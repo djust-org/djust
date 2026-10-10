@@ -8,7 +8,7 @@
 - `python/djust/management/commands/djust_ai_context.py` — generates CLAUDE.md / .cursorrules / copilot instructions
 - `python/djust/mcp/server.py` — MCP tools (`get_framework_schema`, `list_components`, ...)
 - `python/djust/management/commands/djust_check.py`, `djust_audit.py` — the checks agents already run
-- `python/djust/components/` (~170 components; the catalog with categories, labels and ready snippets is `components/gallery/examples.py` + `gallery/registry.py` — `components/registry.py` is only a ~15-entry name→class map for LiveComponent classes), `python/djust/theming/` (~70 presets, `theme_context`)
+- `python/djust/components/` (~170 components; the catalog with categories, labels and ready snippets is `components/gallery/examples.py` + `gallery/registry.py` — `components/registry.py` is only an ~11-entry name→class map for LiveComponent classes), `python/djust/theming/` (~70 presets, `theme_context`)
 - `python/djust/audit_ast.py` — the `X0xx` AST audit and its `# djust: noqa XNNN` suppression
 - `python/djust/scaffolding/generator.py` — `djust new` (themed by default, `--bare` opts out)
 - `docs/llms.txt`, `docs/llms-full.txt`, `docs/BEST_PRACTICES_AI.md`, the `djust` / `djust-dev` agent skills
@@ -49,7 +49,7 @@ djust invests in 2–4, but only for the *directive* surface (events, decorators
 
 Registered as **Django system checks** (not only in `djust_check`): `manage.py check` is the one command every agent runs on any Django project without knowing djust; `djust_check` is only reached by agents that already know djust. In the Ledger build the agent ran `manage.py check` out of Django habit and `djust_audit --ast` because the djust-dev skill showed it — it never ran `djust_check`. A system check cannot see which command invoked it — Django runs checks for `runserver` (every reload), `migrate` and `test` too — so I001 fires only when **both** hold:
 
-- the invoking command is `check` or `djust_check` (`sys.argv[1]`), and
+- the invoking command is `check` (`sys.argv[1]`) — not `djust_check`, which runs only `djust`-tagged checks and is preceded by Django's own command check, so it would print the block twice — and
 - the caller identifies as an agent (`CLAUDECODE`, `CURSOR_AGENT`, `CODEX_*`, or `DJUST_AGENT=1`). Non-TTY stdout is deliberately **not** a signal: CI, pre-commit and IDE runs are non-TTY and human-facing.
 
 It is one INFO block — never an error — and is silenced the way every other djust check is: `SILENCED_SYSTEM_CHECKS = ["djust.I001"]` or `DJUST_CONFIG["suppress_checks"]`, plus `DJUST_AI_HINTS=0` as a per-shell override. Projects running `check --fail-level INFO` must silence it explicitly; that is the documented cost. The block lists only commands that exist in the installed version (see the rollout order in §Consequences):
@@ -61,17 +61,17 @@ djust.I001: Capability discovery for AI agents
     python manage.py djust_ai suggest "<intent>" # intent -> components + tag + snippet
     python manage.py djust_ai manifest           # one llms.txt-style doc (directives, components, theming, best practices)
     python manage.py djust_audit --ast           # security + UI rules
-    python manage.py djust_mcp                   # MCP server (list_ui_components, get_ui_component, ...)
+    python manage.py djust_mcp                   # MCP server (+ list_ui_components / get_ui_component once D3 lands)
 ```
 
 Plus targeted INFO checks that fire on project state, not on every run:
 
-- `djust.I002` — LiveViews exist but `djust.theming` is not in `INSTALLED_APPS`. (The context processor is optional since #3028, and `djust_theming.E001` already covers a misconfigured one, so I002 does not look at it.)
-- `djust.I003` — `djust.components` available but unused while templates contain hand-rolled equivalents. It does **not** rescan templates on every check run (that would tax every `runserver` reload and test startup): it reads the X1xx summary cached by the last `djust_audit` run, and is silent when no cache exists.
+- `djust.I002` — LiveViews exist but `djust.theming` is not in `INSTALLED_APPS`. (The context processor is optional since #3028, and `djust_theming.E001` (a Warning since #3028) already reports a missing one, so I002 does not look at it.)
+- `djust.I003` — `djust.components` available but unused while templates contain hand-rolled equivalents. It does **not** rescan templates on every check run (that would tax every `runserver` reload and test startup): it reads the X1xx summary the last `djust_audit` run wrote to the project's cache directory (`.djust/audit-ui.json`, gitignored by `djust new`), is silent when no cache exists, and ignores a cache older than the newest template it covers.
 
 ### D2. `djust_audit` UI rules (channel 1, catches it regardless of the agent)
 
-New `X1xx` rules (the `X0xx` series is the existing AST audit; `djust.U001` is taken by the update check). X101–X104 scan LiveView templates; X105 scans the stylesheets those templates link (`{% static %}` `<link>` targets under the project's static dirs, not third-party packages). All are warnings, suppressed with the existing syntax — `# djust: noqa X101`, or `{# djust: noqa X101 #}` in templates — not a new one. The `audit_ast.py` docstring that defines the `X0xx` range is updated to name `X1xx` as UI rules.
+New `X1xx` rules (the `X0xx` series is the existing AST audit; `djust.U001` is taken by the update check). X101–X104 scan LiveView templates; X105 scans the stylesheets those templates link (`{% static %}` `<link>` targets under the project's static dirs, not third-party packages). All are warnings, suppressed with the existing `noqa` marker in each file type's own comment syntax: `{# djust: noqa X101 #}` in templates (same line, as today) and `/* djust: noqa X105 */` in stylesheets — the one new spelling, needed because CSS has no `#` comment. X103 matches on templates only (inline `style=` and class names), so it uses the template form. The `audit_ast.py` docstring that defines the `X0xx` range is updated to name `X1xx` as UI rules.
 
 | Rule | Detects | Suggests |
 |---|---|---|
@@ -98,13 +98,13 @@ MCP gains `list_ui_components(query?)` and `get_ui_component(name)` (or `list_co
 - `djust_ai_context`, `llms.txt`, `llms-full.txt`, `BEST_PRACTICES_AI.md`, and the `djust` skill each gain a short **"UI building blocks — use these before writing markup"** section near the top: use case → component table, theming setup, and the D3 commands.
 - Fix the djust-dev skill's naming mismatch (`SKILL.md` lines 244–250): its prose says "Run `djust check`" but its example runs `python manage.py djust_audit --ast`; name the commands exactly and list `manage.py check`, `djust_check`, `djust_audit`, and the D3 commands with one line each on when to use which.
 - `djust new` already scaffolds `djust.theming` by default (`--bare` opts out). It additionally installs `djust.components` and uses an `app_shell` base template, and the skill tells agents to start projects with `djust new`.
-- The skill edits (`djust`, `djust-dev`) land in the skills' own repositories, not in this one; this ADR records the decision, and those PRs link back to it.
+- The skill edits (`djust`, `djust-dev`) live outside this repo (the `djust` skill in the `djust_skills` repo, which has no published remote; `djust-dev` in no repo at all). How users receive skill updates is unresolved — see §Open questions; until then the D4 doc sections in this repo (`llms*.txt`, `BEST_PRACTICES_AI.md`, `djust_ai_context`) carry the content.
 
 ## Consequences
 
 - Agents learn about components and theming from output they cannot avoid (D1/D2), not from docs they must think to read.
 - One source of truth (the gallery catalog) feeds `suggest`, `manifest`, MCP, and the docs sections, so new components become discoverable without doc edits.
-- Cost: X1xx heuristics will have false positives; they are warnings with the standard `noqa` escape, and I002/I003 are INFO. D1's hint block is gated to `check`/`djust_check` run by a self-identified agent, so `runserver`, `test`, CI and human `check` output are unchanged.
+- Cost: X1xx heuristics will have false positives; they are warnings with the standard `noqa` escape, and I002/I003 are INFO. D1's hint block is gated to `manage.py check` run by a self-identified agent, so `runserver`, `test`, CI and human `check` output are unchanged.
 - Rollout order: D2 → D3 → D1 → D4 (docs/skill) → D4 (scaffolding). D1 ships after D3 so I001 never points an agent at a command that does not exist; if D1 must ship earlier, its block lists only `djust_audit --ast` and the existing `djust_mcp`.
 
 ## Alternatives rejected
@@ -112,13 +112,14 @@ MCP gains `list_ui_components(query?)` and `get_ui_component(name)` (or `list_co
 - **Docs only (D4 alone).** Fixes channels 2 and 4, which Ledger shows agents do not reliably consult for UI; leaves channel 1 silent.
 - **Fire I001 on every check run, or on non-TTY stdout.** Pollutes `runserver` reloads, test startup and CI logs for every user to reach a minority of callers.
 - **Make X1xx errors.** Raw tables and native selects are legitimate in places; an error would push agents to `noqa` reflexively rather than read the suggestion.
-- **Extend `components/registry.py` as the catalog.** It covers ~15 LiveComponent classes and none of the template-tag components; the gallery catalog already has categories and snippets for all of them.
+- **Extend `components/registry.py` as the catalog.** It covers ~11 LiveComponent classes and none of the template-tag components; the gallery catalog already has categories and snippets for ~180 of ~200 tags (the gaps are child tags, which `suggest` reports under their parent).
 
 ## Open questions
 
 - Should I001 fire once per process (simple) or once per project, tracked in a marker file (quieter across repeated `check` runs, but writes to the project)?
 - How does `djust ai` (no `manage.py`) find the project's settings — `DJANGO_SETTINGS_MODULE`, a `manage.py` in the cwd, or neither, falling back to the catalog-only subset (`suggest`, `manifest`) outside a project?
 - Which agent environment variables are stable enough to depend on? `DJUST_AGENT=1` is the documented contract; the vendor variables are best-effort.
+- Skill distribution: should the `djust` / `djust-dev` skills ship inside the djust package (e.g. `djust_ai skills install`) so D4's skill edits reach users with a djust upgrade?
 - Tracking issue: to be opened when the ADR is accepted, one sub-issue per D-item in rollout order.
 
 ## Evidence
