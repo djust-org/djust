@@ -5,6 +5,7 @@ Generates a comprehensive report of every LiveView and LiveComponent: what they
 expose, how they're configured, and what decorators protect them.
 
 Usage:
+    python manage.py djust_audit --ast              # security + UI rules
     python manage.py djust_audit                  # pretty terminal output
     python manage.py djust_audit --json           # machine-readable JSON
     python manage.py djust_audit --app myapp      # filter to one Django app
@@ -430,7 +431,7 @@ class Command(BaseCommand):
                 "user Python and template files looking for IDOR, missing "
                 "auth on state-mutating handlers, SQL string formatting, "
                 "open redirects, and mark_safe/|safe abuse. Emits stable "
-                "X001-X007 finding codes."
+                "X001-X008 security codes and X101-X105 UI-component warnings (ADR-043)."
             ),
         )
         parser.add_argument(
@@ -453,6 +454,18 @@ class Command(BaseCommand):
                 "scanning. Useful for vendored code, generated files, and "
                 "third-party packages."
             ),
+        )
+        parser.add_argument(
+            "--ast-no-ui",
+            action="store_true",
+            dest="ast_no_ui",
+            help="Skip the X1xx UI-component rules in --ast mode.",
+        )
+        parser.add_argument(
+            "--ast-no-ui-cache",
+            action="store_true",
+            dest="ast_no_ui_cache",
+            help="Do not write .djust/audit-ui.json after an --ast run.",
         )
         parser.add_argument(
             "--ast-no-templates",
@@ -538,9 +551,22 @@ class Command(BaseCommand):
 
         return None
 
+    @staticmethod
+    def _static_dirs_from_settings() -> list:
+        """Read configured static directories without requiring Django setup."""
+        from django.conf import settings
+
+        try:
+            if not settings.configured:
+                return []
+            return list(getattr(settings, "STATICFILES_DIRS", []))
+        except Exception:
+            return []
+
     def _run_ast_audit(self, options: dict[str, Any]) -> None:
         """Run the AST security anti-pattern scanner (#660)."""
         from djust.audit_ast import run_ast_audit
+        from djust.audit_ui import write_ui_summary
 
         root = options.get("ast_path") or os.getcwd()
         exclude = options.get("ast_exclude") or []
@@ -552,12 +578,20 @@ class Command(BaseCommand):
             root=root,
             include_templates=include_templates,
             exclude=exclude,
+            include_ui=not options.get("ast_no_ui", False),
+            static_dirs=self._static_dirs_from_settings(),
         )
+        cache_path, cache_error = None, None
+        if report.ui_ran and not options.get("ast_no_ui_cache", False):
+            cache_path, cache_error = write_ui_summary(report, root)
 
         if json_output:
-            self.stdout.write(json.dumps(report.to_dict(), indent=2))
+            payload = report.to_dict()
+            payload["ui_cache"] = cache_path
+            payload["ui_cache_error"] = cache_error
+            self.stdout.write(json.dumps(payload, indent=2))
         else:
-            self._output_ast_pretty(report, root)
+            self._output_ast_pretty(report, root, cache_path, cache_error)
 
         # Exit code mirrors --live / --permissions semantics:
         #   strict mode: any error or warning fails
@@ -568,7 +602,13 @@ class Command(BaseCommand):
             raise SystemExit(1)
         return
 
-    def _output_ast_pretty(self, report: Any, root: str) -> None:
+    def _output_ast_pretty(
+        self,
+        report: Any,
+        root: str,
+        cache_path: Optional[str] = None,
+        cache_error: Optional[str] = None,
+    ) -> None:
         """Pretty-print an ASTAuditReport to the terminal."""
         line = "=" * 50
         self.stdout.write("")
@@ -577,6 +617,11 @@ class Command(BaseCommand):
         self.stdout.write(self.style.MIGRATE_HEADING(line))
         self.stdout.write(f"  Root:    {root}")
         self.stdout.write(f"  Files:   {report.files_scanned} scanned")
+        if report.ui_ran:
+            self.stdout.write(
+                f"  UI rules: {sum(report.ui_templates.values())} live template(s), "
+                f"{len(report.ui_stylesheets)} stylesheet(s)"
+            )
         self.stdout.write("")
 
         errors = report.errors
@@ -606,6 +651,10 @@ class Command(BaseCommand):
         self.stdout.write(
             f"  Summary: {len(errors)} error(s), {len(warnings_)} warning(s), {len(infos)} info"
         )
+        if cache_path:
+            self.stdout.write(f"  UI summary: {cache_path}")
+        elif cache_error:
+            self.stdout.write(f"  UI summary not written: {cache_error}")
         self.stdout.write("")
 
     def _run_a11y_audit(self, options: dict[str, Any]) -> None:
