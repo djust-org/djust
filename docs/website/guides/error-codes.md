@@ -32,6 +32,7 @@ djust uses structured error codes to help you diagnose problems quickly. This gu
 | P0xx | Permissions Document | `manage.py djust_audit --permissions permissions.yaml` |
 | L0xx | Live Runtime Probe | `manage.py djust_audit --live <url>` |
 | X0xx | AST Anti-Pattern Scanner | `manage.py djust_audit --ast` |
+| X1xx | [AST UI Rules](#ast-ui-rules-x1xx) | `manage.py djust_audit --ast` (unless `--ast-no-ui`) |
 | DJE-xxx | Runtime | During WebSocket events and VDOM diffing |
 
 Run all static checks at once:
@@ -2641,6 +2642,230 @@ WARN [djust.X007] /path/templates/emails/body.html:3:0 Template uses {% autoesca
 **What causes it**: A detail-shaped view class has `permission_required`, binds a URL-kwarg id to `self` in `mount()`, and has event handlers that read it, but neither it nor a base class in the same module overrides `has_object_permission()` or `check_permissions()`. View-level permissions don't check that the user may access this particular object.
 
 **Fix**: Override `has_object_permission()` (or `check_permissions()`) to check access to the object. See [Authorization](authorization.md) for the pattern. Suppress with `# djust: noqa X008` if access is scoped elsewhere.
+
+---
+
+## AST UI Rules (X1xx)
+
+`manage.py djust_audit --ast` includes X101–X105 by default. All five are
+warnings and fail CI under `--strict`. They scan the live template closure
+and its linked application stylesheets; see the [audit guide](djust-audit.md#ui-rules-x1xx)
+for discovery limits and the [summary cache](djust-audit.md#ui-summary-cache).
+Use `--ast-no-ui` to opt out, or fix or suppress individual findings.
+
+The examples below assume a LiveView template. Load `djust_components` for
+component tags. Template suppressions belong on the same line as the opening
+HTML tag reported by the finding, for example `{# djust: noqa X101 #}`.
+CSS suppressions use `/* djust: noqa X105 */` on the declaration's starting
+line. Bare `{# djust: noqa #}` or `/* djust: noqa */` suppresses all applicable
+rules on that line; a comma-separated code list suppresses selected rules.
+
+### X101: Hand-built `<table>` renders a loop — use the data_table component
+
+**Severity**: Warning
+
+**What causes it**: A `<table>` contains a Django `for` loop, `dj-stream`,
+or `dj-update="append"` / `dj-update="prepend"` before its closing tag.
+
+**What you see**: `WARN [djust.X101]` at the table's opening tag, suggesting
+`data_table` (sorting, paging, selection, search), `data_grid` for editable
+cells, and `infinite_scroll` for a growing list.
+
+**Example trigger**:
+
+```html
+{% load live_tags %}
+<table>
+  {% for row in rows %}<tr><td>{{ row.name }}</td></tr>{% endfor %}
+</table>
+```
+
+**Fix**: Supply `rows` and `columns` to the component:
+
+```html
+{% load djust_components %}
+{% data_table rows=rows columns=columns %}
+```
+
+For editable cells use `{% data_grid columns=columns rows=rows %}`; for a
+growing list wrap its content in
+`{% infinite_scroll load_event="load_more" %}…{% endinfinite_scroll %}`.
+Configure the corresponding handlers for the interactions you enable.
+
+**Suppression**: Keep the comment on the table opener:
+
+```html
+<table> {# djust: noqa X101 #}
+  {% for row in rows %}<tr><td>{{ row.name }}</td></tr>{% endfor %}
+</table>
+```
+
+---
+
+### X102: Native `<select dj-change>` over a long or generated option list — use combobox
+
+**Severity**: Warning
+
+**What causes it**: A native `<select>` has `dj-change` and contains a
+Django `for` loop or more than 10 `<option>` elements. A generated list is
+flagged regardless of its runtime length; exactly 10 static options do not
+trigger the rule.
+
+**What you see**: `WARN [djust.X102]` at the select opener, suggesting
+`combobox` or `rich_select` with `searchable=True`.
+
+**Example trigger**:
+
+```html
+<select dj-change="on_change">
+  {% for option in options %}
+    <option value="{{ option.value }}">{{ option.label }}</option>
+  {% endfor %}
+</select>
+```
+
+**Fix**: Pass options as a list of dictionaries with `value` and `label`:
+
+```html
+{% load djust_components %}
+{% combobox name="field" options=options event="on_change" %}
+```
+
+Alternatively use
+`{% rich_select name="field" options=options event="on_change" searchable=True %}`.
+
+**Suppression**: Add `{# djust: noqa X102 #}` on the `<select>` opening line.
+
+---
+
+### X103: Hand-built overlay panel — use the sheet or modal component
+
+**Severity**: Warning
+
+**What causes it**: An opening HTML tag has one of these class tokens:
+`modal`, `modal-backdrop`, `modal-overlay`, `modal-dialog`, `drawer`,
+`offcanvas`, `slide-over`, `side-panel`, `sheet`, or `dialog`. Alternatively,
+its inline style has `position: fixed` and full-screen geometry: `inset: 0`,
+all four edges set to zero, or `width: 100vw` plus `height: 100vh`.
+Fixed positioning alone does not trigger this style heuristic.
+
+**What you see**: `WARN [djust.X103]` at the opening tag, suggesting `sheet`
+for a side panel or `modal` for a dialog.
+
+**Example trigger**:
+
+```html
+{% load live_tags %}
+<div style="position: fixed; inset: 0">{{ details }}</div>
+```
+
+**Fix**:
+
+```html
+{% load djust_components %}
+{% sheet open=show_panel title="Details" %}{{ details }}{% endsheet %}
+```
+
+For a dialog use
+`{% modal open=show_modal title="Details" %}{{ details }}{% endmodal %}`.
+
+**Suppression**: Add `{# djust: noqa X103 #}` on the overlay's opening line.
+
+---
+
+### X104: Status message styled by switching classes — use toasts or page_alert
+
+**Severity**: Warning
+
+**What causes it**: A `<p>`, `<div>`, or `<span>` has a class attribute with
+an `if` / `elif` expression or variable interpolation. The class expression
+or an interpolated body expression must have a message-like identifier:
+`message`, `messages`, `msg`, `flash`, `notice`, `notification`,
+`notifications`, `alert`, `feedback`, `toast`, or `status_text` (including
+underscore-separated names such as `save_message`). It also needs a literal
+status word in the classes (`error`, `success`, `danger`, `warning`, `info`,
+`ok`, `fail`, `failed`, `failure`, `invalid`, or `valid`), unless the body
+already contains a message-like interpolation. Generic row-state or progress
+class switches alone are not flagged.
+
+**What you see**: `WARN [djust.X104]` suggesting `server_toast_container`
+with `self.push_toast("Saved", type="success")` via `ServerEventToastMixin`,
+`toast_container` for a view-held list, or `page_alert` for a persistent banner.
+
+**Example trigger**:
+
+```html
+{% load live_tags %}
+<p class="{% if save_message %}success{% endif %}">{{ save_message }}</p>
+```
+
+**Fix**: Use a persistent alert for inline feedback:
+
+```html
+{% load djust_components %}
+{% page_alert type="success" %}{{ save_message }}{% endpage_alert %}
+```
+
+For transient feedback use one of the toast containers:
+
+```html
+{% load djust_components %}
+{% server_toast_container position="top-right" %}
+```
+
+Or, when the view holds a list of toasts:
+
+```html
+{% load djust_components %}
+{% toast_container toasts %}
+```
+
+**Suppression**: Add `{# djust: noqa X104 #}` on the message element's
+opening line.
+
+---
+
+### X105: App stylesheet sets colors outside djust theme tokens — use theme tokens or a preset
+
+**Severity**: Warning
+
+**What causes it**: A stylesheet linked from the live template closure
+through a literal `static` reference contains hex colors or color functions
+(`rgb`, `rgba`, `hsl`, `hsla`, `hwb`, `lab`, `lch`, `oklab`, `oklch`, or
+`color`) in declarations. Recognized theme-token definitions, CSS comments,
+`var(...)` including fallbacks, and `url(...)` are ignored. Selectors and
+named colors are not checked. Only linked, eligible application CSS is scanned;
+see [scan scope](djust-audit.md#ui-rules-x1xx).
+
+**What you see**: One `WARN [djust.X105]` per stylesheet, at its first
+unsuppressed offending declaration. Details give the number of literals,
+the first declaration and up to 10 line numbers, followed by the token/preset
+suggestion. The count is of offending declarations, even if one declaration
+contains multiple colors.
+
+**Example trigger** (in a linked stylesheet):
+
+```css
+.panel { color: #123456; background: rgb(255, 255, 255); }
+```
+
+**Fix**: Use the theme's foreground and card tokens:
+
+```css
+.panel { color: hsl(var(--foreground)); background: hsl(var(--card)); }
+```
+
+Choose a theme preset with `LIVEVIEW_CONFIG["theme"]["preset"]` rather
+than duplicating its colors in component CSS. Definitions of recognized tokens
+(such as `--foreground`) are allowed; arbitrary custom properties with literal
+colors are still checked.
+
+**Suppression**: Apply a CSS comment on each declaration's starting line;
+a suppressed line can cover multiple declarations:
+
+```css
+.brand-mark { color: #123456; } /* djust: noqa X105 */
+```
 
 ---
 
