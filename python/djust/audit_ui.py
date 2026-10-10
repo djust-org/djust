@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from pathlib import PurePath
 from typing import Any, Dict, Iterator, List, Mapping, Optional, Sequence, Set, Tuple, Union
 
-from djust.audit_ast import ASTAuditReport, ASTFinding, _template_suppressed
+from djust.audit_ast import ASTAuditReport, ASTFinding, _comment_suppressed, _template_suppressed
 
 X1XX_CODES = ("X101", "X102", "X103", "X104", "X105")
 X102_OPTION_THRESHOLD = 10
@@ -90,9 +90,6 @@ _STATE_RE = re.compile(
 )
 _STATIC_LINK_RE = re.compile(
     r"""\bhref\s*+=\s*+["']\{%\s*+static\s++["']([^"'{}]+\.css)["']\s*+%\}["']""", re.I
-)
-_CSS_SUPPRESSION_RE = re.compile(
-    r"/\*\s*+djust\s*+:\s*+noqa(?:(?:\s++:?\s*+|:\s*+)([A-Za-z0-9, ]++))?\s*+\*/", re.I
 )
 _CSS_DECL_RE = re.compile(r"\s*+(--[\w-]++|[a-zA-Z-]++)\s*+:\s*+([^;{}]++)")
 _COLOR_HEX_RE = re.compile(r"#(?:[0-9a-fA-F]{8}|[0-9a-fA-F]{6}|[0-9a-fA-F]{3,4})\b")
@@ -267,7 +264,7 @@ def _attr_value(match: re.Match) -> str:
     return match.group(2) if match.group(2) is not None else match.group(3)
 
 
-def _check_x103(tag: str, attrs: str) -> Optional[str]:
+def _check_x103(tag: str, attrs: str, overlay_context: bool = False) -> Optional[str]:
     classes = _CLASS_RE.search(attrs)
     if classes:
         for token in _TEMPLATE_EXPR_RE.sub(" ", _attr_value(classes)).split():
@@ -285,11 +282,95 @@ def _check_x103(tag: str, attrs: str) -> Optional[str]:
             re.search(r"(?:^|;)" + prop + ":100" + unit + r"(?:;|$|!)", value)
             for prop, unit in (("width", "vw"), ("height", "vh"))
         )
-        if re.search(r"(?:^|;)position:fixed(?:;|$|!)", value) and (
-            zero("inset") or full_edges or full_size
-        ):
-            return "position: fixed full-screen style; " + _X103_DETAILS
+        if re.search(r"(?:^|;)position:fixed(?:;|$|!)", value):
+            if zero("inset") or full_edges or full_size:
+                return "position: fixed full-screen style; " + _X103_DETAILS
+            full_height = (zero("top") and zero("bottom")) or re.search(
+                r"(?:^|;)height:100(?:vh|%)(?:;|$|!)", value
+            )
+            if full_height and overlay_context:
+                return "position: fixed full-height overlay style; " + _X103_DETAILS
     return None
+
+
+def _overlay_contexts(source: str, tags: Sequence[Tuple[int, str, str]]) -> Set[int]:
+    """Index conditional tags and overlay markers on tags or backdrop siblings."""
+    # Mask expressions before indexing closing tags; directives inside opening
+    # attributes are excluded from the block stack (they do not hide the tag).
+    masked = _TEMPLATE_EXPR_RE.sub(lambda m: " " * len(m.group()), source)
+    events = [(offset, "open", (tag, attrs)) for offset, tag, attrs in tags]
+    events.extend(
+        (m.start(), "close", m.group(1).lower())
+        for m in re.finditer(r"</([a-zA-Z][\w-]*+)\b", masked)
+    )
+    tag_index = 0
+    for match in re.finditer(r"\{%\s*(if|endif)\b[^%]*%\}", source):
+        while tag_index < len(tags):
+            offset, tag, attrs = tags[tag_index]
+            if offset + len(tag) + len(attrs) + 2 > match.start():
+                break
+            tag_index += 1
+        if tag_index < len(tags) and tags[tag_index][0] <= match.start():
+            continue
+        events.append((match.start(), match.group(1), None))
+    contexts: Set[int] = set()
+    parents: Dict[int, Optional[int]] = {}
+    backdrops: Set[Optional[int]] = set()
+    stack: List[Tuple[str, int]] = []
+    conditional_depth = 0
+    void_tags = {
+        "area",
+        "base",
+        "br",
+        "col",
+        "embed",
+        "hr",
+        "img",
+        "input",
+        "link",
+        "meta",
+        "param",
+        "source",
+        "track",
+        "wbr",
+    }
+    for offset, kind, data in sorted(events, key=lambda event: event[0]):
+        if kind == "if":
+            conditional_depth += 1
+        elif kind == "endif":
+            conditional_depth = max(0, conditional_depth - 1)
+        elif kind == "close":
+            for i in range(len(stack) - 1, -1, -1):
+                if stack[i][0] == data:
+                    del stack[i:]
+                    break
+        else:
+            tag, attrs = data
+            parent = stack[-1][1] if stack else None
+            parents[offset] = parent
+            marker = bool(
+                re.search(
+                    r"\brole\s*=\s*['\"]dialog['\"]|\baria-modal(?=[\s=>/])|\bdj-click(?:-away)?\s*=",
+                    attrs,
+                    re.I,
+                )
+            )
+            if conditional_depth or marker:
+                contexts.add(offset)
+            classes = _CLASS_RE.search(attrs)
+            tokens = _attr_value(classes).split() if classes else []
+            if marker and (
+                any(
+                    token in {"backdrop", "overlay", "modal-backdrop", "modal-overlay"}
+                    for token in tokens
+                )
+                or _check_x103(tag, _CLASS_RE.sub("", attrs)) is not None
+            ):
+                backdrops.add(parent)
+            if tag not in void_tags and not attrs.rstrip().endswith("/"):
+                stack.append((tag, offset))
+    contexts.update(offset for offset, parent in parents.items() if parent in backdrops)
+    return contexts
 
 
 def _messageish(expression: str) -> bool:
@@ -359,14 +440,6 @@ def _find_linked_stylesheets(
     return paths
 
 
-def _css_suppressed(line: str, code: str) -> bool:
-    match = _CSS_SUPPRESSION_RE.search(line)
-    if not match:
-        return False
-    codes = match.group(1)
-    return not codes or code.upper() in {c.strip().upper() for c in codes.split(",") if c.strip()}
-
-
 @functools.lru_cache(maxsize=1)
 def _theme_token_names() -> Set[str]:
     from djust.theming._types import ThemeTokens
@@ -426,7 +499,9 @@ def _scan_stylesheet(path: str, source: str) -> List[ASTFinding]:
     masked = _mask_css_comments(source)
     lines = source.splitlines()
     starts = _line_starts(masked)
-    suppressed = {i + 1 for i, line in enumerate(lines) if _css_suppressed(line, "X105")}
+    suppressed = {
+        i + 1 for i, line in enumerate(lines) if _comment_suppressed(line, "X105", "/*", "*/")
+    }
     offenders: List[Tuple[int, str]] = []
     for offset, prop, value, declaration in _css_declarations(masked):
         if prop.startswith("--") and prop[2:] in _theme_token_names():
@@ -496,7 +571,9 @@ def scan_ui(
             }
             for code in X1XX_CODES[:4]
         }
-        for offset, tag, attrs in _iter_open_tags(source):
+        tags = list(_iter_open_tags(source))
+        overlay_contexts = _overlay_contexts(source, tags)
+        for offset, tag, attrs in tags:
             end = _region(closings, tag, offset, len(source))
             lineno, col = _line_col(starts, offset)
             checks = (
@@ -510,7 +587,7 @@ def scan_ui(
                         _in_region(options, offset, end),
                     ),
                 ),
-                ("X103", _check_x103(tag, attrs)),
+                ("X103", _check_x103(tag, attrs, offset in overlay_contexts)),
                 (
                     "X104",
                     _check_x104(
@@ -603,6 +680,7 @@ def write_ui_summary(report: ASTAuditReport, root: str) -> Tuple[Optional[str], 
             fh.write("\n")
         os.chmod(temp_path, 0o644)
         os.replace(temp_path, path)
+        temp_path = None
         return path, None
     except (OSError, ValueError, TypeError) as exc:
         return None, getattr(exc, "strerror", None) or type(exc).__name__

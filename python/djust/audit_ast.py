@@ -59,6 +59,7 @@ See issue #660.
 from __future__ import annotations
 
 import ast
+import functools
 import logging
 import os
 import re
@@ -991,21 +992,29 @@ def _check_idor_shape_needs_object_permission(ctx: _FileContext) -> None:
 
 _SAFE_FILTER_RE = re.compile(r"\{\{\s*([a-zA-Z_][\w\.]*)\s*\|\s*safe\b")
 _AUTOESCAPE_OFF_RE = re.compile(r"\{%\s*autoescape\s+off\s*%\}")
-_SAFE_SUPPRESSION_RE = re.compile(
-    r"\{#\s*+djust\s*+:\s*+noqa(?:(?:\s++:?\s*+|:\s*+)([A-Za-z0-9, ]++))?\s*+#\}",
-    re.IGNORECASE,
-)
 
 
-def _template_suppressed(line: str, code: str) -> bool:
-    match = _SAFE_SUPPRESSION_RE.search(line)
+@functools.lru_cache(maxsize=8)
+def _comment_suppression_re(opener: str, closer: str) -> re.Pattern:
+    return re.compile(
+        re.escape(opener)
+        + r"\s*+djust\s*+:\s*+noqa(?:(?:\s++:?\s*+|:\s*+)([A-Za-z0-9, ]++))?\s*+"
+        + re.escape(closer),
+        re.IGNORECASE,
+    )
+
+
+def _comment_suppressed(line: str, code: str, opener: str, closer: str) -> bool:
+    """Apply same-line djust noqa syntax for the given comment delimiters."""
+    match = _comment_suppression_re(opener, closer).search(line)
     if not match:
         return False
     codes = match.group(1)
-    if not codes:
-        return True
-    wanted = {c.strip().upper() for c in codes.split(",") if c.strip()}
-    return code.upper() in wanted
+    return not codes or code.upper() in {c.strip().upper() for c in codes.split(",") if c.strip()}
+
+
+def _template_suppressed(line: str, code: str) -> bool:
+    return _comment_suppressed(line, code, "{#", "#}")
 
 
 def _scan_template_file(path: str, source: Optional[str] = None) -> List[ASTFinding]:

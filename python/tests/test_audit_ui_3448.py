@@ -161,13 +161,55 @@ class TestX103Overlay:
             _live(tmp_path, '<div class="drawer {% if show %}open{% endif %}"></div>')
         ) == ["X103"]
 
-    def test_fixed_full_height_inline_style_triggers(self, tmp_path):
+    def test_fixed_four_edges_inline_style_triggers(self, tmp_path):
         assert _codes(
             _live(
                 tmp_path,
                 '<aside style="position: fixed; top: 0px; bottom: 0 !important; left: 0; right: 0"></aside>',
             )
         ) == ["X103"]
+
+    @pytest.mark.parametrize("geometry", ["top:0;bottom:0", "height:100vh", "height:100%"])
+    @pytest.mark.parametrize(
+        "marker", ["conditional", "dialog", "modal", "click", "click-away", "backdrop"]
+    )
+    def test_fixed_full_height_drawer_with_overlay_marker(self, tmp_path, geometry, marker):
+        attrs = {
+            "dialog": ' role="dialog"',
+            "modal": ' aria-modal="true"',
+            "click": ' dj-click="close_panel"',
+            "click-away": ' dj-click-away="close_panel"',
+        }.get(marker, "")
+        source = (
+            '<aside style="position:fixed;right:0;width:24rem;'
+            + geometry
+            + '"'
+            + attrs
+            + "></aside>"
+        )
+        if marker == "conditional":
+            source = "{% if open %}" + source + "{% endif %}"
+        elif marker == "backdrop":
+            source = '<div class="backdrop" dj-click="close_panel"></div>' + source
+        assert _codes(_live(tmp_path, source)) == ["X103"]
+
+    @pytest.mark.parametrize("geometry", ["top:0;bottom:0", "height:100vh", "height:100%"])
+    def test_unconditional_full_height_sidebar_without_markers(self, tmp_path, geometry):
+        source = '<nav style="position:fixed;left:0;width:24rem;' + geometry + '">nav</nav>'
+        assert _codes(_live(tmp_path, source)) == []
+
+    @pytest.mark.parametrize(
+        "prefix",
+        [
+            "{% if open %}<p>Open</p>{% endif %}",
+            '<div dj-click="close_panel"></div>',
+            '<div class="panel {% if open %}active{% endif %}"></div>',
+            '<section><div class="backdrop" dj-click="close_panel"></div></section>',
+        ],
+    )
+    def test_unrelated_overlay_markers_do_not_flag_sidebar(self, tmp_path, prefix):
+        source = prefix + '<nav style="position:fixed;top:0;bottom:0;left:0;width:24rem">nav</nav>'
+        assert _codes(_live(tmp_path, source)) == []
 
     def test_fixed_inset_zero_triggers(self, tmp_path):
         assert _codes(_live(tmp_path, '<div style="position:fixed;inset:0"></div>')) == ["X103"]
@@ -821,3 +863,48 @@ def test_static_settings_warning_preserves_json_output(tmp_path, monkeypatch):
     Command(stdout=out, stderr=err)._run_ast_audit({"ast_path": str(tmp_path), "json_output": True})
     assert json.loads(out.getvalue())["mode"] == "ast"
     assert "WARNING: STATICFILES_DIRS" in err.getvalue()
+
+
+@pytest.mark.parametrize("opener,closer", [("{#", "#}"), ("/*", "*/")])
+@pytest.mark.parametrize(
+    "body,expected",
+    [
+        ("djust: noqa", True),
+        ("djust: noqa X103", True),
+        ("DJUST : NOQA: x103, X105", True),
+        ("djust: noqa X105", False),
+        ("djust: noqa X1030", False),
+        ("djust: noqaX103", False),
+    ],
+)
+def test_shared_comment_suppression_syntax(opener, closer, body, expected):
+    from djust.audit_ast import _comment_suppressed
+
+    assert _comment_suppressed(opener + body + closer, "X103", opener, closer) is expected
+
+
+@pytest.mark.parametrize("replace_fails", [False, True])
+def test_summary_temp_cleanup_only_before_successful_replace(tmp_path, monkeypatch, replace_fails):
+    from djust import audit_ui
+
+    report = _live(tmp_path, LOOP_TABLE)
+    original_replace = audit_ui.os.replace
+    original_unlink = audit_ui.os.unlink
+    unlinked = []
+
+    def replace(source, target):
+        if replace_fails:
+            raise OSError("replace failed")
+        return original_replace(source, target)
+
+    def unlink(path, *args, **kwargs):
+        unlinked.append(path)
+        return original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(audit_ui.os, "replace", replace)
+    monkeypatch.setattr(audit_ui.os, "unlink", unlink)
+    path, error = audit_ui.write_ui_summary(report, str(tmp_path))
+    assert bool(error) is replace_fails
+    assert bool(path) is not replace_fails
+    assert len(unlinked) == int(replace_fails)
+    assert not list((tmp_path / ".djust").glob(".audit-ui.*.tmp"))
