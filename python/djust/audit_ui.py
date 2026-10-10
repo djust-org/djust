@@ -13,6 +13,7 @@ from bisect import bisect_left, bisect_right
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from heapq import merge
 from pathlib import PurePath
 from typing import Any, Dict, Iterator, List, Mapping, Optional, Sequence, Set, Tuple, Union
 
@@ -57,6 +58,10 @@ _TAG_START_RE = re.compile(r"<([a-zA-Z][\w-]*+)(?=[\s/>])")
 _TEMPLATE_EXPR_RE = re.compile(r"\{%[^%]*+%\}|\{\{[^{}]*+\}\}", re.S)
 _CLASS_RE = re.compile(r"""\bclass\s*=\s*("([^"]*)"|'([^']*)')""", re.I)
 _STYLE_RE = re.compile(r"""\bstyle\s*=\s*("([^"]*)"|'([^']*)')""", re.I)
+_OVERLAY_MARKER_RE = re.compile(
+    r"\brole\s*=\s*['\"]dialog['\"]|\baria-modal(?=[\s=>/])|\bdj-click(?:-away)?\s*=",
+    re.I,
+)
 _FOR_RE = re.compile(r"\{%\s*for\b")
 _X103_OVERLAY_CLASSES = {
     "modal",
@@ -294,15 +299,19 @@ def _check_x103(tag: str, attrs: str, overlay_context: bool = False) -> Optional
 
 
 def _overlay_contexts(source: str, tags: Sequence[Tuple[int, str, str]]) -> Set[int]:
-    """Index conditional tags and overlay markers on tags or backdrop siblings."""
-    # Mask expressions before indexing closing tags; directives inside opening
-    # attributes are excluded from the block stack (they do not hide the tag).
-    masked = _TEMPLATE_EXPR_RE.sub(lambda m: " " * len(m.group()), source)
-    events = [(offset, "open", (tag, attrs)) for offset, tag, attrs in tags]
-    events.extend(
-        (m.start(), "close", m.group(1).lower())
-        for m in re.finditer(r"</([a-zA-Z][\w-]*+)\b", masked)
-    )
+    """Index overlay context in linear passes, doing marker work only as needed."""
+    candidates = {
+        offset
+        for offset, tag, attrs in tags
+        if _STYLE_RE.search(attrs) and _check_x103(tag, _CLASS_RE.sub("", attrs), True)
+    }
+    if not candidates:
+        return set()
+
+    # Record disjoint outermost conditional spans once. Directives inside an
+    # opening tag's attributes do not conditionally render that tag.
+    regions: List[Tuple[int, int]] = []
+    conditionals: List[int] = []
     tag_index = 0
     for match in re.finditer(r"\{%\s*(if|endif)\b[^%]*%\}", source):
         while tag_index < len(tags):
@@ -312,12 +321,55 @@ def _overlay_contexts(source: str, tags: Sequence[Tuple[int, str, str]]) -> Set[
             tag_index += 1
         if tag_index < len(tags) and tags[tag_index][0] <= match.start():
             continue
-        events.append((match.start(), match.group(1), None))
+        if match.group(1) == "if":
+            conditionals.append(match.end())
+        elif conditionals:
+            start = conditionals.pop()
+            if not conditionals:
+                regions.append((start, match.start()))
+    if conditionals:
+        regions.append((conditionals[0], len(source)))
+
     contexts: Set[int] = set()
+    backdrop_offsets: Set[int] = set()
+    region_index = 0
+    for offset, tag, attrs in tags:
+        if offset in candidates:
+            while region_index < len(regions) and regions[region_index][1] <= offset:
+                region_index += 1
+            conditional = region_index < len(regions) and regions[region_index][0] <= offset
+            if conditional or _OVERLAY_MARKER_RE.search(attrs):
+                contexts.add(offset)
+        # Backdrops can be non-fixed siblings. Inspect their markers only after
+        # a cheap class-name screen; ordinary tags need no marker regex.
+        backdrop = False
+        if "backdrop" in attrs or "overlay" in attrs:
+            classes = _CLASS_RE.search(attrs)
+            backdrop = bool(
+                classes
+                and {"backdrop", "overlay", "modal-backdrop", "modal-overlay"}.intersection(
+                    _attr_value(classes).split()
+                )
+            )
+        if (backdrop or offset in candidates) and _OVERLAY_MARKER_RE.search(attrs):
+            if backdrop or _check_x103(tag, _CLASS_RE.sub("", attrs)):
+                backdrop_offsets.add(offset)
+    if not backdrop_offsets:
+        return contexts
+
+    # Only backdrop sibling matching needs HTML ancestry. Merge the already
+    # ordered streams rather than sorting events. Each stack entry is removed
+    # once, including when malformed markup closes an ancestor.
+    masked = _TEMPLATE_EXPR_RE.sub(lambda m: " " * len(m.group()), source)
+    openings = ((offset, False, tag, attrs) for offset, tag, attrs in tags)
+    closings = (
+        (m.start(), True, m.group(1).lower(), "")
+        for m in re.finditer(r"</([a-zA-Z][\w-]*+)\b", masked)
+    )
     parents: Dict[int, Optional[int]] = {}
     backdrops: Set[Optional[int]] = set()
     stack: List[Tuple[str, int]] = []
-    conditional_depth = 0
+    positions: Dict[str, List[int]] = {}
     void_tags = {
         "area",
         "base",
@@ -334,40 +386,22 @@ def _overlay_contexts(source: str, tags: Sequence[Tuple[int, str, str]]) -> Set[
         "track",
         "wbr",
     }
-    for offset, kind, data in sorted(events, key=lambda event: event[0]):
-        if kind == "if":
-            conditional_depth += 1
-        elif kind == "endif":
-            conditional_depth = max(0, conditional_depth - 1)
-        elif kind == "close":
-            for i in range(len(stack) - 1, -1, -1):
-                if stack[i][0] == data:
-                    del stack[i:]
-                    break
+    for offset, closing, tag, attrs in merge(openings, closings):
+        if closing:
+            matches = positions.get(tag)
+            if matches:
+                index = matches[-1]
+                while len(stack) > index:
+                    popped_tag, _ = stack.pop()
+                    positions[popped_tag].pop()
         else:
-            tag, attrs = data
             parent = stack[-1][1] if stack else None
-            parents[offset] = parent
-            marker = bool(
-                re.search(
-                    r"\brole\s*=\s*['\"]dialog['\"]|\baria-modal(?=[\s=>/])|\bdj-click(?:-away)?\s*=",
-                    attrs,
-                    re.I,
-                )
-            )
-            if conditional_depth or marker:
-                contexts.add(offset)
-            classes = _CLASS_RE.search(attrs)
-            tokens = _attr_value(classes).split() if classes else []
-            if marker and (
-                any(
-                    token in {"backdrop", "overlay", "modal-backdrop", "modal-overlay"}
-                    for token in tokens
-                )
-                or _check_x103(tag, _CLASS_RE.sub("", attrs)) is not None
-            ):
+            if offset in candidates:
+                parents[offset] = parent
+            if offset in backdrop_offsets:
                 backdrops.add(parent)
             if tag not in void_tags and not attrs.rstrip().endswith("/"):
+                positions.setdefault(tag, []).append(len(stack))
                 stack.append((tag, offset))
     contexts.update(offset for offset, parent in parents.items() if parent in backdrops)
     return contexts
@@ -658,6 +692,7 @@ def write_ui_summary(report: ASTAuditReport, root: str) -> Tuple[Optional[str], 
     path = os.path.join(os.path.realpath(root), UI_SUMMARY_RELPATH)
     dirpath = os.path.dirname(path)
     temp_path = None
+    result: Tuple[Optional[str], Optional[str]] = (None, None)
     try:
         payload = build_ui_summary(report, root)
         created = False
@@ -665,28 +700,32 @@ def write_ui_summary(report: ASTAuditReport, root: str) -> Tuple[Optional[str], 
             os.mkdir(dirpath)
             created = True
         except FileExistsError:
-            pass
+            # Existing cache directories are validated with lstat below.
+            created = False
         mode = os.lstat(dirpath).st_mode
         if stat.S_ISLNK(mode) or not stat.S_ISDIR(mode):
             return None, "cache directory is not a real directory"
         if created:
             ignore = os.path.join(dirpath, ".gitignore")
-            fd = os.open(ignore, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+            fd = os.open(ignore, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
             with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 fh.write("*\n")
         fd, temp_path = tempfile.mkstemp(dir=dirpath, prefix=".audit-ui.", suffix=".tmp")
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             json.dump(payload, fh, sort_keys=True, indent=2)
             fh.write("\n")
-        os.chmod(temp_path, 0o644)
         os.replace(temp_path, path)
         temp_path = None
-        return path, None
+        result = path, None
     except (OSError, ValueError, TypeError) as exc:
-        return None, getattr(exc, "strerror", None) or type(exc).__name__
+        result = None, getattr(exc, "strerror", None) or type(exc).__name__
     finally:
         if temp_path is not None:
             try:
                 os.unlink(temp_path)
-            except OSError:
-                pass
+            except FileNotFoundError:
+                # A missing temporary file is already cleaned up.
+                temp_path = None
+            except OSError as exc:
+                result = None, exc.strerror or type(exc).__name__
+    return result

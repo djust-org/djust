@@ -694,6 +694,9 @@ class TestReviewRegressions:
         assert flags_seen[0] & audit_ui.os.O_CREAT
         assert flags_seen[0] & audit_ui.os.O_EXCL
         assert flags_seen[0] & audit_ui.os.O_NOFOLLOW
+        mode = (tmp_path / ".djust/.gitignore").stat().st_mode
+        assert mode & 0o022 == 0
+        assert mode & 0o400
 
     def test_cache_json_symlink_replaced_and_mode_is_readable(self, tmp_path):
         (tmp_path / ".djust").mkdir()
@@ -703,7 +706,9 @@ class TestReviewRegressions:
         _command(tmp_path)
         assert target.read_text() == "keep"
         assert not (tmp_path / CACHE).is_symlink()
-        assert (tmp_path / CACHE).stat().st_mode & 0o777 == 0o644
+        mode = (tmp_path / CACHE).stat().st_mode
+        assert mode & 0o022 == 0
+        assert mode & 0o400
 
     def test_css_detail_is_terminal_safe_and_bounded(self, tmp_path):
         _css(tmp_path, "a { color: \x1b[2J\x1b[31m\x00\x7f\x85" + " " * 300 + "#abcdef; }")
@@ -809,12 +814,12 @@ def test_adversarial_scan_completes_under_two_seconds(case):
     remaining = size - len(prefix) - len(suffix)
     unit = units[case]
     source = prefix + unit * (remaining // len(unit)) + " " * (remaining % len(unit)) + suffix
-    start = time.perf_counter()
+    start = time.process_time()
     if case.startswith("css-"):
         findings = _scan_stylesheet("app.css", source)
     else:
         findings = scan_ui(".", {"app/templates/page.html": source}, {"page.html"}).findings
-    elapsed = time.perf_counter() - start
+    elapsed = time.process_time() - start
     assert elapsed < 2, (case, elapsed)
     if case == "table":
         assert [f.code for f in findings] == ["X101"]
@@ -908,3 +913,87 @@ def test_summary_temp_cleanup_only_before_successful_replace(tmp_path, monkeypat
     assert bool(path) is not replace_fails
     assert len(unlinked) == int(replace_fails)
     assert not list((tmp_path / ".djust").glob(".audit-ui.*.tmp"))
+
+
+@pytest.mark.parametrize("case", ["div", "table"])
+def test_adversarial_scan_scales_linearly(case):
+    import time
+    from djust.audit_ui import scan_ui
+
+    unit = "<div>" if case == "div" else '<tr><td class="cell">{{ r }}</td></tr>\n'
+    prefix = "" if case == "div" else "<table>{% for r in rows %}"
+    suffix = "" if case == "div" else "{% endfor %}</table>"
+    timings = []
+    for size in (262144, 1048576):
+        remaining = size - len(prefix) - len(suffix)
+        source = prefix + unit * (remaining // len(unit)) + " " * (remaining % len(unit)) + suffix
+        start = time.process_time()
+        findings = scan_ui(".", {"app/templates/page.html": source}, {"page.html"}).findings
+        timings.append(time.process_time() - start)
+        assert [f.code for f in findings] == ([] if case == "div" else ["X101"])
+    assert timings[1] <= 6 * timings[0], (case, timings)
+
+
+@pytest.mark.parametrize(
+    "before,after,expected",
+    [
+        ("{% if outer %}{% if inner %}{% endif %}", "{% endif %}", True),
+        ("{% if outer %}{% if inner %}", "", True),
+        ("{% if outer %}{% endif %}", "", False),
+        ('<section class="{% if open %}active{% endif %}">', "</section>", False),
+        ('<section><div class="backdrop" dj-click="close"></div>', "</section>", True),
+        ("<section>", '<div class="backdrop" dj-click="close"></div></section>', True),
+        (
+            '<section><div class="backdrop" dj-click="close"></div><article>',
+            "</article></section>",
+            False,
+        ),
+        ('<section><article></section><div class="backdrop" dj-click="close"></div>', "", True),
+        ('<section><div class="backdrop" dj-click="close"></div></unknown>', "</section>", True),
+    ],
+)
+def test_drawer_context_boundaries(tmp_path, before, after, expected):
+    drawer = '<aside style="position:fixed;top:0;bottom:0;right:0"></aside>'
+    assert _codes(_live(tmp_path, before + drawer + after)) == (["X103"] if expected else [])
+
+
+@pytest.mark.parametrize("missing", [True, False])
+def test_summary_cleanup_errors_return_as_data(tmp_path, monkeypatch, missing):
+    from djust import audit_ui
+
+    report = _run(tmp_path)
+    original_unlink = audit_ui.os.unlink
+
+    def deny_replace(source, target):
+        raise PermissionError(13, "Permission denied")
+
+    def cleanup(path):
+        # Remove the actual scratch file before simulating either cleanup race.
+        original_unlink(path)
+        if missing:
+            raise FileNotFoundError(2, "No such file or directory")
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(audit_ui.os, "replace", deny_replace)
+    monkeypatch.setattr(audit_ui.os, "unlink", cleanup)
+    assert audit_ui.write_ui_summary(report, str(tmp_path)) == (None, "Permission denied")
+    assert not list((tmp_path / ".djust").glob(".audit-ui.*.tmp"))
+
+
+def test_summary_cleanup_does_not_suppress_unexpected_exception(tmp_path, monkeypatch):
+    from djust import audit_ui
+
+    report = _run(tmp_path)
+    original_unlink = audit_ui.os.unlink
+
+    def crash(*args, **kwargs):
+        raise RuntimeError("unexpected encoder error")
+
+    def deny_cleanup(path):
+        original_unlink(path)
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(audit_ui.json, "dump", crash)
+    monkeypatch.setattr(audit_ui.os, "unlink", deny_cleanup)
+    with pytest.raises(RuntimeError, match="unexpected encoder error"):
+        audit_ui.write_ui_summary(report, str(tmp_path))
