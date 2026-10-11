@@ -18,6 +18,7 @@ from django.urls import reverse
 from djust import LiveView
 from djust.decorators import debounce, event_handler, state
 
+from .._log_utils import sanitize_for_log
 from .forms import AdminFormMixin
 
 logger = logging.getLogger(__name__)
@@ -230,6 +231,41 @@ class ModelListView(AdminBaseMixin, LiveView):
         self.select_all = False
         self.active_filters = {}
 
+    def _declared_filter_fields(self):
+        """Field names declared in the ModelAdmin's ``list_filter``.
+
+        ``apply_filter`` and :meth:`get_queryset` accept only these names, as
+        Django's admin does: a filter cannot follow a relation or use a lookup
+        that ``list_filter`` does not declare.
+        """
+        names = set()
+        for entry in self._model_admin.get_list_filter(self.request) or ():
+            if isinstance(entry, (list, tuple)) and entry:
+                entry = entry[0]
+            if isinstance(entry, str) and entry:
+                names.add(entry)
+        return names
+
+    def _sortable_fields(self):
+        """Field names the change list sorts on: the sortable ``list_display``
+        columns plus the fields named in the ModelAdmin's ``ordering``."""
+        names = {
+            name
+            for name in self._model_admin.get_list_display(self.request) or ()
+            if isinstance(name, str) and name and name != "__str__"
+        }
+        for entry in self._model_admin.get_ordering(self.request) or ():
+            if isinstance(entry, str) and entry:
+                names.add(entry[1:] if entry.startswith("-") else entry)
+        return names
+
+    def _ordering_allowed(self, ordering):
+        """True when ``ordering`` is a sortable field, optionally prefixed by ``-``."""
+        if not isinstance(ordering, str) or not ordering:
+            return False
+        name = ordering[1:] if ordering.startswith("-") else ordering
+        return name in self._sortable_fields()
+
     def get_queryset(self):
         """Get filtered and sorted queryset."""
         qs = self._model_admin.get_queryset(self.request)
@@ -243,8 +279,14 @@ class ModelListView(AdminBaseMixin, LiveView):
                     q_objects |= Q(**{f"{field}__icontains": self.search_query})
                 qs = qs.filter(q_objects)
 
-        # Apply active filters
+        # Apply active filters (declared list_filter fields only)
+        allowed_filters = self._declared_filter_fields()
         for field_name, value in self.active_filters.items():
+            if field_name not in allowed_filters:
+                logger.debug(
+                    "Ignoring undeclared admin list filter %s", sanitize_for_log(field_name)
+                )
+                continue
             if value is not None and value != "":
                 if value == "true":
                     qs = qs.filter(**{field_name: True})
@@ -253,9 +295,14 @@ class ModelListView(AdminBaseMixin, LiveView):
                 else:
                     qs = qs.filter(**{field_name: value})
 
-        # Apply ordering
+        # Apply ordering (sortable fields only)
         if self.ordering:
-            qs = qs.order_by(self.ordering)
+            if self._ordering_allowed(self.ordering):
+                qs = qs.order_by(self.ordering)
+            else:
+                logger.debug(
+                    "Ignoring undeclared admin list ordering %s", sanitize_for_log(self.ordering)
+                )
 
         return qs
 
@@ -316,7 +363,7 @@ class ModelListView(AdminBaseMixin, LiveView):
 
         # Build filter options
         filters = []
-        list_filter = getattr(self._model_admin, "list_filter", [])
+        list_filter = self._model_admin.get_list_filter(self.request) or []
         for filter_field in list_filter:
             try:
                 field = self._model._meta.get_field(filter_field)
@@ -396,7 +443,10 @@ class ModelListView(AdminBaseMixin, LiveView):
 
     @event_handler
     def sort_by(self, field: str):
-        """Handle column sorting."""
+        """Handle column sorting. Only sortable columns are accepted."""
+        if not isinstance(field, str) or field not in self._sortable_fields():
+            logger.debug("Ignoring sort on undeclared admin field %s", sanitize_for_log(field))
+            return
         if self.ordering == field:
             self.ordering = f"-{field}"
         elif self.ordering == f"-{field}":
@@ -493,7 +543,10 @@ class ModelListView(AdminBaseMixin, LiveView):
 
     @event_handler
     def apply_filter(self, field: str, value: str):
-        """Apply a filter to the list."""
+        """Apply a filter to the list. Only ``list_filter`` fields are accepted."""
+        if not isinstance(field, str) or field not in self._declared_filter_fields():
+            logger.debug("Ignoring undeclared admin list filter %s", sanitize_for_log(field))
+            return
         if value:
             self.active_filters = {**self.active_filters, field: value}
         else:

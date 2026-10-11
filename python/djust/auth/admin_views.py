@@ -8,6 +8,7 @@ from django.core.paginator import Paginator
 from django.db.models import Max, Q
 from django.utils import timezone
 from djust import LiveView
+from djust._log_utils import sanitize_for_log
 from djust.decorators import debounce, event_handler, state
 
 logger = logging.getLogger(__name__)
@@ -249,6 +250,9 @@ class SocialAccountsView(AdminBaseMixin, LiveView):
 
     template_name = "djust_auth/admin/social_accounts.html"
 
+    # Fields ``sort_by`` accepts (each optionally prefixed by ``-``).
+    _SORTABLE_FIELDS = ("date_joined", "provider", "uid", "user__username", "user__email")
+
     search_query = state(default="")
     current_page = state(default=1)
     ordering = state(default="-date_joined")
@@ -272,8 +276,12 @@ class SocialAccountsView(AdminBaseMixin, LiveView):
                 | Q(uid__icontains=self.search_query)
             )
 
-        if self.ordering:
-            qs = qs.order_by(self.ordering)
+        ordering = self.ordering
+        if (
+            ordering
+            and (ordering[1:] if ordering.startswith("-") else ordering) in self._SORTABLE_FIELDS
+        ):
+            qs = qs.order_by(ordering)
 
         return qs
 
@@ -336,6 +344,9 @@ class SocialAccountsView(AdminBaseMixin, LiveView):
 
     @event_handler
     def sort_by(self, field: str):
+        if not isinstance(field, str) or field not in self._SORTABLE_FIELDS:
+            logger.debug("Ignoring sort on undeclared field %s", sanitize_for_log(field))
+            return
         if self.ordering == field:
             self.ordering = f"-{field}"
         elif self.ordering == f"-{field}":
