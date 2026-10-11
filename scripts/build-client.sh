@@ -47,13 +47,16 @@ minify_and_compress() {
     # (the unminified client.js resolves via the shared outer-IIFE scope).
     # Preserving function names keeps every cross-module reference resolvable.
     # Costs ~2 KB gzipped; correctness > size for a prod-breaking class of bug.
-    "$terser_bin" "$input" \
+    # Run from the bundle's directory with relative paths so the source map's
+    # `sources` is "client.js", not this checkout's absolute path (which
+    # differs per clone and made every rebuild rewrite the committed .map).
+    (cd "$(dirname "$input")" && "$terser_bin" "$(basename "$input")" \
         --compress \
         --mangle \
         --keep-fnames \
         --comments=false \
         --source-map "url='$(basename "$output_min").map',includeSources,root='./'" \
-        --output "$output_min" 2>/dev/null || {
+        --output "$(basename "$output_min")") 2>/dev/null || {
         echo "  terser failed on $(basename "$input"); leaving raw file"
         return 0
     }
