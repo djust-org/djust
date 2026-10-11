@@ -18,6 +18,8 @@ pub mod lis;
 pub mod parser;
 pub mod patch;
 
+pub use parser::MAX_VDOM_DEPTH;
+
 /// Check if VDOM tracing is enabled via environment variable.
 /// Cached for performance (only checks env var once).
 pub(crate) fn should_trace() -> bool {
@@ -493,6 +495,26 @@ impl VNode {
 
     pub fn is_comment(&self) -> bool {
         self.tag == "#comment"
+    }
+
+    /// How deeply elements nest in this subtree: this node alone is 1 when it
+    /// is an element, 0 for a text or comment node. Iterative, so it is safe
+    /// on a tree of any depth.
+    ///
+    /// The parser keeps every tree it returns within [`MAX_VDOM_DEPTH`]; a
+    /// caller that grafts one parsed subtree into another checks the result
+    /// with this before it walks the combined tree.
+    pub fn element_depth(&self) -> usize {
+        let mut deepest = 0;
+        let mut stack = vec![(self, 1usize)];
+        while let Some((node, depth)) = stack.pop() {
+            if node.is_text() || node.is_comment() {
+                continue;
+            }
+            deepest = deepest.max(depth);
+            stack.extend(node.children.iter().map(|child| (child, depth + 1)));
+        }
+        deepest
     }
 
     /// Serialize the VNode back to HTML string.

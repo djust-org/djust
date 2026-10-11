@@ -31,6 +31,12 @@ def _safe(html: str) -> str:
 
 
 class TerminalNode(template.Node):
+    # Styles a line may have open at once, and SGR parameters in one sequence
+    # that may open a style (terminal.js reads at most as many parameters).
+    # Every open style is a nested span, so these bound how deep one line nests.
+    MAX_OPEN_SPANS = 32
+    MAX_PARAMS = 16
+
     ANSI_RE = _re.compile(r"\033\[([0-9;]*)m")
     ANSI_COLORS = {
         "30": "#000",
@@ -64,10 +70,15 @@ class TerminalNode(template.Node):
             result.append(conditional_escape(text[last_end:start]))
             last_end = end
             codes = m.group(1).split(";")
-            for code in codes:
+            for index, code in enumerate(codes):
                 if code == "0" or code == "":
                     result.append("</span>" * open_spans)
                     open_spans = 0
+                elif index >= cls.MAX_PARAMS or open_spans >= cls.MAX_OPEN_SPANS:
+                    # A style past the caps is dropped, a reset anywhere is
+                    # honoured (it closes every open span): an unbounded stack
+                    # of nested spans is unbounded nesting in the page.
+                    continue
                 elif code == "1":
                     result.append('<span style="font-weight:bold">')
                     open_spans += 1

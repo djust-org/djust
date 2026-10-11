@@ -1200,6 +1200,13 @@ impl RustLiveViewBackend {
             if new_node.attrs.get("data-component-id") != Some(&component_id) {
                 return Ok(None);
             }
+            // The fragment was parsed on its own, so it may be as deep as a
+            // page; grafted at `path` it must still fit under the page's
+            // nesting limit. If not, the full path (which parses the whole
+            // page and applies the limit there) handles it.
+            if path.len() + new_node.element_depth() > djust_vdom::MAX_VDOM_DEPTH {
+                return Ok(None);
+            }
             // Exactness check (review of #2920 🟡2): the page parse can
             // relocate part of a component's markup OUTSIDE its wrapper —
             // foster-parenting of a nested `<table>`, `<option>`/`<input>`
@@ -2143,6 +2150,12 @@ impl RustLiveViewBackend {
         if found != expected
             || djust_vdom::tree_contains_tag_prefix(&tree, djust_vdom::LOOP_PLACEHOLDER_TAG_PREFIX)
         {
+            return None;
+        }
+        // Each cached item was parsed on its own, so spliced into the page it
+        // can nest past the page-wide limit. A full parse applies the limit
+        // to the whole page, so let it handle that page.
+        if tree.element_depth() > djust_vdom::MAX_VDOM_DEPTH {
             return None;
         }
 
@@ -6092,6 +6105,12 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // The conversion's recursion ceiling (#2624), exported so the test that
     // pins it against the worker-stack measurement reads the real constant.
     m.add("MAX_CONVERSION_DEPTH", djust_core::MAX_CONVERSION_DEPTH)?;
+    // The VDOM's element-nesting limit, exported so the tests pin the
+    // boundary against the real constant.
+    m.add("MAX_VDOM_DEPTH", djust_vdom::MAX_VDOM_DEPTH)?;
+    // How many block quotes / lists / list items the Markdown renderer keeps
+    // open at once, exported so the tests read the real constant.
+    m.add("MAX_MD_NESTING", djust_templates::markdown::MAX_MD_NESTING)?;
     m.add_function(wrap_pyfunction!(set_virtual_keyed_ops, m)?)?;
     m.add_function(wrap_pyfunction!(set_django_value_repr, m)?)?;
     m.add_function(wrap_pyfunction!(django_value_repr_enabled, m)?)?;
