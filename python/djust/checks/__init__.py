@@ -14,6 +14,7 @@ Registers checks with Django's check framework that also run via
 - Event bindings (T019-T022, T023) -- ADR-037 template bindings against their owners
 - Serialization floor (T024) -- user fields a template reads that djust never serializes
 - Document-root placement (T025) -- dj-view / dj-root on <html>, <head> or <body>
+- AI discovery (I0xx) -- ADR-043 D1
 - Assets (B0xx) -- vendored third-party files and SBOMs
 """
 
@@ -40,6 +41,7 @@ from . import (  # noqa: F401  (imported for @register side effects + re-export)
     bindings,
     assets,
     sbom,
+    ai_discovery,
 )
 
 _pkg = _sys.modules[__name__]
@@ -59,6 +61,7 @@ for _mod in (
     bindings,
     assets,
     sbom,
+    ai_discovery,
 ):
     for _name in dir(_mod):
         # Skip dunders and the per-submodule ``import djust.checks as

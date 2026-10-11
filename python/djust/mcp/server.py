@@ -192,7 +192,8 @@ def create_server() -> "FastMCP":
         instructions=(
             "djust MCP server — introspect djust projects, run system checks, "
             "and scaffold LiveView code. Use get_framework_schema() first to "
-            "understand djust directives and patterns."
+            "understand djust directives and patterns. "
+            "Call list_ui_components() before writing template markup."
         ),
     )
 
@@ -297,6 +298,53 @@ def create_server() -> "FastMCP":
 
         schema = get_project_schema()
         return json.dumps(schema["components"], indent=2)
+
+    @mcp.tool()
+    def list_ui_components(query: str = "") -> str:
+        """List bundled UI template tags and classes before writing templates.
+
+        With query, rank components against an intent using the same search as
+        manage.py djust_ai suggest. Otherwise list the catalog by category.
+        No Django project is required.
+        """
+        from djust.ai_discovery.catalog import CATALOG_VERSION, MAX_QUERY_LENGTH, search
+        from djust.ai_discovery.inventory import catalog_summary
+
+        query = query[:MAX_QUERY_LENGTH]
+        if query:
+            return json.dumps(
+                {
+                    "version": CATALOG_VERSION,
+                    "kind": "suggest",
+                    "query": query,
+                    "results": [
+                        entry.to_dict() | {"score": score} for entry, score in search(query, 10)
+                    ],
+                },
+                indent=2,
+            )
+        return json.dumps(
+            {"version": CATALOG_VERSION, "kind": "catalog", **catalog_summary()}, indent=2
+        )
+
+    @mcp.tool()
+    def get_ui_component(name: str) -> str:
+        """Get a bundled component's purpose, load line, props and example variants.
+
+        Includes signature-required props where introspectable, child tags and
+        related components. Child tag names resolve to their parent component.
+        No Django project is required.
+        """
+        from djust.ai_discovery.catalog import CATALOG_VERSION, close_matches, get_entry
+
+        entry = get_entry(name)
+        if entry is None:
+            return json.dumps(
+                {"error": f"Unknown component '{name}'", "did_you_mean": close_matches(name)},
+                indent=2,
+            )
+        payload = entry.to_dict(full=True)
+        return json.dumps({"version": CATALOG_VERSION, **payload, "kind": "component"}, indent=2)
 
     @mcp.tool()
     def list_routes() -> str:

@@ -1,0 +1,3 @@
+- **AI discovery INFO checks (#3448).** Add `djust.I001` agent discovery hints, `djust.I002` for LiveView projects without theming, and `djust.I003` for fresh cached X101–X104 UI findings even when components are enabled. Missing/stale caches are silent.
+
+  **Behavior change:** Agent-run `manage.py check --fail-level INFO` now fails unless I001 is silenced; unsilenced I002/I003 can also fail this threshold. I002 also prints on runserver/migrate for LiveView projects without `djust.theming`. Use `SILENCED_SYSTEM_CHECKS` or `DJUST_CONFIG["suppress_checks"]` per ID; `DJUST_AI_HINTS=0` silences I001 only.

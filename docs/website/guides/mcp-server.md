@@ -120,6 +120,24 @@ These tools return static framework metadata. They work in both modes.
 
 **`get_best_practices()`** — Returns comprehensive guidance: setup checklist, lifecycle flow diagram, event handler rules, JIT serialization patterns, form integration, security rules, template directive examples, and the 8 most common pitfalls.
 
+### UI component catalog (no Django required)
+
+Call these before writing template markup. They share the catalog used by
+[`djust ai suggest`](ai-discovery.md), including purposes, keywords, load
+lines, props, child tags, related components, and snippets.
+
+| Tool | Result |
+| --- | --- |
+| `list_ui_components(query="")` | Empty query: catalog grouped by category. With an intent: up to 10 ranked results; query is truncated to 512 characters. |
+| `get_ui_component(name)` | Component detail and example variants; child tag names resolve to their parent. Unknown names return `error` and `did_you_mean`. |
+
+Successful JSON payloads have `version: 1` and `kind`: `catalog` for an
+empty-query list, `suggest` for a search, or `component` for a lookup.
+`component_kind` separately identifies `tag` or `class`. Search uses `query`
+where the CLI uses `intent`. Within a version, keys may be added; breaking
+schema changes bump the version. Unknown-name errors have no version/kind.
+These tools work in standalone mode; no Django settings are required.
+
 ### Project Introspection (requires Django)
 
 These tools inspect your live Django project. They only work when launched via `python manage.py djust_mcp`.

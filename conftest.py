@@ -59,6 +59,16 @@ def _isolate_system_check_registry():
 
 
 @pytest.fixture(autouse=True)
+def _no_agent_hint_env(monkeypatch):
+    """Disable inherited AI hints in subprocess check tests; I001 tests opt in.
+
+    Agent shells may inherit CLAUDECODE or CODEX_* variables. Discovery tests
+    explicitly remove this per-shell override when testing the I001 hint.
+    """
+    monkeypatch.setenv("DJUST_AI_HINTS", "0")
+
+
+@pytest.fixture(autouse=True)
 def _no_inherited_git_env(monkeypatch):
     """Strip git's execution variables for every test (#2608, #3179).
 

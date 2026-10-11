@@ -394,6 +394,8 @@ With `DEBUG = True` and `watchdog` installed, djust 1.2.2 and the 1.3 release ca
 
 ## See also
 
+- [AI Capability Discovery](ai-discovery.md): inventory, intent-based UI suggestions, manifest, and I001–I003 hints
+
 - [MCP server](mcp-server.md): setup for each editor and the full tool list
 - [`djust_audit`](djust-audit.md): every flag, exit code and a CI example
 - [Error code reference](error-codes.md): every check ID with its cause and fix
