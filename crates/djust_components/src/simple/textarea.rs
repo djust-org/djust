@@ -80,7 +80,7 @@ impl RustTextArea {
         // Label
         if let Some(ref label) = self.label {
             html.push_str("\n    <label for=\"");
-            html.push_str(&self.id);
+            html.push_str(&html_escape(&self.id));
             html.push_str("\" class=\"form-label\">");
             html.push_str(&html_escape(label));
             if self.required {
@@ -102,9 +102,9 @@ impl RustTextArea {
         }
 
         html.push_str("\"\n              id=\"");
-        html.push_str(&self.id);
+        html.push_str(&html_escape(&self.id));
         html.push_str("\"\n              name=\"");
-        html.push_str(&self.name);
+        html.push_str(&html_escape(&self.name));
         html.push_str("\"\n              rows=\"");
         html.push_str(&self.rows.to_string());
         html.push('"');
@@ -371,5 +371,55 @@ mod tests {
         let html = textarea.render();
         assert!(html.contains("&lt;script&gt;"));
         assert!(!html.contains("<script>"));
+    }
+}
+
+#[cfg(test)]
+mod escaping_tests {
+    use super::*;
+
+    #[test]
+    fn id_and_name_are_html_escaped() {
+        let t = RustTextArea::new(
+            "n\" onmouseover=\"y".to_string(),
+            Some("i\"><img src=x>".to_string()),
+            Some("L".to_string()),
+            "",
+            None,
+            None,
+            3,
+            false,
+            false,
+            false,
+            None,
+            None,
+        );
+        let html = t.render();
+        assert!(!html.contains("n\" onmouseover"));
+        assert!(!html.contains("<img"));
+        assert!(html.contains("name=\"n&quot; onmouseover=&quot;y\""));
+        assert!(html.contains("id=\"i&quot;&gt;&lt;img src=x&gt;\""));
+        assert!(html.contains("for=\"i&quot;&gt;&lt;img src=x&gt;\""));
+    }
+
+    #[test]
+    fn plain_id_output_unchanged() {
+        let t = RustTextArea::new(
+            "bio".to_string(),
+            None,
+            Some("Bio".to_string()),
+            "",
+            None,
+            None,
+            3,
+            false,
+            false,
+            false,
+            None,
+            None,
+        );
+        let html = t.render();
+        assert!(html.contains("<label for=\"bio\" class=\"form-label\">Bio</label>"));
+        assert!(html.contains("id=\"bio\"\n              name=\"bio\""));
     }
 }

@@ -6,6 +6,8 @@ Simple stateless pagination component with automatic Rust optimization.
 
 from ..base import Component
 
+from django.utils.html import conditional_escape
+
 try:
     from djust._rust import RustPagination
 
@@ -143,7 +145,7 @@ class Pagination(Component):
         # Build pagination classes
         pagination_classes = ["pagination"]
         if self.size != "md":
-            pagination_classes.append(f"pagination-{self.size}")
+            pagination_classes.append(f"pagination-{conditional_escape(self.size)}")
 
         parts.append(f'  <ul class="{" ".join(pagination_classes)}">')
 

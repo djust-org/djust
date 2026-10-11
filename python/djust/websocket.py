@@ -22,6 +22,7 @@ from .websocket_utils import (
     _call_handler,
     _check_event_security,  # noqa: F401 - re-exported for tests
     _ensure_handler_rate_limit,  # noqa: F401 - re-exported for tests
+    _post_only_rules_deny,
     _safe_error,
     _validate_event_security,
     get_handler_coerce_setting,
@@ -275,6 +276,35 @@ from .security.mount import validate_mount_url as _validate_mount_url  # noqa: E
 #: Fallback for ``LIVEVIEW_CONFIG["reauth_server_turn_interval"]``: seconds a
 #: passed ``reauth_on_event`` check covers server-originated turns on one socket.
 _SERVER_TURN_REAUTH_INTERVAL_S = 5.0
+
+#: Consumer attributes a mount sets up before its auth check; a view refused
+#: beside the page view puts them back as they were.
+_BESIDE_PAGE_STATE = (
+    "_sticky_auto_reattached",
+    "_view_path",
+    "_view_group",
+    "_presence_group",
+    "_db_notify_channels",
+    "_tick_task",
+    "use_actors",
+    "actor_handle",
+)
+
+
+def _release_failed_view(view: Any) -> None:
+    """Release a view whose mount failed or was refused after ``mount()`` ran.
+
+    ``mount()`` may already have opened uploads or waiters; the view is gone,
+    so they go with it, as at a disconnect. Never raises.
+    """
+    for step, args in (("_cleanup_uploads", ()), ("_cancel_all_waiters", ("mount_failed",))):
+        method = getattr(view, step, None)
+        if not callable(method):
+            continue
+        try:
+            method(*args)
+        except Exception:  # noqa: BLE001 — cleanup after a failure already reported
+            logger.debug("releasing a failed mount: %s raised", step, exc_info=True)
 
 
 def _should_expose_timing() -> bool:
@@ -1461,7 +1491,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         import time
 
         # --- security / validation (shared with handle_event) -----------
-        handler = await _validate_event_security(self, event_name, target_view, self._rate_limiter)
+        handler = await _validate_event_security(
+            self, event_name, target_view, self._rate_limiter, root_view=self.view_instance
+        )
         if handler is None:
             return
 
@@ -2047,6 +2079,22 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
         logger = logging.getLogger(__name__)
 
+        # A mount while a view is live on this socket (dj-lazy hydration), a
+        # mount_batch entry, or a mount addressed to a container is a view
+        # beside the page view: a LoginRequiredMiddleware refusal refuses that
+        # view only and leaves the consumer as it was.
+        previous_view = self.view_instance
+        beside_page = (
+            previous_view is not None
+            or bool(getattr(self, "_mounting_in_batch", False))
+            or bool(data.get("target_id"))
+        )
+        before_mount = (
+            {name: getattr(self, name, None) for name in _BESIDE_PAGE_STATE}
+            if beside_page
+            else None
+        )
+
         # Reset auto-reattach tracker (ADR-014): each mount starts with
         # an empty set; the tag pushes ids onto it as it claims survivors.
         self._sticky_auto_reattached = set()
@@ -2136,51 +2184,17 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 # Observability must never break a WS connection.
                 logger.warning("Failed to register view in observability registry: %s", e)
 
-            # Join per-view channel group for server-push
-            from .push import view_group_name
-
-            self._view_path = view_path
-            self._view_group = view_group_name(view_path)
-            await self.channel_layer.group_add(self._view_group, self.channel_name)
-
-            # Join presence group if view supports presence tracking
-            self._presence_group = None
-            if hasattr(self.view_instance, "get_presence_key"):
-                try:
-                    presence_key = self.view_instance.get_presence_key()
-                    self._presence_group = PresenceManager.presence_group_name(presence_key)
-                    await self.channel_layer.group_add(self._presence_group, self.channel_name)
-                except Exception as e:
-                    logger.warning("Error setting up presence group: %s", e)
-
-            # Join db_notify groups for every channel the view subscribed to
-            # via NotificationMixin.listen() during mount(). The groups are
-            # addressed per-channel (djust_db_notify_<channel>) so a NOTIFY
-            # on one channel never fans out to views listening on another.
-            self._db_notify_channels = set()
-            listen_channels = getattr(self.view_instance, "_listen_channels", None)
-            if listen_channels:
-                for ch in listen_channels:
-                    try:
-                        await self.channel_layer.group_add(
-                            f"djust_db_notify_{ch}", self.channel_name
-                        )
-                        self._db_notify_channels.add(ch)
-                    except Exception as e:  # noqa: BLE001
-                        logger.warning("Error joining db_notify group for %s: %s", ch, e)
-
-            # Start periodic tick if subclass overrides handle_tick
-            tick_interval = getattr(view_class, "tick_interval", None)
-            if tick_interval:
-                from .live_view import LiveView as _LV
-
-                if view_class.handle_tick is not _LV.handle_tick:
-                    self._tick_task = asyncio.create_task(self._run_tick(tick_interval))
+            # The view, presence and db_notify groups are joined once auth and
+            # the on_mount hooks have admitted the view, and the tick starts
+            # once the object-permission check has passed (both below), so a
+            # refused mount joins nothing and never ticks.
 
             # Check if view uses actor-based state management
             self.use_actors = getattr(view_class, "use_actors", False)
 
-            if self.use_actors and create_session_actor:
+            # A view beside the page view gets its SessionActor once auth admits
+            # it (below), so a refused one leaves no actor behind.
+            if self.use_actors and create_session_actor and before_mount is None:
                 # Create SessionActor for this session
                 logger.info("Creating SessionActor for %s", view_path)
                 self.actor_handle = await create_session_actor(self.session_id)
@@ -2312,9 +2326,16 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     "Permission denied for %s: %s", self.view_instance.__class__.__name__, exc
                 )
                 await self.send_json({"type": "error", "message": "Permission denied"})
+                # Clear the refused view so no later frame reaches it.
+                self.view_instance = None
                 await self.close(code=4403)
                 return
             if redirect_url:
+                from .auth._login_required_middleware import is_middleware_redirect
+
+                if before_mount is not None and is_middleware_redirect(redirect_url):
+                    await self._refuse_beside_page(before_mount, previous_view)
+                    return
                 # Auth failure (e.g. anonymous user on a login_required view).
                 # Send the redirect frame so a browser navigates to LOGIN_URL,
                 # THEN close the socket — otherwise a raw WS client can ignore
@@ -2350,6 +2371,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             # See: https://github.com/djust-org/djust/issues/342
             # --- End pre-mount security sequence ---
 
+            if before_mount is not None and self.use_actors and create_session_actor:
+                logger.info("Creating SessionActor for %s", view_path)
+                self.actor_handle = await create_session_actor(self.session_id)
+                logger.info("SessionActor created: %s", self.actor_handle.session_id)
+
             # --- on_mount hooks (after auth, before mount) ---
             from .hooks import run_on_mount_hooks
 
@@ -2369,6 +2395,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     await self.close(code=4403)
                 return
             # --- End on_mount hooks ---
+
+            # Auth and the on_mount hooks have admitted the view: only now does
+            # the connection join its channel-layer groups.
+            await self._join_view_groups(view_path)
 
             # --- State restoration (skip mount when pre-rendered state exists) ---
             # Loosened from `if has_prerendered:` — also fire on plain WS
@@ -2584,26 +2614,6 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 if hasattr(self.view_instance, "_capture_dirty_baseline"):
                     self.view_instance._capture_dirty_baseline()
 
-                # --- Object-permission check (ADR-017 §Decision 5, post-mount) ---
-                # check_view_auth handled login + role + custom checks pre-mount
-                # at line ~1947. The fourth (object-level) step is split out
-                # into a separate helper here because get_object() reads
-                # `self.<x>_id` which only exists after mount() has populated it.
-                # See ADR-017 § "Physical call sites" for the full rationale.
-                from .auth.core import check_object_permission
-
-                try:
-                    await sync_to_async(check_object_permission)(self.view_instance, request)
-                except PermissionDenied as exc:
-                    logger.info(
-                        "Object-permission denied for %s: %s",
-                        self.view_instance.__class__.__name__,
-                        exc,
-                    )
-                    await self.send_json({"type": "error", "message": "Permission denied"})
-                    await self.close(code=4403)
-                    return
-                # --- End object-permission check ---
         except Exception as e:
             response = handle_exception(
                 e,
@@ -2612,7 +2622,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 logger=logger,
                 log_message=f"Error in {sanitize_for_log(view_path)}.mount()",
             )
-            await self.send_json(response)
+            await self._fail_mount(e, response, before_mount, previous_view)
             return
 
         # Call handle_params() after mount (Phoenix parity: handle_params is
@@ -2629,8 +2639,41 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 logger=logger,
                 log_message=f"Error in {sanitize_for_log(view_path)}.handle_params()",
             )
-            await self.send_json(response)
+            await self._fail_mount(e, response, before_mount, previous_view)
             return
+
+        # --- Object-permission check (ADR-017 §Decision 5) ---
+        # check_view_auth handled login + role + custom checks pre-mount. The
+        # fourth (object-level) step runs after mount() AND handle_params(),
+        # before the first render: get_object() reads `self.<x>_id`, which
+        # mount() populates from the URL or handle_params() sets from the mount
+        # frame's query params (e.g. ``?id=``). Checking any earlier would
+        # authorize the pre-params object and then render the one the params
+        # selected. This is the order RequestMixin.get and url_change use.
+        from django.core.exceptions import PermissionDenied
+
+        from .auth.core import check_object_permission
+
+        try:
+            await sync_to_async(check_object_permission)(self.view_instance, request)
+        except PermissionDenied as exc:
+            logger.info(
+                "Object-permission denied for %s: %s",
+                self.view_instance.__class__.__name__,
+                exc,
+            )
+            # The groups and any presence mount() tracked were set up
+            # before this check could run: undo them before closing.
+            await self._leave_view_groups(untrack_presence=True)
+            _release_failed_view(self.view_instance)
+            self.view_instance = None
+            await self.send_json({"type": "error", "message": "Permission denied"})
+            await self.close(code=4403)
+            return
+        # --- End object-permission check ---
+
+        # The view is mounted and admitted, object permission included.
+        self._start_tick(view_class)
 
         # Get initial HTML (skip if client already has pre-rendered content)
         html = None
@@ -2713,7 +2756,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 logger=logger,
                 log_message=f"Error rendering {sanitize_for_log(view_path)}",
             )
-            await self.send_json(response)
+            await self._fail_mount(e, response, before_mount, previous_view)
             return
 
         # Send success response (HTML only if generated)
@@ -2902,6 +2945,192 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         # never delivered).
         await self._flush_push_events()
         await self._dispatch_async_work()
+
+    async def _join_view_groups(self, view_path: str) -> None:
+        """Join the admitted view's channel-layer groups.
+
+        Called by :meth:`handle_mount` only after the pre-mount auth sequence
+        and the on_mount hooks have admitted the view, so a refused or
+        redirected mount (a ``mount_batch`` entry or a lazy mount keeps the
+        socket open) never receives the view's server pushes, presence events
+        or db_notify messages. Still before ``mount()``, so the db_notify join
+        reads ``_listen_channels`` at the point it always has; the
+        object-permission refusal after ``mount()`` leaves these groups again.
+        """
+        from .push import view_group_name
+
+        self._view_path = view_path
+        self._view_group = view_group_name(view_path)
+        await self.channel_layer.group_add(self._view_group, self.channel_name)
+
+        # Join presence group if view supports presence tracking
+        self._presence_group = None
+        if hasattr(self.view_instance, "get_presence_key"):
+            try:
+                presence_key = self.view_instance.get_presence_key()
+                self._presence_group = PresenceManager.presence_group_name(presence_key)
+                await self.channel_layer.group_add(self._presence_group, self.channel_name)
+            except Exception as e:
+                logger.warning("Error setting up presence group: %s", e)
+
+        # Join db_notify groups for every channel the view subscribed to
+        # via NotificationMixin.listen(). The groups are addressed
+        # per-channel (djust_db_notify_<channel>) so a NOTIFY on one
+        # channel never fans out to views listening on another.
+        self._db_notify_channels = set()
+        listen_channels = getattr(self.view_instance, "_listen_channels", None)
+        if listen_channels:
+            for ch in listen_channels:
+                try:
+                    await self.channel_layer.group_add(f"djust_db_notify_{ch}", self.channel_name)
+                    self._db_notify_channels.add(ch)
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("Error joining db_notify group for %s: %s", ch, e)
+
+    def _start_tick(self, view_class: Any) -> None:
+        """Start the periodic tick if the view overrides ``handle_tick``.
+
+        Called by :meth:`handle_mount` once the view is mounted and its
+        object-permission check has passed: the tick runs as its own task,
+        so starting it any earlier would let ``handle_tick`` run on a view
+        that is about to be refused.
+        """
+        tick_interval = getattr(view_class, "tick_interval", None)
+        if tick_interval:
+            from .live_view import LiveView as _LV
+
+            if view_class.handle_tick is not _LV.handle_tick:
+                self._tick_task = asyncio.create_task(self._run_tick(tick_interval))
+
+    async def _leave_view_groups(self, untrack_presence: bool = False) -> None:
+        """Undo :meth:`_join_view_groups` for a mount refused after it ran.
+
+        Leaves the view, presence and db_notify groups, cancels the tick and,
+        with ``untrack_presence``, drops any presence ``mount()`` tracked. The
+        group attributes are reset so ``disconnect`` does not discard them a
+        second time. Failures are logged, never raised.
+        """
+        if self._tick_task is not None:
+            self._tick_task.cancel()
+            self._tick_task = None
+        if untrack_presence and hasattr(self.view_instance, "untrack_presence"):
+            try:
+                await sync_to_async(self.view_instance.untrack_presence)()
+            except Exception as e:  # noqa: BLE001
+                logger.warning("Error cleaning up presence: %s", e)
+        groups = [g for g in (self._view_group, self._presence_group) if g]
+        groups.extend(f"djust_db_notify_{ch}" for ch in self._db_notify_channels or ())
+        self._view_group = None
+        self._presence_group = None
+        self._db_notify_channels = set()
+        for group in groups:
+            try:
+                await self.channel_layer.group_discard(group, self.channel_name)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("Error leaving channel group %s: %s", group, e)
+
+    async def _fail_mount(
+        self,
+        exc: BaseException,
+        response: Dict[str, Any],
+        before: Optional[Dict[str, Any]],
+        previous_view: Any,
+    ) -> None:
+        """End a mount that raised after the view was set up: nothing stays mounted.
+
+        ``mount()`` is where an application checks what the user may see, so
+        an exception there (``PermissionDenied``, ``Http404``, any other), in
+        the state restore, ``handle_params()`` or the first render refuses the
+        view. ``PermissionDenied`` gets the auth refusal's ``Permission
+        denied`` frame, any other exception its error frame. The view's
+        groups, tick and tracked presence are dropped and the view is
+        released. The page view's socket is left without a view, and closed
+        with 4403 for ``PermissionDenied``; a view beside the page view goes
+        alone: the consumer gets back the view and state it had and the socket
+        stays open (a ``failed[]`` entry in a batch).
+        """
+        from django.core.exceptions import PermissionDenied
+
+        view = self.view_instance
+        denied = isinstance(exc, PermissionDenied)
+        frame = {"type": "error", "message": "Permission denied"} if denied else response
+        if before is not None:
+            await self._untrack_view_presence(view)
+            await self._restore_beside_page(before, previous_view)
+            _release_failed_view(view)
+            await self.send_json(frame)
+            return
+        await self._leave_view_groups(untrack_presence=True)
+        self.view_instance = None
+        _release_failed_view(view)
+        await self.send_json(frame)
+        if denied:
+            await self.close(code=4403)
+
+    async def _untrack_view_presence(self, view: Any) -> None:
+        """Untrack the presence ``mount()`` tracked for ``view``. Never raises."""
+        if not getattr(view, "_presence_tracked", False):
+            return
+        try:
+            await sync_to_async(view.untrack_presence)()
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Error cleaning up presence: %s", e)
+
+    async def _refuse_beside_page(self, before: Dict[str, Any], previous_view: Any) -> None:
+        """Refuse a view mounted beside the page view on its own.
+
+        Django's ``LoginRequiredMiddleware`` rule refused a view beside the
+        page view (``dj-lazy`` hydration, a ``mount_batch`` entry). Only that
+        view is refused, as on HTTP, where the middleware never gates what a
+        page includes: the groups and tick it set up are dropped, the consumer
+        gets back the view and state it had, and the client gets an error frame
+        (a ``failed[]`` entry in a batch) instead of a navigation, with the
+        socket left open.
+        """
+        await self._restore_beside_page(before, previous_view)
+        await self.send_json(
+            {
+                "type": "error",
+                "error": "Login required",
+                "message": "Login required",
+                "code": "login_required",
+            }
+        )
+
+    async def _restore_beside_page(self, before: Dict[str, Any], previous_view: Any) -> None:
+        """Drop what a refused view beside the page view set up, and put back
+        the view and consumer state the mount found."""
+
+        def groups(state: Dict[str, Any]) -> set:
+            names = {state.get("_view_group"), state.get("_presence_group")}
+            names.update(f"djust_db_notify_{ch}" for ch in state.get("_db_notify_channels") or ())
+            names.discard(None)
+            return names
+
+        current = {name: getattr(self, name, None) for name in _BESIDE_PAGE_STATE}
+        for group in groups(current) - groups(before):
+            try:
+                await self.channel_layer.group_discard(group, self.channel_name)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("Error leaving channel group %s: %s", group, e)
+        task = current.get("_tick_task")
+        if task is not None and task is not before.get("_tick_task"):
+            task.cancel()
+        for name, value in before.items():
+            setattr(self, name, value)
+        self.view_instance = previous_view
+        # The refused view registered itself for this session when it was
+        # instantiated; the observability registry follows the consumer back.
+        try:
+            from djust.observability.registry import register_view, unregister_view
+
+            if previous_view is None:
+                unregister_view(self.session_id)
+            else:
+                register_view(self.session_id, previous_view)
+        except Exception as e:  # noqa: BLE001
+            # Observability must never break a WS connection.
+            logger.warning("Failed to restore the observability registry entry: %s", e)
 
     async def _mount_one(self, data_view: Dict[str, Any]):
         """Mount + render a single view and return a payload WITHOUT sending.
@@ -3262,7 +3491,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 # RESOLVED target (may be an embedded child) so a child's
                 # handler is what gets validated/called, not the parent's.
                 handler = await _validate_event_security(
-                    self, event_name, target_view, self._rate_limiter
+                    self,
+                    event_name,
+                    target_view,
+                    self._rate_limiter,
+                    root_view=self.view_instance,
                 )
                 if handler is None:
                     _tt_error = "permission_denied"
@@ -3390,7 +3623,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     try:
                         # Security checks (shared with actor and view paths)
                         handler = await _validate_event_security(
-                            self, event_name, component, self._rate_limiter
+                            self,
+                            event_name,
+                            component,
+                            self._rate_limiter,
+                            root_view=self.view_instance,
                         )
                         if handler is None:
                             _tt_c_error = "permission_denied"
@@ -3508,7 +3745,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     # Use target_view for handler lookup (may be an embedded child)
                     # Security checks (shared with actor and component paths)
                     handler = await _validate_event_security(
-                        self, event_name, target_view, self._rate_limiter
+                        self,
+                        event_name,
+                        target_view,
+                        self._rate_limiter,
+                        root_view=self.view_instance,
                     )
                     if handler is None:
                         _tt_error = "permission_denied"
@@ -4342,6 +4583,24 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
     # File Upload Handling
     # ========================================================================
 
+    def _scope_session_key(self) -> Optional[str]:
+        """Django session key of this connection, or None when it has none.
+
+        Identifies the owner of a resumable upload: recorded at
+        ``upload_register`` and compared at ``upload_resume`` (and by the
+        HTTP ``UploadStatusView``, which reads the same cookie session).
+        """
+        try:
+            session = self.scope.get("session") if hasattr(self, "scope") else None
+            if session is not None:
+                # Channels' SessionMiddlewareStack makes the key available by
+                # the time the WS message loop is running.
+                key = getattr(session, "session_key", None)
+                return key if isinstance(key, str) and key else None
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("failed to read the session key: %s", exc)
+        return None
+
     async def _handle_upload_register(self, data: Dict[str, Any]) -> None:
         """Handle upload_register message: client announces a file to upload."""
         if not self.view_instance:
@@ -4355,6 +4614,12 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             await self.send_error("No uploads configured for this view")
             return
 
+        # An upload is part of an event on HTTP (a POST through the view's
+        # post()): what only post() runs applies to it as to every event.
+        if await _post_only_rules_deny(self.view_instance):
+            await self.send_error("Permission denied")
+            return
+
         mgr = self.view_instance._upload_manager
         entry = mgr.register_entry(
             upload_name=data.get("upload_name", ""),
@@ -4362,6 +4627,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             client_name=data.get("client_name", ""),
             client_type=data.get("client_type", ""),
             client_size=data.get("client_size", 0),
+            session_key=self._scope_session_key(),
         )
 
         if entry:
@@ -4392,8 +4658,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
              "bytes_received": N, "chunks_received": [0, 1, 2, ...]}
 
         Session-scoped access: the state entry's stored ``session_key``
-        must match the current WS session, else we reply ``not_found``
-        (same response as missing — prevents existence-probe leak).
+        must be present and match the current WS session, else we reply
+        ``not_found`` (same response as missing, so the reply does not
+        reveal whether the id exists).
         """
         from .uploads.resumable import resolve_resume_request
 
@@ -4402,17 +4669,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             await self.send_error("upload_resume requires a ref")
             return
 
-        session_key = None
-        try:
-            session = self.scope.get("session") if hasattr(self, "scope") else None
-            if session is not None:
-                # Session object may need loading — access .session_key
-                # synchronously; Channels' SessionMiddlewareStack
-                # guarantees the key is available by the time the WS
-                # message loop is running.
-                session_key = getattr(session, "session_key", None)
-        except Exception as exc:  # noqa: BLE001
-            logger.debug("upload_resume: failed to read session key: %s", exc)
+        session_key = self._scope_session_key()
 
         # Active-ref check: is another in-flight upload using this id?
         active = False
@@ -4432,6 +4689,19 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             session_key=session_key,
             active_refs=(lambda _uid, _a=active: _a),
         )
+        if (
+            payload.get("status") == "resumed"
+            and self.view_instance is not None
+            and await _post_only_rules_deny(self.view_instance)
+        ):
+            # What only the view's post() runs applies to uploads too.
+            payload = {
+                "type": "upload_resumed",
+                "ref": upload_id,
+                "status": "not_found",
+                "bytes_received": 0,
+                "chunks_received": [],
+            }
         await self.send_json(payload)
 
     async def _handle_upload_frame(self, data: bytes) -> None:
@@ -5738,10 +6008,14 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         """
         Handle presence-related events from the channel layer.
 
-        These events are broadcasted to all users in a presence group.
+        These events are broadcasted to all users in a presence group. They are
+        forwarded only while this connection has a mounted view; with none (the
+        mount was refused or never happened) the event is dropped.
         """
         view = self.view_instance
-        if view is not None and djust_config.get("reauth_on_event"):
+        if view is None:
+            return
+        if djust_config.get("reauth_on_event"):
             # The presence payload is data the viewer may no longer be entitled
             # to: same re-check as a server-originated render turn.
             async with self._render_lock:
@@ -5898,8 +6172,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         """
         Handle a direct push_event from the channel layer (via push_event_to_view).
 
-        Sends the event directly to the client without re-rendering.
+        Sends the event directly to the client without re-rendering. Dropped
+        when this connection has no mounted view, like ``server_push``.
         """
+        if not self.view_instance:
+            return
         await self.send_json(
             {
                 "type": "push_event",

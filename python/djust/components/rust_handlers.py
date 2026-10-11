@@ -16,10 +16,14 @@ from django.utils.html import conditional_escape
 from django.utils.safestring import mark_safe
 
 from djust.components.utils import (
+    safe_css_color,
+    safe_css_length,
+    safe_css_ratio,
     CURRENCY_SYMBOLS,
     format_cell as _format_cell_util,
     interpolate_color,
     interpolate_color_gradient,
+    url_attr,
 )
 
 
@@ -388,7 +392,7 @@ class AvatarHandler:
         size = conditional_escape(kw.get("size", "md"))
         status = conditional_escape(kw.get("status", ""))
         img_html = (
-            f'<img class="avatar-image" src="{conditional_escape(src)}" alt="{alt}">'
+            f'<img class="avatar-image" src="{url_attr(src, image=True)}" alt="{alt}">'
             if src
             else f'<span class="avatar-initials">{initials}</span>'
         )
@@ -456,7 +460,7 @@ class BreadcrumbHandler:
         for i, item in enumerate(items):
             if isinstance(item, dict):
                 label = conditional_escape(item.get("label", ""))
-                url = conditional_escape(item.get("url", ""))
+                url = url_attr(item.get("url", ""))
                 active = item.get("active", i == len(items) - 1)
             else:
                 label = conditional_escape(str(item))
@@ -1205,6 +1209,7 @@ class DataTableHandler:
                 frozen_cls = " data-table-frozen-right"
 
             # Width style
+            width = safe_css_length(width, "") if width else ""
             width_attr = f' style="width:{conditional_escape(width)}"' if width else ""
 
             # Resize / reorder attributes
@@ -1572,7 +1577,12 @@ class DataTableHandler:
                             cf_colors = cf_preset.get("colors", ["#ff0000", "#00ff00"])
                             cf_color = _interpolate_color_simple(cf_colors, cf_ratio)
                             td_classes.append("data-table-cf-color-scale")
-                            cf_html = f' style="background-color:{conditional_escape(cf_color)}"'
+                            cf_color = safe_css_color(cf_color, "")
+                            cf_html = (
+                                f' style="background-color:{conditional_escape(cf_color)}"'
+                                if cf_color
+                                else ""
+                            )
                         elif cf_type == "icon_set":
                             cf_icons = cf_preset.get("icons", ["\u25bc", "\u25b6", "\u25b2"])
                             cf_thresholds = cf_preset.get("thresholds", [])
@@ -1769,9 +1779,9 @@ class DataTableHandler:
                     if s and s.get("count", 0) > 0:
                         stat_cells.append(
                             f'<td class="data-table-stats-cell">'
-                            f'<span class="data-table-stat" title="Min">{s.get("min", "")}</span>'
-                            f'<span class="data-table-stat" title="Max">{s.get("max", "")}</span>'
-                            f'<span class="data-table-stat" title="Avg">{s.get("avg", "")}</span>'
+                            f'<span class="data-table-stat" title="Min">{conditional_escape(s.get("min", ""))}</span>'
+                            f'<span class="data-table-stat" title="Max">{conditional_escape(s.get("max", ""))}</span>'
+                            f'<span class="data-table-stat" title="Avg">{conditional_escape(s.get("avg", ""))}</span>'
                             f"</td>"
                         )
                     else:
@@ -3483,13 +3493,13 @@ class ResponsiveImageHandler:
 
     def render(self, args, context):
         kw = _parse_args(args, context)
-        src = conditional_escape(str(kw.get("src", "")))
+        src = url_attr(kw.get("src", ""), image=True)
         alt = conditional_escape(str(kw.get("alt", "")))
-        aspect_ratio = conditional_escape(str(kw.get("aspect_ratio", "")))
+        aspect_ratio = conditional_escape(safe_css_ratio(kw.get("aspect_ratio", ""), ""))
         lazy = kw.get("lazy", True)
         srcset = conditional_escape(str(kw.get("srcset", "")))
         sizes = conditional_escape(str(kw.get("sizes", "")))
-        placeholder = conditional_escape(str(kw.get("placeholder", "")))
+        placeholder = url_attr(kw.get("placeholder", ""), image=True)
         custom_class = conditional_escape(str(kw.get("custom_class", "")))
 
         if isinstance(lazy, str):
@@ -4504,7 +4514,7 @@ class SidebarItemHandler:
             )
         else:
             trigger = (
-                f'<a class="dj-sidebar__link{active_cls}" href="{href}">'
+                f'<a class="dj-sidebar__link{active_cls}" href="{url_attr(kw.get("href", "#"))}">'
                 f'{icon_html}<span class="dj-sidebar__label">{label}</span></a>'
             )
 
@@ -4541,7 +4551,7 @@ class NavMenuHandler:
         kw = _parse_args(args, context)
         nav_id = conditional_escape(kw.get("id", "nav-menu"))
         brand = kw.get("brand", "")
-        brand_href = conditional_escape(kw.get("brand_href", "/"))
+        brand_href = url_attr(kw.get("brand_href", "/"))
         toggle_event = conditional_escape(kw.get("toggle_event", "toggle_nav"))
         mobile_open = kw.get("mobile_open", False)
         custom_class = conditional_escape(kw.get("class", ""))
@@ -4618,7 +4628,7 @@ class NavItemHandler:
 
         return mark_safe(
             f'<li class="dj-nav__item{active_cls}">'
-            f'<a class="dj-nav__link" href="{href}">'
+            f'<a class="dj-nav__link" href="{url_attr(kw.get("href", "#"))}">'
             f"{label}{desc_html}</a></li>"
         )
 
@@ -4931,7 +4941,7 @@ class AvatarGroupHandler:
                 name = str(user)
                 src = ""
             e_name = conditional_escape(str(name))
-            e_src = conditional_escape(str(src))
+            e_src = url_attr(src, image=True)
             initials = conditional_escape("".join(w[0].upper() for w in str(name).split()[:2] if w))
             z = len(visible) - i
             if e_src:
@@ -5481,7 +5491,7 @@ class SourceCitationHandler:
             popover_parts.append(f'<span class="dj-citation__title">{e_title}</span>')
         if e_url:
             popover_parts.append(
-                f'<a class="dj-citation__url" href="{e_url}" '
+                f'<a class="dj-citation__url" href="{url_attr(url)}" '
                 f'target="_blank" rel="noopener noreferrer">{e_url}</a>'
             )
         if relevance is not None:
@@ -5711,7 +5721,7 @@ class ChatBubbleHandler:
         e_name = conditional_escape(str(name))
         e_text = conditional_escape(str(text))
         e_time = conditional_escape(str(time_str))
-        e_avatar = conditional_escape(str(avatar_src))
+        e_avatar = url_attr(avatar_src, image=True)
         e_class = conditional_escape(str(custom_class))
 
         side = "dj-bubble--user" if sender == "user" else "dj-bubble--other"
@@ -5802,7 +5812,7 @@ class PresenceAvatarsHandler:
                 status = "online"
 
             e_name = conditional_escape(str(name))
-            e_src = conditional_escape(str(src))
+            e_src = url_attr(src, image=True)
             safe_status = status if status in self.VALID_STATUSES else "online"
             initials = conditional_escape(
                 "".join(w[0].upper() for w in str(name).split()[:2] if w) or "?"
@@ -5873,7 +5883,7 @@ class MentionsInputHandler:
                 continue
             uid = conditional_escape(str(user.get("id", "")))
             uname = conditional_escape(str(user.get("name", "")))
-            avatar_src = conditional_escape(str(user.get("avatar", "")))
+            avatar_src = url_attr(user.get("avatar", ""), image=True)
 
             initials = (
                 conditional_escape(
@@ -6546,7 +6556,7 @@ class CookieConsentHandler:
 
         privacy_html = ""
         if privacy_url:
-            e_url = conditional_escape(str(privacy_url))
+            e_url = url_attr(privacy_url)
             privacy_html = f' <a href="{e_url}" class="dj-cookie-consent__link">Privacy Policy</a>'
 
         buttons = [
@@ -6822,7 +6832,7 @@ class MeterHandler:
             except (ValueError, TypeError):
                 val = 0
             pct = min(100, max(0, (val / total) * 100)) if total > 0 else 0
-            color = conditional_escape(str(seg.get("color", "")))
+            color = conditional_escape(safe_css_color(seg.get("color", ""), ""))
             seg_label = conditional_escape(str(seg.get("label", "")))
             style = f"width:{pct:.1f}%"
             if color:
@@ -6841,7 +6851,7 @@ class MeterHandler:
             for seg in segments:
                 if not isinstance(seg, dict):
                     continue
-                color = conditional_escape(str(seg.get("color", "")))
+                color = conditional_escape(safe_css_color(seg.get("color", ""), ""))
                 seg_label = conditional_escape(str(seg.get("label", "")))
                 val = seg.get("value", 0)
                 swatch_style = f"background:{color}" if color else ""
@@ -6849,7 +6859,7 @@ class MeterHandler:
                     f'<div class="dj-meter__legend-item">'
                     f'<span class="dj-meter__legend-swatch" style="{swatch_style}"></span>'
                     f'<span class="dj-meter__legend-label">{seg_label}</span>'
-                    f'<span class="dj-meter__legend-value">{val}</span></div>'
+                    f'<span class="dj-meter__legend-value">{conditional_escape(val)}</span></div>'
                 )
             legend_html = f'<div class="dj-meter__legend">{"".join(items)}</div>'
 
@@ -7046,7 +7056,7 @@ class AuditLogHandler:
             cells = []
             for col in columns:
                 val = conditional_escape(str(entry.get(col, "")))
-                cell_cls = f"dj-audit-log__td dj-audit-log__td--{col}"
+                cell_cls = f"dj-audit-log__td dj-audit-log__td--{conditional_escape(col)}"
                 if col == "action":
                     cell_cls += (
                         f" dj-audit-log__action--{conditional_escape(str(entry.get('action', '')))}"
@@ -7165,7 +7175,7 @@ class SortableGridHandler:
 
         e_event = conditional_escape(str(move_event))
         e_class = conditional_escape(str(custom_class))
-        e_gap = conditional_escape(str(gap))
+        e_gap = conditional_escape(safe_css_length(gap, "0.75rem"))
 
         classes = ["dj-sortable-grid"]
         if disabled:
@@ -7191,7 +7201,7 @@ class SortableGridHandler:
             thumbnail = item.get("thumbnail", "")
             thumb_html = ""
             if thumbnail:
-                e_thumb = conditional_escape(str(thumbnail))
+                e_thumb = url_attr(thumbnail, image=True)
                 thumb_html = (
                     f'<img class="dj-sortable-grid__thumb" '
                     f'src="{e_thumb}" alt="{label}" loading="lazy">'
@@ -7224,7 +7234,7 @@ class ImageCropperHandler:
         disabled = kw.get("disabled", False)
         custom_class = kw.get("class", "")
 
-        e_src = conditional_escape(str(src))
+        e_src = url_attr(src, image=True)
         e_event = conditional_escape(str(crop_event))
         e_class = conditional_escape(str(custom_class))
 
@@ -7346,13 +7356,13 @@ class ResizablePanelHandler:
             classes.append(e_class)
         class_str = " ".join(classes)
 
-        e_min = conditional_escape(str(min_size))
-        e_max = conditional_escape(str(max_size))
-        e_initial = conditional_escape(str(initial_size))
+        e_min = conditional_escape(safe_css_length(min_size, "100px"))
+        e_max = conditional_escape(safe_css_length(max_size, "none"))
+        e_initial = conditional_escape(safe_css_length(initial_size, "50%"))
 
         size_prop = "width" if direction == "horizontal" else "height"
         style_parts = [f"{size_prop}:{e_initial}", f"min-{size_prop}:{e_min}"]
-        if max_size != "none":
+        if e_max != "none":
             style_parts.append(f"max-{size_prop}:{e_max}")
         style = f'style="{";".join(style_parts)}"'
 
@@ -7410,7 +7420,7 @@ class LightboxHandler:
         if images and 0 <= idx < total:
             img = images[idx]
             if isinstance(img, dict):
-                e_src = conditional_escape(str(img.get("src", "")))
+                e_src = url_attr(img.get("src", ""), image=True)
                 e_alt = conditional_escape(str(img.get("alt", "")))
                 caption = img.get("caption", "")
                 img_html = f'<img class="dj-lightbox__image" src="{e_src}" alt="{e_alt}">'
@@ -7469,8 +7479,8 @@ class DashboardGridHandler:
 
         e_move = conditional_escape(str(move_event))
         e_resize = conditional_escape(str(resize_event))
-        e_gap = conditional_escape(str(gap))
-        e_row_height = conditional_escape(str(row_height))
+        e_gap = conditional_escape(safe_css_length(gap, "1rem"))
+        e_row_height = conditional_escape(safe_css_length(row_height, "200px"))
         e_class = conditional_escape(str(custom_class))
 
         classes = ["dj-dashboard-grid"]
@@ -7492,7 +7502,7 @@ class DashboardGridHandler:
                 continue
             pid = conditional_escape(str(panel.get("id", "")))
             title = conditional_escape(str(panel.get("title", "")))
-            pcontent = panel.get("content", "")
+            pcontent = conditional_escape(panel.get("content", ""))
             try:
                 col = int(panel.get("col", 1))
             except (ValueError, TypeError):
@@ -8520,6 +8530,12 @@ import re as _re_mod
 class TerminalHandler:
     """Inline handler for {% terminal output=lines %}"""
 
+    # Styles a line may have open at once, and SGR parameters in one sequence
+    # that may open a style (terminal.js reads at most as many parameters).
+    # Every open style is a nested span, so these bound how deep one line nests.
+    MAX_OPEN_SPANS = 32
+    MAX_PARAMS = 16
+
     ANSI_RE = _re_mod.compile(r"\033\[([0-9;]*)m")
     ANSI_COLORS = {
         "30": "#000",
@@ -8550,10 +8566,15 @@ class TerminalHandler:
             result.append(conditional_escape(text[last_end:start]))
             last_end = end
             codes = m.group(1).split(";")
-            for code in codes:
+            for index, code in enumerate(codes):
                 if code == "0" or code == "":
                     result.append("</span>" * open_spans)
                     open_spans = 0
+                elif index >= cls.MAX_PARAMS or open_spans >= cls.MAX_OPEN_SPANS:
+                    # A style past the caps is dropped, a reset anywhere is
+                    # honoured (it closes every open span): an unbounded stack
+                    # of nested spans is unbounded nesting in the page.
+                    continue
                 elif code == "1":
                     result.append('<span style="font-weight:bold">')
                     open_spans += 1
@@ -9186,7 +9207,10 @@ class CalendarViewHandler:
                 for i, ev in enumerate(day_events[:3]):
                     title = conditional_escape(str(ev.get("title", "")))
                     color = conditional_escape(
-                        str(ev.get("color", self.COLORS[i % len(self.COLORS)]))
+                        safe_css_color(
+                            ev.get("color", self.COLORS[i % len(self.COLORS)]),
+                            self.COLORS[i % len(self.COLORS)],
+                        )
                     )
                     ev_html += (
                         f'<div class="dj-calendar__event" '
@@ -9622,7 +9646,9 @@ class OrgChartHandler:
         if e_event:
             click_attr = f' dj-click="{e_event}" data-value="{conditional_escape(nid)}"'
         if avatar:
-            avatar_html = f'<img class="dj-org__avatar" src="{conditional_escape(str(avatar))}" alt="{name}" />'
+            avatar_html = (
+                f'<img class="dj-org__avatar" src="{url_attr(avatar, image=True)}" alt="{name}" />'
+            )
         else:
             initials = "".join(w[0] for w in str(node.get("name", "")).split()[:2]).upper() or "?"
             avatar_html = f'<span class="dj-org__initials">{conditional_escape(initials)}</span>'
@@ -9813,7 +9839,7 @@ class MasonryGridHandler:
         for items_in_col in col_items:
             item_cards = []
             for item in items_in_col:
-                content = str(item.get("content", ""))
+                content = conditional_escape(item.get("content", ""))
                 item_class = conditional_escape(str(item.get("class", "")))
                 extra = f" {item_class}" if item_class else ""
                 item_cards.append(f'<div class="dj-masonry__item{extra}">{content}</div>')
@@ -9881,7 +9907,9 @@ class CursorsOverlayHandler:
                 y = 0
 
             e_name = conditional_escape(str(name))
-            e_color = conditional_escape(str(color))
+            e_color = conditional_escape(
+                safe_css_color(color, self.DEFAULT_COLORS[i % len(self.DEFAULT_COLORS)])
+            )
 
             try:
                 px = int(x)
@@ -9951,7 +9979,7 @@ class LiveIndicatorHandler:
             avatar = ""
 
         e_name = conditional_escape(str(name))
-        e_avatar = conditional_escape(str(avatar))
+        e_avatar = url_attr(avatar, image=True)
         e_field = conditional_escape(str(field))
         e_action = conditional_escape(str(action))
 
@@ -10022,7 +10050,9 @@ class CollabSelectionHandler:
                 end = 0
 
             e_name = conditional_escape(str(name))
-            e_color = conditional_escape(str(color))
+            e_color = conditional_escape(
+                safe_css_color(color, self.DEFAULT_COLORS[i % len(self.DEFAULT_COLORS)])
+            )
             e_text = conditional_escape(str(text))
 
             try:
@@ -10100,7 +10130,7 @@ class ActivityFeedHandler:
             action = conditional_escape(str(event.get("action", "")))
             target = conditional_escape(str(event.get("target", "")))
             time = conditional_escape(str(event.get("time", "")))
-            avatar_src = conditional_escape(str(event.get("avatar", "")))
+            avatar_src = url_attr(event.get("avatar", ""), image=True)
             icon = conditional_escape(str(event.get("icon", "")))
 
             initials = (
@@ -10249,7 +10279,7 @@ class MapPickerHandler:
 
         e_class = conditional_escape(str(custom_class))
         e_event = conditional_escape(str(pick_event))
-        e_height = conditional_escape(str(height))
+        e_height = conditional_escape(safe_css_length(height, "400px"))
 
         cls = "dj-map-picker"
         if e_class:
@@ -10456,7 +10486,7 @@ class ErrorPageHandler:
         e_class = conditional_escape(str(custom_class))
         e_title = conditional_escape(str(title))
         e_message = conditional_escape(str(message))
-        e_url = conditional_escape(str(action_url))
+        e_url = url_attr(action_url)
         e_label = conditional_escape(str(action_label))
 
         cls = "dj-error-page"
@@ -10512,7 +10542,7 @@ class ImageUploadPreviewHandler:
 
         thumbs = []
         for url in previews:
-            e_url = conditional_escape(str(url))
+            e_url = url_attr(url, image=True)
             thumbs.append(
                 f'<div class="dj-img-upload__thumb">'
                 f'<img src="{e_url}" alt="Preview" '
@@ -10686,7 +10716,7 @@ class BreadcrumbDropdownHandler:
             url = item.get("url", "")
             aria = ' aria-current="page"' if is_last else ""
             if url and not is_last:
-                e_url = conditional_escape(str(url))
+                e_url = url_attr(url)
                 content = f'<a href="{e_url}" class="dj-breadcrumb__link">{label}</a>'
             else:
                 content = f'<span class="dj-breadcrumb__current">{label}</span>'
@@ -10707,7 +10737,7 @@ class BreadcrumbDropdownHandler:
                 label = conditional_escape(str(it.get("label", "")))
                 url = it.get("url", "")
                 if url:
-                    e_url = conditional_escape(str(url))
+                    e_url = url_attr(url)
                     dropdown_items.append(
                         f'<li class="dj-breadcrumb__dropdown-item">'
                         f'<a href="{e_url}">{label}</a></li>'
@@ -10797,7 +10827,7 @@ class DataCardGridHandler:
 
             img_html = ""
             if image:
-                e_img = conditional_escape(str(image))
+                e_img = url_attr(image, image=True)
                 img_html = f'<img src="{e_img}" alt="{title}" class="dj-data-card-grid__img">'
 
             click_attr = ""

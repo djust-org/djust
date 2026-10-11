@@ -28,6 +28,7 @@ import logging
 from typing import Any, Dict, Optional
 
 from asgiref.sync import sync_to_async
+from django.core.exceptions import PermissionDenied
 
 logger = logging.getLogger(__name__)
 
@@ -513,7 +514,8 @@ class StickyChildRegistry:
         Walks :attr:`_child_views`, filters to children with
         ``sticky is True``, and re-checks each child's auth against
         ``new_request`` via
-        :func:`djust.auth.core.check_view_auth_lightweight`. Survivors
+        :func:`djust.auth.core.check_view_auth_lightweight` and the
+        object-level :func:`djust.auth.core.enforce_object_permission`. Survivors
         are returned in a ``{sticky_id: child}`` map (keyed by each
         child's ``sticky_id`` class attr) for the consumer to stash on
         ``self._sticky_preserved``.
@@ -523,14 +525,23 @@ class StickyChildRegistry:
         unmount flow run on the old view.
         """
         # Lazy import to avoid circular: auth.core -> live_view -> mixins -> auth.
-        from ..auth.core import check_view_auth_lightweight
+        from ..auth.core import check_view_auth_lightweight, enforce_object_permission
+
+        def _authorized(child: Any) -> bool:
+            if not check_view_auth_lightweight(child, new_request):
+                return False
+            try:
+                enforce_object_permission(child, new_request)
+            except PermissionDenied:
+                return False
+            return True
 
         survivors: Dict[str, Any] = {}
         for _view_id, child in self._get_all_child_views().items():
             if getattr(child, "sticky", False) is not True:
                 continue
             sticky_id = getattr(child, "sticky_id", None) or _view_id
-            if not check_view_auth_lightweight(child, new_request):
+            if not _authorized(child):
                 logger.info(
                     "Sticky child %s auth denied for new request; discarding",
                     sticky_id,

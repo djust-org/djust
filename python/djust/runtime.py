@@ -462,6 +462,36 @@ class ViewRuntime:
             await self.transport.send(response)
             return
 
+        # ---- Object-permission check (ADR-017 §Decision 5) ----
+        # Runs AFTER mount() AND handle_params(), before the first render — the
+        # same order as the HTTP GET render (RequestMixin.get), the WebSocket
+        # mount and dispatch_url_change. get_object() may read
+        # access-determining state that mount() populates from the URL or that
+        # handle_params() sets from the mount frame's params (e.g.
+        # ``self.doc_id`` from ``?id=``). Routed through the shared
+        # enforce_object_permission chokepoint so this path cannot drift from
+        # the others (#1646). No-op for views that don't override get_object.
+        # Fail-closed: the chokepoint maps a None request / any
+        # non-PermissionDenied get_object failure to denial; the raised
+        # PermissionDenied becomes the permission_denied error frame (matching
+        # dispatch_url_change) and no view stays mounted.
+        from django.core.exceptions import PermissionDenied
+
+        from .auth.core import enforce_object_permission
+
+        try:
+            await sync_to_async(enforce_object_permission)(view_instance, request)
+        except PermissionDenied:
+            logger.info(
+                "Object-permission denied for %s (runtime mount)",
+                view_instance.__class__.__name__,
+            )
+            await self.transport.send_error(
+                "Access denied for this object.", code="permission_denied"
+            )
+            self.view_instance = None
+            return
+
         # ---- Initial render ----
         try:
             if hasattr(view_instance, "_initialize_rust_view"):

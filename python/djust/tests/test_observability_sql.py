@@ -12,7 +12,9 @@ import time
 
 import pytest
 from django.db import connection
-from django.test import RequestFactory, override_settings
+from django.test import override_settings
+
+from .conftest import observability_request_factory
 
 from djust.observability.sql import (
     _clear_queries,
@@ -118,7 +120,7 @@ def test_endpoint_returns_entries():
     with capture_for_event(session_id="s", handler_name="h"):
         with connection.cursor() as cursor:
             cursor.execute("SELECT 1")
-    rf = RequestFactory()
+    rf = observability_request_factory()
     resp = sql_queries_view(rf.get("/"))
     assert resp.status_code == 200
     data = json.loads(resp.content)
@@ -134,7 +136,7 @@ def test_endpoint_session_filter():
     with capture_for_event(session_id="sB", handler_name="h"):
         with connection.cursor() as cursor:
             cursor.execute("SELECT 2")
-    rf = RequestFactory()
+    rf = observability_request_factory()
     resp = sql_queries_view(rf.get("/?session_id=sA"))
     data = json.loads(resp.content)
     assert all(e["session_id"] == "sA" for e in data["entries"])
@@ -142,6 +144,6 @@ def test_endpoint_session_filter():
 
 @override_settings(DEBUG=False)
 def test_endpoint_404_when_debug_off():
-    rf = RequestFactory()
+    rf = observability_request_factory()
     resp = sql_queries_view(rf.get("/"))
     assert resp.status_code == 404

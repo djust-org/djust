@@ -160,7 +160,15 @@ require:
 - `path("_djust/observability/", include("djust.observability.urls"))`
   in the project's `urls.py`
 - `LocalhostOnlyObservabilityMiddleware` in `MIDDLEWARE` (rejects any
-  non-loopback caller)
+  non-loopback caller, and any request relayed by a reverse proxy)
+- the observability token: every request must carry it in the
+  `X-Djust-Observability-Token` header. The MCP server sends it on its own
+  when started with `python manage.py djust_mcp`, because the token is
+  derived from the project's `SECRET_KEY`. Other local tools can print it
+  with `python manage.py djust_observability_token`. If the dev server and
+  the tool don't load the same `SECRET_KEY` (for example, a key generated
+  at random on each start), set the same `DJUST_OBSERVABILITY_TOKEN`
+  environment variable for both
 
 Each tool corresponds 1:1 to an HTTP endpoint under
 `/_djust/observability/` — the MCP wrapper just calls it.
@@ -215,11 +223,16 @@ blocking. A process-wide lock serializes dry-runs.
 template file against every view that uses it. Returns the `dj-*`
 handlers wired in the template AND the diff against the view's
 handler methods, so you can catch dead bindings (template uses
-`dj-click="missing"`) at author time.
+`dj-click="missing"`) at author time. `template_path` is a logical name or
+an absolute path to a file inside a directory the template engines serve, or
+inside `BASE_DIR`; any other absolute path gets the same "Could not resolve
+template" answer as a missing file.
 
 **`seed_fixtures(fixture_paths)`** — Subprocess wrapper around
 `manage.py loaddata` for regression-fixture DB setup before a
-`reset_view_state` + `eval_handler` cycle.
+`reset_view_state` + `eval_handler` cycle. Every fixture path must resolve
+inside `BASE_DIR` (relative paths are joined to it, symlinks are followed);
+with no `BASE_DIR` set it loads nothing.
 
 > **Security model.** Mirrors django-debug-toolbar: only fires when
 > `DEBUG=True` AND the request originates from `127.0.0.1` / `::1`.

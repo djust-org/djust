@@ -31,6 +31,7 @@ from django.utils.html import escape, format_html
 from django.utils.safestring import mark_safe
 
 from .._html import build_tag
+from ..auth._login_required_middleware import mark_embedded
 from ..config import config
 from ..utils import get_csp_nonce
 
@@ -1357,6 +1358,27 @@ def _stamp_view_id(html: str, view_id: str) -> str:
     return _MASK_PLACEHOLDER_RE.sub(_unmask, stamped)
 
 
+def _discard_sticky_child(parent: Any, view_id: str, child: Any) -> None:
+    """Drop a registered sticky child that may no longer be rendered.
+
+    Runs the child's ``_on_sticky_unmount`` hook (cancels background work)
+    and unregisters it from ``parent`` (which runs ``_cleanup_on_unregister``).
+    Never raises — a failing hook must not mask the refusal that follows.
+    """
+    hook = getattr(child, "_on_sticky_unmount", None)
+    if callable(hook):
+        try:
+            hook()
+        except Exception:  # noqa: BLE001 — defensive
+            logger.exception("sticky child %r _on_sticky_unmount raised", view_id)
+    unregister = getattr(parent, "_unregister_child", None)
+    if callable(unregister):
+        try:
+            unregister(view_id)
+        except Exception:  # noqa: BLE001 — defensive
+            logger.exception("live_render: unregistering sticky child %r failed", view_id)
+
+
 def _render_sticky_child_html(
     child: Any,
     view_id: str,
@@ -1809,6 +1831,7 @@ def live_render(context, view_path: str, **kwargs) -> Any:
                 # Eager mount + render path — same as the non-lazy
                 # branch below. Returns the stamped child HTML.
                 child = child_cls()
+                mark_embedded(child)
                 child.request = request
                 auth_redirect = check_view_auth(child, request)
                 if auth_redirect is not None:
@@ -2023,6 +2046,34 @@ def live_render(context, view_path: str, **kwargs) -> Any:
             # (auth, session) read from the CURRENT parent render's request —
             # mirrors the ``_sticky_preserved`` auto-reattach path above.
             existing_child.request = request
+            # Re-run the same view-level (4a) and object-level (4c) checks the
+            # fresh-mount path runs, against the CURRENT request, so a reused
+            # child is only rendered while the user may still see it. On
+            # denial the child is dropped from the parent's registry (running
+            # its unmount/cleanup hooks) and the embed is refused, exactly as
+            # a fresh mount would be.
+            from ..auth.core import enforce_object_permission
+
+            try:
+                auth_redirect = check_view_auth(existing_child, request)
+            except PermissionDenied:
+                _discard_sticky_child(parent, preferred_view_id, existing_child)
+                raise
+            if auth_redirect is not None:
+                _discard_sticky_child(parent, preferred_view_id, existing_child)
+                raise TemplateSyntaxError(
+                    "{%% live_render %%} target %r denied access: the child view "
+                    "requires auth/permissions that the parent's request does not "
+                    "satisfy (login redirect: %s)" % (view_path, auth_redirect)
+                )
+            try:
+                enforce_object_permission(existing_child, request)
+            except PermissionDenied:
+                _discard_sticky_child(parent, preferred_view_id, existing_child)
+                raise TemplateSyntaxError(
+                    "{%% live_render %%} target %r denied access: object-level permission "
+                    "check failed for the requested object." % view_path
+                )
             return _render_sticky_child_html(
                 existing_child,
                 preferred_view_id,
@@ -2032,6 +2083,7 @@ def live_render(context, view_path: str, **kwargs) -> Any:
             )
 
     child = child_cls()
+    mark_embedded(child)
     child.request = request
 
     # 4a. Enforce child's auth posture against the parent's request BEFORE

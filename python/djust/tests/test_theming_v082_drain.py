@@ -90,7 +90,7 @@ def test_theme_css_link_url_changes_with_pack_cookie():
 
     # Render with a different pack cookie
     req2 = rf.get("/")
-    req2.COOKIES["djust_theme_pack"] = "nyc_core"
+    req2.COOKIES["djust_theme_pack"] = "aurora"
     url2 = tmpl.render(Context({"request": req2})).strip()
 
     assert url1 != url2, (
@@ -111,7 +111,7 @@ def test_get_state_reads_cookies_when_enable_client_override_true():
 
     rf = RequestFactory()
     req = rf.get("/")
-    req.COOKIES["djust_theme_pack"] = "nyc_core"
+    req.COOKIES["djust_theme_pack"] = "aurora"
     req.session = {}
 
     mgr = ThemeManager(request=req)
@@ -119,7 +119,7 @@ def test_get_state_reads_cookies_when_enable_client_override_true():
     mgr.config = dict(mgr.config, pack="djust", enable_client_override=True)
     state = mgr.get_state()
     # Cookie wins over config (back-compat default)
-    assert state.pack == "nyc_core", (
+    assert state.pack == "aurora", (
         f"expected cookie pack to win when enable_client_override=True; got pack={state.pack!r}"
     )
 
@@ -132,7 +132,7 @@ def test_get_state_ignores_cookies_when_enable_client_override_false():
 
     rf = RequestFactory()
     req = rf.get("/")
-    req.COOKIES["djust_theme_pack"] = "nyc_core"
+    req.COOKIES["djust_theme_pack"] = "aurora"
     req.session = {}
 
     mgr = ThemeManager(request=req)

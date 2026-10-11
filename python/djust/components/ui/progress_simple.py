@@ -6,6 +6,9 @@ Simple stateless progress bar with automatic Rust optimization.
 
 from typing import Optional
 from ..base import Component
+from djust.components.utils import safe_css_length
+
+from django.utils.html import conditional_escape
 
 try:
     from djust._rust import RustProgress
@@ -64,7 +67,9 @@ class Progress(Component):
         min_value: float = 0,
         max_value: float = 100,
     ):
-        # Clamp value and store parameters
+        # Clamp value and store parameters. ``height`` is written into a
+        # style attribute (all three render paths), so only a CSS length.
+        height = safe_css_length(height, "") or None
         clamped_value = max(min_value, min(value, max_value))
 
         # Pass kwargs to parent to create Rust instance
@@ -127,13 +132,13 @@ class Progress(Component):
             classes.append("progress-bar-striped")
         if self.animated:
             classes.append("progress-bar-animated")
-        classes.append(f"bg-{self.variant}")
+        classes.append(f"bg-{conditional_escape(self.variant)}")
 
         # Build outer style
-        outer_style = f' style="height: {self.height}"' if self.height else ""
+        outer_style = f' style="height: {conditional_escape(self.height)}"' if self.height else ""
 
         # Build label
-        label_html = self.label_text if (self.show_label or self.label) else ""
+        label_html = conditional_escape(self.label_text) if (self.show_label or self.label) else ""
 
         return f"""<div class="progress"{outer_style}>
     <div class="{" ".join(classes)}"

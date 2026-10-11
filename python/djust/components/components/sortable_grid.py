@@ -1,9 +1,11 @@
 """Sortable Grid component — 2D drag-and-drop grid."""
 
 import html
+from djust.components.utils import url_attr
 from typing import Optional
 
 from djust import Component
+from djust.components.utils import safe_css_length
 
 
 class SortableGrid(Component):
@@ -71,7 +73,7 @@ class SortableGrid(Component):
         class_str = " ".join(classes)
 
         e_event = html.escape(self.move_event)
-        e_gap = html.escape(self.gap)
+        e_gap = html.escape(safe_css_length(self.gap, "0.75rem"))
 
         items_html = []
         for item in self.items:
@@ -82,7 +84,7 @@ class SortableGrid(Component):
             thumbnail = item.get("thumbnail", "")
             thumb_html = ""
             if thumbnail:
-                e_thumb = html.escape(str(thumbnail))
+                e_thumb = url_attr(thumbnail, image=True)
                 thumb_html = (
                     f'<img class="dj-sortable-grid__thumb" '
                     f'src="{e_thumb}" alt="{label}" loading="lazy">'

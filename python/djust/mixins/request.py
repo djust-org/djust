@@ -71,13 +71,22 @@ class RequestMixin:
         # doesn't see lazy thunks from a prior request stashed by the
         # template tag during sync render.
         self._lazy_thunks = []
+        # Django's middleware chain (LoginRequiredMiddleware included) has
+        # processed this request for this view.
+        from ..auth._login_required_middleware import note_http_dispatch
+
+        note_http_dispatch(self, request)
 
         # Check login_required / permission_required (matches WebSocket path).
         # Without this, views with login_required=True render their full HTML
         # to unauthenticated users on the initial HTTP GET.
         from ..auth import check_view_auth
 
-        redirect_url = check_view_auth(self, request)
+        # http_dispatched: Django's View.dispatch() brought this request here
+        # after running the view's own dispatch() and method decorators, so
+        # access control that lives there has already run (check_view_auth
+        # step 5 refuses it only on paths that skip dispatch()).
+        redirect_url = check_view_auth(self, request, http_dispatched=True)
         if redirect_url:
             from django.utils.http import urlencode
 
@@ -517,12 +526,55 @@ class RequestMixin:
 
     def post(self, request, *args, **kwargs):
         """Handle POST requests - event handling"""
+        # Django's middleware chain has processed this request for this view.
+        from ..auth._login_required_middleware import note_http_dispatch
+
+        note_http_dispatch(self, request)
         from ..components.base import Component, LiveComponent
+
+        # Referenced by the ``except`` at the end of this method, which must not
+        # raise its own UnboundLocalError when the failure precedes their
+        # assignment (e.g. a body that is not valid JSON). Previously that
+        # masked the real exception as a 500 and the logger never recorded it.
+        event_name: str = ""
+        params: dict = {}
 
         try:
             # Ensure self.request is set for context processors and
             # _sync_state_to_rust csrf_token injection (#705).
             self.request = request
+
+            # --- Authorization layer 1 of 3: view-level ---------------------
+            # login_required / permission_required / check_permissions().
+            # ``get()`` enforces this, and every WS/SSE event path enforces it
+            # before dispatch; this transport enforced none of the three, so an
+            # unauthenticated client could drive @event_handler methods on a
+            # ``login_required = True`` view with a plain POST. The denial shape
+            # is the 403+redirect the on_mount hook below uses: this path is a
+            # programmatic call, so it cannot follow a page redirect the way
+            # ``get()`` does.
+            from ..auth import check_view_auth
+
+            try:
+                # event=True: what only the view's post() runs applies here.
+                redirect_url = check_view_auth(self, request, event=True)
+            except PermissionDenied:
+                # check_view_auth *raises* for an authenticated user who lacks
+                # the view's permission_required (only the unauthenticated case
+                # returns a URL). Uncaught, the broad handler below would report
+                # a permission failure as a 500.
+                logger.warning(
+                    "Auth denied for %s: missing view permission (HTTP POST)",
+                    type(self).__name__,
+                )
+                return JsonResponse({"error": "Permission denied"}, status=403)
+            if redirect_url:
+                logger.info(
+                    "Auth denied for %s: login required (HTTP POST)",
+                    type(self).__name__,
+                )
+                return JsonResponse({"redirect": redirect_url}, status=403)
+
             data = json.loads(request.body)
             # Support both formats:
             # 1. Standard: {"event": "name", "params": {...}}
@@ -589,6 +641,23 @@ class RequestMixin:
                 if component and isinstance(component, (Component, LiveComponent)):
                     self._restore_component_state(component, state)
 
+            # --- Authorization layer 3 of 3: object-level (ADR-017) ----------
+            # Runs here, after the session-state restore above, because
+            # ``get_object()`` reads the access-determining state (e.g.
+            # ``self.<x>_id``) from it; and per event, as the WS path does, so a
+            # session cannot carry a stale ``_object`` cache past a denial. A
+            # no-op for views that do not override ``get_object``.
+            from ..auth.core import enforce_object_permission
+
+            try:
+                enforce_object_permission(self, request)
+            except PermissionDenied:
+                logger.warning(
+                    "Auth denied for %s: object permission (HTTP POST)",
+                    type(self).__name__,
+                )
+                return JsonResponse({"error": "Access denied for this object."}, status=403)
+
             # Call the event handler — only @event_handler-decorated methods
             # can be invoked via POST (matches WS security)
             t_handler_ms = 0.0
@@ -603,6 +672,43 @@ class RequestMixin:
                     return JsonResponse(
                         {"error": "Event handler not found"},
                         status=400,
+                    )
+                # --- Authorization layer 2 of 3: handler-level -----------
+                # ``@permission_required`` on the handler — the same check the
+                # WS path runs (websocket_utils._validate_event_security →
+                # auth.check_handler_permission). Returns True for a handler
+                # that declares no permission, so the call is unconditional.
+                # The WS path needs a sync_to_async wrapper here (#1648); this
+                # path is synchronous, so the bare call is correct.
+                from ..auth import check_handler_permission
+
+                if not check_handler_permission(handler, request):
+                    logger.warning(
+                        "HTTP POST denied: handler '%s' on %s requires a "
+                        "permission the caller lacks",
+                        event_name,
+                        type(self).__name__,
+                    )
+                    return JsonResponse({"error": "Permission denied"}, status=403)
+                # --- Per-handler @rate_limit -------------------------------
+                # The WS/SSE chokepoint (_validate_event_security) and the HTTP
+                # API both enforce the handler's @rate_limit against the SHARED
+                # per-caller store; this transport enforced nothing, so a
+                # handler throttled on every other transport was unthrottled
+                # here, and POST did not consume the shared budget (F27's
+                # "regardless of transport" was therefore false for this
+                # path). Same helper as the HTTP API, so the two cannot drift
+                # apart again.
+                from ..rate_limit import http_handler_rate_check
+
+                if not http_handler_rate_check(request, self, event_name, handler):
+                    logger.warning(
+                        "HTTP POST rate-limited handler '%s' on %s",
+                        event_name,
+                        type(self).__name__,
+                    )
+                    return JsonResponse(
+                        {"error": "Rate limit exceeded", "code": "rate_limited"}, status=429
                     )
                 coerce = True
                 if hasattr(handler, "_djust_decorators"):

@@ -13,11 +13,67 @@ Two modes:
 
 import json
 import logging
+import os
 import sys
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
 __all__ = ["create_server", "_django_ready"]
+
+# ---------------------------------------------------------------------------
+# Path containment shared by the tools that take a filesystem path
+# ---------------------------------------------------------------------------
+
+
+def _path_within(path: str, roots: "list[Any]") -> bool:
+    """Whether ``path`` resolves inside one of ``roots``.
+
+    Both sides go through ``os.path.realpath``, so ``..`` segments and symlinks
+    are followed before comparing, and the comparison is
+    ``os.path.commonpath`` on whole path components, so ``/app-data`` is not
+    inside ``/app``. An empty ``roots`` contains nothing.
+    """
+    real = os.path.realpath(path)
+    for root in roots:
+        if not root:
+            continue
+        base = os.path.realpath(str(root))
+        try:
+            if os.path.commonpath([real, base]) == base:
+                return True
+        except ValueError:  # different drives, or mixed absolute/relative
+            continue
+    return False
+
+
+def _template_roots() -> "list[str]":
+    """Directories the configured template engines serve from, plus ``BASE_DIR``."""
+    from django.conf import settings
+    from django.template import engines
+
+    roots: list[str] = []
+    for backend in engines.all():
+        try:
+            roots.extend(str(d) for d in getattr(backend, "template_dirs", None) or [])
+        except Exception:  # noqa: BLE001 -- a backend without dirs contributes none
+            pass
+        engine = getattr(backend, "engine", None)
+        pending = list(getattr(engine, "template_loaders", None) or [])
+        while pending:
+            loader = pending.pop()
+            pending.extend(getattr(loader, "loaders", None) or [])  # cached.Loader
+            get_dirs = getattr(loader, "get_dirs", None)
+            if callable(get_dirs):
+                try:
+                    roots.extend(str(d) for d in get_dirs())
+                except Exception:  # noqa: BLE001 -- a loader without dirs contributes none
+                    pass
+    base_dir = getattr(settings, "BASE_DIR", None)
+    if base_dir:
+        roots.append(str(base_dir))
+    return roots
+
 
 # ---------------------------------------------------------------------------
 # Django availability detection
@@ -42,6 +98,29 @@ def _ensure_django():
         return True
     except Exception:
         return False
+
+
+def _observability_headers():
+    """Headers for requests to the dev server's /_djust/observability/ endpoints.
+
+    The endpoints require the project's observability token. It comes from the
+    ``DJUST_OBSERVABILITY_TOKEN`` environment variable when set, otherwise it is
+    derived from the project's settings (available when started with
+    ``manage.py djust_mcp``). Without either, no token is sent and the
+    endpoints answer 404.
+    """
+    from djust.observability.middleware import (
+        TOKEN_ENV_VAR,
+        TOKEN_HEADER,
+        get_observability_token,
+    )
+
+    if not os.environ.get(TOKEN_ENV_VAR) and not _ensure_django():
+        return {}
+    try:
+        return {TOKEN_HEADER: get_observability_token()}
+    except Exception:  # noqa: BLE001 - settings unavailable: send no token
+        return {}
 
 
 # ---------------------------------------------------------------------------
@@ -231,7 +310,8 @@ def create_server():
             fixture_paths: Absolute or relative paths to fixture files
                 (JSON, XML, YAML — whatever django-admin recognizes).
                 Relative paths are resolved against the Django project's
-                BASE_DIR (i.e. settings.BASE_DIR / path).
+                BASE_DIR (i.e. settings.BASE_DIR / path). Every path must
+                resolve inside BASE_DIR; without BASE_DIR nothing is loaded.
 
         Returns JSON: {ok, loaded_count, stdout, stderr, returncode}.
 
@@ -259,17 +339,22 @@ def create_server():
         from django.conf import settings as dj_settings
 
         base_dir = getattr(dj_settings, "BASE_DIR", None)
+        if not base_dir:
+            return json.dumps(
+                {
+                    "error": "settings.BASE_DIR is not set, so fixture paths cannot be "
+                    "confined to the project directory",
+                }
+            )
         resolved = []
         for p in fixture_paths:
             if os.path.isabs(p):
                 candidate = os.path.realpath(p)
-            elif base_dir:
-                candidate = os.path.realpath(os.path.join(str(base_dir), p))
             else:
-                candidate = os.path.realpath(p)
-            # Security: reject paths outside the project directory.
-            # Prevents ../../../etc/evil.json style traversal.
-            if base_dir and not candidate.startswith(os.path.realpath(str(base_dir))):
+                candidate = os.path.realpath(os.path.join(str(base_dir), p))
+            # Reject paths outside the project directory (``..`` segments,
+            # symlinks, and sibling directories that share a name prefix).
+            if not _path_within(candidate, [base_dir]):
                 return json.dumps(
                     {
                         "error": f"fixture path '{p}' resolves outside the project directory",
@@ -281,8 +366,8 @@ def create_server():
 
         # manage.py is the canonical entry point; fall back to -m if
         # we can't find one (e.g. during tests).
-        manage_py = os.path.join(str(base_dir), "manage.py") if base_dir else None
-        if manage_py and os.path.isfile(manage_py):
+        manage_py = os.path.join(str(base_dir), "manage.py")
+        if os.path.isfile(manage_py):
             cmd = [sys.executable, manage_py, "loaddata", *resolved]
         else:
             cmd = [sys.executable, "-m", "django", "loaddata", *resolved]
@@ -293,7 +378,7 @@ def create_server():
                 capture_output=True,
                 text=True,
                 timeout=60,
-                cwd=str(base_dir) if base_dir else None,
+                cwd=str(base_dir),
             )
         except subprocess.TimeoutExpired:
             return json.dumps(
@@ -330,7 +415,9 @@ def create_server():
         Args:
             template_path: Either a logical template name (e.g.
                 'demos/counter.html' — what you'd pass to `render`) OR
-                an absolute filesystem path. Both are searched.
+                an absolute path to a file inside a directory the template
+                engines serve, or inside BASE_DIR. Other absolute paths get
+                the answer a missing template gets.
 
         Returns JSON:
           {
@@ -363,8 +450,24 @@ def create_server():
         # Resolve the template to an absolute path. Accept both logical
         # names and absolute paths so callers can hand either form.
         resolved_path: str | None = None
-        if os.path.isabs(template_path) and os.path.isfile(template_path):
-            resolved_path = template_path
+        hint = (
+            "Pass either a logical name (e.g. 'demos/counter.html') or an absolute "
+            "path inside the project's template directories or BASE_DIR."
+        )
+        if os.path.isabs(template_path):
+            # Read directly only a file that resolves (symlinks and ``..``
+            # followed) inside a directory the template engines serve, or
+            # inside BASE_DIR. Anything else gets the answer a missing
+            # template gets, so the reply says nothing about files elsewhere.
+            real_path = os.path.realpath(template_path)
+            if not (os.path.isfile(real_path) and _path_within(real_path, _template_roots())):
+                return json.dumps(
+                    {
+                        "error": f"Could not resolve template '{template_path}': {template_path}",
+                        "hint": hint,
+                    }
+                )
+            resolved_path = real_path
         else:
             try:
                 from django.template.loader import get_template
@@ -377,7 +480,7 @@ def create_server():
                 return json.dumps(
                     {
                         "error": f"Could not resolve template '{template_path}': {e}",
-                        "hint": "Pass either a logical name (e.g. 'demos/counter.html') or an absolute filesystem path.",
+                        "hint": hint,
                     }
                 )
 
@@ -509,7 +612,12 @@ def create_server():
         base = os.environ.get("DJUST_DEV_SERVER_URL", "http://127.0.0.1:8000").rstrip("/")
         url = f"{base}/_djust/observability/view_assigns/"
         try:
-            r = requests.get(url, params={"session_id": session_id}, timeout=5)
+            r = requests.get(
+                url,
+                params={"session_id": session_id},
+                headers=_observability_headers(),
+                timeout=5,
+            )
         except requests.RequestException as e:
             return json.dumps(
                 {
@@ -528,8 +636,11 @@ def create_server():
                     "hint": (
                         "Check that (a) settings.DEBUG=True, (b) the project "
                         "urls.py includes `path('_djust/observability/', "
-                        "include('djust.observability.urls'))`, and (c) a "
-                        "WebSocket connection is open for this session."
+                        "include('djust.observability.urls'))`, (c) a "
+                        "WebSocket connection is open for this session, and "
+                        "(d) this MCP server was started with the project's "
+                        "settings (`manage.py djust_mcp`) or with the same "
+                        "DJUST_OBSERVABILITY_TOKEN as the dev server."
                     ),
                 }
             )
@@ -590,7 +701,7 @@ def create_server():
             body["dry_run"] = True
             body["dry_run_block"] = bool(dry_run_block)
         try:
-            r = requests.post(url, json=body, timeout=10)
+            r = requests.post(url, json=body, headers=_observability_headers(), timeout=10)
         except requests.RequestException as e:
             return json.dumps(
                 {
@@ -632,7 +743,7 @@ def create_server():
         url = f"{base}/_djust/observability/reset_view_state/?session_id={session_id}"
         try:
             # csrf_exempt on the endpoint — POST with no body is fine.
-            r = requests.post(url, timeout=5)
+            r = requests.post(url, headers=_observability_headers(), timeout=5)
         except requests.RequestException as e:
             return json.dumps(
                 {
@@ -678,7 +789,7 @@ def create_server():
         if since_ms:
             params["since_ms"] = since_ms
         try:
-            r = requests.get(url, params=params, timeout=5)
+            r = requests.get(url, params=params, headers=_observability_headers(), timeout=5)
         except requests.RequestException as e:
             return json.dumps(
                 {
@@ -728,7 +839,7 @@ def create_server():
         if handler_name:
             params["handler_name"] = handler_name
         try:
-            r = requests.get(url, params=params, timeout=5)
+            r = requests.get(url, params=params, headers=_observability_headers(), timeout=5)
         except requests.RequestException as e:
             return json.dumps(
                 {
@@ -772,6 +883,7 @@ def create_server():
             r = requests.get(
                 url,
                 params={"since_ms": since_ms, "level": level, "limit": limit},
+                headers=_observability_headers(),
                 timeout=5,
             )
         except requests.RequestException as e:
@@ -811,7 +923,7 @@ def create_server():
         base = os.environ.get("DJUST_DEV_SERVER_URL", "http://127.0.0.1:8000").rstrip("/")
         url = f"{base}/_djust/observability/last_traceback/"
         try:
-            r = requests.get(url, params={"n": n}, timeout=5)
+            r = requests.get(url, params={"n": n}, headers=_observability_headers(), timeout=5)
         except requests.RequestException as e:
             return json.dumps(
                 {

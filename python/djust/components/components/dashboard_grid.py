@@ -3,7 +3,10 @@
 import html
 from typing import Optional
 
+from django.utils.html import conditional_escape
+
 from djust import Component
+from djust.components.utils import safe_css_length
 
 
 class DashboardGrid(Component):
@@ -16,9 +19,9 @@ class DashboardGrid(Component):
         self.dashboard = DashboardGrid(
             panels=[
                 {"id": "chart", "title": "Revenue", "col": 1, "row": 1,
-                 "width": 2, "height": 1, "content": "<canvas>...</canvas>"},
+                 "width": 2, "height": 1, "content": mark_safe(chart_html)},
                 {"id": "stats", "title": "Users", "col": 3, "row": 1,
-                 "width": 1, "height": 1, "content": "<p>1234</p>"},
+                 "width": 1, "height": 1, "content": "1234"},
             ],
             columns=4,
             move_event="dashboard_move",
@@ -30,7 +33,11 @@ class DashboardGrid(Component):
         {{ dashboard|safe }}
 
     Args:
-        panels: list of panel dicts with id, title, col, row, width, height, content
+        panels: list of panel dicts with id, title, col, row, width, height, content.
+            ``content`` is text and is escaped. Markup the app built itself can
+            be passed as ``mark_safe(...)`` to the class or the Django tag; the
+            Rust template engine receives list arguments as data and escapes
+            ``content`` either way.
         columns: number of grid columns (default 4)
         row_height: CSS row height (default "200px")
         gap: CSS gap (default "1rem")
@@ -76,8 +83,8 @@ class DashboardGrid(Component):
 
         e_move = html.escape(self.move_event)
         e_resize = html.escape(self.resize_event)
-        e_gap = html.escape(self.gap)
-        e_row_height = html.escape(self.row_height)
+        e_gap = html.escape(safe_css_length(self.gap, "1rem"))
+        e_row_height = html.escape(safe_css_length(self.row_height, "200px"))
 
         cols = int(self.columns)
 
@@ -102,7 +109,7 @@ class DashboardGrid(Component):
                 f'<span class="dj-dashboard-grid__panel-title">{title}</span>'
                 f'<span class="dj-dashboard-grid__panel-drag" aria-hidden="true">&#x2630;</span>'
                 f"</div>"
-                f'<div class="dj-dashboard-grid__panel-body">{content}</div>'
+                f'<div class="dj-dashboard-grid__panel-body">{conditional_escape(content)}</div>'
                 f'<div class="dj-dashboard-grid__panel-resize" role="separator"></div>'
                 f"</div>"
             )

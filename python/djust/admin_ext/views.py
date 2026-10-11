@@ -13,11 +13,12 @@ from django.contrib.auth import authenticate, logout
 from django.core.exceptions import PermissionDenied
 from django.core.paginator import Paginator
 from django.db.models import ForeignKey, OneToOneField, Q
-from django.http import HttpResponseRedirect
+from django.http import Http404, HttpResponseRedirect
 from django.urls import reverse
 from djust import LiveView
 from djust.decorators import debounce, event_handler, state
 
+from .._log_utils import sanitize_for_log
 from .forms import AdminFormMixin
 
 logger = logging.getLogger(__name__)
@@ -217,11 +218,53 @@ class ModelListView(AdminBaseMixin, LiveView):
     select_all = state(default=False)
     active_filters = state(default={})
 
+    def check_permissions(self, request):
+        """Staff gate plus the ModelAdmin view permission."""
+        super().check_permissions(request)
+        model_admin = self._model_admin
+        if model_admin is None or not model_admin.has_view_or_change_permission(request):
+            raise PermissionDenied("You do not have permission to view these objects.")
+
     def mount(self, request, **kwargs):
         self.request = request
         self.selected_ids = []
         self.select_all = False
         self.active_filters = {}
+
+    def _declared_filter_fields(self):
+        """Field names declared in the ModelAdmin's ``list_filter``.
+
+        ``apply_filter`` and :meth:`get_queryset` accept only these names, as
+        Django's admin does: a filter cannot follow a relation or use a lookup
+        that ``list_filter`` does not declare.
+        """
+        names = set()
+        for entry in self._model_admin.get_list_filter(self.request) or ():
+            if isinstance(entry, (list, tuple)) and entry:
+                entry = entry[0]
+            if isinstance(entry, str) and entry:
+                names.add(entry)
+        return names
+
+    def _sortable_fields(self):
+        """Field names the change list sorts on: the sortable ``list_display``
+        columns plus the fields named in the ModelAdmin's ``ordering``."""
+        names = {
+            name
+            for name in self._model_admin.get_list_display(self.request) or ()
+            if isinstance(name, str) and name and name != "__str__"
+        }
+        for entry in self._model_admin.get_ordering(self.request) or ():
+            if isinstance(entry, str) and entry:
+                names.add(entry[1:] if entry.startswith("-") else entry)
+        return names
+
+    def _ordering_allowed(self, ordering):
+        """True when ``ordering`` is a sortable field, optionally prefixed by ``-``."""
+        if not isinstance(ordering, str) or not ordering:
+            return False
+        name = ordering[1:] if ordering.startswith("-") else ordering
+        return name in self._sortable_fields()
 
     def get_queryset(self):
         """Get filtered and sorted queryset."""
@@ -236,8 +279,14 @@ class ModelListView(AdminBaseMixin, LiveView):
                     q_objects |= Q(**{f"{field}__icontains": self.search_query})
                 qs = qs.filter(q_objects)
 
-        # Apply active filters
+        # Apply active filters (declared list_filter fields only)
+        allowed_filters = self._declared_filter_fields()
         for field_name, value in self.active_filters.items():
+            if field_name not in allowed_filters:
+                logger.debug(
+                    "Ignoring undeclared admin list filter %s", sanitize_for_log(field_name)
+                )
+                continue
             if value is not None and value != "":
                 if value == "true":
                     qs = qs.filter(**{field_name: True})
@@ -246,9 +295,14 @@ class ModelListView(AdminBaseMixin, LiveView):
                 else:
                     qs = qs.filter(**{field_name: value})
 
-        # Apply ordering
+        # Apply ordering (sortable fields only)
         if self.ordering:
-            qs = qs.order_by(self.ordering)
+            if self._ordering_allowed(self.ordering):
+                qs = qs.order_by(self.ordering)
+            else:
+                logger.debug(
+                    "Ignoring undeclared admin list ordering %s", sanitize_for_log(self.ordering)
+                )
 
         return qs
 
@@ -309,7 +363,7 @@ class ModelListView(AdminBaseMixin, LiveView):
 
         # Build filter options
         filters = []
-        list_filter = getattr(self._model_admin, "list_filter", [])
+        list_filter = self._model_admin.get_list_filter(self.request) or []
         for filter_field in list_filter:
             try:
                 field = self._model._meta.get_field(filter_field)
@@ -389,7 +443,10 @@ class ModelListView(AdminBaseMixin, LiveView):
 
     @event_handler
     def sort_by(self, field: str):
-        """Handle column sorting."""
+        """Handle column sorting. Only sortable columns are accepted."""
+        if not isinstance(field, str) or field not in self._sortable_fields():
+            logger.debug("Ignoring sort on undeclared admin field %s", sanitize_for_log(field))
+            return
         if self.ordering == field:
             self.ordering = f"-{field}"
         elif self.ordering == f"-{field}":
@@ -452,19 +509,24 @@ class ModelListView(AdminBaseMixin, LiveView):
 
         action_func = actions[action_name]["func"]
 
-        # Defense-in-depth: if the action declares required perms
-        # (via ``@admin_action_with_progress(permissions=[...])`` or an
+        if action_name == "delete_selected" and not self._model_admin.has_delete_permission(
+            self.request
+        ):
+            raise PermissionDenied("You do not have permission to delete these objects.")
+
+        # If the action declares required perms (via
+        # ``@admin_action_with_progress(permissions=[...])`` or an
         # equivalent ``allowed_permissions`` attribute), block users who
-        # lack them BEFORE firing the action. This covers the gap where
-        # the default ``has_*_permission`` methods return True for any
-        # authenticated staff user -- a view-only staff user could
-        # otherwise fire a destructive action just by having an action
-        # entry in the dropdown.
+        # lack them BEFORE firing the action. The change list only needs
+        # view permission, so without this a view-only staff user could
+        # fire any action in the dropdown.
         allowed = getattr(action_func, "allowed_permissions", None) or []
         if allowed and not self.request.user.has_perms(allowed):
             raise PermissionDenied("User lacks required permissions for this action: %r" % allowed)
 
-        queryset = self._model.objects.filter(pk__in=self.selected_ids)
+        # Only rows the ModelAdmin's queryset holds, as Django's admin acts on
+        # get_queryset(request): a selected pk outside it is ignored.
+        queryset = self._model_admin.get_queryset(self.request).filter(pk__in=self.selected_ids)
         result = action_func(self.request, queryset)
 
         self.selected_ids = []
@@ -483,7 +545,10 @@ class ModelListView(AdminBaseMixin, LiveView):
 
     @event_handler
     def apply_filter(self, field: str, value: str):
-        """Apply a filter to the list."""
+        """Apply a filter to the list. Only ``list_filter`` fields are accepted."""
+        if not isinstance(field, str) or field not in self._declared_filter_fields():
+            logger.debug("Ignoring undeclared admin list filter %s", sanitize_for_log(field))
+            return
         if value:
             self.active_filters = {**self.active_filters, field: value}
         else:
@@ -518,6 +583,24 @@ class ModelDetailView(AdminBaseMixin, AdminFormMixin, LiveView):
 
     def mount(self, request, object_id=None, **kwargs):
         super().mount(request, object_id=object_id, **kwargs)
+
+    def get_object(self):
+        """The object being edited, or None on the add page."""
+        return self.object
+
+    def has_object_permission(self, request, obj):
+        """Viewing an existing object needs the ModelAdmin view or change permission."""
+        return bool(self._model_admin.has_view_or_change_permission(request, obj))
+
+    def _check_save_permission(self):
+        """Saving needs add permission for a new object, change permission otherwise."""
+        obj = self.object
+        if obj is None or obj.pk is None:
+            allowed = self._model_admin.has_add_permission(self.request)
+        else:
+            allowed = self._model_admin.has_change_permission(self.request, obj)
+        if not allowed:
+            raise PermissionDenied("You do not have permission to save this object.")
 
     def get_context_data(self, **kwargs):
         readonly_fields = self._model_admin.get_readonly_fields(self.request, self.object)
@@ -598,6 +681,7 @@ class ModelDetailView(AdminBaseMixin, AdminFormMixin, LiveView):
         self.validate_field(field_name=field, value=value)
 
     def form_valid(self, form):
+        self._check_save_permission()
         self.object = form.save()
         self.save_success = True
 
@@ -607,6 +691,7 @@ class ModelDetailView(AdminBaseMixin, AdminFormMixin, LiveView):
     @event_handler
     def save(self, redirect=True):
         """Save the form."""
+        self._check_save_permission()
         self.is_saving = True
         self.save_success = False
         self.redirect_url = None
@@ -638,6 +723,13 @@ class ModelDetailView(AdminBaseMixin, AdminFormMixin, LiveView):
 class ModelCreateView(ModelDetailView):
     """Model create view - reuses detail view with no object."""
 
+    def check_permissions(self, request):
+        """Staff gate plus the ModelAdmin add permission."""
+        super().check_permissions(request)
+        model_admin = self._model_admin
+        if model_admin is None or not model_admin.has_add_permission(request):
+            raise PermissionDenied("You do not have permission to add this object.")
+
     def mount(self, request, **kwargs):
         super().mount(request, object_id=None, **kwargs)
 
@@ -654,8 +746,19 @@ class ModelDeleteView(AdminBaseMixin, LiveView):
     def mount(self, request, object_id=None, **kwargs):
         self.request = request
         self.object_id = object_id
-        self.object = self._model.objects.get(pk=object_id)
+        # Through the ModelAdmin's queryset, as Django's delete view does.
+        self.object = self._model_admin.get_object(request, object_id)
+        if self.object is None:
+            raise Http404("No such object.")
         self.object_str = str(self.object)
+
+    def get_object(self):
+        """The object being deleted."""
+        return getattr(self, "object", None)
+
+    def has_object_permission(self, request, obj):
+        """The confirmation page and the delete need the ModelAdmin delete permission."""
+        return bool(self._model_admin.has_delete_permission(request, obj))
 
     def get_context_data(self, **kwargs):
         return {
@@ -672,6 +775,8 @@ class ModelDeleteView(AdminBaseMixin, LiveView):
     @event_handler
     def confirm_delete(self):
         """Confirm and execute deletion."""
+        if not self._model_admin.has_delete_permission(self.request, self.object):
+            raise PermissionDenied("You do not have permission to delete this object.")
         self.is_deleting = True
         self.object.delete()
         self.redirect_url = reverse(

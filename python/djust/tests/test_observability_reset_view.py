@@ -7,7 +7,9 @@ from __future__ import annotations
 import json
 
 import pytest
-from django.test import RequestFactory, override_settings
+from django.test import override_settings
+
+from .conftest import observability_request_factory
 
 from djust.observability.registry import _clear_registry, register_view
 from djust.observability.views import reset_view_state
@@ -57,7 +59,7 @@ def test_reset_restores_state_to_post_mount():
     view.label = "dirty"
     register_view("s", view)
 
-    rf = RequestFactory()
+    rf = observability_request_factory()
     resp = reset_view_state(rf.post("/?session_id=s"))
     assert resp.status_code == 200
     data = json.loads(resp.content)
@@ -79,7 +81,7 @@ def test_reset_preserves_private_attrs():
     view.counter = 99
     register_view("s", view)
 
-    rf = RequestFactory()
+    rf = observability_request_factory()
     reset_view_state(rf.post("/?session_id=s"))
     # Private attrs stay (framework bookkeeping isn't disturbed).
     assert view._websocket_session_id == "ws-1"
@@ -90,21 +92,21 @@ def test_reset_preserves_private_attrs():
 def test_reset_requires_post():
     view = _FakeView()
     register_view("s", view)
-    rf = RequestFactory()
+    rf = observability_request_factory()
     resp = reset_view_state(rf.get("/?session_id=s"))
     assert resp.status_code == 405
 
 
 @override_settings(DEBUG=True)
 def test_reset_400_when_session_id_missing():
-    rf = RequestFactory()
+    rf = observability_request_factory()
     resp = reset_view_state(rf.post("/"))
     assert resp.status_code == 400
 
 
 @override_settings(DEBUG=True)
 def test_reset_404_when_session_unknown():
-    rf = RequestFactory()
+    rf = observability_request_factory()
     resp = reset_view_state(rf.post("/?session_id=never"))
     assert resp.status_code == 404
 
@@ -113,7 +115,7 @@ def test_reset_404_when_session_unknown():
 def test_reset_409_when_mount_args_not_stashed():
     view = _ViewMissingMountArgs()
     register_view("s", view)
-    rf = RequestFactory()
+    rf = observability_request_factory()
     resp = reset_view_state(rf.post("/?session_id=s"))
     assert resp.status_code == 409
     assert b"before reset_view_state was wired" in resp.content
@@ -123,7 +125,7 @@ def test_reset_409_when_mount_args_not_stashed():
 def test_reset_500_when_mount_raises():
     view = _ViewMountRaises()
     register_view("s", view)
-    rf = RequestFactory()
+    rf = observability_request_factory()
     resp = reset_view_state(rf.post("/?session_id=s"))
     assert resp.status_code == 500
     data = json.loads(resp.content)
@@ -138,6 +140,6 @@ def test_reset_500_when_mount_raises():
 def test_reset_404_when_debug_off():
     view = _FakeView()
     register_view("s", view)
-    rf = RequestFactory()
+    rf = observability_request_factory()
     resp = reset_view_state(rf.post("/?session_id=s"))
     assert resp.status_code == 404

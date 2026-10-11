@@ -666,7 +666,7 @@ class TestResolveResumeRequest:
         result = resolve_resume_request("u1", session_key="owner", store=broken)
         assert result["status"] == "not_found"
 
-    def test_no_session_key_stored_accepts_any_session(self):
+    def test_no_session_key_stored_is_not_found(self):
         store = InMemoryUploadState()
         store.set(
             "u1",
@@ -678,7 +678,7 @@ class TestResolveResumeRequest:
             ttl=60,
         )
         result = resolve_resume_request("u1", session_key="whoever", store=store)
-        assert result["status"] == "resumed"
+        assert result["status"] == "not_found"
 
     def test_default_store_used_when_none(self):
         _reset_default_store_for_tests()

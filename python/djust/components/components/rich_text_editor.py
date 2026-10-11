@@ -2,6 +2,9 @@
 
 import html
 from djust import Component
+from djust.components.utils import safe_css_length
+
+from ..utils import rich_html
 
 
 class RichTextEditor(Component):
@@ -52,7 +55,7 @@ class RichTextEditor(Component):
         e_name = html.escape(self.name)
         e_event = html.escape(self.event)
         e_placeholder = html.escape(self.placeholder)
-        e_height = html.escape(self.height)
+        e_height = html.escape(safe_css_length(self.height, "200px"))
         e_label = html.escape(self.label)
         label_html = f'<label class="form-label">{e_label}</label>' if self.label else ""
         return (
@@ -65,7 +68,7 @@ class RichTextEditor(Component):
             f"</div>"
             f'<div class="rte-editor" contenteditable="true" '
             f'style="min-height:{e_height}" data-placeholder="{e_placeholder}" '
-            f'dj-input="{e_event}">{self.value}</div>'
+            f'dj-input="{e_event}">{rich_html(self.value)}</div>'
             f'<input type="hidden" name="{e_name}">'
             f"</div></div>"
         )

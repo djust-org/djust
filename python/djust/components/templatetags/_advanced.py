@@ -8,8 +8,11 @@ All tags register on the shared ``register`` from ``_registry``.
 """
 
 import calendar as _calendar
+from djust.components.utils import safe_css_color, safe_css_length
 
 from django import template
+
+from djust.components.utils import url_attr
 
 from ._registry import register, _resolve, _parse_kv_args, conditional_escape, mark_safe, safe_url
 
@@ -213,7 +216,10 @@ class CalendarViewNode(template.Node):
                 for i, ev in enumerate(day_events[:3]):
                     title = conditional_escape(str(ev.get("title", "")))
                     color = conditional_escape(
-                        str(ev.get("color", self.COLORS[i % len(self.COLORS)]))
+                        safe_css_color(
+                            ev.get("color", self.COLORS[i % len(self.COLORS)]),
+                            self.COLORS[i % len(self.COLORS)],
+                        )
                     )
                     ev_html += (
                         f'<div class="dj-calendar__event" '
@@ -734,8 +740,7 @@ class OrgChartNode(template.Node):
 
         if avatar:
             avatar_html = (
-                f'<img class="dj-org__avatar" src="{conditional_escape(str(avatar))}" '
-                f'alt="{name}" />'
+                f'<img class="dj-org__avatar" src="{url_attr(avatar, image=True)}" alt="{name}" />'
             )
         else:
             initials = "".join(w[0] for w in str(node.get("name", "")).split()[:2]).upper() or "?"
@@ -974,7 +979,7 @@ class MasonryGridNode(template.Node):
         for col_idx, items_in_col in enumerate(col_items):
             item_cards = []
             for item in items_in_col:
-                content = str(item.get("content", ""))
+                content = conditional_escape(item.get("content", ""))
                 item_class = conditional_escape(str(item.get("class", "")))
                 extra = f" {item_class}" if item_class else ""
                 item_cards.append(f'<div class="dj-masonry__item{extra}">{content}</div>')
@@ -1038,7 +1043,9 @@ class CursorsOverlayNode(template.Node):
                 y = 0
 
             e_name = conditional_escape(str(name))
-            e_color = conditional_escape(str(color))
+            e_color = conditional_escape(
+                safe_css_color(color, self.DEFAULT_COLORS[i % len(self.DEFAULT_COLORS)])
+            )
 
             try:
                 px = int(x)
@@ -1121,7 +1128,7 @@ class LiveIndicatorNode(template.Node):
             avatar = ""
 
         e_name = conditional_escape(str(name))
-        e_avatar = conditional_escape(str(avatar))
+        e_avatar = url_attr(avatar, image=True)
         e_field = conditional_escape(str(field))
         e_action = conditional_escape(str(action))
 
@@ -1205,7 +1212,9 @@ class CollabSelectionNode(template.Node):
                 end = 0
 
             e_name = conditional_escape(str(name))
-            e_color = conditional_escape(str(color))
+            e_color = conditional_escape(
+                safe_css_color(color, self.DEFAULT_COLORS[i % len(self.DEFAULT_COLORS)])
+            )
             e_text = conditional_escape(str(text))
 
             try:
@@ -1291,7 +1300,7 @@ class ActivityFeedNode(template.Node):
             action = conditional_escape(str(event.get("action", "")))
             target = conditional_escape(str(event.get("target", "")))
             time = conditional_escape(str(event.get("time", "")))
-            avatar_src = conditional_escape(str(event.get("avatar", "")))
+            avatar_src = url_attr(event.get("avatar", ""), image=True)
             icon = conditional_escape(str(event.get("icon", "")))
 
             initials = (
@@ -1450,7 +1459,7 @@ class MapPickerNode(template.Node):
 
         e_class = conditional_escape(str(custom_class))
         e_event = conditional_escape(str(pick_event))
-        e_height = conditional_escape(str(height))
+        e_height = conditional_escape(safe_css_length(height, "400px"))
 
         cls = "dj-map-picker"
         if e_class:
@@ -1781,7 +1790,7 @@ class ImageUploadPreviewNode(template.Node):
 
         thumbs = []
         for url in previews:
-            e_url = conditional_escape(str(url))
+            e_url = url_attr(url, image=True)
             thumbs.append(
                 f'<div class="dj-img-upload__thumb">'
                 f'<img src="{e_url}" alt="Preview" '
@@ -2119,7 +2128,7 @@ class DataCardGridNode(template.Node):
 
             img_html = ""
             if image:
-                e_img = conditional_escape(str(image))
+                e_img = url_attr(image, image=True)
                 img_html = f'<img src="{e_img}" alt="{title}" class="dj-data-card-grid__img">'
 
             click_attr = ""

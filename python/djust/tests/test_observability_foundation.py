@@ -9,7 +9,9 @@ import gc
 
 import pytest
 from django.http import HttpResponse
-from django.test import RequestFactory, override_settings
+from django.test import override_settings
+
+from .conftest import observability_request_factory
 
 from djust.observability import (
     get_registered_session_count,
@@ -96,7 +98,7 @@ def _dummy_get_response(request):
 
 
 def test_localhost_middleware_allows_127_0_0_1():
-    rf = RequestFactory()
+    rf = observability_request_factory()
     req = rf.get("/_djust/observability/health/", REMOTE_ADDR="127.0.0.1")
     mw = LocalhostOnlyObservabilityMiddleware(_dummy_get_response)
     resp = mw(req)
@@ -104,14 +106,14 @@ def test_localhost_middleware_allows_127_0_0_1():
 
 
 def test_localhost_middleware_allows_ipv6_loopback():
-    rf = RequestFactory()
+    rf = observability_request_factory()
     req = rf.get("/_djust/observability/health/", REMOTE_ADDR="::1")
     mw = LocalhostOnlyObservabilityMiddleware(_dummy_get_response)
     assert mw(req).status_code == 200
 
 
 def test_localhost_middleware_rejects_lan_address():
-    rf = RequestFactory()
+    rf = observability_request_factory()
     req = rf.get("/_djust/observability/health/", REMOTE_ADDR="192.168.1.5")
     mw = LocalhostOnlyObservabilityMiddleware(_dummy_get_response)
     resp = mw(req)
@@ -121,14 +123,14 @@ def test_localhost_middleware_rejects_lan_address():
 
 def test_localhost_middleware_ignores_non_observability_paths():
     """Requests to other paths flow through regardless of IP."""
-    rf = RequestFactory()
+    rf = observability_request_factory()
     req = rf.get("/some/other/path/", REMOTE_ADDR="192.168.1.5")
     mw = LocalhostOnlyObservabilityMiddleware(_dummy_get_response)
     assert mw(req).status_code == 200
 
 
 def test_is_localhost_helper():
-    rf = RequestFactory()
+    rf = observability_request_factory()
     assert is_localhost(rf.get("/", REMOTE_ADDR="127.0.0.1"))
     assert is_localhost(rf.get("/", REMOTE_ADDR="::1"))
     assert not is_localhost(rf.get("/", REMOTE_ADDR="10.0.0.1"))
@@ -140,7 +142,7 @@ def test_is_localhost_helper():
 
 @override_settings(DEBUG=True)
 def test_health_endpoint_debug_on():
-    rf = RequestFactory()
+    rf = observability_request_factory()
     resp = health(rf.get("/_djust/observability/health/"))
     assert resp.status_code == 200
     import json
@@ -157,7 +159,7 @@ def test_health_reports_registered_session_count():
     views = [_FakeView(), _FakeView()]
     register_view("a", views[0])
     register_view("b", views[1])
-    rf = RequestFactory()
+    rf = observability_request_factory()
     resp = health(rf.get("/_djust/observability/health/"))
     import json
 
@@ -168,6 +170,6 @@ def test_health_reports_registered_session_count():
 @override_settings(DEBUG=False)
 def test_health_endpoint_debug_off_returns_404():
     """In production the endpoint should 404 — don't leak its existence."""
-    rf = RequestFactory()
+    rf = observability_request_factory()
     resp = health(rf.get("/_djust/observability/health/"))
     assert resp.status_code == 404

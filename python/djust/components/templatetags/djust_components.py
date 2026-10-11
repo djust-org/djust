@@ -11,6 +11,12 @@ Usage:
 """
 
 import calendar as _calendar
+from djust.components.utils import (
+    safe_css_color,
+    safe_css_length,
+    safe_css_number,
+    safe_css_ratio,
+)
 import datetime
 import itertools
 import json as _json
@@ -18,9 +24,10 @@ import re as _re
 import uuid
 
 from django import template
-from django.utils.html import conditional_escape
+from django.utils.html import conditional_escape, escapejs
 
 from ._registry import safe_url
+from djust.components.utils import rich_html, url_attr
 from django.utils.safestring import mark_safe
 
 
@@ -566,6 +573,20 @@ def do_card(parser, token):
 # ---------------------------------------------------------------------------
 
 
+def _checked_column_widths(columns: object) -> object:
+    """Columns with any ``width`` that is not a plain CSS length cleared.
+
+    ``table.html`` writes ``col.width`` into a style attribute."""
+    if not isinstance(columns, (list, tuple)):
+        return columns
+    checked = []
+    for col in columns:
+        if isinstance(col, dict) and col.get("width") and not safe_css_length(col["width"], ""):
+            col = {**col, "width": ""}
+        checked.append(col)
+    return checked
+
+
 @register.inclusion_tag("djust_components/table.html")
 def data_table(
     rows,
@@ -794,7 +815,7 @@ def data_table(
     """
     return {
         "rows": rows,
-        "columns": columns,
+        "columns": _checked_column_widths(columns),
         "sort_by": sort_by,
         "sort_desc": sort_desc,
         "sort_event": sort_event,
@@ -2452,11 +2473,11 @@ def carousel(
     dots = ""
     for i, img in enumerate(images):
         if isinstance(img, dict):
-            src = conditional_escape(str(img.get("src", img.get("url", ""))))
+            src = url_attr(img.get("src", img.get("url", "")), image=True)
             alt = conditional_escape(str(img.get("alt", f"Slide {i + 1}")))
             caption = img.get("caption", "")
         else:
-            src = conditional_escape(str(img))
+            src = url_attr(img, image=True)
             alt = f"Slide {i + 1}"
             caption = ""
 
@@ -2589,7 +2610,7 @@ def color_picker(name="", value="#3B82F6", event="", label="", swatches=None):
 
     swatch_html = ""
     for sw in swatches:
-        e_sw = conditional_escape(sw)
+        e_sw = conditional_escape(safe_css_color(sw, "transparent"))
         active_cls = " color-swatch-active" if sw == value else ""
         swatch_html += (
             f'<button class="color-swatch{active_cls}" '
@@ -2601,7 +2622,7 @@ def color_picker(name="", value="#3B82F6", event="", label="", swatches=None):
         f'<div class="form-group">'
         f"{label_html}"
         f'<div class="color-picker">'
-        f'<div class="color-preview" style="background:{e_value}"></div>'
+        f'<div class="color-preview" style="background:{conditional_escape(safe_css_color(value, "transparent"))}"></div>'
         f'<div class="color-swatches">{swatch_html}</div>'
         f'<input class="color-hex-input form-input" type="text" '
         f'name="{e_name}" value="{e_value}" placeholder="#000000" '
@@ -2921,7 +2942,7 @@ def file_dropzone(
     label_html = f'<label class="form-label">{e_label}</label>' if label else ""
     helper_html = f'<span class="form-helper">{e_helper}</span>' if helper else ""
 
-    js_id = f"dz-{name}"
+    js_id = f"dz-{e_name}"
 
     return mark_safe(
         f"{label_html}"
@@ -2979,7 +3000,7 @@ class SplitPaneNode(template.Node):
 
         e_uid = conditional_escape(uid)
         e_dir = conditional_escape(direction)
-        e_init = conditional_escape(str(initial))
+        e_init = conditional_escape(safe_css_number(initial, "50"))
 
         content1 = self.pane1.render(context)
         content2 = self.pane2.render(context)
@@ -3149,7 +3170,9 @@ def kanban_board(
     if not columns:
         return mark_safe('<div class="kanban"></div>')
 
-    e_move = conditional_escape(move_event)
+    # e_move sits inside a single-quoted JS string in the ondrop attribute:
+    # escapejs \u-escapes quotes, backslashes and HTML special characters.
+    e_move = escapejs(move_event)
     e_add_card = conditional_escape(add_card_event)
 
     cols_html = ""
@@ -3158,7 +3181,7 @@ def kanban_board(
             continue
         col_id = conditional_escape(str(col.get("id", "")))
         col_title = conditional_escape(str(col.get("title", "")))
-        col_color = conditional_escape(str(col.get("color", "#6366F1")))
+        col_color = conditional_escape(safe_css_color(col.get("color", "#6366F1"), "#6366F1"))
         cards = col.get("cards", [])
 
         cards_html = ""
@@ -3255,10 +3278,12 @@ def rich_text_editor(
         required = required.lower() not in ("false", "0", "")
 
     e_name = conditional_escape(name)
-    e_value = value  # Already HTML — rendered as-is (trust server content)
+    # Editor HTML keeps its formatting: values marked safe pass through, and
+    # anything else is cleaned to the Markdown allowlist (utils.rich_html).
+    e_value = rich_html(value)
     e_event = conditional_escape(event)
     e_placeholder = conditional_escape(placeholder)
-    e_height = conditional_escape(height)
+    e_height = conditional_escape(safe_css_length(height, "200px"))
     e_label = conditional_escape(label)
 
     uid = f"rte-{uuid.uuid4().hex[:6]}"
@@ -4010,7 +4035,7 @@ class ScrollAreaNode(template.Node):
         custom_class = kw.get("custom_class", "")
         label = kw.get("label", "Scrollable content")
 
-        e_max_height = conditional_escape(str(max_height))
+        e_max_height = conditional_escape(safe_css_length(max_height, "400px"))
         e_custom_class = conditional_escape(str(custom_class))
         e_label = conditional_escape(str(label))
 
@@ -4119,7 +4144,7 @@ class AspectRatioNode(template.Node):
         ratio = kw.get("ratio", "16/9")
         custom_class = kw.get("custom_class", "")
 
-        e_ratio = conditional_escape(str(ratio))
+        e_ratio = conditional_escape(safe_css_ratio(ratio, "16/9"))
         e_custom_class = conditional_escape(str(custom_class))
 
         content = self.nodelist.render(context)
@@ -4202,8 +4227,8 @@ class StickyHeaderNode(template.Node):
         z_index = kw.get("z_index", "10")
         custom_class = kw.get("custom_class", "")
 
-        e_offset = conditional_escape(str(offset))
-        e_z_index = conditional_escape(str(z_index))
+        e_offset = conditional_escape(safe_css_length(offset, "0"))
+        e_z_index = conditional_escape(safe_css_number(z_index, "10", integer=True))
         e_custom_class = conditional_escape(str(custom_class))
 
         content = self.nodelist.render(context)
@@ -4745,7 +4770,7 @@ def _rich_select_option_html(opt, is_display=False):
 
     if image:
         parts.append(
-            f'<img class="rich-select-option-image" src="{conditional_escape(str(image))}" alt="">'
+            f'<img class="rich-select-option-image" src="{url_attr(image, image=True)}" alt="">'
         )
     elif icon:
         parts.append(
@@ -4852,6 +4877,7 @@ def data_grid(
         col_key = conditional_escape(str(col.get("key", "")))
         col_label = conditional_escape(str(col.get("label", col.get("key", ""))))
         width = col.get("width", "")
+        width = safe_css_length(width, "") if width else ""
         style = (
             f' style="width:{conditional_escape(str(width))};min-width:{conditional_escape(str(width))}"'
             if width
@@ -5239,7 +5265,7 @@ def responsive_image(
     if isinstance(lazy, str):
         lazy = lazy.lower() not in ("false", "0", "")
 
-    e_src = conditional_escape(src)
+    e_src = url_attr(src, image=True)
     e_alt = conditional_escape(alt)
     e_cls = conditional_escape(custom_class)
 
@@ -5250,6 +5276,7 @@ def responsive_image(
         cls += f" {e_cls}"
 
     style = ""
+    aspect_ratio = safe_css_ratio(aspect_ratio, "") if aspect_ratio else ""
     if aspect_ratio:
         e_ratio = conditional_escape(aspect_ratio)
         style = f' style="aspect-ratio:{e_ratio}"'
@@ -5266,7 +5293,7 @@ def responsive_image(
 
     placeholder_html = ""
     if placeholder:
-        e_ph = conditional_escape(placeholder)
+        e_ph = url_attr(placeholder, image=True)
         placeholder_html = (
             f'<img src="{e_ph}" alt="" class="dj-responsive-image__placeholder" aria-hidden="true">'
         )
@@ -6306,7 +6333,7 @@ class AvatarGroupNode(template.Node):
                 name = str(user)
                 src = ""
             e_name = conditional_escape(str(name))
-            e_src = conditional_escape(str(src))
+            e_src = url_attr(src, image=True)
             initials = conditional_escape("".join(w[0].upper() for w in str(name).split()[:2] if w))
             z = len(visible) - i
             if e_src:
@@ -7189,7 +7216,7 @@ class ChatBubbleNode(template.Node):
         e_name = conditional_escape(str(name))
         e_text = conditional_escape(str(text))
         e_time = conditional_escape(str(time_str))
-        e_avatar = conditional_escape(str(avatar_src))
+        e_avatar = url_attr(avatar_src, image=True)
         e_class = conditional_escape(str(custom_class))
 
         side = "dj-bubble--user" if sender == "user" else "dj-bubble--other"
@@ -7297,7 +7324,7 @@ class PresenceAvatarsNode(template.Node):
                 status = "online"
 
             e_name = conditional_escape(str(name))
-            e_src = conditional_escape(str(src))
+            e_src = url_attr(src, image=True)
             safe_status = status if status in self.VALID_STATUSES else "online"
             initials = conditional_escape(
                 "".join(w[0].upper() for w in str(name).split()[:2] if w) or "?"
@@ -7382,7 +7409,7 @@ class MentionsInputNode(template.Node):
                 continue
             uid = conditional_escape(str(user.get("id", "")))
             uname = conditional_escape(str(user.get("name", "")))
-            avatar_src = conditional_escape(str(user.get("avatar", "")))
+            avatar_src = url_attr(user.get("avatar", ""), image=True)
 
             initials = (
                 conditional_escape(
@@ -8721,7 +8748,7 @@ class MeterNode(template.Node):
                 pct = min(100, max(0, (val / total) * 100))
             else:
                 pct = 0
-            color = conditional_escape(str(seg.get("color", "")))
+            color = conditional_escape(safe_css_color(seg.get("color", ""), ""))
             seg_label = conditional_escape(str(seg.get("label", "")))
             style = f"width:{pct:.1f}%"
             if color:
@@ -8741,9 +8768,9 @@ class MeterNode(template.Node):
             for seg in segments:
                 if not isinstance(seg, dict):
                     continue
-                color = conditional_escape(str(seg.get("color", "")))
+                color = conditional_escape(safe_css_color(seg.get("color", ""), ""))
                 seg_label = conditional_escape(str(seg.get("label", "")))
-                val = seg.get("value", 0)
+                val = conditional_escape(seg.get("value", 0))
                 swatch_style = f"background:{color}" if color else ""
                 legend_items.append(
                     f'<div class="dj-meter__legend-item">'
@@ -9004,7 +9031,7 @@ class AuditLogNode(template.Node):
             cells = []
             for col in columns:
                 val = conditional_escape(str(entry.get(col, "")))
-                cell_cls = f"dj-audit-log__td dj-audit-log__td--{col}"
+                cell_cls = f"dj-audit-log__td dj-audit-log__td--{conditional_escape(col)}"
                 if col == "action":
                     cell_cls += (
                         f" dj-audit-log__action--{conditional_escape(str(entry.get('action', '')))}"
@@ -9167,7 +9194,7 @@ class SortableGridNode(template.Node):
         items = kw.get("items", [])
         columns = kw.get("columns", 3)
         move_event = kw.get("move_event", "reorder")
-        gap = kw.get("gap", "0.75rem")
+        gap = safe_css_length(kw.get("gap", "0.75rem"), "0.75rem")
         disabled = kw.get("disabled", False)
         custom_class = kw.get("class", "")
 
@@ -9199,7 +9226,7 @@ class SortableGridNode(template.Node):
             thumbnail = item.get("thumbnail", "")
             thumb_html = ""
             if thumbnail:
-                e_thumb = conditional_escape(str(thumbnail))
+                e_thumb = url_attr(thumbnail, image=True)
                 thumb_html = (
                     f'<img class="dj-sortable-grid__thumb" '
                     f'src="{e_thumb}" alt="{label}" loading="lazy">'
@@ -9247,7 +9274,7 @@ class ImageCropperNode(template.Node):
         disabled = kw.get("disabled", False)
         custom_class = kw.get("class", "")
 
-        e_src = conditional_escape(str(src))
+        e_src = url_attr(src, image=True)
         e_event = conditional_escape(str(crop_event))
         e_class = conditional_escape(str(custom_class))
 
@@ -9400,15 +9427,15 @@ class ResizablePanelNode(template.Node):
             classes.append(e_class)
         class_str = " ".join(classes)
 
-        e_min = conditional_escape(str(min_size))
-        e_max = conditional_escape(str(max_size))
-        e_initial = conditional_escape(str(initial_size))
+        e_min = conditional_escape(safe_css_length(min_size, "100px"))
+        e_max = conditional_escape(safe_css_length(max_size, "none"))
+        e_initial = conditional_escape(safe_css_length(initial_size, "50%"))
 
         content = self.nodelist.render(context)
 
         size_prop = "width" if direction == "horizontal" else "height"
         style_parts = [f"{size_prop}:{e_initial}", f"min-{size_prop}:{e_min}"]
-        if max_size != "none":
+        if e_max != "none":
             style_parts.append(f"max-{size_prop}:{e_max}")
         style = f'style="{";".join(style_parts)}"'
 
@@ -9484,7 +9511,7 @@ class LightboxNode(template.Node):
         if images and 0 <= idx < total:
             img = images[idx]
             if isinstance(img, dict):
-                e_src = conditional_escape(str(img.get("src", "")))
+                e_src = url_attr(img.get("src", ""), image=True)
                 e_alt = conditional_escape(str(img.get("alt", "")))
                 caption = img.get("caption", "")
                 img_html = f'<img class="dj-lightbox__image" src="{e_src}" alt="{e_alt}">'
@@ -9555,7 +9582,7 @@ class DashboardGridNode(template.Node):
         panels = kw.get("panels", [])
         columns = kw.get("columns", 4)
         row_height = kw.get("row_height", "200px")
-        gap = kw.get("gap", "1rem")
+        gap = safe_css_length(kw.get("gap", "1rem"), "1rem")
         move_event = kw.get("move_event", "dashboard_move")
         resize_event = kw.get("resize_event", "dashboard_resize")
         custom_class = kw.get("class", "")
@@ -9563,7 +9590,7 @@ class DashboardGridNode(template.Node):
         e_move = conditional_escape(str(move_event))
         e_resize = conditional_escape(str(resize_event))
         e_gap = conditional_escape(str(gap))
-        e_row_height = conditional_escape(str(row_height))
+        e_row_height = conditional_escape(safe_css_length(row_height, "200px"))
         e_class = conditional_escape(str(custom_class))
 
         classes = ["dj-dashboard-grid"]
@@ -9588,7 +9615,7 @@ class DashboardGridNode(template.Node):
                 continue
             pid = conditional_escape(str(panel.get("id", "")))
             title = conditional_escape(str(panel.get("title", "")))
-            content = panel.get("content", "")
+            content = conditional_escape(panel.get("content", ""))
             try:
                 col = int(panel.get("col", 1))
             except (ValueError, TypeError):

@@ -1,8 +1,10 @@
 """Responsive Image component with srcset, lazy loading, and blur-up."""
 
 import html
+from djust.components.utils import url_attr
 
 from djust import Component
+from djust.components.utils import safe_css_ratio
 
 
 class ResponsiveImage(Component):
@@ -78,12 +80,13 @@ class ResponsiveImage(Component):
             classes.append(html.escape(self.custom_class))
         class_str = " ".join(classes)
 
-        e_src = html.escape(self.src)
+        e_src = url_attr(self.src, image=True)
         e_alt = html.escape(self.alt)
 
         style = ""
-        if self.aspect_ratio:
-            e_ratio = html.escape(self.aspect_ratio)
+        aspect_ratio = safe_css_ratio(self.aspect_ratio, "") if self.aspect_ratio else ""
+        if aspect_ratio:
+            e_ratio = html.escape(aspect_ratio)
             style = f' style="aspect-ratio:{e_ratio}"'
 
         img_attrs = [f'src="{e_src}"', f'alt="{e_alt}"']
@@ -101,7 +104,7 @@ class ResponsiveImage(Component):
 
         placeholder_html = ""
         if self.placeholder:
-            e_ph = html.escape(self.placeholder)
+            e_ph = url_attr(self.placeholder, image=True)
             placeholder_html = (
                 f'<img src="{e_ph}" alt="" class="dj-responsive-image__placeholder" '
                 f'aria-hidden="true">'

@@ -2,7 +2,10 @@
 
 import html
 
+from django.utils.html import conditional_escape
+
 from djust import Component
+from djust.components.utils import safe_css_color
 
 
 class Meter(Component):
@@ -73,15 +76,15 @@ class Meter(Component):
                 pct = min(100, max(0, (val / self.total) * 100))
             else:
                 pct = 0
-            color = html.escape(str(seg.get("color", "")))
+            color = html.escape(safe_css_color(seg.get("color", ""), ""))
             seg_label = html.escape(str(seg.get("label", "")))
             style = f"width:{pct:.1f}%"
             if color:
                 style += f";background:{color}"
             bar_parts.append(
                 f'<div class="dj-meter__segment" style="{style}" '
-                f'role="meter" aria-valuenow="{val}" '
-                f'aria-valuemin="0" aria-valuemax="{self.total}" '
+                f'role="meter" aria-valuenow="{conditional_escape(val)}" '
+                f'aria-valuemin="0" aria-valuemax="{conditional_escape(self.total)}" '
                 f'aria-label="{seg_label}"></div>'
             )
 
@@ -91,7 +94,7 @@ class Meter(Component):
         if self.show_legend and self.segments:
             legend_items = []
             for seg in self.segments:
-                color = html.escape(str(seg.get("color", "")))
+                color = html.escape(safe_css_color(seg.get("color", ""), ""))
                 seg_label = html.escape(str(seg.get("label", "")))
                 val = seg.get("value", 0)
                 swatch_style = f"background:{color}" if color else ""
@@ -99,7 +102,7 @@ class Meter(Component):
                     f'<div class="dj-meter__legend-item">'
                     f'<span class="dj-meter__legend-swatch" style="{swatch_style}"></span>'
                     f'<span class="dj-meter__legend-label">{seg_label}</span>'
-                    f'<span class="dj-meter__legend-value">{val}</span>'
+                    f'<span class="dj-meter__legend-value">{conditional_escape(val)}</span>'
                     f"</div>"
                 )
             legend_html = f'<div class="dj-meter__legend">{"".join(legend_items)}</div>'

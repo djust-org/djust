@@ -2,7 +2,10 @@
 
 import html
 
+from django.utils.html import conditional_escape
+
 from djust import Component
+from djust.components.utils import safe_css_length
 
 
 class ResizablePanel(Component):
@@ -16,7 +19,7 @@ class ResizablePanel(Component):
             direction="horizontal",
             min_size="200px",
             max_size="800px",
-            content="<p>Panel content here</p>",
+            content=mark_safe("<p>Panel content here</p>"),
         )
 
     In template::
@@ -72,13 +75,13 @@ class ResizablePanel(Component):
             classes.append(html.escape(self.custom_class))
         class_str = " ".join(classes)
 
-        e_min = html.escape(self.min_size)
-        e_max = html.escape(self.max_size)
-        e_initial = html.escape(self.initial_size)
+        e_min = html.escape(safe_css_length(self.min_size, "100px"))
+        e_max = html.escape(safe_css_length(self.max_size, "none"))
+        e_initial = html.escape(safe_css_length(self.initial_size, "50%"))
 
         size_prop = "width" if direction == "horizontal" else "height"
         style = f'style="{size_prop}:{e_initial};min-{size_prop}:{e_min}"'
-        if self.max_size != "none":
+        if e_max != "none":
             style = (
                 f'style="{size_prop}:{e_initial};min-{size_prop}:{e_min};max-{size_prop}:{e_max}"'
             )
@@ -90,7 +93,7 @@ class ResizablePanel(Component):
             f'data-direction="{direction}" '
             f'data-min-size="{e_min}" data-max-size="{e_max}" '
             f"{style}{disabled_attr}>"
-            f'<div class="dj-resizable-panel__content">{self.content}</div>'
+            f'<div class="dj-resizable-panel__content">{conditional_escape(self.content)}</div>'
             f'<div class="dj-resizable-panel__handle" role="separator" '
             f'aria-orientation="{direction}" tabindex="0">'
             f'<span class="dj-resizable-panel__handle-bar"></span>'

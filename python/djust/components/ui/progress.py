@@ -6,7 +6,10 @@ Provides progress bars for showing completion status.
 
 from typing import Dict, Any
 from ..base import LiveComponent
+from django.utils.html import conditional_escape
 from django.utils.safestring import mark_safe
+
+from djust.components.utils import safe_css_length
 
 
 class ProgressComponent(LiveComponent):
@@ -52,7 +55,8 @@ class ProgressComponent(LiveComponent):
         self.custom_label = kwargs.get("custom_label", None)  # Custom label text
         self.striped = kwargs.get("striped", False)
         self.animated = kwargs.get("animated", False)  # Animated stripes
-        self.height = kwargs.get("height", None)  # Custom height
+        # Custom height; written into a style attribute, so only a CSS length.
+        self.height = safe_css_length(kwargs.get("height"), "") or None
 
     def get_context(self) -> Dict[str, Any]:
         """Get progress context"""
@@ -111,10 +115,10 @@ class ProgressComponent(LiveComponent):
         height = self.height or size_map.get(self.size, "1rem")
 
         # Progress container
-        html = f'<div class="progress" id="{self.component_id}" style="height: {height};">'
+        html = f'<div class="progress" id="{conditional_escape(self.component_id)}" style="height: {conditional_escape(height)};">'
 
         # Progress bar classes
-        classes = f"progress-bar bg-{self.variant}"
+        classes = f"progress-bar bg-{conditional_escape(self.variant)}"
         if self.striped:
             classes += " progress-bar-striped"
         if self.animated:
@@ -123,12 +127,12 @@ class ProgressComponent(LiveComponent):
         # Label
         label = ""
         if self.custom_label:
-            label = self.custom_label
+            label = conditional_escape(self.custom_label)
         elif self.show_label:
             label = f"{percentage}%"
 
         html += f'<div class="{classes}" role="progressbar" style="width: {percentage}%" '
-        html += f'aria-valuenow="{self.value}" aria-valuemin="{self.min_value}" aria-valuemax="{self.max_value}">'
+        html += f'aria-valuenow="{conditional_escape(self.value)}" aria-valuemin="{conditional_escape(self.min_value)}" aria-valuemax="{conditional_escape(self.max_value)}">'
         html += label
         html += "</div></div>"
 
@@ -154,10 +158,10 @@ class ProgressComponent(LiveComponent):
         color_class = variant_map.get(self.variant, "bg-blue-600")
 
         # Custom height
-        style = f' style="height: {self.height}"' if self.height else ""
+        style = f' style="height: {conditional_escape(self.height)}"' if self.height else ""
 
         # Progress container
-        html = f'<div class="w-full bg-gray-200 rounded-full {height_class}" id="{self.component_id}"{style}>'
+        html = f'<div class="w-full bg-gray-200 rounded-full {height_class}" id="{conditional_escape(self.component_id)}"{style}>'
 
         # Progress bar
         bar_classes = f"{color_class} {height_class} rounded-full transition-all duration-300"
@@ -167,11 +171,11 @@ class ProgressComponent(LiveComponent):
             bar_classes += " animate-[shimmer_1s_linear_infinite]"
 
         html += f'<div class="{bar_classes}" style="width: {percentage}%"'
-        html += f' role="progressbar" aria-valuenow="{self.value}" aria-valuemin="{self.min_value}" aria-valuemax="{self.max_value}">'
+        html += f' role="progressbar" aria-valuenow="{conditional_escape(self.value)}" aria-valuemin="{conditional_escape(self.min_value)}" aria-valuemax="{conditional_escape(self.max_value)}">'
 
         # Label
         if self.custom_label or self.show_label:
-            label = self.custom_label or f"{percentage}%"
+            label = conditional_escape(self.custom_label) if self.custom_label else f"{percentage}%"
             html += f'<span class="flex items-center justify-center h-full text-xs font-medium text-white px-2">{label}</span>'
 
         html += "</div></div>"
@@ -193,22 +197,22 @@ class ProgressComponent(LiveComponent):
         size_map = {"sm": "10px", "md": "20px", "lg": "30px"}
         height = self.height or size_map.get(self.size, "20px")
 
-        html = f'<div class="progress" id="{self.component_id}" style="height: {height};">'
+        html = f'<div class="progress" id="{conditional_escape(self.component_id)}" style="height: {conditional_escape(height)};">'
 
         # Progress bar
-        bar_class = f"progress-bar progress-bar-{self.variant}"
+        bar_class = f"progress-bar progress-bar-{conditional_escape(self.variant)}"
         if self.striped:
             bar_class += " progress-bar-striped"
 
         # Label
         label = ""
         if self.custom_label:
-            label = self.custom_label
+            label = conditional_escape(self.custom_label)
         elif self.show_label:
             label = f"{percentage}%"
 
         html += f'<div class="{bar_class}" style="width: {percentage}%" '
-        html += f'role="progressbar" aria-valuenow="{self.value}" aria-valuemin="{self.min_value}" aria-valuemax="{self.max_value}">'
+        html += f'role="progressbar" aria-valuenow="{conditional_escape(self.value)}" aria-valuemin="{conditional_escape(self.min_value)}" aria-valuemax="{conditional_escape(self.max_value)}">'
         html += label
         html += "</div></div>"
 

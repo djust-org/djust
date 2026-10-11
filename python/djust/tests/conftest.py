@@ -7,7 +7,7 @@ module is loaded for every test in `python/djust/tests/`.
 
 from __future__ import annotations
 
-from typing import Iterable
+from typing import Any, Iterable
 
 
 def make_staff_user(
@@ -42,3 +42,18 @@ def make_staff_user(
     user.has_perm = lambda p: p in perm_set  # type: ignore[assignment]
     user.has_perms = lambda ps: all(p in perm_set for p in ps)  # type: ignore[assignment]
     return user
+
+
+def observability_request_factory(**defaults: Any) -> Any:
+    """A ``RequestFactory`` whose requests carry the observability token.
+
+    The ``/_djust/observability/`` views only serve requests with the
+    ``X-Djust-Observability-Token`` header; endpoint tests that are not about
+    the access check build their requests with this factory.
+    """
+    from django.test import RequestFactory
+
+    from djust.observability.middleware import TOKEN_META_KEY, get_observability_token
+
+    defaults.setdefault(TOKEN_META_KEY, get_observability_token())
+    return RequestFactory(**defaults)

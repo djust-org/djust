@@ -3,6 +3,7 @@
 import html
 
 from djust import Component
+from djust.components.utils import url_attr
 
 
 class ErrorPage(Component):
@@ -70,7 +71,7 @@ class ErrorPage(Component):
 
         e_title = html.escape(str(self.title))
         e_message = html.escape(str(self.message))
-        e_url = html.escape(str(self.action_url))
+        e_url = url_attr(self.action_url)
         e_label = html.escape(str(self.action_label))
 
         msg_html = ""
