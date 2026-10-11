@@ -200,7 +200,26 @@ djust:
 | Stream-friendly base templates | off | `--with-streaming` |
 | Models generated from a JSON schema | off | `--from-schema schema.json` |
 | Demo page: live list, theme switcher, docs links | on | Replace with a placeholder via `--bare` |
+| Component library (`djust.components`) and an `{% app_shell %}` base template | on | `--bare` omits both |
 | Create `.venv`, install dependencies, migrate, and check | on | Skip with `--no-setup` |
+
+The themed scaffold enables `djust.theming` and `djust.components`, and its
+`requirements.txt` requests `djust[components]`. Its base template uses
+`{% app_shell %}` with `{% app_header %}` and `{% app_content %}` slots;
+add an `{% app_sidebar %}` slot when you need a sidebar. This also applies to
+non-bare projects generated with `--with-db` or `--from-schema`.
+
+`--bare` keeps the core `djust` requirement, omits both bundled apps and the
+app-shell layout, and writes this explicit opt-out from the theming hint:
+
+```python
+DJUST_CONFIG = {"suppress_checks": ["I002"]}
+```
+
+If `djust.components` is enabled without its optional `markdown` or `nh3`
+dependency, loading the component library raises `ImproperlyConfigured`
+naming the missing dependency and asking for `pip install "djust[components]"`.
+These scaffold changes affect new projects only; existing projects are unaffected.
 
 `--from-schema` reads a small JSON file describing models and fields, then
 generates models, admin, migrations, LiveViews and templates in one step.
@@ -261,7 +280,9 @@ you still need to register the app and include its URLs.
 
 Generated projects include an `AGENTS.md` pointing at the canonical
 [application conventions](../../ai/conventions.md) and the focused API
-references. Add project-specific rules there. Note that `djust new` does not
+references, plus `djust_ai suggest` and `djust_ai inventory` for discovery,
+and `manage.py check` and `djust_audit --ast` before finishing.
+Add project-specific rules there. Note that `djust new` does not
 rewrite an existing project directory; for an existing application, add the
 pointer to whatever agent entry file it already has. Agents do not
 automatically read a dependency's docs.

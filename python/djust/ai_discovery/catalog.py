@@ -83,11 +83,16 @@ def load_catalog() -> tuple[CatalogEntry, ...]:
         CHILD_TAGS,
     )
 
+    from django.core.exceptions import ImproperlyConfigured
+
     try:
         from djust.components.gallery.registry import discover_template_tags
 
         tags = discover_template_tags()
-    except ImportError:  # Optional rendering extras must not hide the catalog.
+    # Optional rendering extras must not hide the catalog. A missing
+    # markdown/nh3 surfaces as ImproperlyConfigured (it names the extra), not
+    # as an ImportError, so both are caught.
+    except (ImportError, ImproperlyConfigured):
         logger.debug("UI catalog tag discovery unavailable")
         tags = None
     entries = []

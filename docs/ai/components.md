@@ -227,11 +227,30 @@ Avoid `{% elif %}` in inline templates — Rust engine limitation. Use separate 
 
 ## Styling
 
-### Recommended: djust-components + djust-theming (style-agnostic)
+### Recommended: djust.components + djust.theming (style-agnostic)
 
-`pip install djust-components djust-theming`
+Start a new project with `djust new myproject`; the default themed scaffold
+installs the components extra and enables both bundled apps. For an existing
+project:
 
-**djust-components** — Template tag UI library using CSS custom properties:
+```bash
+pip install "djust[components]"
+```
+
+```python
+INSTALLED_APPS += ["djust.components", "djust.theming"]
+```
+
+Discover the available building blocks before writing markup:
+
+```bash
+python manage.py djust_ai suggest "<intent>"
+python manage.py djust_ai inventory
+python manage.py djust_ai manifest
+python manage.py djust_theme list-presets
+```
+
+**djust.components** — Template tag UI library using CSS custom properties:
 ```html
 {% load djust_components %}
 {% modal id="confirm" title="Sure?" open=modal_open %}...{% endmodal %}
@@ -255,7 +274,7 @@ Customize via CSS custom properties:
 }
 ```
 
-**djust-theming** — Design system with 11 themes x 12 color presets = 132 combos:
+**djust.theming** — Design system with 11 themes x 12 color presets = 132 combos:
 ```python
 LIVEVIEW_CONFIG = {
     "theme": {"theme": "material", "preset": "blue", "default_mode": "system"}

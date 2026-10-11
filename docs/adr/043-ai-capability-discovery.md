@@ -1,6 +1,6 @@
 # ADR-043: djust tells AI agents what it already provides — checks point at discovery, discovery covers components and theming
 
-**Status**: Proposed
+**Status**: Accepted (2026-10-10; D2 #3452, D3 + D1 #3453, D4 in the PR for #3448)
 **Date**: 2026-10-10
 **Citations**: paths pinned to `main` at `edda6475b`.
 **Deciders**: Project maintainers
@@ -95,9 +95,9 @@ MCP gains `list_ui_components(query?)` and `get_ui_component(name)` (or `list_co
 
 ### D4. Documentation and scaffolding (channels 2 and 4)
 
-- `djust_ai_context`, `llms.txt`, `llms-full.txt`, `BEST_PRACTICES_AI.md`, and the `djust` skill each gain a short **"UI building blocks — use these before writing markup"** section near the top: use case → component table, theming setup, and the D3 commands.
+- `djust_ai_context`, `djust_ai manifest`, `llms.txt`, `llms-full.txt`, and `BEST_PRACTICES_AI.md` share the renderer in `ai_discovery/manifest.py`; `scripts/generate-ai-ui-section.py` maintains the marked doc regions. They each gain a short **"UI building blocks — use these before writing markup"** section near the top: use case → component table, theming setup, and the D3 commands.
 - Fix the djust-dev skill's naming mismatch (`SKILL.md` lines 244–250): its prose says "Run `djust check`" but its example runs `python manage.py djust_audit --ast`; name the commands exactly and list `manage.py check`, `djust_check`, `djust_audit`, and the D3 commands with one line each on when to use which.
-- `djust new` already scaffolds `djust.theming` by default (`--bare` opts out). It additionally installs `djust.components` and uses an `app_shell` base template, and the skill tells agents to start projects with `djust new`.
+- `djust new` enables `djust.theming` and `djust.components` by default, requests `djust[components]`, and uses an `app_shell` base template. `--bare` omits both apps and that layout, keeps the core requirement, and writes `DJUST_CONFIG = {"suppress_checks": ["I002"]}`. Generated `AGENTS.md` files point to discovery and audit commands. Agent setup docs lead with `djust new`.
 - The skill edits (`djust`, `djust-dev`) live outside this repo (the `djust` skill in the `djust_skills` repo, which has no published remote; `djust-dev` in no repo at all). How users receive skill updates is unresolved — see §Open questions; until then the D4 doc sections in this repo (`llms*.txt`, `BEST_PRACTICES_AI.md`, `djust_ai_context`) carry the content.
 
 ## Consequences
@@ -116,11 +116,26 @@ MCP gains `list_ui_components(query?)` and `get_ui_component(name)` (or `list_co
 
 ## Open questions
 
-- Should I001 fire once per process (simple) or once per project, tracked in a marker file (quieter across repeated `check` runs, but writes to the project)?
-- How does `djust ai` (no `manage.py`) find the project's settings — `DJANGO_SETTINGS_MODULE`, a `manage.py` in the cwd, or neither, falling back to the catalog-only subset (`suggest`, `manifest`) outside a project?
+- **Resolved:** I001 fires once per process, using `_I001_STATE` in `checks/ai_discovery.py`; it does not write a project marker.
+- **Resolved in #3453:** `djust ai` uses `DJANGO_SETTINGS_MODULE` in-process when set. Otherwise `inventory` can hand off to a nearby owned `manage.py`; `suggest` and `manifest` run in-process with the standalone catalog. Windows ownership verification is tracked in #3454.
 - Which agent environment variables are stable enough to depend on? `DJUST_AGENT=1` is the documented contract; the vendor variables are best-effort.
 - Skill distribution: should the `djust` / `djust-dev` skills ship inside the djust package (e.g. `djust_ai skills install`) so D4's skill edits reach users with a djust upgrade?
-- Tracking issue: to be opened when the ADR is accepted, one sub-issue per D-item in rollout order.
+- Tracking issue: #3448; D2 landed in #3452, D3 + D1 in #3453, and D4 is in the PR for #3448.
+
+## Follow-ups
+
+- The `djust` and `djust-dev` agent-skill edits live outside this repo and need
+  owner action. This includes the UI building blocks section and the
+  `djust-dev` naming fix: replace the ambiguous “djust check” prose with the
+  actual `python manage.py check`, `djust_check`, and `djust_audit --ast`
+  commands and their purposes. Skill distribution remains open.
+- #3454 tracks the Windows owner check for the `djust ai` hand-off to
+  `manage.py`.
+- Rust `{% app_shell %}` now supplies `dj-app-shell__main` and extracts only
+  a direct sidebar slot, preserving nested sidebars. It keeps rendered
+  template order inside the main wrapper, unlike Django's node, which orders
+  header before content and drops text outside the slots. The scaffold puts
+  the header first; broader slot-order parity remains a follow-up.
 
 ## Evidence
 

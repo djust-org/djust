@@ -249,6 +249,14 @@ interactive-reference: ## Regenerate the interactive-components reference tables
 check-interactive-reference: ## Fail when the interactive-components reference differs from the components' contracts (ADR-034)
 	@PYTHONPATH=python:. $(PYTHON) scripts/generate-interactive-reference.py
 
+.PHONY: ai-ui-section
+ai-ui-section: ## Regenerate UI building blocks in AI-facing docs (ADR-043 D4)
+	@PYTHONPATH=python:. $(PYTHON) scripts/generate-ai-ui-section.py --write
+
+.PHONY: check-ai-ui-section
+check-ai-ui-section: ## Check generated UI building blocks in AI-facing docs (ADR-043 D4)
+	@PYTHONPATH=python:. $(PYTHON) scripts/generate-ai-ui-section.py
+
 .PHONY: check-template-backend-lists
 check-template-backend-lists: ## Fail when docs/TEMPLATE_BACKEND.md's generated lists differ from the engine (closes #2533)
 	@PYTHONPATH=. $(PYTHON) scripts/generate-template-backend-lists.py

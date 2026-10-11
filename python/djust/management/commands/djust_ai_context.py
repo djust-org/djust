@@ -6,7 +6,7 @@ Generates project-aware documentation files for AI coding assistants:
 - .cursorrules for Cursor
 - .github/copilot-instructions.md for GitHub Copilot
 
-Each file includes: framework directives, project views with handlers,
+Each file includes: UI building blocks, framework directives, project views with handlers,
 template bindings, and available components.
 
 Usage:
@@ -205,13 +205,12 @@ def _generate_content(framework: dict, project: dict, fmt: str) -> str:
         "reactive server-side rendering to Django.\n" % framework.get("version", "?")
     )
 
-    # Framework quick reference
-    sections.append(_section_directives(framework))
-    sections.append(_section_lifecycle(framework))
-    sections.append(_section_decorators(framework))
-    sections.append(_section_conventions(framework))
-    sections.append(_section_security())
-    sections.append(_section_state())
+    # Shared manifest reference; keep project sections and format headers local.
+    from djust.ai_discovery.manifest import AI_CONTEXT_SECTIONS, manifest_sections
+
+    sections.extend(
+        text for key, text in manifest_sections(framework) if key in AI_CONTEXT_SECTIONS
+    )
 
     # Project-specific
     if project.get("views") or project.get("components"):

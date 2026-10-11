@@ -115,7 +115,7 @@ INSTALLED_APPS = [
     "django.contrib.messages",
     "django.contrib.staticfiles",
     "djust",
-%(theming_app)s    "%(app_name)s",
+%(theming_app)s%(components_app)s    "%(app_name)s",
 ]
 
 MIDDLEWARE = [
@@ -182,7 +182,7 @@ LIVEVIEW_ALLOWED_MODULES = [
     "%(app_name)s.views",
     "djust",
 ]
-%(theming_settings)s%(extra_settings)s"""
+%(theming_settings)s%(bare_settings)s%(extra_settings)s"""
 
 # ---------------------------------------------------------------------------
 # Admin opt-in fragments (only emitted when the project ships models)
@@ -207,6 +207,9 @@ ADMIN_APP_ENTRY = '    "django.contrib.admin",\n'
 THEMING_SETTINGS = ""
 # theme.css plus the theme gallery (/theme/gallery/, DEBUG or staff only).
 THEMING_URLS = '    path("theme/", include("djust.theming.urls")),\n'
+COMPONENTS_APP_ENTRY = '    "djust.components",\n'
+BARE_SETTINGS = '\n# --bare skips djust.theming, so do not suggest it on every check run (djust.I002).\nDJUST_CONFIG = {"suppress_checks": ["I002"]}\n'
+
 THEMING_APP_ENTRY = '    "djust.theming",\n'
 THEMING_CONTEXT_PROCESSOR = '                "djust.theming.context_processors.theme_context",\n'
 
@@ -602,7 +605,7 @@ BARE_INDEX_HTML = """\
 # ---------------------------------------------------------------------------
 
 BASE_HTML = """\
-{%% load live_tags theme_tags %%}
+{%% load live_tags theme_tags djust_components %%}
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -622,11 +625,9 @@ BASE_HTML = """\
         /* Layout only. Colors, type, radii and shadows all come from the
            theme pack, so every pack restyles this page completely. */
         .wrap { max-width: 64rem; margin: 0 auto; padding: 0 1.25rem; }
-        .topbar { border-bottom: 1px solid hsl(var(--border)); background: hsl(var(--card)); }
-        .topbar .wrap { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding-top: .75rem; padding-bottom: .75rem; flex-wrap: wrap; }
+        .topbar { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
         .brand { font-weight: var(--font-bold, 700); font-size: 1.1rem; }
         .topbar-links { display: flex; align-items: center; gap: 1rem; }
-        main { padding: 2.5rem 0 4rem; }
         .stack > * + * { margin-top: 2rem; }
         .grid-3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); gap: 1rem; }
         .row { display: flex; gap: .75rem; align-items: center; flex-wrap: wrap; }
@@ -648,8 +649,10 @@ BASE_HTML = """\
     {%% load static %%}
 </head>
 <body>
-    <nav class="topbar">
-        <div class="wrap">
+    {# app_shell comes from djust.components; add {%% app_sidebar %%} for a sidebar. #}
+    {%% app_shell %%}
+    {%% app_header %%}
+        <div class="topbar">
             <span class="brand">%(display_name)s</span>
             <div class="topbar-links">
                 <a href="/theme/gallery/">Component gallery</a>
@@ -657,15 +660,18 @@ BASE_HTML = """\
                 {%% theme_panel %%}
             </div>
         </div>
-    </nav>
-    <main class="wrap stack">
-        {%% block content %%}{%% endblock %%}
-    </main>
+    {%% endapp_header %%}
+    {%% app_content %%}
+        <div class="wrap stack">
+            {%% block content %%}{%% endblock %%}
+        </div>
     <footer class="wrap site-footer muted">
         djust {{ djust_version }} &middot;
         <a href="https://docs.djust.org/">Documentation</a> &middot;
         <a href="https://github.com/djust-org/djust">GitHub</a>
     </footer>
+    {%% endapp_content %%}
+    {%% endapp_shell %%}
     {# djust injects the client.js <script> automatically (see <head> note). #}
 </body>
 </html>
@@ -1260,4 +1266,7 @@ Before changing live views, forms, templates or navigation, read:
 Use the documentation/source matching the installed djust release; main may
 contain newer APIs. Prefer native Django/djust behavior and declarative options
 before application wrappers. Keep project-specific instructions in this file.
+
+Before writing templates or views, see what djust already provides: `python manage.py djust_ai suggest "<what you need>"`
+and `python manage.py djust_ai inventory`. Before finishing, run `python manage.py check` and `python manage.py djust_audit --ast`.
 """

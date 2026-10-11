@@ -439,9 +439,11 @@ def test_djust_new_and_djust_init_write_the_same_djust_entry():
         "secret_key": "x",
         "admin_app": "",
         "theming_app": "",
+        "components_app": "",
         "theming_context_processor": "",
         "admin_template_backend": T.ADMIN_TEMPLATE_BACKEND,
         "theming_settings": "",
+        "bare_settings": "",
         "extra_settings": "",
     }
     namespace = {"os": os, "BASE_DIR": Path("/base")}

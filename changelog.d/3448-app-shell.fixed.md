@@ -1,0 +1,1 @@
+- **Rust-engine `{% app_shell %}` main wrapper (#3448).** Restore the omitted `dj-app-shell__main` wrapper so header and content form a column rather than rendering side by side. Only a direct sidebar slot moves to the outer row; nested sidebars are kept, and the main content retains template order. Covered by `python/djust/tests/test_app_shell_rust_engine_3448.py`.

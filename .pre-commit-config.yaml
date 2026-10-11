@@ -272,6 +272,14 @@ repos:
         files: ^(docs/website/api-reference/components\.md|python/djust/components/(_interactive|interactive)\.py|scripts/generate-interactive-reference\.py)$
         pass_filenames: false
 
+      # A catalog/command change regenerates these docs — run `make ai-ui-section`.
+      - id: check-ai-ui-section
+        name: check generated UI building blocks section (ADR-043 D4)
+        entry: bash -c 'PYTHONPATH=python:. bash scripts/run-with-venv-python.sh scripts/generate-ai-ui-section.py'
+        language: system
+        files: ^(docs/(llms\.txt|llms-full\.txt|BEST_PRACTICES_AI\.md)|python/djust/ai_discovery/(manifest|catalog|agents)\.py|python/djust/checks/ai_discovery\.py|python/djust/components/gallery/examples\.py|scripts/generate-ai-ui-section\.py)$
+        pass_filenames: false
+
   - repo: local
     hooks:
       - id: check-template-backend-lists
