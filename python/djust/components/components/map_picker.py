@@ -4,6 +4,7 @@ import html
 
 from djust import Component
 from typing import Any
+from djust.components.utils import safe_css_length
 
 
 class MapPicker(Component):
@@ -84,7 +85,7 @@ class MapPicker(Component):
         except (ValueError, TypeError):
             zoom = 13
 
-        e_height = html.escape(str(self.height))
+        e_height = html.escape(safe_css_length(self.height, "400px"))
 
         return (
             f'<div class="{cls}" dj-hook="MapPicker" '

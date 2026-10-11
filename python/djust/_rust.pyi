@@ -127,6 +127,16 @@ def diff_html(old_html: str, new_html: str) -> str:
     """
     ...
 
+MAX_VDOM_DEPTH: int
+"""How many element levels the VDOM parser keeps, counted from the LiveView
+root (256). An element at the limit keeps its tag and attributes; everything
+below it is flattened to its text content."""
+
+MAX_MD_NESTING: int
+"""How many container elements (``<blockquote>``, ``<ul>``/``<ol>``, ``<li>``)
+:func:`render_markdown` keeps open at once. A container that starts deeper is
+rendered without its own tags; its content stays in place."""
+
 def resolve_template_inheritance(
     template_path: str,
     template_dirs: List[str],
@@ -981,6 +991,8 @@ __all__ = [
     "render_template_with_dirs",
     "render_markdown",
     "diff_html",
+    "MAX_VDOM_DEPTH",
+    "MAX_MD_NESTING",
     "resolve_template_inheritance",
     # Serialization
     "fast_json_dumps",

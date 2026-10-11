@@ -4,6 +4,7 @@ import html
 from typing import Any, List, Optional, Union
 
 from djust import Component
+from djust.components.utils import safe_css_color
 
 
 class CollabSelection(Component):
@@ -79,7 +80,9 @@ class CollabSelection(Component):
                 end = 0
 
             e_name = html.escape(str(name))
-            e_color = html.escape(str(color))
+            e_color = html.escape(
+                safe_css_color(color, self.DEFAULT_COLORS[i % len(self.DEFAULT_COLORS)])
+            )
             e_text = html.escape(str(text))
 
             try:

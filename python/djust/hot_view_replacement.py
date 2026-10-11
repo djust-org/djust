@@ -392,6 +392,12 @@ def reload_module_if_liveview(path: str) -> Optional[ReloadResult]:
             logger.exception("HVR: importlib.reload failed for %s", path)
             return None
 
+        # The reloaded classes are new objects: let the live auth check
+        # re-read what the URLconf routes wrap them in.
+        from djust.auth.core import invalidate_url_auth_cache
+
+        invalidate_url_auth_cache()
+
         new_classes: Dict[str, type] = {
             name: attr
             for name, attr in module.__dict__.items()

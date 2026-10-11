@@ -354,7 +354,7 @@ def test_rate_bucket_lru_cap_bounds_memory():
             request.user = None  # force anonymous path
             # We can't actually call dispatch_api without an auth pass; instead
             # call the internal helper directly.
-            dispatch_mod._rate_limit_check(request, "ping", V.ping)
+            dispatch_mod._rate_limit_check(request, V, "ping", V.ping)
         assert len(rate_limit_mod._handler_buckets) == 5
     finally:
         rate_limit_mod._HANDLER_BUCKET_CAP = original_cap

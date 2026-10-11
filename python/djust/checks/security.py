@@ -9,6 +9,7 @@ S012.
 """
 
 import ast
+import inspect
 import logging
 import os
 import re
@@ -44,6 +45,23 @@ def check_security(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
     app_dirs = _root._get_project_app_dirs()  # type: ignore[attr-defined]  # _root.* is dynamic re-export (patch-by-path; #1822 split)
     if not app_dirs:
         return errors
+
+    # S012 (inspect-based) -- a LiveView defined in the project whose access
+    # control only the HTTP request runs, and which the runtime therefore
+    # refuses on live transports (check_view_auth step 5) until it declares
+    # djust auth that covers it: a custom AccessMixin subclass's dispatch(),
+    # an override, method decorator or URLconf wrapper that checks the user
+    # and denies (and, where this line refuses them, unknown decorators and
+    # wrappers). Same predicate as the runtime (djust.auth.core), so the two
+    # cannot disagree. Code the runtime replays (Django's auth decorators and
+    # wrappers) is not reported; code it neither refuses nor runs (an
+    # override that only reads the user, an unknown decorator this line does
+    # not refuse) is a djust.V013 warning, as is a refused view that an
+    # installed package defines.
+    s012_messages, s012_analysed = _http_only_access_messages(app_dirs)
+    if not _is_check_suppressed("djust.S012"):
+        for msg, kwargs in s012_messages:
+            errors.append(DjustError(msg, id="djust.S012", **kwargs))
 
     for filepath in _iter_python_files(app_dirs):
         tree, source_lines = _parse_python_file(filepath)
@@ -150,21 +168,29 @@ def check_security(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
             # non-localhost ALLOWED_HOSTS" S004) -- LiveView subclass whose
             # authorization is applied via @method_decorator(<auth>,
             # name="dispatch"). The WS/SSE mount path authorizes through
-            # check_view_auth (not dispatch()), so a decorated dispatch is
-            # enforced on the HTTP GET but NOT over WebSocket. (Django auth
-            # MIXINS are auto-honored by check_view_auth; only the
-            # decorated/overridden-dispatch pattern is un-portable and
-            # flagged here.) See finding #14.
+            # check_view_auth (not dispatch()). check_view_auth replays
+            # Django's own auth decorators and mixins and refuses other gates;
+            # the inspect-based S012 at the top of this function reports the
+            # refused views it can import, and this source scan covers the rest
+            # (a decorator other than Django's four, or a dispatch() that
+            # checks the user and denies). See finding #14.
             if isinstance(node, ast.ClassDef) and _is_liveview_subclass(node):
-                for deco in node.decorator_list:
-                    if _is_dispatch_auth_method_decorator(deco) and not _has_noqa(
-                        source_lines, deco.lineno, "S012"
-                    ):
+                # The source scan reports only classes the inspect-based S012
+                # above did not analyse (not imported when checks run), so a
+                # view is never reported twice, and skips what the runtime
+                # replays: Django's own login_required / staff_member_required
+                # / user_passes_test / permission_required on dispatch().
+                s012_ast = (os.path.realpath(filepath), node.name) not in s012_analysed
+                for deco in node.decorator_list if s012_ast else ():
+                    if _is_dispatch_auth_method_decorator(
+                        deco, include_replayed=False
+                    ) and not _has_noqa(source_lines, deco.lineno, "S012"):
                         errors.append(
                             DjustError(
                                 "%s:%d -- LiveView %r gates auth via "
-                                "@method_decorator(..., name='dispatch'); this is "
-                                "NOT enforced over WebSocket (only on the HTTP GET)."
+                                "@method_decorator(..., name='dispatch'); dispatch() "
+                                "runs only on the HTTP request, so the rule is not "
+                                "declared where every transport reads it."
                                 % (relpath, node.lineno, node.name),
                                 hint=(
                                     "LiveView authorization must use djust's "
@@ -173,8 +199,11 @@ def check_security(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
                                     "(honored on every transport), or a Django "
                                     "auth mixin (LoginRequiredMixin / "
                                     "PermissionRequiredMixin / UserPassesTestMixin, "
-                                    "auto-honored). A decorated dispatch() is "
-                                    "HTTP-only."
+                                    "replayed as-is). Django's own login_required / "
+                                    "staff_member_required / user_passes_test / "
+                                    "permission_required are replayed on live "
+                                    "transports; any other decorator on dispatch() "
+                                    "is HTTP-only."
                                 ),
                                 id="djust.S012",
                                 fix_hint=(
@@ -194,24 +223,30 @@ def check_security(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
                 # Also flag an overridden ``def dispatch`` that performs auth
                 # itself (e.g. ``if not request.user.is_authenticated: raise
                 # PermissionDenied``). check_view_auth never calls dispatch(),
-                # so such auth is HTTP-only too.
-                auth_dispatch = _liveview_auth_dispatch_method(node)
+                # so such auth is HTTP-only too. Only a dispatch() that checks
+                # the user and denies (raises, redirects, returns an error
+                # response) is reported; one that only reads the user is not
+                # refused at runtime either.
+                auth_dispatch = _liveview_dispatch_gate(node) if s012_ast else None
                 if auth_dispatch is not None and not _has_noqa(
                     source_lines, auth_dispatch.lineno, "S012"
                 ):
                     errors.append(
                         DjustError(
-                            "%s:%d -- LiveView %r overrides dispatch() with auth "
-                            "logic; this is NOT enforced over WebSocket (only on "
-                            "the HTTP GET)." % (relpath, auth_dispatch.lineno, node.name),
+                            "%s:%d -- LiveView %r overrides dispatch() with an "
+                            "access check; dispatch() runs only on the HTTP request, "
+                            "so live mounts of the view are refused until the rule "
+                            "is declared." % (relpath, auth_dispatch.lineno, node.name),
                             hint=(
                                 "LiveView authorization must use djust's "
                                 "login_required / permission_required class "
                                 "attributes or a check_permissions() method "
                                 "(honored on every transport), or a Django auth "
                                 "mixin (LoginRequiredMixin / PermissionRequiredMixin "
-                                "/ UserPassesTestMixin, auto-honored). Auth inside an "
-                                "overridden dispatch() is HTTP-only."
+                                "/ UserPassesTestMixin, replayed as-is). Auth inside an "
+                                "overridden dispatch() is HTTP-only; when it refuses "
+                                "the user, live mounts of the view are refused until "
+                                "the rule is declared."
                             ),
                             id="djust.S012",
                             fix_hint=(
@@ -408,6 +443,125 @@ def check_upload_client_name_path_sink(app_configs: Any, **kwargs: Any) -> list[
     return errors
 
 
+_S012_DECLARE_HINT = (
+    "Declare the view's access rule where every transport enforces it: "
+    "`permission_required = ...` or a `check_permissions(self, request)` "
+    "method (return True from it for a view that is public); "
+    "`login_required = True` covers a check only when that check is "
+    "`is_authenticated` / `is_anonymous` alone. Django's login_required / "
+    "staff_member_required / user_passes_test / permission_required (applied "
+    "with @method_decorator, wrapped around as_view() in the URLconf, or "
+    "inside another package's decorator built on user_passes_test) and its "
+    "LoginRequiredMixin / PermissionRequiredMixin / UserPassesTestMixin are "
+    "replayed on live transports; other access checks in "
+    "setup()/dispatch()/get()/post() and URLconf wrappers are not."
+)
+
+
+def _in_app_dirs(path: str, app_dirs: list[str]) -> bool:
+    """Whether ``path`` is under one of the project's ``app_dirs``."""
+    if not path:
+        return False
+    real = os.path.realpath(path)
+    for root in (os.path.realpath(d) for d in app_dirs):
+        try:
+            if os.path.commonpath([real, root]) == root:
+                return True
+        except ValueError:  # different drives
+            continue
+    return False
+
+
+def _http_only_access_messages(
+    app_dirs: list[str],
+) -> tuple[list[tuple[str, dict[str, Any]]], set[tuple[str, str]]]:
+    """(message, DjustError kwargs) for djust.S012, and the (file, class name)
+    pairs analysed. ``check_security`` emits the messages (one function per
+    check id) and skips the analysed classes in its source scan.
+
+    Considers URL-routed views and imported subclasses defined under one of
+    ``app_dirs`` (the project's own code), skipping djust's own production
+    classes and ``abstract = True`` bases. A refused view defined outside the
+    project (an installed package) is left to djust.V013's warning: the
+    project cannot edit it.
+    """
+    try:
+        from djust.live_view import LiveView
+    except ImportError:
+        return [], set()
+    from djust.auth.core import is_framework_module, live_auth_refused_findings
+    from djust.checks.utils import _walk_subclasses
+
+    def _source(obj: Any) -> tuple[str, Optional[int]]:
+        path = ""
+        line = None
+        try:
+            path = inspect.getfile(obj)
+            line = inspect.getsourcelines(obj)[1]
+        except (OSError, TypeError):
+            pass  # Source introspection may fail for built-in or C-extension objects
+        return path, line
+
+    try:
+        routed = {view_cls for _route, _callback, view_cls in _routed_liveview_callbacks()}
+    except Exception:  # noqa: BLE001 — a broken URLconf is reported by Django's own check
+        routed = set()
+
+    errors: list[tuple[str, dict[str, Any]]] = []
+    analysed: set[tuple[str, str]] = set()
+    for cls in sorted(
+        routed | set(_walk_subclasses(LiveView)),
+        key=lambda c: (getattr(c, "__module__", ""), getattr(c, "__qualname__", "")),
+    ):
+        if (
+            is_framework_module(getattr(cls, "__module__", "") or "")
+            or cls.__dict__.get("abstract") is True
+        ):
+            continue
+        cls_file, cls_line = _source(cls)
+        if not _in_app_dirs(cls_file, app_dirs):
+            continue
+        analysed.add((os.path.realpath(cls_file), cls.__name__))
+        refused = live_auth_refused_findings(cls)
+        if not refused:
+            continue
+        refusals = [f.label for f in refused]
+        label = "%s.%s" % (cls.__module__, cls.__qualname__)
+        if any(f.beyond_login for f in refused):
+            declare = "`permission_required` / `check_permissions(self, request)`"
+        else:
+            declare = (
+                "`login_required = True` (the check is login-only) / "
+                "`permission_required` / `check_permissions(self, request)`"
+            )
+        errors.append(
+            (
+                "%s: this access control runs only on the HTTP request: %s. The "
+                "WebSocket/SSE mount, events (including the HTTP POST event "
+                "fallback) and embedded renders refuse this view until it "
+                "declares djust auth that covers it." % (label, "; ".join(refusals)),
+                {
+                    "hint": _S012_DECLARE_HINT,
+                    "fix_hint": (
+                        "On `%s`, express the check from %s as %s."
+                        % (cls.__qualname__, "; ".join(refusals), declare)
+                    ),
+                    "file_path": cls_file,
+                    "line_number": cls_line,
+                },
+            )
+        )
+    return errors, analysed
+
+
+def _routed_liveview_callbacks() -> Iterator[tuple[str, Any, type]]:
+    """(route, callback, LiveView class) for every URL pattern routing a
+    LiveView (the runtime reads the same routes; see djust.auth.core)."""
+    from djust.auth.core import routed_liveview_callbacks
+
+    yield from routed_liveview_callbacks()
+
+
 _AUTH_REFERENCE_NAMES = frozenset(
     {
         "PermissionDenied",
@@ -480,8 +634,59 @@ _AUTH_DECORATOR_NAMES = frozenset(
 )
 
 
-def _is_dispatch_auth_method_decorator(deco: ast.expr) -> bool:
-    """True if ``deco`` is ``@method_decorator(<auth-decorator>, name="dispatch")``."""
+#: Django's auth decorators the runtime replays on live transports.
+_REPLAYED_DECORATOR_NAMES = frozenset(
+    {"login_required", "permission_required", "user_passes_test", "staff_member_required"}
+)
+
+#: How a dispatch() override denies once it has checked the user.
+_DISPATCH_DENIAL_NAMES = frozenset(
+    {
+        "PermissionDenied",
+        "HttpResponseForbidden",
+        "redirect_to_login",
+        "handle_no_permission",
+        "redirect",
+        "HttpResponseRedirect",
+        "HttpResponsePermanentRedirect",
+        "Http404",
+        "HttpResponseNotFound",
+    }
+)
+
+
+def _liveview_dispatch_gate(
+    node: "ast.ClassDef",
+) -> Union[ast.FunctionDef, ast.AsyncFunctionDef, None]:
+    """The ``dispatch`` override whose body checks the user and denies.
+
+    Like :func:`_liveview_auth_dispatch_method`, but reads only the body (a
+    decorator on ``def dispatch`` is not the override's own check) and needs
+    a denial: a ``raise``, or a name from ``_DISPATCH_DENIAL_NAMES``.
+    """
+    for item in node.body:
+        if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and item.name == "dispatch":
+            refs: set[str] = set()
+            raises = False
+            for stmt in item.body:
+                for sub in ast.walk(stmt):
+                    if isinstance(sub, ast.Raise):
+                        raises = True
+                    elif isinstance(sub, ast.Name):
+                        refs.add(sub.id)
+                    elif isinstance(sub, ast.Attribute):
+                        refs.add(sub.attr)
+            if refs & _AUTH_REFERENCE_NAMES and (raises or refs & _DISPATCH_DENIAL_NAMES):
+                return item
+    return None
+
+
+def _is_dispatch_auth_method_decorator(deco: ast.expr, *, include_replayed: bool = True) -> bool:
+    """True if ``deco`` is ``@method_decorator(<auth-decorator>, name="dispatch")``.
+
+    ``include_replayed=False`` leaves out Django's own decorators that the
+    runtime replays on live transports (djust.S012 does not report them).
+    """
     if not isinstance(deco, ast.Call):
         return False
     fn = deco.func
@@ -516,6 +721,8 @@ def _is_dispatch_auth_method_decorator(deco: ast.expr) -> bool:
         )
     elif isinstance(inner, ast.Attribute):
         inner_name = inner.attr
+    if not include_replayed and inner_name in _REPLAYED_DECORATOR_NAMES:
+        return False
     return inner_name in _AUTH_DECORATOR_NAMES
 
 

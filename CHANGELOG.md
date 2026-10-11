@@ -7,6 +7,227 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.7] - 2026-10-10
+
+A 1.1 patch release that includes security fixes; upgrading from 1.1.6 is recommended.
+
+### Changed
+
+- **Markdown output keeps at most 32 containers open at once.** `djust.render_markdown` and `{% djust_markdown %}` emit one `<blockquote>` per `>` and a `<ul>`/`<li>` pair per list level, so the depth of the output, and the time spent parsing and diffing it, grew with the nesting of the source. A block quote, list or list item that starts while `MAX_MD_NESTING` (32) containers are already open is now rendered without its own tags; its content stays in place inside the innermost kept container, so no text is lost, every kept `<li>` stays balanced, and the cost of rendering stays proportional to the length of the source. Documents that nest 32 containers or fewer (ordinary documents: 914 distinct Markdown files from the docs of this repository and its sibling projects all render unchanged, and the deepest nests 6) render byte for byte as before. The bound is exported as `djust._rust.MAX_MD_NESTING`. Regression cases in `python/tests/test_markdown_nesting_bound.py` and the `markdown` unit tests of `djust_templates`.
+- **Terminal's ANSI conversion keeps a bounded number of styles open per line.** Each open style is a nested `<span>` until a reset or the end of the line, so a short line could nest as deep as it was long. The conversion (in the `Terminal` component, the inline handler and the `{% terminal %}` tag) now keeps at most 32 styles open per line and opens styles from at most the first 16 parameters of a sequence (the client hook reads the same 16); a style past either cap is dropped, and a reset anywhere in a sequence closes every open style. Lines that stay under the caps, which is every line a program prints in practice, render byte for byte as before. Regression cases in `python/tests/test_terminal_ansi_span_cap.py`.
+- **The VDOM bounds the nesting depth of the HTML it parses.** Every walker over the VDOM (diff, patch serialization, serialization back to HTML) recurses once per nesting level, so a page whose markup nests thousands of elements deep needs more stack than the rendering thread has. The parser now keeps at most `MAX_VDOM_DEPTH` (256) levels, counted from the LiveView root: an element at the limit keeps its tag and attributes, and everything below it is flattened to its text content, so nothing nests deeper and no text is lost (except below an SVG or MathML `<style>` or `<script>` at the limit, which keeps no text: its descendants' text is not its own). Pages are unaffected: the deepest of 92 rendered demo-project pages and 316 template files nests 14 levels, and parsing, diffing and serializing them gives byte-identical results before and after. The search for the `dj-root` element no longer walks the raw tree recursively either. The limit is exported as `djust._rust.MAX_VDOM_DEPTH`; the loop-item subtree cache falls back to a full parse when grafting a subtree would pass it. Regression cases in `python/tests/test_vdom_nesting_bound.py` and `crates/djust_vdom/tests/test_nesting_depth_bound.rs`.
+
+### Fixed
+
+- **No test process can write into the real repository's `.git/config` under
+  a git hook any more (#3179).** On this line the pre-commit-wrapper and
+  shared-git-config fixtures already scrubbed git variables (#2608), but other
+  git-spawning test modules still inherited `GIT_DIR` and friends when pytest
+  ran under a hook. Every test module that spawns git, or a script that runs
+  git, now strips `GIT_EXECUTION_VARS` with an autouse fixture, and the root
+  `conftest.py` strips them for every test (covering library code that runs git
+  in-process). `tests/test_git_env_guard_3179.py` adds a static guard that fails
+  on any unprotected process spawn in a git-spawning test module, plus
+  consistency checks that the two helpers leave a throwaway `GIT_DIR`
+  unchanged.
+- **Components check the CSS values they write into `style` attributes.** A
+  colour, length, ratio or number that a component takes from its caller and
+  writes into an inline `style` attribute is now checked against the shapes the
+  component documents, and anything else is replaced by the component's
+  default. Colours accept `#rgb`/`#rgba`/`#rrggbb`/`#rrggbbaa`, a CSS named
+  colour (with `transparent` and `currentcolor`), `rgb()`/`rgba()`/`hsl()`/
+  `hsla()` with plain numeric arguments, and `var(--name)` references; lengths
+  accept numbers with a unit, the usual keywords, `var()`, and `calc()`/`min()`/
+  `max()`/`clamp()`. Valid values render exactly as before. Covers
+  `CursorsOverlay` and `CollabSelection` (the user colour), `CalendarView`
+  event colours, `Meter` segment colours, `ColorPicker`, kanban column colours,
+  the data table colour scale, and the heights, widths, gaps, offsets and
+  ratios of `MapPicker`, `RichTextEditor`, `ScrollArea`, `StickyHeader`,
+  `DataGrid`, `DataTable`, `ResizablePanel`, `SortableGrid`, `DashboardGrid`,
+  `AspectRatio`, `ResponsiveImage`, `SplitPane`, the progress components and
+  `{% theme_skeleton %}`, on every render path (component class, template tag
+  and Rust template engine). The helpers are
+  `djust.components.utils.safe_css_color`, `safe_css_length`, `safe_css_ratio`
+  and `safe_css_number`.
+- **Text in an SVG or MathML `<style>` / `<script>` is serialized as escaped text.** The VDOM wrote the text of any element named `script` or `style` verbatim, by tag name alone. The HTML serialization rules apply that only to HTML elements: inside `<svg>` or `<math>` these are foreign elements, whose text the parser decodes, so it has to be escaped again when written back (`&lt;` stays `&lt;`). The serializer now tracks the namespace while it writes (`svg` and `math` switch to foreign content; `foreignObject`, `desc`, `title`, MathML text elements and HTML `annotation-xml` switch back), so re-parsing the HTML gives the same tree. HTML `<style>` and `<script>` output is byte-identical, and so is SVG CSS without `<`, `>` or `&`. HTML `<script>` and `<style>` content is written verbatim exactly as the HTML serialization algorithm writes it, including a script that holds `</script>` inside `<!-- … -->` (the legacy `document.write` pattern). An inserted `{% if %}` block (the HTML of an `InsertSubtree` patch) is written the way the page writes it, since the client now parses it in its parent's namespace. The `render_binary_diff` text-only fast path now updates a text node only when the HTML's text runs and the tree's text nodes line up one for one, and never inside a raw-text element: it mapped changes by byte offset, so dropped whitespace or text outside the root sent a change to the neighbouring node, and it decoded `&lt;` inside a `<script>`. The text fast paths (the in-place update, `try_text_only_vdom_update`, `try_text_patches`, and the fragment and text-region paths of `render_with_diff`) also require each text node to sit in the element the source has open around its text: text directly inside a `<table>` is moved before the table by the parser, so two equal texts could line up in the wrong order and a change was applied to the other node. Such updates, and any start tag the parser would move out of a table, now take the full parse. The text fast path also falls back to a full parse for every `<style>` or `<script>` that follows an `<svg>` or `<math>` start tag; it used to count `</svg>` / `</math>` to decide when foreign content closed, and the tree builder ignores some of those end tags (a stray `</math>` inside `<svg>`, an `</svg>` inside `foreignObject` or `desc` content), so a text change could still be sent to the wrong node. The serializer also starts from the real namespace of the root: the parser reports it, so a `dj-root` on an element inside `<svg>` or `<math>` (`<svg><g dj-root>`) writes its `<style>` / `<script>` text escaped, as does its `dj-update="ignore"` cache, and the HTML of an `InsertSubtree` patch is written for its parent's namespace; the text fast paths run only under an HTML root. Regression cases in `python/tests/test_vdom_foreign_raw_text.py`, `python/tests/test_vdom_html_raw_text_verbatim.py` and in `crates/djust_vdom/src/lib.rs`.
+- **A dj-root on an SVG or MathML element keeps its children's namespace through `html_update`, `html_recovery` and the morph of a prerendered page on mount.** These three paths parsed the root's inner HTML in an HTML context (`DOMParser`, or `innerHTML` on a `<div>`), so every child of a dj-root placed on an SVG or MathML element came out as an HTML element and replaced the SVG / MathML element of the full render: an `<iframe>`, `<a>`, `<form>`, `<details>` or `<video>` written there was a working HTML element after the update, where the full render has an inert SVG or MathML element. `html_update` and `html_recovery` now parse the frame as the root's children in the root's namespace, inertly (`_parseRootFrameHtml`), and the mount morph parses it in a detached element of the root's own namespace and name (`_parseRootHtmlLive`). A dj-root on an HTML element parses exactly as before. Regression tests in `tests/js/full_html_frame_namespace.test.js`.
+- **A node inserted inside `<svg>` or `<math>` by an `InsertChild` patch keeps the SVG / MathML namespace.** The client chose an inserted element's namespace from its name alone: an allow-listed HTML name (`iframe`, `a`, `form`, `details`, `video`) inside `<svg>` or `<math>` became a working HTML element where the full render has an inert SVG or MathML element, and MathML names became a `<span>`. The client now derives the namespace from the element the node is inserted into, by the same rules a page parse follows (`foreignObject`, `desc`, `title`, the MathML text elements and HTML `annotation-xml` hold HTML), and creates allow-listed names, MathML element names included, in that namespace. Names outside the allow lists still become a `<span>`, and an element under an HTML parent is created as before. Regression tests in `tests/js/insert_subtree_namespace.test.js`; `tests/playwright/test_insert_subtree_namespace.py` covers `InsertChild` in Chromium too.
+- **The children of a placeholder for an SVG or MathML element keep their namespace.** An `InsertChild` patch turns an SVG or MathML element outside the client's allow lists (`filter`, `fe*`, `animate*`, `set`, `mstack`, an unknown name) into a `<span>`, and then created its children inside that HTML `<span>`: an `<iframe>`, `<a>`, `<form>`, `<details>` or `<video>` there became a working HTML element, where the full render has an inert SVG or MathML element. The children are now created in the namespace of the element the `<span>` stands in for. The placeholder itself stays a `<span>`. Regression tests in `tests/js/insert_subtree_namespace.test.js`.
+- **An inserted `{% if %}` block inside `<svg>` or `<math>` keeps the SVG / MathML namespace.** The client parsed the HTML of every `InsertSubtree` patch in an HTML `<template>`, so the elements of a conditional block inside `<svg>` or `<math>` came out as HTML elements, while the full render has them as SVG or MathML elements: an `<iframe>`, `<a>`, `<form>`, `<details>` or `<video>` written there is inert in the full render but was a working HTML element after the patch. The client now parses that HTML as children of the element it is inserted into: inside an `<svg>` or `<math>` wrapper for an SVG or MathML parent (a MathML `mi`, `mo`, `mn`, `ms`, `mtext` or `annotation-xml` parent is reproduced as well), and as HTML, as before, for an HTML parent and for the HTML integration points (`foreignObject`, `desc`, `title`, and `annotation-xml` with an HTML `encoding`). The server writes that HTML for that parse. Regression tests in `tests/js/insert_subtree_namespace.test.js`, `python/tests/test_vdom_foreign_raw_text.py` and `crates/djust_vdom/src/lib.rs`; `tests/playwright/test_insert_subtree_namespace.py` compares real patches with a full render in Chromium.
+- **The mount morph no longer runs a MathML or SVG `<script>`.** After the morph of a prerendered page, the client re-creates each classic `<script>` in the dj-root as a new HTML `<script>` so that inline page scripts run (#1848). It also matched `<script>` elements inside `<math>` and `<svg>` and re-created them as HTML scripts, so a MathML `<script>`, which never runs in a full render, ran after the morph. `_runInsertedScripts` now re-creates only HTML `<script>` elements. Regression test in `tests/js/mount-morph-script-exec-1848.test.js`.
+- **Live transports follow Django's `LoginRequiredMiddleware`.** With
+  `django.contrib.auth.middleware.LoginRequiredMiddleware` (Django 5.1+, or a
+  subclass) in `MIDDLEWARE`, a view mounted over a live transport (WebSocket,
+  SSE, API dispatch, `mount_batch`) now gets the answer the middleware gives
+  for its page: an anonymous user is sent to the login page, where the
+  middleware would send them (its `login_url` and `redirect_field_name` for
+  that route), unless the view is public. A view is public when its
+  `dispatch` carries Django's `login_not_required`
+  (`@method_decorator(login_not_required, name="dispatch")`, public
+  everywhere), or when the URLconf routes that view class through
+  `login_not_required(MyView.as_view())`, or when the request's own route
+  serves the view and the installed middleware (subclass exemptions
+  included) lets it through. A view the URLconf does not route, mounted
+  beside the page view or hydrated as a lazy child over the WebSocket, needs
+  the `dispatch` marker to be mounted anonymously; naming a public page's URL
+  does not make it public. When the middleware refuses such a view, only that
+  view is refused (an `error` frame with `code: "login_required"`, or a
+  `failed[]` entry in the `mount_batch` reply) and the page stays where it is;
+  the first view mounted on a socket is the page view, and its refusal sends
+  the page to the login page. That is the middleware's answer: a view refused
+  by its own `login_required = True` still sends the page to the login page,
+  and a view that relies only on `permission_required`, `check_permissions()`
+  or Django's auth mixins gets the middleware's answer first, so beside the
+  page view it is refused on its own. On SSE and the API the request is the
+  endpoint's, so a view served there anonymously needs the `dispatch` marker
+  or a `login_not_required` route of its own (and the endpoint itself must be
+  exempt from the middleware for the request to arrive). Views rendered inside
+  a page (`{% live_render %}` children) take their page's answer, as Django
+  never checks what a page includes, and a page's own HTTP GET and POST are
+  left to the middleware itself. djust's own `login_required = False` is not
+  an exemption, as it is not for the middleware. Without the middleware, or on
+  Django < 5.1, nothing changes.
+- **`{% masonry_grid %}`, `{% dashboard_grid %}` and `{% audit_log %}` escape
+  caller values in the Rust template engine.** The component classes and the
+  Django template tags escape each masonry item's `content`, each dashboard
+  panel's `content` and each audit-log column name (written into the cell's
+  `class` attribute); the Rust-engine handlers wrote them unchanged. They now
+  escape them the same way. The Rust engine passes list arguments to component
+  handlers as data, so markup marked safe inside items is escaped there too;
+  render such items with the component class or the Django tag. The
+  `MasonryGrid` and `DashboardGrid` docstrings and the gallery examples now
+  show text content. Tests in
+  `python/djust/tests/test_rust_handler_item_escaping.py`.
+
+### Security
+
+- **The djust admin change list filters and sorts only on declared fields.**
+  `ModelListView.apply_filter` accepts the field names in the ModelAdmin's
+  `list_filter` (`get_list_filter()`), and `sort_by` accepts the sortable
+  `list_display` columns and the fields named in `ordering` (`get_ordering()`),
+  as Django's admin does. The queryset applies the same check to the stored
+  filters and ordering, so any other name (another lookup, a path through a
+  relation, an expression) is ignored and logged at debug level. The filter
+  list on the page now comes from `get_list_filter()` as well. A custom
+  change-list template that filters or sorts on other fields must declare them
+  in `list_filter`, `list_display` or `ordering`. The auth admin's social
+  accounts list sorts only on its own columns.
+- **The djust admin loads rows through the ModelAdmin's `get_queryset()`.**
+  A `DjustModelAdmin` that scopes rows in `get_queryset(request)` was honoured
+  by the change list only: bulk actions ran on the selected primary keys
+  through `Model.objects`, and the change and delete views loaded their
+  object with `Model.objects.get()`. As in Django's admin, an action now runs
+  on the selected rows that `get_queryset(request)` holds (other selected keys
+  are ignored), and the change and delete views load their object with the
+  new `DjustModelAdmin.get_object(request, object_id)`, which looks it up in
+  that queryset; a row it leaves out, or a key that names no row, is a 404.
+- **A live view whose `mount()` raises is no longer left mounted.** An
+  exception from `mount()`, `handle_params()` or the first render used to
+  answer with an error frame and keep the view as the connection's mounted
+  view, so later events still ran its handlers, and it stayed in its channel
+  groups with its presence tracked. Such a mount now
+  ends like a refused one on WebSocket and SSE: a `PermissionDenied` is
+  answered as the authorization check answers it (`Permission denied`; the
+  socket closes with 4403 outside a `mount_batch`), any other exception keeps
+  its error frame, and in both cases the view is dropped, its groups are
+  left, its presence is untracked and its tick stops. A view whose object
+  permission is refused after `mount()` also untracks its presence. The HTTP
+  fallback and the HTTP API already refused such a request.
+- **One `@rate_limit` budget per handler function, whatever name reaches it.** The shared store keyed buckets on the caller and the name the route used (the client-supplied `event_name` on WebSocket/SSE, the function name on the HTTP API), so a method reachable under two names (an alias attribute, or a second name bound in `mount`) had a separate budget per name. The bucket is now keyed on the function that actually runs (`__func__` of a bound method), accepted only when that function is declared on the owning class; only the exact builtin `staticmethod`/`classmethod` wrappers are unwrapped, and membership is compared with `is`. A handler whose identity cannot be determined this way (a property or other descriptor, a `functools.partial`, a callable instance, a function from an unrelated class) is refused with a named error rather than given a budget of its own, and two handlers that resolve to one key with different limit settings are refused rather than sharing the first one's settings. Functions made by one factory keep separate budgets. Tests: `python/djust/tests/test_ratelimit_post_fallback.py`.
+- **`@rate_limit` now applies on the page-POST fallback.** The per-handler `@rate_limit` was checked on WebSocket/SSE and on the HTTP API, but the page-POST fallback (`mixins/request.post`), which also runs an `@event_handler` from the request body, did not consult it, so calls through it did not use the shared per-caller budget that F27 documents as "one budget per handler regardless of transport". The fallback now checks the limit at the same point as the WebSocket path (after the decorator and permission checks, before the handler runs) and answers `429` with `code: "rate_limited"` in its existing JSON error shape. Both HTTP transports share one implementation, `djust.rate_limit.http_handler_rate_check`, and one caller-key helper, `caller_key_for_request` (still behind `resolve_client_ip`, so `DJUST_TRUSTED_PROXY_COUNT` still applies); the HTTP API's behaviour is unchanged. Tests: `python/djust/tests/test_ratelimit_post_fallback.py`.
+- **Theming URLs use a shared script-scheme denylist (backported from #3400, #3407, #3420).**
+  Data-derived URLs in navigation, breadcrumbs, pagination, avatars and page
+  tags are neutralised to `"#"` for `javascript:`, `vbscript:` and `data:`
+  schemes, including whitespace and control-character obfuscation. Image
+  sources retain `data:image/*`; links do not. Other schemes, including `sms:`,
+  `geo:` and app deep links, remain unchanged. Developer-supplied URL keyword
+  arguments (button `href=`, and `href`/`src`/`action`/`formaction` passed to
+  the button, input, select and progress tags) raise `ValueError`.
+  Navigation covers dictionary and object items, iterable collections and
+  sidebar sections without mutating caller-owned items. Pagination checks
+  every page, first, last, previous and next URL after formatting.
+- **The live mount checks object permission after `handle_params()`.** The
+  WebSocket and SSE mounts ran `has_object_permission()` after `mount()` but
+  before `handle_params()`, so a view that selects its object from the URL's
+  query parameters in `handle_params()` was checked against the object
+  `mount()` chose and then rendered the one the parameters selected. The mount
+  now runs `mount()`, `handle_params()`, the object check, and then the first
+  render: the order the HTTP GET render and `url_change` navigation already
+  used. A refused mount still sends a `permission_denied` error frame and
+  closes the WebSocket with 4403.
+- **Live transports enforce or refuse access control that only the HTTP request runs.**
+  The WebSocket and SSE mount, events, the HTTP POST event fallback, the API
+  and `{% live_render %}` children never call a view's `setup()`,
+  `dispatch()`, `get()` or `post()`, and never run the wrappers the URLconf
+  puts around `as_view()`. djust replays its own declarations and Django's
+  `LoginRequiredMixin`, `PermissionRequiredMixin` and `UserPassesTestMixin`
+  there, but a custom `AccessMixin` subclass that checks the user in its own
+  `dispatch()`, a `@method_decorator(...)` on `dispatch`, `get` or `post`, an
+  overridden method that checks the user, or a URLconf wrapper such as
+  `path("x/", login_required(MyView.as_view()))` did not run at all.
+  `check_view_auth` now:
+  - replays Django's `login_required`, `staff_member_required`,
+    `user_passes_test(...)` and `permission_required(...)` applied with
+    `@method_decorator`, wrapped around `as_view()` in the URLconf (read from
+    the server's URLconf, not from the URL the client sends) or by an
+    `as_view()` override, and other packages' decorators built on
+    `user_passes_test`. The same users are admitted as on the HTTP request;
+    an authenticated user who fails the test gets `PermissionDenied`, where
+    Django's HTTP response would redirect to the login page. Async test
+    functions are awaited (called directly on the event loop's thread, the
+    check refuses instead of blocking). `login_not_required` is not access
+    control. A decorator applied only to `post` is checked for every event on
+    the page (the view's, its components', its embedded views' and uploads),
+    not for the mount;
+  - refuses a view whose custom `AccessMixin` subclass defines `dispatch()`,
+    unless it declares `permission_required` or `check_permissions()`
+    (`login_required = True` alone does not cover it);
+  - refuses a view whose `setup()`/`dispatch()`/`get()`/`post()` override, a
+    decorator on one (also under another decorator stacked above
+    `@method_decorator`, or returned by a project decorator that delegates to
+    it), or a URLconf wrapper checks the user (any attribute of it, such as
+    `is_staff`, `groups` or a role) and denies by any means (raises, including
+    `PermissionDenied` and `Http404`; calls `handle_no_permission()` or
+    `redirect_to_login()`; returns a redirect, an error response or a page of
+    its own such as `render(...)` or `HttpResponse(...)`; calls
+    `get_object_or_404()`), unless a declared rule covers it (`login_required` covers a check that reads only
+    `is_authenticated` / `is_anonymous`);
+  - does not refuse a view for any other decorator or URLconf wrapper that
+    is neither Django's nor djust's and whose code does not check the user (a
+    CSP, rate-limit or logging decorator); it does not run on live
+    transports, and `djust.V013` warns about it.
+
+  Permitted users of views using Django's `login_required`,
+  `staff_member_required`, `user_passes_test` and `permission_required`
+  decorators and wrappers, or its three auth mixins, are unaffected. Views
+  whose access check lives in their own `setup()`, `dispatch()`, `get()`,
+  `post()`, decorators or URLconf wrappers are refused for every user until
+  the rule is declared. The HTTP GET page, which Django's dispatch already
+  gated, is unchanged. System check `djust.S012` (an Error, so `manage.py
+  check` and `migrate` stop until the view is fixed) names each refused view
+  defined in the project; `djust.V013` (a warning) names overrides that only
+  read the user and unknown decorators and wrappers, which are not refused,
+  refused views that an installed package defines, and URLconf routes whose
+  wrapper does not use `functools.wraps` (djust cannot read it). `djust.S012` no longer reports Django's
+  own decorators on `dispatch()`, which are replayed. Only `djust` and
+  `djust.*` modules are treated as framework code: apps and packages named
+  `djust_*` are inspected, djust-auth's `LoginRequiredLiveViewMixin` is read
+  as `login_required = True`, and djust-tenants' `TenantMixin` is not
+  reported. `LoginRequiredLiveViewMixin` in `djust.auth` now also sets
+  `login_required = True`.
+  **Upgrade note:** a view refused this way must declare its rule;
+  `login_required = False` is not a declaration.
+- **MCP tools keep filesystem paths inside the project.**
+  `find_handlers_for_template` read any absolute path that existed, so it
+  confirmed which files existed anywhere on disk and returned `dj-*`-shaped
+  strings from them. It now reads an absolute path only when the file resolves
+  (symlinks and `..` followed) inside a directory the template loaders serve or
+  inside `BASE_DIR`, and answers any other absolute path like a missing
+  template. `seed_fixtures` compared paths with a string prefix, so
+  `/app-data` passed for a `BASE_DIR` of `/app`, and skipped the check when
+  `BASE_DIR` was unset; it now compares whole path components and refuses to
+  load anything without `BASE_DIR`. Both use one containment helper.
+
 ## [1.1.6] - 2026-10-03
 
 A 1.1 patch release that includes security fixes; upgrading from 1.1.5 is recommended.
