@@ -1,0 +1,221 @@
+"""Item content in ``{% masonry_grid %}`` and ``{% dashboard_grid %}`` panels is
+escaped the same way on every render path: the component class, the Django
+template tag, the Rust-engine handler called directly, and the Rust template
+engine itself (``djust._rust.render_template``).
+
+The class and the tag ``conditional_escape`` the item ``content``; the Rust
+handlers must do the same.
+"""
+
+from __future__ import annotations
+
+import re
+from pathlib import Path
+from typing import Any
+
+import pytest
+from django.template import Context, Engine
+from django.utils.safestring import mark_safe
+
+from djust.components import rust_handlers as rh
+from djust.components.components.dashboard_grid import DashboardGrid
+from djust.components.components.masonry_grid import MasonryGrid
+
+PAYLOADS = [
+    "<img src=x onerror=alert(1)>",
+    '"><script>alert(1)</script>',
+    "x' onmouseover='alert(1)",
+    'x" onmouseover="alert(1)',
+    "<b>bold</b> & <i>it</i>",
+]
+
+_ENGINE = Engine(
+    dirs=[str(Path(rh.__file__).resolve().parent / "templates")],
+    libraries={"djust_components": "djust.components.templatetags.djust_components"},
+)
+
+
+def _tag(source: str, **context: Any) -> str:
+    return _ENGINE.from_string("{% load djust_components %}" + source).render(Context(context))
+
+
+_REGISTERED: list[bool] = []
+
+
+def _engine(source: str, **context: Any) -> str:
+    from djust._rust import render_template
+
+    if not _REGISTERED:
+        # The components app registers these at startup; the test settings
+        # may not install it.
+        rh.register_with_rust_engine()
+        _REGISTERED.append(True)
+    return str(render_template(source, context))
+
+
+def _handler(name: str, args: list[str], context: dict, block: bool = False) -> str:
+    handlers = {n: h for n, h in rh.INLINE_HANDLERS}
+    handlers.update({n: h for n, _end, h in rh.BLOCK_HANDLERS})
+    handler = handlers[name]
+    if block:
+        return str(handler.render(args, "", context))
+    return str(handler.render(args, context))
+
+
+def _bodies(html: str, cls: str) -> list[str]:
+    return re.findall(rf'<div class="{cls}">(.*?)</div>', html, re.S)
+
+
+def _masonry(payload: Any) -> dict[str, str]:
+    items = [{"content": payload, "height": 120}]
+    return {
+        "class": str(MasonryGrid(items=items).render()),
+        "tag": _tag("{% masonry_grid items=items %}", items=items),
+        "handler": _handler("masonry_grid", ["items=items"], {"items": items}),
+        "engine": _engine("{% masonry_grid items=items %}", items=items),
+    }
+
+
+def _dashboard(payload: Any) -> dict[str, str]:
+    panels = [{"id": "p1", "title": "T", "content": payload}]
+    outputs = {
+        "class": str(DashboardGrid(panels=panels).render()),
+        "tag": _tag("{% dashboard_grid panels=panels %}{% enddashboard_grid %}", panels=panels),
+        "handler": _handler("dashboard_grid", ["panels=panels"], {"panels": panels}, block=True),
+    }
+    engine = _engine("{% dashboard_grid panels=panels %}{% enddashboard_grid %}", panels=panels)
+    # Some releases' engines pass no list arguments to block handlers; those
+    # render no panels at all (nothing to escape on that path).
+    if "dj-dashboard-grid__panel-body" in engine:
+        outputs["engine"] = engine
+    else:
+        assert payload not in engine
+    return outputs
+
+
+def _is_raw(html: str) -> bool:
+    return any(
+        marker in html
+        for marker in ("<img src=x", "<script>", "' onmouseover='", '" onmouseover="', "<b>bold")
+    )
+
+
+@pytest.mark.parametrize("payload", PAYLOADS)
+def test_masonry_item_content_is_escaped_on_every_path(payload):
+    outputs = _masonry(payload)
+    bodies = {path: _bodies(html, "dj-masonry__item") for path, html in outputs.items()}
+    for path, html in outputs.items():
+        assert not _is_raw(html), (path, html)
+        assert bodies[path] == bodies["class"], (path, bodies)
+    assert bodies["class"] == [str(_tag("{{ v }}", v=payload))]
+
+
+@pytest.mark.parametrize("payload", PAYLOADS)
+def test_dashboard_panel_content_is_escaped_on_every_path(payload):
+    outputs = _dashboard(payload)
+    bodies = {
+        path: _bodies(html, "dj-dashboard-grid__panel-body") for path, html in outputs.items()
+    }
+    for path, html in outputs.items():
+        assert not _is_raw(html), (path, html)
+        assert bodies[path] == bodies["class"], (path, bodies)
+    assert bodies["class"] == [str(_tag("{{ v }}", v=payload))]
+
+
+def test_marked_safe_content_is_kept_where_the_value_reaches_the_handler():
+    """conditional_escape semantics: a SafeString passed to the handler as an
+    object stays markup, as on the class and the tag."""
+    safe = mark_safe("<b>card</b>")
+    html = _handler("masonry_grid", ["items=items"], {"items": [{"content": safe}]})
+    assert '<div class="dj-masonry__item"><b>card</b></div>' in html
+    html = _handler(
+        "dashboard_grid",
+        ["panels=panels"],
+        {"panels": [{"id": "p", "title": "T", "content": safe}]},
+        block=True,
+    )
+    assert '<div class="dj-dashboard-grid__panel-body"><b>card</b></div>' in html
+    assert "<b>card</b>" in str(MasonryGrid(items=[{"content": safe}]).render())
+
+
+def test_valid_plain_text_renders_unchanged():
+    outputs = _masonry("Plain card text")
+    for html in outputs.values():
+        assert '<div class="dj-masonry__item">Plain card text</div>' in html
+    outputs = _dashboard("Panel text")
+    for html in outputs.values():
+        assert '<div class="dj-dashboard-grid__panel-body">Panel text</div>' in html
+
+
+# --------------------------------------------------------------------------- #
+# Three more components whose values must stay escaped (or cleaned) on every
+# path: file_dropzone's name, meter values, rich_text_editor's value.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("payload", PAYLOADS)
+def test_file_dropzone_name_is_escaped_on_every_path(payload):
+    from djust.components.components.file_dropzone import FileDropzone
+
+    outputs = {
+        "class": str(FileDropzone(name=payload).render()),
+        "tag": _tag("{% file_dropzone name=n %}", n=payload),
+        "handler": _handler("file_dropzone", ["name=n"], {"n": payload}),
+        "engine": _engine("{% file_dropzone name=n %}", n=payload),
+    }
+    for path, html in outputs.items():
+        assert not _is_raw(html), (path, html)
+
+
+@pytest.mark.parametrize("payload", PAYLOADS)
+def test_meter_segment_values_are_escaped_on_every_path(payload):
+    from djust.components.components.meter import Meter
+
+    segments = [{"value": payload, "label": payload, "color": "#3b82f6"}]
+    renders = {
+        "class": lambda: str(Meter(segments=segments).render()),
+        "tag": lambda: _tag("{% meter segments=segments %}", segments=segments),
+        "handler": lambda: _handler("meter", ["segments=segments"], {"segments": segments}),
+        "engine": lambda: _engine("{% meter segments=segments %}", segments=segments),
+    }
+    rendered = []
+    for path, render in renders.items():
+        try:
+            html = render()
+        except (TypeError, ValueError):
+            continue  # this path refuses a non-numeric value outright
+        rendered.append(path)
+        assert not _is_raw(html), (path, html)
+    assert "handler" in rendered
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        "<img src=x onerror=alert(1)>",
+        "<p>ok</p><script>alert(1)</script>",
+        '<a href="javascript:alert(1)">x</a>',
+        '<p onclick="alert(1)">x</p>',
+    ],
+)
+def test_rich_text_editor_value_is_cleaned_on_every_path(payload):
+    from djust.components.components.rich_text_editor import RichTextEditor
+
+    outputs = {
+        "class": str(RichTextEditor(value=payload).render()),
+        "tag": _tag("{% rich_text_editor value=v %}", v=payload),
+        "handler": _handler("rich_text_editor", ["value=v"], {"v": payload}),
+        "engine": _engine("{% rich_text_editor value=v %}", v=payload),
+    }
+    for path, html in outputs.items():
+        lowered = html.lower()
+        assert "onerror" not in lowered and "<script" not in lowered, (path, html)
+        assert "javascript:" not in lowered and 'onclick="alert' not in lowered, (path, html)
+
+
+def test_rich_text_editor_keeps_formatting():
+    from djust.components.components.rich_text_editor import RichTextEditor
+
+    value = "<p>Hello <strong>bold</strong> <em>it</em></p>"
+    assert value in str(RichTextEditor(value=value).render())
+    assert value in _tag("{% rich_text_editor value=v %}", v=value)

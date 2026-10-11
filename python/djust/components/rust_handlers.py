@@ -7546,7 +7546,7 @@ class DashboardGridHandler:
                 continue
             pid = conditional_escape(str(panel.get("id", "")))
             title = conditional_escape(str(panel.get("title", "")))
-            pcontent = panel.get("content", "")
+            pcontent = conditional_escape(panel.get("content", ""))
             try:
                 col = int(panel.get("col", 1))
             except (ValueError, TypeError):
@@ -9926,7 +9926,7 @@ class MasonryGridHandler:
             item_cards = []
             for item_obj in items_in_col:
                 item = cast("dict[str, object]", item_obj)
-                content = str(item.get("content", ""))
+                content = conditional_escape(item.get("content", ""))
                 item_class = conditional_escape(str(item.get("class", "")))
                 extra = f" {item_class}" if item_class else ""
                 item_cards.append(f'<div class="dj-masonry__item{extra}">{content}</div>')
