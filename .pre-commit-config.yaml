@@ -277,7 +277,7 @@ repos:
         name: check generated UI building blocks section (ADR-043 D4)
         entry: bash -c 'PYTHONPATH=python:. bash scripts/run-with-venv-python.sh scripts/generate-ai-ui-section.py'
         language: system
-        files: ^(docs/(llms\.txt|llms-full\.txt|BEST_PRACTICES_AI\.md)|python/djust/ai_discovery/(manifest|catalog|agents)\.py|python/djust/components/gallery/examples\.py|scripts/generate-ai-ui-section\.py)$
+        files: ^(docs/(llms\.txt|llms-full\.txt|BEST_PRACTICES_AI\.md)|python/djust/ai_discovery/(manifest|catalog|agents)\.py|python/djust/checks/ai_discovery\.py|python/djust/components/gallery/examples\.py|scripts/generate-ai-ui-section\.py)$
         pass_filenames: false
 
   - repo: local

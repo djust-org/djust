@@ -41,3 +41,34 @@ else:
         timeout=60,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("missing", ["markdown", "nh3"])
+def test_discovery_works_without_components_extra(missing):
+    """djust_ai_context, manifest, suggest and the MCP catalog degrade to the
+    catalog without props instead of failing when the extra is missing."""
+    root = Path(__file__).resolve().parents[3]
+    code = """
+import sys
+sys.modules[sys.argv[1]] = None
+from django.conf import settings
+settings.configure(SECRET_KEY="test", INSTALLED_APPS=[])
+import django
+django.setup()
+from djust.ai_discovery import catalog, manifest
+from djust.management.commands import djust_ai_context as context
+from djust.schema import get_framework_schema
+assert "UI building blocks" in manifest.render_ui_building_blocks()
+assert dict(manifest.manifest_sections())["ui_building_blocks"]
+assert "UI building blocks" in context._generate_content(get_framework_schema(), {}, "claude")
+assert catalog.search("data table")
+assert catalog.get_entry("data_table") is not None
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", code, missing],
+        env={**os.environ, "PYTHONPATH": os.pathsep.join([str(root / "python"), str(root)])},
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
