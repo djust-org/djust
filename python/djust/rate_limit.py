@@ -11,6 +11,7 @@ import logging
 from collections import OrderedDict
 from typing import Any, Dict, Optional, Tuple
 
+from ._client_ip import resolve_client_ip
 from .security.log_sanitizer import sanitize_for_log
 
 logger = logging.getLogger(__name__)
@@ -305,6 +306,57 @@ def handler_rate_check(caller: str, handler_name: str, settings: Optional[dict])
             # Touch for LRU order.
             _handler_buckets.move_to_end(key)
     return bucket.consume()
+
+
+def caller_key_for_request(request: Any) -> str:
+    """Resolve a :func:`caller_key` from a Django request, resolving the IP.
+
+    The single place the ``HTTP_X_FORWARDED_FOR`` / ``REMOTE_ADDR`` pair is
+    turned into a client identity. ``resolve_client_ip`` honors
+    ``DJUST_TRUSTED_PROXY_COUNT``, so behind a reverse proxy the buckets are
+    per-real-client (no shared-proxy bucket) and an XFF header cannot spoof the
+    key (closes F28). Both HTTP transports reach the store through here.
+    """
+    meta = getattr(request, "META", None) or {}
+    client_ip = resolve_client_ip(meta.get("HTTP_X_FORWARDED_FOR"), meta.get("REMOTE_ADDR"))
+    return caller_key(request, client_ip)
+
+
+def http_handler_rate_check(request: Any, handler_name: str, handler: Any) -> bool:
+    """Per-handler ``@rate_limit`` check for an HTTP-transport request.
+
+    The HTTP counterpart of the WS/SSE chokepoint's inline check
+    (``websocket_utils._validate_event_security``), and the SINGLE helper both
+    HTTP transports use — the HTTP API (``api/dispatch._rate_limit_check``) and
+    the page-POST fallback (``mixins/request.post``). They previously differed:
+    the API enforced the shared store, the page-POST fallback enforced nothing,
+    so a handler throttled on every other transport was unthrottled there.
+
+    Callers pass the handler and the request; everything else (setting lookup,
+    caller identity, IP resolution) happens here so the two HTTP paths cannot
+    drift apart again. The bucket is keyed on the caller and ``handler_name`` —
+    the same key shape the WS/SSE chokepoint and the HTTP API already used, so
+    budgets are genuinely shared across transports; the consequence, shared with
+    every transport, is that one callable reachable under two names holds a
+    budget per name. The IP fallback resolves through
+    :func:`djust._client_ip.resolve_client_ip` (honoring
+    ``DJUST_TRUSTED_PROXY_COUNT``) rather than trusting a raw ``REMOTE_ADDR`` —
+    closing F28 for both paths: per-real-client buckets behind a proxy, no XFF
+    spoof.
+
+    Args:
+        request: The Django request (carries ``.user``, ``.session``, ``.META``).
+        handler_name: The event/function name (the bucket's second key).
+        handler: The resolved handler; its ``@rate_limit`` metadata is read here.
+
+    Returns:
+        True if allowed (or the handler declares no limit), False if
+        rate-limited.
+    """
+    settings = get_rate_limit_settings(handler)
+    if settings is None:
+        return True
+    return handler_rate_check(caller_key_for_request(request), handler_name, settings)
 
 
 def reset_handler_buckets() -> None:
