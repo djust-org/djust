@@ -5855,6 +5855,17 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             return
         view = self.view_instance
 
+        from .push import push_tenant_matches
+
+        if not push_tenant_matches(view, event):
+            # Stamped for another tenant: not this view's push, whichever
+            # group carried it here.
+            logger.debug(
+                "[djust] server_push on %s dropped — stamped for another tenant",
+                view.__class__.__name__,
+            )
+            return
+
         try:
             # Skip our OWN self-broadcast (#1677): when a handler on THIS
             # session pushed to its own view, the originating session already
@@ -6286,6 +6297,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         Each view has its own queue and drain (#3252): a push waits only for the
         view it is addressed to.
         """
+        from .push import push_tenant_matches
+
         queue = self._deferred_pushes
         while queue:
             # Unbounded wait is right here: this runs in its own task, not in
@@ -6299,8 +6312,18 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             events: List[Dict[str, Any]] = []
             for queued_view, event in list(queue):
                 queue.remove((queued_view, event))
-                if view is not None and queued_view is view:
-                    events.append(event)
+                if view is None or queued_view is not view:
+                    continue
+                # Check the tenant again, as on arrival: the turn that held
+                # the lock may have moved the view to another tenant
+                # (set_tenant()) after the push was queued.
+                if not push_tenant_matches(view, event):
+                    logger.debug(
+                        "[djust] server_push on %s dropped — stamped for another tenant",
+                        view.__class__.__name__,
+                    )
+                    continue
+                events.append(event)
             if not events:
                 self._render_lock.release()
                 continue
