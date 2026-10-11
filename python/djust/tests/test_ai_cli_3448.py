@@ -175,3 +175,31 @@ def test_inventory_rejects_unsafe_manage_py(tmp_path, monkeypatch, capsys, unsaf
     assert str(manage) in error
     assert ("owner" if unsafe == "foreign owner" else "writable") in error
     assert "directly" in error
+
+
+def test_inventory_hands_off_on_windows_modes(tmp_path, monkeypatch):
+    """Windows reports writable files as 0o666 and dirs as 0o777; the mode-bit
+    checks are POSIX-only, so the hand-off must still run there."""
+    import stat
+
+    manage = tmp_path / "manage.py"
+    manage.write_text("")
+    original = os.stat
+
+    def fake_stat(path, *args, **kwargs):
+        if os.fspath(path) == str(manage):
+            return SimpleNamespace(st_mode=stat.S_IFREG | 0o666, st_uid=0)
+        if os.fspath(path) == str(tmp_path):
+            return SimpleNamespace(st_mode=stat.S_IFDIR | 0o777, st_uid=0)
+        return original(path, *args, **kwargs)
+
+    calls = []
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("DJANGO_SETTINGS_MODULE", raising=False)
+    monkeypatch.delattr(os, "getuid", raising=False)
+    monkeypatch.setattr(os, "stat", fake_stat)
+    monkeypatch.setattr(
+        subprocess, "run", lambda args, **kw: calls.append(args) or SimpleNamespace(returncode=0)
+    )
+    assert cli.cmd_ai(["inventory"]) == 0
+    assert calls and str(manage) in calls[0]

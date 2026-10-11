@@ -1122,14 +1122,18 @@ def _find_ai_manage_py() -> str | None:
                 parent = os.stat(directory)
             except OSError as exc:
                 raise ValueError(f"rejected {candidate}: cannot stat entry point") from exc
+            # Ownership and group/world mode bits only mean something on POSIX;
+            # Windows reports every writable file as 0o666, so checking them
+            # there would reject every entry point.
+            posix = hasattr(os, "getuid")
             reason = None
             if not stat.S_ISREG(info.st_mode):
                 reason = "entry point is not a regular file"
-            elif hasattr(os, "getuid") and info.st_uid != os.getuid():
+            elif posix and info.st_uid != os.getuid():
                 reason = "entry point owner is not the current user"
-            elif info.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+            elif posix and info.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
                 reason = "entry point is group/world writable"
-            elif parent.st_mode & stat.S_IWOTH:
+            elif posix and parent.st_mode & stat.S_IWOTH:
                 reason = "containing directory is world writable"
             if reason:
                 raise ValueError(f"rejected {candidate}: {reason}")
