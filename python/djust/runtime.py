@@ -3797,51 +3797,12 @@ class ViewRuntime:
                 await self._on_mount_failed(view_instance)
                 return
 
-        # ---- Object-permission check (ADR-017 §Decision 5, post-mount) ----
-        # Iter 0 / #1885: mirrors the WS handle_mount post-mount object check
-        # (websocket.py:2554-2573) so the runtime mount path enforces the SAME
-        # ADR-017 object-level authorization. Placed AFTER mount() — so
-        # get_object() can read URL-derived attrs (e.g. self.<x>_id) that mount()
-        # populated — and BEFORE handle_params + render, so a denied object is
-        # NEVER rendered or sent to the client (latent IDOR, findings #10-#12).
-        # Routed through the shared enforce_object_permission chokepoint (the same
-        # one dispatch_url_change already uses, runtime.py + the parity net) so
-        # the runtime path cannot drift from WS/SSE/API (#1646). No-op for views
-        # that don't override get_object (behavior-preserving). Fail-closed: the
-        # chokepoint maps a None request / any non-PermissionDenied get_object
-        # failure to denial; the raised PermissionDenied becomes the runtime's
-        # natural permission_denied error frame (matching dispatch_url_change).
-        from django.core.exceptions import PermissionDenied
-
-        from .auth.core import enforce_object_permission
-
-        try:
-            await sync_to_async(enforce_object_permission)(view_instance, request)
-        except PermissionDenied:
-            logger.info(
-                "Object-permission denied for %s (runtime mount)",
-                view_instance.__class__.__name__,
-            )
-            if not await self._refused_view("permission_denied"):
-                await self.transport.send_error(
-                    "Access denied for this object.", code="permission_denied"
-                )
-            # ADR-022 Iter 3 Phase 3.3b (#1919, Finding E): the runtime sent the
-            # error frame; finalize_mount_auth adds the transport-level
-            # ``close(4403)`` the bespoke WS handle_mount performed UNCONDITIONALLY
-            # on an object-perm denial (websocket.py:2622 — matching the
-            # PermissionDenied verdict, NOT the batch-gated redirect verdicts). SSE
-            # no-op. Without this the WS socket stayed open after a denied mount
-            # (the test_object_permission_denied_mount_refused net).
-            await self._finalize_mount_auth("permission_denied")
-            self.view_instance = None
-            return
-
         # ---- Mount-request stash + dirty/private baselines (ADR-022 Iter 3
         # Phase 3.0 transport-agnostic grows) ----
         # Ported from WS handle_mount (websocket.py:2596-2603), placed at the
-        # SAME point: AFTER mount() + the object-permission check, BEFORE
-        # handle_params.
+        # SAME point: AFTER mount(), BEFORE handle_params. The object-permission
+        # check runs after handle_params (below); a denial there clears the
+        # explicit binding set here along with the view.
         #
         # #1895 (KNOWN required fold): stash the mount request + kwargs on the
         # view. The runtime's OWN per-event session-save fallback
@@ -3893,6 +3854,48 @@ class ViewRuntime:
             )
             await self.transport.send(response)
             await self._on_mount_failed(view_instance)
+            return
+
+        # ---- Object-permission check (ADR-017 §Decision 5) ----
+        # Runs AFTER mount() AND handle_params(), before connected() and the
+        # first render — the same order as the HTTP GET render
+        # (RequestMixin.get) and dispatch_url_change. get_object() may read
+        # access-determining state that handle_params() sets from the mount
+        # frame's params (e.g. ``self.doc_id`` from ``?id=``), so checking any
+        # earlier would authorize the pre-params object and then render the one
+        # the params selected. The ADR-035 one-shot verdict a managed-object
+        # view leaves in mount() is consumed here, as on HTTP GET.
+        # Routed through the shared enforce_object_permission chokepoint so the
+        # runtime path cannot drift from WS/SSE/API (#1646). No-op for views
+        # that don't override get_object. Fail-closed: the chokepoint maps a
+        # None request / any non-PermissionDenied get_object failure to denial;
+        # the raised PermissionDenied becomes the permission_denied error frame
+        # (matching dispatch_url_change).
+        from django.core.exceptions import PermissionDenied
+
+        from .auth.core import enforce_object_permission
+
+        try:
+            await sync_to_async(enforce_object_permission)(view_instance, request)
+        except PermissionDenied:
+            logger.info(
+                "Object-permission denied for %s (runtime mount)",
+                view_instance.__class__.__name__,
+            )
+            if not await self._refused_view("permission_denied"):
+                await self.transport.send_error(
+                    "Access denied for this object.", code="permission_denied"
+                )
+            # ADR-022 Iter 3 Phase 3.3b (#1919, Finding E): the runtime sent the
+            # error frame; finalize_mount_auth adds the transport-level
+            # ``close(4403)`` the bespoke WS handle_mount performed UNCONDITIONALLY
+            # on an object-perm denial (websocket.py:2622 — matching the
+            # PermissionDenied verdict, NOT the batch-gated redirect verdicts). SSE
+            # no-op. Without this the WS socket stayed open after a denied mount
+            # (the test_object_permission_denied_mount_refused net).
+            await self._finalize_mount_auth("permission_denied")
+            self.view_instance = None
+            self._explicit_mount_binding = None
             return
 
         # ---- connected() view hook (#3007) ----
