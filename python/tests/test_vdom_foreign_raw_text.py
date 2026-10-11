@@ -157,9 +157,11 @@ def test_an_html_root_is_unchanged_by_the_root_namespace():
 _NOSCRIPT_TAG = re.compile(r"<(/?)noscript(?=[\s/>])", re.IGNORECASE)
 
 
-def _elements(html: str) -> list[str]:
-    """Element names of ``html`` parsed in an HTML context, as the client
-    parses an ``InsertSubtree`` payload (``<template>.innerHTML``).
+def _elements(html: str, parent: str | None = None) -> list[str]:
+    """Element names of ``html`` parsed as the client parses an
+    ``InsertSubtree`` payload: in a ``<template>`` (``innerHTML``), inside an
+    ``<svg>`` / ``<math>`` wrapper when the parent it goes into is ``"svg"``
+    or ``"math"``.
 
     A template's document has scripting disabled, so a ``<noscript>`` there
     holds markup. ``diff_html`` parses with scripting enabled, where
@@ -168,6 +170,8 @@ def _elements(html: str) -> list[str]:
     element, in HTML and in foreign content alike).
     """
     html = _NOSCRIPT_TAG.sub(r"<\1dj-noscript", html)
+    if parent:
+        html = f"<{parent}>{html}</{parent}>"
     patches = json.loads(
         diff_html("<div dj-root><p></p></div>", f"<div dj-root><section>{html}</section></div>")
     )
@@ -180,36 +184,12 @@ def _elements(html: str) -> list[str]:
                 names.append(child["tag"].replace("dj-noscript", "noscript"))
                 walk(child)
 
-    walk(replace["node"])
+    walk(replace["node"]["children"][0] if parent else replace["node"])
     return sorted(names)
 
 
-@pytest.mark.parametrize("method", ["render_with_diff", "render_binary_diff"])
-@pytest.mark.parametrize(
-    "pre, branch, post",
-    [
-        ("<div dj-root><svg>", "<style><style>a</style>{{ v }}</style>", "</svg></div>"),
-        ("<div dj-root><svg>", "<style><g><style>a</style></g>{{ v }}</style>", "</svg></div>"),
-        ("<div dj-root><svg>", "<noembed><noembed>a</noembed>{{ v }}</noembed>", "</svg></div>"),
-        ("<div dj-root><svg>", "<script><script>a</script>{{ v }}</script>", "</svg></div>"),
-        (
-            "<div dj-root><svg>",
-            "<title><script></title><option>x</option></script>{{ v }}</title>",
-            "</svg></div>",
-        ),
-        ("<svg><g dj-root>", "<style><style>a</style>{{ v }}</style>", "</g></svg>"),
-        ("<math><mrow dj-root>", "<style><style>a</style>{{ v }}</style>", "</mrow></math>"),
-    ],
-)
-def test_inserted_raw_text_element_holding_elements_never_ends_early(method, pre, branch, post):
-    # An {% if %} / {% elif %} swap inside <svg> inserts a foreign <style>
-    # that holds a <style> element and then an auto-escaped value. The
-    # client reads the payload as HTML: the inner </style> must not end the
-    # outer element, or the value after it is parsed as markup.
-    template = (
-        f"{pre}{{% if step == 1 %}}<g>one</g>{{% elif step == 2 %}}{branch}{{% endif %}}{post}"
-    )
-    value = "<img src=x onerror=alert(1)>"
+def _insert_payloads(template: str, method: str, value: str) -> list[str]:
+    """The ``InsertSubtree`` payloads for a swap from ``step`` 1 to 2."""
     view = RustLiveView(template, [])
     view.update_state({"step": 1, "v": value})
     getattr(view, method)()
@@ -219,50 +199,112 @@ def test_inserted_raw_text_element_holding_elements_never_ends_early(method, pre
         patches = json.dumps(msgpack.unpackb(patches, raw=False))
     payloads = [p["html"] for p in json.loads(patches) if p["type"] == "InsertSubtree"]
     assert payloads, patches
+    return payloads
 
-    # The full render of the same state holds no <img>; the payload, read as
-    # the client reads it, holds only the inserted element itself.
+
+def _full_render_segment(template: str, value: str, payload: str) -> str:
+    """The span of a fresh step-2 render that ``payload`` replaces."""
     fresh = RustLiveView(template, [])
     fresh.update_state({"step": 2, "v": value})
-    assert "<img" not in fresh.render_with_diff()[0]
-    outer = branch[1 : branch.index(">")]
-    for html in payloads:
-        assert _elements(html) == [outer], html
+    html = fresh.render_with_diff()[0]
+    open_marker = payload[: payload.index("-->") + 3]
+    start = html.index(open_marker)
+    end = html.index("<!--/dj-if-->", start) + len("<!--/dj-if-->")
+    return html[start:end]
 
 
 @pytest.mark.parametrize("method", ["render_with_diff", "render_binary_diff"])
 @pytest.mark.parametrize(
-    "pre, post",
+    "pre, branch, post, parent",
     [
-        ("<div dj-root><svg>", "</svg></div>"),
-        ("<div dj-root><math>", "</math></div>"),
-        ("<svg><g dj-root>", "</g></svg>"),
-        ("<math><mrow dj-root>", "</mrow></math>"),
+        ("<div dj-root><svg>", "<style><style>a</style>{{ v }}</style>", "</svg></div>", "svg"),
+        (
+            "<div dj-root><svg>",
+            "<style><g><style>a</style></g>{{ v }}</style>",
+            "</svg></div>",
+            "svg",
+        ),
+        (
+            "<div dj-root><svg>",
+            "<noembed><noembed>a</noembed>{{ v }}</noembed>",
+            "</svg></div>",
+            "svg",
+        ),
+        ("<div dj-root><svg>", "<script><script>a</script>{{ v }}</script>", "</svg></div>", "svg"),
+        (
+            "<div dj-root><svg>",
+            "<title><script></title><option>x</option></script>{{ v }}</title>",
+            "</svg></div>",
+            "svg",
+        ),
+        ("<svg><g dj-root>", "<style><style>a</style>{{ v }}</style>", "</g></svg>", "svg"),
+        (
+            "<math><mrow dj-root>",
+            "<style><style>a</style>{{ v }}</style>",
+            "</mrow></math>",
+            "math",
+        ),
+        ("<div dj-root>", "<style>{{ v }}</style>", "</div>", None),
     ],
 )
-def test_inserted_foreign_noscript_text_stays_text(method, pre, post):
-    # An {% if %} / {% elif %} swap inserting an SVG or MathML <noscript>
-    # with an auto-escaped value. The client parses the payload with
-    # scripting disabled, where <noscript> holds markup: the value must be
-    # escaped there, as it is in the full render.
+def test_inserted_raw_text_element_reads_back_as_the_full_render(method, pre, branch, post, parent):
+    # An {% if %} / {% elif %} swap inside <svg> inserts a foreign <style>
+    # that holds a <style> element and then an auto-escaped value. The
+    # client parses the payload in its parent's namespace: it must read
+    # back the elements the full render has, with no element made from text.
+    template = (
+        f"{pre}{{% if step == 1 %}}<g>one</g>{{% elif step == 2 %}}{branch}{{% endif %}}{post}"
+    )
+    value = "<img src=x onerror=alert(1)>"
+    for html in _insert_payloads(template, method, value):
+        segment = _full_render_segment(template, value, html)
+        assert "<img" not in segment
+        assert "img" not in _elements(html, parent), html
+        assert _elements(html, parent) == _elements(segment, parent), html
+
+
+@pytest.mark.parametrize("method", ["render_with_diff", "render_binary_diff"])
+@pytest.mark.parametrize(
+    "pre, post, parent",
+    [
+        ("<div dj-root><svg>", "</svg></div>", "svg"),
+        ("<div dj-root><math>", "</math></div>", "math"),
+        ("<svg><g dj-root>", "</g></svg>", "svg"),
+        ("<math><mrow dj-root>", "</mrow></math>", "math"),
+        ("<div dj-root>", "</div>", None),
+    ],
+)
+def test_inserted_noscript_text_stays_text(method, pre, post, parent):
+    # An {% if %} / {% elif %} swap inserting a <noscript> with an
+    # auto-escaped value. The client parses the payload with scripting
+    # disabled, where <noscript> holds markup: the value must be escaped
+    # there, and reads back as the text the full render has.
     template = (
         f"{pre}{{% if step == 1 %}}<g>one</g>"
         f"{{% elif step == 2 %}}<noscript>{{{{ v }}}}</noscript>{{% endif %}}{post}"
     )
     value = "<img src=x onerror=alert(1)>"
-    view = RustLiveView(template, [])
-    view.update_state({"step": 1, "v": value})
-    getattr(view, method)()
-    view.update_state({"step": 2, "v": value})
-    patches = getattr(view, method)()[1]
-    if isinstance(patches, (bytes, bytearray)):
-        patches = json.dumps(msgpack.unpackb(patches, raw=False))
-    payloads = [p["html"] for p in json.loads(patches) if p["type"] == "InsertSubtree"]
-    assert payloads, patches
+    for html in _insert_payloads(template, method, value):
+        assert "<img" not in _full_render_segment(template, value, html)
+        assert _elements(html, parent) == ["noscript"], html
+        # An HTML <noscript> in the page holds the escaped value as raw
+        # text, "&lt;img …"; the payload writes that text escaped again.
+        text = "&lt;img src=x onerror=alert(1)&gt;"
+        if parent is None:
+            text = text.replace("&", "&amp;")
+        assert f"{text}</noscript>" in html, html
 
-    fresh = RustLiveView(template, [])
-    fresh.update_state({"step": 2, "v": value})
-    assert "<img" not in fresh.render_with_diff()[0]
-    for html in payloads:
+
+@pytest.mark.parametrize("method", ["render_with_diff", "render_binary_diff"])
+def test_inserted_html_noscript_markup_stays_text(method):
+    # Authored markup in an HTML <noscript> is raw text in the page (the
+    # page parses with scripting enabled) but markup in the client's
+    # scripting-disabled parse of the payload: it is written escaped there.
+    template = (
+        "<div dj-root>{% if step == 1 %}<p>one</p>"
+        '{% elif step == 2 %}<noscript><img src="pixel.gif"></noscript>{% endif %}</div>'
+    )
+    for html in _insert_payloads(template, method, ""):
+        assert "<img" in _full_render_segment(template, "", html)
         assert _elements(html) == ["noscript"], html
-        assert "&lt;img src=x onerror=alert(1)&gt;</noscript>" in html, html
+        assert '&lt;img src="pixel.gif"&gt;</noscript>' in html, html

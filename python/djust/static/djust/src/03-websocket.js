@@ -139,6 +139,9 @@ function _runInsertedScripts(container, retainedBefore) {
             continue;
         }
         if (_retainedMountScripts.has(old)) continue;
+        // Only HTML scripts: an SVG or MathML <script> is not re-created as
+        // an HTML one (a MathML script never runs in the full render).
+        if (old.namespaceURI !== 'http://www.w3.org/1999/xhtml') continue;
         // Skip already-executed scripts (idempotent on reconnect/re-mount)
         // and any djust-managed marker scripts.
         if (old.hasAttribute('data-djust-script-ran')) continue;
@@ -278,9 +281,9 @@ function storeSignedSnapshot(data, primaryViewPath) {
 // component identities) reaches the page. Shared by the WebSocket and SSE
 // mount paths (#1646: one path, not two).
 function _morphPrerenderedMount(container, html, formRecoverySnapshot, restoreDraft) {
-    const temp = document.createElement('div');
-    // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
-    temp.innerHTML = html;
+    // Parsed as the page parses the container's children: an SVG / MathML
+    // root keeps its children SVG / MathML (_parseRootHtmlLive).
+    const temp = _parseRootHtmlLive(html, container);
     // #3302: scripts retained from the body must not be rerun. DOM presence
     // alone cannot distinguish parser-executed scripts from inert ones.
     const retainedBefore = (container === document.body && pageRootIsBody())
@@ -1145,15 +1148,13 @@ class LiveViewWebSocket {
             case 'html_recovery': {
                 // Server response to request_html — morph DOM with recovered HTML.
                 // Bypasses normal version tracking to avoid mismatch loops.
-                const parser = new DOMParser();
-                // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
-                const doc = parser.parseFromString(data.html, 'text/html');
                 const liveviewRoot = getLiveViewRoot();
                 if (!liveviewRoot) {
                     window.location.reload();
                     break;
                 }
-                const newRoot = doc.querySelector('[dj-root]') || doc.body;
+                // Parsed in the root's namespace, inert (_parseRootFrameHtml).
+                const newRoot = _parseRootFrameHtml(data.html, liveviewRoot);
                 morphChildren(liveviewRoot, newRoot);
                 // #2058: html_recovery morphs the same way the #1610 mount
                 // path does, but never calls _runInsertedScripts() — a

@@ -123,11 +123,11 @@ fn non_boundary_count_before(excluded: &[bool], open: usize) -> usize {
 /// Serialize a boundary's full marker-pair span (open..=close, inclusive) to
 /// HTML for `InsertSubtree.html`.
 ///
-/// The client parses the payload in an HTML `<template>`, so it is written
-/// for an HTML context. `kids` is how the boundary's real parent places its
-/// children (`None` when not known): text that is HTML raw text in the page
-/// as well is written verbatim, and only text that is not (an `{% if %}`
-/// inside `<svg>`) is checked so it cannot end its element early.
+/// The client parses the payload as children of the boundary's real parent,
+/// in that parent's namespace (an `<svg>` or `<math>` wrapper inside a
+/// `<template>`), so each node is written as the page writes it
+/// ([`VNode::to_html_for_client`]). `kids` is how the real parent places its
+/// children (`None` when not known: raw-text content is then escaped).
 fn serialize_boundary_html(
     children: &[VNode],
     open: usize,
@@ -136,7 +136,7 @@ fn serialize_boundary_html(
 ) -> String {
     let mut html = String::new();
     for child in &children[open..=close] {
-        html.push_str(&child.to_html_read_as_html(kids));
+        html.push_str(&child.to_html_for_client(kids));
     }
     html
 }

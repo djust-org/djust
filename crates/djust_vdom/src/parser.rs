@@ -394,12 +394,39 @@ pub fn parse_html_fragment(html: &str, context_tag: &str) -> Result<Vec<VNode>> 
 /// The parse has scripting disabled, as `<template>.innerHTML` has: there a
 /// `<noscript>` holds markup, not raw text.
 pub fn parse_html_fragment_client_view(html: &str, context_tag: &str) -> Result<Vec<VNode>> {
-    let context_name = QualName::new(None, ns!(html), LocalName::from(context_tag));
+    parse_html_fragment_client_view_in(html, context_tag, Namespace::Html, None)
+}
+
+/// [`parse_html_fragment_client_view`] as children of a `context_tag`
+/// element in namespace `context_ns`: the client parses a payload for an
+/// SVG or MathML parent in that namespace (`_parseSubtreeHtml`). `encoding`
+/// is the context's `encoding` attribute (a MathML `annotation-xml` with an
+/// HTML encoding holds HTML).
+pub fn parse_html_fragment_client_view_in(
+    html: &str,
+    context_tag: &str,
+    context_ns: Namespace,
+    encoding: Option<&str>,
+) -> Result<Vec<VNode>> {
+    let namespace = match context_ns {
+        Namespace::Html => ns!(html),
+        Namespace::Svg => ns!(svg),
+        Namespace::MathMl => ns!(mathml),
+    };
+    let context_name = QualName::new(None, namespace, LocalName::from(context_tag));
+    let context_attrs = encoding
+        .map(|value| {
+            vec![html5ever::Attribute {
+                name: QualName::new(None, ns!(), LocalName::from("encoding")),
+                value: value.into(),
+            }]
+        })
+        .unwrap_or_default();
     let dom = parse_fragment(
         RcDom::default(),
         client_parse_opts(),
         context_name,
-        vec![],
+        context_attrs,
         false,
     )
     .from_utf8()
