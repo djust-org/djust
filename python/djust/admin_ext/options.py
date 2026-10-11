@@ -8,6 +8,7 @@ import logging
 from typing import Any, Dict, List, Optional, Type
 
 from django.contrib.auth import get_permission_codename
+from django.core.exceptions import ValidationError
 from django.db import models
 from django.forms import BaseModelForm, modelform_factory
 from django.http import HttpRequest
@@ -170,6 +171,19 @@ class DjustModelAdmin:
             qs = qs.order_by(*ordering)
 
         return qs
+
+    def get_object(self, request: HttpRequest, object_id: Any) -> Optional[models.Model]:
+        """The object ``object_id`` names among ``get_queryset(request)``, or None.
+
+        As Django's ``ModelAdmin.get_object``: the change and delete views load
+        their object through the queryset, so a row it leaves out is not found.
+        """
+        queryset = self.get_queryset(request)
+        model = queryset.model
+        try:
+            return queryset.get(pk=model._meta.pk.to_python(object_id))
+        except (model.DoesNotExist, ValidationError, ValueError, TypeError):
+            return None
 
     def get_ordering(self, request: HttpRequest) -> Any:
         """Return the ordering for the list view."""

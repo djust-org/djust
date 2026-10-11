@@ -14,7 +14,7 @@ from django.contrib.auth import authenticate, logout
 from django.core.exceptions import PermissionDenied
 from django.core.paginator import Paginator
 from django.db.models import ForeignKey, OneToOneField, Q
-from django.http import HttpRequest, HttpResponse, HttpResponseRedirect
+from django.http import Http404, HttpRequest, HttpResponse, HttpResponseRedirect
 from django.urls import reverse
 from djust import LiveView
 from djust.decorators import debounce, event_handler, state
@@ -547,7 +547,9 @@ class ModelListView(AdminBaseMixin, LiveView):
         if allowed and not self.request.user.has_perms(allowed):
             raise PermissionDenied("User lacks required permissions for this action: %r" % allowed)
 
-        queryset = self._model.objects.filter(pk__in=self.selected_ids)
+        # Only rows the ModelAdmin's queryset holds, as Django's admin acts on
+        # get_queryset(request): a selected pk outside it is ignored.
+        queryset = self._model_admin.get_queryset(self.request).filter(pk__in=self.selected_ids)
         result = action_func(self.request, queryset)
 
         self.selected_ids = []
@@ -769,7 +771,10 @@ class ModelDeleteView(AdminBaseMixin, LiveView):
     def mount(self, request: HttpRequest, object_id: Optional[Any] = None, **kwargs: Any) -> None:
         self.request = request
         self.object_id = object_id
-        self.object = self._model.objects.get(pk=object_id)
+        # Through the ModelAdmin's queryset, as Django's delete view does.
+        self.object = self._model_admin.get_object(request, object_id)
+        if self.object is None:
+            raise Http404("No such object.")
         self.object_str = str(self.object)
 
     def get_object(self) -> Any:
