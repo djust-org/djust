@@ -181,6 +181,10 @@ push_to_view("games.views.RoomView", handler="handle_refresh", scope="room-42")
 - `scope=` takes one `str` or `int`. `push_to_view` and `apush_to_view` both accept it.
 - **A push without `scope` is unchanged**: it still reaches every session of the view, including sessions that set a `push_scope`.
 - Scopes belong to one view path. `scope="room-42"` for `RoomView` does not reach another view class whose sessions use the same scope; push to each view path.
+- **Scopes belong to one tenant.** A view that uses `TenantMixin` joins the scope groups of its own tenant (derived from `self.tenant.id`), so two tenants that both use `room-42` do not share a room. `push_to_view` and `apush_to_view` take `tenant=` (a tenant id or a `TenantInfo`) and default to the tenant bound to the running context: an event handler, a server-push hook and a `handle_info` turn of a tenant view each run with their own, so a push they send stays in that tenant. A Celery task or management command has none; pass `tenant=` from it. `tenant=None` reaches only views that are not tenant-scoped.
+  - `tenant` only matters for a view that uses `TenantMixin`. A push to a view class that does not is sent unqualified whichever tenant is bound, so a tenant's handler, or an HTTP view under `TenantMiddleware`, still reaches the plain view's sessions. That check reads the class from the publishing process: from a process that has not imported the view (a Celery worker), pass `tenant=None` for a view that is not tenant-scoped, or `tenant=` for one that is. A scoped push from such a process that names no tenant and has none bound logs one warning per view path.
+  - A tenant view whose tenant did not resolve receives no scoped push, and a scoped push to a tenant-scoped view with no tenant reaches no session. Each logs one warning (per consumer, per view path) that names no value.
+  - A push without `scope` is not tenant-scoped and still reaches every session of the view.
 - Scoped groups are ordinary channel-layer groups. They work across processes with the Redis channel layer, like view-wide push.
 - WebSocket sessions only. SSE and HTTP-only sessions receive no server push, scoped or not.
 - **Presence follows.** In a view that also uses `PresenceMixin`, a join or leave then wakes only the sessions that share the presence key, not every room (v1.3+; see [Presence](../guides/presence.md#multi-room-views-who-a-join-wakes)).
@@ -195,7 +199,7 @@ This is automatic and requires no developer action.
 
 ## How It Works
 
-1. When a client connects via WebSocket, the consumer joins a channel-layer group named `djust_view_<view_path>` (dots replaced with underscores). After mount it also joins one group per `push_scope` value, `djust_scope_<digest of view path and scope>`.
+1. When a client connects via WebSocket, the consumer joins a channel-layer group named `djust_view_<view_path>` (dots replaced with underscores). After mount it also joins one group per `push_scope` value, `djust_scope_<digest of view path and scope>` (`djust_tscope_<digest of view path, tenant and scope>` for a tenant view).
 2. `push_to_view()` sends a message to the view's group, or to the scope's group when `scope=` is given, via Django Channels.
 3. Each connected consumer receives the message, applies state updates and/or calls the handler, re-renders, and sends DOM patches to the client.
 
@@ -230,6 +234,7 @@ Synchronous. Sends an update to all clients connected to `view_path`, or with `s
 | `handler`   | `str`  | Name of a method to call on the view — must start with `handle_`, be decorated with `@event_handler`, or be marked `@push_handler`; other names are blocked |
 | `payload`   | `dict` | Keyword arguments passed to the handler       |
 | `scope`     | `str` or `int` | Only the sessions in this scope (see [Scoped Push](#scoped-push-one-room-not-every-room)); `None` reaches every session |
+| `tenant`    | tenant id or `TenantInfo` | With `scope`, the tenant whose sessions it reaches; defaults to the tenant bound to the running context (see [Scoped Push](#scoped-push-one-room-not-every-room)) |
 
 ### `apush_to_view(view_path, *, state=None, handler=None, payload=None, scope=None)`
 

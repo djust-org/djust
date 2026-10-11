@@ -5,6 +5,7 @@ WebSocket consumer for LiveView real-time updates
 import asyncio
 import collections
 import contextlib
+import functools
 import inspect
 import json
 import logging
@@ -82,6 +83,26 @@ def _tenant_context(tenant: Any) -> ContextManager[Any]:
         from contextlib import nullcontext
 
         return nullcontext()
+
+
+def _binds_tenant_of(view_of: Callable[..., Any]) -> Callable[[Any], Any]:
+    """Decorate a server-originated turn so it runs with its view's tenant bound.
+
+    A push, a NOTIFY and the work they start run application code (a handler
+    that queries tenant managers or publishes with ``push_to_view``) on a task
+    the channel layer started, which has no tenant bound; an event handler has
+    its own. ``view_of(self, *args)`` names the view the turn belongs to.
+    """
+
+    def decorate(turn: Any) -> Any:
+        @functools.wraps(turn)
+        async def bound(self: Any, *args: Any, **kwargs: Any) -> Any:
+            with _tenant_context(getattr(view_of(self, *args), "_tenant", None)):
+                return await turn(self, *args, **kwargs)
+
+        return bound
+
+    return decorate
 
 
 def _bind_tenant(tenant: Any) -> None:
@@ -5880,6 +5901,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
         await self._run_server_push_turn(view, event)
 
+    @_binds_tenant_of(lambda self, view, *events: view)
     async def _run_server_push_turn(self, view: Any, *events: Dict[str, Any]) -> None:
         """Apply pushes to the view, render once and send. Caller holds the lock.
 
@@ -6340,6 +6362,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         for consumer in self._channel_targets(routed):
             await type(self)._db_notify_to_view(consumer, event)
 
+    @_binds_tenant_of(lambda self, event: self.view_instance)
     async def _db_notify_to_view(self, event: Dict[str, Any]) -> None:
         """Handle a PostgreSQL NOTIFY for the view ``self`` runs.
 

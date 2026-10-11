@@ -36,6 +36,15 @@ def state_scope(view: Any) -> Optional[str]:
     return f"{prefix}:{slot_scope}"
 
 
+def tenant_scope_for_id(tenant_id: Any) -> str:
+    """``"tenant:<id>"`` for a tenant id, spelled as ``TenantMixin.get_state_key_prefix()``.
+
+    For code that has no view in hand but must name the same tenant scope as
+    the views do, such as ``push_to_view(..., tenant=...)`` from a Celery task.
+    """
+    return f"tenant:{quote(str(tenant_id), safe='')}"
+
+
 def snapshot_tenant_scope(view: Any) -> Optional[str]:
     """The tenant a signed state-snapshot token is bound to (#3328).
 
