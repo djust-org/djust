@@ -1764,6 +1764,30 @@ class WSConsumerTransport:
         """Expose the consumer's ``_mounting_in_batch`` flag (#1915, #291)."""
         return bool(getattr(self._consumer, "_mounting_in_batch", False))
 
+    async def refuse_beside_page(self) -> bool:
+        """Report a view mounted beside the page view as refused.
+
+        Applies inside a ``mount_batch`` and to a mount the consumer marked as
+        beside the page view. The error frame becomes the entry's ``failed[]``
+        record in a batch; the socket stays open and the consumer keeps the
+        view it had."""
+        consumer = self._consumer
+        if not (
+            getattr(consumer, "_mounting_in_batch", False)
+            or getattr(consumer, "_mounting_beside_page", False)
+        ):
+            return False
+        consumer._refused_beside_page = True
+        await self.send(
+            {
+                "type": "error",
+                "error": "Login required",
+                "message": "Login required",
+                "code": "login_required",
+            }
+        )
+        return True
+
 
 class SSESessionTransport:
     """Transport adapter wrapping ``SSESession``.
@@ -4712,6 +4736,8 @@ class ViewRuntime:
             return True
 
         if redirect_url:
+            if await self._refused_beside_page(redirect_url):
+                return True
             await self.transport.send({"type": "navigate", "to": redirect_url})
             # Finding E: the redirect verdict gates the WS close on
             # ``not _mounting_in_batch`` (#291 / #1780) — a batched login-required
@@ -4721,6 +4747,29 @@ class ViewRuntime:
             return True
 
         return None
+
+    async def _refused_beside_page(self, redirect_url: str) -> bool:
+        """Refuse a view beside the page view on its own.
+
+        When Django's ``LoginRequiredMiddleware`` rule refuses a view mounted
+        beside the page view (``dj-lazy`` hydration, a ``mount_batch`` entry),
+        only that view is refused: the transport reports it as a failed mount
+        and the page view keeps running, as it would on HTTP, where the
+        middleware never gates what a page includes. Returns True when the
+        transport did so; False for the page view itself, whose refusal sends
+        the page to the login page. Only the middleware's answer is refused
+        this way: a view refused by its own ``login_required = True`` still
+        sends the page to the login page, while a view without it gets the
+        middleware's answer before its permission checks.
+        """
+        from .auth._login_required_middleware import is_middleware_redirect
+
+        if not is_middleware_redirect(redirect_url):
+            return False
+        refuse = getattr(self.transport, "refuse_beside_page", None)
+        if refuse is None:
+            return False
+        return bool(await refuse())
 
     async def _on_mount_failed(self, view_instance: Any) -> None:
         """Tell the transport that a mount it already set up has failed (#3027).
