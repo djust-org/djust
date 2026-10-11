@@ -3,8 +3,10 @@
 To add a new component to the gallery:
 1. Add an entry to EXAMPLES (for template tags) or CLASS_EXAMPLES (for component classes)
 2. Include at least one variant with a 'name' and 'template' (or 'render' for classes)
-3. Set the 'category' to one of the keys in CATEGORIES
-4. Run tests to verify: .venv/bin/python -m pytest tests/test_gallery.py -v
+3. Add a one-line 'purpose', plus 'keywords' and 'related' tuples
+4. Register child tags in CHILD_TAGS with their parent entry
+5. Set the 'category' to one of the keys in CATEGORIES
+6. Run tests to verify: .venv/bin/python -m pytest tests/test_gallery.py -v
 """
 
 from typing import Any, Dict, Iterator
@@ -39,9 +41,12 @@ CATEGORY_ORDER = [
 # Each key must match a registered template tag name.
 # 'variants' is a list of dicts: {"name": str, "template": str, "context": dict (optional)}
 
-EXAMPLES = {
+EXAMPLES: Dict[str, Any] = {
     # ── Layout ──
     "modal": {
+        "purpose": "Overlay dialog with a title, close action and configurable size",
+        "keywords": (),
+        "related": (),
         "label": "Modal",
         "category": "overlay",
         "variants": [
@@ -60,6 +65,9 @@ EXAMPLES = {
         ],
     },
     "card": {
+        "purpose": "Group content in a titled panel with optional subtitle and elevation",
+        "keywords": (),
+        "related": (),
         "label": "Card",
         "category": "layout",
         "variants": [
@@ -78,6 +86,9 @@ EXAMPLES = {
         ],
     },
     "accordion": {
+        "purpose": "Expand one section at a time using titled accordion items",
+        "keywords": (),
+        "related": (),
         "label": "Accordion",
         "category": "layout",
         "variants": [
@@ -93,6 +104,9 @@ EXAMPLES = {
         ],
     },
     "tabs": {
+        "purpose": "Switch between labelled content panels using tab navigation",
+        "keywords": (),
+        "related": (),
         "label": "Tabs",
         "category": "layout",
         "variants": [
@@ -108,6 +122,9 @@ EXAMPLES = {
         ],
     },
     "collapsible": {
+        "purpose": "Show or hide a content block with a trigger button",
+        "keywords": (),
+        "related": (),
         "label": "Collapsible",
         "category": "layout",
         "variants": [
@@ -122,6 +139,9 @@ EXAMPLES = {
         ],
     },
     "sheet": {
+        "purpose": "Slide-over side panel drawer for settings or navigation",
+        "keywords": ("drawer", "side panel", "slide-over", "offcanvas"),
+        "related": ("modal", "bottom_sheet"),
         "label": "Sheet / Drawer",
         "category": "layout",
         "variants": [
@@ -136,6 +156,9 @@ EXAMPLES = {
         ],
     },
     "split_pane": {
+        "purpose": "Divide content into two panes with a draggable resize handle",
+        "keywords": (),
+        "related": (),
         "label": "Split Pane",
         "category": "layout",
         "variants": [
@@ -153,6 +176,9 @@ EXAMPLES = {
     },
     # ── Form ──
     "dj_button": {
+        "purpose": "Trigger an action with a styled button, optional icon and loading state",
+        "keywords": (),
+        "related": (),
         "label": "Button",
         "category": "form",
         "variants": [
@@ -166,6 +192,9 @@ EXAMPLES = {
         ],
     },
     "dj_input": {
+        "purpose": "Labelled text input inside a form-group wrapper",
+        "keywords": (),
+        "related": (),
         "label": "Input",
         "category": "form",
         "variants": [
@@ -184,6 +213,9 @@ EXAMPLES = {
         ],
     },
     "dj_select": {
+        "purpose": "Labelled native select with options inside a form-group wrapper",
+        "keywords": (),
+        "related": (),
         "label": "Select",
         "category": "form",
         "variants": [
@@ -201,6 +233,9 @@ EXAMPLES = {
         ],
     },
     "dj_textarea": {
+        "purpose": "Labelled multiline text input inside a form-group wrapper",
+        "keywords": (),
+        "related": (),
         "label": "Textarea",
         "category": "form",
         "variants": [
@@ -211,6 +246,9 @@ EXAMPLES = {
         ],
     },
     "dj_checkbox": {
+        "purpose": "Single checkbox input with a label and checked state",
+        "keywords": (),
+        "related": (),
         "label": "Checkbox",
         "category": "form",
         "variants": [
@@ -225,6 +263,9 @@ EXAMPLES = {
         ],
     },
     "dj_radio": {
+        "purpose": "Single radio input for choosing one value in a named group",
+        "keywords": (),
+        "related": (),
         "label": "Radio",
         "category": "form",
         "variants": [
@@ -236,6 +277,9 @@ EXAMPLES = {
         ],
     },
     "switch": {
+        "purpose": "Accessible on/off toggle with a checked state",
+        "keywords": (),
+        "related": (),
         "label": "Switch",
         "category": "form",
         "variants": [
@@ -244,6 +288,9 @@ EXAMPLES = {
         ],
     },
     "color_picker": {
+        "purpose": "Choose colors using preset swatches and a hex input",
+        "keywords": (),
+        "related": (),
         "label": "Color Picker",
         "category": "form",
         "variants": [
@@ -254,6 +301,9 @@ EXAMPLES = {
         ],
     },
     "combobox": {
+        "purpose": "Searchable select dropdown with server-driven option filtering",
+        "keywords": ("dropdown", "autocomplete", "typeahead", "searchable"),
+        "related": ("rich_select", "autocomplete"),
         "label": "Combobox",
         "category": "form",
         "variants": [
@@ -271,6 +321,9 @@ EXAMPLES = {
         ],
     },
     "date_picker": {
+        "purpose": "Server-driven calendar date picker with optional date range",
+        "keywords": (),
+        "related": (),
         "label": "Date Picker",
         "category": "form",
         "variants": [
@@ -278,6 +331,9 @@ EXAMPLES = {
         ],
     },
     "file_dropzone": {
+        "purpose": "Drag-and-drop file upload zone with a browse control",
+        "keywords": (),
+        "related": (),
         "label": "File Dropzone",
         "category": "form",
         "variants": [
@@ -292,6 +348,9 @@ EXAMPLES = {
         ],
     },
     "form_group": {
+        "purpose": "Wrap form controls with a label, help text and validation error",
+        "keywords": (),
+        "related": (),
         "label": "Form Group",
         "category": "form",
         "variants": [
@@ -303,6 +362,9 @@ EXAMPLES = {
     },
     # ── Overlay ──
     "dropdown": {
+        "purpose": "Toggle a menu beneath a labelled trigger",
+        "keywords": (),
+        "related": (),
         "label": "Dropdown",
         "category": "overlay",
         "variants": [
@@ -318,6 +380,9 @@ EXAMPLES = {
         ],
     },
     "tooltip": {
+        "purpose": "Show a short hint beside wrapped content on hover",
+        "keywords": (),
+        "related": (),
         "label": "Tooltip",
         "category": "overlay",
         "variants": [
@@ -332,6 +397,9 @@ EXAMPLES = {
         ],
     },
     "popover": {
+        "purpose": "Toggle a floating content panel beside a trigger",
+        "keywords": (),
+        "related": (),
         "label": "Popover",
         "category": "overlay",
         "variants": [
@@ -342,6 +410,9 @@ EXAMPLES = {
         ],
     },
     "command_palette": {
+        "purpose": "Search a command list in a dialog with selectable palette items",
+        "keywords": (),
+        "related": (),
         "label": "Command Palette",
         "category": "overlay",
         "variants": [
@@ -357,6 +428,9 @@ EXAMPLES = {
         ],
     },
     "context_menu": {
+        "purpose": "Display actions in a menu attached to wrapped content",
+        "keywords": (),
+        "related": (),
         "label": "Context Menu",
         "category": "overlay",
         "variants": [
@@ -373,6 +447,9 @@ EXAMPLES = {
     },
     # ── Feedback ──
     "alert": {
+        "purpose": "Inline status message with optional dismiss action",
+        "keywords": (),
+        "related": (),
         "label": "Alert",
         "category": "feedback",
         "variants": [
@@ -395,6 +472,9 @@ EXAMPLES = {
         ],
     },
     "toast_container": {
+        "purpose": "Stack dismissible toast notifications from a supplied message list",
+        "keywords": ("notification", "flash", "message", "snackbar", "save"),
+        "related": (),
         "label": "Toast",
         "category": "feedback",
         "variants": [
@@ -411,6 +491,9 @@ EXAMPLES = {
         ],
     },
     "progress": {
+        "purpose": "Show completion percentage in a labelled progress bar",
+        "keywords": (),
+        "related": (),
         "label": "Progress",
         "category": "feedback",
         "variants": [
@@ -420,6 +503,9 @@ EXAMPLES = {
         ],
     },
     "spinner": {
+        "purpose": "Animated loading spinner with configurable size and color",
+        "keywords": (),
+        "related": (),
         "label": "Spinner",
         "category": "feedback",
         "variants": [
@@ -429,6 +515,9 @@ EXAMPLES = {
         ],
     },
     "skeleton": {
+        "purpose": "Loading placeholders for text, avatars or cards",
+        "keywords": (),
+        "related": (),
         "label": "Skeleton",
         "category": "feedback",
         "variants": [
@@ -438,6 +527,9 @@ EXAMPLES = {
         ],
     },
     "empty_state": {
+        "purpose": "Explain an empty result with an optional call to action",
+        "keywords": (),
+        "related": (),
         "label": "Empty State",
         "category": "feedback",
         "variants": [
@@ -449,6 +541,19 @@ EXAMPLES = {
     },
     # ── Data ──
     "data_table": {
+        "purpose": "Sortable table with search, filters, bulk row selection, pagination and editing",
+        "keywords": (
+            "grid",
+            "rows",
+            "sort",
+            "paginate",
+            "list",
+            "bulk",
+            "select",
+            "infinite",
+            "scroll",
+        ),
+        "related": ("infinite_scroll", "filter_bar", "pagination"),
         "label": "Data Table",
         "category": "data",
         "variants": [
@@ -470,6 +575,9 @@ EXAMPLES = {
         ],
     },
     "pagination": {
+        "purpose": "Navigate pages with previous, next and numbered page controls",
+        "keywords": (),
+        "related": (),
         "label": "Pagination",
         "category": "data",
         "variants": [
@@ -477,6 +585,9 @@ EXAMPLES = {
         ],
     },
     "virtual_list": {
+        "purpose": "Paginated list for large datasets with load-more controls",
+        "keywords": (),
+        "related": (),
         "label": "Virtual List",
         "category": "data",
         "variants": [
@@ -494,6 +605,9 @@ EXAMPLES = {
         ],
     },
     "kanban_board": {
+        "purpose": "Arrange cards in status columns with move actions",
+        "keywords": (),
+        "related": (),
         "label": "Kanban Board",
         "category": "data",
         "variants": [
@@ -515,6 +629,9 @@ EXAMPLES = {
         ],
     },
     "tree_view": {
+        "purpose": "Browse hierarchical nodes with expand and selection actions",
+        "keywords": (),
+        "related": (),
         "label": "Tree View",
         "category": "data",
         "variants": [
@@ -538,6 +655,9 @@ EXAMPLES = {
     },
     # ── Navigation ──
     "breadcrumb": {
+        "purpose": "Link back through an ordered navigation hierarchy",
+        "keywords": (),
+        "related": (),
         "label": "Breadcrumb",
         "category": "navigation",
         "variants": [
@@ -555,6 +675,9 @@ EXAMPLES = {
         ],
     },
     "stepper": {
+        "purpose": "Show progress through labelled steps with a step selection action",
+        "keywords": (),
+        "related": (),
         "label": "Stepper",
         "category": "navigation",
         "variants": [
@@ -572,6 +695,9 @@ EXAMPLES = {
         ],
     },
     "table_of_contents": {
+        "purpose": "Navigate to document sections from a supplied list of headings",
+        "keywords": (),
+        "related": (),
         "label": "Table of Contents",
         "category": "navigation",
         "variants": [
@@ -589,6 +715,9 @@ EXAMPLES = {
         ],
     },
     "timeline": {
+        "purpose": "Display event content along a vertical timeline",
+        "keywords": (),
+        "related": (),
         "label": "Timeline",
         "category": "navigation",
         "variants": [
@@ -605,6 +734,9 @@ EXAMPLES = {
     },
     # ── Indicator ──
     "badge": {
+        "purpose": "Compact status label with an optional pulsing indicator",
+        "keywords": (),
+        "related": (),
         "label": "Badge (Tag)",
         "category": "indicator",
         "variants": [
@@ -616,6 +748,9 @@ EXAMPLES = {
         ],
     },
     "avatar": {
+        "purpose": "Display a user image or initials with an optional status indicator",
+        "keywords": (),
+        "related": (),
         "label": "Avatar",
         "category": "indicator",
         "variants": [
@@ -625,6 +760,9 @@ EXAMPLES = {
         ],
     },
     "rating": {
+        "purpose": "Display or choose a star rating",
+        "keywords": (),
+        "related": (),
         "label": "Rating",
         "category": "indicator",
         "variants": [
@@ -633,6 +771,9 @@ EXAMPLES = {
         ],
     },
     "gauge": {
+        "purpose": "Visualize a value as an SVG donut gauge",
+        "keywords": (),
+        "related": (),
         "label": "Gauge",
         "category": "indicator",
         "variants": [
@@ -644,6 +785,9 @@ EXAMPLES = {
         ],
     },
     "stat_card": {
+        "purpose": "Display a metric with its label and optional trend",
+        "keywords": (),
+        "related": (),
         "label": "Stat Card",
         "category": "indicator",
         "variants": [
@@ -659,6 +803,9 @@ EXAMPLES = {
     },
     # ── Typography ──
     "code_block": {
+        "purpose": "Syntax-highlighted code with an optional copy button",
+        "keywords": (),
+        "related": (),
         "label": "Code Block",
         "category": "typography",
         "variants": [
@@ -669,6 +816,9 @@ EXAMPLES = {
         ],
     },
     "kbd": {
+        "purpose": "Display keyboard shortcut keys as keycaps",
+        "keywords": (),
+        "related": (),
         "label": "Kbd",
         "category": "typography",
         "variants": [
@@ -678,6 +828,9 @@ EXAMPLES = {
     },
     # ── Misc ──
     "dj_tag": {
+        "purpose": "Label content with a small chip and optional remove action",
+        "keywords": (),
+        "related": (),
         "label": "Tag",
         "category": "misc",
         "variants": [
@@ -686,6 +839,9 @@ EXAMPLES = {
         ],
     },
     "dj_divider": {
+        "purpose": "Separate content with a horizontal or vertical rule and optional label",
+        "keywords": (),
+        "related": (),
         "label": "Divider",
         "category": "misc",
         "variants": [
@@ -694,6 +850,9 @@ EXAMPLES = {
         ],
     },
     "carousel": {
+        "purpose": "Navigate an image slideshow with previous and next controls",
+        "keywords": (),
+        "related": (),
         "label": "Carousel",
         "category": "misc",
         "variants": [
@@ -716,6 +875,9 @@ EXAMPLES = {
         ],
     },
     "copy_button": {
+        "purpose": "Copy supplied text to the clipboard with a confirmation label",
+        "keywords": (),
+        "related": (),
         "label": "Copy Button",
         "category": "misc",
         "variants": [
@@ -723,6 +885,9 @@ EXAMPLES = {
         ],
     },
     "notification_center": {
+        "purpose": "Notification bell with unread count and a dropdown message list",
+        "keywords": (),
+        "related": (),
         "label": "Notification Center",
         "category": "misc",
         "variants": [
@@ -751,6 +916,9 @@ EXAMPLES = {
         ],
     },
     "rich_text_editor": {
+        "purpose": "Edit formatted text with a contenteditable area and toolbar",
+        "keywords": (),
+        "related": (),
         "label": "Rich Text Editor",
         "category": "misc",
         "variants": [
@@ -765,6 +933,9 @@ EXAMPLES = {
     # ══════════════════════════════════════════════════════════════════════
     # ── Layout (additional) ──
     "app_shell": {
+        "purpose": "App layout with sidebar, header and main content slots",
+        "keywords": (),
+        "related": (),
         "label": "App Shell",
         "category": "layout",
         "variants": [
@@ -781,6 +952,9 @@ EXAMPLES = {
         ],
     },
     "sidebar": {
+        "purpose": "Hierarchical navigation with active items and section headings",
+        "keywords": (),
+        "related": (),
         "label": "Sidebar",
         "category": "layout",
         "variants": [
@@ -796,6 +970,9 @@ EXAMPLES = {
         ],
     },
     "aspect_ratio": {
+        "purpose": "Keep wrapped content at a fixed width-to-height ratio",
+        "keywords": (),
+        "related": (),
         "label": "Aspect Ratio",
         "category": "layout",
         "variants": [
@@ -810,6 +987,9 @@ EXAMPLES = {
         ],
     },
     "dashboard_grid": {
+        "purpose": "Arrange dashboard panels in a configurable grid with move and resize events",
+        "keywords": (),
+        "related": (),
         "label": "Dashboard Grid",
         "category": "layout",
         "variants": [
@@ -842,6 +1022,9 @@ EXAMPLES = {
         ],
     },
     "masonry_grid": {
+        "purpose": "Distribute variable-height items into balanced columns",
+        "keywords": (),
+        "related": (),
         "label": "Masonry Grid",
         "category": "layout",
         "variants": [
@@ -859,6 +1042,9 @@ EXAMPLES = {
         ],
     },
     "resizable_panel": {
+        "purpose": "Resize wrapped content using a drag handle",
+        "keywords": (),
+        "related": (),
         "label": "Resizable Panel",
         "category": "layout",
         "variants": [
@@ -873,6 +1059,9 @@ EXAMPLES = {
         ],
     },
     "scroll_area": {
+        "purpose": "Constrain content to a keyboard-focusable scrolling region",
+        "keywords": (),
+        "related": (),
         "label": "Scroll Area",
         "category": "layout",
         "variants": [
@@ -891,6 +1080,9 @@ EXAMPLES = {
         ],
     },
     "sticky_header": {
+        "purpose": "Keep wrapped header content visible while scrolling",
+        "keywords": (),
+        "related": (),
         "label": "Sticky Header",
         "category": "layout",
         "variants": [
@@ -902,6 +1094,9 @@ EXAMPLES = {
     },
     # ── Form (additional) ──
     "autocomplete": {
+        "purpose": "Text input with server-driven suggestions",
+        "keywords": (),
+        "related": (),
         "label": "Autocomplete",
         "category": "form",
         "variants": [
@@ -912,6 +1107,9 @@ EXAMPLES = {
         ],
     },
     "currency_input": {
+        "purpose": "Enter a monetary value with currency formatting",
+        "keywords": (),
+        "related": (),
         "label": "Currency Input",
         "category": "form",
         "variants": [
@@ -926,6 +1124,9 @@ EXAMPLES = {
         ],
     },
     "cron_input": {
+        "purpose": "Edit the five fields of a cron schedule with a description",
+        "keywords": (),
+        "related": (),
         "label": "Cron Input",
         "category": "form",
         "variants": [
@@ -933,6 +1134,9 @@ EXAMPLES = {
         ],
     },
     "dependent_select": {
+        "purpose": "Reload dropdown options when a parent field changes",
+        "keywords": (),
+        "related": (),
         "label": "Dependent Select",
         "category": "form",
         "variants": [
@@ -943,6 +1147,9 @@ EXAMPLES = {
         ],
     },
     "dj_form": {
+        "purpose": "Render a Django form with field controls and validation messages",
+        "keywords": (),
+        "related": (),
         "label": "Form",
         "category": "form",
         "variants": [
@@ -953,6 +1160,9 @@ EXAMPLES = {
         ],
     },
     "dj_label": {
+        "purpose": "Label a form control with an optional required marker",
+        "keywords": (),
+        "related": (),
         "label": "Label",
         "category": "form",
         "variants": [
@@ -967,6 +1177,9 @@ EXAMPLES = {
         ],
     },
     "field_error": {
+        "purpose": "Display validation errors for one Django form field",
+        "keywords": (),
+        "related": (),
         "label": "Field Error",
         "category": "form",
         "variants": [
@@ -978,6 +1191,9 @@ EXAMPLES = {
         ],
     },
     "fieldset": {
+        "purpose": "Group form controls under a legend with an optional description",
+        "keywords": (),
+        "related": (),
         "label": "Fieldset",
         "category": "form",
         "variants": [
@@ -992,6 +1208,9 @@ EXAMPLES = {
         ],
     },
     "form_array": {
+        "purpose": "Add and remove repeated form rows within configured bounds",
+        "keywords": (),
+        "related": (),
         "label": "Form Array",
         "category": "form",
         "variants": [
@@ -1003,6 +1222,9 @@ EXAMPLES = {
         ],
     },
     "form_errors": {
+        "purpose": "Display non-field validation errors from a Django form",
+        "keywords": (),
+        "related": (),
         "label": "Form Errors",
         "category": "form",
         "variants": [
@@ -1020,6 +1242,9 @@ EXAMPLES = {
         ],
     },
     "image_cropper": {
+        "purpose": "Select an image crop region with configurable aspect ratio",
+        "keywords": (),
+        "related": (),
         "label": "Image Cropper",
         "category": "form",
         "variants": [
@@ -1030,6 +1255,9 @@ EXAMPLES = {
         ],
     },
     "image_upload_preview": {
+        "purpose": "Upload multiple images with thumbnail previews and remove actions",
+        "keywords": (),
+        "related": (),
         "label": "Image Upload Preview",
         "category": "form",
         "variants": [
@@ -1037,6 +1265,9 @@ EXAMPLES = {
         ],
     },
     "inline_edit": {
+        "purpose": "Switch a text value between display and inline editing modes",
+        "keywords": (),
+        "related": (),
         "label": "Inline Edit",
         "category": "form",
         "variants": [
@@ -1047,6 +1278,9 @@ EXAMPLES = {
         ],
     },
     "input_group": {
+        "purpose": "Combine an input with prefix or suffix addons",
+        "keywords": (),
+        "related": (),
         "label": "Input Group",
         "category": "form",
         "variants": [
@@ -1062,6 +1296,9 @@ EXAMPLES = {
         ],
     },
     "markdown_editor": {
+        "purpose": "Edit Markdown with formatting controls and a rendered preview",
+        "keywords": (),
+        "related": (),
         "label": "Markdown Editor",
         "category": "form",
         "variants": [
@@ -1072,6 +1309,9 @@ EXAMPLES = {
         ],
     },
     "markdown_textarea": {
+        "purpose": "Markdown textarea with formatting toolbar and preview mode",
+        "keywords": (),
+        "related": (),
         "label": "Markdown Textarea",
         "category": "form",
         "variants": [
@@ -1082,6 +1322,9 @@ EXAMPLES = {
         ],
     },
     "mentions_input": {
+        "purpose": "Text input with mention suggestions from supplied users",
+        "keywords": (),
+        "related": (),
         "label": "Mentions Input",
         "category": "form",
         "variants": [
@@ -1098,6 +1341,9 @@ EXAMPLES = {
         ],
     },
     "multi_select": {
+        "purpose": "Choose multiple options with search filtering and selected tags",
+        "keywords": (),
+        "related": (),
         "label": "Multi Select",
         "category": "form",
         "variants": [
@@ -1115,6 +1361,9 @@ EXAMPLES = {
         ],
     },
     "number_stepper": {
+        "purpose": "Adjust a numeric value with increment and decrement buttons",
+        "keywords": (),
+        "related": (),
         "label": "Number Stepper",
         "category": "form",
         "variants": [
@@ -1125,6 +1374,9 @@ EXAMPLES = {
         ],
     },
     "otp_input": {
+        "purpose": "Enter a one-time code using individual digit boxes",
+        "keywords": (),
+        "related": (),
         "label": "OTP Input",
         "category": "form",
         "variants": [
@@ -1135,6 +1387,9 @@ EXAMPLES = {
         ],
     },
     "password_input": {
+        "purpose": "Password input with visibility toggle and optional strength meter",
+        "keywords": (),
+        "related": (),
         "label": "Password Input",
         "category": "form",
         "variants": [
@@ -1149,6 +1404,9 @@ EXAMPLES = {
         ],
     },
     "prompt_editor": {
+        "purpose": "Edit a prompt template and preview substituted variables",
+        "keywords": (),
+        "related": (),
         "label": "Prompt Editor",
         "category": "form",
         "variants": [
@@ -1159,6 +1417,9 @@ EXAMPLES = {
         ],
     },
     "rich_select": {
+        "purpose": "Searchable dropdown options with icons, images and descriptions",
+        "keywords": (),
+        "related": (),
         "label": "Rich Select",
         "category": "form",
         "variants": [
@@ -1176,6 +1437,9 @@ EXAMPLES = {
         ],
     },
     "search_input": {
+        "purpose": "Search field with icon, clear button and loading indicator",
+        "keywords": (),
+        "related": (),
         "label": "Search Input",
         "category": "form",
         "variants": [
@@ -1186,6 +1450,9 @@ EXAMPLES = {
         ],
     },
     "signature_pad": {
+        "purpose": "Draw a signature on a canvas with clear and save actions",
+        "keywords": (),
+        "related": (),
         "label": "Signature Pad",
         "category": "form",
         "variants": [
@@ -1196,6 +1463,9 @@ EXAMPLES = {
         ],
     },
     "slider": {
+        "purpose": "Choose a numeric value or range with a horizontal slider",
+        "keywords": (),
+        "related": (),
         "label": "Slider",
         "category": "form",
         "variants": [
@@ -1210,6 +1480,9 @@ EXAMPLES = {
         ],
     },
     "tag_input": {
+        "purpose": "Create and remove tags in a text input",
+        "keywords": (),
+        "related": (),
         "label": "Tag Input",
         "category": "form",
         "variants": [
@@ -1221,6 +1494,9 @@ EXAMPLES = {
         ],
     },
     "time_picker": {
+        "purpose": "Choose hours and minutes with optional AM/PM selection",
+        "keywords": (),
+        "related": (),
         "label": "Time Picker",
         "category": "form",
         "variants": [
@@ -1231,6 +1507,9 @@ EXAMPLES = {
         ],
     },
     "toggle_group": {
+        "purpose": "Choose one or multiple values from segmented toggle buttons",
+        "keywords": (),
+        "related": (),
         "label": "Toggle Group",
         "category": "form",
         "variants": [
@@ -1248,6 +1527,9 @@ EXAMPLES = {
         ],
     },
     "voice_input": {
+        "purpose": "Capture speech with a microphone control and configurable language",
+        "keywords": (),
+        "related": (),
         "label": "Voice Input",
         "category": "form",
         "variants": [
@@ -1256,6 +1538,9 @@ EXAMPLES = {
     },
     # ── Overlay (additional) ──
     "bottom_sheet": {
+        "purpose": "Show a dialog panel rising from the bottom of the viewport",
+        "keywords": (),
+        "related": (),
         "label": "Bottom Sheet",
         "category": "overlay",
         "variants": [
@@ -1266,6 +1551,9 @@ EXAMPLES = {
         ],
     },
     "confirm_dialog": {
+        "purpose": "Confirm or cancel an action in a titled dialog",
+        "keywords": (),
+        "related": (),
         "label": "Confirm Dialog",
         "category": "overlay",
         "variants": [
@@ -1276,6 +1564,9 @@ EXAMPLES = {
         ],
     },
     "dropdown_menu": {
+        "purpose": "Display action items and dividers under a menu trigger",
+        "keywords": (),
+        "related": (),
         "label": "Dropdown Menu",
         "category": "overlay",
         "variants": [
@@ -1292,6 +1583,9 @@ EXAMPLES = {
         ],
     },
     "export_dialog": {
+        "purpose": "Choose export format and columns in a dialog",
+        "keywords": (),
+        "related": (),
         "label": "Export Dialog",
         "category": "overlay",
         "variants": [
@@ -1309,6 +1603,9 @@ EXAMPLES = {
         ],
     },
     "hover_card": {
+        "purpose": "Reveal richer content in a card beside a hover trigger",
+        "keywords": (),
+        "related": (),
         "label": "Hover Card",
         "category": "overlay",
         "variants": [
@@ -1319,6 +1616,9 @@ EXAMPLES = {
         ],
     },
     "lightbox": {
+        "purpose": "View images in an overlay with previous and next navigation",
+        "keywords": (),
+        "related": (),
         "label": "Lightbox",
         "category": "overlay",
         "variants": [
@@ -1343,6 +1643,9 @@ EXAMPLES = {
         ],
     },
     "notification_popover": {
+        "purpose": "Notification bell with a message popover and unread count",
+        "keywords": (),
+        "related": (),
         "label": "Notification Popover",
         "category": "overlay",
         "variants": [
@@ -1364,6 +1667,9 @@ EXAMPLES = {
         ],
     },
     "popconfirm": {
+        "purpose": "Confirm an action in a small popover around its trigger",
+        "keywords": (),
+        "related": (),
         "label": "Popconfirm",
         "category": "overlay",
         "variants": [
@@ -1374,6 +1680,9 @@ EXAMPLES = {
         ],
     },
     "cookie_consent": {
+        "purpose": "Present cookie consent with accept and decline actions",
+        "keywords": (),
+        "related": (),
         "label": "Cookie Consent",
         "category": "overlay",
         "variants": [
@@ -1388,6 +1697,9 @@ EXAMPLES = {
     },
     # ── Feedback (additional) ──
     "announcement_bar": {
+        "purpose": "Page-wide announcement with optional dismiss action",
+        "keywords": (),
+        "related": (),
         "label": "Announcement Bar",
         "category": "feedback",
         "variants": [
@@ -1398,6 +1710,9 @@ EXAMPLES = {
         ],
     },
     "callout": {
+        "purpose": "Highlight explanatory content with a semantic tone and optional icon",
+        "keywords": (),
+        "related": (),
         "label": "Callout",
         "category": "feedback",
         "variants": [
@@ -1412,6 +1727,9 @@ EXAMPLES = {
         ],
     },
     "connection_status": {
+        "purpose": "Display connected, disconnected or reconnecting status",
+        "keywords": (),
+        "related": (),
         "label": "Connection Status",
         "category": "feedback",
         "variants": [
@@ -1422,6 +1740,9 @@ EXAMPLES = {
         ],
     },
     "error_boundary": {
+        "purpose": "Replace wrapped content with an error message and retry action",
+        "keywords": (),
+        "related": (),
         "label": "Error Boundary",
         "category": "feedback",
         "variants": [
@@ -1432,6 +1753,9 @@ EXAMPLES = {
         ],
     },
     "error_page": {
+        "purpose": "Display an error code, message and recovery actions",
+        "keywords": (),
+        "related": (),
         "label": "Error Page",
         "category": "feedback",
         "variants": [
@@ -1446,6 +1770,9 @@ EXAMPLES = {
         ],
     },
     "loading_overlay": {
+        "purpose": "Cover wrapped content with a loading indicator while busy",
+        "keywords": (),
+        "related": (),
         "label": "Loading Overlay",
         "category": "feedback",
         "variants": [
@@ -1456,6 +1783,9 @@ EXAMPLES = {
         ],
     },
     "page_alert": {
+        "purpose": "Page-level message with semantic styling and optional dismiss action",
+        "keywords": (),
+        "related": (),
         "label": "Page Alert",
         "category": "feedback",
         "variants": [
@@ -1470,6 +1800,9 @@ EXAMPLES = {
         ],
     },
     "progress_circle": {
+        "purpose": "Visualize completion percentage in a circular progress indicator",
+        "keywords": (),
+        "related": (),
         "label": "Progress Circle",
         "category": "feedback",
         "variants": [
@@ -1478,6 +1811,9 @@ EXAMPLES = {
         ],
     },
     "server_toast_container": {
+        "purpose": "Receive server toast notifications in a positioned live region",
+        "keywords": ("notification", "flash", "message", "snackbar", "save"),
+        "related": ("toast_container", "page_alert"),
         "label": "Server Toast Container",
         "category": "feedback",
         "variants": [
@@ -1485,6 +1821,9 @@ EXAMPLES = {
         ],
     },
     "skeleton_for": {
+        "purpose": "Create table, card, list or text loading placeholders",
+        "keywords": (),
+        "related": (),
         "label": "Skeleton For",
         "category": "feedback",
         "variants": [
@@ -1493,6 +1832,9 @@ EXAMPLES = {
         ],
     },
     "thinking_indicator": {
+        "purpose": "Show an animated thinking or processing status",
+        "keywords": (),
+        "related": (),
         "label": "Thinking Indicator",
         "category": "feedback",
         "variants": [
@@ -1504,6 +1846,9 @@ EXAMPLES = {
     },
     # ── Data (additional) ──
     "activity_feed": {
+        "purpose": "Display timestamped activity items with optional streaming updates",
+        "keywords": (),
+        "related": (),
         "label": "Activity Feed",
         "category": "data",
         "variants": [
@@ -1532,6 +1877,9 @@ EXAMPLES = {
         ],
     },
     "audit_log": {
+        "purpose": "Display user actions in a timestamped audit table with optional streaming",
+        "keywords": (),
+        "related": (),
         "label": "Audit Log",
         "category": "data",
         "variants": [
@@ -1560,6 +1908,9 @@ EXAMPLES = {
         ],
     },
     "bar_chart": {
+        "purpose": "Compare values using an SVG bar chart",
+        "keywords": (),
+        "related": (),
         "label": "Bar Chart",
         "category": "data",
         "variants": [
@@ -1574,6 +1925,9 @@ EXAMPLES = {
         ],
     },
     "calendar": {
+        "purpose": "Display events on a navigable monthly calendar",
+        "keywords": (),
+        "related": (),
         "label": "Calendar",
         "category": "data",
         "variants": [
@@ -1590,6 +1944,9 @@ EXAMPLES = {
         ],
     },
     "calendar_heatmap": {
+        "purpose": "Visualize daily activity intensity on an SVG calendar",
+        "keywords": (),
+        "related": (),
         "label": "Calendar Heatmap",
         "category": "data",
         "variants": [
@@ -1603,6 +1960,9 @@ EXAMPLES = {
         ],
     },
     "comparison_table": {
+        "purpose": "Compare features across plans with an optional highlighted plan",
+        "keywords": (),
+        "related": (),
         "label": "Comparison Table",
         "category": "data",
         "variants": [
@@ -1623,6 +1983,9 @@ EXAMPLES = {
         ],
     },
     "conversation_thread": {
+        "purpose": "Display chat messages with roles and timestamps",
+        "keywords": (),
+        "related": (),
         "label": "Conversation Thread",
         "category": "data",
         "variants": [
@@ -1649,6 +2012,9 @@ EXAMPLES = {
         ],
     },
     "data_card_grid": {
+        "purpose": "Display records as cards in a configurable column grid",
+        "keywords": (),
+        "related": (),
         "label": "Data Card Grid",
         "category": "data",
         "variants": [
@@ -1673,6 +2039,9 @@ EXAMPLES = {
         ],
     },
     "data_grid": {
+        "purpose": "Edit spreadsheet-style cells with keyboard navigation and frozen columns",
+        "keywords": (),
+        "related": (),
         "label": "Data Grid",
         "category": "data",
         "variants": [
@@ -1693,6 +2062,9 @@ EXAMPLES = {
         ],
     },
     "description_list": {
+        "purpose": "Display labelled values in a definition list",
+        "keywords": (),
+        "related": (),
         "label": "Description List",
         "category": "data",
         "variants": [
@@ -1710,6 +2082,9 @@ EXAMPLES = {
         ],
     },
     "diff_viewer": {
+        "purpose": "Compare text changes in unified or side-by-side views",
+        "keywords": (),
+        "related": (),
         "label": "Diff Viewer",
         "category": "data",
         "variants": [
@@ -1724,6 +2099,9 @@ EXAMPLES = {
         ],
     },
     "file_tree": {
+        "purpose": "Browse files and folders with expansion and selection actions",
+        "keywords": (),
+        "related": (),
         "label": "File Tree",
         "category": "data",
         "variants": [
@@ -1747,6 +2125,9 @@ EXAMPLES = {
         ],
     },
     "gantt_chart": {
+        "purpose": "Visualize task start and end dates on a project timeline",
+        "keywords": (),
+        "related": (),
         "label": "Gantt Chart",
         "category": "data",
         "variants": [
@@ -1764,6 +2145,9 @@ EXAMPLES = {
         ],
     },
     "heatmap": {
+        "purpose": "Visualize matrix values using color intensity",
+        "keywords": (),
+        "related": (),
         "label": "Heatmap",
         "category": "data",
         "variants": [
@@ -1779,6 +2163,9 @@ EXAMPLES = {
         ],
     },
     "json_viewer": {
+        "purpose": "Inspect nested JSON with expandable nodes",
+        "keywords": (),
+        "related": (),
         "label": "JSON Viewer",
         "category": "data",
         "variants": [
@@ -1796,6 +2183,9 @@ EXAMPLES = {
         ],
     },
     "line_chart": {
+        "purpose": "Plot one or more series as an SVG line chart",
+        "keywords": (),
+        "related": (),
         "label": "Line Chart",
         "category": "data",
         "variants": [
@@ -1810,6 +2200,9 @@ EXAMPLES = {
         ],
     },
     "log_viewer": {
+        "purpose": "Display log lines with severity filtering and optional streaming",
+        "keywords": (),
+        "related": (),
         "label": "Log Viewer",
         "category": "data",
         "variants": [
@@ -1828,6 +2221,9 @@ EXAMPLES = {
         ],
     },
     "model_table": {
+        "purpose": "Render a Django queryset table with inferred model columns and filters",
+        "keywords": (),
+        "related": (),
         "label": "Model Table",
         "category": "data",
         "variants": [
@@ -1845,6 +2241,9 @@ EXAMPLES = {
         ],
     },
     "org_chart": {
+        "purpose": "Display a hierarchical organization tree with node selection",
+        "keywords": (),
+        "related": (),
         "label": "Org Chart",
         "category": "data",
         "variants": [
@@ -1862,6 +2261,9 @@ EXAMPLES = {
         ],
     },
     "pie_chart": {
+        "purpose": "Show proportions in an SVG pie or donut chart",
+        "keywords": (),
+        "related": (),
         "label": "Pie Chart",
         "category": "data",
         "variants": [
@@ -1889,6 +2291,9 @@ EXAMPLES = {
         ],
     },
     "pivot_table": {
+        "purpose": "Aggregate records by row and column groups with totals",
+        "keywords": (),
+        "related": (),
         "label": "Pivot Table",
         "category": "data",
         "variants": [
@@ -1907,6 +2312,9 @@ EXAMPLES = {
         ],
     },
     "sortable_grid": {
+        "purpose": "Reorder items in a grid using drag handles",
+        "keywords": (),
+        "related": (),
         "label": "Sortable Grid",
         "category": "data",
         "variants": [
@@ -1924,6 +2332,9 @@ EXAMPLES = {
         ],
     },
     "sortable_list": {
+        "purpose": "Reorder list items with drag handles",
+        "keywords": (),
+        "related": (),
         "label": "Sortable List",
         "category": "data",
         "variants": [
@@ -1941,6 +2352,9 @@ EXAMPLES = {
         ],
     },
     "sparkline": {
+        "purpose": "Show a compact SVG line chart for a value series",
+        "keywords": (),
+        "related": (),
         "label": "Sparkline",
         "category": "data",
         "variants": [
@@ -1957,6 +2371,9 @@ EXAMPLES = {
         ],
     },
     "terminal": {
+        "purpose": "Display terminal output with ANSI colors and optional streaming",
+        "keywords": (),
+        "related": (),
         "label": "Terminal",
         "category": "data",
         "variants": [
@@ -1974,6 +2391,9 @@ EXAMPLES = {
         ],
     },
     "treemap": {
+        "purpose": "Show relative values as proportional SVG rectangles",
+        "keywords": (),
+        "related": (),
         "label": "Treemap",
         "category": "data",
         "variants": [
@@ -1993,6 +2413,9 @@ EXAMPLES = {
     },
     # ── Navigation (additional) ──
     "breadcrumb_dropdown": {
+        "purpose": "Navigate breadcrumb levels with sibling dropdown options",
+        "keywords": (),
+        "related": (),
         "label": "Breadcrumb Dropdown",
         "category": "navigation",
         "variants": [
@@ -2012,6 +2435,9 @@ EXAMPLES = {
         ],
     },
     "nav_menu": {
+        "purpose": "Navigate using labelled links with active state and dropdown children",
+        "keywords": (),
+        "related": (),
         "label": "Nav Menu",
         "category": "navigation",
         "variants": [
@@ -2027,6 +2453,9 @@ EXAMPLES = {
         ],
     },
     "page_header": {
+        "purpose": "Page title with subtitle, breadcrumbs and an actions slot",
+        "keywords": (),
+        "related": (),
         "label": "Page Header",
         "category": "navigation",
         "variants": [
@@ -2041,6 +2470,9 @@ EXAMPLES = {
         ],
     },
     "scroll_spy": {
+        "purpose": "Navigate sections with an active-section indicator",
+        "keywords": (),
+        "related": (),
         "label": "Scroll Spy",
         "category": "navigation",
         "variants": [
@@ -2058,6 +2490,9 @@ EXAMPLES = {
         ],
     },
     "toolbar": {
+        "purpose": "Group action controls with separators and an overflow menu",
+        "keywords": (),
+        "related": (),
         "label": "Toolbar",
         "category": "navigation",
         "variants": [
@@ -2074,6 +2509,9 @@ EXAMPLES = {
         ],
     },
     "wizard": {
+        "purpose": "Guide users through labelled steps with back and next actions",
+        "keywords": (),
+        "related": (),
         "label": "Wizard",
         "category": "navigation",
         "variants": [
@@ -2096,6 +2534,9 @@ EXAMPLES = {
     },
     # ── Indicator (additional) ──
     "animated_number": {
+        "purpose": "Animate transitions between numeric values",
+        "keywords": (),
+        "related": (),
         "label": "Animated Number",
         "category": "indicator",
         "variants": [
@@ -2110,6 +2551,9 @@ EXAMPLES = {
         ],
     },
     "avatar_group": {
+        "purpose": "Display overlapping user avatars with an overflow count",
+        "keywords": (),
+        "related": (),
         "label": "Avatar Group",
         "category": "indicator",
         "variants": [
@@ -2128,6 +2572,9 @@ EXAMPLES = {
         ],
     },
     "countdown": {
+        "purpose": "Show time remaining until a target date",
+        "keywords": (),
+        "related": (),
         "label": "Countdown",
         "category": "indicator",
         "variants": [
@@ -2135,6 +2582,9 @@ EXAMPLES = {
         ],
     },
     "icon": {
+        "purpose": "Display a named SVG icon with configurable size",
+        "keywords": (),
+        "related": (),
         "label": "Icon",
         "category": "indicator",
         "variants": [
@@ -2143,6 +2593,9 @@ EXAMPLES = {
         ],
     },
     "live_counter": {
+        "purpose": "Display a numeric counter with an optional live update event",
+        "keywords": (),
+        "related": (),
         "label": "Live Counter",
         "category": "indicator",
         "variants": [
@@ -2150,6 +2603,9 @@ EXAMPLES = {
         ],
     },
     "live_indicator": {
+        "purpose": "Indicate live activity with a status dot and optional pulse",
+        "keywords": (),
+        "related": (),
         "label": "Live Indicator",
         "category": "indicator",
         "variants": [
@@ -2161,6 +2617,9 @@ EXAMPLES = {
         ],
     },
     "meter": {
+        "purpose": "Show a bounded value with configurable threshold colors",
+        "keywords": (),
+        "related": (),
         "label": "Meter",
         "category": "indicator",
         "variants": [
@@ -2178,6 +2637,9 @@ EXAMPLES = {
         ],
     },
     "notification_badge": {
+        "purpose": "Show an unread count attached to wrapped content",
+        "keywords": (),
+        "related": (),
         "label": "Notification Badge",
         "category": "indicator",
         "variants": [
@@ -2187,6 +2649,9 @@ EXAMPLES = {
         ],
     },
     "presence_avatars": {
+        "purpose": "Show online users as avatars with an overflow count",
+        "keywords": (),
+        "related": (),
         "label": "Presence Avatars",
         "category": "indicator",
         "variants": [
@@ -2204,6 +2669,9 @@ EXAMPLES = {
         ],
     },
     "qr_code": {
+        "purpose": "Generate a QR code for supplied text or a URL",
+        "keywords": (),
+        "related": (),
         "label": "QR Code",
         "category": "indicator",
         "variants": [
@@ -2211,6 +2679,9 @@ EXAMPLES = {
         ],
     },
     "relative_time": {
+        "purpose": "Display a timestamp as relative elapsed time",
+        "keywords": (),
+        "related": (),
         "label": "Relative Time",
         "category": "indicator",
         "variants": [
@@ -2218,6 +2689,9 @@ EXAMPLES = {
         ],
     },
     "ribbon": {
+        "purpose": "Attach a labelled corner ribbon to wrapped content",
+        "keywords": (),
+        "related": (),
         "label": "Ribbon",
         "category": "indicator",
         "variants": [
@@ -2229,6 +2703,9 @@ EXAMPLES = {
         ],
     },
     "segmented_progress": {
+        "purpose": "Display completion across multiple labelled progress segments",
+        "keywords": (),
+        "related": (),
         "label": "Segmented Progress",
         "category": "indicator",
         "variants": [
@@ -2246,6 +2723,9 @@ EXAMPLES = {
         ],
     },
     "status_indicator": {
+        "purpose": "Display a labelled status with a colored indicator",
+        "keywords": (),
+        "related": (),
         "label": "Status Indicator",
         "category": "indicator",
         "variants": [
@@ -2261,6 +2741,9 @@ EXAMPLES = {
         ],
     },
     "token_counter": {
+        "purpose": "Show token usage against a configurable budget",
+        "keywords": (),
+        "related": (),
         "label": "Token Counter",
         "category": "indicator",
         "variants": [
@@ -2269,6 +2752,9 @@ EXAMPLES = {
     },
     # ── Typography (additional) ──
     "code_snippet": {
+        "purpose": "Display compact code with language label and copy action",
+        "keywords": (),
+        "related": (),
         "label": "Code Snippet",
         "category": "typography",
         "variants": [
@@ -2279,6 +2765,9 @@ EXAMPLES = {
         ],
     },
     "copyable_text": {
+        "purpose": "Display a text value with a clipboard copy control",
+        "keywords": (),
+        "related": (),
         "label": "Copyable Text",
         "category": "typography",
         "variants": [
@@ -2289,6 +2778,9 @@ EXAMPLES = {
         ],
     },
     "expandable_text": {
+        "purpose": "Truncate long text with expand and collapse controls",
+        "keywords": (),
+        "related": (),
         "label": "Expandable Text",
         "category": "typography",
         "variants": [
@@ -2304,6 +2796,9 @@ EXAMPLES = {
         ],
     },
     "streaming_text": {
+        "purpose": "Display streamed text with an optional typing cursor",
+        "keywords": (),
+        "related": (),
         "label": "Streaming Text",
         "category": "typography",
         "variants": [
@@ -2314,6 +2809,9 @@ EXAMPLES = {
         ],
     },
     "truncated_list": {
+        "purpose": "Limit visible items and show the remaining count",
+        "keywords": (),
+        "related": (),
         "label": "Truncated List",
         "category": "data",
         "variants": [
@@ -2333,6 +2831,9 @@ EXAMPLES = {
     },
     # ── Misc (additional) ──
     "agent_step": {
+        "purpose": "Show an agent action with status, duration and expandable details",
+        "keywords": (),
+        "related": (),
         "label": "Agent Step",
         "category": "misc",
         "variants": [
@@ -2343,6 +2844,9 @@ EXAMPLES = {
         ],
     },
     "approval_gate": {
+        "purpose": "Present an action for approval or rejection with a risk indicator",
+        "keywords": (),
+        "related": (),
         "label": "Approval Gate",
         "category": "misc",
         "variants": [
@@ -2353,6 +2857,9 @@ EXAMPLES = {
         ],
     },
     "await": {
+        "purpose": "Show loading or error feedback until wrapped content is ready",
+        "keywords": (),
+        "related": (),
         "label": "Await",
         "category": "misc",
         "variants": [
@@ -2367,6 +2874,9 @@ EXAMPLES = {
         ],
     },
     "chat_bubble": {
+        "purpose": "Display a chat message with role, timestamp and delivery status",
+        "keywords": (),
+        "related": (),
         "label": "Chat Bubble",
         "category": "misc",
         "variants": [
@@ -2397,6 +2907,9 @@ EXAMPLES = {
         ],
     },
     "collab_selection": {
+        "purpose": "Display other users' text selection highlights",
+        "keywords": (),
+        "related": (),
         "label": "Collab Selection",
         "category": "misc",
         "variants": [
@@ -2418,6 +2931,9 @@ EXAMPLES = {
         ],
     },
     "cursors": {
+        "purpose": "Overlay named cursors for collaborating users",
+        "keywords": (),
+        "related": (),
         "label": "Cursors",
         "category": "misc",
         "variants": [
@@ -2434,6 +2950,9 @@ EXAMPLES = {
         ],
     },
     "fab": {
+        "purpose": "Floating action button with optional secondary speed-dial actions",
+        "keywords": (),
+        "related": (),
         "label": "Floating Action Button",
         "category": "misc",
         "variants": [
@@ -2441,6 +2960,9 @@ EXAMPLES = {
         ],
     },
     "feedback": {
+        "purpose": "Collect feedback using thumbs, stars or emoji choices",
+        "keywords": (),
+        "related": (),
         "label": "Feedback Widget",
         "category": "misc",
         "variants": [
@@ -2449,6 +2971,9 @@ EXAMPLES = {
         ],
     },
     "filter_bar": {
+        "purpose": "Combine search, select and date-range filters with a clear action",
+        "keywords": ("table", "filters"),
+        "related": (),
         "label": "Filter Bar",
         "category": "misc",
         "variants": [
@@ -2470,6 +2995,9 @@ EXAMPLES = {
         ],
     },
     "import_wizard": {
+        "purpose": "Guide file import through upload, column mapping and preview steps",
+        "keywords": (),
+        "related": (),
         "label": "Import Wizard",
         "category": "misc",
         "variants": [
@@ -2486,6 +3014,9 @@ EXAMPLES = {
         ],
     },
     "infinite_scroll": {
+        "purpose": "Load more list items when a scrolling sentinel becomes visible",
+        "keywords": (),
+        "related": (),
         "label": "Infinite Scroll",
         "category": "misc",
         "variants": [
@@ -2496,6 +3027,9 @@ EXAMPLES = {
         ],
     },
     "map_picker": {
+        "purpose": "Choose a geographic position on an interactive map",
+        "keywords": (),
+        "related": (),
         "label": "Map Picker",
         "category": "misc",
         "variants": [
@@ -2506,6 +3040,9 @@ EXAMPLES = {
         ],
     },
     "model_selector": {
+        "purpose": "Choose an AI model with provider, tier and pricing details",
+        "keywords": (),
+        "related": (),
         "label": "Model Selector",
         "category": "misc",
         "variants": [
@@ -2522,6 +3059,9 @@ EXAMPLES = {
         ],
     },
     "multimodal_input": {
+        "purpose": "Compose a message with text, file and voice controls",
+        "keywords": (),
+        "related": (),
         "label": "Multimodal Input",
         "category": "misc",
         "variants": [
@@ -2532,6 +3072,9 @@ EXAMPLES = {
         ],
     },
     "reactions": {
+        "purpose": "Display emoji reaction counts with toggle actions",
+        "keywords": (),
+        "related": (),
         "label": "Reactions",
         "category": "misc",
         "variants": [
@@ -2549,6 +3092,9 @@ EXAMPLES = {
         ],
     },
     "responsive_image": {
+        "purpose": "Display an image with srcset, lazy loading and an optional placeholder",
+        "keywords": (),
+        "related": (),
         "label": "Responsive Image",
         "category": "misc",
         "variants": [
@@ -2559,6 +3105,9 @@ EXAMPLES = {
         ],
     },
     "scroll_to_top": {
+        "purpose": "Scroll the page back to the top using a floating button",
+        "keywords": (),
+        "related": (),
         "label": "Scroll to Top",
         "category": "misc",
         "variants": [
@@ -2566,6 +3115,9 @@ EXAMPLES = {
         ],
     },
     "source_citation": {
+        "purpose": "Display a numbered source reference with title and link",
+        "keywords": (),
+        "related": (),
         "label": "Source Citation",
         "category": "misc",
         "variants": [
@@ -2576,6 +3128,9 @@ EXAMPLES = {
         ],
     },
     "split_button": {
+        "purpose": "Primary action button with a dropdown of secondary actions",
+        "keywords": (),
+        "related": (),
         "label": "Split Button",
         "category": "misc",
         "variants": [
@@ -2592,6 +3147,9 @@ EXAMPLES = {
         ],
     },
     "theme_toggle": {
+        "purpose": "Choose light, dark or system color mode",
+        "keywords": (),
+        "related": (),
         "label": "Theme Toggle",
         "category": "misc",
         "variants": [
@@ -2602,6 +3160,9 @@ EXAMPLES = {
         ],
     },
     "tour": {
+        "purpose": "Guide users through positioned onboarding steps",
+        "keywords": (),
+        "related": (),
         "label": "Tour",
         "category": "misc",
         "variants": [
@@ -2633,78 +3194,131 @@ EXAMPLES = {
 # Each variant has a 'render' callable that returns HTML.
 
 
+def _component_class(name: str) -> Any:
+    """Import rendering classes only when a gallery variant is rendered."""
+    from djust.components import components
+
+    return getattr(components, name)
+
+
 def _make_class_examples() -> Dict[str, Any]:
     """Build CLASS_EXAMPLES lazily to avoid import-time issues with djust stubs."""
-    from djust.components.components import Badge, Button, Card, Markdown, StatusDot
-
     return {
         "Badge": {
+            "purpose": "Create a styled status badge from Python",
+            "keywords": (),
+            "related": (),
+            "snippet": 'Badge("Running", variant="success")',
             "label": "Badge (Class)",
             "category": "indicator",
             "variants": [
                 {
                     "name": "Status Running",
-                    "render": lambda: Badge.status("running")._render_custom(),
+                    "render": lambda: _component_class("Badge").status("running")._render_custom(),
                 },
-                {"name": "Status Error", "render": lambda: Badge.status("error")._render_custom()},
-                {"name": "Priority P0", "render": lambda: Badge.priority("P0")._render_custom()},
-                {"name": "Priority P3", "render": lambda: Badge.priority("P3")._render_custom()},
+                {
+                    "name": "Status Error",
+                    "render": lambda: _component_class("Badge").status("error")._render_custom(),
+                },
+                {
+                    "name": "Priority P0",
+                    "render": lambda: _component_class("Badge").priority("P0")._render_custom(),
+                },
+                {
+                    "name": "Priority P3",
+                    "render": lambda: _component_class("Badge").priority("P3")._render_custom(),
+                },
             ],
         },
         "Button": {
+            "purpose": "Create a styled action button from Python",
+            "keywords": (),
+            "related": (),
+            "snippet": 'Button("Save", variant="primary")',
             "label": "Button (Class)",
             "category": "form",
             "variants": [
                 {
                     "name": "Primary",
-                    "render": lambda: Button("Save", variant="primary")._render_custom(),
+                    "render": lambda: _component_class("Button")(
+                        "Save", variant="primary"
+                    )._render_custom(),
                 },
                 {
                     "name": "Danger",
-                    "render": lambda: Button("Delete", variant="danger")._render_custom(),
+                    "render": lambda: _component_class("Button")(
+                        "Delete", variant="danger"
+                    )._render_custom(),
                 },
                 {
                     "name": "Loading",
-                    "render": lambda: Button("Wait...", loading=True)._render_custom(),
+                    "render": lambda: _component_class("Button")(
+                        "Wait...", loading=True
+                    )._render_custom(),
                 },
             ],
         },
         "Card": {
+            "purpose": "Create a titled content card from Python",
+            "keywords": (),
+            "related": (),
+            "snippet": 'Card(header="Overview", content="Details")',
             "label": "Card (Class)",
             "category": "layout",
             "variants": [
                 {
                     "name": "Default",
-                    "render": lambda: Card(content="<p>Card content</p>")._render_custom(),
+                    "render": lambda: _component_class("Card")(
+                        content="<p>Card content</p>"
+                    )._render_custom(),
                 },
                 {
                     "name": "Elevated",
-                    "render": lambda: Card(
+                    "render": lambda: _component_class("Card")(
                         content="<p>Elevated</p>", variant="elevated"
                     )._render_custom(),
                 },
             ],
         },
         "StatusDot": {
+            "purpose": "Create a colored status dot with an optional pulse from Python",
+            "keywords": (),
+            "related": (),
+            "snippet": 'StatusDot("running")',
             "label": "StatusDot (Class)",
             "category": "indicator",
             "variants": [
-                {"name": "Running", "render": lambda: StatusDot("running")._render_custom()},
-                {"name": "Stopped", "render": lambda: StatusDot("stopped")._render_custom()},
-                {"name": "Completed", "render": lambda: StatusDot("completed")._render_custom()},
+                {
+                    "name": "Running",
+                    "render": lambda: _component_class("StatusDot")("running")._render_custom(),
+                },
+                {
+                    "name": "Stopped",
+                    "render": lambda: _component_class("StatusDot")("stopped")._render_custom(),
+                },
+                {
+                    "name": "Completed",
+                    "render": lambda: _component_class("StatusDot")("completed")._render_custom(),
+                },
             ],
         },
         "Markdown": {
+            "purpose": "Render sanitized Markdown content from Python",
+            "keywords": (),
+            "related": (),
+            "snippet": 'Markdown(text="**Hello**")',
             "label": "Markdown (Class)",
             "category": "typography",
             "variants": [
                 {
                     "name": "Simple",
-                    "render": lambda: Markdown("**Bold** and *italic* text.")._render_custom(),
+                    "render": lambda: _component_class("Markdown")(
+                        "**Bold** and *italic* text."
+                    )._render_custom(),
                 },
                 {
                     "name": "Code",
-                    "render": lambda: Markdown(
+                    "render": lambda: _component_class("Markdown")(
                         "Inline `code` and:\n\n```python\nprint('hello')\n```"
                     )._render_custom(),
                 },
@@ -2764,3 +3378,28 @@ class _ClassExamplesProxy:
 
 
 CLASS_EXAMPLES = _ClassExamplesProxy()
+
+
+# Child tags are discoverable through their parent catalog entry.
+CHILD_TAGS: Dict[str, str] = {
+    "accordion_item": "accordion",
+    "app_content": "app_shell",
+    "app_header": "app_shell",
+    "app_sidebar": "app_shell",
+    "context_menu_item": "context_menu",
+    "filter_date_range": "filter_bar",
+    "filter_search": "filter_bar",
+    "filter_select": "filter_bar",
+    "input_addon": "input_group",
+    "menu_divider": "dropdown_menu",
+    "menu_item": "dropdown_menu",
+    "nav_item": "nav_menu",
+    "page_header_actions": "page_header",
+    "palette_item": "command_palette",
+    "sidebar_item": "sidebar",
+    "sidebar_section": "sidebar",
+    "tab": "tabs",
+    "timeline_item": "timeline",
+    "toolbar_overflow": "toolbar",
+    "toolbar_separator": "toolbar",
+}
