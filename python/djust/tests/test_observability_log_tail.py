@@ -9,7 +9,9 @@ import logging
 import time
 
 import pytest
-from django.test import RequestFactory, override_settings
+from django.test import override_settings
+
+from .conftest import observability_request_factory
 
 from djust.observability.log_handler import (
     ObservabilityLogHandler,
@@ -112,7 +114,7 @@ def test_install_handler_is_idempotent():
 @override_settings(DEBUG=True)
 def test_endpoint_returns_entries():
     _emit("INFO", "djust", "test entry")
-    rf = RequestFactory()
+    rf = observability_request_factory()
     resp = log_tail(rf.get("/"))
     assert resp.status_code == 200
     data = json.loads(resp.content)
@@ -124,7 +126,7 @@ def test_endpoint_returns_entries():
 def test_endpoint_honors_level_param():
     _emit("INFO", "djust", "info")
     _emit("ERROR", "djust", "err")
-    rf = RequestFactory()
+    rf = observability_request_factory()
     resp = log_tail(rf.get("/?level=ERROR"))
     data = json.loads(resp.content)
     assert data["count"] == 1
@@ -138,7 +140,7 @@ def test_endpoint_honors_since_ms():
     cutoff = int(time.time() * 1000)
     time.sleep(0.01)
     _emit("INFO", "djust", "after")
-    rf = RequestFactory()
+    rf = observability_request_factory()
     resp = log_tail(rf.get(f"/?since_ms={cutoff}"))
     data = json.loads(resp.content)
     assert data["count"] == 1
@@ -149,13 +151,13 @@ def test_endpoint_honors_since_ms():
 def test_endpoint_handles_bad_params():
     """Non-int params shouldn't 500."""
     _emit("INFO", "djust", "test")
-    rf = RequestFactory()
+    rf = observability_request_factory()
     resp = log_tail(rf.get("/?since_ms=abc&limit=xyz"))
     assert resp.status_code == 200
 
 
 @override_settings(DEBUG=False)
 def test_endpoint_404_when_debug_off():
-    rf = RequestFactory()
+    rf = observability_request_factory()
     resp = log_tail(rf.get("/"))
     assert resp.status_code == 404

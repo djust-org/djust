@@ -7,7 +7,9 @@ from __future__ import annotations
 import json
 
 import pytest
-from django.test import RequestFactory, override_settings
+from django.test import override_settings
+
+from .conftest import observability_request_factory
 
 from djust.decorators import event_handler
 from djust.observability.dry_run import DryRunContext, DryRunViolation
@@ -248,7 +250,7 @@ class _FakeViewWithRecordableSideEffect:
 
 
 def _post(body: dict, session_id: str = "s"):
-    rf = RequestFactory()
+    rf = observability_request_factory()
     return rf.post(
         f"/?session_id={session_id}",
         data=json.dumps(body),

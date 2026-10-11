@@ -4,11 +4,13 @@ HTTP endpoints so the djust Python MCP (running in a separate process
 from Django) can introspect sessions, tracebacks, timings, and logs
 without shared memory.
 
-Security: all endpoints are DEBUG-gated AND localhost-only. The localhost
-check is enforced IN every view (``views._gate``), so the boundary holds even
-if the middleware below is not installed; ``LocalhostOnlyObservabilityMiddleware``
-is an additional outer layer. In production (DEBUG=False) every endpoint 404s.
-This matches django-debug-toolbar's model.
+Access: every endpoint is DEBUG-gated, serves only direct loopback requests
+(no reverse-proxy headers), and requires the project's observability token in
+the ``X-Djust-Observability-Token`` header (see
+``djust.observability.middleware``). These checks run IN every view
+(``views._gate``), so they hold even if the middleware below is not installed;
+``LocalhostOnlyObservabilityMiddleware`` is an additional outer layer. In
+production (DEBUG=False) every endpoint 404s.
 
 Usage (from a project's urls.py + settings.py):
 

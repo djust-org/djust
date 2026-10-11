@@ -100,6 +100,29 @@ def _ensure_django():
         return False
 
 
+def _observability_headers():
+    """Headers for requests to the dev server's /_djust/observability/ endpoints.
+
+    The endpoints require the project's observability token. It comes from the
+    ``DJUST_OBSERVABILITY_TOKEN`` environment variable when set, otherwise it is
+    derived from the project's settings (available when started with
+    ``manage.py djust_mcp``). Without either, no token is sent and the
+    endpoints answer 404.
+    """
+    from djust.observability.middleware import (
+        TOKEN_ENV_VAR,
+        TOKEN_HEADER,
+        get_observability_token,
+    )
+
+    if not os.environ.get(TOKEN_ENV_VAR) and not _ensure_django():
+        return {}
+    try:
+        return {TOKEN_HEADER: get_observability_token()}
+    except Exception:  # noqa: BLE001 - settings unavailable: send no token
+        return {}
+
+
 # ---------------------------------------------------------------------------
 # Server factory
 # ---------------------------------------------------------------------------
@@ -589,7 +612,12 @@ def create_server():
         base = os.environ.get("DJUST_DEV_SERVER_URL", "http://127.0.0.1:8000").rstrip("/")
         url = f"{base}/_djust/observability/view_assigns/"
         try:
-            r = requests.get(url, params={"session_id": session_id}, timeout=5)
+            r = requests.get(
+                url,
+                params={"session_id": session_id},
+                headers=_observability_headers(),
+                timeout=5,
+            )
         except requests.RequestException as e:
             return json.dumps(
                 {
@@ -608,8 +636,11 @@ def create_server():
                     "hint": (
                         "Check that (a) settings.DEBUG=True, (b) the project "
                         "urls.py includes `path('_djust/observability/', "
-                        "include('djust.observability.urls'))`, and (c) a "
-                        "WebSocket connection is open for this session."
+                        "include('djust.observability.urls'))`, (c) a "
+                        "WebSocket connection is open for this session, and "
+                        "(d) this MCP server was started with the project's "
+                        "settings (`manage.py djust_mcp`) or with the same "
+                        "DJUST_OBSERVABILITY_TOKEN as the dev server."
                     ),
                 }
             )
@@ -670,7 +701,7 @@ def create_server():
             body["dry_run"] = True
             body["dry_run_block"] = bool(dry_run_block)
         try:
-            r = requests.post(url, json=body, timeout=10)
+            r = requests.post(url, json=body, headers=_observability_headers(), timeout=10)
         except requests.RequestException as e:
             return json.dumps(
                 {
@@ -712,7 +743,7 @@ def create_server():
         url = f"{base}/_djust/observability/reset_view_state/?session_id={session_id}"
         try:
             # csrf_exempt on the endpoint — POST with no body is fine.
-            r = requests.post(url, timeout=5)
+            r = requests.post(url, headers=_observability_headers(), timeout=5)
         except requests.RequestException as e:
             return json.dumps(
                 {
@@ -758,7 +789,7 @@ def create_server():
         if since_ms:
             params["since_ms"] = since_ms
         try:
-            r = requests.get(url, params=params, timeout=5)
+            r = requests.get(url, params=params, headers=_observability_headers(), timeout=5)
         except requests.RequestException as e:
             return json.dumps(
                 {
@@ -808,7 +839,7 @@ def create_server():
         if handler_name:
             params["handler_name"] = handler_name
         try:
-            r = requests.get(url, params=params, timeout=5)
+            r = requests.get(url, params=params, headers=_observability_headers(), timeout=5)
         except requests.RequestException as e:
             return json.dumps(
                 {
@@ -852,6 +883,7 @@ def create_server():
             r = requests.get(
                 url,
                 params={"since_ms": since_ms, "level": level, "limit": limit},
+                headers=_observability_headers(),
                 timeout=5,
             )
         except requests.RequestException as e:
@@ -891,7 +923,7 @@ def create_server():
         base = os.environ.get("DJUST_DEV_SERVER_URL", "http://127.0.0.1:8000").rstrip("/")
         url = f"{base}/_djust/observability/last_traceback/"
         try:
-            r = requests.get(url, params={"n": n}, timeout=5)
+            r = requests.get(url, params={"n": n}, headers=_observability_headers(), timeout=5)
         except requests.RequestException as e:
             return json.dumps(
                 {
