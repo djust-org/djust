@@ -443,8 +443,9 @@ def resolve_resume_request(
 
     - ``"resumed"`` — entry exists and session matches; reply contains
       ``bytes_received`` and ``chunks_received``.
-    - ``"not_found"`` — no entry, or session mismatch (same response on
-      purpose — we don't leak whether the ID exists).
+    - ``"not_found"`` — no entry, an entry with no recorded owner session,
+      or a session mismatch (same response on purpose, so the reply does
+      not reveal whether the ID exists). Matches ``UploadStatusView``.
     - ``"locked"`` — another session is actively uploading this ID.
       ``active_refs(upload_id)`` is called to check this; when not
       provided, the check is skipped.
@@ -476,9 +477,9 @@ def resolve_resume_request(
         }
 
     stored_session = entry.get("session_key")
-    if stored_session is not None and stored_session != session_key:
-        # Cross-session access attempt — same response as not_found
-        # to avoid leaking existence of other users' upload ids.
+    if stored_session is None or stored_session != session_key:
+        # No recorded owner, or a different session — same response as
+        # not_found so the existence of the upload id is not revealed.
         return {
             "type": "upload_resumed",
             "ref": upload_id,
