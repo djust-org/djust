@@ -2830,6 +2830,12 @@ fn compute_template_hash(source: &str) -> String {
 #[pymodule(gil_used = false)]
 fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<RustLiveViewBackend>()?;
+    // The VDOM's element-nesting limit, exported so the tests pin the
+    // boundary against the real constant.
+    m.add("MAX_VDOM_DEPTH", djust_vdom::MAX_VDOM_DEPTH)?;
+    // How many block quotes / lists / list items the Markdown renderer keeps
+    // open at once, exported so the tests read the real constant.
+    m.add("MAX_MD_NESTING", djust_templates::markdown::MAX_MD_NESTING)?;
     m.add_function(wrap_pyfunction!(render_template, m)?)?;
     m.add_function(wrap_pyfunction!(render_template_with_dirs, m)?)?;
     m.add_function(wrap_pyfunction!(render_markdown_py, m)?)?;

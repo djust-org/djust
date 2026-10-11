@@ -59,7 +59,7 @@ impl RustTooltip {
 
         format!(
             r#"<span class="d-inline-block" tabindex="0" data-bs-toggle="tooltip" data-bs-placement="{}" data-bs-trigger="{}"{}title="{}">{}</span>"#,
-            placement, trigger, arrow_attr, escaped_text, &self.content
+            placement, trigger, arrow_attr, escaped_text, self.content
         )
     }
 
