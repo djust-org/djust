@@ -771,7 +771,7 @@ class RequestMixin:
                 # apart again.
                 from ..rate_limit import http_handler_rate_check
 
-                if not http_handler_rate_check(request, event_name, handler):
+                if not http_handler_rate_check(request, self, event_name, handler):
                     logger.warning(
                         "HTTP POST rate-limited handler '%s' on %s",
                         event_name,
