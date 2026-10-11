@@ -263,7 +263,7 @@ def test_dj_key_description_matches_the_parser_and_the_differ() -> None:
     assert "DJE-051" in (GUIDES / "error-codes.md").read_text(encoding="utf-8")
 
 
-#: `djust_ai_context._section_directives` emits every category in `DIRECTIVES`
+#: `ai_discovery.manifest._section_directives` emits every category in `DIRECTIVES`
 #: (#3353; it used to skip performance, animation and recovery, so the corrected
 #: dj-prefetch / dj-key text never reached the generated files). Phrases from
 #: those categories are pinned here beside the others, in the three generated

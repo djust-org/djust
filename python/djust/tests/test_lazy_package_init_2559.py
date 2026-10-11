@@ -105,6 +105,7 @@ ALLOWLIST_SETUP = ALLOWLIST_BACKEND | frozenset(
         "djust.assets",  # ADR-040 asset registry (setting_changed receiver)
         "djust.checks",
         "djust.checks.accessibility",
+        "djust.checks.ai_discovery",  # ADR-043 INFO checks; no heavy imports at setup
         "djust.checks.assets",  # ADR-040 asset checks (B001-B010)
         "djust.checks.audio",
         "djust.checks.components",
@@ -134,7 +135,7 @@ ALLOWLIST_SETUP = ALLOWLIST_BACKEND | frozenset(
         "djust.template_filters",
     }
 )
-assert len(ALLOWLIST_SETUP) == 66
+assert len(ALLOWLIST_SETUP) == 67
 
 # ``DEBUG=True`` additionally auto-enables hot reload: the file watcher only.
 # ``djust.websocket`` (and ``channels``) are deferred to a change event (#2566).

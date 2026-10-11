@@ -7,6 +7,8 @@ Usage:
     python -m djust startproject <name>   Create a new djust project (legacy)
     python -m djust startapp <name>       Create a new djust app
 
+    python -m djust ai <subcommand>       Discover capabilities and UI components
+
     python -m djust mcp install            Write .mcp.json for Claude Code / Cursor
 
     djust deploy <slug>                    Deploy current directory to djustlive.com
@@ -1106,7 +1108,53 @@ def cmd_serve(args: argparse.Namespace) -> int:
         return 2
 
 
+def cmd_ai(rest: list[str]) -> int:
+    """Resolve project settings, a nearby manage.py, or standalone discovery."""
+    from django.core.management.base import CommandError
+
+    module = os.environ.get("DJANGO_SETTINGS_MODULE")
+    if module:
+        import django
+        from django.core.management import call_command
+
+        if os.getcwd() not in sys.path:
+            sys.path.insert(0, os.getcwd())
+        try:
+            django.setup()
+        except Exception as exc:
+            print(f"djust ai: could not load settings {module}: {exc}", file=sys.stderr)
+            if rest and rest[0] == "inventory":
+                return 2
+        else:
+            try:
+                call_command("djust_ai", *rest)
+            except CommandError as exc:
+                print(str(exc), file=sys.stderr)
+                return 1
+            return 0
+    else:
+        manage_py = _find_manage_py()
+        if manage_py:
+            import subprocess
+
+            return subprocess.run(
+                [sys.executable, manage_py, "djust_ai", *rest], cwd=os.path.dirname(manage_py)
+            ).returncode
+    from djust.ai_discovery import runner
+
+    parser = argparse.ArgumentParser(prog="djust ai")
+    runner.add_subcommands(parser)
+    try:
+        return runner.run(vars(parser.parse_args(rest)), sys.stdout, project=False)
+    except CommandError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+
 def main() -> None:
+    if len(sys.argv) >= 2 and sys.argv[1] == "ai":
+        sys.exit(cmd_ai(sys.argv[2:]))
+
     # `deploy` is detected before argparse so the Click subcommand owns its
     # own argv (flags, prompts, streaming output) without argparse interference.
     if len(sys.argv) >= 2 and sys.argv[1] == "deploy":
@@ -1119,6 +1167,10 @@ def main() -> None:
     )
 
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
+
+    subparsers.add_parser(
+        "ai", help="AI capability discovery (inventory, suggest, manifest)", add_help=False
+    )
 
     # new command (recommended)
     new_parser = subparsers.add_parser(

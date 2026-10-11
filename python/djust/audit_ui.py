@@ -17,6 +17,7 @@ from heapq import merge
 from pathlib import PurePath
 from typing import Any, Dict, Iterator, List, Mapping, Optional, Sequence, Set, Tuple, Union
 
+from djust.ai_discovery.inventory import UISummaryState
 from djust.audit_ast import ASTAuditReport, ASTFinding, _comment_suppressed, _template_suppressed
 
 X1XX_CODES = ("X101", "X102", "X103", "X104", "X105")
@@ -729,3 +730,70 @@ def write_ui_summary(report: ASTAuditReport, root: str) -> Tuple[Optional[str], 
             except OSError as exc:
                 result = None, exc.strerror or type(exc).__name__
     return result
+
+
+_MAX_SUMMARY_BYTES = 4 * 1_048_576
+
+
+def read_ui_summary(root: str) -> UISummaryState:
+    """Read a bounded summary and stat covered files; never scan project sources."""
+    root = os.path.realpath(root)
+    path = os.path.join(root, UI_SUMMARY_RELPATH)
+    try:
+        try:
+            mode = os.lstat(os.path.dirname(path)).st_mode
+        except FileNotFoundError:
+            return UISummaryState("missing", path, None, "no cache")
+        if stat.S_ISLNK(mode) or not stat.S_ISDIR(mode):
+            return UISummaryState("invalid", path, None, "cache directory is not a real directory")
+        try:
+            with open(path, "rb") as fh:
+                raw = fh.read(_MAX_SUMMARY_BYTES + 1)
+        except FileNotFoundError:
+            return UISummaryState("missing", path, None, "no cache")
+        if len(raw) > _MAX_SUMMARY_BYTES:
+            return UISummaryState("invalid", path, None, "cache exceeds size limit")
+        payload = json.loads(raw)
+        if not isinstance(payload, dict):
+            return UISummaryState("invalid", path, None, "cache is not an object")
+        if payload["version"] != UI_SUMMARY_VERSION:
+            return UISummaryState(
+                "invalid",
+                path,
+                None,
+                f"schema version {payload['version']}, expected {UI_SUMMARY_VERSION}",
+            )
+        if payload["root"] != root:
+            return UISummaryState("invalid", path, None, "root mismatch")
+        counts = payload["counts"]
+        if not isinstance(counts, dict) or any(
+            type(v) is not int or v < 0 for v in counts.values()
+        ):
+            return UISummaryState("invalid", path, None, "invalid finding counts")
+        if type(payload["total"]) is not int or payload["total"] < 0:
+            return UISummaryState("invalid", path, None, "invalid finding total")
+        stale = []
+        for field in ("templates", "stylesheets"):
+            records = payload[field]
+            if not isinstance(records, dict):
+                return UISummaryState("invalid", path, None, f"invalid {field} records")
+            for rel, record in records.items():
+                if not isinstance(rel, str) or not isinstance(record, dict):
+                    return UISummaryState("invalid", path, None, "invalid file record")
+                mtime = record["mtime"]
+                if type(mtime) not in (float, int):
+                    return UISummaryState("invalid", path, None, "invalid file mtime")
+                absolute = os.path.normpath(os.path.join(root, *rel.split("/")))
+                try:
+                    changed = os.stat(absolute).st_mtime > mtime
+                except OSError:
+                    changed = True
+                if changed and len(stale) < 5:
+                    stale.append(rel)
+        if stale:
+            return UISummaryState(
+                "stale", path, None, f"{stale[0]} changed since audit", tuple(stale)
+            )
+        return UISummaryState("fresh", path, payload)
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        return UISummaryState("invalid", path, None, str(exc))
