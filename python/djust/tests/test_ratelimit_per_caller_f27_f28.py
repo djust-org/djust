@@ -324,7 +324,9 @@ async def test_f27_cross_transport_ws_and_api_share_budget():
         if (await _validate_event_security(ws, "expensive_send", ws_view, rl)) is not None:
             accepted += 1
     for _ in range(3):
-        if _rate_limit_check(api_request, "expensive_send", _RateLimitedView.expensive_send):
+        if _rate_limit_check(
+            api_request, _RateLimitedView, "expensive_send", _RateLimitedView.expensive_send
+        ):
             accepted += 1
 
     assert accepted == 5, (

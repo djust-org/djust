@@ -58,7 +58,7 @@ def _caller_key(request: HttpRequest) -> str:
     return caller_key_for_request(request)
 
 
-def _rate_limit_check(request: HttpRequest, handler_name: str, handler: Any) -> bool:
+def _rate_limit_check(request: HttpRequest, owner: Any, handler_name: str, handler: Any) -> bool:
     """Token-bucket check honoring the handler's ``@rate_limit`` settings.
 
     Routes through the SHARED per-caller store
@@ -71,13 +71,14 @@ def _rate_limit_check(request: HttpRequest, handler_name: str, handler: Any) -> 
     nothing before), so this path and ``mixins/request.post`` cannot drift apart
     again on the per-handler ``@rate_limit``.
 
-    Note the budget is keyed on the caller and the handler **name**, so one
-    callable reachable under two names gets a budget per name (pre-existing, and
-    true of every transport, WS/SSE included).
+    The budget is keyed on the caller and the handler's declaration (see
+    :func:`djust.rate_limit.handler_identity`), not on the name the request
+    used, so one callable reachable under two names holds one budget, on every
+    transport.
 
     Returns True if allowed, False if rate-limited.
     """
-    return http_handler_rate_check(request, handler_name, handler)
+    return http_handler_rate_check(request, owner, handler_name, handler)
 
 
 def reset_rate_buckets() -> None:
@@ -345,7 +346,7 @@ def dispatch_api(request: HttpRequest, view_slug: str, handler_name: str) -> Htt
         return api_error(403, "permission_denied", "Permission denied for this handler")
 
     # 9. Rate limit (shared bucket key with WS, per caller).
-    if not _rate_limit_check(request, handler_name, handler):
+    if not _rate_limit_check(request, view, handler_name, handler):
         return api_error(429, "rate_limited", "Rate limit exceeded for this handler")
 
     # 10. Parameter validation + coercion.
@@ -557,7 +558,7 @@ def dispatch_server_function(
     # 7. Handler-level @permission_required + @rate_limit (shared helpers).
     if not check_handler_permission(fn, request):
         return api_error(403, "permission_denied", "Permission denied")
-    if not _rate_limit_check(request, function_name, fn):
+    if not _rate_limit_check(request, view, function_name, fn):
         return api_error(429, "rate_limited", "Rate limit exceeded")
 
     # 8. Parameter validation + coercion (reuses ADR-008 validator).
