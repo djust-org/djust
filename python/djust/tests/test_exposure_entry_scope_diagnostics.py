@@ -384,6 +384,11 @@ async def test_sse_navigation_failure(monkeypatch, caplog, signals, debug, polic
             f"/djust/sse/{sid}/", {"view": VIEW_PATH, "_djust_url": "/entry/"}
         )
         assert started.status_code == 200
+        if policy is None or policy == "invalid":
+            # Its first mount fails (server persistence needs the explicit
+            # policy), and a failed mount leaves no session to navigate.
+            assert sid not in _sse_sessions
+            return
         session = _sse_sessions[sid]
         assert session.view_instance is not None
         drain(session)

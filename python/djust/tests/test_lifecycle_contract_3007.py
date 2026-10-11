@@ -442,10 +442,12 @@ async def test_a_connected_that_raises_fails_the_mount_like_mount_does():
         frame = await _ws_mount(communicator, FailsToConnect)
         assert frame["type"] == "error", frame
         tag = _one(FailsToConnect)
-        assert _order(tag) == ["mount", "handle_params", "connected"]
+        await _until(lambda: _calls("disconnected"), "the disconnected() of the failed mount")
+        # The failed mount leaves no view: it is released at once, not at close.
+        assert _order(tag) == ["mount", "handle_params", "connected", "disconnected"]
     finally:
         await _close(communicator)
-    # It was entered, so whatever it claimed is released.
+    # It was entered, so whatever it claimed is released, once.
     await _until(lambda: _calls("disconnected"), "the disconnected() of the failed mount")
     assert _calls("disconnected") == [tag]
 
