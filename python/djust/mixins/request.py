@@ -153,6 +153,11 @@ class RequestMixin:
         # doesn't see lazy thunks from a prior request stashed by the
         # template tag during sync render.
         self._lazy_thunks = []
+        # Django's middleware chain (LoginRequiredMiddleware included) has
+        # processed this request for this view.
+        from ..auth._login_required_middleware import note_http_dispatch
+
+        note_http_dispatch(self, request)
 
         # Check login_required / permission_required (matches WebSocket path).
         # Without this, views with login_required=True render their full HTML
@@ -633,6 +638,10 @@ class RequestMixin:
             # Ensure self.request is set for context processors and
             # _sync_state_to_rust csrf_token injection (#705).
             self.request = request
+            # Django's middleware chain has processed this request for this view.
+            from ..auth._login_required_middleware import note_http_dispatch
+
+            note_http_dispatch(self, request)
 
             # --- Authorization layer 1 of 3: view-level ---------------------
             # login_required / permission_required / check_permissions().

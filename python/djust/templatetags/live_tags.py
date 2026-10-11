@@ -33,6 +33,7 @@ from django.utils.html import escape, format_html, format_html_join
 from django.utils.safestring import SafeString, mark_safe
 
 from .._html import build_tag
+from ..auth._login_required_middleware import mark_embedded
 from ..config import config
 from ..utils import get_csp_nonce
 
@@ -2028,6 +2029,7 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
                 # Eager mount + render path — same as the non-lazy
                 # branch below. Returns the stamped child HTML.
                 child = child_cls()
+                mark_embedded(child)
                 child.request = request
                 auth_redirect = check_view_auth(child, request)
                 if auth_redirect is not None:
@@ -2286,6 +2288,7 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
             )
 
     child = child_cls()
+    mark_embedded(child)
     child.request = request
 
     # 4a. Enforce child's auth posture against the parent's request BEFORE
