@@ -18,6 +18,7 @@ the conversion's own cap is pinned in ``test_terminal_ansi_span_cap.py``.
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 import textwrap
@@ -201,3 +202,26 @@ def test_a_page_root_under_deep_wrappers_is_still_found():
         """
     )
     assert result is True
+
+
+@pytest.mark.parametrize(
+    "open_tag, tag", [("<svg>", "style"), ("<svg>", "script"), ("<math>", "style")]
+)
+def test_a_raw_text_named_element_at_the_limit_keeps_no_text_from_its_children(open_tag, tag):
+    # Inside svg/math `tag` is a foreign element with element children; at the
+    # limit their decoded text must not become its own text.
+    close_tag = "</" + open_tag[1:]
+    result = _child(
+        f"""
+        depth = {MAX - 3}  # the dj-root is level 1, so `{tag}` lands on the limit
+        tpl = '<div dj-root>' + '<div>' * depth + '{{{{ v|safe }}}}' + '</div>' * depth + '</div>'
+        lv = RustLiveView(tpl, [])
+        v = '{open_tag}<{tag}><a>&lt;/{tag}&gt;&lt;img src=x onerror=alert(1)&gt;</a></{tag}>{close_tag}'
+        lv.update_state({{'v': v}})
+        return lv.render_with_diff()[0]
+        """
+    )
+    assert "<img" not in result
+    assert re.search(rf"<{tag} dj-id=\"[^\"]*\"></{tag}>", result), result[result.find(open_tag) :][
+        :200
+    ]
