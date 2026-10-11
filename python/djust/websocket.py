@@ -40,6 +40,7 @@ from .websocket_utils import (
     _call_handler,
     _check_event_security,  # noqa: F401 - re-exported for tests
     _ensure_handler_rate_limit,  # noqa: F401 - re-exported for tests
+    _post_only_rules_deny,
     _safe_error,
     _validate_event_security,
     get_handler_coerce_setting,
@@ -2228,7 +2229,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 return
 
         # --- security / validation (shared with handle_event) -----------
-        handler = await _validate_event_security(self, event_name, target_view, self._rate_limiter)
+        handler = await _validate_event_security(
+            self, event_name, target_view, self._rate_limiter, root_view=self.view_instance
+        )
         if handler is None:
             return
 
@@ -3658,6 +3661,12 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             await self.send_error("No uploads configured for this view")
             return
 
+        # An upload is part of an event on HTTP (a POST through the view's
+        # post()): what only post() runs applies to it as to every event.
+        if await _post_only_rules_deny(self.view_instance):
+            await self.send_error("Permission denied", code="permission_denied")
+            return
+
         mgr = self.view_instance._upload_manager
         entry = mgr.register_entry(
             upload_name=data.get("upload_name", ""),
@@ -3753,6 +3762,19 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             session_key=session_key,
             active_refs=_active_ref,
         )
+        if (
+            payload.get("status") == "resumed"
+            and self.view_instance is not None
+            and await _post_only_rules_deny(self.view_instance)
+        ):
+            # What only the view's post() runs applies to uploads too.
+            payload = {
+                "type": "upload_resumed",
+                "ref": upload_id,
+                "status": "not_found",
+                "bytes_received": 0,
+                "chunks_received": [],
+            }
         if payload.get("status") == "resumed":
             # The state entry only says which chunks arrived; the chunks still
             # to come need the upload's live writer. Re-attach the upload

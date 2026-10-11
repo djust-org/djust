@@ -136,7 +136,7 @@ def authorize_event(view: Any, request: Any, binding: StateBinding) -> Any:
     previous = view.request
     view.request = request
     try:
-        if check_view_auth(view, request) is not None:
+        if check_view_auth(view, request, event=True) is not None:
             raise ExposureError("Explicit event authorization denied")
     except Exception:
         view.request = previous

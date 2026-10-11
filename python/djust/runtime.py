@@ -4996,7 +4996,11 @@ class ViewRuntime:
 
         # --- security / validation (shared with the live path) -------------
         handler = await _validate_event_security(
-            self.transport, event_name, target_view, self._rate_limiter
+            self.transport,
+            event_name,
+            target_view,
+            self._rate_limiter,
+            root_view=self.view_instance,
         )
         if handler is None:
             return
@@ -5764,7 +5768,7 @@ class ViewRuntime:
                 raise ExposureError("Missing current child event authorization")
             adapter = child_event_adapter(target_view, view, event_request)
             target_view.request = event_request
-            if check_view_auth(target_view, event_request) is not None:
+            if check_view_auth(target_view, event_request, event=True) is not None:
                 raise ExposureError("Child event authorization denied")
             return adapter
 
@@ -5781,7 +5785,11 @@ class ViewRuntime:
         # Validate the handler against the CHILD (not the parent) — mirrors WS
         # using ``target_view`` for handler lookup (websocket.py:3498).
         handler = await _validate_event_security(
-            self.transport, event_name, target_view, self._rate_limiter
+            self.transport,
+            event_name,
+            target_view,
+            self._rate_limiter,
+            root_view=self.view_instance,
         )
         if handler is None:
             return True
@@ -5998,7 +6006,7 @@ class ViewRuntime:
 
         # Validate the handler against the COMPONENT (websocket.py:3380-3382).
         handler = await _validate_event_security(
-            self.transport, event_name, component, self._rate_limiter
+            self.transport, event_name, component, self._rate_limiter, root_view=view
         )
         if handler is None:
             return True
