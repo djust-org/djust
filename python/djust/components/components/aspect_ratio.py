@@ -2,6 +2,7 @@
 
 import html
 from djust import Component
+from djust.components.utils import safe_css_ratio
 
 
 class AspectRatio(Component):
@@ -33,5 +34,5 @@ class AspectRatio(Component):
         cls = "dj-aspect-ratio"
         if self.custom_class:
             cls += f" {html.escape(self.custom_class)}"
-        e_ratio = html.escape(self.ratio)
+        e_ratio = html.escape(safe_css_ratio(self.ratio, "16/9"))
         return f'<div class="{cls}" style="aspect-ratio: {e_ratio};">{self.content}</div>'

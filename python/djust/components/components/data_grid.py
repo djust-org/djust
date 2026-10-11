@@ -4,6 +4,7 @@ import html
 from typing import Optional
 
 from djust import Component
+from djust.components.utils import safe_css_length
 
 
 class DataGrid(Component):
@@ -115,6 +116,7 @@ class DataGrid(Component):
             col_key = html.escape(str(col.get("key", "")))
             col_label = html.escape(str(col.get("label", col.get("key", ""))))
             width = col.get("width", "")
+            width = safe_css_length(width, "") if width else ""
             style = f' style="width:{html.escape(str(width))}"' if width else ""
             frozen_cls = ""
             if idx < self.frozen_left:

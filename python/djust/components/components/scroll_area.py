@@ -2,6 +2,7 @@
 
 import html
 from djust import Component
+from djust.components.utils import safe_css_length
 
 
 class ScrollArea(Component):
@@ -38,7 +39,7 @@ class ScrollArea(Component):
         if self.custom_class:
             cls += f" {html.escape(self.custom_class)}"
         e_label = html.escape(self.label)
-        e_max = html.escape(self.max_height)
+        e_max = html.escape(safe_css_length(self.max_height, "400px"))
         return (
             f'<div class="{cls}" role="region" aria-label="{e_label}" '
             f'style="max-height: {e_max}; overflow-y: auto;">'

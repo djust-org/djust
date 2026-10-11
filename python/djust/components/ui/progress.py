@@ -8,6 +8,8 @@ from typing import Dict, Any
 from ..base import LiveComponent
 from django.utils.safestring import mark_safe
 
+from djust.components.utils import safe_css_length
+
 
 class ProgressComponent(LiveComponent):
     """
@@ -52,7 +54,8 @@ class ProgressComponent(LiveComponent):
         self.custom_label = kwargs.get("custom_label", None)  # Custom label text
         self.striped = kwargs.get("striped", False)
         self.animated = kwargs.get("animated", False)  # Animated stripes
-        self.height = kwargs.get("height", None)  # Custom height
+        # Custom height; written into a style attribute, so only a CSS length.
+        self.height = safe_css_length(kwargs.get("height"), "") or None
 
     def get_context(self) -> Dict[str, Any]:
         """Get progress context"""

@@ -3,6 +3,7 @@
 import html
 
 from djust import Component
+from djust.components.utils import safe_css_ratio
 
 
 class ResponsiveImage(Component):
@@ -82,8 +83,9 @@ class ResponsiveImage(Component):
         e_alt = html.escape(self.alt)
 
         style = ""
-        if self.aspect_ratio:
-            e_ratio = html.escape(self.aspect_ratio)
+        aspect_ratio = safe_css_ratio(self.aspect_ratio, "") if self.aspect_ratio else ""
+        if aspect_ratio:
+            e_ratio = html.escape(aspect_ratio)
             style = f' style="aspect-ratio:{e_ratio}"'
 
         img_attrs = [f'src="{e_src}"', f'alt="{e_alt}"']

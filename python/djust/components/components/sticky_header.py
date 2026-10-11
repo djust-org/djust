@@ -2,6 +2,7 @@
 
 import html
 from djust import Component
+from djust.components.utils import safe_css_length, safe_css_number
 
 
 class StickyHeader(Component):
@@ -37,8 +38,8 @@ class StickyHeader(Component):
         cls = "dj-sticky-header"
         if self.custom_class:
             cls += f" {html.escape(self.custom_class)}"
-        e_offset = html.escape(self.offset)
-        e_z = html.escape(self.z_index)
+        e_offset = html.escape(safe_css_length(self.offset, "0"))
+        e_z = html.escape(safe_css_number(self.z_index, "10", integer=True))
         return (
             f'<div class="{cls}" style="position: sticky; top: {e_offset}; z-index: {e_z};">'
             f"{self.content}</div>"

@@ -3,6 +3,7 @@
 import html
 
 from djust import Component
+from djust.components.utils import safe_css_color
 
 
 class Meter(Component):
@@ -73,7 +74,7 @@ class Meter(Component):
                 pct = min(100, max(0, (val / self.total) * 100))
             else:
                 pct = 0
-            color = html.escape(str(seg.get("color", "")))
+            color = html.escape(safe_css_color(seg.get("color", ""), ""))
             seg_label = html.escape(str(seg.get("label", "")))
             style = f"width:{pct:.1f}%"
             if color:
@@ -91,7 +92,7 @@ class Meter(Component):
         if self.show_legend and self.segments:
             legend_items = []
             for seg in self.segments:
-                color = html.escape(str(seg.get("color", "")))
+                color = html.escape(safe_css_color(seg.get("color", ""), ""))
                 seg_label = html.escape(str(seg.get("label", "")))
                 val = seg.get("value", 0)
                 swatch_style = f"background:{color}" if color else ""

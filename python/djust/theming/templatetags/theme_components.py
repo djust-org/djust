@@ -775,12 +775,15 @@ def theme_skeleton(
         {% theme_skeleton variant="text" width="200px" %}
         {% theme_skeleton variant="circle" width="3rem" height="3rem" %}
     """
+    from djust.components.utils import safe_css_length
+
     request = context.get("request")
     tmpl = resolve_component_template(request, "skeleton")
     ctx = {
         "variant": variant,
-        "width": width,
-        "height": height,
+        # Both are written into a style attribute: only CSS lengths.
+        "width": safe_css_length(width, "100%"),
+        "height": safe_css_length(height, "1rem"),
         "attrs": attrs,
         "css_prefix": _css_prefix(),
     }
