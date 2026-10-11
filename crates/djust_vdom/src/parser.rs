@@ -17,10 +17,11 @@
 //! - Element structure being parsed
 //! - Child filtering decisions
 
-use crate::{next_djust_id, reset_id_counter, should_trace, VNode};
+use crate::{next_djust_id, reset_id_counter, should_trace, Namespace, VNode};
 use djust_core::html_whitespace::{is_html_whitespace_only, is_inline_level_tag};
 use djust_core::{DjangoRustError, Result};
 use html5ever::tendril::TendrilSink;
+use html5ever::tree_builder::TreeBuilderOpts;
 use html5ever::{ns, parse_document, parse_fragment, LocalName, ParseOpts, QualName};
 use markup5ever_rcdom::{Handle, NodeData, RcDom};
 use std::collections::HashMap;
@@ -287,6 +288,21 @@ pub fn parse_html(html: &str) -> Result<VNode> {
 ///
 /// The ID counter continues from where the previous parse left off.
 pub fn parse_html_continue(html: &str) -> Result<VNode> {
+    parse_html_continue_with_namespace(html).map(|(vnode, _)| vnode)
+}
+
+/// [`parse_html`], also returning the namespace the parser gave the root
+/// element (see [`crate::Namespace`]).
+pub fn parse_html_with_namespace(html: &str) -> Result<(VNode, Namespace)> {
+    reset_id_counter();
+    parse_html_continue_with_namespace(html)
+}
+
+/// [`parse_html_continue`], also returning the namespace the parser gave the
+/// root element: a `dj-root` inside `<svg>` is an SVG element, and the
+/// serializer needs that to write its descendants (the VDOM keeps local
+/// names only).
+pub fn parse_html_continue_with_namespace(html: &str) -> Result<(VNode, Namespace)> {
     parser_trace!(
         "parse_html_continue() - parsing {} bytes (counter NOT reset)",
         html.len()
@@ -300,10 +316,15 @@ pub fn parse_html_continue(html: &str) -> Result<VNode> {
 
     // Find the body or first child
     let root = find_root(&dom.document);
+    let namespace = match root.data {
+        NodeData::Element { ref name, .. } if name.ns == ns!(svg) => Namespace::Svg,
+        NodeData::Element { ref name, .. } if name.ns == ns!(mathml) => Namespace::MathMl,
+        _ => Namespace::Html,
+    };
     begin_depth_accounting();
     let vnode = handle_to_vnode(&root, 1);
     report_depth_accounting("parse_html");
-    vnode
+    Ok((vnode?, namespace))
 }
 
 /// Parse an HTML fragment in the context of a given parent element.
@@ -369,11 +390,14 @@ pub fn parse_html_fragment(html: &str, context_tag: &str) -> Result<Vec<VNode>> 
 ///
 /// Used by the reference patch model (`patch::apply_patches`) so the Rust
 /// round-trip tests apply `InsertSubtree` exactly as the browser does (#2999).
+///
+/// The parse has scripting disabled, as `<template>.innerHTML` has: there a
+/// `<noscript>` holds markup, not raw text.
 pub fn parse_html_fragment_client_view(html: &str, context_tag: &str) -> Result<Vec<VNode>> {
     let context_name = QualName::new(None, ns!(html), LocalName::from(context_tag));
     let dom = parse_fragment(
         RcDom::default(),
-        ParseOpts::default(),
+        client_parse_opts(),
         context_name,
         vec![],
         false,
@@ -418,6 +442,18 @@ pub fn parse_html_fragment_client_view(html: &str, context_tag: &str) -> Result<
     }
     report_depth_accounting("parse_html_fragment_client_view");
     Ok(roots)
+}
+
+/// Parser options for a client-side `<template>.innerHTML` parse: scripting
+/// is disabled in a template's inert document.
+fn client_parse_opts() -> ParseOpts {
+    ParseOpts {
+        tree_builder: TreeBuilderOpts {
+            scripting_enabled: false,
+            ..Default::default()
+        },
+        ..Default::default()
+    }
 }
 
 fn find_root(handle: &Handle) -> Handle {
@@ -585,6 +621,9 @@ fn push_text(children: &mut Vec<VNode>, text: String) {
 /// predicate a property of the node, so it does not flip while a patch batch
 /// moves the node's neighbours around.
 fn build_children(parent_tag: &str, raw: &[Handle], parent_depth: usize) -> Result<Vec<VNode>> {
+    // By name, so a foreign `<svg><style>` keeps its whitespace too. That is
+    // only a kept text node: the serializer escapes it as foreign text and
+    // a re-parse gives the same node.
     let preserve_whitespace =
         matches!(parent_tag, "pre" | "code" | "textarea" | "script" | "style");
 
@@ -669,6 +708,10 @@ fn build_children(parent_tag: &str, raw: &[Handle], parent_depth: usize) -> Resu
 /// whitespace rule as [`build_children`] for a lone child: a whitespace-only
 /// run is dropped except inside `pre`/`code`/`textarea`/`script`/`style`.
 /// That keeps `parse(to_html(tree))` equal to `tree` for a flattened tree.
+///
+/// A raw-text-named element (`djust_core::raw_text`) that had child elements
+/// keeps no text: that happens only in `<svg>` / `<math>`, and the text of
+/// its descendants is not its own text.
 fn collapse_subtree_to_text(parent_tag: &str, handle: &Handle) -> Vec<VNode> {
     let mut text = String::new();
     let mut stack: Vec<Handle> = handle.children.borrow().iter().rev().cloned().collect();
@@ -685,6 +728,12 @@ fn collapse_subtree_to_text(parent_tag: &str, handle: &Handle) -> Vec<VNode> {
     }
     if collapsed_elements {
         COLLAPSED_SUBTREES.with(|c| c.set(c.get() + 1));
+        // Only foreign content (svg/math) gives a raw-text-named element
+        // element children. Text decoded from them must not become the
+        // direct text of that element: keep none.
+        if djust_core::raw_text::is_raw_text_element(parent_tag) {
+            return Vec::new();
+        }
     }
     let preserve_whitespace =
         matches!(parent_tag, "pre" | "code" | "textarea" | "script" | "style");
