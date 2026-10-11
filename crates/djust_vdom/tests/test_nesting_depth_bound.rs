@@ -175,6 +175,47 @@ fn preformatted_text_below_the_limit_keeps_its_whitespace() {
 }
 
 #[test]
+fn a_raw_text_named_element_at_the_limit_keeps_no_text_from_its_children() {
+    // In svg/math these are foreign elements with element children. Their
+    // descendants' decoded text must not become the element's own text.
+    let payload = "<a>&lt;/style&gt;&lt;/script&gt;&lt;img src=x onerror=alert(1)&gt;</a>";
+    for (open, tag, close) in [
+        ("<svg>", "style", "</svg>"),
+        ("<svg>", "script", "</svg>"),
+        ("<math>", "style", "</math>"),
+        ("<svg>", "noscript", "</svg>"),
+        ("<svg>", "xmp", "</svg>"),
+        ("<svg>", "iframe", "</svg>"),
+    ] {
+        // `MAX - 2` divs, then the svg/math, puts `tag` at depth MAX.
+        let html = format!(
+            "{}{open}<{tag}>{payload}</{tag}>{close}{}",
+            "<div>".repeat(MAX_VDOM_DEPTH - 2),
+            "</div>".repeat(MAX_VDOM_DEPTH - 2)
+        );
+        let root = parse_html(&html).unwrap();
+        let edge = descend(&root, MAX_VDOM_DEPTH - 1);
+        assert_eq!(edge.tag, tag);
+        assert!(edge.children.is_empty(), "{tag}: {:?}", edge.children);
+        let out = root.to_html();
+        assert!(!out.contains("<img"), "{tag}: {out}");
+        let again = parse_html(&out).unwrap();
+        assert_eq!(again.to_html(), out, "{tag}");
+    }
+    // An element with text only (no child elements) keeps it, as before.
+    let html = format!(
+        "{}<svg><style>.a {{ fill: red }}</style></svg>{}",
+        "<div>".repeat(MAX_VDOM_DEPTH - 2),
+        "</div>".repeat(MAX_VDOM_DEPTH - 2)
+    );
+    let root = parse_html(&html).unwrap();
+    assert_eq!(
+        text_of(descend(&root, MAX_VDOM_DEPTH - 1)),
+        ".a { fill: red }"
+    );
+}
+
+#[test]
 fn a_flattened_tree_survives_the_round_trip_through_html() {
     for depth in [MAX_VDOM_DEPTH + 1, MAX_VDOM_DEPTH + 50] {
         for html in [nested("span", depth, "x"), nested_with_text(depth)] {

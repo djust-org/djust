@@ -739,6 +739,7 @@ s.insert("x".to_string(), Value::String(x.to_string()));
 s.insert("x".to_string(), Value::String(x.to_string()));
 view.set_changed_keys(vec!["x".to_string()]);
 let tpl = format!(r#"<div dj-id="0"><{tag}>{{{{ x|safe }}}}</{tag}></div>"#);
+let tpl = format!(
 view.set_changed_keys(vec!["highlight_id".to_string()]);
 view.set_changed_keys(vec!["label".to_string()]);
 view.set_changed_keys(vec!["label".to_string()]);
