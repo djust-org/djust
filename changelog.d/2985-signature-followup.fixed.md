@@ -1,1 +1,0 @@
-- SignaturePad notifications preserve nested component and embedded-view routing. A refused export reports that it cannot fit without mislabeling the rejected frame size as the server limit; the browser regression verifies both a retryable export and a bounded refusal (#2985).
