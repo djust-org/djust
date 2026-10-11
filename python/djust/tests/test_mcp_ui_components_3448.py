@@ -56,3 +56,36 @@ def test_ui_tools_need_no_django(mcp_server, monkeypatch):
     monkeypatch.setattr("djust.mcp.server._ensure_django", forbidden)
     assert _call_tool(mcp_server, "list_ui_components")["count"] > 0
     assert _call_tool(mcp_server, "get_ui_component", name="modal")["name"] == "modal"
+
+
+def test_ui_component_kind_consistent_across_tools_and_suggest(mcp_server):
+    from djust.ai_discovery.runner import render_suggest
+
+    get = _call_tool(mcp_server, "get_ui_component", name="data_table")
+    listed = _call_tool(mcp_server, "list_ui_components", query="data table")["results"][0]
+    suggested = json.loads(render_suggest("data table", 1, as_json=True))["results"][0]
+    catalog = _call_tool(mcp_server, "list_ui_components")
+    summary = next(
+        e
+        for category in catalog["categories"]
+        for e in category["components"]
+        if e["name"] == "data_table"
+    )
+    assert all(e["component_kind"] == "tag" for e in (get, listed, suggested, summary))
+    assert all("kind" not in e for e in (listed, suggested, summary))
+
+
+def test_mcp_megabyte_query_is_bounded(mcp_server):
+    import time
+    from djust.ai_discovery.catalog import load_catalog
+
+    load_catalog()
+    query = ("table filters searchable dropdown " * 40000)[:1_048_576]
+    start = time.process_time()
+    result = _call_tool(mcp_server, "list_ui_components", query=query)
+    assert time.process_time() - start < 1
+    assert result["query"] == query[:512]
+    assert (
+        result["results"]
+        == _call_tool(mcp_server, "list_ui_components", query=query[:512])["results"]
+    )

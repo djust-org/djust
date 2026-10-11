@@ -89,6 +89,8 @@ def test_i001_silenced_by_silenced_system_checks(reset_i001, monkeypatch):
         assert not any(
             c.id == "djust.I001" and not c.is_silenced() for c in run_checks(tags=["djust"])
         )
+    with override_settings(SILENCED_SYSTEM_CHECKS=[]):
+        assert any(c.id == "djust.I001" for c in run_checks(tags=["djust"]))
 
 
 def test_i001_once_per_process(reset_i001, monkeypatch):

@@ -97,3 +97,81 @@ def test_ai_bad_settings_falls_back_only_for_static_commands(
     rest = [subcommand] + (["data table"] if subcommand == "suggest" else [])
     assert cli.cmd_ai(rest) == code
     assert "could not load settings" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("rest", [["suggest", "table", "--json"], ["manifest"]])
+def test_static_commands_never_execute_parent_manage_py(tmp_path, rest):
+    marker = tmp_path / "PWNED"
+    (tmp_path / "manage.py").write_text(
+        f"from pathlib import Path\nPath({str(marker)!r}).touch()\n"
+    )
+    child = tmp_path / "child"
+    child.mkdir()
+    env = dict(os.environ)
+    env.pop("DJANGO_SETTINGS_MODULE", None)
+    result = subprocess.run(
+        [sys.executable, "-m", "djust", "ai", *rest],
+        cwd=child,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    assert not marker.exists()
+    assert "data_table" in result.stdout
+
+
+@pytest.mark.parametrize("boundary", [".git", "pyproject.toml", "setup.cfg", "home"])
+def test_inventory_stops_at_project_or_home_boundary(tmp_path, monkeypatch, boundary):
+    (tmp_path / "manage.py").write_text("")
+    child = tmp_path / "child"
+    child.mkdir()
+    if boundary == "home":
+        monkeypatch.setenv("HOME", str(child))
+    else:
+        (child / boundary).touch()
+    monkeypatch.chdir(child)
+    monkeypatch.delenv("DJANGO_SETTINGS_MODULE", raising=False)
+    monkeypatch.setattr(subprocess, "run", lambda *a, **kw: pytest.fail("executed parent"))
+    assert cli.cmd_ai(["inventory"]) == 2
+
+
+@pytest.mark.skipif(not hasattr(os, "getuid"), reason="POSIX ownership")
+@pytest.mark.parametrize(
+    "unsafe", ["foreign owner", "group writable", "world writable", "directory"]
+)
+def test_inventory_rejects_unsafe_manage_py(tmp_path, monkeypatch, capsys, unsafe):
+    import stat
+
+    manage = tmp_path / "manage.py"
+    manage.write_text("")
+    original = os.stat
+
+    def fake_stat(path, *args, **kwargs):
+        result = original(path, *args, **kwargs)
+        if os.fspath(path) == str(manage) and unsafe != "directory":
+            return SimpleNamespace(
+                st_mode=stat.S_IFREG
+                | (
+                    0o620
+                    if unsafe == "group writable"
+                    else 0o602
+                    if unsafe == "world writable"
+                    else 0o600
+                ),
+                st_uid=os.getuid() + (unsafe == "foreign owner"),
+            )
+        if os.fspath(path) == str(tmp_path) and unsafe == "directory":
+            return SimpleNamespace(st_mode=stat.S_IFDIR | 0o1777, st_uid=os.getuid())
+        return result
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("DJANGO_SETTINGS_MODULE", raising=False)
+    monkeypatch.setattr(os, "stat", fake_stat)
+    monkeypatch.setattr(subprocess, "run", lambda *a, **kw: pytest.fail("executed unsafe file"))
+    assert cli.cmd_ai(["inventory"]) == 2
+    error = capsys.readouterr().err
+    assert str(manage) in error
+    assert ("owner" if unsafe == "foreign owner" else "writable") in error
+    assert "directly" in error

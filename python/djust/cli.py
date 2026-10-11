@@ -1108,6 +1108,43 @@ def cmd_serve(args: argparse.Namespace) -> int:
         return 2
 
 
+def _find_ai_manage_py() -> str | None:
+    """Discover an inventory entry point within the nearest project boundary."""
+    import stat
+
+    directory = os.path.abspath(os.getcwd())
+    home = os.path.realpath(os.path.expanduser("~"))
+    while True:
+        candidate = os.path.join(directory, "manage.py")
+        if os.path.lexists(candidate):
+            try:
+                info = os.stat(candidate)
+                parent = os.stat(directory)
+            except OSError as exc:
+                raise ValueError(f"rejected {candidate}: cannot stat entry point") from exc
+            reason = None
+            if not stat.S_ISREG(info.st_mode):
+                reason = "entry point is not a regular file"
+            elif hasattr(os, "getuid") and info.st_uid != os.getuid():
+                reason = "entry point owner is not the current user"
+            elif info.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+                reason = "entry point is group/world writable"
+            elif parent.st_mode & stat.S_IWOTH:
+                reason = "containing directory is world writable"
+            if reason:
+                raise ValueError(f"rejected {candidate}: {reason}")
+            return candidate
+        if os.path.realpath(directory) == home or any(
+            os.path.lexists(os.path.join(directory, marker))
+            for marker in (".git", "pyproject.toml", "setup.cfg")
+        ):
+            return None
+        parent_directory = os.path.dirname(directory)
+        if parent_directory == directory:
+            return None
+        directory = parent_directory
+
+
 def cmd_ai(rest: list[str]) -> int:
     """Resolve project settings, a nearby manage.py, or standalone discovery."""
     from django.core.management.base import CommandError
@@ -1132,8 +1169,15 @@ def cmd_ai(rest: list[str]) -> int:
                 print(str(exc), file=sys.stderr)
                 return 1
             return 0
-    else:
-        manage_py = _find_manage_py()
+    elif rest and rest[0] == "inventory":
+        try:
+            manage_py = _find_ai_manage_py()
+        except ValueError as exc:
+            print(
+                f"djust ai: {exc}; run python manage.py djust_ai inventory directly.",
+                file=sys.stderr,
+            )
+            return 2
         if manage_py:
             import subprocess
 

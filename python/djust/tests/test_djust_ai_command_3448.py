@@ -137,3 +137,60 @@ def test_inventory_reports_invalid_cache_directory_before_cwd_fallback(
     result = json.loads(invoke("inventory", "--json"))["ui_audit"]
     assert result["status"] == "invalid"
     assert result["path"] == str(base / ".djust/audit-ui.json")
+
+
+def test_inventory_imports_url_only_liveview_in_subprocess(tmp_path):
+    import os
+    import subprocess
+    import sys
+
+    (tmp_path / "settings.py").write_text(
+        "SECRET_KEY='test'\nINSTALLED_APPS=['djust']\nROOT_URLCONF='urls'\n"
+        "LIVEVIEW_CONFIG={'hot_reload_auto_enable': False}\n"
+    )
+    (tmp_path / "views.py").write_text(
+        "from djust import LiveView\nclass UrlOnlyView(LiveView):\n    template_name='only.html'\n"
+    )
+    (tmp_path / "urls.py").write_text(
+        "from django.urls import path\nfrom views import UrlOnlyView\n"
+        "urlpatterns=[path('only/', UrlOnlyView.as_view())]\n"
+    )
+    env = dict(os.environ, DJANGO_SETTINGS_MODULE="settings")
+    result = subprocess.run(
+        [sys.executable, "-m", "djust", "ai", "inventory", "--json"],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    assert any(
+        view["name"] == "UrlOnlyView" for view in json.loads(result.stdout)["project"]["views"]
+    )
+
+
+def test_inventory_text_strips_all_derived_controls():
+    from djust.ai_discovery.inventory import build_inventory, render_inventory
+
+    data = build_inventory()
+    control = "\x1b]0;PWN\x07\n\x85"
+    data["project"]["views"] = [{"name": control + "View"}]
+    data["theming"]["error"] = control + "theme"
+    data["ui_audit"].update(status="stale", reason=control + "reason")
+    output = render_inventory(data)
+    assert "PWN" in output
+    assert all(ord(char) >= 32 or char == "\n" for char in output)
+    assert not any(127 <= ord(char) <= 159 for char in output)
+    assert "\nView" not in output
+
+
+def test_inventory_text_retains_discovery_command_lines():
+    from djust.ai_discovery.agents import DISCOVERY_COMMANDS
+    from djust.ai_discovery.inventory import build_inventory, render_inventory
+
+    output = render_inventory(build_inventory())
+    lines = output.splitlines()
+    assert sum("#" in line and "python manage.py" in line for line in lines) == len(
+        DISCOVERY_COMMANDS
+    )

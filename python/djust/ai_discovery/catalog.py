@@ -4,10 +4,14 @@ from dataclasses import asdict, dataclass
 from difflib import get_close_matches
 from functools import lru_cache
 import inspect
+import logging
 import re
 from typing import Any, Literal
 
+logger = logging.getLogger(__name__)
+
 CATALOG_VERSION = 1
+MAX_QUERY_LENGTH = 512
 _STOPWORDS = frozenset(
     "a an the with and or for of to in on my i want need some that which into from by using use".split()
 )
@@ -45,6 +49,7 @@ class CatalogEntry:
     def to_dict(self, *, full: bool = False) -> dict[str, Any]:
         result = asdict(self)
         result.pop("variants")
+        result["component_kind"] = result.pop("kind")
         result["required_props"] = self.required_props()
         if full:
             result["variants"] = [
@@ -82,7 +87,8 @@ def load_catalog() -> tuple[CatalogEntry, ...]:
         from djust.components.gallery.registry import discover_template_tags
 
         tags = discover_template_tags()
-    except Exception:  # Optional rendering extras must not hide the catalog.
+    except ImportError:  # Optional rendering extras must not hide the catalog.
+        logger.debug("UI catalog tag discovery unavailable")
         tags = None
     entries = []
     names = set(EXAMPLES) | set(CLASS_EXAMPLES)
@@ -171,7 +177,8 @@ def _tokens(value: str) -> list[str]:
 def search(intent: str, limit: int = 5) -> list[tuple[CatalogEntry, int]]:
     from djust.components.gallery.examples import CATEGORY_ORDER
 
-    query = _tokens(intent)
+    query = _tokens(intent[:MAX_QUERY_LENGTH])
+    query_tokens = set(query)
     if not query:
         raise ValueError("intent is empty")
     results = []
@@ -183,7 +190,7 @@ def search(intent: str, limit: int = 5) -> list[tuple[CatalogEntry, int]]:
             (entry.purpose, 2),
             (entry.category + " " + entry.category_label, 1),
         ]
-        score = sum(weight * len(set(query) & set(_tokens(field))) for field, weight in fields)
+        score = sum(weight * len(query_tokens & set(_tokens(field))) for field, weight in fields)
         name_tokens = _tokens(entry.name)
         if any(query[i : i + len(name_tokens)] == name_tokens for i in range(len(query))):
             score += 5

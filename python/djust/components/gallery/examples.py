@@ -541,7 +541,7 @@ EXAMPLES: Dict[str, Any] = {
     },
     # ── Data ──
     "data_table": {
-        "purpose": "Sortable table with search, filters, bulk row selection, pagination and editing",
+        "purpose": "Sortable table with search, row selection and pagination controls",
         "keywords": (
             "grid",
             "rows",
@@ -1107,7 +1107,7 @@ EXAMPLES: Dict[str, Any] = {
         ],
     },
     "currency_input": {
-        "purpose": "Enter a monetary value with currency formatting",
+        "purpose": "Enter a monetary value with a currency symbol and code",
         "keywords": (),
         "related": (),
         "label": "Currency Input",
@@ -1124,7 +1124,7 @@ EXAMPLES: Dict[str, Any] = {
         ],
     },
     "cron_input": {
-        "purpose": "Edit the five fields of a cron schedule with a description",
+        "purpose": "Edit five cron schedule fields alongside the current expression",
         "keywords": (),
         "related": (),
         "label": "Cron Input",
@@ -1191,7 +1191,7 @@ EXAMPLES: Dict[str, Any] = {
         ],
     },
     "fieldset": {
-        "purpose": "Group form controls under a legend with an optional description",
+        "purpose": "Group form controls under an optional legend",
         "keywords": (),
         "related": (),
         "label": "Fieldset",
@@ -1309,7 +1309,7 @@ EXAMPLES: Dict[str, Any] = {
         ],
     },
     "markdown_textarea": {
-        "purpose": "Markdown textarea with formatting toolbar and preview mode",
+        "purpose": "Markdown textarea with write and rendered preview modes",
         "keywords": (),
         "related": (),
         "label": "Markdown Textarea",
@@ -1877,7 +1877,7 @@ EXAMPLES: Dict[str, Any] = {
         ],
     },
     "audit_log": {
-        "purpose": "Display user actions in a timestamped audit table with optional streaming",
+        "purpose": "Display user actions in a timestamped audit table",
         "keywords": (),
         "related": (),
         "label": "Audit Log",
@@ -1925,7 +1925,7 @@ EXAMPLES: Dict[str, Any] = {
         ],
     },
     "calendar": {
-        "purpose": "Display events on a navigable monthly calendar",
+        "purpose": "Display events on a monthly calendar with optional event click actions",
         "keywords": (),
         "related": (),
         "label": "Calendar",
@@ -2125,7 +2125,7 @@ EXAMPLES: Dict[str, Any] = {
         ],
     },
     "gantt_chart": {
-        "purpose": "Visualize task start and end dates on a project timeline",
+        "purpose": "Visualize task start positions, durations and progress on an SVG timeline",
         "keywords": (),
         "related": (),
         "label": "Gantt Chart",
@@ -2312,7 +2312,7 @@ EXAMPLES: Dict[str, Any] = {
         ],
     },
     "sortable_grid": {
-        "purpose": "Reorder items in a grid using drag handles",
+        "purpose": "Reorder draggable items in a grid",
         "keywords": (),
         "related": (),
         "label": "Sortable Grid",
@@ -2413,7 +2413,7 @@ EXAMPLES: Dict[str, Any] = {
     },
     # ── Navigation (additional) ──
     "breadcrumb_dropdown": {
-        "purpose": "Navigate breadcrumb levels with sibling dropdown options",
+        "purpose": "Navigate breadcrumb levels with collapsed ancestors in a dropdown",
         "keywords": (),
         "related": (),
         "label": "Breadcrumb Dropdown",
@@ -2509,7 +2509,7 @@ EXAMPLES: Dict[str, Any] = {
         ],
     },
     "wizard": {
-        "purpose": "Guide users through labelled steps with back and next actions",
+        "purpose": "Guide users through labelled, selectable steps and a content area",
         "keywords": (),
         "related": (),
         "label": "Wizard",
@@ -2603,7 +2603,7 @@ EXAMPLES: Dict[str, Any] = {
         ],
     },
     "live_indicator": {
-        "purpose": "Indicate live activity with a status dot and optional pulse",
+        "purpose": "Show a named user activity with animated typing dots",
         "keywords": (),
         "related": (),
         "label": "Live Indicator",
@@ -2617,7 +2617,7 @@ EXAMPLES: Dict[str, Any] = {
         ],
     },
     "meter": {
-        "purpose": "Show a bounded value with configurable threshold colors",
+        "purpose": "Display colored value segments against a total with an optional legend",
         "keywords": (),
         "related": (),
         "label": "Meter",
@@ -2637,7 +2637,7 @@ EXAMPLES: Dict[str, Any] = {
         ],
     },
     "notification_badge": {
-        "purpose": "Show an unread count attached to wrapped content",
+        "purpose": "Show an unread count or dot with an optional pulse",
         "keywords": (),
         "related": (),
         "label": "Notification Badge",
@@ -2669,7 +2669,7 @@ EXAMPLES: Dict[str, Any] = {
         ],
     },
     "qr_code": {
-        "purpose": "Generate a QR code for supplied text or a URL",
+        "purpose": "Display a decorative QR-style SVG pattern derived from supplied text",
         "keywords": (),
         "related": (),
         "label": "QR Code",
@@ -2689,7 +2689,7 @@ EXAMPLES: Dict[str, Any] = {
         ],
     },
     "ribbon": {
-        "purpose": "Attach a labelled corner ribbon to wrapped content",
+        "purpose": "Display a labelled ribbon positioned at a corner of its container",
         "keywords": (),
         "related": (),
         "label": "Ribbon",
@@ -2831,7 +2831,7 @@ EXAMPLES: Dict[str, Any] = {
     },
     # ── Misc (additional) ──
     "agent_step": {
-        "purpose": "Show an agent action with status, duration and expandable details",
+        "purpose": "Show an agent action with status, duration and optional details",
         "keywords": (),
         "related": (),
         "label": "Agent Step",
@@ -2995,7 +2995,7 @@ EXAMPLES: Dict[str, Any] = {
         ],
     },
     "import_wizard": {
-        "purpose": "Guide file import through upload, column mapping and preview steps",
+        "purpose": "Display file-import stages with upload, mapping fields and an import action",
         "keywords": (),
         "related": (),
         "label": "Import Wizard",
@@ -3040,7 +3040,7 @@ EXAMPLES: Dict[str, Any] = {
         ],
     },
     "model_selector": {
-        "purpose": "Choose an AI model with provider, tier and pricing details",
+        "purpose": "Choose an AI model with tier, description and context-window details",
         "keywords": (),
         "related": (),
         "label": "Model Selector",

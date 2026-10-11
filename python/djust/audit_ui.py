@@ -733,6 +733,7 @@ def write_ui_summary(report: ASTAuditReport, root: str) -> Tuple[Optional[str], 
 
 
 _MAX_SUMMARY_BYTES = 4 * 1_048_576
+_MAX_SUMMARY_RECORDS = 20_000
 
 
 def read_ui_summary(root: str) -> UISummaryState:
@@ -747,7 +748,14 @@ def read_ui_summary(root: str) -> UISummaryState:
         if stat.S_ISLNK(mode) or not stat.S_ISDIR(mode):
             return UISummaryState("invalid", path, None, "cache directory is not a real directory")
         try:
-            with open(path, "rb") as fh:
+            flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+            fd = os.open(path, flags)
+            with os.fdopen(fd, "rb") as fh:
+                info = os.fstat(fh.fileno())
+                if not stat.S_ISREG(info.st_mode):
+                    return UISummaryState("invalid", path, None, "cache is not a regular file")
+                if info.st_size > _MAX_SUMMARY_BYTES:
+                    return UISummaryState("invalid", path, None, "cache exceeds size limit")
                 raw = fh.read(_MAX_SUMMARY_BYTES + 1)
         except FileNotFoundError:
             return UISummaryState("missing", path, None, "no cache")
@@ -772,6 +780,11 @@ def read_ui_summary(root: str) -> UISummaryState:
             return UISummaryState("invalid", path, None, "invalid finding counts")
         if type(payload["total"]) is not int or payload["total"] < 0:
             return UISummaryState("invalid", path, None, "invalid finding total")
+        record_sets = [payload[field] for field in ("templates", "stylesheets")]
+        if any(not isinstance(records, dict) for records in record_sets):
+            return UISummaryState("invalid", path, None, "invalid file records")
+        if sum(len(records) for records in record_sets) > _MAX_SUMMARY_RECORDS:
+            return UISummaryState("invalid", path, None, "cache exceeds record limit")
         stale = []
         for field in ("templates", "stylesheets"):
             records = payload[field]
@@ -783,7 +796,12 @@ def read_ui_summary(root: str) -> UISummaryState:
                 mtime = record["mtime"]
                 if type(mtime) not in (float, int):
                     return UISummaryState("invalid", path, None, "invalid file mtime")
-                absolute = os.path.normpath(os.path.join(root, *rel.split("/")))
+                normalized = os.path.normpath(rel)
+                if os.path.isabs(rel) or normalized == ".." or normalized.startswith(".." + os.sep):
+                    return UISummaryState("invalid", path, None, "file record escapes cache root")
+                absolute = os.path.normpath(os.path.join(root, normalized))
+                if os.path.commonpath((root, os.path.realpath(absolute))) != root:
+                    return UISummaryState("invalid", path, None, "file record escapes cache root")
                 try:
                     changed = os.stat(absolute).st_mtime > mtime
                 except OSError:
@@ -795,5 +813,5 @@ def read_ui_summary(root: str) -> UISummaryState:
                 "stale", path, None, f"{stale[0]} changed since audit", tuple(stale)
             )
         return UISummaryState("fresh", path, payload)
-    except (OSError, ValueError, TypeError, KeyError) as exc:
+    except (OSError, ValueError, TypeError, KeyError, RecursionError) as exc:
         return UISummaryState("invalid", path, None, str(exc))

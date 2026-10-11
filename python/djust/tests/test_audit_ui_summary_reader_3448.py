@@ -59,22 +59,115 @@ def test_reader_bounds_stale_paths_and_checks_stylesheets(tmp_path):
     assert state.status == "stale" and len(state.stale_paths) == 5 and state.payload is None
 
 
-def test_reader_allows_writer_relative_parent_paths(tmp_path):
+@pytest.mark.parametrize("rel", ["../style.css", "/etc/passwd", "a/../../style.css"])
+def test_reader_rejects_paths_outside_root(tmp_path, rel):
     from djust.audit_ui import read_ui_summary
 
-    root = tmp_path / "app"
-    (root / ".djust").mkdir(parents=True)
-    external = tmp_path / "style.css"
-    external.write_text("")
     payload = {
         "version": 1,
-        "root": str(root.resolve()),
-        "templates": {},
-        "stylesheets": {"../style.css": {"mtime": external.stat().st_mtime}},
+        "root": str(tmp_path.resolve()),
+        "templates": {rel: {"mtime": 0}},
+        "stylesheets": {},
         "counts": {},
         "total": 0,
     }
-    (root / ".djust/audit-ui.json").write_text(json.dumps(payload))
-    assert read_ui_summary(str(root)).status == "fresh"
-    os.utime(external, (external.stat().st_atime, external.stat().st_mtime + 10))
-    assert read_ui_summary(str(root)).status == "stale"
+    (tmp_path / ".djust").mkdir()
+    (tmp_path / ".djust/audit-ui.json").write_text(json.dumps(payload))
+    assert read_ui_summary(str(tmp_path)).status == "invalid"
+
+
+def test_reader_rejects_excessive_records(tmp_path):
+    from djust.audit_ui import read_ui_summary
+
+    payload = {
+        "version": 1,
+        "root": str(tmp_path.resolve()),
+        "templates": {str(i): {"mtime": 0} for i in range(10001)},
+        "stylesheets": {str(i): {"mtime": 0} for i in range(10000)},
+        "counts": {},
+        "total": 0,
+    }
+    (tmp_path / ".djust").mkdir()
+    (tmp_path / ".djust/audit-ui.json").write_text(json.dumps(payload))
+    state = read_ui_summary(str(tmp_path))
+    assert state.status == "invalid" and "record" in state.reason
+
+
+def test_reader_deep_json_is_invalid(tmp_path):
+    from djust.audit_ui import read_ui_summary
+
+    (tmp_path / ".djust").mkdir()
+    (tmp_path / ".djust/audit-ui.json").write_text("[" * 10000 + "0" + "]" * 10000)
+    assert read_ui_summary(str(tmp_path)).status == "invalid"
+
+
+@pytest.mark.parametrize("special", ["fifo", "symlink"])
+def test_reader_special_file_does_not_block(tmp_path, special):
+    import subprocess
+    import sys
+
+    (tmp_path / ".djust").mkdir()
+    cache = tmp_path / ".djust/audit-ui.json"
+    if special == "fifo":
+        os.mkfifo(cache)
+    else:
+        cache.symlink_to("/dev/zero")
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from django.conf import settings; settings.configure(BASE_DIR="
+            + repr(str(tmp_path))
+            + "); "
+            "from djust.ai_discovery.inventory import read_project_ui_summary; "
+            "assert read_project_ui_summary().status == 'invalid'",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_reader_rejects_oversize_before_reading(tmp_path, monkeypatch):
+    from djust import audit_ui
+
+    (tmp_path / ".djust").mkdir()
+    (tmp_path / ".djust/audit-ui.json").write_bytes(b" " * (audit_ui._MAX_SUMMARY_BYTES + 1))
+    original = os.fdopen
+
+    class NoRead:
+        def __init__(self, fd, mode):
+            self.file = original(fd, mode)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            self.file.close()
+
+        def fileno(self):
+            return self.file.fileno()
+
+        def read(self, *args):
+            pytest.fail("oversize cache was read")
+
+    monkeypatch.setattr(os, "fdopen", NoRead)
+    assert audit_ui.read_ui_summary(str(tmp_path)).status == "invalid"
+
+
+def test_reader_rejects_symlink_record_escaping_root(tmp_path):
+    from djust.audit_ui import read_ui_summary
+
+    (tmp_path / ".djust").mkdir()
+    (tmp_path / "external").symlink_to(tmp_path.parent, target_is_directory=True)
+    payload = {
+        "version": 1,
+        "root": str(tmp_path.resolve()),
+        "templates": {"external/outside.html": {"mtime": 0}},
+        "stylesheets": {},
+        "counts": {},
+        "total": 0,
+    }
+    (tmp_path / ".djust/audit-ui.json").write_text(json.dumps(payload))
+    assert read_ui_summary(str(tmp_path)).status == "invalid"

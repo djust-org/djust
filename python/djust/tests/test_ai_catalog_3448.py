@@ -199,3 +199,172 @@ def test_class_snippets_use_public_constructor_signatures():
         args = [ast.literal_eval(arg) for arg in call.args]
         kwargs = {keyword.arg: ast.literal_eval(keyword.value) for keyword in call.keywords}
         inspect.signature(classes[name]).bind(*args, **kwargs)
+
+
+def test_suggest_megabyte_intent_is_bounded():
+    import json
+    import time
+    from djust.ai_discovery.catalog import load_catalog, search
+    from djust.ai_discovery.runner import render_suggest
+
+    load_catalog()
+    intent = ("table filters searchable dropdown " * 40000)[:1_048_576]
+    start = time.process_time()
+    actual = search(intent)
+    payload = json.loads(render_suggest(intent, 5, as_json=True))
+    assert time.process_time() - start < 1
+    assert actual == search(intent[:512])
+    assert payload["intent"] == intent[:512]
+
+
+def test_catalog_missing_tag_extra_logs_debug(monkeypatch, caplog):
+    import logging
+    from djust.ai_discovery.catalog import load_catalog
+    from djust.components.gallery import registry
+
+    def unavailable():
+        raise ImportError("private exception details")
+
+    load_catalog.cache_clear()
+    try:
+        monkeypatch.setattr(registry, "discover_template_tags", unavailable)
+        with caplog.at_level(logging.DEBUG, logger="djust.ai_discovery.catalog"):
+            assert load_catalog()
+        record = next(r for r in caplog.records if r.name == "djust.ai_discovery.catalog")
+        assert record.exc_info is None and "private exception details" not in record.getMessage()
+    finally:
+        load_catalog.cache_clear()
+
+
+def test_catalog_programming_error_is_not_swallowed(monkeypatch):
+    from djust.ai_discovery.catalog import load_catalog
+    from djust.components.gallery import registry
+
+    def broken():
+        raise RuntimeError("bug")
+
+    load_catalog.cache_clear()
+    try:
+        monkeypatch.setattr(registry, "discover_template_tags", broken)
+        with pytest.raises(RuntimeError):
+            load_catalog()
+    finally:
+        load_catalog.cache_clear()
+
+
+@pytest.mark.parametrize(
+    "name,purpose,marker",
+    [
+        (
+            "calendar",
+            "Display events on a monthly calendar with optional event click actions",
+            "dj-calendar__event",
+        ),
+        (
+            "wizard",
+            "Guide users through labelled, selectable steps and a content area",
+            "dj-wizard__step",
+        ),
+        (
+            "data_table",
+            "Sortable table with search, row selection and pagination controls",
+            "data-table",
+        ),
+        (
+            "currency_input",
+            "Enter a monetary value with a currency symbol and code",
+            "dj-currency-input__symbol",
+        ),
+        (
+            "cron_input",
+            "Edit five cron schedule fields alongside the current expression",
+            "dj-cron-input__preview",
+        ),
+        ("fieldset", "Group form controls under an optional legend", "<fieldset"),
+        (
+            "markdown_textarea",
+            "Markdown textarea with write and rendered preview modes",
+            "dj-md-textarea__tab",
+        ),
+        ("audit_log", "Display user actions in a timestamped audit table", "dj-audit-log__table"),
+        (
+            "gantt_chart",
+            "Visualize task start positions, durations and progress on an SVG timeline",
+            "dj-gantt__bar",
+        ),
+        ("sortable_grid", "Reorder draggable items in a grid", 'draggable="true"'),
+        (
+            "breadcrumb_dropdown",
+            "Navigate breadcrumb levels with collapsed ancestors in a dropdown",
+            "dj-breadcrumb__link",
+        ),
+        (
+            "live_indicator",
+            "Show a named user activity with animated typing dots",
+            "dj-live-indicator",
+        ),
+        (
+            "meter",
+            "Display colored value segments against a total with an optional legend",
+            "dj-meter__segment",
+        ),
+        (
+            "notification_badge",
+            "Show an unread count or dot with an optional pulse",
+            "dj-notification-badge",
+        ),
+        (
+            "qr_code",
+            "Display a decorative QR-style SVG pattern derived from supplied text",
+            "dj-qr-code__svg",
+        ),
+        (
+            "ribbon",
+            "Display a labelled ribbon positioned at a corner of its container",
+            "dj-ribbon__text",
+        ),
+        (
+            "agent_step",
+            "Show an agent action with status, duration and optional details",
+            "dj-agent-step__status",
+        ),
+        (
+            "import_wizard",
+            "Display file-import stages with upload, mapping fields and an import action",
+            "dj-import-wizard__upload",
+        ),
+        (
+            "model_selector",
+            "Choose an AI model with tier, description and context-window details",
+            "dj-model-sel__tier",
+        ),
+    ],
+)
+def test_corrected_purposes_match_rendered_components(name, purpose, marker):
+    from pathlib import Path
+
+    from django.template import Context, Engine
+    from djust.components.gallery.examples import EXAMPLES
+
+    info = EXAMPLES[name]
+    assert info["purpose"] == purpose
+    engine = Engine(
+        libraries={"djust_components": "djust.components.templatetags.djust_components"},
+        dirs=[str(Path(__file__).parents[1] / "components/templates")],
+    )
+    variant = info["variants"][0]
+    context = dict(variant.get("context", {}))
+    if name == "model_selector":
+        context["options"] = [
+            {
+                "value": "test",
+                "label": "Test",
+                "tier": "standard",
+                "description": "A model",
+                "context_window": "8k",
+            }
+        ]
+    rendered = engine.from_string("{% load djust_components %}" + variant["template"]).render(
+        Context(context)
+    )
+    assert marker in rendered

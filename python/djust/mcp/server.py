@@ -307,9 +307,10 @@ def create_server() -> "FastMCP":
         manage.py djust_ai suggest. Otherwise list the catalog by category.
         No Django project is required.
         """
-        from djust.ai_discovery.catalog import CATALOG_VERSION, search
+        from djust.ai_discovery.catalog import CATALOG_VERSION, MAX_QUERY_LENGTH, search
         from djust.ai_discovery.inventory import catalog_summary
 
+        query = query[:MAX_QUERY_LENGTH]
         if query:
             return json.dumps(
                 {
@@ -343,7 +344,6 @@ def create_server() -> "FastMCP":
                 indent=2,
             )
         payload = entry.to_dict(full=True)
-        payload["component_kind"] = payload.pop("kind")
         return json.dumps({"version": CATALOG_VERSION, **payload, "kind": "component"}, indent=2)
 
     @mcp.tool()

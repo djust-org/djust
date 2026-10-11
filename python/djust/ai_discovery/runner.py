@@ -21,8 +21,9 @@ def add_subcommands(parser: argparse.ArgumentParser) -> None:
 
 
 def render_suggest(intent: str, limit: int, *, as_json: bool) -> str:
-    from djust.ai_discovery.catalog import CATALOG_VERSION, search
+    from djust.ai_discovery.catalog import CATALOG_VERSION, MAX_QUERY_LENGTH, search
 
+    intent = intent[:MAX_QUERY_LENGTH]
     results = search(intent, limit)
     if as_json:
         return json.dumps(

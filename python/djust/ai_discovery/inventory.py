@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 import importlib.util
+import logging
 import os
 from typing import Any, Literal
 
@@ -19,6 +20,8 @@ class UISummaryState:
     reason: str = ""
     stale_paths: tuple[str, ...] = ()
 
+
+logger = logging.getLogger(__name__)
 
 INVENTORY_VERSION = 1
 
@@ -89,6 +92,15 @@ def theming_status() -> dict[str, Any]:
 def project_classes() -> dict[str, Any]:
     from djust.schema import get_project_schema
 
+    from django.core.exceptions import ImproperlyConfigured
+    from django.urls import get_resolver
+
+    try:
+        # URL-only views are not necessarily imported by app initialization.
+        get_resolver().url_patterns
+    except (ImproperlyConfigured, ImportError, AttributeError):
+        # Projects without a usable URLconf can still inventory loaded classes.
+        logger.debug("UI inventory URLconf unavailable")
     schema = get_project_schema()
     return {
         key: [
@@ -126,7 +138,7 @@ def read_project_ui_summary() -> "UISummaryState":
         invalid_directory = os.path.lexists(directory) and (
             os.path.islink(directory) or not os.path.isdir(directory)
         )
-        if os.path.exists(path) or invalid_directory:
+        if os.path.lexists(path) or invalid_directory:
             from djust.audit_ui import read_ui_summary
 
             state = read_ui_summary(root)
@@ -147,7 +159,12 @@ def catalog_summary() -> dict[str, Any]:
                 "slug": slug,
                 "label": label,
                 "components": [
-                    {"name": e.name, "kind": e.kind, "label": e.label, "purpose": e.purpose}
+                    {
+                        "name": e.name,
+                        "component_kind": e.kind,
+                        "label": e.label,
+                        "purpose": e.purpose,
+                    }
                     for e in entries
                 ],
             }
@@ -232,7 +249,10 @@ def render_inventory(data: dict[str, Any]) -> str:
         status = "none: run python manage.py djust_audit --ast"
     else:
         status = f"{audit['status']}: {audit['reason']}; rerun python manage.py djust_audit --ast"
-    lines.extend(
-        ["", "UI audit: " + status, "", "Discovery", format_discovery_block(DISCOVERY_COMMANDS)]
+    lines.extend(["", "UI audit: " + status, "", "Discovery"])
+    # Remove terminal controls from every derived field, retaining our own line breaks.
+    content = "\n".join(
+        "".join(char for char in line if ord(char) >= 32 and not 127 <= ord(char) <= 159)
+        for line in lines
     )
-    return "\n".join(lines)
+    return content + "\n" + format_discovery_block(DISCOVERY_COMMANDS)
