@@ -10,15 +10,31 @@
 //!   typed line as plain (escaped) text instead of mid-syntax malformed HTML.
 //! - Input is capped at `MAX_MD_INPUT_BYTES`; beyond that the source is
 //!   returned verbatim inside an escaped `<pre>`.
+//! - Container nesting (block quotes, lists, list items) is bounded by
+//!   `MAX_MD_NESTING`, so the depth of the output, and with it the cost of
+//!   parsing and diffing it downstream, stays predictable.
 //!
-//! Public API: [`render_markdown`], [`RenderOpts`], [`MAX_MD_INPUT_BYTES`].
+//! Public API: [`render_markdown`], [`RenderOpts`], [`MAX_MD_INPUT_BYTES`],
+//! [`MAX_MD_NESTING`].
 
-use pulldown_cmark::{html, CowStr, Event, LinkType, Options, Parser, Tag};
+use pulldown_cmark::{html, CowStr, Event, LinkType, Options, Parser, Tag, TagEnd};
 
 /// Maximum input size in bytes. Inputs larger than this are returned as
 /// an escaped `<pre class="djust-md-toobig">` block without invoking the
 /// Markdown parser — a belt-and-braces DoS guard.
 pub const MAX_MD_INPUT_BYTES: usize = 10 * 1024 * 1024;
+
+/// Most container elements (`<blockquote>`, `<ul>`/`<ol>`, `<li>`) the
+/// rendered HTML keeps open at once.
+///
+/// A container that starts while this many are already open is rendered
+/// without its own tags: its content (paragraphs, text, code, inline markup)
+/// stays in place inside the innermost kept container, so no text is lost
+/// and the output never nests deeper than this. Each `>` or list level costs
+/// one or two levels, so ordinary documents (a handful of levels) never come
+/// near it; it keeps the size of the rendered tree, and the time spent
+/// parsing and diffing it, proportional to the length of the source.
+pub const MAX_MD_NESTING: usize = 32;
 
 /// Render-time options for [`render_markdown`].
 ///
@@ -99,7 +115,10 @@ pub fn render_markdown(src: &str, opts: RenderOpts) -> String {
     // passes those events through verbatim. To actually escape raw HTML
     // in the source, we map those events to Text events, and we strip
     // `javascript:` (and similar) URLs from link/image destinations.
-    let safe_events = parser.map(sanitise_event);
+    let mut nesting = NestingCap::default();
+    let safe_events = parser
+        .map(sanitise_event)
+        .filter_map(|event| nesting.filter(event));
     let mut out = String::with_capacity(stable.len() + 64);
     html::push_html(&mut out, safe_events);
 
@@ -245,6 +264,44 @@ fn sanitise_event(event: Event<'_>) -> Event<'_> {
             id,
         }),
         other => other,
+    }
+}
+
+/// Tracks how many containers are open and drops the tags of those beyond
+/// [`MAX_MD_NESTING`].
+///
+/// Whether a container keeps its tags depends only on how many containers
+/// enclose it, so its start and end events always get the same answer and
+/// every kept `<li>`/`<ul>`/`<blockquote>` stays balanced. A run of dropped
+/// tags becomes one line break, so the text on either side stays apart.
+#[derive(Default)]
+struct NestingCap {
+    open: usize,
+    separated: bool,
+}
+
+impl NestingCap {
+    fn filter<'a>(&mut self, event: Event<'a>) -> Option<Event<'a>> {
+        let keep = match event {
+            Event::Start(Tag::BlockQuote(_) | Tag::List(_) | Tag::Item) => {
+                self.open += 1;
+                self.open <= MAX_MD_NESTING
+            }
+            Event::End(TagEnd::BlockQuote(_) | TagEnd::List(_) | TagEnd::Item) => {
+                self.open = self.open.saturating_sub(1);
+                self.open < MAX_MD_NESTING
+            }
+            _ => true,
+        };
+        if keep {
+            self.separated = false;
+            Some(event)
+        } else if self.separated {
+            None
+        } else {
+            self.separated = true;
+            Some(Event::SoftBreak)
+        }
     }
 }
 
@@ -650,5 +707,199 @@ mod tests {
             out.contains("https://example.com"),
             "plain-text URL should survive as literal text (got: {out})",
         );
+    }
+
+    // ---------------------------------------------------------------
+    // Container nesting bound (MAX_MD_NESTING)
+    // ---------------------------------------------------------------
+
+    /// The same pipeline as `render_markdown` minus the nesting bound: what
+    /// the renderer produced before the bound existed.
+    fn render_unbounded(src: &str, opts: RenderOpts) -> String {
+        let (stable, trailing) = if opts.provisional {
+            split_provisional(src)
+        } else {
+            (src, "")
+        };
+        let parser = Parser::new_ext(stable, opts.to_pulldown());
+        let mut out = String::new();
+        html::push_html(&mut out, parser.map(sanitise_event));
+        if !trailing.is_empty() {
+            out.push_str("<p class=\"djust-md-provisional\">");
+            out.push_str(&html_escape(trailing));
+            out.push_str("</p>");
+        }
+        out
+    }
+
+    const CONTAINERS: [&str; 4] = ["blockquote", "ul", "ol", "li"];
+
+    /// Walk the container tags of `html` with a stack: panics on a closing
+    /// tag that does not match the innermost open one, and returns the
+    /// deepest nesting reached plus the number of `<li>` / `</li>` seen.
+    fn container_shape(html: &str) -> (usize, usize, usize) {
+        let mut stack: Vec<&str> = Vec::new();
+        let (mut deepest, mut li_open, mut li_close) = (0, 0, 0);
+        let mut rest = html;
+        while let Some(lt) = rest.find('<') {
+            rest = &rest[lt + 1..];
+            let closing = rest.starts_with('/');
+            let body = if closing { &rest[1..] } else { rest };
+            let end = body
+                .find(|c: char| c == '>' || c.is_ascii_whitespace())
+                .unwrap_or(body.len());
+            let name = &body[..end];
+            let Some(tag) = CONTAINERS.iter().find(|t| **t == name) else {
+                continue;
+            };
+            if closing {
+                assert_eq!(stack.pop(), Some(*tag), "unbalanced </{tag}>");
+                if *tag == "li" {
+                    li_close += 1;
+                }
+            } else {
+                stack.push(tag);
+                deepest = deepest.max(stack.len());
+                if *tag == "li" {
+                    li_open += 1;
+                }
+            }
+        }
+        assert!(stack.is_empty(), "unclosed containers: {stack:?}");
+        (deepest, li_open, li_close)
+    }
+
+    fn quotes(depth: usize, text: &str) -> String {
+        format!("{}{}\n", "> ".repeat(depth), text)
+    }
+
+    /// One bullet per level, each indented under the previous one.
+    fn nested_list(depth: usize) -> String {
+        (0..depth)
+            .map(|i| format!("{}- item{}\n", "  ".repeat(i), i))
+            .collect()
+    }
+
+    #[test]
+    fn test_nesting_bound_constant() {
+        assert_eq!(MAX_MD_NESTING, 32);
+    }
+
+    #[test]
+    fn test_deep_quotes_render_fast_and_bounded() {
+        let src = quotes(100_000, "bottom");
+        let started = std::time::Instant::now();
+        let out = render_markdown(&src, RenderOpts::default());
+        let took = started.elapsed();
+        assert!(
+            took < std::time::Duration::from_secs(2),
+            "100,000 nested quotes took {took:?}"
+        );
+        let (deepest, _, _) = container_shape(&out);
+        assert_eq!(deepest, MAX_MD_NESTING);
+        assert!(out.contains("bottom"));
+        assert!(out.len() < 2_000, "output grew to {} bytes", out.len());
+    }
+
+    #[test]
+    fn test_nested_quotes_past_the_bound_are_capped() {
+        let src = quotes(MAX_MD_NESTING + 8, "deep text");
+        let out = render_markdown(&src, RenderOpts::default());
+        assert_eq!(out.matches("<blockquote>").count(), MAX_MD_NESTING);
+        assert_eq!(out.matches("</blockquote>").count(), MAX_MD_NESTING);
+        assert_eq!(container_shape(&out).0, MAX_MD_NESTING);
+        assert!(out.contains("<p>deep text</p>"));
+        assert_ne!(out, render_unbounded(&src, RenderOpts::default()));
+    }
+
+    #[test]
+    fn test_deep_lists_keep_balanced_items_and_all_text() {
+        for depth in [MAX_MD_NESTING / 2 + 1, 40, 200, 1_500] {
+            let src = nested_list(depth);
+            let out = render_markdown(&src, RenderOpts::default());
+            let (deepest, li_open, li_close) = container_shape(&out);
+            assert!(deepest <= MAX_MD_NESTING, "depth {depth}: {deepest}");
+            assert_eq!(li_open, li_close, "depth {depth}");
+            for i in 0..depth {
+                let word = format!("item{i}");
+                let hits = out
+                    .split(|c: char| !c.is_ascii_alphanumeric())
+                    .filter(|w| *w == word)
+                    .count();
+                assert_eq!(hits, 1, "depth {depth}: {word} appears {hits} times");
+            }
+        }
+    }
+
+    #[test]
+    fn test_every_quote_level_keeps_its_text() {
+        let src: String = (1..=300).map(|i| quotes(i, &format!("t{i}"))).collect();
+        let out = render_markdown(&src, RenderOpts::default());
+        assert!(container_shape(&out).0 <= MAX_MD_NESTING);
+        for i in 1..=300 {
+            let word = format!("t{i}");
+            assert!(
+                out.split(|c: char| !c.is_ascii_alphanumeric())
+                    .any(|w| w == word),
+                "{word} missing"
+            );
+        }
+    }
+
+    #[test]
+    fn test_mixed_quotes_and_lists_bounded() {
+        let mut src = String::new();
+        for i in 0..200 {
+            src.push_str(&"> ".repeat(i));
+            src.push_str("- ");
+            src.push_str(&format!("m{i}\n"));
+        }
+        let out = render_markdown(&src, RenderOpts::default());
+        let (deepest, li_open, li_close) = container_shape(&out);
+        assert!(deepest <= MAX_MD_NESTING);
+        assert_eq!(li_open, li_close);
+        for i in 0..200 {
+            assert!(out.contains(&format!("m{i}")), "m{i} missing");
+        }
+    }
+
+    #[test]
+    fn test_nesting_within_the_bound_is_byte_identical() {
+        let opts = RenderOpts::default();
+        let mut cases: Vec<String> = Vec::new();
+        for depth in 1..=MAX_MD_NESTING {
+            cases.push(quotes(depth, "quoted *text* and `code`"));
+            cases.push(format!(
+                "{}\n\n{}para two\n",
+                quotes(depth, "para one").trim_end(),
+                "> ".repeat(depth)
+            ));
+        }
+        // A list level is two containers (<ul> and <li>).
+        for depth in 1..=MAX_MD_NESTING / 2 {
+            cases.push(nested_list(depth));
+            let loose: String = (0..depth)
+                .map(|i| format!("{}1. item{i}\n\n", "   ".repeat(i)))
+                .collect();
+            cases.push(loose);
+        }
+        // Quotes holding lists, lists holding quotes, alerts, tasks.
+        cases.push("> - a\n>   > b\n>   > - c\n>   >   1. d\n".into());
+        cases.push("- a\n  > b\n  > > - c\n".into());
+        cases.push("> [!NOTE]\n> > nested\n".into());
+        cases.push("- [ ] todo\n  - [x] done\n".into());
+        for src in &cases {
+            assert_eq!(
+                render_markdown(src, opts),
+                render_unbounded(src, opts),
+                "output changed for {src:?}"
+            );
+            let tl = RenderOpts {
+                task_lists: true,
+                provisional: false,
+                ..opts
+            };
+            assert_eq!(render_markdown(src, tl), render_unbounded(src, tl));
+        }
     }
 }
