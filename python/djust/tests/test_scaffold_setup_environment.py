@@ -127,7 +127,7 @@ def test_requirements_floor_is_generating_version(tmp_path):
 
     project = generator.generate_project("child", target_dir=str(tmp_path), auto_setup=False)
     requirements = (project / "requirements.txt").read_text().splitlines()
-    assert "djust>=%s" % __version__.split("+")[0] in requirements
+    assert "djust[components]>=%s" % __version__.split("+")[0] in requirements
 
 
 def test_generated_asgi_uses_project_settings(tmp_path):
@@ -221,7 +221,8 @@ def test_bare_project_has_a_placeholder_and_no_demo(tmp_path):
     assert "from django.urls import path\n" in (project / "child" / "urls.py").read_text()
     assert 'dj-click="ping"' in index
     assert "theme_head" not in base
-    assert "djust.theming" not in (project / "child" / "settings.py").read_text()
+    assert '"djust.components"' not in (project / "child" / "settings.py").read_text()
+    assert '"djust.theming"' not in (project / "child" / "settings.py").read_text()
     check = _check(project, "child")
     assert check.returncode == 0, check.stdout + check.stderr
 
@@ -242,7 +243,7 @@ from django.core.management import call_command
 call_command("migrate", run_syncdb=True, verbosity=0)
 from django.test import Client
 html = Client().get("/").content.decode()
-print("<!DOCTYPE html>" in html, 'data-tp-select="pack"' in html, "--background" in html)
+print("<!DOCTYPE html>" in html, 'data-tp-select="pack"' in html, "--background" in html, "dj-app-shell__main" in html)
 """
 
 
@@ -266,4 +267,54 @@ def test_with_db_project_renders_the_full_themed_page(tmp_path):
     probe = subprocess.run(
         [sys.executable, "-c", RENDER_PROBE], cwd=project, env=env, capture_output=True, text=True
     )
-    assert probe.stdout.split() == ["True", "True", "True"], probe.stdout + probe.stderr
+    assert probe.stdout.split() == ["True", "True", "True", "True"], probe.stdout + probe.stderr
+
+
+def test_bare_requirements_floor_has_no_extra(tmp_path):
+    from djust import __version__
+
+    project = generator.generate_project(
+        "child", target_dir=str(tmp_path), auto_setup=False, bare=True
+    )
+    assert (
+        "djust>=%s" % __version__.split("+")[0]
+        in (project / "requirements.txt").read_text().splitlines()
+    )
+
+
+def test_default_scaffold_installs_components_and_uses_app_shell(tmp_path):
+    project = generator.generate_project("child", target_dir=str(tmp_path), auto_setup=False)
+    settings = (project / "child/settings.py").read_text()
+    base = (project / "child/templates/child/base.html").read_text()
+    assert settings.index('"djust.theming"') < settings.index('"djust.components"')
+    assert base.splitlines()[0] == "{% load live_tags theme_tags djust_components %}"
+    for tag in ("app_shell", "app_header", "app_content"):
+        assert "{% " + tag + " %}" in base
+    assert (
+        base.index("{% app_content %}")
+        < base.index("{% block content %}")
+        < base.index("{% endapp_content %}")
+    )
+    agents = (project / "AGENTS.md").read_text()
+    for cmd in (
+        'djust_ai suggest "<what you need>"',
+        "djust_ai inventory",
+        "manage.py check",
+        "djust_audit --ast",
+    ):
+        assert cmd in agents
+    check = _check(project, "child")
+    assert check.returncode == 0, check.stdout + check.stderr
+
+
+def test_bare_scaffold_suppresses_i002(tmp_path):
+    project = generator.generate_project(
+        "child", target_dir=str(tmp_path), auto_setup=False, bare=True
+    )
+    settings = (project / "child/settings.py").read_text()
+    assert 'DJUST_CONFIG = {"suppress_checks": ["I002"]}' in settings
+    assert '"djust.components"' not in settings
+    assert "djust_ai inventory" in (project / "AGENTS.md").read_text()
+    check = _check(project, "child")
+    assert check.returncode == 0, check.stdout + check.stderr
+    assert "djust.I002" not in check.stdout + check.stderr

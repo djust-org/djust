@@ -25,11 +25,12 @@ class ScaffoldSetupError(RuntimeError):
     """A generated project could not complete environment setup or migrations."""
 
 
-def djust_requirement() -> str:
+def djust_requirement(extras: str = "") -> str:
     """Requirement line pinning djust to at least the running version."""
     from djust import __version__
 
-    return "djust>=%s" % __version__.split("+", 1)[0]
+    version = __version__.split("+", 1)[0]
+    return "djust[%s]>=%s" % (extras, version) if extras else "djust>=%s" % version
 
 
 def next_steps(app_name: str, setup_ran: bool) -> List[str]:
@@ -140,7 +141,7 @@ def _build_context(
     view_class = app_class + "View"
 
     # Determine view bases. Every non-bare project ships the themed base
-    # template and the theme gallery routes.
+    # template and the theme gallery routes, installs djust.components, and uses app_shell.
     demo = not bare
     bases = ["LiveView"]
     extra_imports = []
@@ -238,7 +239,7 @@ def _build_context(
         "app_name": app_name,
         "project_name": app_name,
         "settings_module": "%s.settings" % app_name,
-        "djust_requirement": djust_requirement(),
+        "djust_requirement": djust_requirement("components" if demo else ""),
         "app_class": app_class,
         "display_name": display_name,
         "view_class": view_class,
@@ -254,6 +255,8 @@ def _build_context(
         "nav_extra": nav_extra,
         "template_extra": template_extra,
         "admin_app": admin_app,
+        "components_app": T.COMPONENTS_APP_ENTRY if demo else "",
+        "bare_settings": T.BARE_SETTINGS if bare else "",
         "theming_app": T.THEMING_APP_ENTRY if demo else "",
         "theming_context_processor": T.THEMING_CONTEXT_PROCESSOR if demo else "",
         "theming_settings": T.THEMING_SETTINGS if demo else "",

@@ -38,7 +38,7 @@ def test_manifest_theming_names_resolve():
     from djust.theming.templatetags.theme_tags import register
     from djust.theming.management.commands.djust_theme import Command
 
-    section = dict(manifest_sections())["theming"]
+    section = dict(manifest_sections())["ui_building_blocks"]
     assert "theme_head" in register.tags and "theme_head" in section
     assert DjustThemingConfig.name == "djust.theming" and "djust.theming" in section
     for key in ("theme", "preset", "default_mode"):
@@ -53,9 +53,8 @@ def test_manifest_sections_ids_and_order():
     from djust.ai_discovery.manifest import manifest_sections
 
     assert [i for i, _ in manifest_sections()] == [
-        "discovery",
+        "ui_building_blocks",
         "components",
-        "theming",
         "directives",
         "lifecycle",
         "decorators",
@@ -79,3 +78,12 @@ def test_ai_context_output_unchanged_by_the_move():
     fw = get_framework_schema()
     text = _generate_content(fw, {}, "claude")
     assert "## Security" in text and _section_directives(fw) in text
+
+
+def test_manifest_starts_with_ui_building_blocks():
+    from djust.ai_discovery.manifest import UI_SECTION_HEADING, render_manifest
+
+    assert (
+        next(line for line in render_manifest().splitlines() if line.startswith("## "))
+        == UI_SECTION_HEADING
+    )

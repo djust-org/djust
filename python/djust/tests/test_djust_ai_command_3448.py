@@ -115,7 +115,8 @@ def test_suggest_empty_intent_is_a_command_error():
 
 def test_manifest_prints_markdown():
     text = invoke("manifest")
-    assert text.startswith("# djust ") and "## UI components" in text
+    assert text.startswith("# djust ") and "## UI building blocks" in text
+    assert "## Component catalog" in text
 
 
 def test_djust_ai_skips_system_checks():

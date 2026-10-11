@@ -78,7 +78,8 @@ def test_ai_manifest_runs_without_django_in_a_subprocess(tmp_path):
         timeout=60,
     )
     assert result.returncode == 0, result.stderr
-    assert "## UI components" in result.stdout
+    assert "## UI building blocks" in result.stdout
+    assert "## Component catalog" in result.stdout
 
 
 @pytest.mark.parametrize("subcommand,code", [("inventory", 2), ("manifest", 0), ("suggest", 0)])

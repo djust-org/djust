@@ -4,6 +4,100 @@ from typing import Any, cast
 
 MANIFEST_VERSION = 1
 
+UI_SECTION_HEADING = "## UI building blocks — use these before writing markup"
+
+#: Use case -> catalog component names (ADR-043 D4). Every name is a catalog
+#: entry and every X101–X104 suggestion is covered (test_ai_ui_section_3448).
+UI_USE_CASES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    (
+        "Page layout: header, sidebar, content",
+        ("app_shell", "sidebar", "page_header", "breadcrumb"),
+    ),
+    (
+        "Table of records: sort, select, paginate, scroll",
+        ("data_table", "data_grid", "pagination", "infinite_scroll"),
+    ),
+    ("Filters and search above a list", ("filter_bar", "search_input")),
+    ("Choosing from many options", ("combobox", "rich_select", "multi_select")),
+    ("Form fields and errors", ("dj_form", "dj_input", "dj_select", "date_picker", "form_errors")),
+    ("Side panel, dialog, confirmation", ("sheet", "modal", "confirm_dialog")),
+    (
+        "Flash messages and notifications",
+        ("toast_container", "server_toast_container", "page_alert", "alert"),
+    ),
+    ("Empty and loading states", ("empty_state", "skeleton", "spinner")),
+    ("Dashboards and metrics", ("stat_card", "dashboard_grid", "bar_chart", "line_chart")),
+    ("Tabs, steps and wizards", ("tabs", "stepper", "wizard")),
+    ("Menus and actions", ("dropdown_menu", "toolbar", "command_palette")),
+    ("Status labels", ("badge", "status_indicator")),
+)
+AI_CONTEXT_SECTIONS = (
+    "ui_building_blocks",
+    "directives",
+    "lifecycle",
+    "decorators",
+    "conventions",
+    "security",
+    "state",
+)
+
+
+def render_ui_building_blocks() -> str:
+    """Render the settings-free, version-free UI discovery section (ADR-043 D4)."""
+    from djust.ai_discovery.agents import DISCOVERY_COMMANDS, format_discovery_block
+    from djust.ai_discovery.catalog import get_entry
+
+    lines = [
+        UI_SECTION_HEADING,
+        "",
+        "djust ships template-tag components (`djust.components`) and a theming system "
+        "(`djust.theming`). Use them instead of hand-written tables, `<select>`s, overlays, "
+        "flash messages and color stylesheets: `python manage.py djust_audit --ast` flags "
+        "those (X101–X105).",
+        "",
+        "| You need | Use |",
+        "| --- | --- |",
+    ]
+    for use_case, names in UI_USE_CASES:
+        cells = []
+        for name in names:
+            entry = get_entry(name)
+            if entry is None:
+                raise ValueError("UI use case names unknown component: %s" % name)
+            cells.append("`{% " + name + " %}`" if entry.kind == "tag" else "`" + name + "`")
+        lines.append("| %s | %s |" % (use_case, ", ".join(cells)))
+    lines.extend(
+        [
+            "",
+            "### Setup",
+            "",
+            '- `pip install "djust[components]"`, then add `"djust.components"` and '
+            '`"djust.theming"` to `INSTALLED_APPS`; `djust new` does both.',
+            "- Load the tags with `{% load djust_components %}`; `python manage.py djust_ai "
+            'suggest "<what you need>"` prints a snippet with the required props.',
+            '- Configure `LIVEVIEW_CONFIG["theme"]` with `"theme"`, `"preset"` and `"default_mode"`.',
+            "- In the base template: `{% load theme_tags %}` and `{% theme_head %}` "
+            "(it also links the components' stylesheet).",
+            "- List the built-in presets with `python manage.py djust_theme list-presets`.",
+            "",
+            "### Discovery commands",
+            "",
+            "```text",
+        ]
+    )
+    checks = (
+        (
+            "python manage.py check",
+            "Django + djust system checks (agents also get a discovery hint)",
+        ),
+        ("python manage.py djust_check", "djust's checks only, with pretty output"),
+    )
+    width = max(len(invocation) for invocation, _ in checks)
+    width = max(width, *(len(command.invocation) for command in DISCOVERY_COMMANDS))
+    lines.extend("  %-*s   # %s" % (width, invocation, purpose) for invocation, purpose in checks)
+    lines.extend([format_discovery_block(DISCOVERY_COMMANDS), "```"])
+    return "\n".join(lines) + "\n"
+
 
 #: Categories rendered in full (description, modifiers, fenced example), in this
 #: order. Any other category in `DIRECTIVES` is emitted after them (see
@@ -176,15 +270,13 @@ def _section_state() -> str:
 
 
 def manifest_sections(framework: dict[str, Any] | None = None) -> list[tuple[str, str]]:
-    from djust.ai_discovery.agents import DISCOVERY_COMMANDS, format_discovery_block
     from djust.ai_discovery.catalog import categories
     from djust.schema import BEST_PRACTICES, get_framework_schema
-    from djust.theming._builtin_presets import THEME_PRESETS
 
     if framework is None:
         framework = get_framework_schema()
     components = [
-        "## UI components — use these before writing markup\n",
+        "## Component catalog\n",
         "{% load djust_components %}\n",
     ]
     for _, label, entries in categories():
@@ -200,23 +292,12 @@ def manifest_sections(framework: dict[str, Any] | None = None) -> list[tuple[str
                     + ")"
                 )
         components.append("")
-    theming = (
-        '## Theming\n\nAdd "djust.theming" to INSTALLED_APPS.\n'
-        'Configure LIVEVIEW_CONFIG["theme"] with "theme", "preset" and "default_mode".\n'
-        "In the base template: `{% load theme_tags %}` and `{% theme_head %}`.\n"
-        f"{len(THEME_PRESETS)} built-in presets; list them with "
-        "`python manage.py djust_theme list-presets`.\n"
-    )
     pitfalls = ["## Common pitfalls\n"]
     common_pitfalls = cast(list[dict[str, Any]], BEST_PRACTICES["common_pitfalls"])
     pitfalls.extend(f"- **{item['problem']}** — {item['solution']}" for item in common_pitfalls)
     return [
-        (
-            "discovery",
-            "## Discovery commands\n\n" + format_discovery_block(DISCOVERY_COMMANDS) + "\n",
-        ),
+        ("ui_building_blocks", render_ui_building_blocks()),
         ("components", "\n".join(components)),
-        ("theming", theming),
         ("directives", _section_directives(framework)),
         ("lifecycle", _section_lifecycle(framework)),
         ("decorators", _section_decorators(framework)),

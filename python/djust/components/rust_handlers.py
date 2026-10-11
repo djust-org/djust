@@ -4671,10 +4671,34 @@ class NavItemHandler:
         )
 
 
+_APP_SHELL_SIDEBAR_OPEN = '<aside class="dj-app-shell__sidebar">'
+
+
+def _split_app_shell_sidebar(content: str) -> tuple[str, str]:
+    """Extract the first sidebar, retaining nested asides and unbalanced content."""
+    start = content.find(_APP_SHELL_SIDEBAR_OPEN)
+    if start == -1:
+        return "", content
+    depth, i = 0, start
+    while True:
+        opening, closing = content.find("<aside", i), content.find("</aside>", i)
+        if closing == -1:
+            return "", content
+        if opening != -1 and opening < closing:
+            depth, i = depth + 1, opening + 6
+        else:
+            depth, i = depth - 1, closing + 8
+            if depth == 0:
+                break
+    return content[start:i], content[:start] + content[i:]
+
+
 class AppShellHandler:
     """Block handler for {% app_shell %}...{% endapp_shell %}
 
     Wraps sidebar, header, and content regions in a responsive layout.
+    Unlike Django's node, which orders header before content and drops text
+    outside the three slots, Rust keeps template order. Scaffolds put header first.
     """
 
     def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
@@ -4689,8 +4713,12 @@ class AppShellHandler:
         if custom_class:
             cls += f" {custom_class}"
 
-        # In Rust block mode, content is pre-rendered; wrap in shell layout
-        return _safe(f'<div class="{cls}" id="{shell_id}">{content}</div>')
+        # Keep the sidebar in the outer row and header/content in the main column.
+        sidebar, rest = _split_app_shell_sidebar(content)
+        return _safe(
+            f'<div class="{cls}" id="{shell_id}">{sidebar}'
+            f'<div class="dj-app-shell__main">{rest.strip()}</div></div>'
+        )
 
 
 class AppSidebarHandler:

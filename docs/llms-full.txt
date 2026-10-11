@@ -8,6 +8,49 @@ Read [Application engineering conventions](https://github.com/djust-org/djust/bl
 and the [focused AI reference](https://github.com/djust-org/djust/tree/main/docs/ai).
 Use documentation matching the installed release; main may describe newer APIs.
 
+<!-- BEGIN GENERATED: UI building blocks (scripts/generate-ai-ui-section.py) -->
+
+## UI building blocks — use these before writing markup
+
+djust ships template-tag components (`djust.components`) and a theming system (`djust.theming`). Use them instead of hand-written tables, `<select>`s, overlays, flash messages and color stylesheets: `python manage.py djust_audit --ast` flags those (X101–X105).
+
+| You need | Use |
+| --- | --- |
+| Page layout: header, sidebar, content | `{% app_shell %}`, `{% sidebar %}`, `{% page_header %}`, `{% breadcrumb %}` |
+| Table of records: sort, select, paginate, scroll | `{% data_table %}`, `{% data_grid %}`, `{% pagination %}`, `{% infinite_scroll %}` |
+| Filters and search above a list | `{% filter_bar %}`, `{% search_input %}` |
+| Choosing from many options | `{% combobox %}`, `{% rich_select %}`, `{% multi_select %}` |
+| Form fields and errors | `{% dj_form %}`, `{% dj_input %}`, `{% dj_select %}`, `{% date_picker %}`, `{% form_errors %}` |
+| Side panel, dialog, confirmation | `{% sheet %}`, `{% modal %}`, `{% confirm_dialog %}` |
+| Flash messages and notifications | `{% toast_container %}`, `{% server_toast_container %}`, `{% page_alert %}`, `{% alert %}` |
+| Empty and loading states | `{% empty_state %}`, `{% skeleton %}`, `{% spinner %}` |
+| Dashboards and metrics | `{% stat_card %}`, `{% dashboard_grid %}`, `{% bar_chart %}`, `{% line_chart %}` |
+| Tabs, steps and wizards | `{% tabs %}`, `{% stepper %}`, `{% wizard %}` |
+| Menus and actions | `{% dropdown_menu %}`, `{% toolbar %}`, `{% command_palette %}` |
+| Status labels | `{% badge %}`, `{% status_indicator %}` |
+
+### Setup
+
+- `pip install "djust[components]"`, then add `"djust.components"` and `"djust.theming"` to `INSTALLED_APPS`; `djust new` does both.
+- Load the tags with `{% load djust_components %}`; `python manage.py djust_ai suggest "<what you need>"` prints a snippet with the required props.
+- Configure `LIVEVIEW_CONFIG["theme"]` with `"theme"`, `"preset"` and `"default_mode"`.
+- In the base template: `{% load theme_tags %}` and `{% theme_head %}` (it also links the components' stylesheet).
+- List the built-in presets with `python manage.py djust_theme list-presets`.
+
+### Discovery commands
+
+```text
+  python manage.py check                         # Django + djust system checks (agents also get a discovery hint)
+  python manage.py djust_check                   # djust's checks only, with pretty output
+  python manage.py djust_ai inventory --json     # what's installed/enabled here, component catalog, theme
+  python manage.py djust_ai suggest "<intent>"   # intent -> components + tag + snippet
+  python manage.py djust_ai manifest             # one llms.txt-style doc (directives, components, theming, best practices)
+  python manage.py djust_audit --ast             # security + UI rules
+  python manage.py djust_mcp                     # MCP server (list_ui_components / get_ui_component for the component catalog)
+```
+
+<!-- END GENERATED: UI building blocks -->
+
 ## Setup
 
 ```bash
