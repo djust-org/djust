@@ -131,16 +131,16 @@ not your project's installed configuration. There is no `manifest --json`.
    guidance. **Suggest and manifest stay in-process** without settings and
    do not search for or execute nearby `manage.py` files; they work anywhere.
 
-A discovered `manage.py` must be a regular file owned by the current user
-(on platforms with `getuid`), and must not be group/world-writable. Its
-containing directory must not be world-writable. Stat failures also reject
+A discovered `manage.py` must be a regular file. On POSIX systems it must
+also be owned by the current user and not be group/world-writable, and its
+containing directory must not be world-writable; Windows has no equivalent
+mode bits, so only the regular-file and project-boundary rules apply there. Stat failures also reject
 it. Rejection exits **2**, prints the specific reason and direct-invocation
 guidance, and does not continue searching for a different entry point.
 Explicitly invoking `python manage.py djust_ai ...` remains your own choice
 of project entry point.
 
-Actual rejection output after making the throwaway `manage.py` group/world-writable
-(exit 2; permissions were restored after capture):
+Example rejection output for a group/world-writable `manage.py` (exit 2):
 
 ```text
 djust ai: rejected /srv/shared/myproject/manage.py: entry point is group/world writable; run python manage.py djust_ai inventory directly.
