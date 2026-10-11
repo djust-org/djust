@@ -327,6 +327,11 @@ navigation:
         file: guides/ai-guardrails.md
         order: 14.5
         level: intermediate
+      - title: AI Capability Discovery
+        slug: ai-discovery
+        file: guides/ai-discovery.md
+        order: 14.6
+        level: intermediate
       - title: Error Codes
         slug: error-codes
         file: guides/error-codes.md

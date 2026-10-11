@@ -1,0 +1,1 @@
+- **AI capability discovery (#3448).** Add `djust_ai inventory`, `suggest`, and `manifest`, exposed through `djust ai`, plus MCP `list_ui_components` and `get_ui_component`. The shared catalog supplies component purposes, keywords, props, and examples. Suggest/manifest run in-process; inventory uses configured settings or a validated nearby `manage.py` entry point.

@@ -26,6 +26,7 @@ djust uses structured error codes to help you diagnose problems quickly. This gu
 | B0xx | Vendored assets and SBOMs | `manage.py check --tag djust` (startup; B011/B013/B014 need `--deploy`; B008 needs `--deploy` when `djust` is above `django.contrib.staticfiles`, see B008; B008 and B012 also run before djust's `collectstatic`) |
 | D0xx | Database notifications | `manage.py check --tag djust` (startup) |
 | U0xx | Update notice | `manage.py check --tag djust` (startup, DEBUG only) |
+| I0xx | AI capability discovery | `manage.py check` / startup checks (I001: only the `check` command run by a self-identified agent) |
 | Y0xx | Accessibility | `manage.py check --tag djust` (startup) |
 | `djust.audio.*` | Audio | `manage.py check --tag djust` (startup) |
 | `djust_theming.*` | Theming | `manage.py check` (startup, `compatibility` tag) |
@@ -1853,6 +1854,67 @@ See [Vendoring third-party JS](vendored-assets.md) and [Scanning a djust app](sc
 **Fix**: Upgrade djust. Disable the notice with `DJUST_CONFIG = {"update_check": False}` or the `DJUST_NO_UPDATE_CHECK=1` environment variable. It is also skipped when `CI` is set.
 
 ---
+
+## AI Capability Discovery (I0xx)
+
+These are INFO messages registered with the `djust` tag. They do not fail
+checks at the default ERROR threshold. **Behavior change:** agent-run
+`manage.py check --fail-level INFO` now fails unless I001 is silenced;
+unsilenced I002/I003 can also fail that threshold.
+
+### I001: Capability discovery for AI agents
+
+**What:** Prints available discovery commands before an agent writes views
+or templates. **Why:** Native components and framework capabilities should
+be discovered before custom implementations are added.
+
+It requires `sys.argv[1] == "check"`, an agent environment, and no suppression;
+it emits once per process. It does not run on runserver/migrate. The exact
+agent-variable list is `DJUST_AGENT`, `CLAUDECODE`, `CURSOR_AGENT`,
+`CODEX_SANDBOX`, `CODEX_SANDBOX_NETWORK_DISABLED`, `CODEX_THREAD_ID`.
+Any value other than empty, `0`, `false`, `no`, or `off` (case-insensitive)
+qualifies. `DJUST_AGENT=1` is the explicit contract; other detection is best effort.
+
+**How to use/silence:** Run the [discovery commands](ai-discovery.md), then
+silence with `SILENCED_SYSTEM_CHECKS = ["djust.I001"]` or
+`DJUST_CONFIG = {"suppress_checks": ["I001"]}`. `DJUST_AI_HINTS=0` (also
+`false`, `no`, or `off`) suppresses I001 only. Suppression does not consume
+the once-per-process flag.
+
+### I002: LiveViews without theming
+
+**What:** User LiveViews exist but `djust.theming` is not in `INSTALLED_APPS`.
+**Why:** The project may be missing native design tokens, light/dark mode,
+and presets. Routed and already-loaded non-abstract user LiveViews count;
+framework-internal classes and classes declaring `abstract = True` do not.
+This check is not agent-only or check-command-only: it also prints on
+runserver/migrate when their system checks run.
+
+**How to fix/silence:** Add `"djust.theming"` to `INSTALLED_APPS` and
+`{% load theme_tags %}{% theme_head %}` to the base template if you want
+theming. Otherwise use `SILENCED_SYSTEM_CHECKS = ["djust.I002"]` or
+`DJUST_CONFIG = {"suppress_checks": ["I002"]}`. `DJUST_AI_HINTS=0` does
+not silence I002.
+
+### I003: Hand-rolled UI in the last audit
+
+**What:** A fresh `.djust/audit-ui.json` has positive X101–X104 counts.
+**Why:** Tables, selects, overlays, and status feedback may have reusable
+component replacements. It fires even with `djust.components` installed and
+enabled; installation advice is conditional on availability/enabling.
+X105 alone does not trigger it. Missing, invalid, and stale caches are silent.
+Cache lookup tries resolved `settings.BASE_DIR`, then cwd, and stops at the
+first non-missing state; see [reader limits and staleness](djust-audit.md#ui-summary-cache).
+The check reads the cache and stats covered files; it does not rescan sources.
+
+**How to fix/silence:** Run `python manage.py djust_audit --ast` for locations
+and `python manage.py djust_ai suggest "<intent>"` for snippets. Consider
+`data_table`/`data_grid`/`infinite_scroll` (X101), `combobox`/`rich_select`
+(X102), `sheet`/`modal` (X103), or
+`server_toast_container`/`toast_container`/`page_alert` (X104).
+Silence with `SILENCED_SYSTEM_CHECKS = ["djust.I003"]` or
+`DJUST_CONFIG = {"suppress_checks": ["I003"]}`. `DJUST_AI_HINTS=0` does
+not silence I003.
 
 ## Accessibility Checks (Y0xx)
 

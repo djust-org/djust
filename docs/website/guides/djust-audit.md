@@ -325,6 +325,29 @@ It is written even with no UI findings, and before the command applies
 write; the report's `files_skipped` remains the place to check incomplete
 coverage.
 
+Consumers are `djust.I003` and `djust_ai inventory` (also exposed as
+`djust ai inventory`). Both look for `.djust/audit-ui.json` under resolved
+`settings.BASE_DIR` first, then resolved cwd if different. The first
+non-missing state wins: an invalid or stale BASE_DIR cache does not fall
+through to a fresh cwd cache. A missing cache avoids importing the audit
+reader; reading an existing cache never scans templates or stylesheets.
+
+A covered file with an mtime **greater than** its recorded mtime, or a file
+that can no longer be stat'ed, makes the cache stale. Up to five stale paths
+are reported. This is an mtime check, not a content hash: newly added files
+are not discovered by the reader. Inventory reports the state and suggests
+rerunning the audit. I003 is silent for missing, invalid, or stale caches;
+a fresh cache with X101–X104 findings triggers it even when components are
+enabled. X105 alone does not trigger I003.
+
+The reader accepts at most **4 MiB (4,194,304 bytes)** and **20,000 combined
+template/stylesheet records**. It validates schema version, resolved root,
+nonnegative integer counts/total, and file records. It rejects a symlink or
+non-directory `.djust`, non-regular cache files, and recorded paths that
+escape the root (including symlink escapes). Outside-root `../` stylesheet
+records make a cache invalid for these consumers. These limits protect
+check-time reads; rerun a scoped audit if the summary is too large.
+
 The JSON schema currently has:
 
 - `version: 1`, `generator: "djust_audit --ast"`, `djust_version`,
