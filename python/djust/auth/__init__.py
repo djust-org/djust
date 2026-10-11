@@ -14,7 +14,8 @@ Usage:
         login_required = True
         permission_required = "analytics.view_dashboard"
 
-    # Dispatch-level mixins (checked at HTTP dispatch)
+    # Dispatch-level mixins (checked at HTTP dispatch; LoginRequiredLiveViewMixin
+    # also sets login_required = True, which every live transport enforces)
     from djust.auth import LoginRequiredLiveViewMixin
 
     class DashboardView(LoginRequiredLiveViewMixin, LiveView):

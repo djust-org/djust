@@ -568,16 +568,17 @@ class TestS012LiveViewDispatchAuth:
         return errors
 
     def test_s012_flags_decorated_dispatch(self, tmp_path):
-        """CANARY: @method_decorator(login_required, name='dispatch') on a
-        LiveView must fire under the NEW id djust.S012, not the old S004."""
+        """CANARY: @method_decorator(<auth decorator djust does not replay>,
+        name='dispatch') on a LiveView must fire under the NEW id djust.S012,
+        not the old S004."""
         errors = self._scan(
             tmp_path,
             """\
-            from django.contrib.auth.decorators import login_required
             from django.utils.decorators import method_decorator
             from djust import LiveView
+            from myapp.decorators import active_account_required
 
-            @method_decorator(login_required, name="dispatch")
+            @method_decorator(active_account_required, name="dispatch")
             class SecretView(LiveView):
                 template_name = "secret.html"
             """,
@@ -590,6 +591,46 @@ class TestS012LiveViewDispatchAuth:
         assert not any(e.id == "djust.S004" for e in errors), (
             "the dispatch-auth check must no longer emit djust.S004: %r" % errors
         )
+
+    def test_s012_skips_django_decorators_the_runtime_replays(self, tmp_path):
+        """Django's login_required / permission_required / user_passes_test /
+        staff_member_required on dispatch() are replayed on live transports,
+        so the source scan does not report them."""
+        for decorator in (
+            "login_required",
+            'permission_required("app.view")',
+            "user_passes_test(is_staff)",
+            "staff_member_required",
+        ):
+            errors = self._scan(
+                tmp_path,
+                """\
+                from django.utils.decorators import method_decorator
+                from djust import LiveView
+
+                @method_decorator(%s, name="dispatch")
+                class SecretView(LiveView):
+                    template_name = "secret.html"
+                """
+                % decorator,
+            )
+            assert [e for e in errors if e.id == "djust.S012"] == [], (decorator, errors)
+
+    def test_s012_ignores_a_dispatch_that_only_reads_the_user(self, tmp_path):
+        errors = self._scan(
+            tmp_path,
+            """\
+            from djust import LiveView
+
+            class ContextView(LiveView):
+                template_name = "context.html"
+
+                def dispatch(self, request, *args, **kwargs):
+                    self.show_admin = request.user.is_staff
+                    return super().dispatch(request, *args, **kwargs)
+            """,
+        )
+        assert [e for e in errors if e.id == "djust.S012"] == []
 
     def test_s012_flags_overridden_dispatch_with_auth(self, tmp_path):
         errors = self._scan(
@@ -636,11 +677,11 @@ class TestS012LiveViewDispatchAuth:
         old_id_noqa = self._scan(
             tmp_path,
             """\
-            from django.contrib.auth.decorators import login_required
             from django.utils.decorators import method_decorator
             from djust import LiveView
+            from myapp.decorators import active_account_required
 
-            @method_decorator(login_required, name="dispatch")  # noqa: S004
+            @method_decorator(active_account_required, name="dispatch")  # noqa: S004
             class SecretView(LiveView):
                 template_name = "secret.html"
             """,
@@ -653,11 +694,11 @@ class TestS012LiveViewDispatchAuth:
         new_id_noqa = self._scan(
             tmp_path,
             """\
-            from django.contrib.auth.decorators import login_required
             from django.utils.decorators import method_decorator
             from djust import LiveView
+            from myapp.decorators import active_account_required
 
-            @method_decorator(login_required, name="dispatch")  # noqa: S012
+            @method_decorator(active_account_required, name="dispatch")  # noqa: S012
             class SecretView(LiveView):
                 template_name = "secret.html"
             """,

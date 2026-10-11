@@ -316,12 +316,10 @@ The client script is injected automatically; `{% djust_client_config %}` is opti
 from djust import LiveView
 from djust.decorators import event_handler
 from shop.models import Product, CartItem
-from django.contrib.auth.decorators import login_required
-from django.utils.decorators import method_decorator
 
-@method_decorator(login_required, name='dispatch')
 class ShoppingCartView(LiveView):
     template_name = 'shop/cart.html'
+    login_required = True  # enforced on the HTTP request and every live transport
 
     def mount(self, request, **kwargs):
         self.cart_items = CartItem.objects.filter(user=request.user)

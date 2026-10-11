@@ -174,6 +174,222 @@ def _check_routed_djust_views_allowlisted(errors: list, routed: "set[type]") -> 
     )
 
 
+def _v013_warnings(cls: type, cls_label: str) -> list[CheckMessage]:
+    """V013 for ``cls``: HTTP-only setup()/dispatch()/get()/post() overrides in
+    its MRO, and the URLconf wrappers around its routes that live transports do
+    not run."""
+    errors: list[CheckMessage] = []
+    # V013 -- HTTP-only dispatch()/get()/post() overrides never run on
+    # WebSocket mounts (#2059). The WS mount path calls
+    # ``view_instance.mount(request, **kwargs)`` directly
+    # (``runtime.py`` ``dispatch_mount``, ~line 2269) -- it never calls
+    # ``dispatch()``/``get()``/``post()``. An ancestor in the MRO (the
+    # view class itself, or an earlier mixin) that overrides one of
+    # these to do real work -- tenant resolution, rate limiting, custom
+    # auth, request-scoped setup -- silently never runs for a
+    # WS-mounted view. Downstream symptom pattern (djust-monitor, USAI
+    # build, DJUST_LESSONS): `self._tenant = None` in handlers, empty
+    # querysets, writes that no-op.
+    #
+    # Excluded ancestors (module-prefix check, mirrors the existing
+    # "skip djust's own internal classes" convention at the top of this
+    # loop):
+    # - "django." -- covers django.views.generic.base.View's harmless
+    #   base dispatch() AND django.contrib.auth.mixins.{LoginRequiredMixin,
+    #   PermissionRequiredMixin,UserPassesTestMixin}, which
+    #   djust.auth.core._check_django_access_mixins replays on the WS/SSE
+    #   mount path via isinstance() checks -- NOT HTTP-only despite
+    #   overriding dispatch(). A project's own AccessMixin subclass is not
+    #   exempt: its dispatch() is reported here and, without declared djust
+    #   auth, as djust.S012 (checks/security.py).
+    # - djust-auth's LoginRequiredLiveViewMixin (module djust_auth.mixins),
+    #   which check_view_auth reads as login_required = True.
+    # - "djust." -- djust's own mixins are already
+    #   WS-reconciled (e.g. djust.tenants.mixin.TenantMixin overrides
+    #   dispatch/get/post for pure-HTTP Django parity, but
+    #   djust.auth.core.run_pre_mount_auth independently calls its
+    #   _ensure_tenant() hook on every live mount path). As with the
+    #   ``cls`` skip above, djust's own test/example fixtures are still
+    #   inspected (dogfooding) -- only djust's real production modules
+    #   are exempted. A project app or package named ``djust_*`` is not.
+    # - djust-tenants' TenantMixin / TenantScopedMixin (an explicit allowlist,
+    #   djust.auth.core._NON_ACCESS_MIXINS): their dispatch/get/post resolve
+    #   the tenant, which run_pre_mount_auth does on every live mount path.
+    from djust.auth.core import (
+        _covered,
+        _full_analysis,
+        _is_djust_auth_login_mixin,
+        _refusable,
+        _unwrap_method_decorator,
+        is_framework_module,
+        is_non_access_mixin,
+        unreadable_url_wrappers,
+    )
+
+    try:
+        uncovered = [f for f in _full_analysis(cls).findings if not _covered(cls, f)]
+    except Exception:  # noqa: BLE001 — a broken URLconf is reported by Django's own check
+        uncovered = []
+
+    def _notes(findings: list[Any]) -> str:
+        refused = [f.label for f in findings if _refusable(f)]
+        unrun = [f.label for f in findings if not _refusable(f)]
+        note = ""
+        if refused:
+            note += (
+                " djust refuses live requests to this view until it declares "
+                "login_required / permission_required / check_permissions() "
+                "covering: %s." % "; ".join(refused)
+            )
+        if unrun:
+            note += (
+                " Live transports do not run: %s; if that code controls access, "
+                "declare the rule as login_required / permission_required / "
+                "check_permissions() so every transport enforces it." % "; ".join(unrun)
+            )
+        return note
+
+    for ancestor in cls.__mro__:
+        if ancestor is object:
+            continue
+        amod = getattr(ancestor, "__module__", "") or ""
+        if (
+            is_framework_module(amod)
+            or _is_djust_auth_login_mixin(ancestor)
+            or is_non_access_mixin(ancestor)
+        ):
+            continue
+
+        overridden = [h for h in ("setup", "dispatch", "get", "post") if h in ancestor.__dict__]
+        if overridden and not _is_check_suppressed("djust.V013"):
+            ancestor_label = "%s.%s" % (
+                amod,
+                getattr(ancestor, "__qualname__", ancestor.__name__),
+            )
+            methods_str = "/".join("%s()" % h for h in overridden)
+
+            ancestor_file = ""
+            ancestor_line = None
+            try:
+                ancestor_file = inspect.getfile(ancestor)
+                ancestor_line = inspect.getsourcelines(ancestor)[1]
+            except (OSError, TypeError):
+                pass  # Source introspection may fail for built-in or C-extension classes
+
+            decorated = [
+                h
+                for h in overridden
+                if _unwrap_method_decorator(
+                    getattr(ancestor.__dict__[h], "__func__", ancestor.__dict__[h])
+                )[0]
+            ]
+            decorated_note = ""
+            if decorated:
+                decorated_note = (
+                    " The decorators applied to %s with @method_decorator do "
+                    "not run there either: djust replays Django's own auth "
+                    "decorators there and refuses a decorator whose code checks "
+                    "the user; any other decorator does not run on live "
+                    "transports." % "/".join("%s()" % h for h in decorated)
+                )
+            decorated_note += _notes([f for f in uncovered if f.owner is ancestor])
+            errors.append(
+                DjustWarning(
+                    "%s: %s overrides %s, which will NOT run on a "
+                    "WebSocket mount (the WS path calls mount() "
+                    "directly, never dispatch()/get()/post()).%s"
+                    % (cls_label, ancestor_label, methods_str, decorated_note),
+                    hint=(
+                        "Move this setup into mount(self, request, "
+                        "**kwargs) so it runs on every transport. For "
+                        "auth/tenant-family logic specifically, see "
+                        "djust.auth.core.run_pre_mount_auth -- the "
+                        "canonical pre-mount hook every live mount path "
+                        "already calls. Mark abstract base classes with "
+                        "`abstract = True` to skip this check, or "
+                        "suppress globally with "
+                        "DJUST_CONFIG = {'suppress_checks': ['V013']}."
+                    ),
+                    id="djust.V013",
+                    fix_hint=(
+                        "Move the logic from `%s` on `%s` into "
+                        "`mount(self, request, **kwargs)` on `%s`."
+                        % (methods_str, ancestor_label, cls.__qualname__)
+                    ),
+                    file_path=ancestor_file,
+                    line_number=ancestor_line,
+                )
+            )
+
+    try:
+        hidden_routes = unreadable_url_wrappers().get(cls, ())
+    except Exception:  # noqa: BLE001 — a broken URLconf is reported by Django's own check
+        hidden_routes = ()
+    if hidden_routes and not _is_check_suppressed("djust.V013"):
+        cls_file = ""
+        cls_line = None
+        try:
+            cls_file = inspect.getfile(cls)
+            cls_line = inspect.getsourcelines(cls)[1]
+        except (OSError, TypeError):
+            pass  # Source introspection may fail for built-in or C-extension classes
+        errors.append(
+            DjustWarning(
+                "%s: the URLconf route %s wraps its as_view() in a function that "
+                "does not use functools.wraps, so djust cannot read that wrapper; "
+                "live transports do not run it. If it controls access, the rule "
+                "is not applied to live requests."
+                % (cls_label, ", ".join(repr(r) for r in hidden_routes)),
+                hint=(
+                    "Declare the rule on the view (`login_required = True` / "
+                    "`permission_required = ...` / `check_permissions(self, "
+                    "request)`), or build the wrapper with functools.wraps so "
+                    "djust can read it."
+                ),
+                id="djust.V013",
+                fix_hint=(
+                    "Add @functools.wraps(view) to the wrapper around `%s.as_view()`, "
+                    "or move its check into `%s`'s declared auth."
+                    % (cls.__qualname__, cls.__qualname__)
+                ),
+                file_path=cls_file,
+                line_number=cls_line,
+            )
+        )
+
+    routed = [f for f in uncovered if f.owner is None]
+    if routed and not _is_check_suppressed("djust.V013"):
+        cls_file = ""
+        cls_line = None
+        try:
+            cls_file = inspect.getfile(cls)
+            cls_line = inspect.getsourcelines(cls)[1]
+        except (OSError, TypeError):
+            pass  # Source introspection may fail for built-in or C-extension classes
+        errors.append(
+            DjustWarning(
+                "%s: a URLconf wrapper around its as_view() runs only on the HTTP "
+                "request.%s" % (cls_label, _notes(routed)),
+                hint=(
+                    "Declare the rule on the view (`login_required = True` / "
+                    "`permission_required = ...` / `check_permissions(self, "
+                    "request)`) instead of wrapping its as_view() in the URLconf. "
+                    "Django's login_required / user_passes_test / "
+                    "permission_required / staff_member_required wrappers are "
+                    "replayed on live transports."
+                ),
+                id="djust.V013",
+                fix_hint=(
+                    "Move the check from the URLconf wrapper into `%s`'s declared "
+                    "auth." % cls.__qualname__
+                ),
+                file_path=cls_file,
+                line_number=cls_line,
+            )
+        )
+    return errors
+
+
 @register("djust")
 def check_liveviews(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
     """Validate LiveView subclasses."""
@@ -215,6 +431,12 @@ def check_liveviews(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
             # Skip internal djust classes -- only check user classes
             # But still check classes in djust's own examples/tests
             if "test" not in module and "example" not in module:
+                # A user app or package named djust_* is not djust: V013 still
+                # inspects it (the other per-class checks keep skipping it).
+                from djust.auth.core import is_framework_module as _is_framework_module
+
+                if not _is_framework_module(module) and cls.__dict__.get("abstract") is not True:
+                    errors.extend(_v013_warnings(cls, "%s.%s" % (module, cls.__qualname__)))
                 continue
 
         # User-declared abstract base classes opt out of all per-class V/Q checks
@@ -545,88 +767,7 @@ def check_liveviews(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
                             )
                         )
 
-        # V013 -- HTTP-only dispatch()/get()/post() overrides never run on
-        # WebSocket mounts (#2059). The WS mount path calls
-        # ``view_instance.mount(request, **kwargs)`` directly
-        # (``runtime.py`` ``dispatch_mount``, ~line 2269) -- it never calls
-        # ``dispatch()``/``get()``/``post()``. An ancestor in the MRO (the
-        # view class itself, or an earlier mixin) that overrides one of
-        # these to do real work -- tenant resolution, rate limiting, custom
-        # auth, request-scoped setup -- silently never runs for a
-        # WS-mounted view. Downstream symptom pattern (djust-monitor, USAI
-        # build, DJUST_LESSONS): `self._tenant = None` in handlers, empty
-        # querysets, writes that no-op.
-        #
-        # Excluded ancestors (module-prefix check, mirrors the existing
-        # "skip djust's own internal classes" convention at the top of this
-        # loop):
-        # - "django." -- covers django.views.generic.base.View's harmless
-        #   base dispatch() AND django.contrib.auth.mixins.{AccessMixin,
-        #   LoginRequiredMixin,PermissionRequiredMixin,UserPassesTestMixin},
-        #   which djust.auth.core._check_django_access_mixins already
-        #   enforces on the WS/SSE mount path via isinstance() checks -- NOT
-        #   HTTP-only despite overriding dispatch().
-        # - "djust."/"djust_" -- djust's own mixins are already
-        #   WS-reconciled (e.g. djust.tenants.mixin.TenantMixin overrides
-        #   dispatch/get/post for pure-HTTP Django parity, but
-        #   djust.auth.core.run_pre_mount_auth independently calls its
-        #   _ensure_tenant() hook on every live mount path). As with the
-        #   ``cls`` skip above, djust's own test/example fixtures are still
-        #   inspected (dogfooding) -- only djust's real production modules
-        #   are exempted.
-        for ancestor in cls.__mro__:
-            if ancestor is object:
-                continue
-            amod = getattr(ancestor, "__module__", "") or ""
-            if amod.startswith("django."):
-                continue
-            if amod.startswith("djust.") or amod.startswith("djust_"):
-                if "test" not in amod and "example" not in amod:
-                    continue
-
-            overridden = [h for h in ("dispatch", "get", "post") if h in ancestor.__dict__]
-            if overridden and not _is_check_suppressed("djust.V013"):
-                ancestor_label = "%s.%s" % (
-                    amod,
-                    getattr(ancestor, "__qualname__", ancestor.__name__),
-                )
-                methods_str = "/".join("%s()" % h for h in overridden)
-
-                ancestor_file = ""
-                ancestor_line = None
-                try:
-                    ancestor_file = inspect.getfile(ancestor)
-                    ancestor_line = inspect.getsourcelines(ancestor)[1]
-                except (OSError, TypeError):
-                    pass  # Source introspection may fail for built-in or C-extension classes
-
-                errors.append(
-                    DjustWarning(
-                        "%s: %s overrides %s, which will NOT run on a "
-                        "WebSocket mount (the WS path calls mount() "
-                        "directly, never dispatch()/get()/post())."
-                        % (cls_label, ancestor_label, methods_str),
-                        hint=(
-                            "Move this setup into mount(self, request, "
-                            "**kwargs) so it runs on every transport. For "
-                            "auth/tenant-family logic specifically, see "
-                            "djust.auth.core.run_pre_mount_auth -- the "
-                            "canonical pre-mount hook every live mount path "
-                            "already calls. Mark abstract base classes with "
-                            "`abstract = True` to skip this check, or "
-                            "suppress globally with "
-                            "DJUST_CONFIG = {'suppress_checks': ['V013']}."
-                        ),
-                        id="djust.V013",
-                        fix_hint=(
-                            "Move the logic from `%s` on `%s` into "
-                            "`mount(self, request, **kwargs)` on `%s`."
-                            % (methods_str, ancestor_label, cls.__qualname__)
-                        ),
-                        file_path=ancestor_file,
-                        line_number=ancestor_line,
-                    )
-                )
+        errors.extend(_v013_warnings(cls, cls_label))
 
     # V010 -- TutorialMixin listed after LiveView in MRO (#691)
     _check_tutorial_mixin_mro(errors, LiveView)
