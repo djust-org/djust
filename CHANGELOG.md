@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.10] - 2026-10-10
+
 A 1.0 patch release with security fixes, including the fixes from 1.1.1 to 1.1.5 that the 1.0 line did not have; upgrading from 1.0.9 is recommended. The 1.0 line is no longer maintained, so moving to 1.2 or later is advised. Review these behaviour changes before upgrading:
 
 - Live transports (WebSocket, SSE, the HTTP POST fallback, the API, `{% live_render %}` children) refuse a view whose access check lives only in its own `setup()`, `dispatch()`, `get()` or `post()`, in a decorator on one of them or in a URLconf wrapper, until the view declares its rule (`login_required`, `permission_required` or `check_permissions()`). On this line the system check that names those views is `djust.S004`, the id it shares with the `DEBUG`/`ALLOWED_HOSTS` check.
