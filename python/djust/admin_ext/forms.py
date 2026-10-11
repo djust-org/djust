@@ -9,6 +9,7 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from django import forms
+from django.http import Http404
 from django.db.models import ForeignKey, ManyToManyField, OneToOneField
 from django.db.models.fields import DateField, DateTimeField, TimeField
 from djust.forms import FormMixin
@@ -54,7 +55,11 @@ class AdminFormMixin(FormMixin):
 
         # Load object if editing
         if object_id and self._model:
-            self.object = self._model.objects.get(pk=object_id)
+            # Through the ModelAdmin's queryset, as Django's change view does:
+            # a row get_queryset() leaves out is not found.
+            self.object = self._model_admin.get_object(request, object_id)
+            if self.object is None:
+                raise Http404("No such object.")
         else:
             self.object = None
 
