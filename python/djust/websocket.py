@@ -291,6 +291,22 @@ _BESIDE_PAGE_STATE = (
 )
 
 
+def _release_failed_view(view: Any) -> None:
+    """Release a view whose mount failed or was refused after ``mount()`` ran.
+
+    ``mount()`` may already have opened uploads or waiters; the view is gone,
+    so they go with it, as at a disconnect. Never raises.
+    """
+    for step, args in (("_cleanup_uploads", ()), ("_cancel_all_waiters", ("mount_failed",))):
+        method = getattr(view, step, None)
+        if not callable(method):
+            continue
+        try:
+            method(*args)
+        except Exception:  # noqa: BLE001 — cleanup after a failure already reported
+            logger.debug("releasing a failed mount: %s raised", step, exc_info=True)
+
+
 def _should_expose_timing() -> bool:
     """
     Whether VDOM patch responses may include server-side timing/performance data.
@@ -2310,6 +2326,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     "Permission denied for %s: %s", self.view_instance.__class__.__name__, exc
                 )
                 await self.send_json({"type": "error", "message": "Permission denied"})
+                # Clear the refused view so no later frame reaches it.
+                self.view_instance = None
                 await self.close(code=4403)
                 return
             if redirect_url:
@@ -2604,7 +2622,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 logger=logger,
                 log_message=f"Error in {sanitize_for_log(view_path)}.mount()",
             )
-            await self.send_json(response)
+            await self._fail_mount(e, response, before_mount, previous_view)
             return
 
         # Call handle_params() after mount (Phoenix parity: handle_params is
@@ -2621,7 +2639,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 logger=logger,
                 log_message=f"Error in {sanitize_for_log(view_path)}.handle_params()",
             )
-            await self.send_json(response)
+            await self._fail_mount(e, response, before_mount, previous_view)
             return
 
         # --- Object-permission check (ADR-017 §Decision 5) ---
@@ -2647,6 +2665,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             # The groups and any presence mount() tracked were set up
             # before this check could run: undo them before closing.
             await self._leave_view_groups(untrack_presence=True)
+            _release_failed_view(self.view_instance)
+            self.view_instance = None
             await self.send_json({"type": "error", "message": "Permission denied"})
             await self.close(code=4403)
             return
@@ -2736,7 +2756,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 logger=logger,
                 log_message=f"Error rendering {sanitize_for_log(view_path)}",
             )
-            await self.send_json(response)
+            await self._fail_mount(e, response, before_mount, previous_view)
             return
 
         # Send success response (HTML only if generated)
@@ -3009,6 +3029,53 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             except Exception as e:  # noqa: BLE001
                 logger.warning("Error leaving channel group %s: %s", group, e)
 
+    async def _fail_mount(
+        self,
+        exc: BaseException,
+        response: Dict[str, Any],
+        before: Optional[Dict[str, Any]],
+        previous_view: Any,
+    ) -> None:
+        """End a mount that raised after the view was set up: nothing stays mounted.
+
+        ``mount()`` is where an application checks what the user may see, so
+        an exception there (``PermissionDenied``, ``Http404``, any other), in
+        the state restore, ``handle_params()`` or the first render refuses the
+        view. ``PermissionDenied`` gets the auth refusal's ``Permission
+        denied`` frame, any other exception its error frame. The view's
+        groups, tick and tracked presence are dropped and the view is
+        released. The page view's socket is left without a view, and closed
+        with 4403 for ``PermissionDenied``; a view beside the page view goes
+        alone: the consumer gets back the view and state it had and the socket
+        stays open (a ``failed[]`` entry in a batch).
+        """
+        from django.core.exceptions import PermissionDenied
+
+        view = self.view_instance
+        denied = isinstance(exc, PermissionDenied)
+        frame = {"type": "error", "message": "Permission denied"} if denied else response
+        if before is not None:
+            await self._untrack_view_presence(view)
+            await self._restore_beside_page(before, previous_view)
+            _release_failed_view(view)
+            await self.send_json(frame)
+            return
+        await self._leave_view_groups(untrack_presence=True)
+        self.view_instance = None
+        _release_failed_view(view)
+        await self.send_json(frame)
+        if denied:
+            await self.close(code=4403)
+
+    async def _untrack_view_presence(self, view: Any) -> None:
+        """Untrack the presence ``mount()`` tracked for ``view``. Never raises."""
+        if not getattr(view, "_presence_tracked", False):
+            return
+        try:
+            await sync_to_async(view.untrack_presence)()
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Error cleaning up presence: %s", e)
+
     async def _refuse_beside_page(self, before: Dict[str, Any], previous_view: Any) -> None:
         """Refuse a view mounted beside the page view on its own.
 
@@ -3020,6 +3087,19 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         (a ``failed[]`` entry in a batch) instead of a navigation, with the
         socket left open.
         """
+        await self._restore_beside_page(before, previous_view)
+        await self.send_json(
+            {
+                "type": "error",
+                "error": "Login required",
+                "message": "Login required",
+                "code": "login_required",
+            }
+        )
+
+    async def _restore_beside_page(self, before: Dict[str, Any], previous_view: Any) -> None:
+        """Drop what a refused view beside the page view set up, and put back
+        the view and consumer state the mount found."""
 
         def groups(state: Dict[str, Any]) -> set:
             names = {state.get("_view_group"), state.get("_presence_group")}
@@ -3051,14 +3131,6 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         except Exception as e:  # noqa: BLE001
             # Observability must never break a WS connection.
             logger.warning("Failed to restore the observability registry entry: %s", e)
-        await self.send_json(
-            {
-                "type": "error",
-                "error": "Login required",
-                "message": "Login required",
-                "code": "login_required",
-            }
-        )
 
     async def _mount_one(self, data_view: Dict[str, Any]):
         """Mount + render a single view and return a payload WITHOUT sending.

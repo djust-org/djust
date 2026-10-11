@@ -280,6 +280,24 @@ def _client_ip_from_request(request) -> Optional[str]:
 # ------------------------------------------------------------------ #
 
 
+async def _drop_failed_sse_view(session: SSESession, view_instance: Any) -> None:
+    """A view whose mount failed after ``mount()`` ran is not the session's view.
+
+    Untracks the presence ``mount()`` may have tracked and releases the view's
+    uploads and waiters. Never raises.
+    """
+    if session.view_instance is view_instance:
+        session.view_instance = None
+    if getattr(view_instance, "_presence_tracked", False):
+        try:
+            await sync_to_async(view_instance.untrack_presence)()
+        except Exception:  # noqa: BLE001 — cleanup after a failure already reported
+            logger.warning("SSE: presence cleanup after a failed mount raised")
+    from .websocket import _release_failed_view
+
+    _release_failed_view(view_instance)
+
+
 async def _sse_mount_view(session: SSESession, request, view_path: str) -> bool:
     """
     Mount a LiveView into *session* and push the initial ``mount`` message.
@@ -405,6 +423,11 @@ async def _sse_mount_view(session: SSESession, request, view_path: str) -> bool:
             logger=logger,
             log_message="Error in %s.mount()" % sanitize_for_log(view_path),
         )
+        # mount() refused the user (or failed): answer a PermissionDenied as
+        # the auth check does, and leave nothing mounted.
+        if isinstance(exc, PermissionDenied):
+            response = {"type": "error", "error": "Permission denied"}
+        await _drop_failed_sse_view(session, view_instance)
         session.push(response)
         return False
 
@@ -422,6 +445,7 @@ async def _sse_mount_view(session: SSESession, request, view_path: str) -> bool:
     try:
         await sync_to_async(enforce_object_permission)(view_instance, request)
     except PermissionDenied:
+        await _drop_failed_sse_view(session, view_instance)
         session.push({"type": "error", "error": "Permission denied"})
         return False
 
@@ -440,6 +464,7 @@ async def _sse_mount_view(session: SSESession, request, view_path: str) -> bool:
             logger=logger,
             log_message="Error rendering %s" % sanitize_for_log(view_path),
         )
+        await _drop_failed_sse_view(session, view_instance)
         session.push(response)
         return False
 
