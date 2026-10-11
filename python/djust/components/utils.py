@@ -7,6 +7,10 @@ templatetags, rust_handlers, mixins, and component classes.
 
 import re
 from typing import Any
+from urllib.parse import urlsplit
+
+from django.utils.html import conditional_escape
+from django.utils.safestring import SafeData
 
 __all__ = [
     "CURRENCY_SYMBOLS",
@@ -17,6 +21,8 @@ __all__ = [
     "safe_css_length",
     "safe_css_number",
     "safe_css_ratio",
+    "safe_url",
+    "url_attr",
 ]
 
 
@@ -359,3 +365,78 @@ def safe_css_number(value: Any, default: str = "", *, integer: bool = False) -> 
     else:
         ok = bool(_CSS_NUMBER_RE.fullmatch(candidate))
     return text if ok else default
+
+
+# ---------------------------------------------------------------------------
+# URL attributes
+# ---------------------------------------------------------------------------
+
+# Schemes allowed in an href/action navigation context. Anything else
+# (javascript:, vbscript:, data:, …) is replaced with "#".
+_SAFE_URL_SCHEMES = frozenset({"http", "https", "mailto", "tel", "ftp", "ftps"})
+
+# Browsers ignore leading/embedded ASCII control chars + whitespace when
+# resolving a URL scheme, so a value such as "java\tscript:" / "java\nscript:"
+# / "java\x00script:" still reads as that scheme. Strip them ALL before the
+# scheme probe so the evasions collapse to the canonical form.
+_CTRL_WS_RE = re.compile(r"[\x00-\x20]+")
+
+
+def safe_url(value):
+    """Escape a URL for an HTML attribute AND neutralize dangerous schemes.
+
+    HTML-escaping (``conditional_escape``) prevents attribute breakout but does
+    NOT stop a ``javascript:`` URI (which needs no escapable characters) — so a
+    built-in component rendering a user-supplied URL into ``href``/``action``
+    must validate the scheme too. Use this at every
+    navigation-context URL sink in the component tags; it is NOT for ``<img src>``
+    (where ``javascript:`` doesn't execute and ``data:`` images are legitimate).
+
+    Policy:
+      * Relative / anchor / query / scheme-less URLs (``/x``, ``#frag``, ``?q=1``)
+        → allowed (HTML-escaped).
+      * Absolute URL whose scheme is in :data:`_SAFE_URL_SCHEMES` → allowed.
+      * Any other scheme (``javascript:``/``vbscript:``/``data:``/…), including
+        control-char/whitespace-obfuscated variants, and any value that fails to
+        parse → replaced with ``"#"`` (fail-closed).
+    """
+    s = str(value).strip()
+    if not s:
+        return ""
+    try:
+        scheme = urlsplit(s).scheme.lower()
+    except ValueError:
+        return "#"
+    probe = _CTRL_WS_RE.sub("", s).lower()
+    if scheme and scheme not in _SAFE_URL_SCHEMES:
+        return "#"
+    # Belt-and-suspenders: catch parser-evasion where the obfuscated value has
+    # an empty/odd urlsplit scheme but a browser would still see a bad scheme.
+    if probe.startswith(("javascript:", "vbscript:", "data:")):
+        return "#"
+    return conditional_escape(s)
+
+
+# Image sources may legitimately be inline ``data:image/...`` URIs.
+_DATA_IMAGE_RE = re.compile(r"^data:image/[a-z0-9.+-]+[;,]")
+
+
+def url_attr(value, *, image=False):
+    """Return ``value`` ready to place inside a quoted ``href``/``src``/``action``.
+
+    Values the developer marked safe (``mark_safe`` / ``SafeString``) are
+    returned unchanged. Anything else goes through :func:`safe_url`: it is
+    HTML-escaped, and a URL whose scheme is not a navigation scheme
+    (``javascript:``, ``vbscript:``, ``data:``, ...) becomes ``"#"``. With
+    ``image=True`` an inline ``data:image/...`` URI is also accepted (escaped),
+    for ``<img src>``.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, SafeData):
+        return str(value)
+    if image:
+        probe = _CTRL_WS_RE.sub("", str(value)).lower()
+        if _DATA_IMAGE_RE.match(probe):
+            return conditional_escape(str(value).strip())
+    return safe_url(value)

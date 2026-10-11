@@ -12,6 +12,8 @@ from djust.components.utils import safe_css_color, safe_css_length
 
 from django import template
 
+from djust.components.utils import url_attr
+
 from ._registry import register, _resolve, _parse_kv_args, conditional_escape, mark_safe, safe_url
 
 # ---------------------------------------------------------------------------
@@ -738,8 +740,7 @@ class OrgChartNode(template.Node):
 
         if avatar:
             avatar_html = (
-                f'<img class="dj-org__avatar" src="{conditional_escape(str(avatar))}" '
-                f'alt="{name}" />'
+                f'<img class="dj-org__avatar" src="{url_attr(avatar, image=True)}" alt="{name}" />'
             )
         else:
             initials = "".join(w[0] for w in str(node.get("name", "")).split()[:2]).upper() or "?"
@@ -1127,7 +1128,7 @@ class LiveIndicatorNode(template.Node):
             avatar = ""
 
         e_name = conditional_escape(str(name))
-        e_avatar = conditional_escape(str(avatar))
+        e_avatar = url_attr(avatar, image=True)
         e_field = conditional_escape(str(field))
         e_action = conditional_escape(str(action))
 
@@ -1299,7 +1300,7 @@ class ActivityFeedNode(template.Node):
             action = conditional_escape(str(event.get("action", "")))
             target = conditional_escape(str(event.get("target", "")))
             time = conditional_escape(str(event.get("time", "")))
-            avatar_src = conditional_escape(str(event.get("avatar", "")))
+            avatar_src = url_attr(event.get("avatar", ""), image=True)
             icon = conditional_escape(str(event.get("icon", "")))
 
             initials = (
@@ -1789,7 +1790,7 @@ class ImageUploadPreviewNode(template.Node):
 
         thumbs = []
         for url in previews:
-            e_url = conditional_escape(str(url))
+            e_url = url_attr(url, image=True)
             thumbs.append(
                 f'<div class="dj-img-upload__thumb">'
                 f'<img src="{e_url}" alt="Preview" '
@@ -2127,7 +2128,7 @@ class DataCardGridNode(template.Node):
 
             img_html = ""
             if image:
-                e_img = conditional_escape(str(image))
+                e_img = url_attr(image, image=True)
                 img_html = f'<img src="{e_img}" alt="{title}" class="dj-data-card-grid__img">'
 
             click_attr = ""

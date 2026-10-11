@@ -29,7 +29,7 @@ impl RustBadge {
 
     /// Render badge to HTML string (Bootstrap 5)
     pub fn render(&self) -> String {
-        let mut classes = format!("badge bg-{}", self.variant);
+        let mut classes = format!("badge bg-{}", html_escape(&self.variant));
 
         // Add size class using Bootstrap font-size utilities
         // sm = default (0.75em), md = fs-6 (1rem), lg = fs-5 (1.25rem)
@@ -113,5 +113,26 @@ mod tests {
         let html = badge.render();
         assert!(html.contains("&lt;script&gt;"));
         assert!(!html.contains("<script>"));
+    }
+}
+
+#[cfg(test)]
+mod escaping_tests {
+    use super::*;
+
+    #[test]
+    fn variant_value_is_html_escaped() {
+        let html = RustBadge::new("Hi".to_string(), "x\" onmouseover=\"y", "md", false).render();
+        assert!(!html.contains("x\" onmouseover"));
+        assert!(html.contains("bg-x&quot; onmouseover=&quot;y"));
+    }
+
+    #[test]
+    fn plain_text_output_unchanged() {
+        let html = RustBadge::new("New".to_string(), "primary", "md", true).render();
+        assert_eq!(
+            html,
+            r#"<span class="badge bg-primary fs-6 rounded-pill">New</span>"#
+        );
     }
 }

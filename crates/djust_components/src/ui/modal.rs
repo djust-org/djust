@@ -7,7 +7,7 @@ A modal/dialog overlay component with:
 - Close button and backdrop
 */
 
-use crate::html::element;
+use crate::html::{element, html_escape, js_string_escape};
 use crate::{Component, ComponentError, Framework};
 use ahash::AHashMap as HashMap;
 use djust_core::Value;
@@ -115,7 +115,8 @@ impl Modal {
                     <h5 class="modal-title" id="{}Label">{}</h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
                 </div>"#,
-                self.id, title
+                html_escape(&self.id),
+                html_escape(title)
             );
             content_parts.push(header);
         }
@@ -153,7 +154,7 @@ impl Modal {
                 "onclick",
                 format!(
                     "document.getElementById('{}').classList.add('hidden')",
-                    self.id
+                    js_string_escape(&self.id)
                 ),
             )
             .build();
@@ -204,7 +205,8 @@ impl Modal {
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
                             </svg>
                         </button>"#,
-                        title, self.id
+                        html_escape(title),
+                        html_escape(&js_string_escape(&self.id))
                     ))
                     .build()
             );
@@ -254,7 +256,8 @@ impl Modal {
                 element("div")
                     .class("modal-header")
                     .child(format!(
-                        r#"<h3>{title}</h3><button type="button" class="close" aria-label="Close"><span>&times;</span></button>"#
+                        r#"<h3>{}</h3><button type="button" class="close" aria-label="Close"><span>&times;</span></button>"#,
+                        html_escape(title)
                     ))
                     .build()
             );
@@ -348,5 +351,58 @@ mod tests {
 
         let html = modal.render(Framework::Bootstrap5).unwrap();
         assert!(html.contains("modal-lg"));
+    }
+}
+
+#[cfg(test)]
+mod escaping_tests {
+    use super::*;
+
+    const FWS: [Framework; 3] = [Framework::Bootstrap5, Framework::Tailwind, Framework::Plain];
+
+    #[test]
+    fn title_and_id_are_escaped() {
+        for fw in FWS {
+            let html = Modal::new("m');x('\" onmouseover=\"y", "Body")
+                .title("<img src=x onerror=alert(1)>")
+                .render(fw)
+                .unwrap();
+            assert!(!html.contains("<img"), "{fw:?}");
+            assert!(
+                html.contains("&lt;img src=x onerror=alert(1)&gt;"),
+                "{fw:?}"
+            );
+            assert!(!html.contains("\" onmouseover"), "{fw:?}");
+            assert!(!html.contains("m');x('"), "{fw:?}");
+        }
+    }
+
+    #[test]
+    fn script_attribute_id_is_quoted_for_js() {
+        let html = Modal::new("m');x('", "Body")
+            .title("T")
+            .render(Framework::Tailwind)
+            .unwrap();
+        assert!(html.contains("document.getElementById(&#39;m\\&#39;);x(\\&#39;&#39;)"));
+    }
+
+    #[test]
+    fn plain_output_unchanged_and_body_keeps_markup() {
+        let html = Modal::new("m1", "<b>ok</b>")
+            .title("Title")
+            .footer("<i>f</i>")
+            .render(Framework::Plain)
+            .unwrap();
+        assert!(html.contains("<h3>Title</h3>"));
+        assert!(html.contains("<b>ok</b>"));
+        assert!(html.contains("<i>f</i>"));
+        let html = Modal::new("m1", "B")
+            .title("Title")
+            .render(Framework::Tailwind)
+            .unwrap();
+        assert!(
+            html.contains("document.getElementById(&#39;m1&#39;).classList.add(&#39;hidden&#39;)")
+        );
+        assert!(html.contains("document.getElementById('m1').classList.add('hidden')"));
     }
 }

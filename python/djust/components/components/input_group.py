@@ -1,6 +1,7 @@
 """InputGroup component."""
 
 import html
+from django.utils.html import conditional_escape
 from djust import Component
 
 
@@ -44,4 +45,4 @@ class InputGroup(Component):
             if self.error
             else ""
         )
-        return f'<div class="{cls}">{self.content}</div>{error_html}'
+        return f'<div class="{cls}">{conditional_escape(self.content)}</div>{error_html}'

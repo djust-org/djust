@@ -1,6 +1,7 @@
 """ContextMenu component."""
 
 import html
+from django.utils.html import conditional_escape
 from djust import Component
 
 
@@ -37,6 +38,6 @@ class ContextMenu(Component):
         return (
             f'<div class="{cls}">'
             f'<div class="ctx-trigger">{e_label}</div>'
-            f'<div class="ctx-menu" role="menu">{self.content}</div>'
+            f'<div class="ctx-menu" role="menu">{conditional_escape(self.content)}</div>'
             f"</div>"
         )

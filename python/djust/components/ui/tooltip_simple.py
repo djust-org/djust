@@ -7,6 +7,8 @@ This is a stateless Component optimized for performance.
 
 from ..base import Component
 
+from django.utils.html import conditional_escape
+
 
 # Try to import Rust implementation
 try:
@@ -106,6 +108,14 @@ class Tooltip(Component):
         self.trigger = trigger
         self.arrow = arrow
 
+    def _create_rust_instance(self, **props):
+        # ``content`` is markup; the Rust renderer emits it as given, so it is
+        # HTML-escaped here unless it was marked safe. The template path
+        # escapes it itself.
+        if props.get("content") is not None:
+            props["content"] = conditional_escape(props["content"])
+        super()._create_rust_instance(**props)
+
     def get_context_data(self):
         """Context for hybrid rendering"""
         return {
@@ -151,7 +161,7 @@ class Tooltip(Component):
             f'data-bs-placement="{placement}" '
             f'data-bs-trigger="{trigger}"{arrow_attr} '
             f'title="{escaped_text}">'
-            f"{self.content}"
+            f"{conditional_escape(self.content)}"
             f"</span>"
         )
 
@@ -182,7 +192,7 @@ class Tooltip(Component):
 
         return (
             f'<span class="relative inline-block group">'
-            f"{self.content}"
+            f"{conditional_escape(self.content)}"
             f'<span class="absolute {position_classes} px-2 py-1 text-xs text-white bg-gray-900 rounded '
             f'opacity-0 group-hover:opacity-100 transition-opacity duration-200 whitespace-nowrap pointer-events-none{arrow_classes}">'
             f"{escaped_text}"
@@ -195,9 +205,9 @@ class Tooltip(Component):
         escaped_text = self._escape_html_attr(self.text)
 
         return (
-            f'<span class="tooltip-wrapper" data-placement="{self.placement}" '
-            f'data-trigger="{self.trigger}" title="{escaped_text}">'
-            f"{self.content}"
+            f'<span class="tooltip-wrapper" data-placement="{conditional_escape(self.placement)}" '
+            f'data-trigger="{conditional_escape(self.trigger)}" title="{escaped_text}">'
+            f"{conditional_escape(self.content)}"
             f"</span>"
         )
 

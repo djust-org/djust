@@ -75,3 +75,38 @@ fn html_escape(s: &str) -> String {
         .replace('"', "&quot;")
         .replace('\'', "&#x27;")
 }
+
+#[cfg(test)]
+mod escaping_tests {
+    use super::*;
+
+    #[test]
+    fn header_body_footer_are_html_escaped() {
+        let card = RustCard::new(
+            "<img src=x onerror=alert(1)>".to_string(),
+            Some("<b>h</b>".to_string()),
+            Some("x\" onmouseover=\"y".to_string()),
+            "default",
+        );
+        let html = card.render();
+        assert!(!html.contains("<img"));
+        assert!(!html.contains("<b>"));
+        assert!(html.contains("&lt;img"));
+        assert!(html.contains("x&quot; onmouseover=&quot;y"));
+    }
+
+    #[test]
+    fn plain_output_unchanged() {
+        let html = RustCard::new(
+            "Body".to_string(),
+            Some("Head".to_string()),
+            None,
+            "outlined",
+        )
+        .render();
+        assert_eq!(
+            html,
+            "<div class=\"card border\">\n    <div class=\"card-header\">Head</div>\n    <div class=\"card-body\">Body</div>\n</div>"
+        );
+    }
+}

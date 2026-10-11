@@ -8,6 +8,8 @@ from typing import Optional
 from ..base import Component
 from djust.components.utils import safe_css_length
 
+from django.utils.html import conditional_escape
+
 try:
     from djust._rust import RustProgress
 
@@ -130,13 +132,13 @@ class Progress(Component):
             classes.append("progress-bar-striped")
         if self.animated:
             classes.append("progress-bar-animated")
-        classes.append(f"bg-{self.variant}")
+        classes.append(f"bg-{conditional_escape(self.variant)}")
 
         # Build outer style
-        outer_style = f' style="height: {self.height}"' if self.height else ""
+        outer_style = f' style="height: {conditional_escape(self.height)}"' if self.height else ""
 
         # Build label
-        label_html = self.label_text if (self.show_label or self.label) else ""
+        label_html = conditional_escape(self.label_text) if (self.show_label or self.label) else ""
 
         return f"""<div class="progress"{outer_style}>
     <div class="{" ".join(classes)}"

@@ -39,9 +39,9 @@ impl RustIcon {
     pub fn render(&self) -> String {
         // Build base icon class based on library
         let icon_class = match self.library.as_str() {
-            "bootstrap" => format!("bi bi-{}", self.name),
-            "fontawesome" => self.name.clone(),
-            _ => self.name.clone(), // custom
+            "bootstrap" => format!("bi bi-{}", html_escape(&self.name)),
+            "fontawesome" => html_escape(&self.name),
+            _ => html_escape(&self.name), // custom
         };
 
         let mut classes = icon_class;
@@ -59,7 +59,7 @@ impl RustIcon {
 
         // Add color class
         if let Some(ref color) = self.color {
-            classes.push_str(&format!(" text-{color}"));
+            classes.push_str(&format!(" text-{}", html_escape(color)));
         }
 
         // Build accessibility attributes
@@ -220,6 +220,47 @@ mod tests {
         assert!(
             !html_with_label.contains("\"\"<"),
             "Icon with aria-label should not have '\"\"<'"
+        );
+    }
+}
+
+#[cfg(test)]
+mod escaping_tests {
+    use super::*;
+
+    #[test]
+    fn name_and_color_are_html_escaped() {
+        for library in ["bootstrap", "fontawesome", "custom"] {
+            let icon = RustIcon::new(
+                "x\" onmouseover=\"y".to_string(),
+                library,
+                "md",
+                Some("c\"><img src=x>".to_string()),
+                None,
+            );
+            let html = icon.render();
+            assert!(!html.contains("x\" onmouseover"), "{library}");
+            assert!(!html.contains("<img"), "{library}");
+            assert!(html.contains("x&quot; onmouseover=&quot;y"), "{library}");
+            assert!(
+                html.contains("text-c&quot;&gt;&lt;img src=x&gt;"),
+                "{library}"
+            );
+        }
+    }
+
+    #[test]
+    fn plain_output_unchanged() {
+        let icon = RustIcon::new(
+            "star".to_string(),
+            "bootstrap",
+            "lg",
+            Some("warning".to_string()),
+            None,
+        );
+        assert_eq!(
+            icon.render(),
+            r#"<i class="bi bi-star fs-3 text-warning"></i>"#
         );
     }
 }

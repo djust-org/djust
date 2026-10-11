@@ -35,9 +35,9 @@ impl RustButton {
 
         // Add variant class (solid or outline)
         if self.outline {
-            classes.push_str(&format!(" btn-outline-{}", self.variant));
+            classes.push_str(&format!(" btn-outline-{}", html_escape(&self.variant)));
         } else {
-            classes.push_str(&format!(" btn-{}", self.variant));
+            classes.push_str(&format!(" btn-{}", html_escape(&self.variant)));
         }
 
         // Add size class
@@ -129,5 +129,35 @@ mod tests {
         let html = button.render();
         assert!(html.contains("&lt;script&gt;"));
         assert!(!html.contains("<script>"));
+    }
+}
+
+#[cfg(test)]
+mod escaping_tests {
+    use super::*;
+
+    #[test]
+    fn variant_value_is_html_escaped() {
+        for outline in [false, true] {
+            let html = RustButton::new(
+                "Go".to_string(),
+                "x\" onmouseover=\"y",
+                "md",
+                false,
+                outline,
+            )
+            .render();
+            assert!(!html.contains("x\" onmouseover"));
+            assert!(html.contains("x&quot; onmouseover=&quot;y"));
+        }
+    }
+
+    #[test]
+    fn plain_text_output_unchanged() {
+        let html = RustButton::new("Save".to_string(), "primary", "sm", false, false).render();
+        assert_eq!(
+            html,
+            r#"<button type="button" class="btn btn-primary btn-sm">Save</button>"#
+        );
     }
 }
