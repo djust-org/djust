@@ -4,6 +4,7 @@ import html
 
 from djust import Component
 from typing import Any, Optional
+from djust.components.utils import safe_css_color
 
 
 class ColorPicker(Component):
@@ -59,18 +60,19 @@ class ColorPicker(Component):
             cls += f" {html.escape(self.custom_class)}"
         e_name = html.escape(self.name)
         e_value = html.escape(self.value)
+        e_preview = html.escape(safe_css_color(self.value, "transparent"))
         event = self.event or self.name
         e_label = html.escape(self.label)
         label_html = f'<label class="form-label">{e_label}</label>' if self.label else ""
         swatch_html = ""
         for sw in swatches:
-            e_sw = html.escape(sw)
+            e_sw = html.escape(safe_css_color(sw, "transparent"))
             active_cls = " color-swatch-active" if sw == self.value else ""
             swatch_html += f'<button class="color-swatch{active_cls}" style="background:{e_sw}" {self.event_attrs(event, value=sw)}></button>'
         return (
             f'<div class="form-group">{label_html}'
             f'<div class="{cls}">'
-            f'<div class="color-preview" style="background:{e_value}"></div>'
+            f'<div class="color-preview" style="background:{e_preview}"></div>'
             f'<div class="color-swatches">{swatch_html}</div>'
             f'<input class="color-hex-input form-input" type="text" '
             f'name="{e_name}" value="{e_value}" {self.event_attrs(event, trigger="input")}>'

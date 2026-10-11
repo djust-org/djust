@@ -1713,9 +1713,19 @@ class WSConsumerTransport:
         return bool(getattr(self._consumer, "_live_redirect_mounting", False))
 
     async def on_mount_failed(self, view: Any) -> None:
-        """Stop the tick task ``on_view_mounted`` started for a view whose
-        mount then failed (#3027). Only a task still ticking for THIS view is
-        cancelled; a later mount on the socket owns its own task."""
+        """Undo what the mount set up for a view whose mount then failed.
+
+        Stops the tick task ``on_view_mounted`` started (#3027), leaves the
+        view / presence / db_notify groups it joined and untracks the presence
+        ``mount()`` may have tracked: the view is not mounted, so nothing may
+        still reach it or announce it."""
+        await self._stop_tick_of(view)
+        await self._leave_view_groups()
+        await _untrack_failed_view_presence(view)
+
+    async def _stop_tick_of(self, view: Any) -> None:
+        """Only a task still ticking for THIS view is cancelled; a later mount
+        on the socket owns its own task."""
         consumer = self._consumer
         task = getattr(consumer, "_tick_task", None)
         if task is None or task.done():
@@ -1763,6 +1773,30 @@ class WSConsumerTransport:
     def mounting_in_batch(self) -> bool:
         """Expose the consumer's ``_mounting_in_batch`` flag (#1915, #291)."""
         return bool(getattr(self._consumer, "_mounting_in_batch", False))
+
+    async def refuse_beside_page(self) -> bool:
+        """Report a view mounted beside the page view as refused.
+
+        Applies inside a ``mount_batch`` and to a mount the consumer marked as
+        beside the page view. The error frame becomes the entry's ``failed[]``
+        record in a batch; the socket stays open and the consumer keeps the
+        view it had."""
+        consumer = self._consumer
+        if not (
+            getattr(consumer, "_mounting_in_batch", False)
+            or getattr(consumer, "_mounting_beside_page", False)
+        ):
+            return False
+        consumer._refused_beside_page = True
+        await self.send(
+            {
+                "type": "error",
+                "error": "Login required",
+                "message": "Login required",
+                "code": "login_required",
+            }
+        )
+        return True
 
 
 class SSESessionTransport:
@@ -1842,6 +1876,17 @@ class SSESessionTransport:
         request = getattr(session, "_request", None)
         if request is not None:
             view_instance._websocket_query_string = request.META.get("QUERY_STRING", "")
+
+    async def on_mount_failed(self, view: Any) -> None:
+        """A view whose mount failed is not the session's mounted view.
+
+        ``on_view_mounted`` set ``session.view_instance``, which the event and
+        message endpoints read; clear it, and untrack the presence ``mount()``
+        may have tracked."""
+        session = self._session
+        if getattr(session, "view_instance", None) is view:
+            session.view_instance = None
+        await _untrack_failed_view_presence(view)
 
     async def on_event_recorded(self, view: Any, snapshot: Any) -> None:
         """No-op for SSE — there is no time-travel debug-panel surface on the SSE
@@ -2075,6 +2120,32 @@ _COMPONENT_SLOT_PREFIX = "_component_"
 
 _TEMPLATE_TOKEN_RE = re.compile(r"{{.*?}}|{%.*?%}|{#.*?#}", re.S)
 _UNRESOLVED_TEMPLATE_RE = re.compile(r"{%\s*(include|extends)\b")
+
+
+async def _untrack_failed_view_presence(view: Any) -> None:
+    """Untrack the presence a failed mount's ``mount()`` tracked. Never raises."""
+    if not getattr(view, "_presence_tracked", False):
+        return
+    try:
+        await sync_to_async(view.untrack_presence)()
+    except Exception:  # noqa: BLE001 — cleanup after a failure already reported
+        logger.warning("Error cleaning up presence after a failed mount")
+
+
+def _release_failed_view(view: Any) -> None:
+    """Release a view whose mount failed or was refused after ``mount()`` ran.
+
+    ``mount()`` may already have opened uploads or waiters; the view is gone,
+    so they go with it, as at a disconnect. Never raises.
+    """
+    for step, args in (("_cleanup_uploads", ()), ("_cancel_all_waiters", ("mount_failed",))):
+        method = getattr(view, step, None)
+        if not callable(method):
+            continue
+        try:
+            method(*args)
+        except Exception:  # noqa: BLE001 — cleanup after a failure already reported
+            logger.debug("releasing a failed mount: %s raised", step, exc_info=True)
 
 
 def _scoped_component_for(view: Any, changed_keys: Optional[Any]) -> Optional[Any]:
@@ -2777,54 +2848,14 @@ class ViewRuntime:
                     logger=logger,
                     log_message=f"Error in {sanitize_for_log(view_path)}.mount()",
                 )
-                await self.transport.send(response)
-                await self._on_mount_failed(view_instance)
+                await self._fail_mount(view_instance, exc, response)
                 return
-
-        # ---- Object-permission check (ADR-017 §Decision 5, post-mount) ----
-        # Iter 0 / #1885: mirrors the WS handle_mount post-mount object check
-        # (websocket.py:2554-2573) so the runtime mount path enforces the SAME
-        # ADR-017 object-level authorization. Placed AFTER mount() — so
-        # get_object() can read URL-derived attrs (e.g. self.<x>_id) that mount()
-        # populated — and BEFORE handle_params + render, so a denied object is
-        # NEVER rendered or sent to the client (latent IDOR, findings #10-#12).
-        # Routed through the shared enforce_object_permission chokepoint (the same
-        # one dispatch_url_change already uses, runtime.py + the parity net) so
-        # the runtime path cannot drift from WS/SSE/API (#1646). No-op for views
-        # that don't override get_object (behavior-preserving). Fail-closed: the
-        # chokepoint maps a None request / any non-PermissionDenied get_object
-        # failure to denial; the raised PermissionDenied becomes the runtime's
-        # natural permission_denied error frame (matching dispatch_url_change).
-        from django.core.exceptions import PermissionDenied
-
-        from .auth.core import enforce_object_permission
-
-        try:
-            await sync_to_async(enforce_object_permission)(view_instance, request)
-        except PermissionDenied:
-            logger.info(
-                "Object-permission denied for %s (runtime mount)",
-                view_instance.__class__.__name__,
-            )
-            await self.transport.send_error(
-                "Access denied for this object.", code="permission_denied"
-            )
-            # ADR-022 Iter 3 Phase 3.3b (#1919, Finding E): the runtime sent the
-            # error frame; finalize_mount_auth adds the transport-level
-            # ``close(4403)`` the bespoke WS handle_mount performed UNCONDITIONALLY
-            # on an object-perm denial (websocket.py:2622 — matching the
-            # PermissionDenied verdict, NOT the batch-gated redirect verdicts). SSE
-            # no-op. Without this the WS socket stayed open after a denied mount
-            # (the test_object_permission_denied_mount_refused net).
-            await self._finalize_mount_auth("permission_denied")
-            self.view_instance = None
-            return
 
         # ---- Mount-request stash + dirty/private baselines (ADR-022 Iter 3
         # Phase 3.0 transport-agnostic grows) ----
         # Ported from WS handle_mount (websocket.py:2596-2603), placed at the
-        # SAME point: AFTER mount() + the object-permission check, BEFORE
-        # handle_params.
+        # SAME point: AFTER mount(), BEFORE handle_params. The object-permission
+        # check runs after handle_params (below).
         #
         # #1895 (KNOWN required fold): stash the mount request + kwargs on the
         # view. The runtime's OWN per-event session-save fallback
@@ -2867,8 +2898,49 @@ class ViewRuntime:
                 logger=logger,
                 log_message=f"Error in {sanitize_for_log(view_path)}.handle_params()",
             )
-            await self.transport.send(response)
+            await self._fail_mount(view_instance, exc, response)
+            return
+
+        # ---- Object-permission check (ADR-017 §Decision 5) ----
+        # Runs AFTER mount() AND handle_params(), before the first render — the
+        # same order as the HTTP GET render (RequestMixin.get) and
+        # dispatch_url_change. get_object() may read access-determining state
+        # that handle_params() sets from the mount frame's params (e.g.
+        # ``self.doc_id`` from ``?id=``), so checking any earlier would
+        # authorize the pre-params object and then render the one the params
+        # selected. Routed through the shared enforce_object_permission
+        # chokepoint so the runtime path cannot drift from WS/SSE/API (#1646).
+        # No-op for views that don't override get_object. Fail-closed: the
+        # chokepoint maps a None request / any non-PermissionDenied get_object
+        # failure to denial; the raised PermissionDenied becomes the
+        # permission_denied error frame (matching dispatch_url_change).
+        from django.core.exceptions import PermissionDenied
+
+        from .auth.core import enforce_object_permission
+
+        try:
+            await sync_to_async(enforce_object_permission)(view_instance, request)
+        except PermissionDenied:
+            logger.info(
+                "Object-permission denied for %s (runtime mount)",
+                view_instance.__class__.__name__,
+            )
+            await self.transport.send_error(
+                "Access denied for this object.", code="permission_denied"
+            )
+            # ADR-022 Iter 3 Phase 3.3b (#1919, Finding E): the runtime sent the
+            # error frame; finalize_mount_auth adds the transport-level
+            # ``close(4403)`` the bespoke WS handle_mount performed UNCONDITIONALLY
+            # on an object-perm denial (websocket.py:2622 — matching the
+            # PermissionDenied verdict, NOT the batch-gated redirect verdicts). SSE
+            # no-op. Without this the WS socket stayed open after a denied mount
+            # (the test_object_permission_denied_mount_refused net).
+            # mount() ran: undo what it and the transport set up (tick,
+            # groups, presence), as for a mount that raised.
             await self._on_mount_failed(view_instance)
+            await self._finalize_mount_auth("permission_denied")
+            self.view_instance = None
+            _release_failed_view(view_instance)
             return
 
         # ---- Initial render ----
@@ -2909,8 +2981,7 @@ class ViewRuntime:
                         logger=logger,
                         log_message=f"Error mounting {sanitize_for_log(view_path)} via actor",
                     )
-                    await self.transport.send(response)
-                    await self._on_mount_failed(view_instance)
+                    await self._fail_mount(view_instance, exc, response)
                     return
 
         if not actor_mounted:
@@ -2938,8 +3009,7 @@ class ViewRuntime:
                     logger=logger,
                     log_message=f"Error rendering {sanitize_for_log(view_path)}",
                 )
-                await self.transport.send(response)
-                await self._on_mount_failed(view_instance)
+                await self._fail_mount(view_instance, exc, response)
                 return
 
         # #3036: a live_redirect mount records the destination page's
@@ -3700,7 +3770,11 @@ class ViewRuntime:
 
         # --- security / validation (shared with the live path) -------------
         handler = await _validate_event_security(
-            self.transport, event_name, target_view, self._rate_limiter
+            self.transport,
+            event_name,
+            target_view,
+            self._rate_limiter,
+            root_view=self.view_instance,
         )
         if handler is None:
             return
@@ -4044,7 +4118,11 @@ class ViewRuntime:
         # Validate the handler against the CHILD (not the parent) — mirrors WS
         # using ``target_view`` for handler lookup (websocket.py:3498).
         handler = await _validate_event_security(
-            self.transport, event_name, target_view, self._rate_limiter
+            self.transport,
+            event_name,
+            target_view,
+            self._rate_limiter,
+            root_view=self.view_instance,
         )
         if handler is None:
             return True
@@ -4221,7 +4299,7 @@ class ViewRuntime:
 
         # Validate the handler against the COMPONENT (websocket.py:3380-3382).
         handler = await _validate_event_security(
-            self.transport, event_name, component, self._rate_limiter
+            self.transport, event_name, component, self._rate_limiter, root_view=view
         )
         if handler is None:
             return True
@@ -4705,6 +4783,8 @@ class ViewRuntime:
             return True
 
         if redirect_url:
+            if await self._refused_beside_page(redirect_url):
+                return True
             await self.transport.send({"type": "navigate", "to": redirect_url})
             # Finding E: the redirect verdict gates the WS close on
             # ``not _mounting_in_batch`` (#291 / #1780) — a batched login-required
@@ -4714,6 +4794,29 @@ class ViewRuntime:
             return True
 
         return None
+
+    async def _refused_beside_page(self, redirect_url: str) -> bool:
+        """Refuse a view beside the page view on its own.
+
+        When Django's ``LoginRequiredMiddleware`` rule refuses a view mounted
+        beside the page view (``dj-lazy`` hydration, a ``mount_batch`` entry),
+        only that view is refused: the transport reports it as a failed mount
+        and the page view keeps running, as it would on HTTP, where the
+        middleware never gates what a page includes. Returns True when the
+        transport did so; False for the page view itself, whose refusal sends
+        the page to the login page. Only the middleware's answer is refused
+        this way: a view refused by its own ``login_required = True`` still
+        sends the page to the login page, while a view without it gets the
+        middleware's answer before its permission checks.
+        """
+        from .auth._login_required_middleware import is_middleware_redirect
+
+        if not is_middleware_redirect(redirect_url):
+            return False
+        refuse = getattr(self.transport, "refuse_beside_page", None)
+        if refuse is None:
+            return False
+        return bool(await refuse())
 
     async def _on_mount_failed(self, view_instance: Any) -> None:
         """Tell the transport that a mount it already set up has failed (#3027).
@@ -4738,6 +4841,34 @@ class ViewRuntime:
                 await result
         except Exception:  # noqa: BLE001 — cleanup after an error already reported
             logger.exception("on_mount_failed hook raised")
+
+    async def _fail_mount(self, view_instance: Any, exc: BaseException, response: Any) -> None:
+        """End a mount that raised after the view was admitted: nothing stays mounted.
+
+        ``mount()`` is where an application checks what the user may see, so
+        an exception there (``PermissionDenied``, ``Http404``, any other), in
+        the state restore, ``handle_params()`` or the first render refuses the
+        view. ``PermissionDenied`` is answered as the pre-mount auth check
+        answers it: a ``Permission denied`` error and the transport's refusal
+        close (WebSocket 4403, not inside a ``mount_batch``). Any other
+        exception keeps its error frame. Either way the transport undoes what
+        the mount set up (``on_mount_failed``: tick task, channel groups,
+        presence), the view is released and ``view_instance`` is cleared, so a
+        later frame finds no mounted view.
+        """
+        from django.core.exceptions import PermissionDenied
+
+        denied = isinstance(exc, PermissionDenied)
+        if denied:
+            await self.transport.send({"type": "error", "error": "Permission denied"})
+        else:
+            await self.transport.send(response)
+        await self._on_mount_failed(view_instance)
+        if denied:
+            await self._finalize_mount_auth("permission_denied")
+        if self.view_instance is view_instance:
+            self.view_instance = None
+        _release_failed_view(view_instance)
 
     async def _finalize_mount_auth(self, verdict: str) -> None:
         """Apply the transport-level finalization of a blocking mount-auth verdict.

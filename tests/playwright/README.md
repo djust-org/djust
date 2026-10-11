@@ -24,6 +24,7 @@ python tests/playwright/test_draft_mode.py
 
 ## Available Tests
 
+- **test_insert_subtree_namespace.py** - an `{% if %}` / `{% elif %}` block inserted inside `<svg>`, `<math>`, an SVG or MathML root, `foreignObject`, HTML `annotation-xml` or a plain `<div>`, rendered by the real Rust renderer and applied with the real `client.js` in headless Chromium: the patched page has the same elements (namespace, name, attributes, text) and the same load, error and navigation events as a full render; self-contained, no server (`DJUST_PYTHON` imports `djust._rust`, optional `CHROMIUM_EXECUTABLE`)
 - **test_loading_attribute.py** - Tests @loading HTML attributes (disable, class, show, hide)
 - **test_cache_decorator.py** - Tests @cache decorator client-side caching
 - **test_draft_mode.py** - Tests DraftModeMixin functionality

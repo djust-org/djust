@@ -26,9 +26,9 @@ use djust_templates::loop_cache::{LoopCacheGuard, LoopRenderCache};
 use djust_templates::render_env::RenderEnvGuard;
 use djust_templates::{CompiledTemplate, Template};
 use djust_vdom::{
-    cache_ignore_subtree_html, diff, find_paths_by_attr, parse_html, parse_html_continue,
-    parse_html_fragment, reset_id_counter, splice_ignore_subtrees, sync_ids,
-    try_text_only_vdom_update_inplace, VNode,
+    cache_ignore_subtree_html_in, diff_in, find_paths_by_attr, parse_html_continue_with_namespace,
+    parse_html_fragment, parse_html_with_namespace, reset_id_counter, splice_ignore_subtrees,
+    sync_ids, try_text_only_vdom_update_inplace, Namespace, SourceOpenElements, VNode,
 };
 use once_cell::sync::Lazy;
 use pyo3::prelude::*;
@@ -227,6 +227,13 @@ pub struct RustLiveViewBackend {
     /// `ScopeFrame::values` documents, one level up.
     state: djust_core::SharedValues,
     last_vdom: Option<VNode>,
+    /// The namespace the parser gave `last_vdom`'s root: HTML, or SVG /
+    /// MathML for a `dj-root` inside `<svg>` / `<math>`. The tree is
+    /// serialized and diffed in it, so a `<style>` under `<svg><g dj-root>`
+    /// is written as SVG text. `None` when not known (no tree yet, or one
+    /// restored from MessagePack, which does not carry it); the
+    /// parse-skipping paths are then not taken, so the next render parses.
+    last_root_ns: Option<Namespace>,
     /// Cached HTML from the last render, used for text-only fast path detection.
     /// Not serialized — transient cache that's rebuilt on next render.
     last_html: Option<String>,
@@ -329,6 +336,7 @@ impl RustLiveViewBackend {
             template_source,
             state: Default::default(),
             last_vdom: None,
+            last_root_ns: None,
             last_html: None,
             version: 0,
             timestamp: 0.0, // Will be set on first serialization
@@ -918,7 +926,11 @@ impl RustLiveViewBackend {
             // Text-fast-path: if ALL changed fragments are plain text (no HTML tags),
             // skip html5ever + diff entirely and produce SetText patches directly.
             let t_parse_start = Instant::now();
-            let text_fast_path = if !changed_indices.is_empty() && self.last_vdom.is_some() {
+            // The parse-skipping paths below read text out of the HTML with
+            // HTML-content rules, so they run only under an HTML root (the
+            // text-region index is never built under another one).
+            let html_root = self.last_vdom.is_some() && self.last_root_ns == Some(Namespace::Html);
+            let text_fast_path = if !changed_indices.is_empty() && html_root {
                 // Check if all changed fragments are plain text
                 let mut all_text = true;
                 let mut text_changes: Vec<(usize, String, String)> = Vec::new();
@@ -1058,6 +1070,9 @@ impl RustLiveViewBackend {
             let mut took_full_parse = false;
             // Which parse-skipping path fired, for `RenderTiming::fast_path` (#2532).
             let fast_path: f64;
+            // The fast paths run only under an HTML root; a full parse
+            // reports the root's namespace.
+            let mut root_ns = Namespace::Html;
             let (mut new_vdom, patches, parse_ms, diff_ms) = if let Some((vdom, text_patches)) =
                 text_fast_path
             {
@@ -1136,7 +1151,7 @@ impl RustLiveViewBackend {
                 // placeholder so the found-count disagrees, or a residual
                 // placeholder) makes `try_parse_cache_splice` return None and we
                 // fall back to a full parse of the (full) html — always correct.
-                let mut new_vdom = if has_loop_placeholders {
+                let (mut new_vdom, parsed_ns) = if has_loop_placeholders {
                     match Self::try_parse_cache_splice(
                         &reduced_html,
                         &loop_parse_manifest,
@@ -1150,11 +1165,11 @@ impl RustLiveViewBackend {
                             // counter base the full parse expects.
                             if is_continue {
                                 djust_vdom::set_id_counter(counter_base);
-                                parse_html_continue(&html).map_err(|e| {
+                                parse_html_continue_with_namespace(&html).map_err(|e| {
                                     PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())
                                 })?
                             } else {
-                                parse_html(&html).map_err(|e| {
+                                parse_html_with_namespace(&html).map_err(|e| {
                                     PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())
                                 })?
                             }
@@ -1167,17 +1182,18 @@ impl RustLiveViewBackend {
                     // render) so a FUTURE reorder can hit. Population parses each
                     // miss item's fragment once (the changed items only).
                     let v = if is_continue {
-                        parse_html_continue(&html).map_err(|e| {
+                        parse_html_continue_with_namespace(&html).map_err(|e| {
                             PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())
                         })?
                     } else {
-                        parse_html(&html).map_err(|e| {
+                        parse_html_with_namespace(&html).map_err(|e| {
                             PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())
                         })?
                     };
                     Self::populate_parse_cache_from_manifest(&loop_parse_manifest, &mut loop_cache);
                     v
                 };
+                root_ns = parsed_ns;
                 let parse_ms = t_parse_start.elapsed().as_secs_f64() * 1000.0;
 
                 // Splice ignore subtrees
@@ -1188,7 +1204,7 @@ impl RustLiveViewBackend {
                 // VDOM diff
                 let t_diff_start = Instant::now();
                 let patches = if let Some(old_vdom) = &self.last_vdom {
-                    let patches = diff(old_vdom, &new_vdom);
+                    let patches = diff_in(old_vdom, &new_vdom, root_ns);
                     sync_ids(old_vdom, &mut new_vdom);
                     if !patches.is_empty() {
                         Some(serde_json::to_string(&patches).map_err(|e| {
@@ -1212,7 +1228,7 @@ impl RustLiveViewBackend {
 
             // Phase 4: HTML serialization
             let t_serial_start = Instant::now();
-            let hydrated_html = new_vdom.to_html();
+            let hydrated_html = new_vdom.to_html_in(Some(root_ns));
             let serialize_ms = t_serial_start.elapsed().as_secs_f64() * 1000.0;
 
             let total_ms = t_start.elapsed().as_secs_f64() * 1000.0;
@@ -1230,12 +1246,13 @@ impl RustLiveViewBackend {
 
             // Cache HTML for dj-update="ignore" subtrees so subsequent
             // to_html() calls skip serialization for those sections.
-            cache_ignore_subtree_html(&mut new_vdom);
+            cache_ignore_subtree_html_in(&mut new_vdom, root_ns);
 
             // Cache the rendered HTML for text-only fast path on next render
             self.last_html = Some(html);
 
             self.last_vdom = Some(new_vdom);
+            self.last_root_ns = Some(root_ns);
             self.version += 1;
 
             // Fragment→VDOM text node map for the text fast path on later renders.
@@ -1261,7 +1278,9 @@ impl RustLiveViewBackend {
             // or no index exists yet. Fast-path renders only change text
             // CONTENT — positions and count stay stable — so the old index
             // remains valid and we skip the rebuild.
-            if took_full_parse || self.text_node_index.is_none() {
+            if root_ns != Namespace::Html {
+                self.text_node_index = None;
+            } else if took_full_parse || self.text_node_index.is_none() {
                 if let (Some(ref html_str), Some(ref vdom)) = (&self.last_html, &self.last_vdom) {
                     let index = build_text_node_index(html_str, vdom);
                     self.text_node_index = if index.is_empty() { None } else { Some(index) };
@@ -1414,20 +1433,20 @@ impl RustLiveViewBackend {
             // structural, so it bypasses the in-place update). Helper that parses
             // the reduced html + splices cached subtrees, with a full-parse
             // fallback; returns None to mean "fall back".
-            let parse_full = |full_html: &str| -> PyResult<VNode> {
+            let parse_full = |full_html: &str| -> PyResult<(VNode, Namespace)> {
                 if is_continue {
                     djust_vdom::set_id_counter(counter_base);
-                    parse_html_continue(full_html).map_err(|e| {
+                    parse_html_continue_with_namespace(full_html).map_err(|e| {
                         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())
                     })
                 } else {
-                    parse_html(full_html).map_err(|e| {
+                    parse_html_with_namespace(full_html).map_err(|e| {
                         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())
                     })
                 }
             };
-            let parse_or_splice =
-                |loop_cache: &mut djust_templates::loop_cache::LoopRenderCache| -> PyResult<VNode> {
+            let parse_or_splice = |loop_cache: &mut djust_templates::loop_cache::LoopRenderCache|
+             -> PyResult<(VNode, Namespace)> {
                     if has_loop_placeholders {
                         match Self::try_parse_cache_splice(
                             &reduced_html,
@@ -1445,8 +1464,8 @@ impl RustLiveViewBackend {
                     }
                 };
             let mut fast_path = FAST_PATH_NONE;
-            let mut new_vdom = if let (Some(ref old_html), Some(_)) =
-                (&self.last_html, &self.last_vdom)
+            let (mut new_vdom, root_ns) = if let (Some(ref old_html), Some(_), Some(root_ns)) =
+                (&self.last_html, &self.last_vdom, self.last_root_ns)
             {
                 let old_html = old_html.clone();
                 let mut vdom = self.last_vdom.take().unwrap();
@@ -1467,7 +1486,7 @@ impl RustLiveViewBackend {
                     // review; the first cut mislabelled this site).
                     fast_path = FAST_PATH_TEXT_REGION;
                     Self::populate_parse_cache_from_manifest(&loop_parse_manifest, &mut loop_cache);
-                    vdom
+                    (vdom, root_ns)
                 } else {
                     // Structural change (or placeholders present) — splice / full parse.
                     self.last_vdom = Some(vdom);
@@ -1489,7 +1508,7 @@ impl RustLiveViewBackend {
             // Phase 3: VDOM diff
             let t_diff_start = Instant::now();
             let patches_bytes = if let Some(old_vdom) = &self.last_vdom {
-                let patches = diff(old_vdom, &new_vdom);
+                let patches = diff_in(old_vdom, &new_vdom, root_ns);
                 sync_ids(old_vdom, &mut new_vdom);
                 // `to_vec_named`, NOT `to_vec` (#2130). `Patch` is an internally
                 // tagged enum, and rmp-serde's `to_vec` encodes those as a
@@ -1519,7 +1538,7 @@ impl RustLiveViewBackend {
 
             // Phase 4: HTML serialization
             let t_serial_start = Instant::now();
-            let hydrated_html = new_vdom.to_html();
+            let hydrated_html = new_vdom.to_html_in(Some(root_ns));
             let serialize_ms = t_serial_start.elapsed().as_secs_f64() * 1000.0;
 
             let total_ms = t_start.elapsed().as_secs_f64() * 1000.0;
@@ -1534,12 +1553,13 @@ impl RustLiveViewBackend {
                 fast_path,
             });
 
-            cache_ignore_subtree_html(&mut new_vdom);
+            cache_ignore_subtree_html_in(&mut new_vdom, root_ns);
 
             // Cache the rendered HTML for text-only fast path on next render
             self.last_html = Some(html);
 
             self.last_vdom = Some(new_vdom);
+            self.last_root_ns = Some(root_ns);
             self.version += 1;
             // #2999: the tree may have changed shape; the fragment→text-node
             // map is rebuilt by the next full-parse render_with_diff.
@@ -1578,7 +1598,7 @@ impl RustLiveViewBackend {
             use std::time::Instant;
             let t_start = Instant::now();
 
-            let Some(vdom) = self.last_vdom.as_mut() else {
+            let (Some(vdom), Some(root_ns)) = (self.last_vdom.as_mut(), self.last_root_ns) else {
                 return Ok(None);
             };
             let mut paths = find_paths_by_attr(vdom, "data-component-id", &component_id);
@@ -1586,6 +1606,11 @@ impl RustLiveViewBackend {
                 return Ok(None);
             }
             let path = paths.pop().expect("one path");
+            // The fragment is parsed in an HTML context, so the node must be
+            // an HTML element in the page too.
+            if djust_vdom::namespace_at_path(vdom, root_ns, &path) != Some(Namespace::Html) {
+                return Ok(None);
+            }
             // The full path never patches inside a `dj-update="ignore"` region
             // (the old children are spliced back before the diff) and addresses
             // a `[dj-virtual]` list's rows by key, not by path. A component
@@ -1633,6 +1658,13 @@ impl RustLiveViewBackend {
             if new_node.attrs.get("data-component-id") != Some(&component_id) {
                 return Ok(None);
             }
+            // The fragment was parsed on its own, so it may be as deep as a
+            // page; grafted at `path` it must still fit under the page's
+            // nesting limit. If not, the full path (which parses the whole
+            // page and applies the limit there) handles it.
+            if path.len() + new_node.element_depth() > djust_vdom::MAX_VDOM_DEPTH {
+                return Ok(None);
+            }
             // Exactness check (review of #2920 🟡2): the page parse can
             // relocate part of a component's markup OUTSIDE its wrapper —
             // foster-parenting of a nested `<table>`, `<option>`/`<input>`
@@ -1664,14 +1696,15 @@ impl RustLiveViewBackend {
             }
             let t_diff = Instant::now();
             splice_ignore_subtrees(old_node, &mut new_node);
-            let patches = djust_vdom::diff::diff_nodes(old_node, &new_node, &path);
+            let patches =
+                djust_vdom::diff::diff_nodes_in(old_node, &new_node, &path, Some(Namespace::Html));
             sync_ids(old_node, &mut new_node);
-            cache_ignore_subtree_html(&mut new_node);
+            cache_ignore_subtree_html_in(&mut new_node, Namespace::Html);
             *old_node = new_node;
             let diff_ms = t_diff.elapsed().as_secs_f64() * 1000.0;
 
             let t_serial = Instant::now();
-            let full_html = vdom.to_html();
+            let full_html = vdom.to_html_in(Some(root_ns));
             let patches_json = serde_json::to_string(&patches)
                 .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
             let serialize_ms = t_serial.elapsed().as_secs_f64() * 1000.0;
@@ -1698,6 +1731,7 @@ impl RustLiveViewBackend {
     /// Reset the view state
     fn reset(&mut self) {
         self.last_vdom = None;
+        self.last_root_ns = None;
         self.last_html = None;
         self.version = 0;
         self.node_html_cache = Vec::new();
@@ -1769,7 +1803,8 @@ impl RustLiveViewBackend {
             template_source: serializable.template_source,
             state: std::sync::Arc::new(serializable.state.into_iter().collect()),
             last_vdom: serializable.last_vdom,
-            last_html: None, // Transient cache — rebuilt on next render
+            last_root_ns: None, // Not serialized: the next render parses
+            last_html: None,    // Transient cache — rebuilt on next render
             version: serializable.version,
             timestamp: serializable.timestamp,
             template_dirs: Vec::new(),
@@ -2027,7 +2062,7 @@ impl RustLiveViewBackend {
         manifest: &[djust_templates::loop_cache::ManifestEntry],
         loop_cache: &mut djust_templates::loop_cache::LoopRenderCache,
         counter_base: u64,
-    ) -> Option<VNode> {
+    ) -> Option<(VNode, Namespace)> {
         // Build the subtree map for placeholder (parse-HIT) items.
         let placeholder_hashes: Vec<u64> = manifest
             .iter()
@@ -2058,7 +2093,7 @@ impl RustLiveViewBackend {
 
         // Parse the reduced html. Use continue (no reset) — the re-walk fixes
         // all ids from counter_base, so the parse's own ids are irrelevant.
-        let mut tree = parse_html_continue(reduced_html).ok()?;
+        let (mut tree, root_ns) = parse_html_continue_with_namespace(reduced_html).ok()?;
 
         // Splice cached subtrees into the nonce-tagged placeholders and re-walk
         // dj-ids.
@@ -2075,12 +2110,18 @@ impl RustLiveViewBackend {
         {
             return None;
         }
+        // Each cached item was parsed on its own, so spliced into the page it
+        // can nest past the page-wide limit. A full parse applies the limit
+        // to the whole page, so let it handle that page.
+        if tree.element_depth() > djust_vdom::MAX_VDOM_DEPTH {
+            return None;
+        }
 
         // Populate the parse cache for parse-MISS items (changed/new items that
         // emitted real HTML this render) so a future reorder hits.
         Self::populate_parse_cache_from_manifest(manifest, loop_cache);
 
-        Some(tree)
+        Some((tree, root_ns))
     }
 
     /// Parse + cache the subtree for every parse-MISS item (placeholder=false)
@@ -2795,12 +2836,12 @@ fn collapse_inter_tag_whitespace(html: &str, block_tags: Vec<String>) -> String 
 #[pyfunction]
 fn diff_html(old_html: String, new_html: String) -> PyResult<String> {
     guard_panic("diff_html", move || {
-        let old = parse_html(&old_html)
+        let (old, _) = parse_html_with_namespace(&old_html)
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
-        let new = parse_html(&new_html)
+        let (new, new_ns) = parse_html_with_namespace(&new_html)
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
 
-        let patches = diff(&old, &new);
+        let patches = diff_in(&old, &new, new_ns);
         serde_json::to_string(&patches)
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
     })
@@ -4614,6 +4655,13 @@ fn find_ci(hay: &[u8], from: usize, needle: &[u8]) -> Option<usize> {
 /// JavaScript comment reading `<div dj-root>` must neither be selected as
 /// the root nor move the depth counter (#2663). Returns `None` when
 /// `bytes[i]` starts an ordinary tag. An unterminated region runs to EOF.
+///
+/// By tag name only: inside `<svg>` / `<math>` a `<style>` / `<script>` body
+/// is markup to the parser, and this still skips it. Left as is because the
+/// Python twin (`_mask_for_root_search`) applies the same rule and the two
+/// must agree (#1646); the text index this range feeds refuses foreign
+/// style/script itself (`scan_html_text_runs`). Making the root search
+/// namespace-aware means changing both twins together.
 fn skip_raw_text_region(bytes: &[u8], i: usize) -> Option<usize> {
     if bytes[i..].starts_with(b"<!--") {
         return Some(
@@ -4870,9 +4918,26 @@ fn find_root_close(bytes: &[u8], open_end: usize, tag_name: &[u8]) -> Option<usi
 ///   text node, and `<` inside is literal (not a tag). We skip to the
 ///   matching close tag as a single unit.
 /// - Comments and doctypes: ignored.
+/// - A `<script>` / `<style>` anywhere after an `<svg>` / `<math>` start
+///   tag: `None`. Inside foreign content it is a foreign element whose body
+///   the parser reads as markup, so treating it as one raw run miscounts;
+///   with a miscount elsewhere balancing it, the 1:1 mapping sent a text
+///   change to the wrong node. Whether foreign content is still open is not
+///   decided from end tags: the tree builder ignores some of them (a stray
+///   `</math>` inside `<svg>`, an `</svg>` under a `<div>` in
+///   `foreignObject` or a `<p>` in `desc`), so counting `</svg>` closed it
+///   too early. Once either start tag is seen, every later script/style
+///   gets the full parse.
+///
+/// Each run comes with the name of the innermost element open around it in
+/// the source ([`SourceOpenElements`]; `None` at the top level of `html`),
+/// which callers compare with the VDOM node's parent: the tree builder moves
+/// text out of a `<table>` (foster parenting), so the counts can agree while
+/// the order does not. A start tag that would be foster-parented gives
+/// `None`.
 ///
 /// Returns `None` on unterminated tags or other malformed input.
-fn scan_html_text_runs(html: &str) -> Option<Vec<(usize, usize)>> {
+fn scan_html_text_runs(html: &str) -> Option<Vec<TextRun<'_>>> {
     fn is_preserve_tag(name: &[u8]) -> bool {
         name.eq_ignore_ascii_case(b"pre")
             || name.eq_ignore_ascii_case(b"code")
@@ -4884,10 +4949,14 @@ fn scan_html_text_runs(html: &str) -> Option<Vec<(usize, usize)>> {
 
     let bytes = html.as_bytes();
     let mut runs = Vec::new();
+    let mut elements = SourceOpenElements::default();
     let mut i = 0;
     let mut preserve_depth: usize = 0;
     let mut current_start: Option<usize> = None;
     let mut current_preserve = false;
+    // An `<svg>` / `<math>` start tag was seen: from here on a script/style
+    // may be a foreign element (see above), so the scan gives up on one.
+    let mut seen_foreign = false;
 
     while i < bytes.len() {
         let b = bytes[i];
@@ -4897,7 +4966,7 @@ fn scan_html_text_runs(html: &str) -> Option<Vec<(usize, usize)>> {
                 let run = &bytes[start..i];
                 let all_ws = run.iter().all(|&c| c.is_ascii_whitespace());
                 if !all_ws || current_preserve {
-                    runs.push((start, i));
+                    runs.push((start, i, elements.innermost()));
                 }
             }
 
@@ -4925,6 +4994,18 @@ fn scan_html_text_runs(html: &str) -> Option<Vec<(usize, usize)>> {
                 .map(|n| name_start + n)
                 .unwrap_or(tag_body.len());
             let tag_name = &tag_body[name_start..name_end];
+            if !elements.take(&html[i..=tag_end]) {
+                return None; // foster-parented out of a table
+            }
+
+            if !is_close {
+                seen_foreign |= ["svg".as_bytes(), b"math"]
+                    .iter()
+                    .any(|root| starts_with_ci(tag_name, root) && tag_name.len() == root.len());
+                if seen_foreign && is_raw_text_tag(tag_name) {
+                    return None;
+                }
+            }
 
             if !is_close && is_raw_text_tag(tag_name) {
                 // Raw-text element: body is a single text node. Find the
@@ -4950,14 +5031,18 @@ fn scan_html_text_runs(html: &str) -> Option<Vec<(usize, usize)>> {
                 };
                 // Only emit a run if non-empty.
                 if close_at > body_start {
-                    runs.push((body_start, close_at));
+                    runs.push((body_start, close_at, elements.innermost()));
                 }
                 // Skip past the close tag: find '>' after close_at.
                 let mut k = close_at;
                 while k < bytes.len() && bytes[k] != b'>' {
                     k += 1;
                 }
-                i = k.saturating_add(1);
+                if k >= bytes.len() {
+                    return None;
+                }
+                elements.take(&html[close_at..=k]);
+                i = k + 1;
                 continue;
             }
 
@@ -4984,11 +5069,45 @@ fn scan_html_text_runs(html: &str) -> Option<Vec<(usize, usize)>> {
         let run = &bytes[start..i];
         let all_ws = run.iter().all(|&c| c.is_ascii_whitespace());
         if !all_ws || current_preserve {
-            runs.push((start, i));
+            runs.push((start, i, elements.innermost()));
         }
     }
 
     Some(runs)
+}
+
+/// A text run of [`scan_html_text_runs`]: its byte range and the innermost
+/// element open around it in the source.
+type TextRun<'a> = (usize, usize, Option<&'a str>);
+
+/// Do the scanned `runs` and the VDOM's text `nodes` (from
+/// [`collect_vdom_text_nodes`]) correspond one for one? The counts must
+/// agree, and each node that is not whitespace-only must sit in an element
+/// named like the innermost element open around its run (`vdom` itself for
+/// a run at the top level of the scanned range). Matching counts alone let
+/// foster-parented text pair with another node.
+fn runs_match_text_nodes(
+    runs: &[TextRun<'_>],
+    nodes: &[(Vec<usize>, String, String)],
+    vdom: &VNode,
+) -> bool {
+    runs.len() == nodes.len()
+        && runs
+            .iter()
+            .zip(nodes)
+            .all(|(&(_, _, open), (path, text, _))| {
+                if is_html_whitespace_only(text) {
+                    return true;
+                }
+                let parent = path
+                    .split_last()
+                    .and_then(|(_, parent_path)| get_vdom_node(vdom, parent_path));
+                match (parent, open) {
+                    (Some(parent), Some(open)) => parent.tag.eq_ignore_ascii_case(open),
+                    (Some(_), None) => path.len() == 1,
+                    (None, _) => false,
+                }
+            })
 }
 
 /// Build the sorted `(html_start, html_end, path, text, djust_id)` index
@@ -5006,19 +5125,19 @@ fn build_text_node_index(html: &str, vdom: &VNode) -> Vec<TextNodeEntry> {
     let Some(runs) = scan_html_text_runs(&html[scan_from..scan_to]) else {
         return Vec::new();
     };
-    let runs: Vec<(usize, usize)> = runs
-        .into_iter()
-        .map(|(s, e)| (s + scan_from, e + scan_from))
-        .collect();
-
     let mut vdom_nodes: Vec<(Vec<usize>, String, String)> = Vec::new();
     collect_vdom_text_nodes(vdom, &mut vec![], &mut vdom_nodes);
 
-    if runs.len() != vdom_nodes.len() {
-        // Scanner and VDOM walker disagreed on count — fast-path can't
-        // trust the 1:1 mapping. Fall through to full html5ever parse.
+    if !runs_match_text_nodes(&runs, &vdom_nodes, vdom) {
+        // Scanner and VDOM walker disagreed on count or placement —
+        // fast-path can't trust the 1:1 mapping. Fall through to full
+        // html5ever parse.
         return Vec::new();
     }
+    let runs: Vec<(usize, usize)> = runs
+        .into_iter()
+        .map(|(s, e, _)| (s + scan_from, e + scan_from))
+        .collect();
 
     runs.into_iter()
         .zip(vdom_nodes)
@@ -5088,16 +5207,16 @@ fn build_fragment_text_map(
         // text_region_fast_path or full html5ever parse.
         None => return map,
     };
-    let runs: Vec<(usize, usize)> = runs
-        .into_iter()
-        .map(|(s, e)| (s + root_start, e + root_start))
-        .collect();
-
-    // Defensive: if scanner and VDOM walker disagree on count, the 1:1
-    // mapping isn't trustworthy. Same fallback as build_text_node_index.
-    if runs.len() != text_nodes.len() {
+    // Defensive: if scanner and VDOM walker disagree on count or
+    // placement, the 1:1 mapping isn't trustworthy. Same fallback as
+    // build_text_node_index.
+    if !runs_match_text_nodes(&runs, &text_nodes, vdom) {
         return map;
     }
+    let runs: Vec<(usize, usize)> = runs
+        .into_iter()
+        .map(|(s, e, _)| (s + root_start, e + root_start))
+        .collect();
 
     for (idx, frag) in fragments.iter().enumerate() {
         // Only map text-only fragments (no HTML tags).
@@ -5350,6 +5469,12 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // The conversion's recursion ceiling (#2624), exported so the test that
     // pins it against the worker-stack measurement reads the real constant.
     m.add("MAX_CONVERSION_DEPTH", djust_core::MAX_CONVERSION_DEPTH)?;
+    // The VDOM's element-nesting limit, exported so the tests pin the
+    // boundary against the real constant.
+    m.add("MAX_VDOM_DEPTH", djust_vdom::MAX_VDOM_DEPTH)?;
+    // How many block quotes / lists / list items the Markdown renderer keeps
+    // open at once, exported so the tests read the real constant.
+    m.add("MAX_MD_NESTING", djust_templates::markdown::MAX_MD_NESTING)?;
     m.add_function(wrap_pyfunction!(set_virtual_keyed_ops, m)?)?;
     m.add_function(wrap_pyfunction!(set_django_value_repr, m)?)?;
     m.add_function(wrap_pyfunction!(django_value_repr_enabled, m)?)?;
@@ -5963,6 +6088,107 @@ mod fast_path_flag_tests {
                 patches.contains(r#""text":"Tom & Jerry""#),
                 "{tpl}: {patches}"
             );
+        }
+    }
+
+    #[test]
+    fn text_fast_paths_fall_back_when_text_is_foster_parented() {
+        // Text directly in a <table> is moved before the table, so the VDOM's
+        // text order differs from the source's. With equal texts the count
+        // and content checks both passed and the change went to the moved
+        // node instead of the cell. Fragment path ({{ x }}) and text-region
+        // path ({{ x|safe }} holding a tag).
+        for (tpl, first, second) in [
+            (
+                r#"<div dj-id="0"><table><tr><td>{{ x }}</td></tr>same</table></div>"#,
+                "same",
+                "W",
+            ),
+            (
+                r#"<div dj-id="0"><table><tr><td>{{ x|safe }}</td></tr>same</table></div>"#,
+                "<i>same</i>",
+                "<i>W</i>",
+            ),
+        ] {
+            let mut view = one_var_view(tpl, first);
+            let patches = set_x(&mut view, second);
+            assert!(patches.contains(r#""text":"W""#), "{patches}");
+            assert!(!patches.contains(r#""path":[0]"#), "{patches}");
+        }
+
+        fn parents(html: &str) -> Option<Vec<Option<&str>>> {
+            super::scan_html_text_runs(html)
+                .map(|runs| runs.iter().map(|&(_, _, open)| open).collect())
+        }
+        assert_eq!(
+            parents("<table><tr><td>a</td></tr>b</table>"),
+            Some(vec![Some("td"), Some("table")])
+        );
+        assert_eq!(
+            parents("<p>a<style>b</style></p>c"),
+            Some(vec![Some("p"), Some("style"), None])
+        );
+        // A start tag that would be foster-parented gives no runs at all.
+        assert_eq!(parents("<table><tr><td>a</td></tr><b>a</b></table>"), None);
+    }
+
+    #[test]
+    fn text_index_is_not_built_over_foreign_style_or_script() {
+        // In `<svg><style>` the `<g>` tags are elements: the scanner's one raw
+        // run there is three VDOM text nodes. The textarea's `<b>` is the
+        // opposite miscount, so the totals matched and the text change in the
+        // textarea was sent to the first `<g>`.
+        let tpl = concat!(
+            r#"<div dj-id="0"><textarea>a<b>{{ x|safe }}</textarea>"#,
+            r#"<svg><style><g>Q</g><g>y</g></style></svg></div>"#
+        );
+        let mut view = one_var_view(tpl, "Q");
+        let patches = set_x(&mut view, "W");
+        assert!(patches.contains(r#""text":"a<b>W""#), "{patches}");
+        assert!(!patches.contains(r#""text":"W""#), "{patches}");
+
+        let runs = |html: &str| super::scan_html_text_runs(html).map(|r| r.len());
+        assert_eq!(runs("<svg><style>x</style></svg>"), None);
+        assert_eq!(runs("<math\n><mi><script>x</script></mi></math>"), None);
+        // After any svg/math start tag, closed or self-closing, too: whether
+        // foreign content is still open is not decided from end tags.
+        assert_eq!(runs("<svg></svg><style>x</style>"), None);
+        assert_eq!(runs("<SVG/><p>a</p><script>x</script>"), None);
+        // Before one, and for names that only start like it, raw text.
+        assert_eq!(runs("<style>x</style><svg></svg>"), Some(1));
+        assert_eq!(
+            runs("<svgx></svgx><mathy></mathy><style>x</style>"),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn foreign_content_left_open_by_an_ignored_end_tag_is_not_scanned() {
+        // The tree builder ignores these `</svg>` / `</math>` tags, so the
+        // `<style>` is still SVG and its `<g>` tags are elements. Counting
+        // the end tags closed foreign content early, the scanner took the
+        // style body as one raw run, and with the textarea's `<b>` as the
+        // opposite miscount the text change went to the first `<g>`.
+        // Each must give the patches a full parse gives.
+        let tail = "<style><g>Q</g><g>y</g></style></svg></div>";
+        for middle in [
+            "<svg></math>",
+            "<svg><foreignObject><div></svg></div></foreignObject>",
+            "<svg><desc><p></svg></p></desc>",
+        ] {
+            let tpl = format!(
+                r#"<div dj-id="0"><textarea>a<b>{{{{ x|safe }}}}</textarea>{middle}{tail}"#
+            );
+            let mut view = one_var_view(&tpl, "Q");
+            let patches = set_x(&mut view, "W");
+
+            let mut full = one_var_view(&tpl, "Q");
+            full.clear_fragment_cache();
+            let expected = set_x(&mut full, "W");
+            assert_eq!(timing(&full, "fast_path"), FAST_PATH_NONE);
+            assert_eq!(patches, expected, "{middle}");
+            assert!(patches.contains(r#""text":"a<b>W""#), "{patches}");
+            assert!(!patches.contains(r#""text":"W""#), "{patches}");
         }
     }
 

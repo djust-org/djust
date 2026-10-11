@@ -86,6 +86,103 @@ class ProjectView(LiveView):
 
 The method is only called if the subclass defines it — the base `LiveView` class does not invoke it by default.
 
+### Django Auth Mixins, Custom Access Mixins and Method Decorators
+
+The live transports (the WebSocket and SSE mount, events, the HTTP POST event
+fallback, the API and `{% live_render %}` children) never call the view's
+`setup()`, `dispatch()`, `get()` or `post()`, and never run the wrappers the
+URLconf puts around `as_view()`. djust handles what lives there as follows.
+
+**Replayed** on every live transport. The same users are admitted as on the
+HTTP request. An authenticated user who fails the test gets `PermissionDenied`
+on live transports, where Django's HTTP response would redirect to the login
+page; an anonymous user gets the login redirect.
+
+- Django's `LoginRequiredMixin`, `PermissionRequiredMixin` and
+  `UserPassesTestMixin` (including your own `test_func()`), and a subclass of
+  one of them whose `dispatch()` only does setup;
+- Django's `login_required`, `staff_member_required`, `user_passes_test(...)`
+  and `permission_required(...)` applied with `@method_decorator` to
+  `dispatch`, `get` or `post`;
+- the same decorators wrapped around `as_view()` in the URLconf
+  (`path("x/", login_required(MyView.as_view()))`) or by an `as_view()`
+  override. djust reads them from the server's URLconf, never from the URL a
+  client sends; a view routed more than once gets every route's wrappers;
+- another package's decorator built on `user_passes_test` (django-otp's
+  `otp_required`, for example);
+- an async test function, which is awaited.
+
+A decorator applied only to `post` runs for events (and the HTTP POST event
+fallback), not for the mount, as Django runs it for a POST and not for the
+GET that renders the page. It applies to every event on the page: the view's
+own, its components', its embedded views' and its uploads, as on HTTP, where
+all of them go through the page view's `post()`. `@method_decorator(login_not_required,
+name="dispatch")` (a public view under `LoginRequiredMiddleware`) is not
+access control and changes nothing.
+
+**Refused** unless the view declares a rule that covers it, because no live
+transport can run it:
+
+- a custom `AccessMixin` subclass with its own `dispatch()`. Declare
+  `permission_required` or `check_permissions()`; `login_required = True`
+  alone does not cover it;
+- a `setup()`, `dispatch()`, `get()` or `post()` override (or a subclass of
+  Django's mixins whose `dispatch()` checks the user) that checks the user
+  (any attribute of it: `is_staff`, `groups`, `role`, `getattr(user, ...)`)
+  and denies by any means: it raises (`PermissionDenied`, `Http404`, anything
+  else), calls `handle_no_permission()` or `redirect_to_login()`, returns a
+  redirect (`redirect(...)`, `HttpResponseRedirect`), an error response or a
+  page of its own (`render(...)`, `TemplateResponse`, `HttpResponse(...)`,
+  `self.http_method_not_allowed(...)`), or looks an object up with
+  `get_object_or_404()` / `get_list_or_404()`; these names also count when
+  imported under another name (`from django.shortcuts import redirect as go`);
+- a decorator applied to one of those methods, or a URLconf wrapper, whose
+  code checks the user (also when another decorator is stacked above
+  `@method_decorator(...)`, or when the decorator returns another decorator's
+  wrapper).
+
+Any other decorator or URLconf wrapper djust does not recognise as Django's or
+its own (a rate limiter, a CSP decorator, a project logging decorator) is not
+refused on this release line when its code does not check the user. It does
+not run on live transports either, and `djust.V013` warns about it.
+
+A declared `login_required = True` (or `LoginRequiredLiveViewMixin`) covers a
+gate that reads only `is_authenticated` / `is_anonymous`; a gate that reads
+any other attribute of the user (staff, groups, a role, permissions) needs
+`permission_required` or `check_permissions()`:
+
+```python
+class StaffOnlyView(StaffRequiredMixin, LiveView):
+    login_required = True
+
+    def check_permissions(self, request):
+        return request.user.is_staff
+```
+
+System check `djust.S012` (an Error) names every view defined in the project
+that the runtime refuses. `djust.V013` (a warning) names the rest: an override
+that reads the user (`is_authenticated`, `is_staff`, `has_perm`) without
+denying, and an unknown decorator or URLconf wrapper, which are not refused
+but are not run on live transports either, and a refused view that an
+installed package defines. Because `djust.S012` is an Error, `manage.py check`
+and `migrate` stop until a refused view declares its rule.
+
+`login_required = False` does not count as a declaration. Detection is a
+heuristic over the view's code: a check inside a helper function (also when
+the view passes it the user or the request), a check that does not read the
+user (a session flag, the client address), a `dispatch` built with
+`functools.partialmethod` or a custom descriptor, and a URLconf wrapper that
+does not use `functools.wraps` are not recognised (`djust.V013` still warns
+about every `setup()`/`dispatch()`/`get()`/`post()` override, and names a
+route whose wrapper it cannot read). Live transports use `ROOT_URLCONF`; a
+URLconf that middleware selects per request (django-hosts) applies only to the
+SSE and HTTP POST paths. Django's `LoginRequiredMiddleware` is not applied on
+live transports: declare `login_required = True` on the views it protects.
+An async test function is awaited from the worker thread live transports
+call the check from; called directly on the event loop's thread, it refuses
+the request (call `check_view_auth()` through `sync_to_async`). Declared
+djust auth is the contract every transport enforces.
+
 ### Explicitly Public Views
 
 Set `login_required = False` to explicitly mark a view as public. This suppresses the `djust_audit` warning:

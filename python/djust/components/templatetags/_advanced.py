@@ -14,6 +14,7 @@ from django import template
 from django.utils.safestring import SafeString
 
 from djust.components.utils import url_attr
+from djust.components.utils import safe_css_color, safe_css_length
 
 from ._registry import register, _resolve, _parse_kv_args, conditional_escape, mark_safe, safe_url
 
@@ -217,7 +218,10 @@ class CalendarViewNode(template.Node):
                 for i, ev in enumerate(day_events[:3]):
                     title = conditional_escape(str(ev.get("title", "")))
                     color = conditional_escape(
-                        str(ev.get("color", self.COLORS[i % len(self.COLORS)]))
+                        safe_css_color(
+                            ev.get("color", self.COLORS[i % len(self.COLORS)]),
+                            self.COLORS[i % len(self.COLORS)],
+                        )
                     )
                     ev_html += (
                         f'<div class="dj-calendar__event" '
@@ -1043,7 +1047,9 @@ class CursorsOverlayNode(template.Node):
                 y = 0
 
             e_name = conditional_escape(str(name))
-            e_color = conditional_escape(str(color))
+            e_color = conditional_escape(
+                safe_css_color(color, self.DEFAULT_COLORS[i % len(self.DEFAULT_COLORS)])
+            )
 
             try:
                 px = int(x)
@@ -1210,7 +1216,9 @@ class CollabSelectionNode(template.Node):
                 end = 0
 
             e_name = conditional_escape(str(name))
-            e_color = conditional_escape(str(color))
+            e_color = conditional_escape(
+                safe_css_color(color, self.DEFAULT_COLORS[i % len(self.DEFAULT_COLORS)])
+            )
             e_text = conditional_escape(str(text))
 
             try:
@@ -1455,7 +1463,7 @@ class MapPickerNode(template.Node):
 
         e_class = conditional_escape(str(custom_class))
         e_event = conditional_escape(str(pick_event))
-        e_height = conditional_escape(str(height))
+        e_height = conditional_escape(safe_css_length(height, "400px"))
 
         cls = "dj-map-picker"
         if e_class:

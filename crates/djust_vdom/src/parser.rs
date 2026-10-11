@@ -17,10 +17,11 @@
 //! - Element structure being parsed
 //! - Child filtering decisions
 
-use crate::{next_djust_id, reset_id_counter, should_trace, VNode};
+use crate::{next_djust_id, reset_id_counter, should_trace, Namespace, VNode};
 use djust_core::html_whitespace::{is_html_whitespace_only, is_inline_level_tag};
 use djust_core::{DjangoRustError, Result};
 use html5ever::tendril::TendrilSink;
+use html5ever::tree_builder::TreeBuilderOpts;
 use html5ever::{ns, parse_document, parse_fragment, LocalName, ParseOpts, QualName};
 use markup5ever_rcdom::{Handle, NodeData, RcDom};
 use std::collections::HashMap;
@@ -32,6 +33,46 @@ macro_rules! parser_trace {
             eprintln!("[PARSER TRACE] {}", format!($($arg)*));
         }
     };
+}
+
+/// The deepest element nesting the VDOM keeps: the root element is depth 1.
+///
+/// Every walker over a [`VNode`] tree (diff, patch serialization, `to_html`,
+/// clone, drop, id assignment) recurses once per nesting level, so the tree
+/// depth is bounded where trees are built, here, rather than in each walker.
+/// An element at this depth keeps its tag and attributes, and everything
+/// below it is flattened to that element's text content (the work of
+/// `collapse_subtree_to_text`); nothing nests deeper than this.
+///
+/// The limit is sized by the heaviest walker, the differ, which needs about
+/// 2.2 KB of stack per level (measured in release builds): 256 levels is
+/// about 560 KB. The smallest stack a walker normally runs on is 2 MiB (a
+/// tokio worker thread), which leaves 3x headroom; a Python thread has 8 MiB
+/// on glibc and 16 MiB on macOS. The limit is also far beyond any real page
+/// (Lighthouse flags a DOM depth above 32) and half of the 512 levels
+/// browsers keep when parsing HTML.
+/// html5ever has no depth limit but is not recursive, so the raw tree it
+/// builds is walked iteratively before this conversion starts.
+pub const MAX_VDOM_DEPTH: usize = 256;
+
+thread_local! {
+    /// Subtrees [`collapse_subtree_to_text`] flattened during the parse in
+    /// progress on this thread; read once at the end of the parse.
+    static COLLAPSED_SUBTREES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+fn begin_depth_accounting() {
+    COLLAPSED_SUBTREES.with(|c| c.set(0));
+}
+
+fn report_depth_accounting(entry: &str) {
+    let collapsed = COLLAPSED_SUBTREES.with(|c| c.replace(0));
+    if collapsed > 0 {
+        tracing::warn!(
+            "{entry}: {collapsed} subtree(s) nested deeper than {MAX_VDOM_DEPTH} levels were \
+             flattened to text"
+        );
+    }
 }
 
 /// SVG attributes that require camelCase preservation.
@@ -247,6 +288,21 @@ pub fn parse_html(html: &str) -> Result<VNode> {
 ///
 /// The ID counter continues from where the previous parse left off.
 pub fn parse_html_continue(html: &str) -> Result<VNode> {
+    parse_html_continue_with_namespace(html).map(|(vnode, _)| vnode)
+}
+
+/// [`parse_html`], also returning the namespace the parser gave the root
+/// element (see [`crate::Namespace`]).
+pub fn parse_html_with_namespace(html: &str) -> Result<(VNode, Namespace)> {
+    reset_id_counter();
+    parse_html_continue_with_namespace(html)
+}
+
+/// [`parse_html_continue`], also returning the namespace the parser gave the
+/// root element: a `dj-root` inside `<svg>` is an SVG element, and the
+/// serializer needs that to write its descendants (the VDOM keeps local
+/// names only).
+pub fn parse_html_continue_with_namespace(html: &str) -> Result<(VNode, Namespace)> {
     parser_trace!(
         "parse_html_continue() - parsing {} bytes (counter NOT reset)",
         html.len()
@@ -260,7 +316,15 @@ pub fn parse_html_continue(html: &str) -> Result<VNode> {
 
     // Find the body or first child
     let root = find_root(&dom.document);
-    handle_to_vnode(&root)
+    let namespace = match root.data {
+        NodeData::Element { ref name, .. } if name.ns == ns!(svg) => Namespace::Svg,
+        NodeData::Element { ref name, .. } if name.ns == ns!(mathml) => Namespace::MathMl,
+        _ => Namespace::Html,
+    };
+    begin_depth_accounting();
+    let vnode = handle_to_vnode(&root, 1);
+    report_depth_accounting("parse_html");
+    Ok((vnode?, namespace))
 }
 
 /// Parse an HTML fragment in the context of a given parent element.
@@ -310,8 +374,10 @@ pub fn parse_html_fragment(html: &str, context_tag: &str) -> Result<Vec<VNode>> 
     // exactly the rules a full parse applies to that element's children
     // (#2999): indentation between roots is dropped, a space between two
     // inline-level roots is kept as `" "`, and non-dj-if comments are dropped.
-    let roots = build_children(context_tag, &html_wrapper.children.borrow())?;
-    Ok(roots)
+    begin_depth_accounting();
+    let roots = build_children(context_tag, &html_wrapper.children.borrow(), 0);
+    report_depth_accounting("parse_html_fragment");
+    roots
 }
 
 /// Parse `html` as a fragment the way the CLIENT sees it after inserting it
@@ -324,13 +390,43 @@ pub fn parse_html_fragment(html: &str, context_tag: &str) -> Result<Vec<VNode>> 
 ///
 /// Used by the reference patch model (`patch::apply_patches`) so the Rust
 /// round-trip tests apply `InsertSubtree` exactly as the browser does (#2999).
+///
+/// The parse has scripting disabled, as `<template>.innerHTML` has: there a
+/// `<noscript>` holds markup, not raw text.
 pub fn parse_html_fragment_client_view(html: &str, context_tag: &str) -> Result<Vec<VNode>> {
-    let context_name = QualName::new(None, ns!(html), LocalName::from(context_tag));
+    parse_html_fragment_client_view_in(html, context_tag, Namespace::Html, None)
+}
+
+/// [`parse_html_fragment_client_view`] as children of a `context_tag`
+/// element in namespace `context_ns`: the client parses a payload for an
+/// SVG or MathML parent in that namespace (`_parseSubtreeHtml`). `encoding`
+/// is the context's `encoding` attribute (a MathML `annotation-xml` with an
+/// HTML encoding holds HTML).
+pub fn parse_html_fragment_client_view_in(
+    html: &str,
+    context_tag: &str,
+    context_ns: Namespace,
+    encoding: Option<&str>,
+) -> Result<Vec<VNode>> {
+    let namespace = match context_ns {
+        Namespace::Html => ns!(html),
+        Namespace::Svg => ns!(svg),
+        Namespace::MathMl => ns!(mathml),
+    };
+    let context_name = QualName::new(None, namespace, LocalName::from(context_tag));
+    let context_attrs = encoding
+        .map(|value| {
+            vec![html5ever::Attribute {
+                name: QualName::new(None, ns!(), LocalName::from("encoding")),
+                value: value.into(),
+            }]
+        })
+        .unwrap_or_default();
     let dom = parse_fragment(
         RcDom::default(),
-        ParseOpts::default(),
+        client_parse_opts(),
         context_name,
-        vec![],
+        context_attrs,
         false,
     )
     .from_utf8()
@@ -344,6 +440,7 @@ pub fn parse_html_fragment_client_view(html: &str, context_tag: &str) -> Result<
         .ok_or_else(|| DjangoRustError::VdomError("fragment parse: missing html wrapper".into()))?
         .clone();
     drop(doc_children);
+    begin_depth_accounting();
     let mut roots = Vec::new();
     for child in html_wrapper.children.borrow().iter() {
         match &child.data {
@@ -367,10 +464,23 @@ pub fn parse_html_fragment_client_view(html: &str, context_tag: &str) -> Result<
                     roots.push(VNode::text(text));
                 }
             }
-            _ => roots.push(handle_to_vnode(child)?),
+            _ => roots.push(handle_to_vnode(child, 1)?),
         }
     }
+    report_depth_accounting("parse_html_fragment_client_view");
     Ok(roots)
+}
+
+/// Parser options for a client-side `<template>.innerHTML` parse: scripting
+/// is disabled in a template's inert document.
+fn client_parse_opts() -> ParseOpts {
+    ParseOpts {
+        tree_builder: TreeBuilderOpts {
+            scripting_enabled: false,
+            ..Default::default()
+        },
+        ..Default::default()
+    }
 }
 
 fn find_root(handle: &Handle) -> Handle {
@@ -428,22 +538,23 @@ fn find_body(handle: &Handle) -> Option<Handle> {
     None
 }
 
-/// Recursively search for an element with `dj-root` or `dj-view` attribute.
-/// Returns the first match (depth-first).
+/// Search for an element with a `dj-root` or `dj-view` attribute.
+/// Returns the first match (depth-first, document order).
+///
+/// Iterative (an explicit stack, pre-order): the raw DOM is as deep as the
+/// input nests, and nothing bounds that before the conversion to a VDOM.
 fn find_liveview_root(handle: &Handle) -> Option<Handle> {
-    for child in handle.children.borrow().iter() {
-        if let NodeData::Element { ref attrs, .. } = child.data {
+    let mut stack: Vec<Handle> = handle.children.borrow().iter().rev().cloned().collect();
+    while let Some(node) = stack.pop() {
+        if let NodeData::Element { ref attrs, .. } = node.data {
             let has_liveview_attr = attrs.borrow().iter().any(|a| {
                 let name = a.name.local.as_ref();
                 name == "dj-root" || name == "dj-view"
             });
             if has_liveview_attr {
-                return Some(child.clone());
+                return Some(node.clone());
             }
-            // Recurse into children
-            if let Some(found) = find_liveview_root(child) {
-                return Some(found);
-            }
+            stack.extend(node.children.borrow().iter().rev().cloned());
         }
     }
     None
@@ -536,7 +647,10 @@ fn push_text(children: &mut Vec<VNode>, text: String) {
 /// whitespace-only text node iff it is exactly `" "`. That keeps the client's
 /// predicate a property of the node, so it does not flip while a patch batch
 /// moves the node's neighbours around.
-fn build_children(parent_tag: &str, raw: &[Handle]) -> Result<Vec<VNode>> {
+fn build_children(parent_tag: &str, raw: &[Handle], parent_depth: usize) -> Result<Vec<VNode>> {
+    // By name, so a foreign `<svg><style>` keeps its whitespace too. That is
+    // only a kept text node: the serializer escapes it as foreign text and
+    // a re-parse gives the same node.
     let preserve_whitespace =
         matches!(parent_tag, "pre" | "code" | "textarea" | "script" | "style");
 
@@ -606,13 +720,58 @@ fn build_children(parent_tag: &str, raw: &[Handle]) -> Result<Vec<VNode>> {
                     push_text(&mut children, text);
                 }
             }
-            _ => children.push(handle_to_vnode(child)?),
+            _ => children.push(handle_to_vnode(child, parent_depth + 1)?),
         }
     }
     Ok(children)
 }
 
-fn handle_to_vnode(handle: &Handle) -> Result<VNode> {
+/// The children of an element at [`MAX_VDOM_DEPTH`]: all the text below it,
+/// concatenated in document order, as one text node (none when there is
+/// none). The elements below are not kept, so nothing nests deeper than the
+/// limit; their text is, so the content still reads.
+///
+/// Iterative, like [`find_root_with_attr`]. The result follows the same
+/// whitespace rule as [`build_children`] for a lone child: a whitespace-only
+/// run is dropped except inside `pre`/`code`/`textarea`/`script`/`style`.
+/// That keeps `parse(to_html(tree))` equal to `tree` for a flattened tree.
+///
+/// A raw-text-named element (`djust_core::raw_text`) that had child elements
+/// keeps no text: that happens only in `<svg>` / `<math>`, and the text of
+/// its descendants is not its own text.
+fn collapse_subtree_to_text(parent_tag: &str, handle: &Handle) -> Vec<VNode> {
+    let mut text = String::new();
+    let mut stack: Vec<Handle> = handle.children.borrow().iter().rev().cloned().collect();
+    let mut collapsed_elements = false;
+    while let Some(node) = stack.pop() {
+        match &node.data {
+            NodeData::Text { contents } => text.push_str(&contents.borrow()),
+            NodeData::Element { .. } => {
+                collapsed_elements = true;
+                stack.extend(node.children.borrow().iter().rev().cloned());
+            }
+            _ => {}
+        }
+    }
+    if collapsed_elements {
+        COLLAPSED_SUBTREES.with(|c| c.set(c.get() + 1));
+        // Only foreign content (svg/math) gives a raw-text-named element
+        // element children. Text decoded from them must not become the
+        // direct text of that element: keep none.
+        if djust_core::raw_text::is_raw_text_element(parent_tag) {
+            return Vec::new();
+        }
+    }
+    let preserve_whitespace =
+        matches!(parent_tag, "pre" | "code" | "textarea" | "script" | "style");
+    if text.is_empty() || (!preserve_whitespace && is_html_whitespace_only(&text)) {
+        Vec::new()
+    } else {
+        vec![VNode::text(text)]
+    }
+}
+
+fn handle_to_vnode(handle: &Handle, depth: usize) -> Result<VNode> {
     match &handle.data {
         NodeData::Text { contents } => {
             let text = contents.borrow().to_string();
@@ -683,8 +842,13 @@ fn handle_to_vnode(handle: &Handle) -> Result<VNode> {
                 parser_trace!("  Element <{}> has key: {:?}", tag, key);
             }
 
-            // Convert children (whitespace rules: see `build_children`).
-            let children = build_children(tag_ref, &handle.children.borrow())?;
+            // Convert children (whitespace rules: see `build_children`). At
+            // MAX_VDOM_DEPTH the subtree below is flattened instead of nested.
+            let children = if depth >= MAX_VDOM_DEPTH {
+                collapse_subtree_to_text(tag_ref, handle)
+            } else {
+                build_children(tag_ref, &handle.children.borrow(), depth)?
+            };
 
             Ok(VNode {
                 tag,
@@ -700,7 +864,7 @@ fn handle_to_vnode(handle: &Handle) -> Result<VNode> {
         NodeData::Document => {
             // For document nodes, process children and return first element
             for child in handle.children.borrow().iter() {
-                if let Ok(vnode) = handle_to_vnode(child) {
+                if let Ok(vnode) = handle_to_vnode(child, depth) {
                     if !vnode.is_text() {
                         return Ok(vnode);
                     }

@@ -7,6 +7,8 @@ Provides progress bars for showing completion status.
 from typing import Dict, Any
 from ..base import LiveComponent
 from django.utils.html import conditional_escape
+
+from djust.components.utils import safe_css_length
 from django.utils.safestring import SafeString, mark_safe
 
 
@@ -53,7 +55,8 @@ class ProgressComponent(LiveComponent):
         self.custom_label = kwargs.get("custom_label", None)  # Custom label text
         self.striped = kwargs.get("striped", False)
         self.animated = kwargs.get("animated", False)  # Animated stripes
-        self.height = kwargs.get("height", None)  # Custom height
+        # Custom height; written into a style attribute, so only a CSS length.
+        self.height = safe_css_length(kwargs.get("height"), "") or None
 
     def get_context(self) -> Dict[str, Any]:
         """Get progress context"""

@@ -131,7 +131,14 @@ _RAW_TEXT_RE = re.compile(
 def _mask_raw_text(html: str) -> str:
     """Return ``html`` with every raw-text region (script/style body, HTML
     comment) replaced by NULs of the SAME length, so any match position found
-    in the masked string indexes the original string unchanged (#2663)."""
+    in the masked string indexes the original string unchanged (#2663).
+
+    The match is by tag name, so a ``<style>`` / ``<script>`` inside ``<svg>``
+    or ``<math>`` (a foreign element, whose body the HTML parser reads as
+    markup) is masked too. Left as is: the root search
+    (``_mask_for_root_search``) and its Rust twin (``skip_raw_text_region``)
+    apply the same rule and must agree (#1646); making them namespace-aware
+    means changing them together."""
     return _RAW_TEXT_RE.sub(lambda m: "\x00" * len(m.group(0)), html)
 
 

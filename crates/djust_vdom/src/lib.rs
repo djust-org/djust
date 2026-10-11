@@ -18,6 +18,8 @@ pub mod lis;
 pub mod parser;
 pub mod patch;
 
+pub use parser::MAX_VDOM_DEPTH;
+
 /// Check if VDOM tracing is enabled via environment variable.
 /// Cached for performance (only checks env var once).
 pub(crate) fn should_trace() -> bool {
@@ -495,29 +497,115 @@ impl VNode {
         self.tag == "#comment"
     }
 
-    /// Serialize the VNode back to HTML string.
-    /// This includes dj-id attributes for reliable patch targeting.
-    pub fn to_html(&self) -> String {
-        self._to_html(false)
+    /// How deeply elements nest in this subtree: this node alone is 1 when it
+    /// is an element, 0 for a text or comment node. Iterative, so it is safe
+    /// on a tree of any depth.
+    ///
+    /// The parser keeps every tree it returns within [`MAX_VDOM_DEPTH`]; a
+    /// caller that grafts one parsed subtree into another checks the result
+    /// with this before it walks the combined tree.
+    pub fn element_depth(&self) -> usize {
+        let mut deepest = 0;
+        let mut stack = vec![(self, 1usize)];
+        while let Some((node, depth)) = stack.pop() {
+            if node.is_text() || node.is_comment() {
+                continue;
+            }
+            deepest = deepest.max(depth);
+            stack.extend(node.children.iter().map(|child| (child, depth + 1)));
+        }
+        deepest
     }
 
-    /// Internal serialization with raw-text context tracking.
+    /// Serialize the VNode back to HTML string.
+    /// This includes dj-id attributes for reliable patch targeting.
     ///
-    /// `in_raw_text` is true when the parent element is a raw-text element
-    /// (`djust_core::raw_text::RAW_TEXT_ELEMENTS`: `<script>`, `<style>`,
-    /// `<noscript>`, …), whose text content must NOT be HTML-escaped.
-    fn _to_html(&self, in_raw_text: bool) -> String {
+    /// `self` is serialized as if parsed in an HTML context (the `<body>`
+    /// the VDOM root sits in); an `svg` or `math` element below it switches
+    /// to foreign content (see [`Namespace`]). For a root whose namespace
+    /// the parser reported, use [`VNode::to_html_in`].
+    pub fn to_html(&self) -> String {
+        self.to_html_in(Some(ChildContext::Html.child_namespace(self)))
+    }
+
+    /// [`VNode::to_html`] for an element `self` whose namespace is `ns`, as
+    /// [`parse_html_with_namespace`] reports it for the root: under a root
+    /// inside `<svg>` (`<svg><g dj-root>`), a `<style>` is SVG and its text
+    /// is escaped. `None` means the namespace is not known; then the text
+    /// of every raw-text element is escaped, which can only over-escape.
+    pub fn to_html_in(&self, ns: Option<Namespace>) -> String {
         let mut html = String::new();
-        self.write_html(&mut html, in_raw_text);
+        let place = Place {
+            read_as: ns,
+            actual: ns,
+            verbatim: false,
+            scripting: true,
+        };
+        self.write_html(&mut html, place);
         html
+    }
+
+    /// Serialize an `InsertSubtree` payload node. The client parses the
+    /// payload as children of the node's real parent, in that parent's
+    /// namespace (an SVG or MathML parent gets an `<svg>` / `<math>`
+    /// wrapper), with `<template>.innerHTML`, so with scripting disabled.
+    /// `parent` is how the real parent places its children, or `None` when
+    /// that is not known (the text of every raw-text element is then
+    /// escaped).
+    pub(crate) fn to_html_for_client(&self, parent: Option<ChildContext>) -> String {
+        let mut html = String::new();
+        let ns = parent.map(|context| context.child_namespace(self));
+        let place = Place {
+            read_as: ns,
+            actual: ns,
+            verbatim: false,
+            scripting: false,
+        };
+        self.write_html(&mut html, place);
+        html
+    }
+
+    /// Serialize for an HTML parser with scripting disabled that reads the
+    /// output in an HTML context (`<template>.innerHTML` with no wrapper).
+    /// `parent` is how the node's real parent places its children, or
+    /// `None` when that is not known.
+    #[cfg(test)]
+    pub(crate) fn to_html_read_as_html(&self, parent: Option<ChildContext>) -> String {
+        let mut html = String::new();
+        let place = Place {
+            read_as: Some(ChildContext::Html.child_namespace(self)),
+            actual: parent.map(|context| context.child_namespace(self)),
+            verbatim: false,
+            scripting: false,
+        };
+        self.write_html(&mut html, place);
+        html
+    }
+
+    #[cfg(test)]
+    pub(crate) fn to_html_out_of_context(&self) -> String {
+        self.to_html_read_as_html(None)
     }
 
     /// Append directly to the render's buffer; descendants do not allocate
     /// intermediate HTML strings. Cached ignored subtrees remain verbatim.
-    fn write_html(&self, html: &mut String, in_raw_text: bool) {
+    ///
+    /// `place` is where this node sits when it is an element (see [`Place`]).
+    /// A text node takes its parent's decision: `place.verbatim` is true
+    /// when the parent writes its text raw.
+    fn write_html(&self, html: &mut String, place: Place) {
         if let Some(ref cached) = self.cached_html {
-            html.push_str(cached);
-            return;
+            // The cache was written in the node's real context, for the
+            // page's parser. Reuse it only where the output is read in that
+            // same context. An `InsertSubtree` payload is, but parsed with
+            // scripting disabled, which reads a `<noscript>` differently.
+            if place.read_as.is_some()
+                && place.read_as == place.actual
+                && (place.scripting || !contains_noscript_tag(cached))
+            {
+                html.push_str(cached);
+                return;
+            }
         }
 
         if self.is_text() {
@@ -526,7 +614,7 @@ impl VNode {
             // text content HTML-escaped — the browser treats the bytes
             // literally, so escaping `&` to `&amp;` would corrupt JS/CSS
             // code and cause double-escaping bugs (#613).
-            if in_raw_text {
+            if place.verbatim {
                 html.push_str(text);
             } else {
                 write_escaped(html, text, false);
@@ -549,12 +637,8 @@ impl VNode {
         ];
         let is_void = void_elements.contains(&self.tag.as_str());
 
-        // Raw text elements whose children must not be HTML-escaped: the
-        // parser kept their text verbatim, so escaping it again would turn
-        // `&amp;` into `&amp;amp;` (#613 for script/style; #3045 for
-        // noscript, xmp, iframe, noembed, noframes and plaintext). One list,
-        // shared with the djust_live text fast path.
-        let is_raw_text = djust_core::raw_text::is_raw_text_element(&self.tag);
+        let content = place.content_of(self);
+        let verbatim = content == Content::Verbatim;
 
         // Opening tag
         html.push('<');
@@ -580,9 +664,30 @@ impl VNode {
             html.push('>');
 
             // Children — propagate raw-text context so text nodes inside
-            // <script>/<style> are emitted verbatim.
-            for child in &self.children {
-                child.write_html(html, is_raw_text);
+            // <script>/<style> are emitted verbatim, and the namespace each
+            // child element has.
+            let read_as = place.read_as.map(|ns| ns.children_of(self));
+            let actual = place.actual.map(|ns| ns.children_of(self));
+            let write_children = |html: &mut String| {
+                for child in &self.children {
+                    let child_place = Place {
+                        read_as: read_as.map(|c| c.child_namespace(child)),
+                        actual: actual.map(|c| c.child_namespace(child)),
+                        verbatim,
+                        scripting: place.scripting,
+                    };
+                    child.write_html(html, child_place);
+                }
+            };
+            if content == Content::EscapedMarkup {
+                // Read as raw text, the children's markup would be text, and
+                // a descendant's own end tag (`<style><style>a</style>`)
+                // would end this element: write all of it as escaped text.
+                let mut inner = String::new();
+                write_children(&mut inner);
+                write_escaped(html, &inner, false);
+            } else {
+                write_children(html);
             }
 
             // Closing tag
@@ -627,16 +732,304 @@ pub fn splice_ignore_subtrees(old: &VNode, new: &mut VNode) {
 /// Cache the HTML serialization for all `dj-update="ignore"` subtrees in a VDOM tree.
 /// Call this after the first render so subsequent `to_html()` calls can skip
 /// serialization for these static sections.
+///
+/// `node` is taken to sit in HTML content (see [`VNode::to_html`]); for a
+/// node whose namespace is known, use [`cache_ignore_subtree_html_in`].
 pub fn cache_ignore_subtree_html(node: &mut VNode) {
+    let ns = ChildContext::Html.child_namespace(node);
+    cache_ignore_subtree_html_in(node, ns);
+}
+
+/// [`cache_ignore_subtree_html`] for a `node` in namespace `ns`: the cached
+/// HTML is what [`VNode::to_html_in`] writes for the node at this position,
+/// so a `<style>` in an ignored `<svg>` subtree is still escaped.
+pub fn cache_ignore_subtree_html_in(node: &mut VNode, ns: Namespace) {
     if node.attrs.get("dj-update").map(|v| v.as_str()) == Some("ignore") {
         if node.cached_html.is_none() {
-            node.cached_html = Some(node._to_html(false));
+            let mut html = String::new();
+            node.write_html(&mut html, Place::in_context(ns));
+            node.cached_html = Some(html);
         }
         return; // Don't recurse — entire subtree is cached
     }
+    let children_ns = ns.children_of(node);
     for child in &mut node.children {
-        cache_ignore_subtree_html(child);
+        let child_ns = children_ns.child_namespace(child);
+        cache_ignore_subtree_html_in(child, child_ns);
     }
+}
+
+/// Where a node sits, as the serializer sees it.
+///
+/// Raw-text elements (`djust_core::raw_text`: `script`, `style`, `noscript`,
+/// `xmp`, `iframe`, `noembed`, `noframes`, `plaintext`) are written exactly
+/// as the HTML serialization algorithm writes them: in the HTML namespace
+/// their text goes out verbatim, as the parser kept it (escaping it again
+/// turned `&amp;` into `&amp;amp;`, #613 / #3045); anywhere else their text
+/// is escaped like any other, because a foreign `<svg><style>` holds text
+/// the parser DECODED.
+///
+/// Verbatim is exact only when the element really is an HTML raw-text
+/// element: then the text came from the tokenizer, which already ended the
+/// element wherever it could end, so the bytes read back the same. That
+/// includes a script whose text holds `</script>` inside the script-data
+/// escape states (`<!-- document.write("<script></script>") -->`) and a
+/// `<plaintext>` holding `</plaintext>`.
+///
+/// An `InsertSubtree` payload is read in the node's real context: the client
+/// parses it in the namespace of the parent it is inserted into
+/// ([`VNode::to_html_for_client`]), so it is written exactly like the page,
+/// except that the client's parse has scripting disabled and so reads a
+/// `noscript`'s content as markup: that is written as markup, its text
+/// escaped.
+///
+/// When the output is read in a context the node does not really have (an
+/// HTML parse of nodes that are really SVG or MathML: `read_as == Html`,
+/// `actual != Html`), the two differ: a `<style>` is read as HTML raw text
+/// although its text was decoded as SVG. There the text is written verbatim
+/// only when the element holds nothing but text and the tokenizer would keep
+/// all of it inside the element ([`raw_text_stays_inside`]); otherwise it is escaped. An element
+/// child counts too: the parser reads its markup as raw text, and a
+/// descendant with the same name (`<style><style>a</style>…</style>`,
+/// also deeper down) writes the end tag that closes the element, after
+/// which the rest is read as markup. Such an element's whole content (the
+/// children's serialization) is written as escaped text, so nothing in it
+/// can end the element early. The same holds for the RCDATA names `title`
+/// and `textarea` (an SVG `<title>` holding HTML is read as an HTML
+/// `<title>`); their text alone is escaped as usual. A `noscript` read
+/// there is always escaped: the client parses with scripting disabled, so
+/// it reads the element's content as markup.
+#[derive(Clone, Copy, Debug)]
+struct Place {
+    /// The namespace the parser that reads the output gives this element.
+    /// `None` when that is not known: raw-text names are then escaped.
+    read_as: Option<Namespace>,
+    /// The namespace the element really has in the page, or `None` when the
+    /// output is serialized away from that context.
+    actual: Option<Namespace>,
+    /// For a text node: does its parent write its text verbatim?
+    verbatim: bool,
+    /// Does the parser that reads the output have scripting enabled? The
+    /// page's parser does; the client's `<template>.innerHTML` parse of an
+    /// `InsertSubtree` payload does not, and there a `noscript` holds
+    /// markup, not raw text.
+    scripting: bool,
+}
+
+impl Place {
+    /// An element serialized in its real context, in namespace `ns`.
+    fn in_context(ns: Namespace) -> Self {
+        Place {
+            read_as: Some(ns),
+            actual: Some(ns),
+            verbatim: false,
+            scripting: true,
+        }
+    }
+
+    /// How `element`, placed here, writes its content.
+    fn content_of(self, element: &VNode) -> Content {
+        let raw_text = djust_core::raw_text::is_raw_text_element(&element.tag);
+        // `title` and `textarea` (RCDATA): the tokenizer reads their content
+        // as text too, but decodes references, so escaped text is exact.
+        let rcdata = ["title", "textarea"]
+            .iter()
+            .any(|tag| element.tag.eq_ignore_ascii_case(tag));
+        if self.read_as != Some(Namespace::Html) || !(raw_text || rcdata) {
+            return Content::Markup;
+        }
+        // `noscript` is raw text only to a parser with scripting enabled.
+        // The client parses a payload with `<template>.innerHTML`, which has
+        // scripting disabled, so there its content is read as markup:
+        // escaped text reads back as the same text. The same holds for a
+        // `noscript` that is not really HTML (`<svg><noscript>`).
+        if element.tag.eq_ignore_ascii_case("noscript")
+            && (!self.scripting || self.actual != Some(Namespace::Html))
+        {
+            return Content::Markup;
+        }
+        if self.actual == Some(Namespace::Html) {
+            return if raw_text {
+                Content::Verbatim
+            } else {
+                Content::Markup
+            };
+        }
+        // Read as HTML raw text, but the content is not known to be HTML
+        // raw text. Any child that is not text (an element, a comment) is
+        // read back as text, so the end tag of a same-named descendant
+        // (or, in an SVG `<title>`, a script's `</title>`) would end this
+        // element: escape the whole content.
+        if element.children.iter().any(|child| !child.is_text()) {
+            return Content::EscapedMarkup;
+        }
+        if rcdata {
+            return Content::Markup;
+        }
+        // Text only: verbatim when the tokenizer would keep all of it
+        // inside the element.
+        let mut text = String::new();
+        for child in &element.children {
+            text.push_str(child.text.as_deref().unwrap_or_default());
+        }
+        if raw_text_stays_inside(&element.tag, &text) {
+            Content::Verbatim
+        } else {
+            Content::Markup
+        }
+    }
+}
+
+/// How an element writes its content: [`Place::content_of`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Content {
+    /// Children as usual: elements as markup, text escaped.
+    Markup,
+    /// Text children as they are (HTML raw text).
+    Verbatim,
+    /// The children's whole serialization, escaped as one text: a raw-text
+    /// element read out of context that holds more than text.
+    EscapedMarkup,
+}
+
+/// The namespace the HTML parser puts an element in, as the serializer needs
+/// it: raw-text handling applies only to HTML-namespace elements (#3045
+/// list), so `<svg><style>` text is escaped and `<style>` text is not.
+///
+/// A VNode keeps no namespace (the parser stores the local name), so the
+/// serializer recomputes it top-down with the tree-construction rules
+/// html5ever applies: `svg` / `math` start foreign content; inside SVG,
+/// `foreignObject`, `desc` and `title` hold HTML again (HTML integration
+/// points), as does a MathML `annotation-xml` whose `encoding` is
+/// `text/html` or `application/xhtml+xml`; a MathML `mi`, `mo`, `mn`, `ms`
+/// or `mtext` holds HTML except `mglyph` / `malignmark` (text integration
+/// points); `svg` inside `annotation-xml` is SVG.
+///
+/// One case the top-down rule gets wrong: an element foster-parented out of
+/// a `<table>` inside a MathML text integration point
+/// (`<math><mi><malignmark><table><malignmark>`) is HTML in the parsed tree
+/// but computed as MathML here, so its raw text is escaped. That only
+/// over-escapes; recording each element's namespace at parse time would need
+/// a VNode layout change.
+///
+/// The root's own namespace cannot be recomputed from the tree at all: a
+/// `dj-root` on `<g>` inside `<svg>` is an SVG element although nothing in
+/// the VDOM says so. The parser reports it ([`parse_html_with_namespace`]),
+/// and the namespace-aware entry points ([`VNode::to_html_in`],
+/// [`cache_ignore_subtree_html_in`], [`diff_in`]) take it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Namespace {
+    Html,
+    Svg,
+    MathMl,
+}
+
+/// How a parent places its child elements: [`ChildContext::child_namespace`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ChildContext {
+    /// HTML content: `svg` and `math` switch, anything else is HTML.
+    Html,
+    /// Every child shares the parent's foreign namespace.
+    Foreign(Namespace),
+    /// A MathML text integration point.
+    MathText,
+    /// A MathML `annotation-xml` that is not an HTML integration point.
+    AnnotationXml,
+}
+
+impl Namespace {
+    /// How an element in this namespace places its children.
+    pub(crate) fn children_of(self, element: &VNode) -> ChildContext {
+        let tag = element.tag.as_str();
+        match self {
+            Namespace::Html => ChildContext::Html,
+            Namespace::Svg => {
+                if ["foreignObject", "desc", "title"]
+                    .iter()
+                    .any(|t| tag.eq_ignore_ascii_case(t))
+                {
+                    ChildContext::Html
+                } else {
+                    ChildContext::Foreign(Namespace::Svg)
+                }
+            }
+            Namespace::MathMl => {
+                if ["mi", "mo", "mn", "ms", "mtext"]
+                    .iter()
+                    .any(|t| tag.eq_ignore_ascii_case(t))
+                {
+                    ChildContext::MathText
+                } else if tag.eq_ignore_ascii_case("annotation-xml") {
+                    let html_encoding = element.attrs.get("encoding").is_some_and(|e| {
+                        e.eq_ignore_ascii_case("text/html")
+                            || e.eq_ignore_ascii_case("application/xhtml+xml")
+                    });
+                    if html_encoding {
+                        ChildContext::Html
+                    } else {
+                        ChildContext::AnnotationXml
+                    }
+                } else {
+                    ChildContext::Foreign(Namespace::MathMl)
+                }
+            }
+        }
+    }
+}
+
+impl ChildContext {
+    /// The namespace of `child` placed in this context. Only meaningful for
+    /// an element; text and comments pass it through unused.
+    pub(crate) fn child_namespace(self, child: &VNode) -> Namespace {
+        let tag = child.tag.as_str();
+        let html_rules = || {
+            if tag.eq_ignore_ascii_case("svg") {
+                Namespace::Svg
+            } else if tag.eq_ignore_ascii_case("math") {
+                Namespace::MathMl
+            } else {
+                Namespace::Html
+            }
+        };
+        match self {
+            ChildContext::Html => html_rules(),
+            ChildContext::Foreign(ns) => ns,
+            ChildContext::MathText => {
+                if tag.eq_ignore_ascii_case("mglyph") || tag.eq_ignore_ascii_case("malignmark") {
+                    Namespace::MathMl
+                } else {
+                    html_rules()
+                }
+            }
+            ChildContext::AnnotationXml => {
+                if tag.eq_ignore_ascii_case("svg") {
+                    Namespace::Svg
+                } else {
+                    Namespace::MathMl
+                }
+            }
+        }
+    }
+}
+
+/// The namespace of the element at `path` below `root`, an element in
+/// namespace `root_ns`; `None` when `path` does not lead to an element.
+pub fn namespace_at_path(root: &VNode, root_ns: Namespace, path: &[usize]) -> Option<Namespace> {
+    let mut node = root;
+    let mut ns = root_ns;
+    for &index in path {
+        let child = node.children.get(index)?;
+        ns = ns.children_of(node).child_namespace(child);
+        node = child;
+    }
+    (!node.is_text() && !node.is_comment()).then_some(ns)
+}
+
+/// Does `html` hold a `noscript` tag (any ASCII case)?
+fn contains_noscript_tag(html: &str) -> bool {
+    html.as_bytes()
+        .windows(9)
+        .any(|w| w[0] == b'<' && w[1..].eq_ignore_ascii_case(b"noscript"))
 }
 
 fn html_escape(text: &str) -> String {
@@ -651,6 +1044,138 @@ fn write_attribute(html: &mut String, key: &str, value: &str) {
     html.push_str("=\"");
     write_escaped(html, value, true);
     html.push('"');
+}
+
+/// Does `text` hold an end tag for `tag` as the HTML tokenizer reads one in
+/// raw text: `</`, the name in any ASCII case, then whitespace, `/` or `>`?
+fn contains_end_tag(text: &str, tag: &str) -> bool {
+    let bytes = text.as_bytes();
+    let name = tag.as_bytes();
+    let mut from = 0;
+    while let Some(found) = text[from..].find("</") {
+        let start = from + found + 2;
+        let end = start + name.len();
+        if end < bytes.len()
+            && bytes[start..end].eq_ignore_ascii_case(name)
+            && matches!(
+                bytes[end],
+                b'\t' | b'\n' | b'\x0c' | b'\r' | b' ' | b'/' | b'>'
+            )
+        {
+            return true;
+        }
+        from = from + found + 2;
+    }
+    false
+}
+
+/// Would `text`, read by an HTML parser as the body of an HTML raw-text
+/// element `tag`, stay inside that element, so that the `</tag>` written
+/// after it closes the element? This follows the tokenizer: in RAWTEXT
+/// (`style`, `xmp`, `iframe`, `noembed`, `noframes`, `noscript`) only an
+/// end tag for the element ends it; `script` is read with the script-data
+/// states, where `<!--` … `<script>` (double-escaped) hides `</script>` and
+/// also stops the next `</script>` from closing; nothing ends `plaintext`.
+fn raw_text_stays_inside(tag: &str, text: &str) -> bool {
+    if tag.eq_ignore_ascii_case("plaintext") {
+        true
+    } else if tag.eq_ignore_ascii_case("script") {
+        script_data_stays_inside(text.as_bytes())
+    } else {
+        !contains_end_tag(text, tag)
+    }
+}
+
+/// [`raw_text_stays_inside`] for `script`: the tokenizer's script-data,
+/// escaped and double-escaped states.
+fn script_data_stays_inside(text: &[u8]) -> bool {
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum State {
+        Data,
+        Escaped,
+        EscapedDash,
+        EscapedDashDash,
+        Double,
+        DoubleDash,
+        DoubleDashDash,
+    }
+    let delimiter = |at: usize| {
+        text.get(at)
+            .is_some_and(|&c| matches!(c, b'\t' | b'\n' | b'\x0c' | b'\r' | b' ' | b'/' | b'>'))
+    };
+    // `script` at `at`, then a delimiter: a name the states compare.
+    let script_at = |at: usize| {
+        text.get(at..at + 6)
+            .is_some_and(|name| name.eq_ignore_ascii_case(b"script"))
+            && delimiter(at + 6)
+    };
+    let mut state = State::Data;
+    let mut i = 0;
+    while i < text.len() {
+        let c = text[i];
+        match state {
+            State::Data => {
+                if c == b'<' {
+                    if text.get(i + 1) == Some(&b'/') && script_at(i + 2) {
+                        return false; // an end tag: the element ends here
+                    }
+                    if text[i + 1..].starts_with(b"!--") {
+                        state = State::EscapedDashDash;
+                        i += 4;
+                        continue;
+                    }
+                }
+            }
+            State::Escaped | State::EscapedDash | State::EscapedDashDash => match c {
+                b'<' => {
+                    if text.get(i + 1) == Some(&b'/') && script_at(i + 2) {
+                        return false;
+                    }
+                    if script_at(i + 1) {
+                        state = State::Double;
+                        i += 7;
+                        continue;
+                    }
+                    state = State::Escaped;
+                }
+                b'-' => {
+                    state = if state == State::Escaped {
+                        State::EscapedDash
+                    } else {
+                        State::EscapedDashDash
+                    };
+                }
+                b'>' if state == State::EscapedDashDash => state = State::Data,
+                _ => state = State::Escaped,
+            },
+            State::Double | State::DoubleDash | State::DoubleDashDash => match c {
+                b'<' => {
+                    if text.get(i + 1) == Some(&b'/') && script_at(i + 2) {
+                        state = State::Escaped;
+                        i += 8;
+                        continue;
+                    }
+                    state = State::Double;
+                }
+                b'-' => {
+                    state = if state == State::Double {
+                        State::DoubleDash
+                    } else {
+                        State::DoubleDashDash
+                    };
+                }
+                b'>' if state == State::DoubleDashDash => state = State::Data,
+                _ => state = State::Double,
+            },
+        }
+        i += 1;
+    }
+    // In a double-escaped state the `</script>` written next only leaves
+    // that state; it would not close the element.
+    !matches!(
+        state,
+        State::Double | State::DoubleDash | State::DoubleDashDash
+    )
 }
 
 /// Escape in one pass while copying unchanged spans directly. Text and
@@ -920,7 +1445,7 @@ pub fn diff(old: &VNode, new: &VNode) -> Vec<Patch> {
         new.children.len()
     );
 
-    let patches = diff::diff_nodes(old, new, &[]);
+    let patches = diff::diff_nodes_in(old, new, &[], Some(ChildContext::Html.child_namespace(new)));
 
     vdom_trace!(
         "===== DIFF COMPLETE: {} patches generated =====",
@@ -939,214 +1464,289 @@ pub fn diff(old: &VNode, new: &VNode) -> Vec<Patch> {
 // Text-Only VDOM Fast Path
 // ============================================================================
 
-/// A single text replacement found between old and new HTML.
-#[derive(Debug)]
-struct TextReplacement {
-    /// Byte offset within the concatenated text stream (all text regions in order).
-    text_byte_offset: usize,
-    /// The old text content at this position.
-    old_text: String,
-    /// The new text content to replace it with.
+/// One text change found between the old and new HTML: the VDOM text node it
+/// belongs to and the text that node gets.
+struct TextChange {
+    path: Vec<usize>,
     new_text: String,
 }
 
-/// Check if the changes between old_html and new_html are text-only.
-/// Returns Some(replacements) if all differences fall within text regions
-/// (between `>` and `<`). Returns None if any structural HTML changed.
-fn find_text_replacements(old_html: &str, new_html: &str) -> Option<Vec<TextReplacement>> {
-    // Quick reject: if the tag structure changed, it's structural.
-    // Count '<' occurrences — if they differ, tags were added/removed.
-    if old_html.bytes().filter(|&b| b == b'<').count()
-        != new_html.bytes().filter(|&b| b == b'<').count()
-    {
+/// Split `html` the way the text fast path reads it: text runs between tags,
+/// where a tag runs from a `<` to the next `>`. Returns the text runs (one
+/// more than there are tags, any of them empty) and the tags, or `None` when
+/// the last tag never ends.
+fn split_text_and_tags(html: &str) -> Option<(Vec<&str>, Vec<&str>)> {
+    let bytes = html.as_bytes();
+    let mut texts = Vec::new();
+    let mut tags = Vec::new();
+    let mut start = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'<' {
+            texts.push(&html[start..i]);
+            let end = i + bytes[i..].iter().position(|&b| b == b'>')?;
+            tags.push(&html[i..=end]);
+            i = end + 1;
+            start = i;
+        } else {
+            i += 1;
+        }
+    }
+    texts.push(&html[start..]);
+    Some((texts, tags))
+}
+
+/// The elements open at a point of an HTML source, as far as its tags say,
+/// for checking that text found by scanning the source is where the tree
+/// builder put it. A start tag opens an element (not a void one, not one
+/// written `/>`); an end tag closes the innermost open element with its
+/// name. Implied elements (`<tbody>`), implied end tags and the adoption
+/// agency are not modelled, so a mismatch with the tree only ever makes a
+/// caller fall back.
+#[doc(hidden)]
+#[derive(Debug, Default)]
+pub struct SourceOpenElements<'a> {
+    stack: Vec<&'a str>,
+}
+
+impl<'a> SourceOpenElements<'a> {
+    /// Take one tag, `<…>` as written in the source; comments, doctypes and
+    /// anything not starting with a letter are ignored. Returns `false`
+    /// when the tree builder would foster-parent the element out of a
+    /// table: anything but table structure directly inside `table`,
+    /// `tbody`, `thead`, `tfoot`, `tr` or `colgroup`. The element, and the
+    /// text in it, then lands before the table, so the tree's order of text
+    /// no longer follows the source.
+    pub fn take(&mut self, tag: &'a str) -> bool {
+        const VOID: [&str; 16] = [
+            "area", "base", "br", "col", "embed", "frame", "hr", "img", "input", "keygen", "link",
+            "meta", "param", "source", "track", "wbr",
+        ];
+        const TABLE_CONTEXT: [&str; 6] = ["table", "tbody", "thead", "tfoot", "tr", "colgroup"];
+        const TABLE_STRUCTURE: [&str; 12] = [
+            "caption", "colgroup", "col", "tbody", "thead", "tfoot", "tr", "td", "th", "script",
+            "style", "template",
+        ];
+        let is = |list: &[&str], name: &str| list.iter().any(|t| t.eq_ignore_ascii_case(name));
+        let Some(body) = tag.strip_prefix('<') else {
+            return true;
+        };
+        let (closing, body) = match body.strip_prefix('/') {
+            Some(rest) => (true, rest),
+            None => (false, body),
+        };
+        let end = body
+            .find(|c: char| c.is_ascii_whitespace() || c == '/' || c == '>')
+            .unwrap_or(body.len());
+        let name = &body[..end];
+        if !name.starts_with(|c: char| c.is_ascii_alphabetic()) {
+            return true;
+        }
+        if closing {
+            if let Some(at) = self
+                .stack
+                .iter()
+                .rposition(|open| open.eq_ignore_ascii_case(name))
+            {
+                self.stack.truncate(at);
+            }
+            return true;
+        }
+        if self
+            .innermost()
+            .is_some_and(|parent| is(&TABLE_CONTEXT, parent))
+            && !is(&TABLE_STRUCTURE, name)
+        {
+            return false;
+        }
+        if !is(&VOID, name) && !tag.ends_with("/>") {
+            self.stack.push(name);
+        }
+        true
+    }
+
+    /// The name of the innermost open element, as written in the source.
+    pub fn innermost(&self) -> Option<&'a str> {
+        self.stack.last().copied()
+    }
+}
+
+/// For each text run of [`split_text_and_tags`] (`tags` are its tags), the
+/// innermost element open around it ([`SourceOpenElements`]), or `None`
+/// when one of the tags would be foster-parented.
+fn open_tags_around_runs<'a>(tags: &[&'a str]) -> Option<Vec<Option<&'a str>>> {
+    let mut elements = SourceOpenElements::default();
+    let mut open = Vec::with_capacity(tags.len() + 1);
+    open.push(None);
+    for tag in tags {
+        if !elements.take(tag) {
+            return None;
+        }
+        open.push(elements.innermost());
+    }
+    Some(open)
+}
+
+/// Every text node of `node`'s subtree in document order, with its path and
+/// its parent's tag.
+fn collect_text_nodes<'a>(
+    node: &'a VNode,
+    path: &mut Vec<usize>,
+    out: &mut Vec<(Vec<usize>, &'a str, &'a str)>,
+) {
+    for (index, child) in node.children.iter().enumerate() {
+        path.push(index);
+        if child.is_text() {
+            out.push((
+                path.clone(),
+                node.tag.as_str(),
+                child.text.as_deref().unwrap_or_default(),
+            ));
+        } else {
+            collect_text_nodes(child, path, out);
+        }
+        path.pop();
+    }
+}
+
+/// Work out the text-only update from `old_html` to `new_html` for `vdom`,
+/// the tree parsed from `old_html`, or `None` when it cannot be done exactly
+/// and the caller must parse `new_html` instead.
+///
+/// The tags of both strings must be byte-identical, so only text runs
+/// differ. A run is mapped to a text node only when the tree's text nodes,
+/// written escaped, are exactly the old HTML's non-empty runs, one for one,
+/// in order, and each node that is not whitespace-only has a parent named
+/// like the innermost element open around its run in the source
+/// ([`open_tags_around_runs`]). Equal texts alone do not prove the order:
+/// the tree builder moves text and elements out of a `<table>` (foster
+/// parenting), so two equal texts swapped that way would line up and the
+/// change would land on the other node. Anything else means the two do not
+/// line up: a tag that closes its context early (`<input>` in a
+/// `<select>`), text outside the VDOM root (a `<title>`, the page around
+/// `dj-root`), whitespace runs the parser dropped or collapsed, entities
+/// written differently (`&#x27;`), a `>` inside a comment or attribute
+/// value, a textarea or raw-text body holding tags. Mapping by byte offset instead sent a change to the
+/// neighbouring node whenever the counts drifted.
+///
+/// A changed node must:
+/// * not be in a raw-text element (`djust_core::raw_text`): its bytes are
+///   not escaped text, and decoding `&lt;` there would put markup into a
+///   `<script>` or `<style>`;
+/// * get text that a parser reads back exactly: the new run, decoded, must
+///   escape back to the same bytes (so it holds only `&amp;` `&lt;` `&gt;`
+///   and `&nbsp;` references), must hold no CR or NUL (the parser turns
+///   CR into LF and drops or replaces NUL) and must not start with a
+///   newline in `pre`, `listing` or `textarea`, where the parser drops it;
+/// * not be, or become, whitespace-only (#2999: whether such a node exists
+///   depends on its neighbours).
+fn plan_text_only_update(vdom: &VNode, old_html: &str, new_html: &str) -> Option<Vec<TextChange>> {
+    let (old_texts, old_tags) = split_text_and_tags(old_html)?;
+    let (new_texts, new_tags) = split_text_and_tags(new_html)?;
+    if old_tags != new_tags {
         return None;
     }
 
-    // Walk both HTML strings in parallel, tracking whether we're inside a tag.
-    // If any difference occurs inside a tag (between '<' and '>'), return None.
-    let old_bytes = old_html.as_bytes();
-    let new_bytes = new_html.as_bytes();
-
-    let mut replacements = Vec::new();
-    let mut in_tag = false;
-    let mut text_byte_offset: usize = 0; // offset within the text content stream
-    let mut oi: usize = 0; // old index
-    let mut ni: usize = 0; // new index
-
-    while oi < old_bytes.len() && ni < new_bytes.len() {
-        let ob = old_bytes[oi];
-        let nb = new_bytes[ni];
-
-        if ob == b'<' && nb == b'<' {
-            // Both entering a tag simultaneously — good
-            in_tag = true;
-            oi += 1;
-            ni += 1;
-        } else if ob == b'>' && nb == b'>' && in_tag {
-            // Both exiting a tag simultaneously — good
-            in_tag = false;
-            oi += 1;
-            ni += 1;
-        } else if in_tag {
-            // Inside a tag: bytes must match exactly, or it's structural
-            if ob != nb {
-                return None;
-            }
-            oi += 1;
-            ni += 1;
-        } else {
-            // In text region
-            if ob == nb {
-                // Matching text byte
-                text_byte_offset += 1;
-                oi += 1;
-                ni += 1;
-            } else {
-                // Difference found in text region — collect the full diff span.
-                // Find where this text region ends in both strings (next '<').
-                let old_region_end = old_bytes[oi..]
-                    .iter()
-                    .position(|&b| b == b'<')
-                    .map_or(old_bytes.len(), |p| oi + p);
-                let new_region_end = new_bytes[ni..]
-                    .iter()
-                    .position(|&b| b == b'<')
-                    .map_or(new_bytes.len(), |p| ni + p);
-
-                // Check if any '<' or '>' appear in the diff, which would be structural
-                let old_span = &old_bytes[oi..old_region_end];
-                let new_span = &new_bytes[ni..new_region_end];
-                if old_span.contains(&b'<')
-                    || old_span.contains(&b'>')
-                    || new_span.contains(&b'<')
-                    || new_span.contains(&b'>')
-                {
-                    return None;
-                }
-
-                // Find the exact diff boundaries within this text region.
-                // Scan forward to find where they start matching again.
-                // We need the old text and new text that differ.
-                let old_text = std::str::from_utf8(old_span).ok()?;
-                let new_text = std::str::from_utf8(new_span).ok()?;
-
-                // Trim common suffix to narrow the replacement
-                let common_suffix_len = old_text
-                    .bytes()
-                    .rev()
-                    .zip(new_text.bytes().rev())
-                    .take_while(|(a, b)| a == b)
-                    .count();
-
-                let old_diff = &old_text[..old_text.len() - common_suffix_len];
-                let new_diff = &new_text[..new_text.len() - common_suffix_len];
-
-                replacements.push(TextReplacement {
-                    text_byte_offset,
-                    old_text: old_diff.to_string(),
-                    new_text: new_diff.to_string(),
-                });
-
-                // Advance past the entire text region
-                text_byte_offset += old_span.len();
-                oi = old_region_end;
-                ni = new_region_end;
-            }
+    let mut nodes = Vec::new();
+    collect_text_nodes(vdom, &mut Vec::new(), &mut nodes);
+    let open = open_tags_around_runs(&old_tags)?;
+    let mut runs = old_texts
+        .iter()
+        .enumerate()
+        .filter(|(_, text)| !text.is_empty());
+    for (_, parent_tag, text) in &nodes {
+        let (index, run) = runs.next()?;
+        if html_escape(text) != *run {
+            return None;
         }
-    }
-
-    // If one string has trailing content, it's structural (unless both are exhausted)
-    if oi < old_bytes.len() || ni < new_bytes.len() {
-        // Check if remaining content is only in text regions
-        let old_remaining = &old_bytes[oi..];
-        let new_remaining = &new_bytes[ni..];
-
-        // If either has remaining tag content, it's structural
-        if old_remaining.contains(&b'<')
-            || old_remaining.contains(&b'>')
-            || new_remaining.contains(&b'<')
-            || new_remaining.contains(&b'>')
+        // Whitespace-only text is never foster-parented and never changed
+        // here (see below), and it may sit in an element the source only
+        // implies (`<tbody>`).
+        if !djust_core::html_whitespace::is_html_whitespace_only(text)
+            && !open[index].is_some_and(|tag| tag.eq_ignore_ascii_case(parent_tag))
         {
             return None;
         }
-
-        // Both can't have remaining text — that means the tag structure diverged
-        if !old_remaining.is_empty() && !new_remaining.is_empty() {
-            // This shouldn't happen if tag counts match, but handle gracefully
-            return None;
-        }
-        if !old_remaining.is_empty() || !new_remaining.is_empty() {
-            return None;
-        }
+    }
+    if runs.next().is_some() {
+        return None;
     }
 
-    if replacements.is_empty() {
+    let mut changes = Vec::new();
+    let mut node_index = 0;
+    for (old_run, new_run) in old_texts.iter().zip(&new_texts) {
+        if old_run != new_run {
+            // A run with no text node behind it gaining text is structural.
+            let (path, parent_tag, old_text) = nodes.get(node_index)?;
+            if old_run.is_empty() || djust_core::raw_text::is_raw_text_element(parent_tag) {
+                return None;
+            }
+            let new_text = html_unescape(new_run);
+            let drops_leading_newline = ["pre", "listing", "textarea"]
+                .iter()
+                .any(|tag| parent_tag.eq_ignore_ascii_case(tag));
+            if html_escape(&new_text) != *new_run
+                || new_text.contains(['\r', '\0'])
+                || (drops_leading_newline && new_text.starts_with('\n'))
+                || djust_core::html_whitespace::is_html_whitespace_only(old_text)
+                || djust_core::html_whitespace::is_html_whitespace_only(&new_text)
+            {
+                return None;
+            }
+            changes.push(TextChange {
+                path: path.clone(),
+                new_text,
+            });
+        }
+        if !old_run.is_empty() {
+            node_index += 1;
+        }
+    }
+    if changes.is_empty() {
         return None; // No changes found — no need for fast path
     }
-
-    Some(replacements)
+    Some(changes)
 }
 
 /// Clear `cached_html` on a node and all its ancestors up to root.
 /// Since we modify the tree by walking it, we clear cached_html on every node
 /// along the path during the depth-first walk.
-fn clear_cached_html_recursive(node: &mut VNode) {
+fn clear_cached_html_on_path(node: &mut VNode, path: &[usize]) -> Option<()> {
     node.cached_html = None;
-    for child in &mut node.children {
-        clear_cached_html_recursive(child);
+    match path.split_first() {
+        Some((&index, rest)) => clear_cached_html_on_path(node.children.get_mut(index)?, rest),
+        None => Some(()),
     }
 }
 
-/// Collect text nodes from a VDOM tree in depth-first document order.
-/// Returns mutable references and their cumulative byte offsets in the text stream.
-fn collect_text_nodes_mut(node: &mut VNode) -> Vec<(*mut VNode, usize)> {
-    let mut result = Vec::new();
-    let mut offset = 0;
-    collect_text_nodes_inner(node, &mut result, &mut offset);
-    result
-}
-
-fn collect_text_nodes_inner(
-    node: &mut VNode,
-    result: &mut Vec<(*mut VNode, usize)>,
-    offset: &mut usize,
-) {
-    if node.is_text() {
-        let text_len = node.text.as_ref().map_or(0, |t| t.len());
-        result.push((node as *mut VNode, *offset));
-        *offset += text_len;
-    }
-    for child in &mut node.children {
-        collect_text_nodes_inner(child, result, offset);
+/// Apply planned changes. Every path was taken from `vdom` itself.
+fn apply_text_changes(vdom: &mut VNode, changes: Vec<TextChange>) {
+    for change in changes {
+        let mut node = &mut *vdom;
+        for &index in &change.path {
+            node = &mut node.children[index];
+        }
+        node.text = Some(change.new_text);
+        let _ = clear_cached_html_on_path(vdom, &change.path);
     }
 }
 
-/// Try to update the old VDOM with text-only changes from old_html to new_html.
-/// Returns Some(updated_vdom) if ALL differences are text-only (within text regions).
-/// Returns None if any structural HTML changed (different tags, attributes, etc).
-///
-/// This is a performance fast path that avoids html5ever parsing when only text
-/// content changed between renders (e.g., counter increment, text field update).
 /// Try to update the VDOM in-place with text-only changes from old_html to new_html.
 /// Returns true if ALL differences were text-only and the VDOM was updated.
-/// Returns false if any structural HTML changed — caller must fall back to html5ever.
+/// Returns false if any structural HTML changed, or the change cannot be
+/// mapped to the tree exactly (see [`plan_text_only_update`]) — caller must
+/// fall back to html5ever. The tree is left untouched then.
 /// Mutates `vdom` in-place for zero-copy performance (no VDOM clone).
 pub fn try_text_only_vdom_update_inplace(vdom: &mut VNode, old_html: &str, new_html: &str) -> bool {
-    let replacements = match find_text_replacements(old_html, new_html) {
-        Some(r) => r,
-        None => return false,
-    };
-
-    if replacements.is_empty() {
+    let Some(changes) = plan_text_only_update(vdom, old_html, new_html) else {
         return false;
-    }
-
+    };
     vdom_trace!(
         "text-only fast path: {} text replacement(s) found",
-        replacements.len()
+        changes.len()
     );
-
-    apply_text_replacements_inplace(vdom, &replacements)
+    apply_text_changes(vdom, changes);
+    true
 }
 
 /// Legacy API: returns a cloned+updated VDOM, or None.
@@ -1156,187 +1756,10 @@ pub fn try_text_only_vdom_update(
     old_html: &str,
     new_html: &str,
 ) -> Option<VNode> {
-    let replacements = find_text_replacements(old_html, new_html)?;
-
-    if replacements.is_empty() {
-        return None;
-    }
-
+    let changes = plan_text_only_update(old_vdom, old_html, new_html)?;
     let mut updated = old_vdom.clone();
-
-    // Collect all text nodes with their byte offsets in the text stream.
-    // The text stream is the concatenation of html_escape(text) for all text nodes
-    // in document order, because that's what appears in the HTML between tags.
-    // However, find_text_replacements works on raw HTML bytes, so offsets are in
-    // terms of the escaped HTML text content.
-    let text_nodes = collect_text_nodes_mut(&mut updated);
-
-    // Build a mapping of cumulative escaped byte offsets for text nodes.
-    // In the HTML, text is escaped (& -> &amp;, < -> &lt;, etc.), so we need
-    // to compute escaped lengths to match the offsets from find_text_replacements.
-    // These offsets are immutable — they correspond to the original old HTML.
-    let mut escaped_offsets: Vec<(usize, usize)> = Vec::with_capacity(text_nodes.len());
-    let mut cum_offset = 0;
-    for &(ptr, _) in &text_nodes {
-        // SAFETY: we hold a mutable borrow on `updated` and these pointers
-        // are into that tree. We only read here to compute offsets.
-        let node = unsafe { &*ptr };
-        let text = node.text.as_deref().unwrap_or("");
-        let escaped_len = html_escape(text).len();
-        escaped_offsets.push((cum_offset, escaped_len));
-        cum_offset += escaped_len;
-    }
-
-    // Group replacements by text node index, then apply all at once per node.
-    // Replacement offsets are relative to the original old HTML text stream,
-    // so we use the immutable escaped_offsets for lookup.
-    let mut node_replacements: HashMap<usize, Vec<&TextReplacement>> = HashMap::new();
-
-    for replacement in &replacements {
-        let target_offset = replacement.text_byte_offset;
-
-        let mut found = false;
-        for (i, &(esc_start, esc_len)) in escaped_offsets.iter().enumerate() {
-            if target_offset >= esc_start && target_offset < esc_start + esc_len {
-                node_replacements.entry(i).or_default().push(replacement);
-                found = true;
-                break;
-            }
-        }
-
-        if !found {
-            return None; // Could not map offset to a text node — bail
-        }
-    }
-
-    // Apply replacements to each affected text node
-    for (node_idx, mut reps) in node_replacements {
-        let (esc_start, _esc_len) = escaped_offsets[node_idx];
-        let (ptr, _) = text_nodes[node_idx];
-        // SAFETY: exclusive access through the mutable borrow on `updated`
-        let node = unsafe { &mut *ptr };
-        let current_text = node.text.as_deref().unwrap_or("");
-        let mut current_escaped = html_escape(current_text);
-
-        // Sort replacements by offset (descending) so later replacements don't
-        // shift earlier offsets when we do string surgery.
-        reps.sort_by_key(|b| std::cmp::Reverse(b.text_byte_offset));
-
-        for rep in reps {
-            let local_offset = rep.text_byte_offset - esc_start;
-
-            // Verify the old text matches at this position
-            if local_offset + rep.old_text.len() > current_escaped.len() {
-                return None; // Offset mismatch — bail to full parse
-            }
-            let escaped_slice = &current_escaped[local_offset..local_offset + rep.old_text.len()];
-            if escaped_slice != rep.old_text {
-                return None; // Content mismatch — bail to full parse
-            }
-
-            // Apply the replacement
-            current_escaped = format!(
-                "{}{}{}",
-                &current_escaped[..local_offset],
-                rep.new_text,
-                &current_escaped[local_offset + rep.old_text.len()..]
-            );
-        }
-
-        // Unescape back to the VDOM text representation
-        node.text = Some(html_unescape(&current_escaped));
-        node.cached_html = None;
-    }
-
-    // Clear cached_html on all ancestors of modified nodes.
-    // For simplicity, clear it on the entire tree (it's a clone anyway).
-    clear_cached_html_recursive(&mut updated);
-
+    apply_text_changes(&mut updated, changes);
     Some(updated)
-}
-
-/// Apply text replacements to a VDOM in-place (no clone).
-/// Returns true on success, false if any replacement couldn't be mapped.
-fn apply_text_replacements_inplace(vdom: &mut VNode, replacements: &[TextReplacement]) -> bool {
-    let text_nodes = collect_text_nodes_mut(vdom);
-
-    // Build cumulative escaped byte offsets for text nodes
-    let mut escaped_offsets: Vec<(usize, usize)> = Vec::with_capacity(text_nodes.len());
-    let mut cum_offset = 0;
-    for &(ptr, _) in &text_nodes {
-        let node = unsafe { &*ptr };
-        let text = node.text.as_deref().unwrap_or("");
-        let escaped_len = html_escape(text).len();
-        escaped_offsets.push((cum_offset, escaped_len));
-        cum_offset += escaped_len;
-    }
-
-    // Group replacements by text node index
-    let mut node_replacements: HashMap<usize, Vec<&TextReplacement>> = HashMap::new();
-    for replacement in replacements {
-        let target_offset = replacement.text_byte_offset;
-        let mut found = false;
-        for (i, &(esc_start, esc_len)) in escaped_offsets.iter().enumerate() {
-            if target_offset >= esc_start && target_offset < esc_start + esc_len {
-                node_replacements.entry(i).or_default().push(replacement);
-                found = true;
-                break;
-            }
-        }
-        if !found {
-            return false;
-        }
-    }
-
-    // Compute every node's new text FIRST and only then write them, so a
-    // rejection never leaves the tree half-updated (the caller falls back to a
-    // full parse against this same tree).
-    let mut updates: Vec<(*mut VNode, String)> = Vec::with_capacity(node_replacements.len());
-    for (node_idx, mut reps) in node_replacements {
-        let (esc_start, _) = escaped_offsets[node_idx];
-        let (ptr, _) = text_nodes[node_idx];
-        let node = unsafe { &*ptr };
-        let current_text = node.text.as_deref().unwrap_or("");
-        // #2999: whether a whitespace-only text node exists at all depends on
-        // its neighbours (kept as `" "` between inline siblings, else
-        // dropped) — only the full parse can decide that.
-        if djust_core::html_whitespace::is_html_whitespace_only(current_text) {
-            return false;
-        }
-        let mut current_escaped = html_escape(current_text);
-
-        reps.sort_by_key(|b| std::cmp::Reverse(b.text_byte_offset));
-
-        for rep in reps {
-            let local_offset = rep.text_byte_offset - esc_start;
-            if local_offset + rep.old_text.len() > current_escaped.len() {
-                return false;
-            }
-            let escaped_slice = &current_escaped[local_offset..local_offset + rep.old_text.len()];
-            if escaped_slice != rep.old_text {
-                return false;
-            }
-            current_escaped = format!(
-                "{}{}{}",
-                &current_escaped[..local_offset],
-                rep.new_text,
-                &current_escaped[local_offset + rep.old_text.len()..]
-            );
-        }
-
-        let new_text = html_unescape(&current_escaped);
-        if djust_core::html_whitespace::is_html_whitespace_only(&new_text) {
-            return false;
-        }
-        updates.push((ptr, new_text));
-    }
-    for (ptr, new_text) in updates {
-        let node = unsafe { &mut *ptr };
-        node.text = Some(new_text);
-        node.cached_html = None;
-    }
-
-    true
 }
 
 /// Unescape basic HTML entities back to text.
@@ -1350,65 +1773,27 @@ fn html_unescape(s: &str) -> String {
 }
 
 /// Detect text-only changes and produce SetText patches directly.
-/// Returns Some(patches) if ALL changes are text-only; None for structural changes.
+/// Returns Some(patches) if ALL changes are text-only; None for structural
+/// changes or a change that cannot be mapped exactly (see
+/// [`plan_text_only_update`]).
 /// This skips both html5ever parsing AND VDOM diffing.
 pub fn try_text_patches(old_vdom: &VNode, old_html: &str, new_html: &str) -> Option<Vec<Patch>> {
-    let replacements = find_text_replacements(old_html, new_html)?;
-    if replacements.is_empty() {
+    if old_html == new_html {
         return Some(vec![]);
     }
-
-    // Walk the VDOM depth-first, collecting text nodes with their paths and
-    // cumulative escaped byte offsets in the HTML text stream.
-    let mut text_entries: Vec<(Vec<usize>, usize, usize, String)> = Vec::new(); // (path, esc_start, esc_len, djust_id)
-    let mut cum_offset: usize = 0;
-    collect_text_paths(old_vdom, &mut vec![], &mut text_entries, &mut cum_offset);
-
-    // Map each replacement to a text node and produce a SetText patch
-    let mut patches = Vec::new();
-    for rep in &replacements {
-        let target_offset = rep.text_byte_offset;
-        let mut found = false;
-        for (path, esc_start, esc_len, djust_id) in &text_entries {
-            if target_offset >= *esc_start && target_offset < esc_start + esc_len {
-                // Compute the new text for this node
-                let old_text_node = get_text_node_at_path(old_vdom, path)?;
-                let old_text = old_text_node.text.as_deref().unwrap_or("");
-                let mut escaped = html_escape(old_text);
-                let local_offset = target_offset - esc_start;
-                if local_offset + rep.old_text.len() > escaped.len() {
-                    return None;
-                }
-                if escaped[local_offset..local_offset + rep.old_text.len()] != *rep.old_text {
-                    return None;
-                }
-                escaped = format!(
-                    "{}{}{}",
-                    &escaped[..local_offset],
-                    rep.new_text,
-                    &escaped[local_offset + rep.old_text.len()..]
-                );
-                let new_text = html_unescape(&escaped);
-
-                let d_val = if djust_id.is_empty() {
-                    None
-                } else {
-                    Some(djust_id.clone())
-                };
-                patches.push(Patch::SetText {
-                    path: path.clone(),
-                    d: d_val,
-                    text: new_text,
-                });
-                found = true;
-                break;
+    let changes = plan_text_only_update(old_vdom, old_html, new_html)?;
+    let patches = changes
+        .into_iter()
+        .map(|change| {
+            let d = get_text_node_at_path(old_vdom, &change.path)
+                .and_then(|node| node.djust_id.clone());
+            Patch::SetText {
+                path: change.path,
+                d,
+                text: change.new_text,
             }
-        }
-        if !found {
-            return None;
-        }
-    }
-
+        })
+        .collect();
     Some(patches)
 }
 
@@ -1420,24 +1805,25 @@ fn get_text_node_at_path<'a>(vdom: &'a VNode, path: &[usize]) -> Option<&'a VNod
     Some(node)
 }
 
-/// Walk VDOM depth-first collecting text node paths and cumulative escaped byte offsets.
-fn collect_text_paths(
-    node: &VNode,
-    current_path: &mut Vec<usize>,
-    entries: &mut Vec<(Vec<usize>, usize, usize, String)>,
-    cum_offset: &mut usize,
-) {
-    if let Some(ref text) = node.text {
-        let escaped_len = html_escape(text).len();
-        let djust_id = node.djust_id.clone().unwrap_or_default();
-        entries.push((current_path.clone(), *cum_offset, escaped_len, djust_id));
-        *cum_offset += escaped_len;
-    }
-    for (i, child) in node.children.iter().enumerate() {
-        current_path.push(i);
-        collect_text_paths(child, current_path, entries, cum_offset);
-        current_path.pop();
-    }
+/// [`diff`] for roots whose namespace is `root_ns`, as
+/// [`parse_html_with_namespace`] reports it: an `InsertSubtree` payload is
+/// then serialized knowing the real namespace of its parent (see
+/// [`VNode::to_html_in`]).
+pub fn diff_in(old: &VNode, new: &VNode, root_ns: Namespace) -> Vec<Patch> {
+    diff::diff_nodes_in(old, new, &[], Some(root_ns))
+}
+
+/// [`parse_html`], also returning the namespace of the root element: HTML,
+/// or SVG / MathML for a root inside `<svg>` / `<math>`.
+pub fn parse_html_with_namespace(html: &str) -> Result<(VNode, Namespace)> {
+    vdom_trace!("parse_html_with_namespace() called - will reset ID counter");
+    parser::parse_html_with_namespace(html)
+}
+
+/// [`parse_html_continue`], also returning the namespace of the root element.
+pub fn parse_html_continue_with_namespace(html: &str) -> Result<(VNode, Namespace)> {
+    vdom_trace!("parse_html_continue_with_namespace() called - keeping ID counter");
+    parser::parse_html_continue_with_namespace(html)
 }
 
 /// Parse HTML into a virtual DOM (resets ID counter)
@@ -1508,9 +1894,9 @@ impl PyVNode {
 
 #[pyfunction]
 fn diff_html(old_html: String, new_html: String) -> PyResult<String> {
-    let old = parse_html(&old_html)?;
-    let new = parse_html(&new_html)?;
-    let patches = diff(&old, &new);
+    let (old, _) = parse_html_with_namespace(&old_html)?;
+    let (new, new_ns) = parse_html_with_namespace(&new_html)?;
+    let patches = diff_in(&old, &new, new_ns);
 
     serde_json::to_string(&patches)
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
@@ -1665,6 +2051,642 @@ mod tests {
     }
 
     // ========================================================================
+    // Foreign content (SVG / MathML) serialization
+    // ========================================================================
+
+    /// The tree without dj-ids: (tag, sorted attrs, text, children).
+    fn shape(node: &VNode) -> String {
+        let mut attrs: Vec<_> = node.attrs.iter().filter(|(k, _)| *k != "dj-id").collect();
+        attrs.sort();
+        let kids: Vec<String> = node.children.iter().map(shape).collect();
+        format!("{}{:?}{:?}[{}]", node.tag, attrs, node.text, kids.join(","))
+    }
+
+    /// `to_html` of the parsed `html`, after checking that parsing that
+    /// output again gives the same tree.
+    fn round_trip(html: &str) -> String {
+        let tree = parse_html(html).unwrap();
+        let out = tree.to_html();
+        let again = parse_html(&out).unwrap();
+        assert_eq!(shape(&again), shape(&tree), "re-parse of {out}");
+        out
+    }
+
+    #[test]
+    fn foreign_style_and_script_text_is_escaped() {
+        let payload = "&lt;/style&gt;&lt;/script&gt;&lt;img src=x onerror=alert(1)&gt; a &amp; b";
+        for (open, close) in [
+            ("<svg><style>", "</style></svg>"),
+            ("<svg><script>", "</script></svg>"),
+            ("<math><style>", "</style></math>"),
+            ("<svg><noscript>", "</noscript></svg>"),
+            ("<svg><xmp>", "</xmp></svg>"),
+            ("<math><mi><mglyph><style>", "</style></mglyph></mi></math>"),
+            (
+                "<math><annotation-xml><style>",
+                "</style></annotation-xml></math>",
+            ),
+            (
+                "<svg><foreignObject><math><style>",
+                "</style></math></foreignObject></svg>",
+            ),
+        ] {
+            let out = round_trip(&format!("<div dj-root>{open}{payload}{close}</div>"));
+            assert!(out.contains(&format!(">{payload}</")), "{open}: {out}");
+            assert!(!out.contains("<img"), "{open}: {out}");
+        }
+    }
+
+    #[test]
+    fn html_raw_text_inside_integration_points_stays_verbatim() {
+        // These style/script elements are in the HTML namespace: the parser
+        // kept their text raw, and it is written back raw.
+        let body = "a &amp; b > c";
+        for (open, close) in [
+            ("<style>", "</style>"),
+            ("<script>", "</script>"),
+            (
+                "<svg><foreignObject><style>",
+                "</style></foreignObject></svg>",
+            ),
+            ("<svg><desc><script>", "</script></desc></svg>"),
+            ("<svg><title><style>", "</style></title></svg>"),
+            ("<math><mtext><style>", "</style></mtext></math>"),
+            ("<math><ms><script>", "</script></ms></math>"),
+            (
+                "<math><annotation-xml encoding=\"Text/HTML\"><style>",
+                "</style></annotation-xml></math>",
+            ),
+            (
+                "<math><annotation-xml encoding=\"application/xhtml+xml\"><style>",
+                "</style></annotation-xml></math>",
+            ),
+        ] {
+            let out = round_trip(&format!("<div dj-root>{open}{body}{close}</div>"));
+            assert!(out.contains(&format!(">{body}</")), "{open}: {out}");
+        }
+    }
+
+    #[test]
+    fn html_and_plain_svg_css_serialize_unchanged() {
+        let html = concat!(
+            "<div dj-root><style>.a > .b { content: \"&amp;\" }</style>",
+            "<script>if (a < b && c > d) { x = '</scr' + 'ipt>'; }</script>",
+            "<svg viewBox=\"0 0 1 1\"><style>.c { fill: red }</style></svg></div>"
+        );
+        let out = round_trip(html);
+        assert!(
+            out.contains(">.a > .b { content: \"&amp;\" }</style>"),
+            "{out}"
+        );
+        assert!(
+            out.contains(">if (a < b && c > d) { x = '</scr' + 'ipt>'; }</script>"),
+            "{out}"
+        );
+        assert!(out.contains(">.c { fill: red }</style></svg>"), "{out}");
+    }
+
+    #[test]
+    fn ignored_subtree_cache_escapes_foreign_text() {
+        let mut tree = parse_html(
+            "<div dj-root><svg><g dj-update=\"ignore\"><style>&lt;/style&gt;&lt;img&gt;</style></g></svg></div>",
+        )
+        .unwrap();
+        let fresh = tree.to_html();
+        cache_ignore_subtree_html(&mut tree);
+        assert_eq!(tree.to_html(), fresh);
+        assert!(
+            fresh.contains(">&lt;/style&gt;&lt;img&gt;</style>"),
+            "{fresh}"
+        );
+    }
+
+    /// What html5ever's own serializer writes for the `dj-root` element of
+    /// `doc`, the reference for the HTML serialization algorithm.
+    fn spec_serialization(doc: &str) -> String {
+        use html5ever::serialize::{serialize, SerializeOpts, TraversalScope};
+        use html5ever::tendril::TendrilSink;
+        use markup5ever_rcdom::{Handle, NodeData, RcDom, SerializableHandle};
+        fn find(handle: &Handle) -> Option<Handle> {
+            if let NodeData::Element { ref attrs, .. } = handle.data {
+                if attrs
+                    .borrow()
+                    .iter()
+                    .any(|a| AsRef::<str>::as_ref(&a.name.local) == "dj-root")
+                {
+                    return Some(handle.clone());
+                }
+            }
+            handle.children.borrow().iter().find_map(find)
+        }
+        let dom = html5ever::parse_document(RcDom::default(), Default::default())
+            .from_utf8()
+            .read_from(&mut doc.as_bytes())
+            .unwrap();
+        let root = find(&dom.document).expect("dj-root");
+        let mut out = Vec::new();
+        let opts = SerializeOpts {
+            traversal_scope: TraversalScope::IncludeNode,
+            ..Default::default()
+        };
+        serialize(&mut out, &SerializableHandle::from(root), opts).unwrap();
+        String::from_utf8(out).unwrap()
+    }
+
+    /// `html` without its generated ` dj-id="…"` attributes.
+    fn without_ids(html: &str) -> String {
+        let mut out = String::new();
+        let mut rest = html;
+        while let Some(at) = rest.find(" dj-id=\"") {
+            out.push_str(&rest[..at]);
+            let after = &rest[at + 8..];
+            rest = &after[after.find('"').unwrap() + 1..];
+        }
+        out.push_str(rest);
+        out
+    }
+
+    #[test]
+    fn html_raw_text_is_written_verbatim_like_the_spec_serializer() {
+        // A script whose text holds `</script>` inside the script-data
+        // escape states (the legacy document.write pattern), a <plaintext>
+        // holding `</plaintext>`, and ordinary HTML raw text: written
+        // verbatim, byte-identical to html5ever's serializer and to the
+        // output before foreign-content handling (#3045).
+        let cases = [
+            (
+                "<div dj-root><script><!--\ndocument.write(\"<script src=a.js></script>\");\n//--></script></div>",
+                "<div dj-root=\"\"><script><!--\ndocument.write(\"<script src=a.js></script>\");\n//--></script></div>",
+            ),
+            (
+                "<div dj-root><script><!--<SCRIPT>a</Script >b--></script><p>c</p></div>",
+                "<div dj-root=\"\"><script><!--<SCRIPT>a</Script >b--></script><p>c</p></div>",
+            ),
+            (
+                "<div dj-root><plaintext>a</plaintext>b &amp; <p>c",
+                "<div dj-root=\"\"><plaintext>a</plaintext>b &amp; <p>c</plaintext></div>",
+            ),
+            (
+                "<div dj-root><style>.a > .b { content: '&amp;' }</style><xmp>a</xmpx><b></xmp></div>",
+                "<div dj-root=\"\"><style>.a > .b { content: '&amp;' }</style><xmp>a</xmpx><b></xmp></div>",
+            ),
+        ];
+        for (doc, expected) in cases {
+            let ours = without_ids(&parse_html(doc).unwrap().to_html());
+            assert_eq!(ours, spec_serialization(doc), "{doc}");
+            assert_eq!(ours, expected, "{doc}");
+        }
+    }
+
+    #[test]
+    fn raw_text_read_out_of_context_never_ends_its_element_early() {
+        // Text whose real context is not known here, read by an HTML parser
+        // as raw text (an InsertSubtree payload): escaped exactly when the
+        // tokenizer would leave the element before the text ends.
+        let out = |tag: &str, text: &str| {
+            VNode::element(tag)
+                .with_child(VNode::text(text))
+                .to_html_out_of_context()
+        };
+        assert_eq!(
+            out("style", "a</STYLE\t><img>"),
+            "<style>a&lt;/STYLE\t&gt;&lt;img&gt;</style>"
+        );
+        assert_eq!(
+            out("script", "a</script><img>"),
+            "<script>a&lt;/script&gt;&lt;img&gt;</script>"
+        );
+        // Inside an escaped `<!--` the end tag still ends a script.
+        assert_eq!(
+            out("script", "<!--</script><img>"),
+            "<script>&lt;!--&lt;/script&gt;&lt;img&gt;</script>"
+        );
+        // Double-escaped and left open: the `</script>` written next would
+        // not close the element.
+        assert_eq!(
+            out("script", "<!--<script>x"),
+            "<script>&lt;!--&lt;script&gt;x</script>"
+        );
+        // Text that stays inside: verbatim.
+        for (tag, text) in [
+            ("script", "<!--<script>document.write('</script>')-->"),
+            ("script", "<!--<script>x-->y"),
+            ("script", "a</scripts>b</script"),
+            ("style", "a</styles>"),
+            ("style", "x</script>"),
+            ("plaintext", "a</plaintext><img>"),
+        ] {
+            assert_eq!(out(tag, text), format!("<{tag}>{text}</{tag}>"), "{text}");
+        }
+        // A non-raw-text element is escaped as always; in context, an HTML
+        // raw-text element is verbatim like the spec serializer.
+        assert_eq!(out("div", "a<b"), "<div>a&lt;b</div>");
+        let node = VNode::element("style").with_child(VNode::text("a</styles>&"));
+        assert_eq!(node.to_html(), "<style>a</styles>&</style>");
+    }
+
+    #[test]
+    fn raw_text_with_child_elements_read_out_of_context_is_escaped_whole() {
+        // A foreign `<style>` / `<script>` / `<noembed>` can hold elements.
+        // Read as HTML raw text, a same-named descendant writes the end tag
+        // that closes the element, and the text after it is read as
+        // markup. The whole content is written as escaped text instead.
+        // RCDATA (`title`, `textarea`) is read as text as well. A
+        // `noscript` is read as markup (scripting disabled).
+        let img = "<img src=x onerror=alert(1)>";
+        let rcdata = ["title", "textarea"];
+        for tag in djust_core::raw_text::RAW_TEXT_ELEMENTS
+            .into_iter()
+            .chain(rcdata)
+        {
+            for inner in [
+                VNode::element(tag).with_child(VNode::text("a")),
+                VNode::element("g").with_child(VNode::element(tag).with_child(VNode::text("a"))),
+                {
+                    let mut comment = VNode::element("#comment");
+                    comment.text = Some("c".to_string());
+                    comment
+                },
+            ] {
+                let node = VNode::element(tag)
+                    .with_child(inner)
+                    .with_child(VNode::text(img));
+                let out = node.to_html_out_of_context();
+                let body = out
+                    .strip_prefix(&format!("<{tag}>"))
+                    .and_then(|rest| rest.strip_suffix(&format!("</{tag}>")))
+                    .unwrap_or_else(|| panic!("{out}"));
+                assert!(body.contains("lt;img"), "{out}");
+                if tag == "noscript" {
+                    // Read with scripting disabled: its content is markup,
+                    // written as such, with the text escaped.
+                    assert!(!body.contains("<img"), "{out}");
+                    continue;
+                }
+                assert!(!body.contains(['<', '>']), "{out}");
+            }
+        }
+        // Text-only content keeps the stays-inside rule (verbatim), and
+        // RCDATA text is escaped as always.
+        let node = VNode::element("style").with_child(VNode::text(".a > .b"));
+        assert_eq!(node.to_html_out_of_context(), "<style>.a > .b</style>");
+        let node = VNode::element("title").with_child(VNode::text("</title><b>"));
+        assert_eq!(
+            node.to_html_out_of_context(),
+            "<title>&lt;/title&gt;&lt;b&gt;</title>"
+        );
+    }
+
+    /// The `InsertSubtree` payloads of `diff_in(old, new)`, and the element
+    /// they are inserted into with its namespace.
+    fn payloads_and_parent(old: &str, new: &str) -> (Vec<String>, VNode, Namespace) {
+        let (old, _) = parse_html_with_namespace(old).unwrap();
+        let (new, ns) = parse_html_with_namespace(new).unwrap();
+        let mut parent = None;
+        let payloads = diff_in(&old, &new, ns)
+            .into_iter()
+            .filter_map(|p| match p {
+                Patch::InsertSubtree { html, path, .. } => {
+                    let parent_ns = namespace_at_path(&new, ns, &path).unwrap();
+                    let mut node = &new;
+                    for &i in &path {
+                        node = &node.children[i];
+                    }
+                    parent = Some((node.clone(), parent_ns));
+                    Some(html)
+                }
+                _ => None,
+            })
+            .collect();
+        let (parent, parent_ns) = parent.expect("an InsertSubtree");
+        (payloads, parent, parent_ns)
+    }
+
+    /// `payload` parsed as the client parses it (in `parent`'s namespace,
+    /// scripting disabled), serialized like the page, without ids.
+    fn client_reads(payload: &str, parent: &VNode, parent_ns: Namespace) -> String {
+        let roots = parser::parse_html_fragment_client_view_in(
+            payload,
+            &parent.tag,
+            parent_ns,
+            parent.attrs.get("encoding").map(String::as_str),
+        )
+        .unwrap();
+        let kids = parent_ns.children_of(parent);
+        let html: String = roots
+            .iter()
+            .map(|node| node.to_html_in(Some(kids.child_namespace(node))))
+            .collect();
+        without_ids(&html)
+    }
+
+    /// `parent`'s children as the page has them, without ids.
+    fn page_children(parent: &VNode, parent_ns: Namespace) -> String {
+        let kids = parent_ns.children_of(parent);
+        let html: String = parent
+            .children
+            .iter()
+            .map(|node| node.to_html_in(Some(kids.child_namespace(node))))
+            .collect();
+        without_ids(&html)
+    }
+
+    #[test]
+    fn inserted_raw_text_element_is_read_back_as_the_page_has_it() {
+        // An `{% if %}` / `{% elif %}` swap inside `<svg>` inserting a
+        // `<style>` that holds a `<style>` element and then text. The client
+        // parses the payload in the parent's namespace: it must read back
+        // exactly the nodes the page has, with no element made from text.
+        let value = "&lt;img src=x onerror=alert(1)&gt;";
+        for (tag, pre, post) in [
+            ("style", "<div dj-root><svg>", "</svg></div>"),
+            ("noembed", "<div dj-root><svg>", "</svg></div>"),
+            ("script", "<div dj-root><svg>", "</svg></div>"),
+            ("title", "<div dj-root><svg>", "</svg></div>"),
+            ("textarea", "<div dj-root><svg>", "</svg></div>"),
+            ("style", "<svg><g dj-root>", "</g></svg>"),
+            ("style", "<math><mrow dj-root>", "</mrow></math>"),
+            ("style", "<div dj-root>", "</div>"),
+        ] {
+            let mut bodies = vec![
+                format!("<{tag}><{tag}>a</{tag}>{value}</{tag}>"),
+                format!("<{tag}><g><{tag}>a</{tag}></g>{value}</{tag}>"),
+            ];
+            if tag == "title" {
+                // An SVG <title> holds HTML: a script there keeps
+                // `</title>` in its text, verbatim.
+                bodies.push(format!(
+                    "<title><script></title><img src=x></script>{value}</title>"
+                ));
+            }
+            for body in bodies {
+                let old = format!("{pre}<!--dj-if id=\"if-1\"--><g>one</g><!--/dj-if-->{post}");
+                // The other branch: a new boundary id, inserted whole.
+                let new = format!("{pre}<!--dj-if id=\"if-2\"-->{body}<!--/dj-if-->{post}");
+                let (payloads, parent, parent_ns) = payloads_and_parent(&old, &new);
+                assert_eq!(payloads.len(), 1, "{body}");
+                assert_eq!(
+                    client_reads(&payloads[0], &parent, parent_ns),
+                    page_children(&parent, parent_ns),
+                    "{new}: {}",
+                    payloads[0]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn inserted_noscript_text_stays_text_for_the_client() {
+        // An `{% if %}` / `{% elif %}` swap inserting a `<noscript>` that
+        // holds an auto-escaped value (SVG, MathML) or authored markup
+        // (HTML). The client parses the payload with scripting disabled,
+        // where `<noscript>` holds markup, so its text must be escaped: it
+        // reads back as the text the page has.
+        fn elements(nodes: &[VNode], out: &mut Vec<String>) {
+            for node in nodes {
+                if !node.is_text() && !node.is_comment() {
+                    out.push(node.tag.clone());
+                    elements(&node.children, out);
+                }
+            }
+        }
+        for (pre, body, post) in [
+            (
+                "<div dj-root><svg>",
+                "&lt;img src=x onerror=alert(1)&gt;",
+                "</svg></div>",
+            ),
+            (
+                "<div dj-root><math>",
+                "&lt;img src=x onerror=alert(1)&gt;",
+                "</math></div>",
+            ),
+            (
+                "<svg><g dj-root>",
+                "&lt;img src=x onerror=alert(1)&gt;",
+                "</g></svg>",
+            ),
+            (
+                "<math><mrow dj-root>",
+                "&lt;img src=x onerror=alert(1)&gt;",
+                "</mrow></math>",
+            ),
+            ("<div dj-root>", "<img src=x onerror=alert(1)>", "</div>"),
+            ("<div dj-root>", "a &amp; b", "</div>"),
+        ] {
+            let old = format!("{pre}<!--dj-if id=\"if-1\"--><g>one</g><!--/dj-if-->{post}");
+            let new = format!(
+                "{pre}<!--dj-if id=\"if-2\"--><noscript>{body}</noscript><!--/dj-if-->{post}"
+            );
+            let (payloads, parent, parent_ns) = payloads_and_parent(&old, &new);
+            assert_eq!(payloads.len(), 1, "{pre}");
+            let roots = parser::parse_html_fragment_client_view_in(
+                &payloads[0],
+                &parent.tag,
+                parent_ns,
+                None,
+            )
+            .unwrap();
+            let mut names = Vec::new();
+            elements(&roots, &mut names);
+            assert_eq!(names, ["noscript"], "{pre}: {}", payloads[0]);
+            assert_eq!(
+                client_reads(&payloads[0], &parent, parent_ns),
+                page_children(&parent, parent_ns),
+                "{pre}: {}",
+                payloads[0]
+            );
+        }
+    }
+
+    #[test]
+    fn a_root_inside_svg_or_math_is_serialized_in_its_namespace() {
+        // `<svg><g dj-root>`: the root is an SVG element although the VDOM
+        // only holds `g`. Its `<style>` is SVG, so the decoded text must be
+        // escaped again; written as HTML raw text it became markup.
+        let text = "a&lt;/style&gt;&lt;img src=x&gt; &amp; b";
+        for (doc, ns) in [
+            (
+                format!("<svg><g dj-root><style>{text}</style></g></svg>"),
+                Namespace::Svg,
+            ),
+            (
+                format!("<math><mrow dj-root><style>{text}</style></mrow></math>"),
+                Namespace::MathMl,
+            ),
+            (
+                format!("<svg dj-root><style>{text}</style></svg>"),
+                Namespace::Svg,
+            ),
+        ] {
+            let (root, root_ns) = parse_html_with_namespace(&doc).unwrap();
+            assert_eq!(root_ns, ns, "{doc}");
+            let html = without_ids(&root.to_html_in(Some(root_ns)));
+            assert!(html.contains(&format!("<style>{text}</style>")), "{html}");
+            assert_eq!(
+                html,
+                spec_serialization(&doc.replace(" dj-root", " dj-root=\"\""))
+            );
+        }
+        // An HTML integration point as the root holds HTML: verbatim.
+        let doc = "<svg><foreignObject dj-root><style>.a > .b &amp;</style></foreignObject></svg>";
+        let (root, root_ns) = parse_html_with_namespace(doc).unwrap();
+        assert_eq!(root_ns, Namespace::Svg);
+        let html = without_ids(&root.to_html_in(Some(root_ns)));
+        assert!(html.contains("<style>.a > .b &amp;</style>"), "{html}");
+        assert_eq!(html, spec_serialization(doc));
+        // HTML roots: unchanged, and the same as `to_html`.
+        let doc = "<div dj-root><style>.a > .b &amp;</style><svg><style>a&lt;b</style></svg></div>";
+        let (root, root_ns) = parse_html_with_namespace(doc).unwrap();
+        assert_eq!(root_ns, Namespace::Html);
+        assert_eq!(root.to_html_in(Some(root_ns)), root.to_html());
+        assert_eq!(without_ids(&root.to_html()), spec_serialization(doc));
+        // Namespace not known: raw-text names are escaped.
+        assert!(without_ids(&root.to_html_in(None)).contains("<style>.a &gt; .b &amp;amp;</style>"));
+    }
+
+    #[test]
+    fn namespace_at_path_follows_the_tree_builder() {
+        let (root, ns) = parse_html_with_namespace(
+            "<div dj-root><svg><foreignObject><p>x</p></foreignObject><g></g></svg>\
+             <math><mi><b>y</b></mi></math></div>",
+        )
+        .unwrap();
+        assert_eq!(ns, Namespace::Html);
+        let at = |path: &[usize]| namespace_at_path(&root, ns, path);
+        assert_eq!(at(&[]), Some(Namespace::Html));
+        assert_eq!(at(&[0]), Some(Namespace::Svg));
+        assert_eq!(at(&[0, 0]), Some(Namespace::Svg));
+        assert_eq!(at(&[0, 0, 0]), Some(Namespace::Html));
+        assert_eq!(at(&[0, 1]), Some(Namespace::Svg));
+        assert_eq!(at(&[1, 0, 0]), Some(Namespace::Html));
+        assert_eq!(at(&[0, 0, 0, 0]), None, "a text node");
+        assert_eq!(at(&[9]), None);
+        let (g, ns) = parse_html_with_namespace("<svg><g dj-root><a></a></g></svg>").unwrap();
+        assert_eq!(namespace_at_path(&g, ns, &[0]), Some(Namespace::Svg));
+    }
+
+    #[test]
+    fn inserted_subtree_is_serialized_knowing_its_parents_namespace() {
+        let inserted = |old: &str, new: &str| -> String {
+            let (old, _) = parse_html_with_namespace(old).unwrap();
+            let (new, ns) = parse_html_with_namespace(new).unwrap();
+            let patches = diff_in(&old, &new, ns);
+            let html: Vec<String> = patches
+                .iter()
+                .filter_map(|p| match p {
+                    Patch::InsertSubtree { html, .. } => Some(without_ids(html)),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(html.len(), 1, "{patches:?}");
+            html[0].clone()
+        };
+        // HTML parent: the payload is in context, so a legacy script is
+        // verbatim like everywhere else.
+        let script = "<script><!--<script>document.write('</script>')--></script>";
+        assert_eq!(
+            inserted(
+                "<div dj-root><p>x</p></div>",
+                &format!(
+                    "<div dj-root><!--dj-if id=\"if-1\"-->{script}<!--/dj-if--><p>x</p></div>"
+                ),
+            ),
+            format!("<!--dj-if id=\"if-1\"-->{script}<!--/dj-if-->")
+        );
+        // SVG parent: the client parses the payload as SVG, so the style's
+        // text is escaped as it is in the page.
+        let svg = |body: &str| {
+            format!(
+                "<div dj-root><svg><!--dj-if id=\"if-1\"-->{body}<!--/dj-if--><g></g></svg></div>"
+            )
+        };
+        let old = "<div dj-root><svg><g></g></svg></div>";
+        assert_eq!(
+            inserted(old, &svg("<style>a&lt;/style&gt;&lt;img&gt;</style>")),
+            "<!--dj-if id=\"if-1\"--><style>a&lt;/style&gt;&lt;img&gt;</style><!--/dj-if-->"
+        );
+        assert_eq!(
+            inserted(old, &svg("<style>.a &gt; .b</style>")),
+            "<!--dj-if id=\"if-1\"--><style>.a &gt; .b</style><!--/dj-if-->"
+        );
+        // The same nodes under an HTML root inside foreignObject: in context.
+        assert_eq!(
+            inserted(
+                "<div dj-root><svg><foreignObject><p></p></foreignObject></svg></div>",
+                "<div dj-root><svg><foreignObject><!--dj-if id=\"if-1\"--><style>.a > .b</style>\
+                 <!--/dj-if--><p></p></foreignObject></svg></div>",
+            ),
+            "<!--dj-if id=\"if-1\"--><style>.a > .b</style><!--/dj-if-->"
+        );
+    }
+
+    #[test]
+    fn inserted_subtree_reuses_an_ignore_cache_unless_it_holds_noscript() {
+        // A dj-update="ignore" cache is written in the node's real context
+        // for the page. The client reads an InsertSubtree payload in that
+        // context too, so the cache is reused, under <svg> as well; but its
+        // parse has scripting disabled, so a cache holding a `<noscript>` is
+        // written again.
+        let payload = |old: &str, new: &str, cache: &str| -> String {
+            let (old, _) = parse_html_with_namespace(old).unwrap();
+            let (mut new, ns) = parse_html_with_namespace(new).unwrap();
+            fn mark(node: &mut VNode, cache: &str) {
+                if node.attrs.contains_key("dj-update") {
+                    node.cached_html = Some(cache.to_string());
+                }
+                node.children.iter_mut().for_each(|c| mark(c, cache));
+            }
+            mark(&mut new, cache);
+            diff_in(&old, &new, ns)
+                .into_iter()
+                .find_map(|p| match p {
+                    Patch::InsertSubtree { html, .. } => Some(without_ids(&html)),
+                    _ => None,
+                })
+                .expect("InsertSubtree")
+        };
+        let html_parent = payload(
+            "<div dj-root><p></p></div>",
+            "<div dj-root><!--dj-if id=\"if-1\"--><div dj-update=\"ignore\"><style>a</style></div>\
+             <!--/dj-if--><p></p></div>",
+            "<i>cached</i>",
+        );
+        assert!(html_parent.contains("<i>cached</i>"), "{html_parent}");
+        let svg_parent = payload(
+            "<div dj-root><svg><g></g></svg></div>",
+            "<div dj-root><svg><!--dj-if id=\"if-1\"--><g dj-update=\"ignore\"><style>a</style></g>\
+             <!--/dj-if--><g></g></svg></div>",
+            "<i>cached</i>",
+        );
+        assert!(svg_parent.contains("<i>cached</i>"), "{svg_parent}");
+        let noscript = payload(
+            "<div dj-root><p></p></div>",
+            "<div dj-root><!--dj-if id=\"if-1\"--><div dj-update=\"ignore\"><noscript><b>x</b></noscript></div>\
+             <!--/dj-if--><p></p></div>",
+            "<div><NOSCRIPT><b>x</b></NOSCRIPT></div>",
+        );
+        assert!(
+            noscript.contains("<noscript>&lt;b&gt;x&lt;/b&gt;</noscript>"),
+            "{noscript}"
+        );
+    }
+
+    #[test]
+    fn ignored_subtree_cache_under_a_foreign_root_escapes_its_text() {
+        let doc =
+            "<svg><g dj-root><g dj-update=\"ignore\"><style>a&lt;b&amp;</style></g></g></svg>";
+        let (mut root, ns) = parse_html_with_namespace(doc).unwrap();
+        cache_ignore_subtree_html_in(&mut root, ns);
+        let cached = without_ids(root.children[0].cached_html.as_deref().unwrap());
+        assert!(cached.contains("<style>a&lt;b&amp;</style>"), "{cached}");
+        assert_eq!(
+            without_ids(&root.to_html_in(Some(ns))),
+            spec_serialization(doc)
+        );
+    }
+
+    // ========================================================================
     // Text-only VDOM fast path tests
     // ========================================================================
 
@@ -1799,6 +2821,166 @@ mod tests {
             span_id,
             "Child djust_id must be preserved"
         );
+    }
+
+    /// The in-place text update agrees with a full parse of `new_html`
+    /// whenever it takes the fast path: same text in every node, same output.
+    fn assert_text_update_matches_full_parse(old_html: &str, new_html: &str) -> bool {
+        let mut vdom = parse_html(old_html).unwrap();
+        let untouched = vdom.clone();
+        let took = try_text_only_vdom_update_inplace(&mut vdom, old_html, new_html);
+        if took {
+            let full = parse_html(new_html).unwrap();
+            assert_eq!(vdom.to_html(), full.to_html(), "{old_html} -> {new_html}");
+        } else {
+            assert_eq!(vdom.to_html(), untouched.to_html(), "left untouched");
+        }
+        took
+    }
+
+    #[test]
+    fn text_only_update_never_lands_on_another_node() {
+        // Each of these used to map a change by byte offset onto the wrong
+        // text node, because the HTML's text runs and the tree's text nodes
+        // did not line up: dropped whitespace (a newline, indentation),
+        // text outside the VDOM root, an append at the end of a node.
+        let cases = [
+            (
+                "<div dj-root>\n<p>aaaa</p><p>aaaa</p></div>",
+                "<div dj-root>\n<p>aaab</p><p>aaaa</p></div>",
+            ),
+            (
+                "<div dj-root>    <p>aaaa</p><p>aaaa</p></div>",
+                "<div dj-root>    <p>bbbb</p><p>aaaa</p></div>",
+            ),
+            (
+                "<html><head><title>T</title></head><body><div dj-root><p>xy</p><p>yz</p></div></body></html>",
+                "<html><head><title>T</title></head><body><div dj-root><p>xz</p><p>yz</p></div></body></html>",
+            ),
+            (
+                "<div dj-root><p>ab</p><p>cd</p></div>",
+                "<div dj-root><p>abc</p><p>cd</p></div>",
+            ),
+            (
+                "<div dj-root><p></p><p>cd</p></div>",
+                "<div dj-root><p>x</p><p>cd</p></div>",
+            ),
+        ];
+        for (old_html, new_html) in cases {
+            assert_text_update_matches_full_parse(old_html, new_html);
+        }
+        // Still taken where the runs and nodes line up.
+        assert!(assert_text_update_matches_full_parse(
+            "<div dj-root><p>ab</p><p>cd</p></div>",
+            "<div dj-root><p>abc</p><p>c &amp; d</p></div>",
+        ));
+    }
+
+    #[test]
+    fn text_only_update_falls_back_when_the_tree_builder_moves_text() {
+        // Foster parenting puts text (and elements) that sit directly in a
+        // table before the table, so the tree's text order differs from the
+        // source. With equal texts the one-for-one check still lined up and
+        // the change landed on the other node; every entry point must now
+        // fall back to a full parse. The same holds where a tag ends its
+        // context (`<input>` closes a `<select>`), so the text's parent is
+        // not the element the source has open around it.
+        let cases = [
+            (
+                "<div dj-root><table><tr><td>a</td></tr>a</table></div>",
+                "<div dj-root><table><tr><td>b</td></tr>a</table></div>",
+            ),
+            (
+                "<div dj-root><table><tr><td><b>a</b></td></tr><b>a</b></table></div>",
+                "<div dj-root><table><tr><td><b>b</b></td></tr><b>a</b></table></div>",
+            ),
+            (
+                "<div dj-root><table><tbody><tr><td>a</td></tr>a</tbody></table></div>",
+                "<div dj-root><table><tbody><tr><td>b</td></tr>a</tbody></table></div>",
+            ),
+            (
+                "<div dj-root><table><colgroup>a</colgroup><tr><td>a</td></tr></table></div>",
+                "<div dj-root><table><colgroup>a</colgroup><tr><td>b</td></tr></table></div>",
+            ),
+            (
+                "<div dj-root><table><tr><td>a</td><span>a</span></tr></table></div>",
+                "<div dj-root><table><tr><td>b</td><span>a</span></tr></table></div>",
+            ),
+            (
+                "<div dj-root><select><option>a</option><input>a</select></div>",
+                "<div dj-root><select><option>b</option><input>a</select></div>",
+            ),
+        ];
+        for (old_html, new_html) in cases {
+            let old = parse_html(old_html).unwrap();
+            assert!(
+                try_text_only_vdom_update(&old, old_html, new_html).is_none(),
+                "{old_html}"
+            );
+            assert!(
+                try_text_patches(&old, old_html, new_html).is_none(),
+                "{old_html}"
+            );
+            assert!(
+                !assert_text_update_matches_full_parse(old_html, new_html),
+                "{old_html}"
+            );
+        }
+        // Text in table cells is where the source says: still taken.
+        assert!(assert_text_update_matches_full_parse(
+            "<div dj-root><table><tr><td>a</td><td>a</td></tr></table></div>",
+            "<div dj-root><table><tr><td>b</td><td>a</td></tr></table></div>",
+        ));
+    }
+
+    #[test]
+    fn text_only_update_never_decodes_raw_text() {
+        // An auto-escaped value inside a script or style: the parser keeps
+        // `&lt;/script&gt;` as it is, so decoding it (as the update did)
+        // put a real end tag into the element's text.
+        for (old_html, new_html) in [
+            (
+                "<div dj-root><script>var s=\"x\";</script></div>",
+                "<div dj-root><script>var s=\"&lt;/script&gt;&lt;img src=x onerror=alert(1)&gt;\";</script></div>",
+            ),
+            (
+                "<div dj-root><style>.a{content:\"x\"}</style></div>",
+                "<div dj-root><style>.a{content:\"&lt;/style&gt;&lt;img&gt;\"}</style></div>",
+            ),
+            (
+                "<div dj-root><script>x&&y</script><p>amp</p></div>",
+                "<div dj-root><script>x&&y</script><p>XYZ</p></div>",
+            ),
+        ] {
+            assert!(!assert_text_update_matches_full_parse(old_html, new_html), "{new_html}");
+        }
+        // Text the parser would change on the way in.
+        for (old_html, new_html) in [
+            (
+                "<div dj-root><pre>a</pre></div>",
+                "<div dj-root><pre>\nb</pre></div>",
+            ),
+            (
+                "<div dj-root><p>a</p></div>",
+                "<div dj-root><p>&#x27;</p></div>",
+            ),
+            (
+                "<div dj-root><p>a</p></div>",
+                "<div dj-root><p>a\r\nb</p></div>",
+            ),
+        ] {
+            assert!(
+                !assert_text_update_matches_full_parse(old_html, new_html),
+                "{new_html}"
+            );
+        }
+        let vdom = parse_html("<div dj-root><script>var s=\"x\";</script></div>").unwrap();
+        assert!(try_text_patches(
+            &vdom,
+            "<div dj-root><script>var s=\"x\";</script></div>",
+            "<div dj-root><script>var s=\"&lt;/script&gt;\";</script></div>",
+        )
+        .is_none());
     }
 
     // ADR-032 D3 step 2 (#2917): the scoped component patch locates its node

@@ -20,6 +20,7 @@ from .rate_limit import (
     ConnectionRateLimiter,
     caller_key,
     get_rate_limit_settings,
+    handler_identity,
     handler_rate_check,
     ip_tracker,
 )
@@ -166,16 +167,73 @@ def _ensure_handler_rate_limit(
             )
 
 
+def _views_holding_event(owner_instance: object, root_view: Any = None) -> "list[Any]":
+    """What an event on ``owner_instance`` belongs to: the owner itself, the
+    views above it (a component's view, an embedded child's parents) and
+    ``root_view``, the page view of the transport.
+
+    On HTTP, every event on the page goes through the page view's ``post()``,
+    whatever component or embedded view it targets, so what only ``post()``
+    runs applies to all of them.
+    """
+    from .live_view import LiveView
+
+    holders: "list[Any]" = [owner_instance]
+
+    def _add(candidate: Any) -> None:
+        if isinstance(candidate, LiveView) and not any(candidate is h for h in holders):
+            holders.append(candidate)
+
+    current: Any = owner_instance
+    for _ in range(32):
+        parent = getattr(current, "_parent_view", None)
+        if parent is None and not isinstance(current, LiveView):
+            parent = getattr(current, "_parent", None)  # a component's owner
+        if parent is None:
+            break
+        _add(parent)
+        current = parent
+    _add(root_view)
+    return holders
+
+
+async def _post_only_rules_deny(owner_instance: object, root_view: Any = None) -> bool:
+    """Whether what only ``post()`` runs on the HTTP request (a decorator
+    applied to ``post``, a ``post()`` override that gates) refuses an event,
+    on anything the event belongs to (:func:`_views_holding_event`). A cached
+    lookup for views without such code; a view without a request is
+    refused."""
+    from .auth.core import check_event_auth, has_event_access_control
+
+    for holder in _views_holding_event(owner_instance, root_view):
+        if not has_event_access_control(type(holder)):
+            continue
+        request = getattr(holder, "request", None)
+        if request is None:
+            return True
+        try:
+            if await sync_to_async(check_event_auth)(holder, request) is not None:
+                return True
+        except PermissionDenied:
+            return True
+    return False
+
+
 async def _validate_event_security(
     ws: Any,
     event_name: str,
     owner_instance: object,
     rate_limiter: "ConnectionRateLimiter",
+    *,
+    root_view: Any = None,
 ) -> Optional[Callable[..., Any]]:
     """Validate event name, handler existence, decorator allowlist, and per-handler rate limit.
 
     Shared by actor, component, and view paths. Returns the handler if all
     checks pass, or None after sending the appropriate error/close.
+    ``root_view`` is the page view of the transport when ``owner_instance``
+    is a component or an embedded child: what only its ``post()`` runs
+    applies to every event on the page.
     """
     if not is_safe_event_name(event_name):
         safe_name = sanitize_for_log(event_name)
@@ -213,7 +271,10 @@ async def _validate_event_security(
         client_ip = getattr(ws, "_client_ip", None)
         owner_request = getattr(owner_instance, "request", None)
         key = caller_key(owner_request, client_ip)
-        if not handler_rate_check(key, event_name, rl_settings):
+        # ``handler_identity``, not ``event_name``: one callable reachable under
+        # two names is one handler and holds one budget (event_name is still used
+        # for the log lines below).
+        if not handler_rate_check(key, handler_identity(owner_instance, handler), rl_settings):
             rate_limiter.warnings += 1
             logger.warning(
                 "Per-handler rate limit exceeded for '%s' (warning %d/%d)",
@@ -248,6 +309,16 @@ async def _validate_event_security(
     # default ModelBackend queries the DB for a non-superuser — raising
     # SynchronousOnlyOperation when called bare from this async def.
     if owner_request and not await sync_to_async(check_handler_permission)(handler, owner_request):
+        await ws.send_error("Permission denied")
+        return None
+
+    # What only the view's post() runs on the HTTP request (a decorator
+    # applied to post, a post() override that gates) is not applied at mount,
+    # which Django serves with get(); it applies to every event, including
+    # events on the view's components and embedded views (on HTTP they all go
+    # through the page view's post()). A cached lookup for views without such
+    # code.
+    if await _post_only_rules_deny(owner_instance, root_view):
         await ws.send_error("Permission denied")
         return None
 

@@ -342,22 +342,23 @@ class TestDispatchMountObjectPermission:
 
     @pytest.mark.asyncio
     @override_settings(LIVEVIEW_ALLOWED_MODULES=["djust."])
-    async def test_object_perm_runs_after_mount_before_handle_params(self):
-        """The object check runs AFTER mount() (so get_object can read URL-derived
-        attrs) and BEFORE handle_params + render (so a denied object never renders)
-        — the WS placement (websocket.py:2554-2573)."""
+    async def test_object_perm_runs_after_handle_params_before_render(self):
+        """The object check runs AFTER mount() and handle_params() (so get_object
+        can read state either of them set from the URL) and BEFORE the first
+        render (so a denied object never renders) — the order the HTTP GET render
+        and dispatch_url_change use."""
         view = _ObjectDeniedView()
-        runtime, _ = _runtime_with_view(view)
+        runtime, transport = _runtime_with_view(view)
 
         await runtime.dispatch_mount(
             {"type": "mount", "view": _DENIED_VIEW_PATH, "params": {}, "url": "/x/"}
         )
 
         assert getattr(view, "mounted", False), "mount() must run before the object check"
-        assert not getattr(view, "handle_params_ran", False), (
-            "handle_params ran on a denied object — the object check must short-"
-            "circuit BEFORE handle_params"
+        assert getattr(view, "handle_params_ran", False), (
+            "handle_params must run before the object check, as on HTTP GET"
         )
+        assert not [f for f in transport.sent if f.get("type") == "mount"]
 
 
 # --------------------------------------------------------------------------- #

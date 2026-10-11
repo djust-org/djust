@@ -248,6 +248,11 @@ def diff_html(old_html: str, new_html: str) -> str:
     """
     ...
 
+MAX_VDOM_DEPTH: int
+"""How many element levels the VDOM parser keeps, counted from the LiveView
+root (256). An element at the limit keeps its tag and attributes; everything
+below it is flattened to its text content."""
+
 def resolve_template_inheritance(
     template_path: str,
     template_dirs: List[str],
@@ -384,6 +389,11 @@ MAX_CONVERSION_DEPTH: int
 crosses as ``str(o)`` (#2624). Python's own recursion limit, 1000 — the depth
 at which CPython itself refuses to ``repr``/``json.dumps`` a structure, and
 well inside the 8 MiB (glibc) / 16 MiB (macOS) stack every real thread has."""
+
+MAX_MD_NESTING: int
+"""How many container elements (``<blockquote>``, ``<ul>``/``<ol>``, ``<li>``)
+:func:`render_markdown` keeps open at once. A container that starts deeper is
+rendered without its own tags; its content stays in place."""
 
 def set_virtual_keyed_ops(enabled: bool) -> None:
     """Enable/disable `[dj-virtual]` keyed splice ops in the differ (ADR-026).
@@ -1386,6 +1396,7 @@ __all__ = [
     "template_compiled_at_generation",
     "render_markdown",
     "diff_html",
+    "MAX_VDOM_DEPTH",
     "collapse_inter_tag_whitespace",
     "resolve_template_inheritance",
     # Serialization
@@ -1395,6 +1406,7 @@ __all__ = [
     "crosses_as_encoded",
     "crosses_as_encoded_by_conversion",
     "MAX_CONVERSION_DEPTH",
+    "MAX_MD_NESTING",
     "dj_model_fields_from_template",
     "serialize_queryset",
     "serialize_context",
