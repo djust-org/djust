@@ -2,6 +2,7 @@
 
 import html
 
+from django.utils.html import conditional_escape
 from djust import Component
 
 
@@ -106,7 +107,7 @@ class AuditLog(Component):
             cells = []
             for col in self.columns:
                 val = html.escape(str(entry.get(col, "")))
-                cell_cls = f"dj-audit-log__td dj-audit-log__td--{col}"
+                cell_cls = f"dj-audit-log__td dj-audit-log__td--{conditional_escape(col)}"
                 if col == "action":
                     action_val = str(entry.get("action", ""))
                     if action_val in self.allowed_actions:

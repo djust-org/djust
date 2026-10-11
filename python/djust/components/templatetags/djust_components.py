@@ -9030,7 +9030,7 @@ class AuditLogNode(template.Node):
             cells = []
             for col in columns:
                 val = conditional_escape(str(entry.get(col, "")))
-                cell_cls = f"dj-audit-log__td dj-audit-log__td--{col}"
+                cell_cls = f"dj-audit-log__td dj-audit-log__td--{conditional_escape(col)}"
                 if col == "action":
                     cell_cls += (
                         f" dj-audit-log__action--{conditional_escape(str(entry.get('action', '')))}"
