@@ -13,6 +13,8 @@ only, so ``check_view_auth`` asks the same question for the rest:
   route serves this class and the installed middleware lets it through, or
   when the URLconf routes this class through a ``login_not_required`` entry;
   otherwise an anonymous user is sent where the middleware would send it;
+* a view refused beside the page view (``dj-lazy`` hydration, ``mount_batch``)
+  is refused alone and the page keeps running;
 * an authenticated user passes; without the middleware nothing changes.
 
 djust's own ``login_required = False`` is not an exemption: the middleware does
@@ -813,3 +815,444 @@ def test_same_verdict_as_the_middleware_on_http(middleware_path, view_cls, url):
         response = Client().get(url)
         expected = response["Location"] if response.status_code == 302 else None
         assert check_view_auth(view_cls(), _get(url, _Anon())) == expected
+
+
+# --------------------------------------------------------------------------- #
+# Views beside the page view (dj-lazy hydration, mount_batch): the middleware's
+# refusal refuses that view only and the page keeps running, as on HTTP, where
+# the middleware never gates what a page includes.
+# --------------------------------------------------------------------------- #
+
+
+async def _ws_open(user):
+    from channels.testing import WebsocketCommunicator
+
+    from djust.websocket import LiveViewConsumer
+
+    socket = WebsocketCommunicator(_scoped(LiveViewConsumer.as_asgi(), user), "/ws/")
+    connected, _ = await socket.connect()
+    assert connected
+    try:
+        await socket.receive_json_from(timeout=2)
+    except Exception:  # noqa: BLE001 - the connect ack is optional here
+        pass
+    return socket
+
+
+async def _ws_frame(socket, *types):
+    while True:
+        frame = await socket.receive_json_from(timeout=3)
+        if frame.get("type") in types:
+            return frame
+
+
+async def _ws_public_page(user):
+    socket = await _ws_open(user)
+    await socket.send_json_to(
+        {"type": "mount", "view": f"{MOD}.LrmPublicRouteView", "url": "/lrm/public/"}
+    )
+    frame = await _ws_frame(socket, "mount", "navigate", "error")
+    assert frame.get("type") == "mount", frame
+    return socket
+
+
+async def _ws_page_event_runs(socket):
+    RAN.clear()
+    await socket.send_json_to({"type": "event", "event": "touch", "params": {}, "ref": 7})
+    frames = [await socket.receive_json_from(timeout=3)]
+    # (a timed-out receive cancels the consumer, so wait for quiet instead)
+    while not await socket.receive_nothing(timeout=0.3):
+        frames.append(await socket.receive_json_from(timeout=3))
+    assert RAN == ["LrmPublicRouteView"], frames
+    assert not any(f.get("type") in ("error", "navigate") for f in frames), frames
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("lrm")
+@pytest.mark.parametrize("target_id", [None, "lazy-slot"])
+@pytest.mark.parametrize("view_cls", [LrmEmbeddedView, LrmPrivateView])
+async def test_ws_lazy_view_beside_a_public_page_is_refused_alone(view_cls, target_id):
+    socket = await _ws_public_page(_Anon())
+    try:
+        mount = {"type": "mount", "view": f"{MOD}.{view_cls.__name__}", "url": "/lrm/public/"}
+        if target_id:
+            mount["target_id"] = target_id
+        await socket.send_json_to(mount)
+        frame = await _ws_frame(socket, "mount", "navigate", "error")
+        assert frame.get("type") == "error" and frame.get("code") == "login_required", frame
+        # No navigate frame and no close: the page stays where it is.
+        assert await socket.receive_nothing(timeout=0.3)
+        await _ws_page_event_runs(socket)
+    finally:
+        await socket.disconnect()
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("lrm")
+async def test_ws_mount_batch_beside_a_public_page_refuses_entries_alone():
+    socket = await _ws_public_page(_Anon())
+    try:
+        await socket.send_json_to(
+            {
+                "type": "mount_batch",
+                "views": [
+                    {"view": f"{MOD}.LrmEmbeddedView", "url": "/lrm/public/", "target_id": "u"},
+                    {"view": f"{MOD}.LrmPrivateView", "url": "/lrm/public/", "target_id": "p"},
+                ],
+            }
+        )
+        reply = await _ws_frame(socket, "mount_batch")
+        assert reply.get("views") == [], reply
+        assert {f["target_id"]: f["error"] for f in reply["failed"]} == {
+            "u": "Login required",
+            "p": "Login required",
+        }, reply
+        assert "navigate" not in reply, reply
+        assert await socket.receive_nothing(timeout=0.3)
+        await _ws_page_event_runs(socket)
+    finally:
+        await socket.disconnect()
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("lrm")
+async def test_ws_mount_batch_mixed_entries():
+    """Public entries mount, middleware refusals fail alone, and a view's own
+    ``login_required`` keeps its redirect."""
+    socket = await _ws_public_page(_Anon())
+    try:
+        await socket.send_json_to(
+            {
+                "type": "mount_batch",
+                "views": [
+                    {"view": f"{MOD}.LrmEmbeddedView", "url": "/lrm/public/", "target_id": "u"},
+                    {"view": f"{MOD}.LrmMarkedView", "url": "/lrm/public/", "target_id": "m"},
+                    {
+                        "view": f"{MOD}.LrmLoginRequiredView",
+                        "url": "/lrm/public/",
+                        "target_id": "own",
+                    },
+                ],
+            }
+        )
+        reply = await _ws_frame(socket, "mount_batch")
+        assert [v["target_id"] for v in reply["views"]] == ["m"], reply
+        assert [f["target_id"] for f in reply["failed"]] == ["u"], reply
+        assert [n["target_id"] for n in reply.get("navigate", [])] == ["own"], reply
+        assert await socket.receive_nothing(timeout=0.3)
+    finally:
+        await socket.disconnect()
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("lrm")
+async def test_ws_views_beside_the_page_mount_for_a_signed_in_user():
+    socket = await _ws_public_page(_Authed())
+    try:
+        await socket.send_json_to(
+            {
+                "type": "mount_batch",
+                "views": [
+                    {"view": f"{MOD}.LrmEmbeddedView", "url": "/lrm/public/", "target_id": "u"},
+                    {"view": f"{MOD}.LrmPrivateView", "url": "/lrm/public/", "target_id": "p"},
+                ],
+            }
+        )
+        reply = await _ws_frame(socket, "mount_batch")
+        assert [v["target_id"] for v in reply["views"]] == ["u", "p"], reply
+        assert reply["failed"] == [], reply
+        await socket.send_json_to(
+            {"type": "mount", "view": f"{MOD}.LrmEmbeddedView", "url": "/lrm/public/"}
+        )
+        frame = await _ws_frame(socket, "mount", "navigate", "error")
+        assert frame.get("type") == "mount", frame
+    finally:
+        await socket.disconnect()
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("lrm")
+async def test_ws_first_mount_is_the_page_and_is_redirected():
+    """The first view on a socket is the page view: refused, it moves the page."""
+    socket = await _ws_open(_Anon())
+    try:
+        await socket.send_json_to(
+            {"type": "mount", "view": f"{MOD}.LrmEmbeddedView", "url": "/lrm/public/"}
+        )
+        frame = await _ws_frame(socket, "mount", "navigate", "error")
+        assert frame.get("type") == "navigate" and LOGIN in json.dumps(frame), frame
+        out = await socket.receive_output(timeout=2)
+        assert out.get("type") == "websocket.close" and out.get("code") == 4403, out
+    finally:
+        await socket.disconnect()
+
+
+class LrmTickingView(LrmEmbeddedView):
+    """Unrouted, with a tick: its mount sets up a tick task before auth runs."""
+
+    template = _template("LrmTickingView")
+    api_name = "lrm.ticking"
+    tick_interval = 60_000
+
+    def handle_tick(self):
+        pass
+
+
+sys.modules[MOD].LrmTickingView = LrmTickingView
+_CONSUMERS: list = []
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("lrm")
+async def test_ws_refusal_beside_the_page_leaves_the_consumer_as_it_was():
+    import asyncio
+
+    from channels.testing import WebsocketCommunicator
+
+    from djust.websocket import LiveViewConsumer
+
+    class _Capturing(LiveViewConsumer):
+        async def connect(self):
+            _CONSUMERS.append(self)
+            await super().connect()
+
+    _CONSUMERS.clear()
+    socket = WebsocketCommunicator(_scoped(_Capturing.as_asgi(), _Anon()), "/ws/")
+    connected, _ = await socket.connect()
+    assert connected
+    try:
+        await socket.send_json_to(
+            {"type": "mount", "view": f"{MOD}.LrmPublicRouteView", "url": "/lrm/public/"}
+        )
+        assert (await _ws_frame(socket, "mount", "navigate", "error"))["type"] == "mount"
+        consumer = _CONSUMERS[-1]
+        page_view = consumer.view_instance
+        view_group = getattr(consumer, "_view_group", None)
+        tick_task = getattr(consumer, "_tick_task", None)
+        assert type(page_view) is LrmPublicRouteView and view_group
+        await socket.send_json_to(
+            {"type": "mount", "view": f"{MOD}.LrmTickingView", "url": "/lrm/public/"}
+        )
+        frame = await _ws_frame(socket, "mount", "navigate", "error")
+        assert frame.get("code") == "login_required", frame
+        assert consumer.view_instance is page_view
+        assert getattr(consumer, "_view_group", None) == view_group
+        assert getattr(consumer, "_tick_task", None) is tick_task
+        await _ws_page_event_runs(socket)
+        ticking = [
+            t for t in asyncio.all_tasks() if "_run_tick" in repr(t.get_coro()) and not t.done()
+        ]
+        assert ticking == [], ticking
+        from djust.push import view_group_name
+
+        members = getattr(consumer.channel_layer, "groups", {})
+        assert consumer.channel_name in members.get(view_group, {})
+        assert consumer.channel_name not in members.get(
+            view_group_name(f"{MOD}.LrmTickingView"), {}
+        )
+    finally:
+        await socket.disconnect()
+
+
+# --------------------------------------------------------------------------- #
+# A refusal beside the page view also leaves the observability registry on the
+# page view, and a view relying on permission checks alone is refused alone.
+# --------------------------------------------------------------------------- #
+
+
+class LrmPermissionOnlyView(LrmEmbeddedView):
+    """Unrouted, with ``permission_required`` and no ``login_required``."""
+
+    template = _template("LrmPermissionOnlyView")
+    api_name = "lrm.permission-only"
+    permission_required = "auth.view_user"
+
+
+sys.modules[MOD].LrmPermissionOnlyView = LrmPermissionOnlyView
+
+
+async def _ws_capturing(user):
+    from channels.testing import WebsocketCommunicator
+
+    from djust.websocket import LiveViewConsumer
+
+    class _Capturing(LiveViewConsumer):
+        async def connect(self):
+            _CONSUMERS.append(self)
+            await super().connect()
+
+    _CONSUMERS.clear()
+    socket = WebsocketCommunicator(_scoped(_Capturing.as_asgi(), user), "/ws/")
+    connected, _ = await socket.connect()
+    assert connected
+    return socket, _CONSUMERS[-1]
+
+
+async def _ws_capturing_public_page(user):
+    socket, consumer = await _ws_capturing(user)
+    await socket.send_json_to(
+        {"type": "mount", "view": f"{MOD}.LrmPublicRouteView", "url": "/lrm/public/"}
+    )
+    assert (await _ws_frame(socket, "mount", "navigate", "error"))["type"] == "mount"
+    return socket, consumer
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("lrm")
+async def test_ws_refusal_beside_the_page_keeps_the_page_view_observed():
+    import gc
+
+    from djust.observability.registry import get_view_for_session
+
+    socket, consumer = await _ws_capturing_public_page(_Anon())
+    try:
+        page_view = consumer.view_instance
+        assert get_view_for_session(consumer.session_id) is page_view
+        for extra in ({}, {"target_id": "lz"}):
+            await socket.send_json_to(
+                {"type": "mount", "view": f"{MOD}.LrmEmbeddedView", "url": "/lrm/public/", **extra}
+            )
+            frame = await _ws_frame(socket, "mount", "navigate", "error")
+            assert frame.get("code") == "login_required", frame
+            gc.collect()
+            assert get_view_for_session(consumer.session_id) is page_view, extra
+        await socket.send_json_to(
+            {
+                "type": "mount_batch",
+                "views": [
+                    {"view": f"{MOD}.LrmEmbeddedView", "url": "/lrm/public/", "target_id": "u"}
+                ],
+            }
+        )
+        reply = await _ws_frame(socket, "mount_batch")
+        assert [f["target_id"] for f in reply["failed"]] == ["u"], reply
+        gc.collect()
+        assert get_view_for_session(consumer.session_id) is page_view
+        await _ws_page_event_runs(socket)
+    finally:
+        await socket.disconnect()
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("lrm")
+async def test_ws_refused_first_mount_with_a_target_leaves_no_view_observed():
+    from djust.observability.registry import get_view_for_session
+
+    socket, consumer = await _ws_capturing(_Anon())
+    try:
+        await socket.send_json_to(
+            {
+                "type": "mount",
+                "view": f"{MOD}.LrmEmbeddedView",
+                "url": "/lrm/public/",
+                "target_id": "lz",
+            }
+        )
+        frame = await _ws_frame(socket, "mount", "navigate", "error")
+        assert frame.get("code") == "login_required", frame
+        assert consumer.view_instance is None
+        assert get_view_for_session(consumer.session_id) is None
+    finally:
+        await socket.disconnect()
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("lrm")
+async def test_ws_permission_only_view_beside_the_page_is_refused_alone():
+    """Without its own ``login_required``, the middleware's answer comes before
+    the view's permission checks: refused for an anonymous user beside the
+    page view, it fails alone like any other view there."""
+    socket = await _ws_public_page(_Anon())
+    try:
+        await socket.send_json_to(
+            {"type": "mount", "view": f"{MOD}.LrmPermissionOnlyView", "url": "/lrm/public/"}
+        )
+        frame = await _ws_frame(socket, "mount", "navigate", "error")
+        assert frame.get("type") == "error" and frame.get("code") == "login_required", frame
+        assert await socket.receive_nothing(timeout=0.3)
+        await _ws_page_event_runs(socket)
+    finally:
+        await socket.disconnect()
+
+
+class LrmActorView(LrmEmbeddedView):
+    """Unrouted, with ``use_actors``: on 1.0 its mount sets up a SessionActor."""
+
+    template = _template("LrmActorView")
+    api_name = "lrm.actor"
+    use_actors = True
+
+
+sys.modules[MOD].LrmActorView = LrmActorView
+
+
+class _FakeActorHandle:
+    def __init__(self, session_id):
+        self.session_id = session_id
+        self.shut_down = False
+
+    async def mount(self, view_path, context_data, view):
+        return {"html": "<div>actor</div>", "version": 1}
+
+    async def shutdown(self):
+        self.shut_down = True
+
+
+@pytest.fixture
+def actors(monkeypatch):
+    import djust.websocket as ws
+
+    created: list = []
+
+    async def create_session_actor(session_id):
+        created.append(session_id)
+        return _FakeActorHandle(session_id)
+
+    monkeypatch.setattr(ws, "create_session_actor", create_session_actor)
+    return created
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("lrm")
+async def test_ws_refused_actor_view_beside_the_page_gets_no_session_actor(actors):
+    socket, consumer = await _ws_capturing_public_page(_Anon())
+    try:
+        assert actors == []
+        for extra in ({}, {"target_id": "lz"}):
+            await socket.send_json_to(
+                {"type": "mount", "view": f"{MOD}.LrmActorView", "url": "/lrm/public/", **extra}
+            )
+            frame = await _ws_frame(socket, "mount", "navigate", "error")
+            assert frame.get("code") == "login_required", frame
+        assert actors == []
+        assert consumer.actor_handle is None and not consumer.use_actors
+        await _ws_page_event_runs(socket)
+    finally:
+        await socket.disconnect()
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("lrm")
+async def test_ws_admitted_actor_view_beside_the_page_gets_its_session_actor(actors):
+    socket, consumer = await _ws_capturing_public_page(_Authed())
+    try:
+        await socket.send_json_to(
+            {"type": "mount", "view": f"{MOD}.LrmActorView", "url": "/lrm/public/"}
+        )
+        frame = await _ws_frame(socket, "mount", "navigate", "error")
+        assert frame.get("type") == "mount", frame
+        assert actors == [consumer.session_id]
+        assert consumer.use_actors and consumer.actor_handle is not None
+    finally:
+        await socket.disconnect()

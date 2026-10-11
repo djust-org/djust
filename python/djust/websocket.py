@@ -277,6 +277,19 @@ from .security.mount import validate_mount_url as _validate_mount_url  # noqa: E
 #: passed ``reauth_on_event`` check covers server-originated turns on one socket.
 _SERVER_TURN_REAUTH_INTERVAL_S = 5.0
 
+#: Consumer attributes a mount sets up before its auth check; a view refused
+#: beside the page view puts them back as they were.
+_BESIDE_PAGE_STATE = (
+    "_sticky_auto_reattached",
+    "_view_path",
+    "_view_group",
+    "_presence_group",
+    "_db_notify_channels",
+    "_tick_task",
+    "use_actors",
+    "actor_handle",
+)
+
 
 def _should_expose_timing() -> bool:
     """
@@ -2050,6 +2063,22 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
         logger = logging.getLogger(__name__)
 
+        # A mount while a view is live on this socket (dj-lazy hydration), a
+        # mount_batch entry, or a mount addressed to a container is a view
+        # beside the page view: a LoginRequiredMiddleware refusal refuses that
+        # view only and leaves the consumer as it was.
+        previous_view = self.view_instance
+        beside_page = (
+            previous_view is not None
+            or bool(getattr(self, "_mounting_in_batch", False))
+            or bool(data.get("target_id"))
+        )
+        before_mount = (
+            {name: getattr(self, name, None) for name in _BESIDE_PAGE_STATE}
+            if beside_page
+            else None
+        )
+
         # Reset auto-reattach tracker (ADR-014): each mount starts with
         # an empty set; the tag pushes ids onto it as it claims survivors.
         self._sticky_auto_reattached = set()
@@ -2183,7 +2212,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             # Check if view uses actor-based state management
             self.use_actors = getattr(view_class, "use_actors", False)
 
-            if self.use_actors and create_session_actor:
+            # A view beside the page view gets its SessionActor once auth admits
+            # it (below), so a refused one leaves no actor behind.
+            if self.use_actors and create_session_actor and before_mount is None:
                 # Create SessionActor for this session
                 logger.info("Creating SessionActor for %s", view_path)
                 self.actor_handle = await create_session_actor(self.session_id)
@@ -2318,6 +2349,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 await self.close(code=4403)
                 return
             if redirect_url:
+                from .auth._login_required_middleware import is_middleware_redirect
+
+                if before_mount is not None and is_middleware_redirect(redirect_url):
+                    await self._refuse_beside_page(before_mount, previous_view)
+                    return
                 # Auth failure (e.g. anonymous user on a login_required view).
                 # Send the redirect frame so a browser navigates to LOGIN_URL,
                 # THEN close the socket — otherwise a raw WS client can ignore
@@ -2352,6 +2388,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             # the same envelope this path produced when the call was inline.
             # See: https://github.com/djust-org/djust/issues/342
             # --- End pre-mount security sequence ---
+
+            if before_mount is not None and self.use_actors and create_session_actor:
+                logger.info("Creating SessionActor for %s", view_path)
+                self.actor_handle = await create_session_actor(self.session_id)
+                logger.info("SessionActor created: %s", self.actor_handle.session_id)
 
             # --- on_mount hooks (after auth, before mount) ---
             from .hooks import run_on_mount_hooks
@@ -2910,6 +2951,57 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         # never delivered).
         await self._flush_push_events()
         await self._dispatch_async_work()
+
+    async def _refuse_beside_page(self, before: Dict[str, Any], previous_view: Any) -> None:
+        """Refuse a view mounted beside the page view on its own.
+
+        Django's ``LoginRequiredMiddleware`` rule refused a view beside the
+        page view (``dj-lazy`` hydration, a ``mount_batch`` entry). Only that
+        view is refused, as on HTTP, where the middleware never gates what a
+        page includes: the groups and tick it set up are dropped, the consumer
+        gets back the view and state it had, and the client gets an error frame
+        (a ``failed[]`` entry in a batch) instead of a navigation, with the
+        socket left open.
+        """
+
+        def groups(state: Dict[str, Any]) -> set:
+            names = {state.get("_view_group"), state.get("_presence_group")}
+            names.update(f"djust_db_notify_{ch}" for ch in state.get("_db_notify_channels") or ())
+            names.discard(None)
+            return names
+
+        current = {name: getattr(self, name, None) for name in _BESIDE_PAGE_STATE}
+        for group in groups(current) - groups(before):
+            try:
+                await self.channel_layer.group_discard(group, self.channel_name)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("Error leaving channel group %s: %s", group, e)
+        task = current.get("_tick_task")
+        if task is not None and task is not before.get("_tick_task"):
+            task.cancel()
+        for name, value in before.items():
+            setattr(self, name, value)
+        self.view_instance = previous_view
+        # The refused view registered itself for this session when it was
+        # instantiated; the observability registry follows the consumer back.
+        try:
+            from djust.observability.registry import register_view, unregister_view
+
+            if previous_view is None:
+                unregister_view(self.session_id)
+            else:
+                register_view(self.session_id, previous_view)
+        except Exception as e:  # noqa: BLE001
+            # Observability must never break a WS connection.
+            logger.warning("Failed to restore the observability registry entry: %s", e)
+        await self.send_json(
+            {
+                "type": "error",
+                "error": "Login required",
+                "message": "Login required",
+                "code": "login_required",
+            }
+        )
 
     async def _mount_one(self, data_view: Dict[str, Any]):
         """Mount + render a single view and return a payload WITHOUT sending.

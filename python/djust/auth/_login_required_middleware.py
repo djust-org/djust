@@ -25,7 +25,9 @@ instead, so that function asks :func:`middleware_login_redirect`:
    ``dispatch`` marker; naming a public page's URL does not exempt it.
 
 The refusal redirects where the middleware would (its ``login_url`` and
-``redirect_field_name`` for that route). Without the middleware, or on
+``redirect_field_name`` for that route). A view mounted beside the page view
+(``dj-lazy`` hydration, ``mount_batch``) is refused on its own and the page
+stays (see :class:`MiddlewareRedirect`). Without the middleware, or on
 Django < 5.1, this is inert.
 """
 
@@ -219,6 +221,18 @@ def _login_required_stub(request: Any) -> None:  # pragma: no cover — never ca
     return None
 
 
+class MiddlewareRedirect(str):
+    """A login URL that this module's rule produced (not the view's own
+    ``login_required``). A view mounted beside the page view answers it on
+    its own (its container is refused) instead of moving the whole page."""
+
+
+def is_middleware_redirect(url: Any) -> bool:
+    """True when ``url`` is a refusal from Django's ``LoginRequiredMiddleware``
+    rule (see :class:`MiddlewareRedirect`)."""
+    return isinstance(url, MiddlewareRedirect)
+
+
 def middleware_login_redirect(view_instance: Any, request: Any) -> Optional[str]:
     """Where Django's ``LoginRequiredMiddleware`` sends this request for this
     view, or ``None`` when it lets it through (or is not installed).
@@ -248,13 +262,13 @@ def middleware_login_redirect(view_instance: Any, request: Any) -> Optional[str]
             response = False
         if response is None:
             return None
-        return _redirect(middleware, request, func)
+        return MiddlewareRedirect(_redirect(middleware, request, func))
     routes = _routes_for(view_cls, request)
     if any(not getattr(route, "login_required", True) for route in routes):
         return None
     # The request's path is not this view's page (another route, or the SSE /
     # API endpoint): the login URL of the view's own route, without ``next``.
-    return _login_url(middleware, routes[0] if routes else _login_required_stub)
+    return MiddlewareRedirect(_login_url(middleware, routes[0] if routes else _login_required_stub))
 
 
 def login_required_by_middleware(view_instance: Any, request: Any) -> bool:
