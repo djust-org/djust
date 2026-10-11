@@ -91,15 +91,21 @@ def check_view_auth(
         settings, "LOGIN_URL", "/accounts/login/"
     )
 
-    # 1. Login check
-    if login_required:
+    # 1. Login check (also Django's LoginRequiredMiddleware, see
+    #    djust.auth._login_required_middleware)
+    from ._login_required_middleware import middleware_login_redirect
+
+    middleware_redirect = (
+        None if login_required else middleware_login_redirect(view_instance, request)
+    )
+    if login_required or middleware_redirect is not None:
         user = getattr(request, "user", None)
         if user is None or not getattr(user, "is_authenticated", False):
             logger.info(
                 "Auth denied for %s: user not authenticated",
                 view_instance.__class__.__name__,
             )
-            return login_url
+            return middleware_redirect or login_url
 
     # 2. Permission check
     if permission_required:

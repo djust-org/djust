@@ -71,6 +71,11 @@ class RequestMixin:
         # doesn't see lazy thunks from a prior request stashed by the
         # template tag during sync render.
         self._lazy_thunks = []
+        # Django's middleware chain (LoginRequiredMiddleware included) has
+        # processed this request for this view.
+        from ..auth._login_required_middleware import note_http_dispatch
+
+        note_http_dispatch(self, request)
 
         # Check login_required / permission_required (matches WebSocket path).
         # Without this, views with login_required=True render their full HTML
@@ -521,6 +526,10 @@ class RequestMixin:
 
     def post(self, request, *args, **kwargs):
         """Handle POST requests - event handling"""
+        # Django's middleware chain has processed this request for this view.
+        from ..auth._login_required_middleware import note_http_dispatch
+
+        note_http_dispatch(self, request)
         from ..components.base import Component, LiveComponent
 
         # Referenced by the ``except`` at the end of this method, which must not
