@@ -10,7 +10,7 @@
 
 ## UI building blocks — use these before writing markup
 
-djust ships template-tag components (`djust.components`) and a theming system (`djust.theming`). Use them instead of hand-written tables, `<select>`s, overlays, flash messages and color stylesheets: `python manage.py djust_audit --ast` flags those (X101–X105).
+djust ships template-tag components (`djust.components`) and a theming system (`djust.theming`). Use them instead of hand-written tables, long reactive `<select>`s, overlays, flash messages and color stylesheets: `python manage.py djust_audit --ast` flags those (X101–X105).
 
 | You need | Use |
 | --- | --- |

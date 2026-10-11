@@ -11,6 +11,7 @@ Block handlers implement:  render(self, args, content, context) -> str
 
 import json as _json
 import uuid as _uuid
+from html.parser import HTMLParser
 from typing import Any, cast
 
 from django.utils.html import conditional_escape
@@ -4671,26 +4672,73 @@ class NavItemHandler:
         )
 
 
-_APP_SHELL_SIDEBAR_OPEN = '<aside class="dj-app-shell__sidebar">'
+class _AppShellSlotParser(HTMLParser):
+    """Locate a direct sidebar without reserializing the rendered HTML."""
+
+    _VOID_TAGS = frozenset(
+        {
+            "area",
+            "base",
+            "br",
+            "col",
+            "embed",
+            "hr",
+            "img",
+            "input",
+            "link",
+            "meta",
+            "param",
+            "source",
+            "track",
+            "wbr",
+        }
+    )
+
+    def __init__(self, content: str) -> None:
+        super().__init__(convert_charrefs=False)
+        self._line_offsets = [0]
+        for line in content.split("\n"):
+            self._line_offsets.append(self._line_offsets[-1] + len(line) + 1)
+        self._stack: list[str] = []
+        self.start: int | None = None
+        self.end: int | None = None
+
+    def _offset(self) -> int:
+        line, column = self.getpos()
+        return self._line_offsets[line - 1] + column
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag in self._VOID_TAGS:
+            return
+        if (
+            not self._stack
+            and self.start is None
+            and tag == "aside"
+            and dict(attrs).get("class") == "dj-app-shell__sidebar"
+        ):
+            self.start = self._offset()
+        self._stack.append(tag)
+
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        pass
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag not in self._stack:
+            return
+        # Parent closing tags also close children with optional end tags (e.g. <p>).
+        index = len(self._stack) - 1 - self._stack[::-1].index(tag)
+        del self._stack[index:]
+        if not self._stack and tag == "aside" and self.start is not None and self.end is None:
+            self.end = self._offset() + len("</aside>")
 
 
 def _split_app_shell_sidebar(content: str) -> tuple[str, str]:
-    """Extract the first sidebar, retaining nested asides and unbalanced content."""
-    start = content.find(_APP_SHELL_SIDEBAR_OPEN)
-    if start == -1:
+    """Extract only a direct sidebar slot; preserve nested or unbalanced HTML."""
+    parser = _AppShellSlotParser(content)
+    parser.feed(content)
+    if parser.start is None or parser.end is None:
         return "", content
-    depth, i = 0, start
-    while True:
-        opening, closing = content.find("<aside", i), content.find("</aside>", i)
-        if closing == -1:
-            return "", content
-        if opening != -1 and opening < closing:
-            depth, i = depth + 1, opening + 6
-        else:
-            depth, i = depth - 1, closing + 8
-            if depth == 0:
-                break
-    return content[start:i], content[:start] + content[i:]
+    return content[parser.start : parser.end], content[: parser.start] + content[parser.end :]
 
 
 class AppShellHandler:

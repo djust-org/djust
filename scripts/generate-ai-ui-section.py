@@ -37,6 +37,8 @@ def render_block() -> str:
 
 
 def current_block(text: str) -> str:
+    if text.count(BEGIN) > 1 or text.count(END) > 1:
+        raise ValueError("expected exactly one BEGIN and END generated block marker")
     start, end = text.find(BEGIN), text.find(END)
     if start == -1 or end == -1 or end < start:
         raise ValueError("generated block markers not found")
@@ -44,6 +46,7 @@ def current_block(text: str) -> str:
 
 
 def splice(text: str, block: str) -> str:
+    current_block(text)
     start, end = text.find(BEGIN), text.find(END)
     return text[:start] + block.rstrip("\n") + text[end + len(END) :]
 
@@ -54,7 +57,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--write", action="store_true")
     parser.add_argument("--print", action="store_true")
     args = parser.parse_args(argv)
-    block = render_block()
+    try:
+        block = render_block()
+    except ValueError as exc:
+        print("ERROR: %s" % exc, file=sys.stderr)
+        return 2
     if args.print:
         sys.stdout.write(block)
         return 0

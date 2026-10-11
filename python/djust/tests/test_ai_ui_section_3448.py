@@ -134,3 +134,7 @@ def test_ai_context_is_a_wrapper_over_manifest_sections(monkeypatch):
         manifest, "manifest_sections", lambda framework: [("directives", "SENTINEL")]
     )
     assert "SENTINEL" in context._generate_content(get_framework_schema(), {}, "claude")
+
+
+def test_x102_guidance_is_limited_to_long_reactive_selects():
+    assert "long reactive `<select>`s" in manifest.render_ui_building_blocks()

@@ -54,3 +54,69 @@ def test_rust_app_shell_keeps_id_class_and_collapsed_modifier(rust_backend):
     html = rust_backend.from_string(source).render({})
     assert 'class="dj-app-shell dj-app-shell--sidebar-collapsed custom" id="workspace"' in html
     assert "dj-app-shell__main" in html
+
+
+@pytest.mark.parametrize("outer_sidebar", ["", "{% app_sidebar %}OUTER-NAV{% endapp_sidebar %}"])
+@pytest.mark.parametrize("slot", ["app_content", "app_header"])
+@pytest.mark.parametrize("sidebar_first", [False, True])
+def test_nested_app_shell_sidebars_match_the_django_node(
+    rust_backend, outer_sidebar, slot, sidebar_first
+):
+    inner = (
+        '{% app_shell id="inner" %}'
+        "{% app_sidebar %}INNER-NAV<aside>nested</aside>{% endapp_sidebar %}"
+        "{% app_content %}INNER-CONTENT{% endapp_content %}{% endapp_shell %}"
+    )
+    nested_slot = "{% " + slot + " %}" + inner + "{% end" + slot + " %}"
+    slots = outer_sidebar + nested_slot if sidebar_first else nested_slot + outer_sidebar
+    source = '{% load djust_components %}{% app_shell id="outer" %}' + slots + "{% endapp_shell %}"
+    engine = Engine(
+        libraries={"djust_components": "djust.components.templatetags.djust_components"}
+    )
+    expected = engine.from_string(source).render(Context({}))
+    assert rust_backend.from_string(source).render({}) == expected
+
+
+@pytest.mark.parametrize(
+    "prefix",
+    [
+        '<main class="dj-app-shell__content">A\rB\nC</main>',
+        '<main><img src="x"><br><input></main>',
+        '<!-- <aside class="dj-app-shell__sidebar">fake</aside> -->',
+        "<script>var html = '<aside class=\"dj-app-shell__sidebar\">fake</aside>';</script>",
+    ],
+)
+def test_sidebar_split_preserves_rendered_bytes(prefix):
+    from djust.components.rust_handlers import _split_app_shell_sidebar
+
+    sidebar = '<aside class="dj-app-shell__sidebar">NAV<aside>nested</aside></aside>'
+    assert _split_app_shell_sidebar(prefix + sidebar) == (sidebar, prefix)
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        '<div><aside class="dj-app-shell__sidebar">nested</aside></div>',
+        '<aside class="dj-app-shell__sidebar">unclosed',
+    ],
+)
+def test_sidebar_split_leaves_non_slot_or_unbalanced_content_untouched(content):
+    from djust.components.rust_handlers import _split_app_shell_sidebar
+
+    assert _split_app_shell_sidebar(content) == ("", content)
+
+
+@pytest.mark.parametrize("slot", ["app_sidebar", "app_content"])
+def test_app_shell_handles_optional_html_end_tags(rust_backend, slot):
+    source = (
+        "{% load djust_components %}{% app_shell %}{% " + slot + " %}<p>TEXT{% end" + slot + " %}"
+    )
+    if slot == "app_content":
+        source += "{% app_sidebar %}NAV{% endapp_sidebar %}"
+    source += "{% endapp_shell %}"
+    engine = Engine(
+        libraries={"djust_components": "djust.components.templatetags.djust_components"}
+    )
+    assert rust_backend.from_string(source).render({}) == engine.from_string(source).render(
+        Context({})
+    )

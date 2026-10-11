@@ -1,6 +1,9 @@
 """Generated UI discovery blocks must match their shared renderer."""
 
+import importlib.util
 import os
+
+import pytest
 from pathlib import Path
 import subprocess
 import sys
@@ -54,3 +57,39 @@ def test_missing_markers_are_an_error(tmp_path):
     result = _run("--doc", str(copy))
     assert result.returncode == 2
     assert "markers not found" in result.stderr
+
+
+END = "<!-- END GENERATED: UI building blocks -->"
+
+
+@pytest.mark.parametrize(
+    "markers",
+    [(BEGIN, BEGIN, END, END), (BEGIN, END, BEGIN, END), (BEGIN, BEGIN, END), (BEGIN, END, END)],
+)
+@pytest.mark.parametrize("write", [False, True])
+def test_duplicate_markers_are_an_error_and_leave_file_untouched(tmp_path, markers, write):
+    copy = tmp_path / "llms.txt"
+    original = "\n".join(markers) + "\n"
+    copy.write_text(original)
+    result = _run("--doc", str(copy), *(["--write"] if write else []))
+    assert result.returncode == 2
+    assert "ERROR:" in result.stderr and "exactly one BEGIN and END" in result.stderr
+    assert "Traceback" not in result.stderr
+    assert copy.read_text() == original
+
+
+def test_missing_curated_component_is_a_clean_error(monkeypatch, capsys, tmp_path):
+    from djust.ai_discovery import catalog
+
+    spec = importlib.util.spec_from_file_location("generate_ai_ui_section", SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    monkeypatch.setattr(catalog, "get_entry", lambda name: None)
+    copy = tmp_path / "llms.txt"
+    original = (REPO / "docs/llms.txt").read_text()
+    copy.write_text(original)
+    assert module.main(["--doc", str(copy), "--write"]) == 2
+    stderr = capsys.readouterr().err
+    assert "ERROR: UI use case names unknown component:" in stderr
+    assert "Traceback" not in stderr
+    assert copy.read_text() == original

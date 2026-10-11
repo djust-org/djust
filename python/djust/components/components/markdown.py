@@ -4,8 +4,18 @@ import html
 
 from typing import Any, Optional
 
-import markdown as md_lib  # type: ignore[import-untyped]  # PyPI markdown ships no py.typed
-import nh3
+from django.core.exceptions import ImproperlyConfigured
+
+try:
+    import markdown as md_lib  # type: ignore[import-untyped]  # PyPI markdown ships no py.typed
+    import nh3
+except ModuleNotFoundError as exc:
+    if exc.name not in {"markdown", "nh3"}:
+        raise
+    raise ImproperlyConfigured(
+        "djust.components requires the optional dependency %s. "
+        'Install the components extra with: pip install "djust[components]"' % exc.name
+    ) from exc
 
 from djust import Component
 
