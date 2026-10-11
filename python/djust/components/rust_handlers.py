@@ -31,6 +31,9 @@ def _safe(html: str) -> str:
 
 
 from djust.components.utils import (
+    safe_css_color,
+    safe_css_length,
+    safe_css_ratio,
     CURRENCY_SYMBOLS,
     format_cell as _format_cell_util,
     interpolate_color,
@@ -1221,6 +1224,7 @@ class DataTableHandler:
                 frozen_cls = " data-table-frozen-right"
 
             # Width style
+            width = safe_css_length(width, "") if width else ""
             width_attr = f' style="width:{conditional_escape(width)}"' if width else ""
 
             # Resize / reorder attributes
@@ -1588,7 +1592,12 @@ class DataTableHandler:
                             cf_colors = cf_preset.get("colors", ["#ff0000", "#00ff00"])
                             cf_color = _interpolate_color_simple(cf_colors, cf_ratio)
                             td_classes.append("data-table-cf-color-scale")
-                            cf_html = f' style="background-color:{conditional_escape(cf_color)}"'
+                            cf_color = safe_css_color(cf_color, "")
+                            cf_html = (
+                                f' style="background-color:{conditional_escape(cf_color)}"'
+                                if cf_color
+                                else ""
+                            )
                         elif cf_type == "icon_set":
                             cf_icons = cf_preset.get("icons", ["\u25bc", "\u25b6", "\u25b2"])
                             cf_thresholds = cf_preset.get("thresholds", [])
@@ -3499,7 +3508,7 @@ class ResponsiveImageHandler:
         kw = _parse_args(args, context)
         src = url_attr(kw.get("src", ""), image=True)
         alt = conditional_escape(str(kw.get("alt", "")))
-        aspect_ratio = conditional_escape(str(kw.get("aspect_ratio", "")))
+        aspect_ratio = conditional_escape(safe_css_ratio(kw.get("aspect_ratio", ""), ""))
         lazy = kw.get("lazy", True)
         srcset = conditional_escape(str(kw.get("srcset", "")))
         sizes = conditional_escape(str(kw.get("sizes", "")))
@@ -6833,7 +6842,7 @@ class MeterHandler:
             except (ValueError, TypeError):
                 val = 0
             pct = min(100, max(0, (val / total) * 100)) if total > 0 else 0
-            color = conditional_escape(str(seg.get("color", "")))
+            color = conditional_escape(safe_css_color(seg.get("color", ""), ""))
             seg_label = conditional_escape(str(seg.get("label", "")))
             style = f"width:{pct:.1f}%"
             if color:
@@ -6852,7 +6861,7 @@ class MeterHandler:
             for seg in segments:
                 if not isinstance(seg, dict):
                     continue
-                color = conditional_escape(str(seg.get("color", "")))
+                color = conditional_escape(safe_css_color(seg.get("color", ""), ""))
                 seg_label = conditional_escape(str(seg.get("label", "")))
                 val = seg.get("value", 0)
                 swatch_style = f"background:{color}" if color else ""
@@ -7176,7 +7185,7 @@ class SortableGridHandler:
 
         e_event = conditional_escape(str(move_event))
         e_class = conditional_escape(str(custom_class))
-        e_gap = conditional_escape(str(gap))
+        e_gap = conditional_escape(safe_css_length(gap, "0.75rem"))
 
         classes = ["dj-sortable-grid"]
         if disabled:
@@ -7357,13 +7366,13 @@ class ResizablePanelHandler:
             classes.append(e_class)
         class_str = " ".join(classes)
 
-        e_min = conditional_escape(str(min_size))
-        e_max = conditional_escape(str(max_size))
-        e_initial = conditional_escape(str(initial_size))
+        e_min = conditional_escape(safe_css_length(min_size, "100px"))
+        e_max = conditional_escape(safe_css_length(max_size, "none"))
+        e_initial = conditional_escape(safe_css_length(initial_size, "50%"))
 
         size_prop = "width" if direction == "horizontal" else "height"
         style_parts = [f"{size_prop}:{e_initial}", f"min-{size_prop}:{e_min}"]
-        if max_size != "none":
+        if e_max != "none":
             style_parts.append(f"max-{size_prop}:{e_max}")
         style = f'style="{";".join(style_parts)}"'
 
@@ -7480,8 +7489,8 @@ class DashboardGridHandler:
 
         e_move = conditional_escape(str(move_event))
         e_resize = conditional_escape(str(resize_event))
-        e_gap = conditional_escape(str(gap))
-        e_row_height = conditional_escape(str(row_height))
+        e_gap = conditional_escape(safe_css_length(gap, "1rem"))
+        e_row_height = conditional_escape(safe_css_length(row_height, "200px"))
         e_class = conditional_escape(str(custom_class))
 
         classes = ["dj-dashboard-grid"]
@@ -9224,7 +9233,10 @@ class CalendarViewHandler:
                     ev = cast("dict[str, object]", ev_obj)
                     title = conditional_escape(str(ev.get("title", "")))
                     color = conditional_escape(
-                        str(ev.get("color", self.COLORS[i % len(self.COLORS)]))
+                        safe_css_color(
+                            ev.get("color", self.COLORS[i % len(self.COLORS)]),
+                            self.COLORS[i % len(self.COLORS)],
+                        )
                     )
                     ev_html += (
                         f'<div class="dj-calendar__event" '
@@ -9941,7 +9953,9 @@ class CursorsOverlayHandler:
                 y = 0
 
             e_name = conditional_escape(str(name))
-            e_color = conditional_escape(str(color))
+            e_color = conditional_escape(
+                safe_css_color(color, self.DEFAULT_COLORS[i % len(self.DEFAULT_COLORS)])
+            )
 
             try:
                 px = int(x)
@@ -10082,7 +10096,9 @@ class CollabSelectionHandler:
                 end = 0
 
             e_name = conditional_escape(str(name))
-            e_color = conditional_escape(str(color))
+            e_color = conditional_escape(
+                safe_css_color(color, self.DEFAULT_COLORS[i % len(self.DEFAULT_COLORS)])
+            )
             e_text = conditional_escape(str(text))
 
             try:
@@ -10309,7 +10325,7 @@ class MapPickerHandler:
 
         e_class = conditional_escape(str(custom_class))
         e_event = conditional_escape(str(pick_event))
-        e_height = conditional_escape(str(height))
+        e_height = conditional_escape(safe_css_length(height, "400px"))
 
         cls = "dj-map-picker"
         if e_class:

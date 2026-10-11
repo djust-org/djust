@@ -5,6 +5,7 @@ from typing import Any, Optional
 
 from django.utils.html import conditional_escape
 from djust import Component
+from djust.components.utils import safe_css_length
 
 
 class DashboardGrid(Component):
@@ -77,8 +78,8 @@ class DashboardGrid(Component):
 
         e_move = html.escape(self.move_event)
         e_resize = html.escape(self.resize_event)
-        e_gap = html.escape(self.gap)
-        e_row_height = html.escape(self.row_height)
+        e_gap = html.escape(safe_css_length(self.gap, "1rem"))
+        e_row_height = html.escape(safe_css_length(self.row_height, "200px"))
 
         cols = int(self.columns)
 
