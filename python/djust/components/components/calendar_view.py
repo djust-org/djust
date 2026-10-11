@@ -5,6 +5,7 @@ import calendar
 from typing import Any, Optional
 
 from djust import Component
+from djust.components.utils import safe_css_color
 
 
 class CalendarView(Component):
@@ -130,7 +131,12 @@ class CalendarView(Component):
                 ev_html = ""
                 for i, ev in enumerate(day_events[:3]):
                     title = html.escape(str(ev.get("title", "")))
-                    color = html.escape(str(ev.get("color", self.COLORS[i % len(self.COLORS)])))
+                    color = html.escape(
+                        safe_css_color(
+                            ev.get("color", self.COLORS[i % len(self.COLORS)]),
+                            self.COLORS[i % len(self.COLORS)],
+                        )
+                    )
                     ev_html += (
                         f'<div class="dj-calendar__event" '
                         f'style="--dj-calendar-event-color: {color}">'

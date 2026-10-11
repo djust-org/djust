@@ -5,6 +5,7 @@ import html
 from ..utils import rich_html
 from djust import Component
 from typing import Any
+from djust.components.utils import safe_css_length
 
 
 class RichTextEditor(Component):
@@ -54,7 +55,7 @@ class RichTextEditor(Component):
             cls += f" {html.escape(self.custom_class)}"
         e_name = html.escape(self.name)
         e_placeholder = html.escape(self.placeholder)
-        e_height = html.escape(self.height)
+        e_height = html.escape(safe_css_length(self.height, "200px"))
         e_label = html.escape(self.label)
         label_html = f'<label class="form-label">{e_label}</label>' if self.label else ""
         return (

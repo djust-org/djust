@@ -7,6 +7,7 @@ import re
 
 from djust import Component
 from typing import Any, ClassVar, Optional, Tuple
+from djust.components.utils import safe_css_length
 
 logger = logging.getLogger(__name__)
 
@@ -310,7 +311,7 @@ class MapPicker(Component):
         except (ValueError, TypeError):
             zoom = 13
 
-        e_height = html.escape(str(self.height))
+        e_height = html.escape(safe_css_length(self.height, "400px"))
         e_label = html.escape(str(self.label))
         extra = map_picker_attrs(
             self.tile_url, self.attribution, self.attribution_url, self.max_zoom
