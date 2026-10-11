@@ -46,7 +46,7 @@ djust calls the layers in order. The first denial wins; subsequent layers don't 
 | 3. `check_permissions(request)` | Custom hook for arbitrary logic (not object-aware) | Before `mount()` (HTTP GET and WS mount) |
 | 4. `has_object_permission(request, obj)` | Per-object access (NEW in v0.9.5) | At mount AND every event |
 
-Layers 1-3 run **before** `mount()` (in `check_view_auth`). Layer 4 runs **after** `mount()` because `get_object()` typically reads a URL kwarg the user populates inside `mount()` (e.g., `self.document_id = document_id`).
+Layers 1-3 run **before** `mount()` (in `check_view_auth`). Layer 4 runs **after** `mount()` and `handle_params()`, and before the first render, because `get_object()` typically reads a URL kwarg the user populates inside `mount()` (e.g., `self.document_id = document_id`) or a query parameter `handle_params()` applies (e.g., `?id=`). The HTTP GET render, the WebSocket and SSE mounts, and `url_change` navigation all use this order.
 
 ## Why per-event matters
 

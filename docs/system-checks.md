@@ -39,7 +39,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | V007 | LiveView | Retired | Retired in 1.3 (ADR-037): recommended `**kwargs` on every handler. Never emitted; the ID is not reused |
 | V008 | LiveView | Info | Non-primitive type assigned in mount() — broader, lower-confidence (skips V006 patterns) |
 | V012 | LiveView | Warning | Sticky child template declares its own dj-view (nested duplicate binding) |
-| V013 | LiveView | Warning | HTTP-only dispatch()/get()/post() override never runs on a WebSocket mount |
+| V013 | LiveView | Warning | HTTP-only setup()/dispatch()/get()/post() override or URLconf wrapper never runs on a WebSocket mount |
 | V014 | LiveView | Warning | Time-travel-enabled view has PII-looking model/form fields not in `time_travel_excluded_fields` |
 | V015 | LiveView | Warning | LIVEVIEW_ALLOWED_MODULES rejects a djust LiveView the URLconf routes (add `"djust"`) |
 | V016 | LiveView | Error | Strict-policy handler declaration that strict dispatch rejects (ADR-036) |
@@ -56,7 +56,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | S007 | Security | Warning | `client_name\|safe` renders an unsanitised upload filename (stored XSS) |
 | S009 | Security | Warning | View-auth'd LiveView exposes a public `@event_handler` with no per-handler gate |
 | S011 | Security | Warning | Inline executable `<script>` inside a `dj-root` with no CSP configured (#1848) |
-| S012 | Security | Error | LiveView gates auth via `@method_decorator(..., name="dispatch")` or an overridden `dispatch()` — not enforced over WebSocket (#14; reallocated from a duplicate S004, #2070) |
+| S012 | Security | Error | A LiveView the runtime refuses on live transports because access control that only the HTTP request runs is not covered by its declared djust auth: a custom `AccessMixin` subclass's `dispatch()`, a `setup()`/`dispatch()`/`get()`/`post()` override, decorator or URLconf wrapper that checks the user and denies, and unknown decorators and URLconf wrappers. Django's own auth decorators, wrappers and mixins are replayed; the rest is V013 (#14; reallocated from a duplicate S004, #2070) |
 | S013 | Security | Warning | A `ModelFormMixin` edit view overrides neither `get_queryset()` nor `has_object_permission()` (ADR-035) |
 | T001 | Templates | Warning | Deprecated @click/@input syntax |
 | T002 | Templates | Info | Template declares `dj-view` but no `dj-root` (the root is inferred; the page connects) |
@@ -352,9 +352,11 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 ### V013 — HTTP-only dispatch()/get()/post() override never runs on a WebSocket mount
 - **Severity**: Warning
 - **Method**: Runtime (walks every registered `LiveView`'s `__mro__`)
-- **What it detects**: An ancestor class in a `LiveView`'s MRO — the view class itself, or an earlier mixin — defines `dispatch()`, `get()`, or `post()` in its own `__dict__`. The WebSocket mount path calls `view_instance.mount(request, **kwargs)` directly; it never calls `dispatch()`/`get()`/`post()`. Any setup logic hooked there (tenant resolution, rate limiting, custom auth, request-scoped state) silently never runs for a WS-mounted view. Downstream symptom pattern: `self._tenant = None` in handlers, empty querysets, writes that no-op.
+- **What it detects**: An ancestor class in a `LiveView`'s MRO — the view class itself, or an earlier mixin — defines `setup()`, `dispatch()`, `get()`, or `post()` in its own `__dict__`. The WebSocket mount path calls `view_instance.mount(request, **kwargs)` directly; it never calls `dispatch()`/`get()`/`post()`. Any setup logic hooked there (tenant resolution, rate limiting, custom auth, request-scoped state) silently never runs for a WS-mounted view. Downstream symptom pattern: `self._tenant = None` in handlers, empty querysets, writes that no-op.
 - **Fix**: move the setup logic into `mount(self, request, **kwargs)` so it runs on every transport. For auth/tenant-family logic specifically, see `djust.auth.core.run_pre_mount_auth` — the canonical pre-mount hook every live mount path (WebSocket, SSE, runtime) already calls.
-- **False positives**: none expected on ordinary user mixins. Ancestors in `django.*` (e.g. `django.views.generic.base.View`, and `django.contrib.auth.mixins.{AccessMixin,LoginRequiredMixin,PermissionRequiredMixin,UserPassesTestMixin}` — already enforced on the WS/SSE mount path via `isinstance()` in `djust.auth.core._check_django_access_mixins`) and `djust.*` (djust's own mixins, e.g. `djust.tenants.mixin.TenantMixin`, which is independently reconciled with the WS path via `run_pre_mount_auth`'s `_ensure_tenant()` hook) are excluded.
+- **Decorators and access checks**: when an override is a `@method_decorator` wrapper, the message adds that djust replays Django's own auth decorators there and refuses a decorator whose code checks the user; any other decorator does not run on live transports. When the override (or a decorator on it) is code djust refuses, the message says so and names it (`djust.S012` is the Error for project code); when it only reads the user, the message names it as code live transports do not run.
+- **URLconf wrappers**: a separate message names a URLconf wrapper around the view's `as_view()` that djust refuses or does not run (Django's auth wrappers are replayed and not reported), and another names a route whose wrapper does not use `functools.wraps`: djust cannot read such a wrapper, so live transports do not run it.
+- **False positives**: none expected on ordinary user mixins. Ancestors in `django.*` (e.g. `django.views.generic.base.View`, and `django.contrib.auth.mixins.{LoginRequiredMixin,PermissionRequiredMixin,UserPassesTestMixin}` — replayed on the WS/SSE mount path via `isinstance()` in `djust.auth.core._check_django_access_mixins`; a project's own `AccessMixin` subclass is not exempt, see `S012`) and `djust.*` (an app or package named `djust_*` is not excluded; djust-auth's `LoginRequiredLiveViewMixin` is, since it is read as `login_required = True`) (djust's own mixins, e.g. `djust.tenants.mixin.TenantMixin`, which is independently reconciled with the WS path via `run_pre_mount_auth`'s `_ensure_tenant()` hook) are excluded, as are djust-tenants' `djust_tenants.mixin.TenantMixin` / `TenantScopedMixin` (an explicit allowlist, for the same reason).
 - **Suppression**: `abstract = True` on the LiveView class, `DJUST_CONFIG = {'suppress_checks': ['V013']}`, or `SILENCED_SYSTEM_CHECKS = ["djust.V013"]`
 - Added in v1.1.0 (#2059)
 
@@ -543,25 +545,55 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 
 ### S012 — LiveView gates auth via dispatch() (reallocated from S004, #2070)
 - **Severity**: Error
-- **Method**: AST (LiveView class + decorator/method walk)
-- **What it detects**: A LiveView subclass whose authorization is applied via
-  `@method_decorator(<auth>, name="dispatch")`, or via an overridden
-  `dispatch()` method that performs auth itself (e.g.
-  `if not request.user.is_authenticated: raise PermissionDenied()`). The
-  WS/SSE mount path authorizes through `check_view_auth` and never calls
-  `dispatch()`, so either pattern is enforced on the initial HTTP GET but
-  silently bypassed over WebSocket (finding #14). Django auth **mixins**
-  (`LoginRequiredMixin` / `PermissionRequiredMixin` / `UserPassesTestMixin`)
-  are auto-honored by `check_view_auth` and do NOT trigger this check —
-  only the decorated/overridden-`dispatch` forms are un-portable.
-- **Fix**: Replace the `@method_decorator(..., name="dispatch")` (or the
-  dispatch()-level auth) with djust's `login_required = True` /
-  `permission_required = ...` class attributes, a `check_permissions(self,
-  request)` method (honored on every transport), or subclass a Django auth
-  mixin.
+- **Method**: Runtime (walks every discovered `LiveView`'s `__mro__` and the
+  URLconf, with the same predicate `check_view_auth` uses) and AST (the class
+  bodies of LiveViews the runtime scan could not import)
+- **What it detects**: A LiveView defined in the project that the runtime
+  **refuses** on live transports (the WebSocket/SSE mount, events, the HTTP
+  POST event fallback, the API and embedded children) until it declares djust
+  auth that covers its access control, because that access control lives
+  where only Django's HTTP request runs it:
+  - a `dispatch()` defined on a custom `AccessMixin` subclass;
+  - a `setup()`/`dispatch()`/`get()`/`post()` override (outside Django and
+    `djust` / `djust.*`; an app or package named `djust_*` is inspected) that
+    checks the user (any attribute of it: `is_staff`, `groups`, a role,
+    `getattr(user, ...)`) and denies by any means: it raises (`PermissionDenied`,
+    `Http404`, anything else), calls `handle_no_permission()` /
+    `redirect_to_login()`, returns a redirect, an error response or a page of
+    its own (`render(...)`, `HttpResponse(...)`), or calls
+    `get_object_or_404()`, also under an import alias;
+  - a decorator on one of those methods (also under another decorator
+    stacked above `@method_decorator`, or one a project decorator returns),
+    or a URL pattern's wrapper around `as_view()`, whose code checks the user;
+  - a decorator or URLconf wrapper that is neither Django's nor djust's
+    (refused on this release line, which fails closed);
+  - (AST, classes not imported at check time) `@method_decorator(<auth>,
+    name="dispatch")` with an auth decorator other than Django's four, or a
+    `dispatch()` body that checks the user and denies.
+
+  Not reported here: Django's `login_required`, `staff_member_required`,
+  `user_passes_test(...)` and `permission_required(...)` (applied with
+  `@method_decorator`, wrapped around `as_view()` in the URLconf or by an
+  `as_view()` override, or inside another package's decorator built on
+  `user_passes_test`) and Django's `LoginRequiredMixin` /
+  `PermissionRequiredMixin` / `UserPassesTestMixin`, all replayed on live
+  transports; and code the runtime does not refuse (an override that only
+  reads the user), which `djust.V013` reports as a warning, as it does a
+  refused view defined by an installed package. A declared `login_required`
+  covers only a gate that reads `is_authenticated` / `is_anonymous` alone;
+  anything else needs `permission_required` or `check_permissions()` (the
+  message's fix names `login_required` only for a login-only gate). A view is reported once, by the runtime scan when it
+  can import the class.
+- **Fix**: Express the rule as djust's `login_required = True` /
+  `permission_required = ...` class attributes or a `check_permissions(self,
+  request)` method (honored on every transport). `login_required = False`
+  is not a declaration; a public view that keeps an unknown decorator defines
+  `check_permissions()` returning `True`.
 - **Suppression**: `# noqa: S012` on the decorator or the `def dispatch`
-  line (this check, like `S001`-`S003` in the same module, is AST/inline-noqa
-  only — it does not consult `DJUST_CONFIG['suppress_checks']`), or
+  line for the AST scan (like `S001`-`S003` in the same module, it does not
+  consult `DJUST_CONFIG['suppress_checks']`); the runtime scan honours
+  `DJUST_CONFIG = {'suppress_checks': ['S012']}`. Suppressing the check does
+  not change the runtime refusal or replay. Or
   `SILENCED_SYSTEM_CHECKS = ["djust.S012"]` in settings (honored by
   `python manage.py check`; note `python manage.py djust_check` does not
   currently filter on Django's `is_silenced()`).

@@ -22,7 +22,7 @@
 
 use crate::lis::longest_increasing_subsequence;
 use crate::vdom_trace;
-use crate::{Patch, VNode};
+use crate::{ChildContext, Namespace, Patch, VNode};
 use ahash::{AHashMap, AHashSet};
 
 // ============================================================================
@@ -122,10 +122,21 @@ fn non_boundary_count_before(excluded: &[bool], open: usize) -> usize {
 
 /// Serialize a boundary's full marker-pair span (open..=close, inclusive) to
 /// HTML for `InsertSubtree.html`.
-fn serialize_boundary_html(children: &[VNode], open: usize, close: usize) -> String {
+///
+/// The client parses the payload as children of the boundary's real parent,
+/// in that parent's namespace (an `<svg>` or `<math>` wrapper inside a
+/// `<template>`), so each node is written as the page writes it
+/// ([`VNode::to_html_for_client`]). `kids` is how the real parent places its
+/// children (`None` when not known: raw-text content is then escaped).
+fn serialize_boundary_html(
+    children: &[VNode],
+    open: usize,
+    close: usize,
+    kids: Option<ChildContext>,
+) -> String {
     let mut html = String::new();
     for child in &children[open..=close] {
-        html.push_str(&child.to_html());
+        html.push_str(&child.to_html_for_client(kids));
     }
     html
 }
@@ -140,6 +151,11 @@ fn serialize_boundary_html(children: &[VNode], open: usize, close: usize) -> Str
 /// a real element emits InsertChild/RemoveChild, not Replace — #295).
 fn positionally_compatible(a: &VNode, b: &VNode) -> bool {
     a.is_comment() == b.is_comment()
+}
+
+/// The namespace of `child` under a parent placing children as `kids`.
+fn child_ns(kids: Option<ChildContext>, child: &VNode) -> Option<Namespace> {
+    kids.map(|kids| kids.child_namespace(child))
 }
 
 // ============================================================================
@@ -219,13 +235,35 @@ fn emits_virtual_ops(parent: &VNode) -> bool {
     virtual_keyed_ops_enabled() && parent.attrs.contains_key("dj-virtual")
 }
 
+/// The patches transforming `old` into `new` (see the section note above).
+///
+/// The namespace of `new` is not known here, so an `InsertSubtree` payload is
+/// serialized as text out of context; [`diff_nodes_in`] takes it.
 pub fn diff_nodes(old: &VNode, new: &VNode, path: &[usize]) -> Vec<Patch> {
+    diff_nodes_in(old, new, path, None)
+}
+
+/// [`diff_nodes`] where `ns` is the namespace of the element `new` (`None`
+/// when not known; see [`crate::namespace_at_path`]).
+pub fn diff_nodes_in(
+    old: &VNode,
+    new: &VNode,
+    path: &[usize],
+    ns: Option<Namespace>,
+) -> Vec<Patch> {
     let mut patches = Vec::new();
-    diff_node_into(old, new, path, &mut patches);
+    diff_node_into(old, new, path, &mut patches, ns);
     patches
 }
 
-fn diff_node_into(old: &VNode, new: &VNode, path: &[usize], out: &mut Vec<Patch>) {
+/// `ns`: the namespace of `new` when it is an element, if known.
+fn diff_node_into(
+    old: &VNode,
+    new: &VNode,
+    path: &[usize],
+    out: &mut Vec<Patch>,
+    ns: Option<Namespace>,
+) {
     // Tag mismatch (including #text vs element, element vs #text) -> Replace.
     if old.tag != new.tag {
         vdom_trace!("Replace at {:?}: <{}> -> <{}>", path, old.tag, new.tag);
@@ -278,6 +316,7 @@ fn diff_node_into(old: &VNode, new: &VNode, path: &[usize], out: &mut Vec<Patch>
         out,
         // The NEW tree is authoritative for what this container is now.
         emits_virtual_ops(new),
+        ns.map(|ns| ns.children_of(new)),
     );
 }
 
@@ -377,6 +416,8 @@ fn diff_children(
     // the ADR-026 flag is on — its children are a client-side window, so
     // index-addressed ops are meaningless and keyed splice ops are emitted.
     virtual_parent: bool,
+    // How the parent places its children (their namespaces), if known.
+    kids: Option<ChildContext>,
 ) {
     let (old_boundaries, old_excluded) = find_top_level_boundaries(old);
     let (new_boundaries, new_excluded) = find_top_level_boundaries(new);
@@ -448,6 +489,7 @@ fn diff_children(
                     // A dj-if body lives INSIDE this parent, so it inherits
                     // the parent's virtual-ness.
                     virtual_parent,
+                    kids,
                 );
             } else {
                 // Old-only -> RemoveSubtree.
@@ -462,7 +504,7 @@ fn diff_children(
                     path: ppath.to_vec(),
                     d: pid.map(|s| s.to_string()),
                     index: new_off + nb.open,
-                    html: serialize_boundary_html(new, nb.open, nb.close),
+                    html: serialize_boundary_html(new, nb.open, nb.close, kids),
                 });
             }
         }
@@ -482,7 +524,7 @@ fn diff_children(
         .map(|(i, n)| (new_off + i, n))
         .collect();
 
-    reconcile_siblings(&old_nb, &new_nb, ppath, pid, out, virtual_parent);
+    reconcile_siblings(&old_nb, &new_nb, ppath, pid, out, virtual_parent, kids);
 }
 
 /// Reconcile two lists of non-boundary siblings (each carrying its parent-
@@ -495,6 +537,7 @@ fn reconcile_siblings(
     pid: Option<&str>,
     out: &mut Vec<Patch>,
     virtual_parent: bool,
+    kids: Option<ChildContext>,
 ) {
     let any_new_keyed = new_nb.iter().any(|(_, n)| n.key.is_some());
 
@@ -526,17 +569,17 @@ fn reconcile_siblings(
                 reason
             );
             if any_new_keyed {
-                reconcile_keyed(old_nb, new_nb, ppath, pid, out);
+                reconcile_keyed(old_nb, new_nb, ppath, pid, out, kids);
             } else {
-                reconcile_indexed(old_nb, new_nb, ppath, pid, out);
+                reconcile_indexed(old_nb, new_nb, ppath, pid, out, kids);
             }
         } else {
-            reconcile_virtual_keyed(old_nb, new_nb, ppath, pid, out);
+            reconcile_virtual_keyed(old_nb, new_nb, ppath, pid, out, kids);
         }
     } else if any_new_keyed {
-        reconcile_keyed(old_nb, new_nb, ppath, pid, out);
+        reconcile_keyed(old_nb, new_nb, ppath, pid, out, kids);
     } else {
-        reconcile_indexed(old_nb, new_nb, ppath, pid, out);
+        reconcile_indexed(old_nb, new_nb, ppath, pid, out, kids);
     }
 }
 
@@ -592,6 +635,7 @@ fn reconcile_virtual_keyed(
     ppath: &[usize],
     pid: Option<&str>,
     out: &mut Vec<Patch>,
+    kids: Option<ChildContext>,
 ) {
     // Old positions by key, so a surviving key can be located in old-order.
     let mut old_pos: AHashMap<&str, usize> = AHashMap::new();
@@ -669,7 +713,13 @@ fn reconcile_virtual_keyed(
         // what makes an OFF-WINDOW update land — the row is detached, and
         // mutating a detached node is fine.
         let mut inner: Vec<Patch> = Vec::new();
-        diff_node_into(old_node, new_node, &[], &mut inner);
+        diff_node_into(
+            old_node,
+            new_node,
+            &[],
+            &mut inner,
+            child_ns(kids, new_node),
+        );
         if !inner.is_empty() {
             out.push(Patch::VirtualUpdate {
                 path: ppath.to_vec(),
@@ -722,6 +772,7 @@ fn reconcile_indexed(
     ppath: &[usize],
     pid: Option<&str>,
     out: &mut Vec<Patch>,
+    kids: Option<ChildContext>,
 ) {
     let common = old_nb.len().min(new_nb.len());
     for i in 0..common {
@@ -730,7 +781,13 @@ fn reconcile_indexed(
         if positionally_compatible(old_node, new_node) {
             let mut child_path = ppath.to_vec();
             child_path.push(new_abs);
-            diff_node_into(old_node, new_node, &child_path, out);
+            diff_node_into(
+                old_node,
+                new_node,
+                &child_path,
+                out,
+                child_ns(kids, new_node),
+            );
         } else {
             // Incompatible kind: remove old, insert new.
             push_remove_child(old_abs, old_node, ppath, pid, out);
@@ -765,6 +822,7 @@ fn reconcile_keyed(
     ppath: &[usize],
     pid: Option<&str>,
     out: &mut Vec<Patch>,
+    kids: Option<ChildContext>,
 ) {
     // Keys appearing more than once on either side are ambiguous (warns DJE-051).
     let ambiguous = ambiguous_keys(old_nb, new_nb);
@@ -873,7 +931,13 @@ fn reconcile_keyed(
             }
             let mut child_path = ppath.to_vec();
             child_path.push(new_abs);
-            diff_node_into(old_node, new_node, &child_path, out);
+            diff_node_into(
+                old_node,
+                new_node,
+                &child_path,
+                out,
+                child_ns(kids, new_node),
+            );
         } else {
             push_remove_child(old_abs, old_node, ppath, pid, out);
             push_insert_child(new_abs, new_node, ppath, pid, out);
@@ -893,7 +957,13 @@ fn reconcile_keyed(
         let (new_abs, new_node) = new_nb[np];
         let mut child_path = ppath.to_vec();
         child_path.push(new_abs);
-        diff_node_into(old_node, new_node, &child_path, out);
+        diff_node_into(
+            old_node,
+            new_node,
+            &child_path,
+            out,
+            child_ns(kids, new_node),
+        );
     }
 
     // 4) Insert new effective-keyed children absent from old.

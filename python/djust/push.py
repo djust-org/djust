@@ -7,8 +7,10 @@ state updates to connected LiveView clients.
 
 import contextvars
 import hashlib
+import json
 import logging
 import re
+import sys
 from typing import Any, FrozenSet, Optional, Union
 
 from asgiref.sync import async_to_sync
@@ -60,7 +62,7 @@ def _scope_key(scope: Any) -> str:
     return key
 
 
-def push_scope_group_name(view_path: str, scope: PushScope) -> str:
+def push_scope_group_name(view_path: str, scope: PushScope, tenant_scope: str = "") -> str:
     """Return the channel-layer group for ONE scope of a view (#3004).
 
     Sessions of ``view_path`` whose view sets ``push_scope`` to ``scope`` are
@@ -68,10 +70,131 @@ def push_scope_group_name(view_path: str, scope: PushScope) -> str:
     The name is a digest of the view path and the scope, so any scope string
     maps to a valid group name (Channels allows only ``[A-Za-z0-9_.-]``, under
     100 characters) and two different scopes never share a group.
+
+    ``tenant_scope`` (``"tenant:<id>"``, see ``djust._tenant_state``) puts the
+    group in that tenant's namespace: two tenants that use the same scope
+    string (a room named ``general``, a document id ``7``) do not share a
+    group. ``""`` (a view that is not tenant-scoped) keeps the unqualified
+    name. The tenant-qualified name is a different family (``djust_tscope_``),
+    hashed over a JSON array, so no scope string, whatever it contains, can
+    spell another tenant's name.
     """
     key = _scope_key(scope)
+    if tenant_scope:
+        basis = json.dumps([view_path, tenant_scope, key])
+        return f"djust_tscope_{hashlib.sha256(basis.encode()).hexdigest()[:40]}"
     digest = hashlib.sha256(f"{view_path}\x00{key}".encode()).hexdigest()[:40]
     return f"djust_scope_{digest}"
+
+
+def _is_tenant_scoped(obj: Any) -> bool:
+    """Whether a view (or view class) is tenant-scoped: it has the
+    ``get_state_key_prefix`` hook ``TenantMixin`` provides, the test the saved
+    state and the snapshot token use (:mod:`djust._tenant_state`)."""
+    return callable(getattr(obj, "get_state_key_prefix", None))
+
+
+def view_tenant_scope(view: Any) -> Optional[str]:
+    """The tenant namespace of ``view``'s scoped-push groups.
+
+    ``""`` for a view that is not tenant-scoped, ``"tenant:<id>"`` for a
+    tenant view with a resolved tenant, ``None`` for a tenant view with none:
+    it joins no scoped group, as it reads and writes no saved state.
+
+    The namespace is derived from the tenant's id, the one derivation the
+    publishing side (``push_to_view(tenant=...)``) also uses, not from
+    ``get_state_key_prefix()``: an override of that hook changes the scope of
+    saved state and must not move the view out of the groups a publisher
+    names. Reading an attribute also keeps application code off the event
+    loop, where this runs after every turn.
+    """
+    if not _is_tenant_scoped(view):
+        return ""
+    tenant_id = getattr(getattr(view, "_tenant", None), "id", None)
+    if tenant_id is None:
+        return None
+    from ._tenant_state import tenant_scope_for_id
+
+    return tenant_scope_for_id(tenant_id)
+
+
+class _AmbientTenant:
+    """Default of ``push_to_view(tenant=...)``: the tenant bound to this context."""
+
+    def __repr__(self) -> str:
+        return "AMBIENT_TENANT"
+
+
+AMBIENT_TENANT: Any = _AmbientTenant()
+
+
+def _target_is_tenant_scoped(view_path: str) -> Optional[bool]:
+    """Whether the view class at ``view_path`` is tenant-scoped, or ``None``
+    when this process has not imported it (a Celery worker, a management
+    command). Never imports anything."""
+    module, _, name = view_path.rpartition(".")
+    loaded = sys.modules.get(module)
+    cls = getattr(loaded, name, None) if loaded is not None else None
+    return _is_tenant_scoped(cls) if isinstance(cls, type) else None
+
+
+#: View paths already warned about by :func:`_publish_tenant_scope`.
+_WARNED_NO_TENANT: set = set()
+
+
+def _publish_tenant_scope(view_path: str, tenant: Any, warn: bool = True) -> str:
+    """The tenant namespace a scoped push to ``view_path`` is published into.
+
+    Only a tenant-scoped view has tenant namespaces: a push to a view that is
+    known not to be one (``TenantMixin`` is not in its bases) is unqualified
+    whichever tenant is bound, so a tenant's handler, or an HTTP view under
+    ``TenantMiddleware``, still reaches the plain view's sessions. For a
+    tenant-scoped view, or one this process has not imported:
+
+    ``tenant`` is a tenant id, a ``TenantInfo`` (anything with an ``id``),
+    ``None`` for "no tenant", or ``AMBIENT_TENANT`` (the default) for the
+    tenant bound to the running context: a tenant view's event handler and
+    push or NOTIFY turn run with their own tenant bound, so a push they
+    publish stays in that tenant without saying so. A context with no tenant
+    (a Celery task, a management command) publishes to the unqualified
+    groups, which no tenant-scoped session joins; a task that serves a tenant
+    passes ``tenant=``. That case is logged once per view path.
+    """
+    known = _target_is_tenant_scoped(view_path)
+    if known is False:
+        return ""
+    ambient = tenant is AMBIENT_TENANT
+    if ambient:
+        tenant = None
+        # Only if the tenants package is in use: a project without tenants
+        # never pays for importing it.
+        if "djust.tenants.middleware" in sys.modules:
+            from djust.tenants.middleware import get_current_tenant
+
+            tenant = get_current_tenant()
+    if tenant is None:
+        # Only a push that named no tenant and found none bound is logged: an
+        # explicit ``tenant=None`` is the caller saying there is none.
+        if warn and ambient and known is not False and view_path not in _WARNED_NO_TENANT:
+            _WARNED_NO_TENANT.add(view_path)
+            if known:
+                logger.warning(
+                    "A scoped push to %s has no tenant, so no session of that tenant-scoped "
+                    "view receives it; pass tenant= (a tenant id) from code that runs "
+                    "outside a tenant's request",
+                    view_path,
+                )
+            else:
+                logger.warning(
+                    "A scoped push to %s has no tenant, and this process has not imported "
+                    "the view: if it is tenant-scoped no session receives the push, pass "
+                    "tenant= (a tenant id); if it is not, pass tenant=None",
+                    view_path,
+                )
+        return ""
+    from ._tenant_state import tenant_scope_for_id
+
+    return tenant_scope_for_id(getattr(tenant, "id", tenant))
 
 
 def presence_scope_group_name(view_path: str, presence_key: str) -> str:
@@ -129,8 +252,28 @@ async def sync_push_scope_groups(consumer: Any, view: Any) -> None:
     """
     view_path = getattr(consumer, "_view_path", None) or ""
     joined: dict = getattr(consumer, "_push_scope_groups", None) or {}
+    tenant_scope = ""
     try:
         wanted = view_push_scopes(view) if view is not None and view_path else frozenset()
+        if wanted:
+            try:
+                scope_of = view_tenant_scope(view)
+            except Exception:  # noqa: BLE001 - app hook; fail closed, as for no tenant
+                scope_of = None
+            if scope_of is None:
+                # A tenant view with no resolved tenant has no tenant
+                # namespace to join: it receives no scoped pushes. Once per
+                # consumer until it resolves: this runs after every turn.
+                if not getattr(consumer, "_push_scope_tenantless_logged", False):
+                    logger.warning(
+                        "%s has a push_scope but no resolved tenant; it receives no scoped pushes",
+                        type(view).__name__,
+                    )
+                    consumer._push_scope_tenantless_logged = True
+                wanted = frozenset()
+            else:
+                consumer._push_scope_tenantless_logged = False
+                tenant_scope = scope_of
     except (TypeError, ValueError):
         # Once per consumer until the value becomes valid again: this runs
         # after every tick, and a tick can be every few milliseconds.
@@ -151,10 +294,12 @@ async def sync_push_scope_groups(consumer: Any, view: Any) -> None:
     if channel_layer is None or (not wanted and not joined):
         return
     current = dict(joined)
+    wanted_groups = {key: push_scope_group_name(view_path, key, tenant_scope) for key in wanted}
     # A group another view of the socket still names stays joined: the channel
-    # is one member of it for every view (#3252).
+    # is one member of it for every view (#3252). A scope whose group name
+    # changed (the view's tenant did) is left and joined again below.
     kept = _groups_of_other_views(consumer)
-    for key in sorted(set(current) - wanted):
+    for key in sorted(k for k in current if wanted_groups.get(k) != current[k]):
         try:
             if current[key] not in kept:
                 await channel_layer.group_discard(current[key], consumer.channel_name)
@@ -162,8 +307,8 @@ async def sync_push_scope_groups(consumer: Any, view: Any) -> None:
             logger.warning("Error leaving a scoped push group of %s", view_path)
             continue
         del current[key]
-    for key in sorted(wanted - set(current)):
-        group = push_scope_group_name(view_path, key)
+    for key in sorted(set(wanted_groups) - set(current)):
+        group = wanted_groups[key]
         try:
             await channel_layer.group_add(group, consumer.channel_name)
         except Exception:  # noqa: BLE001 - retried on the next turn
@@ -311,14 +456,21 @@ async def leave_push_scope_groups(consumer: Any) -> None:
             logger.warning("Error leaving scoped push group %s", group)
 
 
-def _push_group(view_path: str, scope: Optional[PushScope]) -> str:
+def _push_group(
+    view_path: str, scope: Optional[PushScope], tenant: Any = AMBIENT_TENANT
+) -> tuple[str, str]:
+    """The group a push goes to and the tenant scope it is stamped with."""
     if not _VIEW_PATH_RE.match(view_path):
         raise ValueError(
             f"Invalid view_path: {view_path!r}. Expected dotted Python path like 'myapp.views.MyView'"
         )
     if scope is None:
-        return view_group_name(view_path)
-    return push_scope_group_name(view_path, scope)
+        # The view-wide group has no tenant in its name; the stamp lets a
+        # tenant view tell the push is for another tenant. A tenant-less
+        # publisher is a broadcast, not a mistake: nothing to warn about.
+        return view_group_name(view_path), _publish_tenant_scope(view_path, tenant, warn=False)
+    tenant_scope = _publish_tenant_scope(view_path, tenant)
+    return push_scope_group_name(view_path, scope, tenant_scope), tenant_scope
 
 
 def _server_push_message(
@@ -326,8 +478,9 @@ def _server_push_message(
     handler: Optional[str],
     payload: Optional[dict[str, Any]],
     group: Optional[str] = None,
+    tenant_scope: str = "",
 ) -> dict[str, Any]:
-    return {
+    message: dict[str, Any] = {
         "type": "server_push",
         "state": state,
         "handler": handler,
@@ -339,6 +492,31 @@ def _server_push_message(
         # handler — lets that session skip its redundant self-broadcast.
         "sender_channel": origin_channel.get(),
     }
+    # The tenant this push is for (``"tenant:<id>"``). A tenant view applies
+    # only a push stamped for its own tenant or not stamped (a broadcast, or a
+    # message from an older process); the key is left out when there is none,
+    # so a message for no tenant is the message it always was.
+    if tenant_scope:
+        message["tenant_scope"] = tenant_scope
+    return message
+
+
+def push_tenant_matches(view: Any, event: dict) -> bool:
+    """Whether ``view`` may apply the server push in ``event``.
+
+    The receiving half of the tenant scoping: whichever group the message
+    arrived through (the view-wide group and a database NOTIFY carry no tenant
+    in their name, and a group name can be wrong), a tenant view applies only
+    a push stamped for its own tenant, or for no tenant (a broadcast; also
+    every message from a process that predates the stamp). A view that is not
+    tenant-scoped applies any, as it always did. A tenant view with no
+    resolved tenant applies only the unstamped.
+    """
+    stamp = event.get("tenant_scope")
+    if not stamp:
+        return True
+    mine = view_tenant_scope(view)
+    return mine == "" or mine == stamp
 
 
 def push_to_presence_scope(
@@ -372,6 +550,7 @@ def push_to_view(
     handler: Optional[str] = None,
     payload: Optional[dict[str, Any]] = None,
     scope: Optional[PushScope] = None,
+    tenant: Any = AMBIENT_TENANT,
 ) -> None:
     """
     Push an update to all clients connected to a LiveView.
@@ -387,6 +566,21 @@ def push_to_view(
         scope: Reach only the sessions whose view set ``push_scope`` to this
             value (a room, a document id), instead of every session of the
             view (#3004). ``None`` (the default) reaches every session.
+        tenant: With ``scope``, the tenant whose sessions it reaches: a tenant
+            id or a ``TenantInfo``. A scope belongs to one tenant, so two
+            tenants that use the same room name do not share it. The default
+            is the tenant bound to the running context (an event handler of a
+            ``TenantMixin`` view has its own); pass ``tenant=`` from a task
+            that has none (Celery, a management command). ``None`` means no
+            tenant: only views that are not tenant-scoped receive it. It only
+            matters for a view that uses ``TenantMixin``: a push to a view
+            class that is not tenant-scoped is unqualified whatever tenant is
+            bound (when the class is imported in the publishing process; from
+            one that has not imported it, pass ``tenant=None``). Without
+            ``scope`` it does not choose a group (the view-wide group has no
+            tenant in its name) but stamps the push: a tenant view applies
+            only a push stamped for its own tenant or not stamped, so
+            ``tenant=None`` (or a task with none) broadcasts to every tenant.
 
     Raises:
         ValueError: If view_path is not a valid dotted Python path, or scope
@@ -410,9 +604,9 @@ def push_to_view(
         push_to_view("games.views.RoomView", handler="handle_refresh",
                      scope="room-42")
     """
-    group = _push_group(view_path, scope)
+    group, tenant_scope = _push_group(view_path, scope, tenant)
     channel_layer = get_channel_layer()
-    message = _server_push_message(state, handler, payload, group)
+    message = _server_push_message(state, handler, payload, group, tenant_scope)
     async_to_sync(channel_layer.group_send)(group, message)
 
 
@@ -423,19 +617,20 @@ async def apush_to_view(
     handler: Optional[str] = None,
     payload: Optional[dict[str, Any]] = None,
     scope: Optional[PushScope] = None,
+    tenant: Any = AMBIENT_TENANT,
 ) -> None:
     """
     Async version of :func:`push_to_view`.
 
     Use from async contexts (async views, async Celery tasks, etc.).
-    ``scope`` works as in :func:`push_to_view`.
+    ``scope`` and ``tenant`` work as in :func:`push_to_view`.
 
     Raises:
         ValueError: If view_path is not a valid dotted Python path, or scope
             is an empty string.
         TypeError: If scope is not a str or an int.
     """
-    group = _push_group(view_path, scope)
+    group, tenant_scope = _push_group(view_path, scope, tenant)
     channel_layer = get_channel_layer()
-    message = _server_push_message(state, handler, payload, group)
+    message = _server_push_message(state, handler, payload, group, tenant_scope)
     await channel_layer.group_send(group, message)

@@ -82,6 +82,7 @@ PER_VIEW_ATTRS: Dict[str, Callable[[], Any]] = {
     "_presence_scope_auto": lambda: None,
     "_push_scope_groups": _empty_dict,
     "_push_scope_invalid_logged": lambda: False,
+    "_push_scope_tenantless_logged": lambda: False,
     "_db_notify_channels": _empty_set,
     "_tick_task": lambda: None,
     # The wire version a view's frames carry is per view: the client keeps one

@@ -9,8 +9,9 @@
 //! ONE list, shared by the VDOM serializer (`djust_vdom::VNode::write_html`)
 //! and the text fast path (`djust_live::text_node_value`), so the two cannot
 //! drift (#1646). Under an `svg` / `math` ancestor the same names are foreign
-//! elements whose text IS decoded; callers that can see ancestors handle that
-//! case themselves.
+//! elements whose text IS decoded; callers handle that case themselves: the
+//! serializer tracks the namespace (`djust_vdom`'s `Namespace`) and escapes
+//! foreign text, and the text fast path falls back to a full parse.
 
 /// Raw-text elements, lowercase: `script` and `style` (raw text), `xmp`,
 /// `iframe`, `noembed`, `noframes`, `plaintext`, and `noscript` (raw text

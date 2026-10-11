@@ -251,7 +251,7 @@ Authentication and exposure:
 | --- | --- | --- | --- |
 | `djust.S005` | Warning | `<view> exposes state without authentication.` | Yes |
 | `djust.S009` | Warning | `LiveView <name> declares view-level auth but exposes the public @event_handler <name> with no per-handler authorization gate. A user who passes the view's mount auth can call this handler.` | Yes |
-| `djust.S012` | Error | `LiveView <name> gates auth via @method_decorator(..., name='dispatch'); this is NOT enforced over WebSocket (only on the HTTP GET).` | Yes |
+| `djust.S012` | Error | `<view>: this access control runs only on the HTTP request: <where>. The WebSocket/SSE mount, events (including the HTTP POST event fallback) and embedded renders refuse this view until it declares djust auth that covers it.` (and, for a class the runtime scan cannot import, the source scan's `LiveView <name> gates auth via @method_decorator(..., name='dispatch'); ...`) | Yes |
 | `djust.S013` | Warning | `<view> lets any user who can open the view edit any <model> by its id.` | No (1.3) |
 
 `T024` reports `request.user.is_staff`, `is_superuser` and `password` (and a `{% with %}` alias of a user) in a template a LiveView renders. djust never serializes those three fields, so the expression is always empty and a `{% if request.user.is_staff %}` block never shows. It looks only at paths through a `user` variable, so a form field named `password` is not reported. `T025` reports `dj-root` or `dj-view` on `<html>` or `<head>`. Neither can be a root, so djust ignores it: the page renders as usual, no live view is mounted, and it stays a plain HTTP page; `<body>` is a supported root.

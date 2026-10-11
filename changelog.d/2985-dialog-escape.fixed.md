@@ -1,1 +1,0 @@
-- Keep Escape confined to ImageLightbox and Tour so enclosing keyboard bindings and window shortcuts do not act on the same key. Wrapping Tab still uses preventDefault and may propagate (#2985).

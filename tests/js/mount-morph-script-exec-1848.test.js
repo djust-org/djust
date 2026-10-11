@@ -161,6 +161,28 @@ describe('#1848 — inline <script> inside dj-root executes after mount morph', 
         expect(window.__djust1848ran).toBeUndefined();
     });
 
+    it('leaves SVG and MathML <script> elements alone', () => {
+        // Only HTML scripts are re-created: a MathML <script> never runs in a
+        // full render, and an SVG one must not become an HTML script.
+        const root = document.createElement('div');
+        root.setAttribute('dj-root', '');
+        document.body.appendChild(root);
+        const temp = document.createElement('div');
+        temp.innerHTML =
+            '<math><script>window.__djust1848ran = "math";</script></math>\n' +
+            '<svg><script>window.__djust1848ran = "svg";</script></svg>\n';
+        const originals = Array.from(temp.querySelectorAll('script'));
+        expect(originals.map((s) => s.namespaceURI)).toEqual([
+            'http://www.w3.org/1998/Math/MathML',
+            'http://www.w3.org/2000/svg',
+        ]);
+        while (temp.firstChild) root.appendChild(temp.firstChild);
+
+        window.djust._runInsertedScripts(root);
+        expect(window.__djust1848ran).toBeUndefined();
+        expect(Array.from(root.querySelectorAll('script'))).toEqual(originals);
+    });
+
     it('runs an external classic <script src> by re-creating the element', () => {
         // External scripts can't execute in JSDOM (no network), but the helper
         // must still re-create them so the browser fetches+runs them. We assert

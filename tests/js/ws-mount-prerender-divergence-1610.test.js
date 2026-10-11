@@ -26,13 +26,20 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { readFileSync } from 'fs';
 
 const clientSource = readFileSync('./python/djust/static/djust/src/03-websocket.js', 'utf-8');
+const vdomSource = readFileSync('./python/djust/static/djust/src/12-vdom-patch.js', 'utf-8');
 
 // The branch delegates the morph to _morphPrerenderedMount, which the SSE
-// mount path shares (#1646). Pins read the branch plus that helper's body.
-function getMorphHelper(source) {
-    const start = source.indexOf('function _morphPrerenderedMount(');
-    if (start < 0) throw new Error('_morphPrerenderedMount not found in 03-websocket.js');
+// mount path shares (#1646), and that helper parses the HTML with
+// _parseRootHtmlLive (in the root's namespace). Pins read the branch plus
+// both helpers' bodies.
+function getFunctionBody(source, name) {
+    const start = source.indexOf('function ' + name + '(');
+    if (start < 0) throw new Error(name + ' not found');
     return source.slice(start, source.indexOf('\n}\n', start) + 2);
+}
+
+function getMorphHelper(source) {
+    return getFunctionBody(source, '_morphPrerenderedMount') + getFunctionBody(vdomSource, '_parseRootHtmlLive');
 }
 
 function getSkipMountHtmlBranch(source) {
@@ -73,7 +80,7 @@ describe('#1610 — WS-mount HTML applied to prerendered DOM via morphChildren',
         // path that could drift from the canonical embedded-update
         // semantics.
         expect(branch).toMatch(/document\.createElement\(['"]div['"]\)/);
-        expect(branch).toMatch(/\.innerHTML\s*=\s*(?:data\.)?html\b/);
+        expect(branch).toMatch(/\.innerHTML\s*=\s*(?:String\()?(?:data\.)?html\b/);
     });
 
     it('the morph branch selects a [dj-view] / [dj-root] container excluding sticky', () => {

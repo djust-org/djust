@@ -19,6 +19,7 @@ from django.utils.html import escape
 from ._exposure import uses_legacy_exposure
 from ._render_provenance import RenderedHTML
 from ._tenant_state import scoped_path, session_view_key, snapshot_tenant_scope
+from .auth._login_required_middleware import mark_embedded
 from .auth.core import run_pre_mount_auth, enforce_object_permission
 from .mixins.sticky import _child_identity
 
@@ -87,6 +88,7 @@ def register_lazy_containers(parent: Any, request: Any, html: str) -> str:
             if not uses_legacy_exposure(cls):
                 continue  # Explicit views require a transport mount binding.
             child = cls()
+            mark_embedded(child)
             child.request = request
             from .tenants.middleware import get_current_tenant, tenant_context
 
@@ -166,6 +168,7 @@ def mount_http_lazy(parent: Any, request: Any, view_id: str) -> Any:
     from .security import safe_setattr
 
     child = entry.child_class()
+    mark_embedded(child)
     child.request = request
     if run_pre_mount_auth(child, request) is not None or run_on_mount_hooks(child, request):
         raise PermissionDenied("Lazy view refused")

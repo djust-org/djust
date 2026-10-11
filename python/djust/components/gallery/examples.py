@@ -1033,9 +1033,9 @@ EXAMPLES: Dict[str, Any] = {
                 "template": "{% masonry_grid items=items columns=3 %}",
                 "context": {
                     "items": [
-                        {"height": 120, "content": "<p>Card 1</p>"},
-                        {"height": 180, "content": "<p>Card 2</p>"},
-                        {"height": 100, "content": "<p>Card 3</p>"},
+                        {"height": 120, "content": "Card 1"},
+                        {"height": 180, "content": "Card 2"},
+                        {"height": 100, "content": "Card 3"},
                     ]
                 },
             },

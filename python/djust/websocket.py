@@ -5,6 +5,7 @@ WebSocket consumer for LiveView real-time updates
 import asyncio
 import collections
 import contextlib
+import functools
 import inspect
 import json
 import logging
@@ -39,6 +40,7 @@ from .websocket_utils import (
     _call_handler,
     _check_event_security,  # noqa: F401 - re-exported for tests
     _ensure_handler_rate_limit,  # noqa: F401 - re-exported for tests
+    _post_only_rules_deny,
     _safe_error,
     _validate_event_security,
     get_handler_coerce_setting,
@@ -82,6 +84,26 @@ def _tenant_context(tenant: Any) -> ContextManager[Any]:
         from contextlib import nullcontext
 
         return nullcontext()
+
+
+def _binds_tenant_of(view_of: Callable[..., Any]) -> Callable[[Any], Any]:
+    """Decorate a server-originated turn so it runs with its view's tenant bound.
+
+    A push, a NOTIFY and the work they start run application code (a handler
+    that queries tenant managers or publishes with ``push_to_view``) on a task
+    the channel layer started, which has no tenant bound; an event handler has
+    its own. ``view_of(self, *args)`` names the view the turn belongs to.
+    """
+
+    def decorate(turn: Any) -> Any:
+        @functools.wraps(turn)
+        async def bound(self: Any, *args: Any, **kwargs: Any) -> Any:
+            with _tenant_context(getattr(view_of(self, *args), "_tenant", None)):
+                return await turn(self, *args, **kwargs)
+
+        return bound
+
+    return decorate
 
 
 def _bind_tenant(tenant: Any) -> None:
@@ -2207,7 +2229,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 return
 
         # --- security / validation (shared with handle_event) -----------
-        handler = await _validate_event_security(self, event_name, target_view, self._rate_limiter)
+        handler = await _validate_event_security(
+            self, event_name, target_view, self._rate_limiter, root_view=self.view_instance
+        )
         if handler is None:
             return
 
@@ -3637,6 +3661,12 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             await self.send_error("No uploads configured for this view")
             return
 
+        # An upload is part of an event on HTTP (a POST through the view's
+        # post()): what only post() runs applies to it as to every event.
+        if await _post_only_rules_deny(self.view_instance):
+            await self.send_error("Permission denied", code="permission_denied")
+            return
+
         mgr = self.view_instance._upload_manager
         entry = mgr.register_entry(
             upload_name=data.get("upload_name", ""),
@@ -3732,6 +3762,19 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             session_key=session_key,
             active_refs=_active_ref,
         )
+        if (
+            payload.get("status") == "resumed"
+            and self.view_instance is not None
+            and await _post_only_rules_deny(self.view_instance)
+        ):
+            # What only the view's post() runs applies to uploads too.
+            payload = {
+                "type": "upload_resumed",
+                "ref": upload_id,
+                "status": "not_found",
+                "bytes_received": 0,
+                "chunks_received": [],
+            }
         if payload.get("status") == "resumed":
             # The state entry only says which chunks arrived; the chunks still
             # to come need the upload's live writer. Re-attach the upload
@@ -5834,6 +5877,17 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             return
         view = self.view_instance
 
+        from .push import push_tenant_matches
+
+        if not push_tenant_matches(view, event):
+            # Stamped for another tenant: not this view's push, whichever
+            # group carried it here.
+            logger.debug(
+                "[djust] server_push on %s dropped — stamped for another tenant",
+                view.__class__.__name__,
+            )
+            return
+
         try:
             # Skip our OWN self-broadcast (#1677): when a handler on THIS
             # session pushed to its own view, the originating session already
@@ -5880,6 +5934,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
         await self._run_server_push_turn(view, event)
 
+    @_binds_tenant_of(lambda self, view, *events: view)
     async def _run_server_push_turn(self, view: Any, *events: Dict[str, Any]) -> None:
         """Apply pushes to the view, render once and send. Caller holds the lock.
 
@@ -6264,6 +6319,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         Each view has its own queue and drain (#3252): a push waits only for the
         view it is addressed to.
         """
+        from .push import push_tenant_matches
+
         queue = self._deferred_pushes
         while queue:
             # Unbounded wait is right here: this runs in its own task, not in
@@ -6277,8 +6334,18 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             events: List[Dict[str, Any]] = []
             for queued_view, event in list(queue):
                 queue.remove((queued_view, event))
-                if view is not None and queued_view is view:
-                    events.append(event)
+                if view is None or queued_view is not view:
+                    continue
+                # Check the tenant again, as on arrival: the turn that held
+                # the lock may have moved the view to another tenant
+                # (set_tenant()) after the push was queued.
+                if not push_tenant_matches(view, event):
+                    logger.debug(
+                        "[djust] server_push on %s dropped — stamped for another tenant",
+                        view.__class__.__name__,
+                    )
+                    continue
+                events.append(event)
             if not events:
                 self._render_lock.release()
                 continue
@@ -6340,6 +6407,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         for consumer in self._channel_targets(routed):
             await type(self)._db_notify_to_view(consumer, event)
 
+    @_binds_tenant_of(lambda self, event: self.view_instance)
     async def _db_notify_to_view(self, event: Dict[str, Any]) -> None:
         """Handle a PostgreSQL NOTIFY for the view ``self`` runs.
 

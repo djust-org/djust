@@ -108,7 +108,6 @@ ATTR_CASES: List[Tuple[str, Factory]] = [
     ("sparkline_stroke_width", lambda v: Sparkline(data=[1, 2, 3], stroke_width=v)),
     ("spinner_size", lambda v: Spinner(size=v)),
     ("spinner_variant", lambda v: Spinner(variant=v)),
-    ("split_pane_initial", lambda v: SplitPane(initial=v)),
     ("stat_card_variant", lambda v: StatCard(label="L", value="1", variant=v)),
     ("stat_card_trend", lambda v: StatCard(label="L", value="1", trend=v)),
     ("status_dot_variant", lambda v: StatusDot("running", variant=v)),
@@ -210,3 +209,12 @@ def test_plain_values_render_unchanged() -> None:
     assert 'href="https://example.com/x"' in _render(
         Sidebar(items=[{"label": "L", "href": "https://example.com/x"}])
     )
+
+
+def test_split_pane_initial_is_a_number() -> None:
+    """``initial`` is written into a style attribute, so a value that is not a
+    number is replaced by the default instead of being escaped."""
+    out = _render(SplitPane(initial=ATTR))
+    assert ATTR not in out
+    assert "x&quot;" not in out
+    assert "width:50%" in out

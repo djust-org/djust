@@ -218,13 +218,22 @@ class RequestMixin:
         # doesn't see lazy thunks from a prior request stashed by the
         # template tag during sync render.
         self._lazy_thunks = []
+        # Django's middleware chain (LoginRequiredMiddleware included) has
+        # processed this request for this view.
+        from ..auth._login_required_middleware import note_http_dispatch
+
+        note_http_dispatch(self, request)
 
         # Check login_required / permission_required (matches WebSocket path).
         # Without this, views with login_required=True render their full HTML
         # to unauthenticated users on the initial HTTP GET.
         from ..auth import check_view_auth
 
-        redirect_url = check_view_auth(self, request)
+        # http_dispatched: Django's View.dispatch() brought this request here
+        # after running the view's own dispatch() and method decorators, so
+        # access control that lives there has already run (check_view_auth
+        # step 5 refuses it only on paths that skip dispatch()).
+        redirect_url = check_view_auth(self, request, http_dispatched=True)
         if redirect_url:
             from django.utils.http import urlencode
 
@@ -967,6 +976,10 @@ class RequestMixin:
             # Ensure self.request is set for context processors and
             # _sync_state_to_rust csrf_token injection (#705).
             self.request = request
+            # Django's middleware chain has processed this request for this view.
+            from ..auth._login_required_middleware import note_http_dispatch
+
+            note_http_dispatch(self, request)
 
             # Navigation the handler queued (``live_redirect`` / ``live_patch``),
             # as ``navigation`` frames in the WebSocket shape. Filled right after
@@ -998,7 +1011,8 @@ class RequestMixin:
             from ..auth import check_view_auth
 
             try:
-                redirect_url = check_view_auth(self, request)
+                # event=True: what only the view's post() runs applies here.
+                redirect_url = check_view_auth(self, request, event=True)
             except PermissionDenied:
                 # check_view_auth *raises* for an authenticated user who lacks
                 # the view's permission_required (only the unauthenticated case
@@ -1237,6 +1251,26 @@ class RequestMixin:
                     )
                     return JsonResponse(
                         {"error": "Permission denied", "code": "permission_denied"}, status=403
+                    )
+                # --- Per-handler @rate_limit -------------------------------
+                # The WS/SSE chokepoint (_validate_event_security) and the HTTP
+                # API both enforce the handler's @rate_limit against the SHARED
+                # per-caller store; this transport enforced nothing, so a
+                # handler throttled on every other transport was unthrottled
+                # here, and POST did not consume the shared budget (F27's
+                # "regardless of transport" was therefore false for this
+                # path). Same helper as the HTTP API, so the two cannot drift
+                # apart again.
+                from ..rate_limit import http_handler_rate_check
+
+                if not http_handler_rate_check(request, owner, event_name, handler):
+                    logger.warning(
+                        "HTTP POST rate-limited handler '%s' on %s",
+                        event_name,
+                        type(self).__name__,
+                    )
+                    return JsonResponse(
+                        {"error": "Rate limit exceeded", "code": "rate_limited"}, status=429
                     )
                 coerce = True
                 if hasattr(handler, "_djust_decorators"):

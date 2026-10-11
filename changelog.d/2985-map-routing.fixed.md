@@ -1,1 +1,0 @@
-- MapPicker notifications preserve nested component and embedded-view routing, including strict-binding root context (#2985).

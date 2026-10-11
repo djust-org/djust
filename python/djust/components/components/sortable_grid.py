@@ -5,6 +5,7 @@ from djust.components.utils import unique_ids as _unique_ids, url_attr
 from typing import Any, Optional
 
 from djust import Component
+from djust.components.utils import safe_css_length
 
 
 class SortableGrid(Component):
@@ -98,7 +99,7 @@ class SortableGrid(Component):
         class_str = " ".join(classes)
 
         e_event = html.escape(self.move_event)
-        e_gap = html.escape(self.gap)
+        e_gap = html.escape(safe_css_length(self.gap, "0.75rem"))
 
         keyed = _unique_ids(self.items)
         items_html = []
