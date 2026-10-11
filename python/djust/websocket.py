@@ -2231,6 +2231,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
           recover to).
         """
         runtime = self._get_runtime()
+        # A view refused beside the page view leaves the consumer's view in
+        # place.
+        previous = self.view_instance
+        self._refused_beside_page = False
         # (A) Null the runtime's view BEFORE dispatch so a reconnect / live_redirect
         # re-mount is never silently no-op'd by the idempotency early-return.
         runtime.view_instance = None
@@ -2249,6 +2253,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             data = {**data, "state_snapshot": state_snapshot}
 
         await runtime.dispatch_mount(data)
+        if self._refused_beside_page:
+            runtime.view_instance = previous
+            self._observe_view(previous)
 
         # (B) Mount creates the view on the runtime — read it back onto the consumer
         # so disconnect cleanup, request_html recovery, upload/presence handlers,
@@ -3060,6 +3067,27 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
     #: convergence COMPLETE. See the routing comment in :meth:`receive`.
     RUNTIME_OWNED_VERBS = frozenset({"url_change", "event", "mount"})
 
+    def _observe_view(self, view: Any) -> None:
+        """Point the observability registry for this session at ``view``.
+
+        Every view registers itself when it is instantiated, a view later
+        refused beside the page view included; after such a refusal the
+        registry follows the consumer back to the view it kept (none: the
+        entry is dropped).
+        """
+        session_id = getattr(self, "session_id", None)
+        if not session_id:
+            return
+        try:
+            from djust.observability.registry import register_view, unregister_view
+
+            if view is None:
+                unregister_view(session_id)
+            else:
+                register_view(session_id, view)
+        except Exception as e:  # noqa: BLE001 — observability must never break a WS connection
+            logger.warning("Failed to restore the observability registry entry: %s", e)
+
     async def _dispatch_runtime_owned(self, data: Dict[str, Any]) -> None:
         """Route a runtime-owned frame through :meth:`ViewRuntime.dispatch_message`.
 
@@ -3081,18 +3109,31 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         the same null+readback; this is the wire-frame twin.
         """
         runtime = self._get_runtime()
+        previous = self.view_instance
         if data.get("type") == "mount":
             runtime.view_instance = None
+            # A mount while a view is live on this socket (dj-lazy hydration),
+            # or one addressed to a container, is a view beside the page view:
+            # a LoginRequiredMiddleware refusal refuses that view only.
+            self._mounting_beside_page = previous is not None or bool(data.get("target_id"))
+            self._refused_beside_page = False
         else:
             runtime.view_instance = self.view_instance
-        await runtime.dispatch_message(data)
+        try:
+            await runtime.dispatch_message(data)
+        finally:
+            self._mounting_beside_page = False
         # Mount CREATES the view on the runtime (runtime→consumer read-back,
         # Finding B): mirror it back so the consumer's ``view_instance`` (read by
         # disconnect cleanup, request_html recovery, upload/presence handlers, the
         # batch collector, etc.) reflects the freshly-mounted view. On an
         # auth/hook block ``dispatch_mount`` cleared ``runtime.view_instance`` so
         # this reads back ``None`` — matching the bespoke "clear on auth fail".
+        # A view refused beside the page view leaves the page view in place.
         if data.get("type") == "mount":
+            if self._refused_beside_page:
+                runtime.view_instance = previous
+                self._observe_view(previous)
             self.view_instance = runtime.view_instance
 
     async def handle_url_change(self, data: Dict[str, Any]) -> None:
