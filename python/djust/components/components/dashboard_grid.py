@@ -45,9 +45,9 @@ class DashboardGrid(Component):
         self.dashboard = DashboardGrid(
             panels=[
                 {"id": "chart", "title": "Revenue", "col": 1, "row": 1,
-                 "width": 2, "height": 1, "content": "<canvas>...</canvas>"},
+                 "width": 2, "height": 1, "content": mark_safe(chart_html)},
                 {"id": "stats", "title": "Users", "col": 3, "row": 1,
-                 "width": 1, "height": 1, "content": "<p>1234</p>"},
+                 "width": 1, "height": 1, "content": "1234"},
             ],
             columns=4,
             move_event="dashboard_move",
@@ -102,7 +102,11 @@ class DashboardGrid(Component):
     Panels are matched by ``id``, so give every panel a unique one.
 
     Args:
-        panels: list of panel dicts with id, title, col, row, width, height, content
+        panels: list of panel dicts with id, title, col, row, width, height, content.
+            ``content`` is text and is escaped. Markup the app built itself can
+            be passed as ``mark_safe(...)`` to the class or the Django tag; the
+            Rust template engine receives list arguments as data and escapes
+            ``content`` either way.
         columns: number of grid columns (default 4)
         row_height: CSS row height (default "200px")
         gap: CSS gap (default "1rem")

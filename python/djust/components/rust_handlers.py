@@ -7102,7 +7102,7 @@ class AuditLogHandler:
             cells = []
             for col in columns:
                 val = conditional_escape(str(entry.get(col, "")))
-                cell_cls = f"dj-audit-log__td dj-audit-log__td--{col}"
+                cell_cls = f"dj-audit-log__td dj-audit-log__td--{conditional_escape(col)}"
                 if col == "action":
                     cell_cls += (
                         f" dj-audit-log__action--{conditional_escape(str(entry.get('action', '')))}"
@@ -7571,7 +7571,7 @@ class DashboardGridHandler:
                 continue
             pid = conditional_escape(str(panel.get("id", "")))
             title = conditional_escape(str(panel.get("title", "")))
-            pcontent = panel.get("content", "")
+            pcontent = conditional_escape(panel.get("content", ""))
 
             def _whole(key: str) -> int:
                 try:
@@ -9975,7 +9975,7 @@ class MasonryGridHandler:
             item_cards = []
             for item_obj in items_in_col:
                 item = cast("dict[str, object]", item_obj)
-                content = str(item.get("content", ""))
+                content = conditional_escape(item.get("content", ""))
                 item_class = conditional_escape(str(item.get("class", "")))
                 extra = f" {item_class}" if item_class else ""
                 item_cards.append(f'<div class="dj-masonry__item{extra}">{content}</div>')

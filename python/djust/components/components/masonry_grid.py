@@ -14,9 +14,9 @@ class MasonryGrid(Component):
 
         self.grid = MasonryGrid(
             items=[
-                {"content": "<p>Card 1</p>", "height": 200},
-                {"content": "<p>Card 2</p>", "height": 150},
-                {"content": "<img src='photo.jpg' />", "height": 300},
+                {"content": "Card 1", "height": 200},
+                {"content": "Card 2", "height": 150},
+                {"content": mark_safe(card_html), "height": 300},
             ],
             columns=3,
         )
@@ -26,7 +26,11 @@ class MasonryGrid(Component):
         {{ grid|safe }}
 
     Args:
-        items: List of dicts with ``content`` (HTML string), optional ``height``, ``class``
+        items: List of dicts with ``content``, optional ``height``, ``class``.
+            ``content`` is text and is escaped. Markup the app built itself can
+            be passed as ``mark_safe(...)`` to the class or the Django tag; the
+            Rust template engine receives list arguments as data and escapes
+            ``content`` either way.
         columns: Number of columns (default: 3)
         gap: Gap between items in px (default: 16)
         custom_class: Additional CSS classes
