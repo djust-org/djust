@@ -6858,7 +6858,7 @@ class MeterHandler:
                     f'<div class="dj-meter__legend-item">'
                     f'<span class="dj-meter__legend-swatch" style="{swatch_style}"></span>'
                     f'<span class="dj-meter__legend-label">{seg_label}</span>'
-                    f'<span class="dj-meter__legend-value">{val}</span></div>'
+                    f'<span class="dj-meter__legend-value">{conditional_escape(val)}</span></div>'
                 )
             legend_html = f'<div class="dj-meter__legend">{"".join(items)}</div>'
 
@@ -7501,7 +7501,7 @@ class DashboardGridHandler:
                 continue
             pid = conditional_escape(str(panel.get("id", "")))
             title = conditional_escape(str(panel.get("title", "")))
-            pcontent = panel.get("content", "")
+            pcontent = conditional_escape(panel.get("content", ""))
             try:
                 col = int(panel.get("col", 1))
             except (ValueError, TypeError):
@@ -9836,7 +9836,7 @@ class MasonryGridHandler:
         for items_in_col in col_items:
             item_cards = []
             for item in items_in_col:
-                content = str(item.get("content", ""))
+                content = conditional_escape(item.get("content", ""))
                 item_class = conditional_escape(str(item.get("class", "")))
                 extra = f" {item_class}" if item_class else ""
                 item_cards.append(f'<div class="dj-masonry__item{extra}">{content}</div>')

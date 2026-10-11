@@ -111,6 +111,25 @@ def format_cell(value, col):
 # ---------------------------------------------------------------------------
 
 
+def rich_html(value):
+    """HTML for a slot whose content is itself HTML, such as an editor's value.
+
+    Values marked safe pass through unchanged. Anything else is cleaned to
+    the Markdown component's tag and attribute allowlist, so stored rich text
+    keeps its formatting while scripts, event-handler attributes and
+    non-http(s)/mailto URLs are removed.
+    """
+    from django.utils.safestring import SafeData
+
+    if value is None:
+        return ""
+    if isinstance(value, SafeData):
+        return str(value)
+    from .components.markdown import _sanitize
+
+    return _sanitize(str(value))
+
+
 def interpolate_color(c1, c2, t):
     """Linearly interpolate between two hex colors.
 

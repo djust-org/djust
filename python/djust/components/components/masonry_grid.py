@@ -3,6 +3,8 @@
 import html
 from typing import Optional
 
+from django.utils.html import conditional_escape
+
 from djust import Component
 
 
@@ -87,7 +89,7 @@ class MasonryGrid(Component):
         for col_idx, items_in_col in enumerate(col_items):
             item_cards = []
             for item in items_in_col:
-                content = str(item.get("content", ""))
+                content = conditional_escape(item.get("content", ""))
                 item_class = html.escape(str(item.get("class", "")))
                 extra = f" {item_class}" if item_class else ""
                 item_cards.append(f'<div class="dj-masonry__item{extra}">{content}</div>')

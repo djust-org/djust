@@ -3,6 +3,8 @@
 import html
 from typing import Optional
 
+from django.utils.html import conditional_escape
+
 from djust import Component
 from djust.components.utils import safe_css_length
 
@@ -103,7 +105,7 @@ class DashboardGrid(Component):
                 f'<span class="dj-dashboard-grid__panel-title">{title}</span>'
                 f'<span class="dj-dashboard-grid__panel-drag" aria-hidden="true">&#x2630;</span>'
                 f"</div>"
-                f'<div class="dj-dashboard-grid__panel-body">{content}</div>'
+                f'<div class="dj-dashboard-grid__panel-body">{conditional_escape(content)}</div>'
                 f'<div class="dj-dashboard-grid__panel-resize" role="separator"></div>'
                 f"</div>"
             )

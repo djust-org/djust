@@ -2941,7 +2941,7 @@ def file_dropzone(
     label_html = f'<label class="form-label">{e_label}</label>' if label else ""
     helper_html = f'<span class="form-helper">{e_helper}</span>' if helper else ""
 
-    js_id = f"dz-{name}"
+    js_id = f"dz-{e_name}"
 
     return mark_safe(
         f"{label_html}"
@@ -3275,7 +3275,11 @@ def rich_text_editor(
         required = required.lower() not in ("false", "0", "")
 
     e_name = conditional_escape(name)
-    e_value = value  # Already HTML — rendered as-is (trust server content)
+    # Editor HTML keeps its formatting: values marked safe pass through, and
+    # anything else is cleaned to the Markdown allowlist (utils.rich_html).
+    from djust.components.utils import rich_html
+
+    e_value = rich_html(value)
     e_event = conditional_escape(event)
     e_placeholder = conditional_escape(placeholder)
     e_height = conditional_escape(safe_css_length(height, "200px"))
@@ -8765,7 +8769,7 @@ class MeterNode(template.Node):
                     continue
                 color = conditional_escape(safe_css_color(seg.get("color", ""), ""))
                 seg_label = conditional_escape(str(seg.get("label", "")))
-                val = seg.get("value", 0)
+                val = conditional_escape(seg.get("value", 0))
                 swatch_style = f"background:{color}" if color else ""
                 legend_items.append(
                     f'<div class="dj-meter__legend-item">'
@@ -9610,7 +9614,7 @@ class DashboardGridNode(template.Node):
                 continue
             pid = conditional_escape(str(panel.get("id", "")))
             title = conditional_escape(str(panel.get("title", "")))
-            content = panel.get("content", "")
+            content = conditional_escape(panel.get("content", ""))
             try:
                 col = int(panel.get("col", 1))
             except (ValueError, TypeError):
