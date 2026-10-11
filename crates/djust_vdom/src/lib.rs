@@ -320,10 +320,25 @@ impl VNode {
         })
     }
 
+    /// Serialize an `InsertSubtree` payload node. The client parses the
+    /// payload as children of the node's real parent, in that parent's
+    /// namespace (an SVG or MathML parent gets an `<svg>` / `<math>`
+    /// wrapper), so the node is written as the page writes it. `parent` is
+    /// how the real parent places its children, or `None` when that is not
+    /// known (the text of every raw-text element is then escaped).
+    pub(crate) fn to_html_for_client(&self, parent: Option<ChildContext>) -> String {
+        let ns = parent.map(|context| context.child_namespace(self));
+        self._to_html(Place {
+            read_as: ns,
+            actual: ns,
+            verbatim: false,
+        })
+    }
+
     /// Serialize for an HTML parser that reads the output in an HTML context
-    /// (`<template>.innerHTML`, as the client does with an `InsertSubtree`
-    /// payload). `parent` is how the node's real parent places its children,
-    /// or `None` when that is not known.
+    /// (`<template>.innerHTML` with no wrapper). `parent` is how the node's
+    /// real parent places its children, or `None` when that is not known.
+    #[cfg(test)]
     pub(crate) fn to_html_read_as_html(&self, parent: Option<ChildContext>) -> String {
         self._to_html(Place {
             read_as: Some(ChildContext::Html.child_namespace(self)),
@@ -510,11 +525,14 @@ pub fn cache_ignore_subtree_html_in(node: &mut VNode, ns: Namespace) {
 /// includes a script whose text holds `</script>` inside the script-data
 /// escape states (`<!-- document.write("<script></script>") -->`).
 ///
-/// When the output is read in a context the node does not really have, the
-/// two differ. An `InsertSubtree` payload is serialized from the boundary's
-/// own nodes and parsed by the client as HTML: for an `{% if %}` inside
-/// `<svg>`, a `<style>` there is read as HTML raw text although its text was
-/// decoded as SVG. There the text is written verbatim only when the element
+/// An `InsertSubtree` payload is read in the node's real context: the client
+/// parses it in the namespace of the parent it is inserted into
+/// ([`VNode::to_html_for_client`]), so it is written exactly like the page.
+///
+/// When the output is read in a context the node does not really have (an
+/// HTML parse of nodes that are really SVG or MathML: `read_as == Html`,
+/// `actual != Html`), the two differ: a `<style>` is read as HTML raw text
+/// although its text was decoded as SVG. There the text is written verbatim only when the element
 /// holds nothing but text and the tokenizer would keep all of it inside the
 /// element ([`raw_text_stays_inside`]); otherwise it is escaped. An element
 /// child counts too: the parser reads its markup as raw text, and a
@@ -1883,20 +1901,105 @@ mod tests {
         );
     }
 
+    /// html5ever's serialization (ids removed) of the children of the
+    /// element at `path` (child element indexes) below the `dj-root` of
+    /// `doc`, parsed as a page, and that element's name and namespace.
+    fn page_children(doc: &str, path: &[usize]) -> (String, String, Namespace) {
+        use html5ever::serialize::{serialize, SerializeOpts, TraversalScope};
+        use html5ever::tendril::TendrilSink;
+        use markup5ever_rcdom::{Handle, NodeData, RcDom, SerializableHandle};
+        fn find(handle: &Handle) -> Option<Handle> {
+            if let NodeData::Element { ref attrs, .. } = handle.data {
+                if attrs
+                    .borrow()
+                    .iter()
+                    .any(|a| AsRef::<str>::as_ref(&a.name.local) == "dj-root")
+                {
+                    return Some(handle.clone());
+                }
+            }
+            handle.children.borrow().iter().find_map(find)
+        }
+        let dom = html5ever::parse_document(RcDom::default(), Default::default())
+            .from_utf8()
+            .read_from(&mut doc.as_bytes())
+            .unwrap();
+        let mut node = find(&dom.document).expect("dj-root");
+        for &i in path {
+            let next = node
+                .children
+                .borrow()
+                .iter()
+                .filter(|c| matches!(c.data, NodeData::Element { .. }))
+                .nth(i)
+                .cloned()
+                .unwrap();
+            node = next;
+        }
+        let NodeData::Element { ref name, .. } = node.data else {
+            unreachable!()
+        };
+        let ns = match AsRef::<str>::as_ref(&name.ns) {
+            "http://www.w3.org/2000/svg" => Namespace::Svg,
+            "http://www.w3.org/1998/Math/MathML" => Namespace::MathMl,
+            _ => Namespace::Html,
+        };
+        let tag = name.local.to_string();
+        let mut out = Vec::new();
+        let opts = SerializeOpts {
+            traversal_scope: TraversalScope::ChildrenOnly(None),
+            ..Default::default()
+        };
+        serialize(&mut out, &SerializableHandle::from(node), opts).unwrap();
+        (without_ids(&String::from_utf8(out).unwrap()), tag, ns)
+    }
+
+    /// `payload` parsed as the client parses it (children of a `tag`
+    /// element in namespace `ns`, scripting disabled), serialized by
+    /// html5ever without ids.
+    fn client_reads(payload: &str, tag: &str, ns: Namespace) -> String {
+        use html5ever::serialize::{serialize, SerializeOpts, TraversalScope};
+        use html5ever::tendril::TendrilSink;
+        use html5ever::{LocalName, QualName};
+        use markup5ever_rcdom::{RcDom, SerializableHandle};
+        let namespace = match ns {
+            Namespace::Html => html5ever::ns!(html),
+            Namespace::Svg => html5ever::ns!(svg),
+            Namespace::MathMl => html5ever::ns!(mathml),
+        };
+        let mut opts = html5ever::ParseOpts::default();
+        opts.tree_builder.scripting_enabled = false;
+        let context = QualName::new(None, namespace, LocalName::from(tag));
+        let dom = html5ever::parse_fragment(RcDom::default(), opts, context, vec![], false)
+            .from_utf8()
+            .read_from(&mut payload.as_bytes())
+            .unwrap();
+        let html = dom.document.children.borrow()[0].clone();
+        let mut out = Vec::new();
+        let opts = SerializeOpts {
+            traversal_scope: TraversalScope::ChildrenOnly(None),
+            ..Default::default()
+        };
+        serialize(&mut out, &SerializableHandle::from(html), opts).unwrap();
+        without_ids(&String::from_utf8(out).unwrap())
+    }
+
     #[test]
-    fn inserted_raw_text_element_with_child_elements_never_ends_early() {
+    fn inserted_raw_text_element_is_read_back_as_the_page_has_it() {
         // An `{% if %}` / `{% elif %}` swap inside `<svg>` inserting a
-        // `<style>` that holds a `<style>` element and then text: the
-        // payload is parsed by the client as HTML.
+        // `<style>` that holds a `<style>` element and then text. The client
+        // parses the payload in the parent's namespace: it must read back
+        // exactly the nodes the page has, with no element made from text.
         let value = "&lt;img src=x onerror=alert(1)&gt;";
-        for (tag, pre, post) in [
-            ("style", "<div dj-root><svg>", "</svg></div>"),
-            ("noembed", "<div dj-root><svg>", "</svg></div>"),
-            ("script", "<div dj-root><svg>", "</svg></div>"),
-            ("title", "<div dj-root><svg>", "</svg></div>"),
-            ("textarea", "<div dj-root><svg>", "</svg></div>"),
-            ("style", "<svg><g dj-root>", "</g></svg>"),
-            ("style", "<math><mrow dj-root>", "</mrow></math>"),
+        for (tag, pre, post, path) in [
+            ("style", "<div dj-root><svg>", "</svg></div>", &[0][..]),
+            ("noembed", "<div dj-root><svg>", "</svg></div>", &[0]),
+            ("script", "<div dj-root><svg>", "</svg></div>", &[0]),
+            ("title", "<div dj-root><svg>", "</svg></div>", &[0]),
+            ("textarea", "<div dj-root><svg>", "</svg></div>", &[0]),
+            ("style", "<svg><g dj-root>", "</g></svg>", &[]),
+            ("style", "<math><mrow dj-root>", "</mrow></math>", &[]),
+            ("style", "<div dj-root>", "</div>", &[]),
         ] {
             let mut bodies = vec![
                 format!("<{tag}><{tag}>a</{tag}>{value}</{tag}>"),
@@ -1913,23 +2016,23 @@ mod tests {
                 let old = format!("{pre}<!--dj-if id=\"if-1\"--><g>one</g><!--/dj-if-->{post}");
                 // The other branch: a new boundary id, inserted whole.
                 let new = format!("{pre}<!--dj-if id=\"if-2\"-->{body}<!--/dj-if-->{post}");
-                let (old, _) = parse_html_with_namespace(&old).unwrap();
-                let (new, ns) = parse_html_with_namespace(&new).unwrap();
-                let patches = diff_in(&old, &new, ns);
-                let payloads: Vec<String> = patches
+                let (old_vdom, _) = parse_html_with_namespace(&old).unwrap();
+                let (new_vdom, ns) = parse_html_with_namespace(&new).unwrap();
+                let payloads: Vec<String> = diff_in(&old_vdom, &new_vdom, ns)
                     .into_iter()
                     .filter_map(|p| match p {
                         Patch::InsertSubtree { html, .. } => Some(html),
                         _ => None,
                     })
                     .collect();
-                assert!(!payloads.is_empty(), "{body}");
-                for html in payloads {
-                    // One element, written start tag, escaped content, end tag.
-                    assert_eq!(html.matches('<').count(), 4, "{html}");
-                    assert_eq!(html.matches(&format!("</{tag}>")).count(), 1, "{html}");
-                    assert!(html.contains("lt;img"), "{html}");
-                }
+                assert_eq!(payloads.len(), 1, "{body}");
+                let (page, parent_tag, parent_ns) = page_children(&new, path);
+                assert_eq!(
+                    client_reads(&payloads[0], &parent_tag, parent_ns),
+                    page,
+                    "{new}: {}",
+                    payloads[0]
+                );
             }
         }
     }
@@ -2029,8 +2132,8 @@ mod tests {
             ),
             format!("<!--dj-if id=\"if-1\"-->{script}<!--/dj-if-->")
         );
-        // SVG parent: the style is SVG in the page but read as HTML by the
-        // client; text that would end it early is escaped, other text is not.
+        // SVG parent: the client parses the payload as SVG, so the style's
+        // text is escaped as it is in the page.
         let svg = |body: &str| {
             format!(
                 "<div dj-root><svg><!--dj-if id=\"if-1\"-->{body}<!--/dj-if--><g></g></svg></div>"
@@ -2043,7 +2146,7 @@ mod tests {
         );
         assert_eq!(
             inserted(old, &svg("<style>.a &gt; .b</style>")),
-            "<!--dj-if id=\"if-1\"--><style>.a > .b</style><!--/dj-if-->"
+            "<!--dj-if id=\"if-1\"--><style>.a &gt; .b</style><!--/dj-if-->"
         );
         // The same nodes under an HTML root inside foreignObject: in context.
         assert_eq!(
@@ -2057,11 +2160,10 @@ mod tests {
     }
 
     #[test]
-    fn inserted_subtree_reuses_an_ignore_cache_only_in_its_real_context() {
+    fn inserted_subtree_reuses_an_ignore_cache_in_its_real_context() {
         // A dj-update="ignore" cache is written in the node's real context.
-        // In an InsertSubtree payload (read by the client as HTML) it is
-        // reused only where that context is HTML too; under <svg> the `g`
-        // is re-serialized for an HTML reader instead.
+        // The client reads an InsertSubtree payload in that context too, so
+        // the cache is reused, under <svg> as well.
         let payload = |old: &str, new: &str| -> String {
             let (old, _) = parse_html_with_namespace(old).unwrap();
             let (mut new, ns) = parse_html_with_namespace(new).unwrap();
@@ -2091,8 +2193,7 @@ mod tests {
             "<div dj-root><svg><!--dj-if id=\"if-1\"--><g dj-update=\"ignore\"><style>a</style></g>\
              <!--/dj-if--><g></g></svg></div>",
         );
-        assert!(!svg_parent.contains("<i>cached</i>"), "{svg_parent}");
-        assert!(svg_parent.contains("<style>a</style>"), "{svg_parent}");
+        assert!(svg_parent.contains("<i>cached</i>"), "{svg_parent}");
     }
 
     #[test]
