@@ -317,12 +317,29 @@ function getNodeByPath(path, djustId = null, rootEl = null) {
 
 // SVG namespace and tags for proper element creation
 const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
+const MATHML_NAMESPACE = 'http://www.w3.org/1998/Math/MathML';
+const HTML_NAMESPACE = 'http://www.w3.org/1999/xhtml';
 const SVG_TAGS = new Set([
     'svg', 'path', 'circle', 'rect', 'line', 'polyline', 'polygon',
     'ellipse', 'g', 'defs', 'use', 'text', 'tspan', 'textPath',
     'clipPath', 'mask', 'pattern', 'marker', 'symbol', 'linearGradient',
     'radialGradient', 'stop', 'image', 'foreignObject', 'switch',
     'desc', 'title', 'metadata'
+]);
+
+// SVG_TAGS by lower-case name (a VNode carries the parser's name, e.g.
+// `foreignObject`; the lookups below use the lower-cased name).
+const SVG_TAGS_LOWER = new Set(Array.from(SVG_TAGS, (tag) => tag.toLowerCase()));
+
+// MathML element names created in the MathML namespace (MathML Core plus
+// the common presentation elements). Nothing in MathML runs script.
+const MATHML_TAGS = new Set([
+    'math', 'maction', 'annotation', 'annotation-xml', 'menclose', 'merror',
+    'mfenced', 'mfrac', 'mglyph', 'mi', 'malignmark', 'mlabeledtr',
+    'mmultiscripts', 'mn', 'mo', 'mover', 'mpadded', 'mphantom',
+    'mprescripts', 'mroot', 'mrow', 'ms', 'mspace', 'msqrt', 'mstyle',
+    'msub', 'msubsup', 'msup', 'mtable', 'mtd', 'mtext', 'mtr', 'munder',
+    'munderover', 'none', 'semantics'
 ]);
 
 // Allowed HTML tags for VDOM element creation (security: prevents script injection)
@@ -540,12 +557,90 @@ function createHtmlElement(tagLower) {
 }
 
 /**
+ * The namespace a full page parse gives an element named `tag` that is a
+ * child of `parent` (the tree-construction rules): `svg` / `math` start
+ * SVG / MathML; inside SVG everything is SVG except below `foreignObject`,
+ * `desc` and `title`, which hold HTML; inside MathML everything is MathML
+ * except below `mi` / `mo` / `mn` / `ms` / `mtext` (HTML, apart from
+ * `mglyph` / `malignmark`) and an `annotation-xml` with an HTML `encoding`
+ * (HTML); `svg` inside another `annotation-xml` is SVG.
+ *
+ * @param {Element|null} parent
+ * @param {string} tag
+ * @returns {string} a namespace URI
+ */
+function _childElementNamespace(parent, tag) {
+    const name = String(tag || '').toLowerCase();
+    const htmlRules = () => {
+        if (name === 'svg') return SVG_NAMESPACE;
+        if (name === 'math') return MATHML_NAMESPACE;
+        return HTML_NAMESPACE;
+    };
+    if (!parent || parent.nodeType !== 1) return htmlRules();
+    const parentName = parent.localName;
+    if (parent.namespaceURI === SVG_NAMESPACE) {
+        if (parentName === 'foreignObject' || parentName === 'desc' || parentName === 'title') {
+            return htmlRules();
+        }
+        return SVG_NAMESPACE;
+    }
+    if (parent.namespaceURI === MATHML_NAMESPACE) {
+        if (['mi', 'mo', 'mn', 'ms', 'mtext'].includes(parentName)) {
+            return name === 'mglyph' || name === 'malignmark' ? MATHML_NAMESPACE : htmlRules();
+        }
+        if (parentName === 'annotation-xml') {
+            const encoding = String(parent.getAttribute('encoding') || '').toLowerCase();
+            if (encoding === 'text/html' || encoding === 'application/xhtml+xml') return htmlRules();
+            return name === 'svg' ? SVG_NAMESPACE : MATHML_NAMESPACE;
+        }
+        return MATHML_NAMESPACE;
+    }
+    return htmlRules();
+}
+
+/**
+ * Create an SVG or MathML element for an allow-listed name. A foreign
+ * element is inert whatever its name (an SVG `iframe` is not a frame), which
+ * is what the full render has there.
+ */
+function _createForeignElement(namespace, tag) {
+    try {
+        return document.createElementNS(namespace, tag);
+    } catch (_e) {
+        return document.createElement('span');
+    }
+}
+
+/**
+ * The namespace context for the children of a `<span>` that stands in for
+ * an SVG or MathML element outside the allow lists (`filter`, `fe*`,
+ * `animate`, `mstack`, an unknown name). Such an element is never an HTML or
+ * text integration point (those names are allow-listed), so its children
+ * are in its own namespace: a detached, never-inserted `g` / `mrow` gives
+ * `_childElementNamespace` exactly that. Without it the children were
+ * created under the HTML `<span>`, so an `<iframe>` or `<a>` there was HTML.
+ *
+ * @param {string} namespace
+ * @returns {Element}
+ */
+function _foreignPlaceholderContext(namespace) {
+    return document.createElementNS(namespace, namespace === SVG_NAMESPACE ? 'g' : 'mrow');
+}
+
+/**
  * Create a DOM node from a virtual node (VDOM).
  * SECURITY NOTE: vnode data comes from the trusted server (Django templates
  * rendered server-side). This is the standard LiveView pattern where the
  * server controls all HTML structure via VDOM patches.
+ *
+ * `context` is the element the node is inserted into: its namespace decides
+ * the node's (`_childElementNamespace`), so an element inside `<svg>` or
+ * `<math>` is SVG or MathML, as in the full render. A boolean (the older
+ * "inside SVG" flag) keeps the name-based choice.
  */
-function createNodeFromVNode(vnode, inSvgContext = false) {
+function createNodeFromVNode(vnode, context = false) {
+    const parentEl = context && typeof context === 'object' ? context : null;
+    const inSvgContext = parentEl ? isInSvgContext(parentEl) : !!context;
     if (vnode.tag === '#text') {
         return document.createTextNode(vnode.text || '');
     }
@@ -580,10 +675,29 @@ function createNodeFromVNode(vnode, inSvgContext = false) {
     // Determine SVG context for child element creation
     const useSvgNamespace = isSvgTag || inSvgContext;
 
+    // The namespace the full render gives this element (only when the
+    // parent element is known).
+    const namespace = parentEl ? _childElementNamespace(parentEl, vnode.tag) : null;
+    const isAllowedForeign = SVG_TAGS_LOWER.has(tagLower) || MATHML_TAGS.has(tagLower)
+        || isAllowedHtml || isCustomElement || isUserAllowed;
+
     // Security: Only pass whitelisted string literals to createElement
     // If not in whitelist, use 'span' as a safe fallback
     let elem;
-    if (isSvgTag) {
+    // The namespace of a foreign element that a `<span>` placeholder stands
+    // in for (its children are created in that namespace).
+    let placeholderNamespace = null;
+    if ((namespace === SVG_NAMESPACE && !isSvgTag) || namespace === MATHML_NAMESPACE) {
+        // An SVG or MathML element other than the SVG tags below: created
+        // in that namespace, so an allow-listed HTML name there (`iframe`,
+        // `a`, `form`) is the inert foreign element the full render has.
+        if (isAllowedForeign) {
+            elem = _createForeignElement(namespace, String(vnode.tag));
+        } else {
+            elem = document.createElement('span');
+            placeholderNamespace = namespace;
+        }
+    } else if (isSvgTag) {
         // SVG tag: use switch for known values only
         elem = createSvgElement(tagLower);
     } else if (isAllowedHtml) {
@@ -633,9 +747,15 @@ function createNodeFromVNode(vnode, inSvgContext = false) {
     }
 
     if (vnode.children) {
-        // Pass SVG context to children so nested SVG elements are created correctly
+        // Pass the context to children so nested SVG / MathML elements are
+        // created correctly: the element itself when the parent was known,
+        // else the SVG flag. Below a placeholder for a foreign element, the
+        // context is an element of that namespace, not the HTML `<span>`.
+        const childContext = placeholderNamespace
+            ? _foreignPlaceholderContext(placeholderNamespace)
+            : (parentEl ? elem : useSvgNamespace);
         for (const child of vnode.children) {
-            elem.appendChild(createNodeFromVNode(child, useSvgNamespace));
+            elem.appendChild(createNodeFromVNode(child, childContext));
         }
     }
 
@@ -1563,19 +1683,149 @@ function applyRemoveSubtree(patch, rootEl = null) {
 }
 
 /**
+ * The wrapper elements (outermost first) that put markup parsed in a
+ * `<template>` where `parent`'s children are, so each element gets the
+ * namespace a full page parse gives it; `null` when `parent`'s children are
+ * parsed as HTML: an HTML parent, or an SVG `foreignObject` / `desc` /
+ * `title` or a MathML `annotation-xml` with an HTML `encoding` (HTML
+ * integration points). A MathML `mi` / `mo` / `mn` / `ms` / `mtext` (text
+ * integration point) is a wrapper itself: its children are HTML, except
+ * `mglyph` / `malignmark`.
+ *
+ * @param {Node|null} parent
+ * @returns {string[]|null}
+ */
+function _foreignParseWrappers(parent) {
+    if (!parent || parent.nodeType !== 1) return null;
+    const name = parent.localName;
+    if (parent.namespaceURI === SVG_NAMESPACE) {
+        if (name === 'foreignObject' || name === 'desc' || name === 'title') return null;
+        return ['svg'];
+    }
+    if (parent.namespaceURI === MATHML_NAMESPACE) {
+        if (name === 'annotation-xml') {
+            const encoding = String(parent.getAttribute('encoding') || '').toLowerCase();
+            if (encoding === 'text/html' || encoding === 'application/xhtml+xml') return null;
+            return ['math', 'annotation-xml'];
+        }
+        if (name === 'mi' || name === 'mo' || name === 'mn' || name === 'ms' || name === 'mtext') {
+            return ['math', name];
+        }
+        return ['math'];
+    }
+    return null;
+}
+
+/**
  * Parse a server-emitted HTML fragment into a DocumentFragment using a
  * `<template>` element so any `<script>` tags inside are inert (not
  * executed). The fragment is the trust-boundary's responsibility — the
  * server is authoritative for HTML content; this just guarantees that
  * even if the server emits a script tag inadvertently, it doesn't run.
  *
+ * The markup is parsed as children of `parent`, the element it is inserted
+ * into: under an SVG or MathML parent it is parsed inside an `<svg>` /
+ * `<math>` wrapper (see `_foreignParseWrappers`), so an element there is
+ * SVG or MathML, as in the full render, not HTML. The server writes the
+ * payload for exactly that parse. An HTML parent parses it as before.
+ *
  * @param {string} html
+ * @param {Node|null} [parent]
  * @returns {DocumentFragment}
  */
-function _parseSubtreeHtml(html) {
+function _parseSubtreeHtml(html, parent) {
     const tpl = document.createElement('template');
-    tpl.innerHTML = String(html || '');
-    return tpl.content;
+    const wrappers = _foreignParseWrappers(parent);
+    if (!wrappers) {
+        tpl.innerHTML = String(html || '');
+        return tpl.content;
+    }
+    const open = wrappers.map((name) => '<' + name + '>').join('');
+    const close = wrappers.slice().reverse().map((name) => '</' + name + '>').join('');
+    // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine; a template's content is inert
+    tpl.innerHTML = open + String(html || '') + close;
+    const content = tpl.content;
+    const outer = content.firstChild;
+    let context = outer;
+    for (let depth = 1; depth < wrappers.length && context; depth++) {
+        context = context.firstChild;
+    }
+    // Lift the parsed children out of the wrappers, in order, and drop the
+    // (now empty) wrappers. The nodes stay in the template's inert document.
+    if (context) {
+        while (context.firstChild) content.insertBefore(context.firstChild, outer);
+    }
+    if (outer) content.removeChild(outer);
+    return content;
+}
+
+/**
+ * Parse a dj-root's inner HTML as the page parses the root's children, for
+ * a morph of `root` (the prerendered mount morph): `innerHTML` on a detached
+ * element of the live document, so with the page's scripting flag (a
+ * `<noscript>` holds text). An SVG or MathML root parses it in an element of
+ * its own namespace and name, so its children are SVG or MathML, as in the
+ * full render, not HTML. An HTML root uses a `<div>`, as before.
+ *
+ * @param {string} html
+ * @param {Element|null} root
+ * @returns {Element} the element whose children are the root's new children
+ */
+function _parseRootHtmlLive(html, root) {
+    let context;
+    if (root && root.nodeType === 1 &&
+        (root.namespaceURI === SVG_NAMESPACE || root.namespaceURI === MATHML_NAMESPACE)) {
+        context = document.createElementNS(root.namespaceURI, root.localName);
+        // An `annotation-xml` holds HTML or MathML by its `encoding`.
+        if (root.hasAttribute('encoding')) context.setAttribute('encoding', root.getAttribute('encoding'));
+    } else {
+        context = document.createElement('div');
+    }
+    // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
+    context.innerHTML = String(html || '');
+    return context;
+}
+
+/** Does `scope` hold an HTML `<noscript>` element? */
+function _holdsHtmlNoscript(scope) {
+    for (const el of scope.querySelectorAll('noscript')) {
+        if (el.namespaceURI === HTML_NAMESPACE) return true;
+    }
+    return false;
+}
+
+/**
+ * Parse a full-HTML frame (`html_update`, `html_recovery`: the dj-root's
+ * inner HTML) into the node whose children `root` is morphed against. The
+ * parse is inert. An HTML root parses it with `DOMParser`, as before; an SVG
+ * or MathML root parses it as its own children (`_parseSubtreeHtml`), so
+ * they keep the root's namespace, as in the full render. A `[dj-root]`
+ * element in the frame is used when present, as before.
+ *
+ * Both inert parses have scripting disabled, so they read the content of an
+ * HTML `<noscript>` as markup, where the page (scripting enabled) has the
+ * text the server wrote. A frame whose parse holds an HTML `<noscript>` is
+ * therefore parsed again as the mount morph parses (`_parseRootHtmlLive`,
+ * the page's scripting flag), so the `<noscript>` holds that text.
+ *
+ * @param {string} html
+ * @param {Element} root
+ * @returns {Node}
+ */
+function _parseRootFrameHtml(html, root) {
+    let scope;
+    let parsed;
+    if (_foreignParseWrappers(root)) {
+        scope = _parseSubtreeHtml(html, root);
+        parsed = scope.querySelector('[dj-root]') || scope;
+    } else {
+        // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine; DOMParser creates an inert document
+        scope = new DOMParser().parseFromString(html, 'text/html');
+        parsed = scope.querySelector('[dj-root]') || scope.body;
+    }
+    if (!_holdsHtmlNoscript(scope)) return parsed;
+    const live = _parseRootHtmlLive(html, root);
+    return live.querySelector('[dj-root]') || live;
 }
 
 /**
@@ -1625,7 +1875,7 @@ function applyInsertSubtree(patch, rootEl = null) {
         }
         return false;
     }
-    const fragment = _parseSubtreeHtml(patch.html);
+    const fragment = _parseSubtreeHtml(patch.html, parent);
     // #2058: scan BEFORE insertion — a DocumentFragment's children move out
     // of it (and it becomes empty) once inserted, so this is the only point
     // that can see what was in the fragment. A classic <script> inside an
@@ -1725,6 +1975,9 @@ function applyMoveSubtree(patch, rootEl = null) {
 window.djust._applyRemoveSubtree = applyRemoveSubtree;
 window.djust._applyInsertSubtree = applyInsertSubtree;
 window.djust._applyMoveSubtree = applyMoveSubtree;
+window.djust._parseSubtreeHtml = _parseSubtreeHtml;
+window.djust._parseRootHtmlLive = _parseRootHtmlLive;
+window.djust._parseRootFrameHtml = _parseRootFrameHtml;
 window.djust._findDjIfOpenMarker = _findDjIfOpenMarker;
 window.djust._findDjIfCloseMarker = _findDjIfCloseMarker;
 window.djust._extractDjIfMarkerId = _extractDjIfMarkerId;
@@ -1999,7 +2252,7 @@ function _placeChildren(parent, ops, movedChildOf, rootEl, tally) {
     for (const op of sorted) {
         let nodes;
         if (op.type === 'InsertChild') {
-            const created = createNodeFromVNode(op.node, isInSvgContext(parent));
+            const created = createNodeFromVNode(op.node, parent);
             // <select> only accepts <option>/<optgroup>: keep the redirect the
             // single-patch path applies (inserts the node as a sibling).
             if (parent.tagName === 'SELECT' && !(created.nodeType === Node.ELEMENT_NODE &&
@@ -2020,7 +2273,7 @@ function _placeChildren(parent, ops, movedChildOf, rootEl, tally) {
                 tally(false, op);
                 continue;
             }
-            const fragment = _parseSubtreeHtml(op.html);
+            const fragment = _parseSubtreeHtml(op.html, parent);
             _warnDeadScripts(fragment);
             _registerDjIfMarkers(fragment);
             nodes = Array.from(fragment.childNodes);
@@ -2294,7 +2547,7 @@ function applySinglePatch(patch, rootEl = null) {
                         document.removeEventListener('visibilitychange', node._djustPollVisibilityHandler);
                     }
                 }
-                const newNode = createNodeFromVNode(patch.node, isInSvgContext(node.parentNode));
+                const newNode = createNodeFromVNode(patch.node, node.parentNode);
                 if (node.nodeType === Node.ELEMENT_NODE
                     && globalThis.djust
                     && typeof globalThis.djust.maybeDeferRemoval === 'function'
@@ -2403,7 +2656,7 @@ function applySinglePatch(patch, rootEl = null) {
                     if (globalThis.djustDebug) console.log('[LiveView] Patch %s targets non-element (nodeType=%d), skipping', patch.type, node.nodeType);
                     return false;
                 }
-                const newChild = createNodeFromVNode(patch.node, isInSvgContext(node));
+                const newChild = createNodeFromVNode(patch.node, node);
                 // Guard: <select> only accepts <option>/<optgroup> as direct children.
                 // When an adjacent {% if %} block expands, the server may resolve the
                 // parent path to the <select> element rather than the surrounding
@@ -2549,7 +2802,7 @@ function applySinglePatch(patch, rootEl = null) {
                     // Swap the pool entry instead, which is what the Rust
                     // simulator has always done for this op.
                     if (inner.type === 'Replace' && (!inner.path || inner.path.length === 0)) {
-                        const replacement = createNodeFromVNode(inner.node, isInSvgContext(node));
+                        const replacement = createNodeFromVNode(inner.node, node);
                         if (!replacement || replacement.nodeType !== 1) {
                             console.warn('[LiveView] VirtualUpdate: could not build the replacement row for key %s', String(patch.key).slice(0, 80));
                             allOk = false;
@@ -2623,7 +2876,7 @@ function applySinglePatch(patch, rootEl = null) {
                     // Materialise the row here rather than in the pool module:
                     // creating nodes is the patcher's job, and the pool stores
                     // nodes, not descriptors.
-                    const created = createNodeFromVNode(patch.node, isInSvgContext(node));
+                    const created = createNodeFromVNode(patch.node, node);
                     // nodeType, not just truthiness: the pool's renderer sets
                     // `.style.height` on every item, so a text or comment node
                     // makes it throw — and that throw escapes the `finally`

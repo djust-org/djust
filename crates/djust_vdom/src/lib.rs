@@ -539,21 +539,44 @@ impl VNode {
             read_as: ns,
             actual: ns,
             verbatim: false,
+            scripting: true,
         };
         self.write_html(&mut html, place);
         html
     }
 
-    /// Serialize for an HTML parser that reads the output in an HTML context
-    /// (`<template>.innerHTML`, as the client does with an `InsertSubtree`
-    /// payload). `parent` is how the node's real parent places its children,
-    /// or `None` when that is not known.
+    /// Serialize an `InsertSubtree` payload node. The client parses the
+    /// payload as children of the node's real parent, in that parent's
+    /// namespace (an SVG or MathML parent gets an `<svg>` / `<math>`
+    /// wrapper), with `<template>.innerHTML`, so with scripting disabled.
+    /// `parent` is how the real parent places its children, or `None` when
+    /// that is not known (the text of every raw-text element is then
+    /// escaped).
+    pub(crate) fn to_html_for_client(&self, parent: Option<ChildContext>) -> String {
+        let mut html = String::new();
+        let ns = parent.map(|context| context.child_namespace(self));
+        let place = Place {
+            read_as: ns,
+            actual: ns,
+            verbatim: false,
+            scripting: false,
+        };
+        self.write_html(&mut html, place);
+        html
+    }
+
+    /// Serialize for an HTML parser with scripting disabled that reads the
+    /// output in an HTML context (`<template>.innerHTML` with no wrapper).
+    /// `parent` is how the node's real parent places its children, or
+    /// `None` when that is not known.
+    #[cfg(test)]
     pub(crate) fn to_html_read_as_html(&self, parent: Option<ChildContext>) -> String {
         let mut html = String::new();
         let place = Place {
             read_as: Some(ChildContext::Html.child_namespace(self)),
             actual: parent.map(|context| context.child_namespace(self)),
             verbatim: false,
+            scripting: false,
         };
         self.write_html(&mut html, place);
         html
@@ -572,9 +595,14 @@ impl VNode {
     /// when the parent writes its text raw.
     fn write_html(&self, html: &mut String, place: Place) {
         if let Some(ref cached) = self.cached_html {
-            // The cache was written in the node's real context. Reuse it
-            // only where the output is read in that same context.
-            if place.read_as.is_some() && place.read_as == place.actual {
+            // The cache was written in the node's real context, for the
+            // page's parser. Reuse it only where the output is read in that
+            // same context. An `InsertSubtree` payload is, but parsed with
+            // scripting disabled, which reads a `<noscript>` differently.
+            if place.read_as.is_some()
+                && place.read_as == place.actual
+                && (place.scripting || !contains_noscript_tag(cached))
+            {
                 html.push_str(cached);
                 return;
             }
@@ -646,6 +674,7 @@ impl VNode {
                         read_as: read_as.map(|c| c.child_namespace(child)),
                         actual: actual.map(|c| c.child_namespace(child)),
                         verbatim,
+                        scripting: place.scripting,
                     };
                     child.write_html(html, child_place);
                 }
@@ -747,13 +776,19 @@ pub fn cache_ignore_subtree_html_in(node: &mut VNode, ns: Namespace) {
 /// escape states (`<!-- document.write("<script></script>") -->`) and a
 /// `<plaintext>` holding `</plaintext>`.
 ///
-/// When the output is read in a context the node does not really have, the
-/// two differ. An `InsertSubtree` payload is serialized from the boundary's
-/// own nodes and parsed by the client as HTML: for an `{% if %}` inside
-/// `<svg>`, a `<style>` there is read as HTML raw text although its text was
-/// decoded as SVG. There the text is written verbatim only when the element
-/// holds nothing but text and the tokenizer would keep all of it inside the
-/// element ([`raw_text_stays_inside`]); otherwise it is escaped. An element
+/// An `InsertSubtree` payload is read in the node's real context: the client
+/// parses it in the namespace of the parent it is inserted into
+/// ([`VNode::to_html_for_client`]), so it is written exactly like the page,
+/// except that the client's parse has scripting disabled and so reads a
+/// `noscript`'s content as markup: that is written as markup, its text
+/// escaped.
+///
+/// When the output is read in a context the node does not really have (an
+/// HTML parse of nodes that are really SVG or MathML: `read_as == Html`,
+/// `actual != Html`), the two differ: a `<style>` is read as HTML raw text
+/// although its text was decoded as SVG. There the text is written verbatim
+/// only when the element holds nothing but text and the tokenizer would keep
+/// all of it inside the element ([`raw_text_stays_inside`]); otherwise it is escaped. An element
 /// child counts too: the parser reads its markup as raw text, and a
 /// descendant with the same name (`<style><style>a</style>…</style>`,
 /// also deeper down) writes the end tag that closes the element, after
@@ -774,6 +809,11 @@ struct Place {
     actual: Option<Namespace>,
     /// For a text node: does its parent write its text verbatim?
     verbatim: bool,
+    /// Does the parser that reads the output have scripting enabled? The
+    /// page's parser does; the client's `<template>.innerHTML` parse of an
+    /// `InsertSubtree` payload does not, and there a `noscript` holds
+    /// markup, not raw text.
+    scripting: bool,
 }
 
 impl Place {
@@ -783,6 +823,7 @@ impl Place {
             read_as: Some(ns),
             actual: Some(ns),
             verbatim: false,
+            scripting: true,
         }
     }
 
@@ -797,19 +838,22 @@ impl Place {
         if self.read_as != Some(Namespace::Html) || !(raw_text || rcdata) {
             return Content::Markup;
         }
+        // `noscript` is raw text only to a parser with scripting enabled.
+        // The client parses a payload with `<template>.innerHTML`, which has
+        // scripting disabled, so there its content is read as markup:
+        // escaped text reads back as the same text. The same holds for a
+        // `noscript` that is not really HTML (`<svg><noscript>`).
+        if element.tag.eq_ignore_ascii_case("noscript")
+            && (!self.scripting || self.actual != Some(Namespace::Html))
+        {
+            return Content::Markup;
+        }
         if self.actual == Some(Namespace::Html) {
             return if raw_text {
                 Content::Verbatim
             } else {
                 Content::Markup
             };
-        }
-        // `noscript` is raw text only to a parser with scripting enabled.
-        // The client parses a payload with `<template>.innerHTML`, which has
-        // scripting disabled, so there its content is read as markup:
-        // escaped text reads back as the same text.
-        if element.tag.eq_ignore_ascii_case("noscript") {
-            return Content::Markup;
         }
         // Read as HTML raw text, but the content is not known to be HTML
         // raw text. Any child that is not text (an element, a comment) is
@@ -979,6 +1023,13 @@ pub fn namespace_at_path(root: &VNode, root_ns: Namespace, path: &[usize]) -> Op
         node = child;
     }
     (!node.is_text() && !node.is_comment()).then_some(ns)
+}
+
+/// Does `html` hold a `noscript` tag (any ASCII case)?
+fn contains_noscript_tag(html: &str) -> bool {
+    html.as_bytes()
+        .windows(9)
+        .any(|w| w[0] == b'<' && w[1..].eq_ignore_ascii_case(b"noscript"))
 }
 
 fn html_escape(text: &str) -> String {
@@ -2286,11 +2337,66 @@ mod tests {
         );
     }
 
+    /// The `InsertSubtree` payloads of `diff_in(old, new)`, and the element
+    /// they are inserted into with its namespace.
+    fn payloads_and_parent(old: &str, new: &str) -> (Vec<String>, VNode, Namespace) {
+        let (old, _) = parse_html_with_namespace(old).unwrap();
+        let (new, ns) = parse_html_with_namespace(new).unwrap();
+        let mut parent = None;
+        let payloads = diff_in(&old, &new, ns)
+            .into_iter()
+            .filter_map(|p| match p {
+                Patch::InsertSubtree { html, path, .. } => {
+                    let parent_ns = namespace_at_path(&new, ns, &path).unwrap();
+                    let mut node = &new;
+                    for &i in &path {
+                        node = &node.children[i];
+                    }
+                    parent = Some((node.clone(), parent_ns));
+                    Some(html)
+                }
+                _ => None,
+            })
+            .collect();
+        let (parent, parent_ns) = parent.expect("an InsertSubtree");
+        (payloads, parent, parent_ns)
+    }
+
+    /// `payload` parsed as the client parses it (in `parent`'s namespace,
+    /// scripting disabled), serialized like the page, without ids.
+    fn client_reads(payload: &str, parent: &VNode, parent_ns: Namespace) -> String {
+        let roots = parser::parse_html_fragment_client_view_in(
+            payload,
+            &parent.tag,
+            parent_ns,
+            parent.attrs.get("encoding").map(String::as_str),
+        )
+        .unwrap();
+        let kids = parent_ns.children_of(parent);
+        let html: String = roots
+            .iter()
+            .map(|node| node.to_html_in(Some(kids.child_namespace(node))))
+            .collect();
+        without_ids(&html)
+    }
+
+    /// `parent`'s children as the page has them, without ids.
+    fn page_children(parent: &VNode, parent_ns: Namespace) -> String {
+        let kids = parent_ns.children_of(parent);
+        let html: String = parent
+            .children
+            .iter()
+            .map(|node| node.to_html_in(Some(kids.child_namespace(node))))
+            .collect();
+        without_ids(&html)
+    }
+
     #[test]
-    fn inserted_raw_text_element_with_child_elements_never_ends_early() {
+    fn inserted_raw_text_element_is_read_back_as_the_page_has_it() {
         // An `{% if %}` / `{% elif %}` swap inside `<svg>` inserting a
-        // `<style>` that holds a `<style>` element and then text: the
-        // payload is parsed by the client as HTML.
+        // `<style>` that holds a `<style>` element and then text. The client
+        // parses the payload in the parent's namespace: it must read back
+        // exactly the nodes the page has, with no element made from text.
         let value = "&lt;img src=x onerror=alert(1)&gt;";
         for (tag, pre, post) in [
             ("style", "<div dj-root><svg>", "</svg></div>"),
@@ -2300,6 +2406,7 @@ mod tests {
             ("textarea", "<div dj-root><svg>", "</svg></div>"),
             ("style", "<svg><g dj-root>", "</g></svg>"),
             ("style", "<math><mrow dj-root>", "</mrow></math>"),
+            ("style", "<div dj-root>", "</div>"),
         ] {
             let mut bodies = vec![
                 format!("<{tag}><{tag}>a</{tag}>{value}</{tag}>"),
@@ -2316,33 +2423,25 @@ mod tests {
                 let old = format!("{pre}<!--dj-if id=\"if-1\"--><g>one</g><!--/dj-if-->{post}");
                 // The other branch: a new boundary id, inserted whole.
                 let new = format!("{pre}<!--dj-if id=\"if-2\"-->{body}<!--/dj-if-->{post}");
-                let (old, _) = parse_html_with_namespace(&old).unwrap();
-                let (new, ns) = parse_html_with_namespace(&new).unwrap();
-                let patches = diff_in(&old, &new, ns);
-                let payloads: Vec<String> = patches
-                    .into_iter()
-                    .filter_map(|p| match p {
-                        Patch::InsertSubtree { html, .. } => Some(html),
-                        _ => None,
-                    })
-                    .collect();
-                assert!(!payloads.is_empty(), "{body}");
-                for html in payloads {
-                    // One element, written start tag, escaped content, end tag.
-                    assert_eq!(html.matches('<').count(), 4, "{html}");
-                    assert_eq!(html.matches(&format!("</{tag}>")).count(), 1, "{html}");
-                    assert!(html.contains("lt;img"), "{html}");
-                }
+                let (payloads, parent, parent_ns) = payloads_and_parent(&old, &new);
+                assert_eq!(payloads.len(), 1, "{body}");
+                assert_eq!(
+                    client_reads(&payloads[0], &parent, parent_ns),
+                    page_children(&parent, parent_ns),
+                    "{new}: {}",
+                    payloads[0]
+                );
             }
         }
     }
 
     #[test]
-    fn inserted_foreign_noscript_text_stays_text_for_the_client() {
-        // An `{% if %}` / `{% elif %}` swap inserting an SVG or MathML
-        // `<noscript>` that holds an auto-escaped value. The client parses
-        // the payload with scripting disabled, where `<noscript>` holds
-        // markup, so its text must be escaped.
+    fn inserted_noscript_text_stays_text_for_the_client() {
+        // An `{% if %}` / `{% elif %}` swap inserting a `<noscript>` that
+        // holds an auto-escaped value (SVG, MathML) or authored markup
+        // (HTML). The client parses the payload with scripting disabled,
+        // where `<noscript>` holds markup, so its text must be escaped: it
+        // reads back as the text the page has.
         fn elements(nodes: &[VNode], out: &mut Vec<String>) {
             for node in nodes {
                 if !node.is_text() && !node.is_comment() {
@@ -2351,35 +2450,49 @@ mod tests {
                 }
             }
         }
-        let value = "&lt;img src=x onerror=alert(1)&gt;";
-        for (pre, post) in [
-            ("<div dj-root><svg>", "</svg></div>"),
-            ("<div dj-root><math>", "</math></div>"),
-            ("<svg><g dj-root>", "</g></svg>"),
-            ("<math><mrow dj-root>", "</mrow></math>"),
+        for (pre, body, post) in [
+            (
+                "<div dj-root><svg>",
+                "&lt;img src=x onerror=alert(1)&gt;",
+                "</svg></div>",
+            ),
+            (
+                "<div dj-root><math>",
+                "&lt;img src=x onerror=alert(1)&gt;",
+                "</math></div>",
+            ),
+            (
+                "<svg><g dj-root>",
+                "&lt;img src=x onerror=alert(1)&gt;",
+                "</g></svg>",
+            ),
+            (
+                "<math><mrow dj-root>",
+                "&lt;img src=x onerror=alert(1)&gt;",
+                "</mrow></math>",
+            ),
+            ("<div dj-root>", "<img src=x onerror=alert(1)>", "</div>"),
+            ("<div dj-root>", "a &amp; b", "</div>"),
         ] {
             let old = format!("{pre}<!--dj-if id=\"if-1\"--><g>one</g><!--/dj-if-->{post}");
             let new = format!(
-                "{pre}<!--dj-if id=\"if-2\"--><noscript>{value}</noscript><!--/dj-if-->{post}"
+                "{pre}<!--dj-if id=\"if-2\"--><noscript>{body}</noscript><!--/dj-if-->{post}"
             );
-            let (old, _) = parse_html_with_namespace(&old).unwrap();
-            let (new, ns) = parse_html_with_namespace(&new).unwrap();
-            let payloads: Vec<String> = diff_in(&old, &new, ns)
-                .into_iter()
-                .filter_map(|p| match p {
-                    Patch::InsertSubtree { html, .. } => Some(html),
-                    _ => None,
-                })
-                .collect();
+            let (payloads, parent, parent_ns) = payloads_and_parent(&old, &new);
             assert_eq!(payloads.len(), 1, "{pre}");
-            let roots = parser::parse_html_fragment_client_view(&payloads[0], "div").unwrap();
+            let roots = parser::parse_html_fragment_client_view_in(
+                &payloads[0],
+                &parent.tag,
+                parent_ns,
+                None,
+            )
+            .unwrap();
             let mut names = Vec::new();
             elements(&roots, &mut names);
             assert_eq!(names, ["noscript"], "{pre}: {}", payloads[0]);
-            let noscript = roots.iter().find(|n| n.tag == "noscript").unwrap();
             assert_eq!(
-                noscript.children[0].text.as_deref(),
-                Some("<img src=x onerror=alert(1)>"),
+                client_reads(&payloads[0], &parent, parent_ns),
+                page_children(&parent, parent_ns),
                 "{pre}: {}",
                 payloads[0]
             );
@@ -2481,8 +2594,8 @@ mod tests {
             ),
             format!("<!--dj-if id=\"if-1\"-->{script}<!--/dj-if-->")
         );
-        // SVG parent: the style is SVG in the page but read as HTML by the
-        // client; text that would end it early is escaped, other text is not.
+        // SVG parent: the client parses the payload as SVG, so the style's
+        // text is escaped as it is in the page.
         let svg = |body: &str| {
             format!(
                 "<div dj-root><svg><!--dj-if id=\"if-1\"-->{body}<!--/dj-if--><g></g></svg></div>"
@@ -2495,7 +2608,7 @@ mod tests {
         );
         assert_eq!(
             inserted(old, &svg("<style>.a &gt; .b</style>")),
-            "<!--dj-if id=\"if-1\"--><style>.a > .b</style><!--/dj-if-->"
+            "<!--dj-if id=\"if-1\"--><style>.a &gt; .b</style><!--/dj-if-->"
         );
         // The same nodes under an HTML root inside foreignObject: in context.
         assert_eq!(
@@ -2509,21 +2622,22 @@ mod tests {
     }
 
     #[test]
-    fn inserted_subtree_reuses_an_ignore_cache_only_in_its_real_context() {
-        // A dj-update="ignore" cache is written in the node's real context.
-        // In an InsertSubtree payload (read by the client as HTML) it is
-        // reused only where that context is HTML too; under <svg> the `g`
-        // is re-serialized for an HTML reader instead.
-        let payload = |old: &str, new: &str| -> String {
+    fn inserted_subtree_reuses_an_ignore_cache_unless_it_holds_noscript() {
+        // A dj-update="ignore" cache is written in the node's real context
+        // for the page. The client reads an InsertSubtree payload in that
+        // context too, so the cache is reused, under <svg> as well; but its
+        // parse has scripting disabled, so a cache holding a `<noscript>` is
+        // written again.
+        let payload = |old: &str, new: &str, cache: &str| -> String {
             let (old, _) = parse_html_with_namespace(old).unwrap();
             let (mut new, ns) = parse_html_with_namespace(new).unwrap();
-            fn mark(node: &mut VNode) {
+            fn mark(node: &mut VNode, cache: &str) {
                 if node.attrs.contains_key("dj-update") {
-                    node.cached_html = Some("<i>cached</i>".to_string());
+                    node.cached_html = Some(cache.to_string());
                 }
-                node.children.iter_mut().for_each(mark);
+                node.children.iter_mut().for_each(|c| mark(c, cache));
             }
-            mark(&mut new);
+            mark(&mut new, cache);
             diff_in(&old, &new, ns)
                 .into_iter()
                 .find_map(|p| match p {
@@ -2536,15 +2650,26 @@ mod tests {
             "<div dj-root><p></p></div>",
             "<div dj-root><!--dj-if id=\"if-1\"--><div dj-update=\"ignore\"><style>a</style></div>\
              <!--/dj-if--><p></p></div>",
+            "<i>cached</i>",
         );
         assert!(html_parent.contains("<i>cached</i>"), "{html_parent}");
         let svg_parent = payload(
             "<div dj-root><svg><g></g></svg></div>",
             "<div dj-root><svg><!--dj-if id=\"if-1\"--><g dj-update=\"ignore\"><style>a</style></g>\
              <!--/dj-if--><g></g></svg></div>",
+            "<i>cached</i>",
         );
-        assert!(!svg_parent.contains("<i>cached</i>"), "{svg_parent}");
-        assert!(svg_parent.contains("<style>a</style>"), "{svg_parent}");
+        assert!(svg_parent.contains("<i>cached</i>"), "{svg_parent}");
+        let noscript = payload(
+            "<div dj-root><p></p></div>",
+            "<div dj-root><!--dj-if id=\"if-1\"--><div dj-update=\"ignore\"><noscript><b>x</b></noscript></div>\
+             <!--/dj-if--><p></p></div>",
+            "<div><NOSCRIPT><b>x</b></NOSCRIPT></div>",
+        );
+        assert!(
+            noscript.contains("<noscript>&lt;b&gt;x&lt;/b&gt;</noscript>"),
+            "{noscript}"
+        );
     }
 
     #[test]

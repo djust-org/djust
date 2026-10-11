@@ -204,16 +204,15 @@ async function handleServerResponse(data, eventName, triggerElement) {
         else if (data.html) {
             if (globalThis.djustDebug) console.log('[LiveView] Applying full HTML update');
             _isBroadcastUpdate = !!data.broadcast;
-            const parser = new DOMParser();
-            // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine; DOMParser creates an inert document
-            const doc = parser.parseFromString(data.html, 'text/html');
             const liveviewRoot = getLiveViewRoot();
             if (!liveviewRoot) {
                 globalLoadingManager.stopLoading(eventName, triggerElement);
                 window.location.reload();
                 return false;
             }
-            const newRoot = doc.querySelector('[dj-root]') || doc.body;
+            // Parsed in the root's namespace (an SVG / MathML root keeps its
+            // children SVG / MathML), inert.
+            const newRoot = _parseRootFrameHtml(data.html, liveviewRoot);
 
             // Handle dj-update="append|prepend|ignore" for efficient list updates.
             // When no dj-update elements exist, applyDjUpdateElements falls back

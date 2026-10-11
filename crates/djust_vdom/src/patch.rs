@@ -3,7 +3,7 @@
 //! Utilities for applying patches to virtual DOM trees.
 //! In the LiveView system, patches are serialized and sent to the client.
 
-use crate::{Patch, VNode};
+use crate::{ChildContext, Namespace, Patch, VNode};
 
 /// Apply a list of patches to a virtual DOM tree (for testing purposes).
 ///
@@ -26,7 +26,18 @@ use crate::{Patch, VNode};
 ///    exactly its `i` final predecessors.
 /// 3. Node patches (`SetText`, `SetAttr`, `RemoveAttr`, `Replace`) in emitted
 ///    order, by djust_id when available, else by (final-tree) path.
+///
+/// `root` is taken to sit in HTML content; for a root whose namespace the
+/// parser reported, use [`apply_patches_in`].
 pub fn apply_patches(root: &mut VNode, patches: &[Patch]) {
+    let root_ns = ChildContext::Html.child_namespace(root);
+    apply_patches_in(root, root_ns, patches);
+}
+
+/// [`apply_patches`] for a `root` element in namespace `root_ns`: an
+/// `InsertSubtree` payload is parsed as the client parses it, in the
+/// namespace of the parent it goes into.
+pub fn apply_patches_in(root: &mut VNode, root_ns: Namespace, patches: &[Patch]) {
     #[derive(Default)]
     struct ParentGroup<'a> {
         removes: Vec<&'a Patch>,
@@ -87,10 +98,12 @@ pub fn apply_patches(root: &mut VNode, patches: &[Patch]) {
 
     for pid in &parent_order {
         let group = parent_groups.get(pid).unwrap();
+        let parent_ns = namespace_of_djust_id(root, root_ns, pid).unwrap_or(Namespace::Html);
         let Some(target) = find_by_djust_id_mut(root, pid) else {
             continue;
         };
         let parent_tag = target.tag.clone();
+        let parent_encoding = target.attrs.get("encoding").cloned();
         let original = std::mem::take(&mut target.children);
         let n = original.len();
 
@@ -201,8 +214,13 @@ pub fn apply_patches(root: &mut VNode, patches: &[Patch]) {
                     if find_dj_if_open_idx(&list, id).is_some() {
                         continue; // idempotent, as on the client
                     }
-                    crate::parser::parse_html_fragment_client_view(html, &parent_tag)
-                        .unwrap_or_default()
+                    crate::parser::parse_html_fragment_client_view_in(
+                        html,
+                        &parent_tag,
+                        parent_ns,
+                        parent_encoding.as_deref(),
+                    )
+                    .unwrap_or_default()
                 }
                 _ => Vec::new(),
             };
@@ -338,6 +356,19 @@ fn find_by_djust_id<'a>(root: &'a VNode, id: &str) -> Option<&'a VNode> {
 }
 
 /// Find a node by its djust_id (mutable).
+/// The namespace of the element with djust_id `id` below `node`, an element
+/// in namespace `ns`.
+fn namespace_of_djust_id(node: &VNode, ns: Namespace, id: &str) -> Option<Namespace> {
+    if node.djust_id.as_deref() == Some(id) {
+        return Some(ns);
+    }
+    let kids = ns.children_of(node);
+    node.children
+        .iter()
+        .filter(|child| !child.is_text() && !child.is_comment())
+        .find_map(|child| namespace_of_djust_id(child, kids.child_namespace(child), id))
+}
+
 fn find_by_djust_id_mut<'a>(root: &'a mut VNode, id: &str) -> Option<&'a mut VNode> {
     if root.djust_id.as_deref() == Some(id) {
         return Some(root);
