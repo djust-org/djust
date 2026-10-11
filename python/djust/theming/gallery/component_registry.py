@@ -948,7 +948,7 @@ PYTHON_COMPONENT_EXAMPLES.update(
                         "row": 1,
                         "width": 2,
                         "height": 1,
-                        "content": "<p>$12,345</p>",
+                        "content": "$12,345",
                     },
                     {
                         "id": "p2",
@@ -957,7 +957,7 @@ PYTHON_COMPONENT_EXAMPLES.update(
                         "row": 1,
                         "width": 2,
                         "height": 1,
-                        "content": "<p>1,234</p>",
+                        "content": "1,234",
                     },
                 ]
             }
@@ -1152,9 +1152,9 @@ PYTHON_COMPONENT_EXAMPLES.update(
         "masonry_grid": [
             {
                 "items": [
-                    {"content": "<p>First card</p>", "height": "120px"},
-                    {"content": "<p>Second card</p>", "height": "90px"},
-                    {"content": "<p>Third card</p>", "height": "140px"},
+                    {"content": "First card", "height": "120px"},
+                    {"content": "Second card", "height": "90px"},
+                    {"content": "Third card", "height": "140px"},
                 ]
             }
         ],
