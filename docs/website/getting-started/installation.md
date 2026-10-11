@@ -55,7 +55,11 @@ make dev
 Open **http://127.0.0.1:8000/**. The starter page has a live list and a
 theme picker: add an item and check that it appears without a page reload,
 then pick a theme pack and watch the whole page restyle. Pass `--bare` for a
-one-button placeholder page instead.
+one-button placeholder page instead. The themed scaffold enables
+`djust.components` and `djust.theming`, requests `djust[components]`, and uses
+an `{% app_shell %}` base template. If the components extra is missing, loading
+the library raises `ImproperlyConfigured` with the `djust[components]` install
+command; see the [scaffolding guide](../guides/scaffolding.md#djust-new).
 
 `djust new` creates `myproject/`, makes a `.venv` inside it, installs the
 project's requirements into that environment, runs migrations, and finishes
@@ -116,7 +120,7 @@ uvx djust@latest new myproject --with-auth --with-db
 | `--with-presence` | Online-user presence example |
 | `--with-streaming` | Live-feed streaming example |
 | `--from-schema schema.json` | Models and views from a JSON schema; implies `--with-db` |
-| `--bare` | A placeholder page with one live button instead of the themed demo |
+| `--bare` | A one-button placeholder; omits components, theming and app shell, keeps core `djust`, and writes `DJUST_CONFIG = {"suppress_checks": ["I002"]}` |
 | `--no-setup` | Generate files only; the command prints the setup steps to run yourself |
 
 You can now edit the generated `myproject/views.py`, or follow

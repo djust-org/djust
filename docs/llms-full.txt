@@ -53,6 +53,10 @@ djust ships template-tag components (`djust.components`) and a theming system (`
 
 ## Setup
 
+Start a new project with `djust new myproject` (themed, with
+`djust.components` and `djust.theming`; `--bare` for a minimal project).
+To add djust to an existing project:
+
 ```bash
 pip install djust
 ```

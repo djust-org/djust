@@ -144,6 +144,20 @@ below are generated from the component's own contracts by
 action names describe what the component does; they are not an API for writing
 components.
 
+### Contributor workflow for generated AI sections
+
+The UI building blocks sections in `docs/llms.txt`, `docs/llms-full.txt` and
+`docs/BEST_PRACTICES_AI.md` are also generated. They share
+`render_ui_building_blocks()` in `python/djust/ai_discovery/manifest.py` with
+`djust_ai manifest` and `djust_ai_context`; edit the renderer or its catalog
+inputs, rather than the text between the `BEGIN GENERATED` / `END GENERATED`
+markers. Run `make ai-ui-section` to regenerate all three files, then
+`make check-ai-ui-section` to check for drift. The generator script defaults
+to check mode; `--write` updates the files and `--print` previews the section.
+The pre-commit hook and `tests/test_generate_ai_ui_section.py` enforce the
+same drift check. For the interactive reference above, use
+`make interactive-reference` and `make check-interactive-reference`.
+
 <!-- BEGIN GENERATED: interactive components (scripts/generate-interactive-reference.py) -->
 
 ### `DropdownMenu` configuration
