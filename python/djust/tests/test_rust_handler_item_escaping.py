@@ -1,10 +1,10 @@
-"""Item content in ``{% masonry_grid %}`` and ``{% dashboard_grid %}`` panels is
-escaped the same way on every render path: the component class, the Django
-template tag, the Rust-engine handler called directly, and the Rust template
-engine itself (``djust._rust.render_template``).
+"""Item content in ``{% masonry_grid %}`` and ``{% dashboard_grid %}`` panels, and
+``{% audit_log %}`` column names, are escaped the same way on every render path:
+the component class, the Django template tag, the Rust-engine handler called
+directly, and the Rust template engine itself (``djust._rust.render_template``).
 
-The class and the tag ``conditional_escape`` the item ``content``; the Rust
-handlers must do the same.
+The class and the tag ``conditional_escape`` these values; the Rust handlers
+must do the same.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ from djust.components import rust_handlers as rh
 from djust.components.components.dashboard_grid import DashboardGrid
 from djust.components.components.masonry_grid import MasonryGrid
 
-PAYLOADS = [
+MARKUP_VALUES = [
     "<img src=x onerror=alert(1)>",
     '"><script>alert(1)</script>',
     "x' onmouseover='alert(1)",
@@ -66,8 +66,8 @@ def _bodies(html: str, cls: str) -> list[str]:
     return re.findall(rf'<div class="{cls}">(.*?)</div>', html, re.S)
 
 
-def _masonry(payload: Any) -> dict[str, str]:
-    items = [{"content": payload, "height": 120}]
+def _masonry(value: Any) -> dict[str, str]:
+    items = [{"content": value, "height": 120}]
     return {
         "class": str(MasonryGrid(items=items).render()),
         "tag": _tag("{% masonry_grid items=items %}", items=items),
@@ -76,8 +76,8 @@ def _masonry(payload: Any) -> dict[str, str]:
     }
 
 
-def _dashboard(payload: Any) -> dict[str, str]:
-    panels = [{"id": "p1", "title": "T", "content": payload}]
+def _dashboard(value: Any) -> dict[str, str]:
+    panels = [{"id": "p1", "title": "T", "content": value}]
     outputs = {
         "class": str(DashboardGrid(panels=panels).render()),
         "tag": _tag("{% dashboard_grid panels=panels %}{% enddashboard_grid %}", panels=panels),
@@ -89,7 +89,7 @@ def _dashboard(payload: Any) -> dict[str, str]:
     if "dj-dashboard-grid__panel-body" in engine:
         outputs["engine"] = engine
     else:
-        assert payload not in engine
+        assert value not in engine
     return outputs
 
 
@@ -100,26 +100,26 @@ def _is_raw(html: str) -> bool:
     )
 
 
-@pytest.mark.parametrize("payload", PAYLOADS)
-def test_masonry_item_content_is_escaped_on_every_path(payload):
-    outputs = _masonry(payload)
+@pytest.mark.parametrize("value", MARKUP_VALUES)
+def test_masonry_item_content_is_escaped_on_every_path(value):
+    outputs = _masonry(value)
     bodies = {path: _bodies(html, "dj-masonry__item") for path, html in outputs.items()}
     for path, html in outputs.items():
         assert not _is_raw(html), (path, html)
         assert bodies[path] == bodies["class"], (path, bodies)
-    assert bodies["class"] == [str(_tag("{{ v }}", v=payload))]
+    assert bodies["class"] == [str(_tag("{{ v }}", v=value))]
 
 
-@pytest.mark.parametrize("payload", PAYLOADS)
-def test_dashboard_panel_content_is_escaped_on_every_path(payload):
-    outputs = _dashboard(payload)
+@pytest.mark.parametrize("value", MARKUP_VALUES)
+def test_dashboard_panel_content_is_escaped_on_every_path(value):
+    outputs = _dashboard(value)
     bodies = {
         path: _bodies(html, "dj-dashboard-grid__panel-body") for path, html in outputs.items()
     }
     for path, html in outputs.items():
         assert not _is_raw(html), (path, html)
         assert bodies[path] == bodies["class"], (path, bodies)
-    assert bodies["class"] == [str(_tag("{{ v }}", v=payload))]
+    assert bodies["class"] == [str(_tag("{{ v }}", v=value))]
 
 
 def test_marked_safe_content_is_kept_where_the_value_reaches_the_handler():
@@ -153,25 +153,25 @@ def test_valid_plain_text_renders_unchanged():
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.parametrize("payload", PAYLOADS)
-def test_file_dropzone_name_is_escaped_on_every_path(payload):
+@pytest.mark.parametrize("value", MARKUP_VALUES)
+def test_file_dropzone_name_is_escaped_on_every_path(value):
     from djust.components.components.file_dropzone import FileDropzone
 
     outputs = {
-        "class": str(FileDropzone(name=payload).render()),
-        "tag": _tag("{% file_dropzone name=n %}", n=payload),
-        "handler": _handler("file_dropzone", ["name=n"], {"n": payload}),
-        "engine": _engine("{% file_dropzone name=n %}", n=payload),
+        "class": str(FileDropzone(name=value).render()),
+        "tag": _tag("{% file_dropzone name=n %}", n=value),
+        "handler": _handler("file_dropzone", ["name=n"], {"n": value}),
+        "engine": _engine("{% file_dropzone name=n %}", n=value),
     }
     for path, html in outputs.items():
         assert not _is_raw(html), (path, html)
 
 
-@pytest.mark.parametrize("payload", PAYLOADS)
-def test_meter_segment_values_are_escaped_on_every_path(payload):
+@pytest.mark.parametrize("value", MARKUP_VALUES)
+def test_meter_segment_values_are_escaped_on_every_path(value):
     from djust.components.components.meter import Meter
 
-    segments = [{"value": payload, "label": payload, "color": "#3b82f6"}]
+    segments = [{"value": value, "label": value, "color": "#3b82f6"}]
     renders = {
         "class": lambda: str(Meter(segments=segments).render()),
         "tag": lambda: _tag("{% meter segments=segments %}", segments=segments),
@@ -190,7 +190,7 @@ def test_meter_segment_values_are_escaped_on_every_path(payload):
 
 
 @pytest.mark.parametrize(
-    "payload",
+    "value",
     [
         "<img src=x onerror=alert(1)>",
         "<p>ok</p><script>alert(1)</script>",
@@ -198,14 +198,14 @@ def test_meter_segment_values_are_escaped_on_every_path(payload):
         '<p onclick="alert(1)">x</p>',
     ],
 )
-def test_rich_text_editor_value_is_cleaned_on_every_path(payload):
+def test_rich_text_editor_value_is_cleaned_on_every_path(value):
     from djust.components.components.rich_text_editor import RichTextEditor
 
     outputs = {
-        "class": str(RichTextEditor(value=payload).render()),
-        "tag": _tag("{% rich_text_editor value=v %}", v=payload),
-        "handler": _handler("rich_text_editor", ["value=v"], {"v": payload}),
-        "engine": _engine("{% rich_text_editor value=v %}", v=payload),
+        "class": str(RichTextEditor(value=value).render()),
+        "tag": _tag("{% rich_text_editor value=v %}", v=value),
+        "handler": _handler("rich_text_editor", ["value=v"], {"v": value}),
+        "engine": _engine("{% rich_text_editor value=v %}", v=value),
     }
     for path, html in outputs.items():
         lowered = html.lower()
@@ -219,3 +219,53 @@ def test_rich_text_editor_keeps_formatting():
     value = "<p>Hello <strong>bold</strong> <em>it</em></p>"
     assert value in str(RichTextEditor(value=value).render())
     assert value in _tag("{% rich_text_editor value=v %}", v=value)
+
+
+# --------------------------------------------------------------------------- #
+# audit_log: column names go into each cell's class attribute.
+# --------------------------------------------------------------------------- #
+
+
+def _audit_cell_classes(html: str) -> list[str]:
+    return re.findall(r'<td class="(dj-audit-log__td[^"]*)"', html)
+
+
+@pytest.mark.parametrize("value", MARKUP_VALUES)
+def test_audit_log_column_names_are_escaped_on_every_path(value):
+    from djust.components.components.audit_log import AuditLog
+
+    columns = ["user", value]
+    entries = [{"user": "ada", value: "cell"}]
+    source = "{% audit_log entries=entries columns=columns %}"
+    outputs = {
+        "class": str(AuditLog(entries=entries, columns=columns).render()),
+        "tag": _tag(source, entries=entries, columns=columns),
+        "handler": _handler(
+            "audit_log",
+            ["entries=entries", "columns=columns"],
+            {"entries": entries, "columns": columns},
+        ),
+        "engine": _engine(source, entries=entries, columns=columns),
+    }
+    expected = [
+        "dj-audit-log__td dj-audit-log__td--user",
+        f"dj-audit-log__td dj-audit-log__td--{_tag('{{ v }}', v=value)}",
+    ]
+    for path, html in outputs.items():
+        assert not _is_raw(html), (path, html)
+        assert _audit_cell_classes(html) == expected, (path, html)
+
+
+def test_audit_log_plain_column_names_render_unchanged():
+    from djust.components.components.audit_log import AuditLog
+
+    columns = ["timestamp", "user"]
+    entries = [{"timestamp": "2026-03-25 14:30", "user": "ada"}]
+    source = "{% audit_log entries=entries columns=columns %}"
+    outputs = [
+        str(AuditLog(entries=entries, columns=columns).render()),
+        _tag(source, entries=entries, columns=columns),
+        _engine(source, entries=entries, columns=columns),
+    ]
+    for html in outputs:
+        assert '<td class="dj-audit-log__td dj-audit-log__td--user">ada</td>' in html
