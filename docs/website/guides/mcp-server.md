@@ -215,11 +215,16 @@ blocking. A process-wide lock serializes dry-runs.
 template file against every view that uses it. Returns the `dj-*`
 handlers wired in the template AND the diff against the view's
 handler methods, so you can catch dead bindings (template uses
-`dj-click="missing"`) at author time.
+`dj-click="missing"`) at author time. `template_path` is a logical name or
+an absolute path to a file inside a directory the template engines serve, or
+inside `BASE_DIR`; any other absolute path gets the same "Could not resolve
+template" answer as a missing file.
 
 **`seed_fixtures(fixture_paths)`** — Subprocess wrapper around
 `manage.py loaddata` for regression-fixture DB setup before a
-`reset_view_state` + `eval_handler` cycle.
+`reset_view_state` + `eval_handler` cycle. Every fixture path must resolve
+inside `BASE_DIR` (relative paths are joined to it, symlinks are followed);
+with no `BASE_DIR` set it loads nothing.
 
 > **Security model.** Mirrors django-debug-toolbar: only fires when
 > `DEBUG=True` AND the request originates from `127.0.0.1` / `::1`.
