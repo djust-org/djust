@@ -6,6 +6,7 @@ Similar to Django's ModelAdmin but designed for reactive LiveView rendering.
 
 import logging
 from django.contrib.auth import get_permission_codename
+from django.core.exceptions import ValidationError
 from django.db import models
 from django.forms import modelform_factory
 
@@ -159,6 +160,19 @@ class DjustModelAdmin:
             qs = qs.order_by(*ordering)
 
         return qs
+
+    def get_object(self, request, object_id):
+        """The object ``object_id`` names among ``get_queryset(request)``, or None.
+
+        As Django's ``ModelAdmin.get_object``: the change and delete views load
+        their object through the queryset, so a row it leaves out is not found.
+        """
+        queryset = self.get_queryset(request)
+        model = queryset.model
+        try:
+            return queryset.get(pk=model._meta.pk.to_python(object_id))
+        except (model.DoesNotExist, ValidationError, ValueError, TypeError):
+            return None
 
     def get_ordering(self, request):
         """Return the ordering for the list view."""
