@@ -1713,9 +1713,19 @@ class WSConsumerTransport:
         return bool(getattr(self._consumer, "_live_redirect_mounting", False))
 
     async def on_mount_failed(self, view: Any) -> None:
-        """Stop the tick task ``on_view_mounted`` started for a view whose
-        mount then failed (#3027). Only a task still ticking for THIS view is
-        cancelled; a later mount on the socket owns its own task."""
+        """Undo what the mount set up for a view whose mount then failed.
+
+        Stops the tick task ``on_view_mounted`` started (#3027), leaves the
+        view / presence / db_notify groups it joined and untracks the presence
+        ``mount()`` may have tracked: the view is not mounted, so nothing may
+        still reach it or announce it."""
+        await self._stop_tick_of(view)
+        await self._leave_view_groups()
+        await _untrack_failed_view_presence(view)
+
+    async def _stop_tick_of(self, view: Any) -> None:
+        """Only a task still ticking for THIS view is cancelled; a later mount
+        on the socket owns its own task."""
         consumer = self._consumer
         task = getattr(consumer, "_tick_task", None)
         if task is None or task.done():
@@ -1866,6 +1876,17 @@ class SSESessionTransport:
         request = getattr(session, "_request", None)
         if request is not None:
             view_instance._websocket_query_string = request.META.get("QUERY_STRING", "")
+
+    async def on_mount_failed(self, view: Any) -> None:
+        """A view whose mount failed is not the session's mounted view.
+
+        ``on_view_mounted`` set ``session.view_instance``, which the event and
+        message endpoints read; clear it, and untrack the presence ``mount()``
+        may have tracked."""
+        session = self._session
+        if getattr(session, "view_instance", None) is view:
+            session.view_instance = None
+        await _untrack_failed_view_presence(view)
 
     async def on_event_recorded(self, view: Any, snapshot: Any) -> None:
         """No-op for SSE — there is no time-travel debug-panel surface on the SSE
@@ -2099,6 +2120,32 @@ _COMPONENT_SLOT_PREFIX = "_component_"
 
 _TEMPLATE_TOKEN_RE = re.compile(r"{{.*?}}|{%.*?%}|{#.*?#}", re.S)
 _UNRESOLVED_TEMPLATE_RE = re.compile(r"{%\s*(include|extends)\b")
+
+
+async def _untrack_failed_view_presence(view: Any) -> None:
+    """Untrack the presence a failed mount's ``mount()`` tracked. Never raises."""
+    if not getattr(view, "_presence_tracked", False):
+        return
+    try:
+        await sync_to_async(view.untrack_presence)()
+    except Exception:  # noqa: BLE001 — cleanup after a failure already reported
+        logger.warning("Error cleaning up presence after a failed mount")
+
+
+def _release_failed_view(view: Any) -> None:
+    """Release a view whose mount failed or was refused after ``mount()`` ran.
+
+    ``mount()`` may already have opened uploads or waiters; the view is gone,
+    so they go with it, as at a disconnect. Never raises.
+    """
+    for step, args in (("_cleanup_uploads", ()), ("_cancel_all_waiters", ("mount_failed",))):
+        method = getattr(view, step, None)
+        if not callable(method):
+            continue
+        try:
+            method(*args)
+        except Exception:  # noqa: BLE001 — cleanup after a failure already reported
+            logger.debug("releasing a failed mount: %s raised", step, exc_info=True)
 
 
 def _scoped_component_for(view: Any, changed_keys: Optional[Any]) -> Optional[Any]:
@@ -2801,8 +2848,7 @@ class ViewRuntime:
                     logger=logger,
                     log_message=f"Error in {sanitize_for_log(view_path)}.mount()",
                 )
-                await self.transport.send(response)
-                await self._on_mount_failed(view_instance)
+                await self._fail_mount(view_instance, exc, response)
                 return
 
         # ---- Mount-request stash + dirty/private baselines (ADR-022 Iter 3
@@ -2852,8 +2898,7 @@ class ViewRuntime:
                 logger=logger,
                 log_message=f"Error in {sanitize_for_log(view_path)}.handle_params()",
             )
-            await self.transport.send(response)
-            await self._on_mount_failed(view_instance)
+            await self._fail_mount(view_instance, exc, response)
             return
 
         # ---- Object-permission check (ADR-017 §Decision 5) ----
@@ -2890,8 +2935,12 @@ class ViewRuntime:
             # PermissionDenied verdict, NOT the batch-gated redirect verdicts). SSE
             # no-op. Without this the WS socket stayed open after a denied mount
             # (the test_object_permission_denied_mount_refused net).
+            # mount() ran: undo what it and the transport set up (tick,
+            # groups, presence), as for a mount that raised.
+            await self._on_mount_failed(view_instance)
             await self._finalize_mount_auth("permission_denied")
             self.view_instance = None
+            _release_failed_view(view_instance)
             return
 
         # ---- Initial render ----
@@ -2932,8 +2981,7 @@ class ViewRuntime:
                         logger=logger,
                         log_message=f"Error mounting {sanitize_for_log(view_path)} via actor",
                     )
-                    await self.transport.send(response)
-                    await self._on_mount_failed(view_instance)
+                    await self._fail_mount(view_instance, exc, response)
                     return
 
         if not actor_mounted:
@@ -2961,8 +3009,7 @@ class ViewRuntime:
                     logger=logger,
                     log_message=f"Error rendering {sanitize_for_log(view_path)}",
                 )
-                await self.transport.send(response)
-                await self._on_mount_failed(view_instance)
+                await self._fail_mount(view_instance, exc, response)
                 return
 
         # #3036: a live_redirect mount records the destination page's
@@ -4794,6 +4841,34 @@ class ViewRuntime:
                 await result
         except Exception:  # noqa: BLE001 — cleanup after an error already reported
             logger.exception("on_mount_failed hook raised")
+
+    async def _fail_mount(self, view_instance: Any, exc: BaseException, response: Any) -> None:
+        """End a mount that raised after the view was admitted: nothing stays mounted.
+
+        ``mount()`` is where an application checks what the user may see, so
+        an exception there (``PermissionDenied``, ``Http404``, any other), in
+        the state restore, ``handle_params()`` or the first render refuses the
+        view. ``PermissionDenied`` is answered as the pre-mount auth check
+        answers it: a ``Permission denied`` error and the transport's refusal
+        close (WebSocket 4403, not inside a ``mount_batch``). Any other
+        exception keeps its error frame. Either way the transport undoes what
+        the mount set up (``on_mount_failed``: tick task, channel groups,
+        presence), the view is released and ``view_instance`` is cleared, so a
+        later frame finds no mounted view.
+        """
+        from django.core.exceptions import PermissionDenied
+
+        denied = isinstance(exc, PermissionDenied)
+        if denied:
+            await self.transport.send({"type": "error", "error": "Permission denied"})
+        else:
+            await self.transport.send(response)
+        await self._on_mount_failed(view_instance)
+        if denied:
+            await self._finalize_mount_auth("permission_denied")
+        if self.view_instance is view_instance:
+            self.view_instance = None
+        _release_failed_view(view_instance)
 
     async def _finalize_mount_auth(self, verdict: str) -> None:
         """Apply the transport-level finalization of a blocking mount-auth verdict.
