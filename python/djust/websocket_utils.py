@@ -20,6 +20,7 @@ from .rate_limit import (
     ConnectionRateLimiter,
     caller_key,
     get_rate_limit_settings,
+    handler_identity,
     handler_rate_check,
     ip_tracker,
 )
@@ -211,7 +212,10 @@ async def _validate_event_security(
         client_ip = getattr(ws, "_client_ip", None)
         owner_request = getattr(owner_instance, "request", None)
         key = caller_key(owner_request, client_ip)
-        if not handler_rate_check(key, event_name, rl_settings):
+        # ``handler_identity``, not ``event_name``: one callable reachable under
+        # two names is one handler and holds one budget (event_name is still used
+        # for the log lines below).
+        if not handler_rate_check(key, handler_identity(owner_instance, handler), rl_settings):
             rate_limiter.warnings += 1
             logger.warning(
                 "Per-handler rate limit exceeded for '%s' (warning %d/%d)",
