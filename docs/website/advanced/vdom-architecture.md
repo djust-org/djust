@@ -64,6 +64,7 @@ Key behaviors during parsing:
 1. **Comment filtering** -- `<!-- ... -->` nodes are skipped entirely, matching browser behavior where comments are not visible to JavaScript DOM traversal.
 2. **Whitespace filtering** -- Text nodes containing only whitespace are dropped, preventing path misalignment between server and client.
 3. **ID assignment** -- Every element gets a unique `djust_id` via a thread-local counter with base62 encoding.
+4. **Nesting limit** -- The tree keeps at most 256 levels of nested elements, counted from the LiveView root (`djust._rust.MAX_VDOM_DEPTH`). No real page comes near it: the deepest page in the demo projects is 14 levels. An element at the limit keeps its tag and attributes, and everything below it is flattened to its text, so nothing nests deeper. Raw HTML you render with `|safe` follows the same rule.
 
 ## The Diff Algorithm
 
