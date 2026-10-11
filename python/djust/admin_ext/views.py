@@ -217,6 +217,13 @@ class ModelListView(AdminBaseMixin, LiveView):
     select_all = state(default=False)
     active_filters = state(default={})
 
+    def check_permissions(self, request):
+        """Staff gate plus the ModelAdmin view permission."""
+        super().check_permissions(request)
+        model_admin = self._model_admin
+        if model_admin is None or not model_admin.has_view_or_change_permission(request):
+            raise PermissionDenied("You do not have permission to view these objects.")
+
     def mount(self, request, **kwargs):
         self.request = request
         self.selected_ids = []
@@ -452,14 +459,17 @@ class ModelListView(AdminBaseMixin, LiveView):
 
         action_func = actions[action_name]["func"]
 
-        # Defense-in-depth: if the action declares required perms
-        # (via ``@admin_action_with_progress(permissions=[...])`` or an
+        if action_name == "delete_selected" and not self._model_admin.has_delete_permission(
+            self.request
+        ):
+            raise PermissionDenied("You do not have permission to delete these objects.")
+
+        # If the action declares required perms (via
+        # ``@admin_action_with_progress(permissions=[...])`` or an
         # equivalent ``allowed_permissions`` attribute), block users who
-        # lack them BEFORE firing the action. This covers the gap where
-        # the default ``has_*_permission`` methods return True for any
-        # authenticated staff user -- a view-only staff user could
-        # otherwise fire a destructive action just by having an action
-        # entry in the dropdown.
+        # lack them BEFORE firing the action. The change list only needs
+        # view permission, so without this a view-only staff user could
+        # fire any action in the dropdown.
         allowed = getattr(action_func, "allowed_permissions", None) or []
         if allowed and not self.request.user.has_perms(allowed):
             raise PermissionDenied("User lacks required permissions for this action: %r" % allowed)
@@ -518,6 +528,24 @@ class ModelDetailView(AdminBaseMixin, AdminFormMixin, LiveView):
 
     def mount(self, request, object_id=None, **kwargs):
         super().mount(request, object_id=object_id, **kwargs)
+
+    def get_object(self):
+        """The object being edited, or None on the add page."""
+        return self.object
+
+    def has_object_permission(self, request, obj):
+        """Viewing an existing object needs the ModelAdmin view or change permission."""
+        return bool(self._model_admin.has_view_or_change_permission(request, obj))
+
+    def _check_save_permission(self):
+        """Saving needs add permission for a new object, change permission otherwise."""
+        obj = self.object
+        if obj is None or obj.pk is None:
+            allowed = self._model_admin.has_add_permission(self.request)
+        else:
+            allowed = self._model_admin.has_change_permission(self.request, obj)
+        if not allowed:
+            raise PermissionDenied("You do not have permission to save this object.")
 
     def get_context_data(self, **kwargs):
         readonly_fields = self._model_admin.get_readonly_fields(self.request, self.object)
@@ -598,6 +626,7 @@ class ModelDetailView(AdminBaseMixin, AdminFormMixin, LiveView):
         self.validate_field(field_name=field, value=value)
 
     def form_valid(self, form):
+        self._check_save_permission()
         self.object = form.save()
         self.save_success = True
 
@@ -607,6 +636,7 @@ class ModelDetailView(AdminBaseMixin, AdminFormMixin, LiveView):
     @event_handler
     def save(self, redirect=True):
         """Save the form."""
+        self._check_save_permission()
         self.is_saving = True
         self.save_success = False
         self.redirect_url = None
@@ -638,6 +668,13 @@ class ModelDetailView(AdminBaseMixin, AdminFormMixin, LiveView):
 class ModelCreateView(ModelDetailView):
     """Model create view - reuses detail view with no object."""
 
+    def check_permissions(self, request):
+        """Staff gate plus the ModelAdmin add permission."""
+        super().check_permissions(request)
+        model_admin = self._model_admin
+        if model_admin is None or not model_admin.has_add_permission(request):
+            raise PermissionDenied("You do not have permission to add this object.")
+
     def mount(self, request, **kwargs):
         super().mount(request, object_id=None, **kwargs)
 
@@ -657,6 +694,14 @@ class ModelDeleteView(AdminBaseMixin, LiveView):
         self.object = self._model.objects.get(pk=object_id)
         self.object_str = str(self.object)
 
+    def get_object(self):
+        """The object being deleted."""
+        return getattr(self, "object", None)
+
+    def has_object_permission(self, request, obj):
+        """The confirmation page and the delete need the ModelAdmin delete permission."""
+        return bool(self._model_admin.has_delete_permission(request, obj))
+
     def get_context_data(self, **kwargs):
         return {
             **self.get_admin_context(),
@@ -672,6 +717,8 @@ class ModelDeleteView(AdminBaseMixin, LiveView):
     @event_handler
     def confirm_delete(self):
         """Confirm and execute deletion."""
+        if not self._model_admin.has_delete_permission(self.request, self.object):
+            raise PermissionDenied("You do not have permission to delete this object.")
         self.is_deleting = True
         self.object.delete()
         self.redirect_url = reverse(
