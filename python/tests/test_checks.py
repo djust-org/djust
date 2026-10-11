@@ -859,6 +859,41 @@ class TestC011MissingCompiledCss:
         assert len(c011) == 0
 
     # ------------------------------------------------------------------
+    # #3449 — Django allows `(prefix, path)` tuples in STATICFILES_DIRS
+    # ------------------------------------------------------------------
+
+    def test_c011_reads_prefixed_staticfiles_dirs_entry(self, tmp_path, settings, monkeypatch):
+        """A `(prefix, path)` entry is checked at its path instead of crashing every command.
+
+        The built output.css lives only under the tuple's path, so C011 staying
+        silent proves the check looked there rather than skipping the entry."""
+        self._setup_djust_tailwind_project(
+            tmp_path,
+            settings,
+            monkeypatch,
+            debug=False,
+            output_css_content=self._REAL_TAILWIND_OUTPUT,
+        )
+        settings.STATICFILES_DIRS = [("app", str(tmp_path / "static"))]
+
+        from djust.checks import check_configuration
+
+        errors = check_configuration(None)
+        assert [e for e in errors if e.id == "djust.C011"] == []
+
+    def test_c011_still_fires_for_prefixed_entry_without_output(
+        self, tmp_path, settings, monkeypatch
+    ):
+        """A tuple entry whose path has no built output.css still raises C011."""
+        self._setup_djust_tailwind_project(tmp_path, settings, monkeypatch, debug=False)
+        settings.STATICFILES_DIRS = [("app", tmp_path / "static")]
+
+        from djust.checks import check_configuration
+
+        errors = check_configuration(None)
+        assert len([e for e in errors if e.id == "djust.C011"]) == 1
+
+    # ------------------------------------------------------------------
     # #1003 — stale / placeholder output.css must trigger C011
     # ------------------------------------------------------------------
 
