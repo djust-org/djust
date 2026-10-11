@@ -165,7 +165,11 @@ def _check_missing_compiled_css(errors: list[CheckMessage]) -> None:
     has_input_css = False
 
     # Check for input.css in STATICFILES_DIRS
-    static_dirs = getattr(settings, "STATICFILES_DIRS", [])
+    # Django accepts a `(prefix, path)` tuple in place of a plain path.
+    static_dirs = [
+        entry[1] if isinstance(entry, (list, tuple)) else entry
+        for entry in getattr(settings, "STATICFILES_DIRS", [])
+    ]
     for static_dir in static_dirs:
         if os.path.exists(os.path.join(static_dir, "css", "input.css")):
             has_input_css = True
