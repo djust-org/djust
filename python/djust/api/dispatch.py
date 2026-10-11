@@ -31,16 +31,14 @@ from django.utils.decorators import method_decorator
 from django.views import View
 from django.views.decorators.csrf import csrf_exempt
 
-from djust._client_ip import resolve_client_ip
 from djust._log_utils import sanitize_for_log
 from djust.api.auth import resolve_auth_classes
 from djust.api.errors import api_error
 from djust.api.registry import resolve_api_view
 from djust.auth.core import check_handler_permission, check_view_auth
 from djust.rate_limit import (
-    caller_key,
-    get_rate_limit_settings,
-    handler_rate_check,
+    caller_key_for_request,
+    http_handler_rate_check,
     reset_handler_buckets,
 )
 from djust.validation import validate_handler_params
@@ -57,27 +55,29 @@ def _caller_key(request: HttpRequest) -> str:
     instead of trusting raw ``REMOTE_ADDR``. Behind a reverse proxy that closes
     F28: per-real-client buckets (no shared-proxy bucket), and no XFF spoof.
     """
-    client_ip = resolve_client_ip(
-        request.META.get("HTTP_X_FORWARDED_FOR"),
-        request.META.get("REMOTE_ADDR"),
-    )
-    return caller_key(request, client_ip)
+    return caller_key_for_request(request)
 
 
 def _rate_limit_check(request: HttpRequest, handler_name: str, handler: Any) -> bool:
     """Token-bucket check honoring the handler's ``@rate_limit`` settings.
 
-    Routes through the SHARED per-caller store (:func:`djust.rate_limit.handler_rate_check`)
-    so a caller has ONE budget per handler across WS, SSE, and the HTTP API
-    (F27 — no per-transport summing). The caller key is the authenticated user's
-    PK, else the anonymous session key, else the resolved client IP.
+    Routes through the SHARED per-caller store
+    (:func:`djust.rate_limit.http_handler_rate_check`) so a caller has ONE budget
+    per handler across WS, SSE, and the HTTP API (F27 — no per-transport
+    summing). The caller key is the authenticated user's PK, else the anonymous
+    session key, else the resolved client IP.
+
+    Both HTTP transports now share that one helper (the page-POST fallback called
+    nothing before), so this path and ``mixins/request.post`` cannot drift apart
+    again on the per-handler ``@rate_limit``.
+
+    Note the budget is keyed on the caller and the handler **name**, so one
+    callable reachable under two names gets a budget per name (pre-existing, and
+    true of every transport, WS/SSE included).
 
     Returns True if allowed, False if rate-limited.
     """
-    settings = get_rate_limit_settings(handler)
-    if settings is None:
-        return True
-    return handler_rate_check(_caller_key(request), handler_name, settings)
+    return http_handler_rate_check(request, handler_name, handler)
 
 
 def reset_rate_buckets() -> None:

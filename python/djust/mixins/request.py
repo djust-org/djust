@@ -804,6 +804,26 @@ class RequestMixin:
                         type(self).__name__,
                     )
                     return JsonResponse({"error": "Permission denied"}, status=403)
+                # --- Per-handler @rate_limit -------------------------------
+                # The WS/SSE chokepoint (_validate_event_security) and the HTTP
+                # API both enforce the handler's @rate_limit against the SHARED
+                # per-caller store; this transport enforced nothing, so a
+                # handler throttled on every other transport was unthrottled
+                # here, and POST did not consume the shared budget (F27's
+                # "regardless of transport" was therefore false for this
+                # path). Same helper as the HTTP API, so the two cannot drift
+                # apart again.
+                from ..rate_limit import http_handler_rate_check
+
+                if not http_handler_rate_check(request, event_name, handler):
+                    logger.warning(
+                        "HTTP POST rate-limited handler '%s' on %s",
+                        event_name,
+                        type(self).__name__,
+                    )
+                    return JsonResponse(
+                        {"error": "Rate limit exceeded", "code": "rate_limited"}, status=429
+                    )
                 coerce = True
                 if hasattr(handler, "_djust_decorators"):
                     event_meta = handler._djust_decorators.get("event_handler", {})
