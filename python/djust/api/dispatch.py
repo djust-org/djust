@@ -309,7 +309,7 @@ def dispatch_api(request: HttpRequest, view_slug: str, handler_name: str) -> Htt
 
     # 6. View-level auth (login_required + @permission_required on the class).
     try:
-        redirect_url = check_view_auth(view, request)
+        redirect_url = check_view_auth(view, request, event=True)
     except PermissionDenied as exc:
         return api_error(403, "permission_denied", str(exc) or "Permission denied")
     if redirect_url:
@@ -526,7 +526,7 @@ def dispatch_server_function(
 
     # 5. View-level auth (login_required + @permission_required on the class).
     try:
-        redirect_url = check_view_auth(view, request)
+        redirect_url = check_view_auth(view, request, event=True)
     except PermissionDenied as exc:
         return api_error(403, "permission_denied", str(exc) or "Permission denied")
     if redirect_url:

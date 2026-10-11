@@ -148,7 +148,11 @@ class RequestMixin:
         # to unauthenticated users on the initial HTTP GET.
         from ..auth import check_view_auth
 
-        redirect_url = check_view_auth(self, request)
+        # http_dispatched: Django's View.dispatch() brought this request here
+        # after running the view's own dispatch() and method decorators, so
+        # access control that lives there has already run (check_view_auth
+        # step 5 refuses it only on paths that skip dispatch()).
+        redirect_url = check_view_auth(self, request, http_dispatched=True)
         if redirect_url:
             from django.utils.http import urlencode
 
@@ -627,7 +631,8 @@ class RequestMixin:
             from ..auth import check_view_auth
 
             try:
-                redirect_url = check_view_auth(self, request)
+                # event=True: what only the view's post() runs applies here.
+                redirect_url = check_view_auth(self, request, event=True)
             except PermissionDenied:
                 # check_view_auth *raises* for an authenticated user who lacks
                 # the view's permission_required (only the unauthenticated case
