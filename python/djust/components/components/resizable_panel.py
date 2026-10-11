@@ -6,6 +6,7 @@ from django.utils.html import conditional_escape
 
 from djust import Component
 from typing import Any
+from djust.components.utils import safe_css_length
 
 
 class ResizablePanel(Component):
@@ -75,13 +76,13 @@ class ResizablePanel(Component):
             classes.append(html.escape(self.custom_class))
         class_str = " ".join(classes)
 
-        e_min = html.escape(self.min_size)
-        e_max = html.escape(self.max_size)
-        e_initial = html.escape(self.initial_size)
+        e_min = html.escape(safe_css_length(self.min_size, "100px"))
+        e_max = html.escape(safe_css_length(self.max_size, "none"))
+        e_initial = html.escape(safe_css_length(self.initial_size, "50%"))
 
         size_prop = "width" if direction == "horizontal" else "height"
         style = f'style="{size_prop}:{e_initial};min-{size_prop}:{e_min}"'
-        if self.max_size != "none":
+        if e_max != "none":
             style = (
                 f'style="{size_prop}:{e_initial};min-{size_prop}:{e_min};max-{size_prop}:{e_max}"'
             )

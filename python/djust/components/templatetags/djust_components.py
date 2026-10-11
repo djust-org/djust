@@ -11,6 +11,12 @@ Usage:
 """
 
 import calendar as _calendar
+from djust.components.utils import (
+    safe_css_color,
+    safe_css_length,
+    safe_css_number,
+    safe_css_ratio,
+)
 import datetime
 import itertools
 import json as _json
@@ -585,6 +591,20 @@ def do_card(parser: Any, token: Any) -> template.Node:
 # ---------------------------------------------------------------------------
 
 
+def _checked_column_widths(columns: Any) -> Any:
+    """Columns with any ``width`` that is not a plain CSS length cleared.
+
+    ``table.html`` writes ``col.width`` into a style attribute."""
+    if not isinstance(columns, (list, tuple)):
+        return columns
+    checked = []
+    for col in columns:
+        if isinstance(col, dict) and col.get("width") and not safe_css_length(col["width"], ""):
+            col = {**col, "width": ""}
+        checked.append(col)
+    return checked
+
+
 @register.inclusion_tag("djust_components/table.html")
 def data_table(
     rows: Any,
@@ -808,7 +828,7 @@ def data_table(
     """
     return {
         "rows": rows,
-        "columns": columns,
+        "columns": _checked_column_widths(columns),
         "sort_by": sort_by,
         "sort_desc": sort_desc,
         "sort_event": sort_event,
@@ -2685,7 +2705,7 @@ def color_picker(
 
     swatch_html = ""
     for sw in swatches:
-        e_sw = conditional_escape(sw)
+        e_sw = conditional_escape(safe_css_color(sw, "transparent"))
         active_cls = " color-swatch-active" if sw == value else ""
         swatch_html += (
             f'<button class="color-swatch{active_cls}" '
@@ -2697,7 +2717,7 @@ def color_picker(
         f'<div class="form-group">'
         f"{label_html}"
         f'<div class="color-picker">'
-        f'<div class="color-preview" style="background:{e_value}"></div>'
+        f'<div class="color-preview" style="background:{conditional_escape(safe_css_color(value, "transparent"))}"></div>'
         f'<div class="color-swatches">{swatch_html}</div>'
         f'<input class="color-hex-input form-input" type="text" '
         f'name="{e_name}" value="{e_value}" placeholder="#000000" '
@@ -3079,7 +3099,7 @@ class SplitPaneNode(template.Node):
 
         e_uid = conditional_escape(uid)
         e_dir = conditional_escape(direction)
-        e_init = conditional_escape(str(initial))
+        e_init = conditional_escape(safe_css_number(initial, "50"))
 
         content1 = self.pane1.render(context)
         content2 = self.pane2.render(context)
@@ -3267,7 +3287,7 @@ def kanban_board(
             continue
         col_id = conditional_escape(str(col.get("id", "")))
         col_title = conditional_escape(str(col.get("title", "")))
-        col_color = conditional_escape(str(col.get("color", "#6366F1")))
+        col_color = conditional_escape(safe_css_color(col.get("color", "#6366F1"), "#6366F1"))
         cards = col.get("cards", [])
 
         cards_html = ""
@@ -3369,7 +3389,7 @@ def rich_text_editor(
     e_value = rich_html(value)
     e_event = conditional_escape(event)
     e_placeholder = conditional_escape(placeholder)
-    e_height = conditional_escape(height)
+    e_height = conditional_escape(safe_css_length(height, "200px"))
     e_label = conditional_escape(label)
 
     uid = f"rte-{uuid.uuid4().hex[:6]}"
@@ -4140,7 +4160,7 @@ class ScrollAreaNode(template.Node):
         custom_class = kw.get("custom_class", "")
         label = kw.get("label", "Scrollable content")
 
-        e_max_height = conditional_escape(str(max_height))
+        e_max_height = conditional_escape(safe_css_length(max_height, "400px"))
         e_custom_class = conditional_escape(str(custom_class))
         e_label = conditional_escape(str(label))
 
@@ -4249,7 +4269,7 @@ class AspectRatioNode(template.Node):
         ratio = kw.get("ratio", "16/9")
         custom_class = kw.get("custom_class", "")
 
-        e_ratio = conditional_escape(str(ratio))
+        e_ratio = conditional_escape(safe_css_ratio(ratio, "16/9"))
         e_custom_class = conditional_escape(str(custom_class))
 
         content = self.nodelist.render(context)
@@ -4332,8 +4352,8 @@ class StickyHeaderNode(template.Node):
         z_index = kw.get("z_index", "10")
         custom_class = kw.get("custom_class", "")
 
-        e_offset = conditional_escape(str(offset))
-        e_z_index = conditional_escape(str(z_index))
+        e_offset = conditional_escape(safe_css_length(offset, "0"))
+        e_z_index = conditional_escape(safe_css_number(z_index, "10", integer=True))
         e_custom_class = conditional_escape(str(custom_class))
 
         content = self.nodelist.render(context)
@@ -4982,6 +5002,7 @@ def data_grid(
         col_key = conditional_escape(str(col.get("key", "")))
         col_label = conditional_escape(str(col.get("label", col.get("key", ""))))
         width = col.get("width", "")
+        width = safe_css_length(width, "") if width else ""
         style = (
             f' style="width:{conditional_escape(str(width))};min-width:{conditional_escape(str(width))}"'
             if width
@@ -5389,6 +5410,7 @@ def responsive_image(
         cls += f" {e_cls}"
 
     style = ""
+    aspect_ratio = safe_css_ratio(aspect_ratio, "") if aspect_ratio else ""
     if aspect_ratio:
         e_ratio = conditional_escape(aspect_ratio)
         style = f' style="aspect-ratio:{e_ratio}"'
@@ -8863,7 +8885,7 @@ class MeterNode(template.Node):
                 pct = min(100, max(0, (val / total) * 100))
             else:
                 pct = 0
-            color = conditional_escape(str(seg.get("color", "")))
+            color = conditional_escape(safe_css_color(seg.get("color", ""), ""))
             seg_label = conditional_escape(str(seg.get("label", "")))
             style = f"width:{pct:.1f}%"
             if color:
@@ -8883,7 +8905,7 @@ class MeterNode(template.Node):
             for seg in segments:
                 if not isinstance(seg, dict):
                     continue
-                color = conditional_escape(str(seg.get("color", "")))
+                color = conditional_escape(safe_css_color(seg.get("color", ""), ""))
                 seg_label = conditional_escape(str(seg.get("label", "")))
                 val = conditional_escape(seg.get("value", 0))
                 swatch_style = f"background:{color}" if color else ""
@@ -9310,7 +9332,7 @@ class SortableGridNode(template.Node):
         items = kw.get("items", [])
         columns = kw.get("columns", 3)
         move_event = kw.get("move_event", "reorder")
-        gap = kw.get("gap", "0.75rem")
+        gap = safe_css_length(kw.get("gap", "0.75rem"), "0.75rem")
         disabled = kw.get("disabled", False)
         custom_class = kw.get("class", "")
 
@@ -9543,15 +9565,15 @@ class ResizablePanelNode(template.Node):
             classes.append(e_class)
         class_str = " ".join(classes)
 
-        e_min = conditional_escape(str(min_size))
-        e_max = conditional_escape(str(max_size))
-        e_initial = conditional_escape(str(initial_size))
+        e_min = conditional_escape(safe_css_length(min_size, "100px"))
+        e_max = conditional_escape(safe_css_length(max_size, "none"))
+        e_initial = conditional_escape(safe_css_length(initial_size, "50%"))
 
         content = self.nodelist.render(context)
 
         size_prop = "width" if direction == "horizontal" else "height"
         style_parts = [f"{size_prop}:{e_initial}", f"min-{size_prop}:{e_min}"]
-        if max_size != "none":
+        if e_max != "none":
             style_parts.append(f"max-{size_prop}:{e_max}")
         style = f'style="{";".join(style_parts)}"'
 
@@ -9698,7 +9720,7 @@ class DashboardGridNode(template.Node):
         panels = kw.get("panels", [])
         columns = kw.get("columns", 4)
         row_height = kw.get("row_height", "200px")
-        gap = kw.get("gap", "1rem")
+        gap = safe_css_length(kw.get("gap", "1rem"), "1rem")
         move_event = kw.get("move_event", "dashboard_move")
         resize_event = kw.get("resize_event", "dashboard_resize")
         custom_class = kw.get("class", "")
@@ -9706,7 +9728,7 @@ class DashboardGridNode(template.Node):
         e_move = conditional_escape(str(move_event))
         e_resize = conditional_escape(str(resize_event))
         e_gap = conditional_escape(str(gap))
-        e_row_height = conditional_escape(str(row_height))
+        e_row_height = conditional_escape(safe_css_length(row_height, "200px"))
         e_class = conditional_escape(str(custom_class))
 
         classes = ["dj-dashboard-grid"]
