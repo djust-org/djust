@@ -1011,7 +1011,7 @@ def _method_decorator_code() -> Any:
     if _METHOD_DECORATOR_CODE is None:
         from django.utils.decorators import method_decorator
 
-        def _probe(self: Any) -> None:
+        def _probe(self: Any) -> None:  # noqa: dead-method-allowed (passed to method_decorator by value)
             return None
 
         _METHOD_DECORATOR_CODE = method_decorator(lambda f: f)(_probe).__code__
