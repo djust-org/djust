@@ -62,8 +62,21 @@ def _exclaim(value):
 
 @_test_library.filter(name="bold_html", is_safe=True)
 def _bold_html(value):
-    """Safe HTML-producing filter (is_safe=True) — must NOT be re-escaped."""
+    """HTML-producing filter that ``mark_safe()``s its own output — must NOT
+    be re-escaped. The ``is_safe=True`` flag is not what earns that: the
+    runtime ``SafeString`` return is (#1660), and this filter renders the same
+    with the flag removed. See ``is_safe_plain`` for what the flag does."""
     return mark_safe(f"<b>{value}</b>")
+
+
+@_test_library.filter(name="is_safe_plain", is_safe=True)
+def _is_safe_plain(value):
+    """``is_safe=True`` with a plain ``str`` return.
+
+    Django's rule is ``is_safe and isinstance(obj, SafeData)`` on the INPUT:
+    a safe input stays safe through this filter, any other input is escaped
+    as usual. The flag never makes markup produced here safe."""
+    return f"<b>{value}</b>"
 
 
 @_test_library.filter(name="md_runtime")
@@ -131,6 +144,7 @@ def _register_custom_filters():
     register_django_filter("lookup", _lookup)
     register_django_filter("exclaim", _exclaim)
     register_django_filter("bold_html", _bold_html)
+    register_django_filter("is_safe_plain", _is_safe_plain)
     register_django_filter("md_runtime", _md_runtime)
     register_django_filter("evil_html_obj", _evil_html_obj)
     register_django_filter("prefix", _prefix)
@@ -219,6 +233,26 @@ def test_is_safe_filter_output_is_not_re_escaped():
     assert "<b>Hi</b>" in out
     # Must not be double-escaped:
     assert "&lt;b&gt;" not in out
+
+
+def test_is_safe_flag_leaves_plain_input_escaped():
+    """``is_safe=True`` on a plain-return filter does not make its output
+    safe: the INPUT here is a bare ``str``, so the whole result (the filter's
+    own ``<b>`` included) is escaped. Same bytes as Django.
+    """
+    out = render_template("{{ name|is_safe_plain }}", {"name": "<i>x</i>"})
+    assert "<i>" not in out
+    assert "<b>" not in out
+    assert out == "&lt;b&gt;&lt;i&gt;x&lt;/i&gt;&lt;/b&gt;"
+
+
+def test_is_safe_flag_keeps_a_safe_input_safe():
+    """What the flag does: a ``|safe`` input stays safe through an
+    ``is_safe=True`` filter, so the markup it produces is emitted as is —
+    exactly Django's ``{{ name|safe|is_safe_plain }}``.
+    """
+    out = render_template("{{ name|safe|is_safe_plain }}", {"name": "Hi"})
+    assert out == "<b>Hi</b>"
 
 
 # ---------------------------------------------------------------------------

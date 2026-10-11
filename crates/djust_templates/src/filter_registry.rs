@@ -23,8 +23,9 @@
 //! # Filter signature
 //!
 //! Django filter callables accept ``(value, arg=None)`` and return a
-//! string (or a SafeString when ``is_safe=True``). ``needs_autoescape=True``
-//! filters additionally accept ``autoescape`` as a kwarg.
+//! string (or a SafeString when they produce markup of their own).
+//! ``needs_autoescape=True`` filters additionally accept ``autoescape`` as a
+//! kwarg.
 //!
 //! - ``value`` — the filtered expression's current `Value`, converted to
 //!   the appropriate Python type (str/int/float/bool/None/list/dict).
@@ -33,8 +34,11 @@
 //!     - bare identifiers are resolved against the template context. If
 //!       the context resolves to a primitive, it's passed as that type;
 //!       otherwise as the value's natural Python representation.
-//! - return — the result. ``is_safe=True`` filters' results bypass
-//!   auto-escape via [`is_custom_filter_safe`] consulted by the renderer.
+//! - return — the result. The renderer escapes it unless it is a runtime
+//!   ``SafeString``, or the filter is ``is_safe=True`` AND its input was
+//!   already safe — Django's ``is_safe and isinstance(obj, SafeData)`` rule,
+//!   applied in `renderer::filter_output_is_safe` via
+//!   [`is_custom_filter_safe`]. The flag alone never makes output safe.
 
 use crate::Value;
 use djust_core::Context;
@@ -74,9 +78,8 @@ static FILTER_REGISTRY: Lazy<RwLock<HashMap<String, FilterEntry>>> =
 /// Hot-path short-circuit guard: ``true`` once any custom filter has been
 /// registered in this process (ever).
 ///
-/// The renderer consults [`is_custom_filter_safe`] inside the
-/// ``filter_specs.iter().any(|name| ...)`` loop on every variable
-/// expansion. For the common case — no project-level custom filters —
+/// The renderer consults [`is_custom_filter_safe`] once per filter on
+/// every variable expansion. For the common case — no project-level custom filters —
 /// the read-lock acquire on every name was wasted work. This `AtomicBool`
 /// is checked first; the lock is only touched when at least one filter
 /// has actually been registered.
@@ -174,11 +177,13 @@ pub fn get_registered_custom_filters() -> PyResult<Vec<String>> {
 
 /// Returns ``true`` if a registered custom filter has ``is_safe=True``.
 ///
-/// The renderer consults this alongside the hardcoded built-in
-/// ``safe_output_filters`` list to decide whether to skip auto-escape.
+/// The renderer consults this ONLY when the filter's input was already safe:
+/// Django's ``is_safe`` means "a safe input stays safe through this filter",
+/// not "this filter's output is safe". The unconditional grants — a runtime
+/// ``SafeString`` return, or a built-in in ``SAFE_OUTPUT_FILTERS`` — live in
+/// ``renderer::filter_output_is_safe``.
 ///
-/// Hot path: this is called once per filter in the
-/// ``filter_specs.iter().any(...)`` loop on every variable expansion.
+/// Hot path: this is called once per filter on every variable expansion.
 /// We short-circuit on the [`ANY_CUSTOM_FILTERS_REGISTERED`]
 /// `AtomicBool` so projects that never register custom filters pay
 /// only an atomic load, not a lock acquisition. ``Acquire`` ordering
