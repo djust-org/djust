@@ -2168,46 +2168,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 # Observability must never break a WS connection.
                 logger.warning("Failed to register view in observability registry: %s", e)
 
-            # Join per-view channel group for server-push
-            from .push import view_group_name
-
-            self._view_path = view_path
-            self._view_group = view_group_name(view_path)
-            await self.channel_layer.group_add(self._view_group, self.channel_name)
-
-            # Join presence group if view supports presence tracking
-            self._presence_group = None
-            if hasattr(self.view_instance, "get_presence_key"):
-                try:
-                    presence_key = self.view_instance.get_presence_key()
-                    self._presence_group = PresenceManager.presence_group_name(presence_key)
-                    await self.channel_layer.group_add(self._presence_group, self.channel_name)
-                except Exception as e:
-                    logger.warning("Error setting up presence group: %s", e)
-
-            # Join db_notify groups for every channel the view subscribed to
-            # via NotificationMixin.listen() during mount(). The groups are
-            # addressed per-channel (djust_db_notify_<channel>) so a NOTIFY
-            # on one channel never fans out to views listening on another.
-            self._db_notify_channels = set()
-            listen_channels = getattr(self.view_instance, "_listen_channels", None)
-            if listen_channels:
-                for ch in listen_channels:
-                    try:
-                        await self.channel_layer.group_add(
-                            f"djust_db_notify_{ch}", self.channel_name
-                        )
-                        self._db_notify_channels.add(ch)
-                    except Exception as e:  # noqa: BLE001
-                        logger.warning("Error joining db_notify group for %s: %s", ch, e)
-
-            # Start periodic tick if subclass overrides handle_tick
-            tick_interval = getattr(view_class, "tick_interval", None)
-            if tick_interval:
-                from .live_view import LiveView as _LV
-
-                if view_class.handle_tick is not _LV.handle_tick:
-                    self._tick_task = asyncio.create_task(self._run_tick(tick_interval))
+            # The view, presence and db_notify groups are joined once auth and
+            # the on_mount hooks have admitted the view, and the tick starts
+            # once the object-permission check has passed (both below), so a
+            # refused mount joins nothing and never ticks.
 
             # Check if view uses actor-based state management
             self.use_actors = getattr(view_class, "use_actors", False)
@@ -2413,6 +2377,10 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     await self.close(code=4403)
                 return
             # --- End on_mount hooks ---
+
+            # Auth and the on_mount hooks have admitted the view: only now does
+            # the connection join its channel-layer groups.
+            await self._join_view_groups(view_path)
 
             # --- State restoration (skip mount when pre-rendered state exists) ---
             # Loosened from `if has_prerendered:` — also fire on plain WS
@@ -2676,10 +2644,16 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 self.view_instance.__class__.__name__,
                 exc,
             )
+            # The groups and any presence mount() tracked were set up
+            # before this check could run: undo them before closing.
+            await self._leave_view_groups(untrack_presence=True)
             await self.send_json({"type": "error", "message": "Permission denied"})
             await self.close(code=4403)
             return
         # --- End object-permission check ---
+
+        # The view is mounted and admitted, object permission included.
+        self._start_tick(view_class)
 
         # Get initial HTML (skip if client already has pre-rendered content)
         html = None
@@ -2951,6 +2925,89 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         # never delivered).
         await self._flush_push_events()
         await self._dispatch_async_work()
+
+    async def _join_view_groups(self, view_path: str) -> None:
+        """Join the admitted view's channel-layer groups.
+
+        Called by :meth:`handle_mount` only after the pre-mount auth sequence
+        and the on_mount hooks have admitted the view, so a refused or
+        redirected mount (a ``mount_batch`` entry or a lazy mount keeps the
+        socket open) never receives the view's server pushes, presence events
+        or db_notify messages. Still before ``mount()``, so the db_notify join
+        reads ``_listen_channels`` at the point it always has; the
+        object-permission refusal after ``mount()`` leaves these groups again.
+        """
+        from .push import view_group_name
+
+        self._view_path = view_path
+        self._view_group = view_group_name(view_path)
+        await self.channel_layer.group_add(self._view_group, self.channel_name)
+
+        # Join presence group if view supports presence tracking
+        self._presence_group = None
+        if hasattr(self.view_instance, "get_presence_key"):
+            try:
+                presence_key = self.view_instance.get_presence_key()
+                self._presence_group = PresenceManager.presence_group_name(presence_key)
+                await self.channel_layer.group_add(self._presence_group, self.channel_name)
+            except Exception as e:
+                logger.warning("Error setting up presence group: %s", e)
+
+        # Join db_notify groups for every channel the view subscribed to
+        # via NotificationMixin.listen(). The groups are addressed
+        # per-channel (djust_db_notify_<channel>) so a NOTIFY on one
+        # channel never fans out to views listening on another.
+        self._db_notify_channels = set()
+        listen_channels = getattr(self.view_instance, "_listen_channels", None)
+        if listen_channels:
+            for ch in listen_channels:
+                try:
+                    await self.channel_layer.group_add(f"djust_db_notify_{ch}", self.channel_name)
+                    self._db_notify_channels.add(ch)
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("Error joining db_notify group for %s: %s", ch, e)
+
+    def _start_tick(self, view_class: Any) -> None:
+        """Start the periodic tick if the view overrides ``handle_tick``.
+
+        Called by :meth:`handle_mount` once the view is mounted and its
+        object-permission check has passed: the tick runs as its own task,
+        so starting it any earlier would let ``handle_tick`` run on a view
+        that is about to be refused.
+        """
+        tick_interval = getattr(view_class, "tick_interval", None)
+        if tick_interval:
+            from .live_view import LiveView as _LV
+
+            if view_class.handle_tick is not _LV.handle_tick:
+                self._tick_task = asyncio.create_task(self._run_tick(tick_interval))
+
+    async def _leave_view_groups(self, untrack_presence: bool = False) -> None:
+        """Undo :meth:`_join_view_groups` for a mount refused after it ran.
+
+        Leaves the view, presence and db_notify groups, cancels the tick and,
+        with ``untrack_presence``, drops any presence ``mount()`` tracked. The
+        group attributes are reset so ``disconnect`` does not discard them a
+        second time. Failures are logged, never raised.
+        """
+        if self._tick_task is not None:
+            self._tick_task.cancel()
+            self._tick_task = None
+        if untrack_presence and hasattr(self.view_instance, "untrack_presence"):
+            try:
+                await sync_to_async(self.view_instance.untrack_presence)()
+            except Exception as e:  # noqa: BLE001
+                logger.warning("Error cleaning up presence: %s", e)
+        groups = [g for g in (self._view_group, self._presence_group) if g]
+        groups.extend(f"djust_db_notify_{ch}" for ch in self._db_notify_channels or ())
+        self._view_group = None
+        self._presence_group = None
+        self._db_notify_channels = set()
+        for group in groups:
+            try:
+                await self.channel_layer.group_discard(group, self.channel_name)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("Error leaving channel group %s: %s", group, e)
 
     async def _refuse_beside_page(self, before: Dict[str, Any], previous_view: Any) -> None:
         """Refuse a view mounted beside the page view on its own.
@@ -5869,10 +5926,14 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         """
         Handle presence-related events from the channel layer.
 
-        These events are broadcasted to all users in a presence group.
+        These events are broadcasted to all users in a presence group. They are
+        forwarded only while this connection has a mounted view; with none (the
+        mount was refused or never happened) the event is dropped.
         """
         view = self.view_instance
-        if view is not None and djust_config.get("reauth_on_event"):
+        if view is None:
+            return
+        if djust_config.get("reauth_on_event"):
             # The presence payload is data the viewer may no longer be entitled
             # to: same re-check as a server-originated render turn.
             async with self._render_lock:
@@ -6029,8 +6090,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         """
         Handle a direct push_event from the channel layer (via push_event_to_view).
 
-        Sends the event directly to the client without re-rendering.
+        Sends the event directly to the client without re-rendering. Dropped
+        when this connection has no mounted view, like ``server_push``.
         """
+        if not self.view_instance:
+            return
         await self.send_json(
             {
                 "type": "push_event",

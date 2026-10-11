@@ -1256,3 +1256,82 @@ async def test_ws_admitted_actor_view_beside_the_page_gets_its_session_actor(act
         assert consumer.use_actors and consumer.actor_handle is not None
     finally:
         await socket.disconnect()
+
+
+class LrmPresenceView(LrmEmbeddedView):
+    """Unrouted, with a presence group and a tick."""
+
+    template = _template("LrmPresenceView")
+    api_name = "lrm.presence"
+    tick_interval = 20
+
+    def get_presence_key(self):
+        return f"{MOD}.LrmPresenceView"
+
+    def handle_tick(self):
+        RAN.append("tick:LrmPresenceView")
+
+
+sys.modules[MOD].LrmPresenceView = LrmPresenceView
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("lrm")
+async def test_ws_view_refused_beside_the_page_never_joins_its_groups(monkeypatch):
+    """Refused beside the page view (lazy, with and without a target, and in a
+    batch), the view joins none of its groups, not even until the refusal, and
+    starts no tick; the page view keeps its own group."""
+    import asyncio
+
+    import djust.auth as auth_pkg
+    from channels.layers import get_channel_layer
+
+    from djust.presence import PresenceManager
+    from djust.push import view_group_name
+
+    layer = get_channel_layer()
+    groups = (
+        view_group_name(f"{MOD}.LrmPresenceView"),
+        PresenceManager.presence_group_name(f"{MOD}.LrmPresenceView"),
+    )
+    at_auth: list = []
+    original = auth_pkg.run_pre_mount_auth
+
+    def spy(view_instance, request):
+        if isinstance(view_instance, LrmPresenceView):
+            at_auth.append([g for g in groups if layer.groups.get(g)])
+        return original(view_instance, request)
+
+    monkeypatch.setattr(auth_pkg, "run_pre_mount_auth", spy)
+    socket, consumer = await _ws_capturing_public_page(_Anon())
+    try:
+        page_group = consumer._view_group
+        for extra in ({}, {"target_id": "lz"}):
+            await socket.send_json_to(
+                {"type": "mount", "view": f"{MOD}.LrmPresenceView", "url": "/lrm/public/", **extra}
+            )
+            frame = await _ws_frame(socket, "mount", "navigate", "error")
+            assert frame.get("code") == "login_required", frame
+        await socket.send_json_to(
+            {
+                "type": "mount_batch",
+                "views": [
+                    {"view": f"{MOD}.LrmPresenceView", "url": "/lrm/public/", "target_id": "u"}
+                ],
+            }
+        )
+        reply = await _ws_frame(socket, "mount_batch")
+        assert [f["target_id"] for f in reply["failed"]] == ["u"], reply
+        assert at_auth == [[], [], []]
+        assert [g for g in groups if layer.groups.get(g)] == []
+        assert consumer.channel_name in layer.groups.get(page_group, {})
+        await layer.group_send(
+            groups[1], {"type": "presence_event", "event": "e", "payload": {"who": "x"}}
+        )
+        assert await socket.receive_nothing(timeout=0.3)
+        await asyncio.sleep(0.1)
+        assert "tick:LrmPresenceView" not in RAN
+        await _ws_page_event_runs(socket)
+    finally:
+        await socket.disconnect()
