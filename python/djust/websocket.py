@@ -2584,26 +2584,6 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 if hasattr(self.view_instance, "_capture_dirty_baseline"):
                     self.view_instance._capture_dirty_baseline()
 
-                # --- Object-permission check (ADR-017 §Decision 5, post-mount) ---
-                # check_view_auth handled login + role + custom checks pre-mount
-                # at line ~1947. The fourth (object-level) step is split out
-                # into a separate helper here because get_object() reads
-                # `self.<x>_id` which only exists after mount() has populated it.
-                # See ADR-017 § "Physical call sites" for the full rationale.
-                from .auth.core import check_object_permission
-
-                try:
-                    await sync_to_async(check_object_permission)(self.view_instance, request)
-                except PermissionDenied as exc:
-                    logger.info(
-                        "Object-permission denied for %s: %s",
-                        self.view_instance.__class__.__name__,
-                        exc,
-                    )
-                    await self.send_json({"type": "error", "message": "Permission denied"})
-                    await self.close(code=4403)
-                    return
-                # --- End object-permission check ---
         except Exception as e:
             response = handle_exception(
                 e,
@@ -2631,6 +2611,31 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             )
             await self.send_json(response)
             return
+
+        # --- Object-permission check (ADR-017 §Decision 5) ---
+        # check_view_auth handled login + role + custom checks pre-mount. The
+        # fourth (object-level) step runs after mount() AND handle_params(),
+        # before the first render: get_object() reads `self.<x>_id`, which
+        # mount() populates from the URL or handle_params() sets from the mount
+        # frame's query params (e.g. ``?id=``). Checking any earlier would
+        # authorize the pre-params object and then render the one the params
+        # selected. This is the order RequestMixin.get and url_change use.
+        from django.core.exceptions import PermissionDenied
+
+        from .auth.core import check_object_permission
+
+        try:
+            await sync_to_async(check_object_permission)(self.view_instance, request)
+        except PermissionDenied as exc:
+            logger.info(
+                "Object-permission denied for %s: %s",
+                self.view_instance.__class__.__name__,
+                exc,
+            )
+            await self.send_json({"type": "error", "message": "Permission denied"})
+            await self.close(code=4403)
+            return
+        # --- End object-permission check ---
 
         # Get initial HTML (skip if client already has pre-rendered content)
         html = None
