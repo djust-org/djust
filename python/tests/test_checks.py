@@ -549,6 +549,127 @@ class TestS004DebugAllowedHosts:
         assert len(s004) == 0
 
 
+class TestS004LiveViewDispatchAuth:
+    """S004 (security.py) -- LiveView gates auth via dispatch(). On this line
+    the check shares its id with TestS004DebugAllowedHosts's check (the 1.1
+    line moved it to S012), so each test filters on the message."""
+
+    def _scan(self, tmp_path, source):
+        py_file = tmp_path / "views.py"
+        py_file.write_text(textwrap.dedent(source))
+        from djust.checks import check_security
+
+        with patch("djust.checks._get_project_app_dirs", return_value=[str(tmp_path)]):
+            errors = check_security(None)
+        return [e for e in errors if e.id == "djust.S004"]
+
+    def test_s004_flags_decorated_dispatch(self, tmp_path):
+        """@method_decorator(<auth decorator djust does not replay>,
+        name='dispatch') on a LiveView fires."""
+        errors = self._scan(
+            tmp_path,
+            """\
+            from django.utils.decorators import method_decorator
+            from djust import LiveView
+            from myapp.decorators import active_account_required
+
+            @method_decorator(active_account_required, name="dispatch")
+            class SecretView(LiveView):
+                template_name = "secret.html"
+            """,
+        )
+        assert len(errors) == 1, "S004 should fire: %r" % errors
+        assert "SecretView" in errors[0].msg
+        assert "dispatch" in errors[0].msg
+
+    def test_s004_skips_django_decorators_the_runtime_replays(self, tmp_path):
+        """Django's login_required / permission_required / user_passes_test /
+        staff_member_required on dispatch() are replayed on live transports,
+        so the source scan does not report them."""
+        for decorator in (
+            "login_required",
+            'permission_required("app.view")',
+            "user_passes_test(is_staff)",
+            "staff_member_required",
+        ):
+            errors = self._scan(
+                tmp_path,
+                """\
+                from django.utils.decorators import method_decorator
+                from djust import LiveView
+
+                @method_decorator(%s, name="dispatch")
+                class SecretView(LiveView):
+                    template_name = "secret.html"
+                """
+                % decorator,
+            )
+            assert errors == [], (decorator, errors)
+
+    def test_s004_ignores_a_dispatch_that_only_reads_the_user(self, tmp_path):
+        errors = self._scan(
+            tmp_path,
+            """\
+            from djust import LiveView
+
+            class ContextView(LiveView):
+                template_name = "context.html"
+
+                def dispatch(self, request, *args, **kwargs):
+                    self.show_admin = request.user.is_staff
+                    return super().dispatch(request, *args, **kwargs)
+            """,
+        )
+        assert errors == []
+
+    def test_s004_flags_overridden_dispatch_with_auth(self, tmp_path):
+        errors = self._scan(
+            tmp_path,
+            """\
+            from django.core.exceptions import PermissionDenied
+            from djust import LiveView
+
+            class SecretView(LiveView):
+                template_name = "secret.html"
+
+                def dispatch(self, request, *args, **kwargs):
+                    if not request.user.is_authenticated:
+                        raise PermissionDenied()
+                    return super().dispatch(request, *args, **kwargs)
+            """,
+        )
+        assert len(errors) == 1, (
+            "S004 should fire for an auth-performing dispatch() override: %r" % errors
+        )
+
+    def test_s004_ignores_plain_liveview(self, tmp_path):
+        errors = self._scan(
+            tmp_path,
+            """\
+            from djust import LiveView
+
+            class PublicView(LiveView):
+                template_name = "public.html"
+            """,
+        )
+        assert errors == []
+
+    def test_s004_suppressible_by_noqa(self, tmp_path):
+        errors = self._scan(
+            tmp_path,
+            """\
+            from django.utils.decorators import method_decorator
+            from djust import LiveView
+            from myapp.decorators import active_account_required
+
+            @method_decorator(active_account_required, name="dispatch")  # noqa: S004
+            class SecretView(LiveView):
+                template_name = "secret.html"
+            """,
+        )
+        assert errors == []
+
+
 class TestC010TailwindCdnInProduction:
     """C010 -- Tailwind CDN detected in production templates."""
 

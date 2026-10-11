@@ -35,6 +35,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | S007 | Security | Warning | `client_name\|safe` renders an unsanitised upload filename (stored XSS) |
 | S009 | Security | Warning | View-auth'd LiveView exposes a public `@event_handler` with no per-handler gate |
 | S011 | Security | Warning | Inline executable `<script>` inside a `dj-root` with no CSP configured (#1848) |
+| S004 | Security | Error | A LiveView the runtime refuses on live transports because access control that only the HTTP request runs is not covered by its declared djust auth (see the S004 dispatch-auth section below; this id is shared with the DEBUG/ALLOWED_HOSTS check) |
 | T001 | Templates | Warning | Deprecated @click/@input syntax |
 | T002 | Templates | Info | LiveView template missing dj-root |
 | T003 | Templates | Info | wrapper_template uses {% include %} instead of liveview_content |
@@ -368,6 +369,66 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 
 > **Note**: `S010` (rate-limit-presence) is intentionally not shipped as a
 > default-on check — it is advisory/opt-in only (high false-positive risk).
+
+### S004 — LiveView access control that only the HTTP request runs (security.py)
+- **Severity**: Error
+- **Id**: on this release line this check shares the id `djust.S004` with the
+  "DEBUG=True with non-localhost ALLOWED_HOSTS" check above (later lines moved
+  it to `S012`). Suppressing `djust.S004` silences both.
+- **Method**: Runtime (walks every discovered `LiveView`'s `__mro__` and the
+  URLconf, with the same predicate `check_view_auth` uses) and AST (the class
+  bodies of LiveViews the runtime scan could not import)
+- **What it detects**: A LiveView defined in the project that the runtime
+  **refuses** on live transports (the WebSocket/SSE mount, events, the HTTP
+  POST event fallback, the API and embedded children) until it declares djust
+  auth that covers its access control, because that access control lives
+  where only Django's HTTP request runs it:
+  - a `dispatch()` defined on a custom `AccessMixin` subclass;
+  - a `setup()`/`dispatch()`/`get()`/`post()` override (outside Django and
+    `djust` / `djust.*`; an app or package named `djust_*` is inspected) that
+    checks the user (any attribute of it: `is_staff`, `groups`, a role,
+    `getattr(user, ...)`) and denies by any means: it raises (`PermissionDenied`,
+    `Http404`, anything else), calls `handle_no_permission()` /
+    `redirect_to_login()`, returns a redirect, an error response or a page of
+    its own (`render(...)`, `HttpResponse(...)`), or calls
+    `get_object_or_404()`, also under an import alias;
+  - a decorator on one of those methods (also under another decorator
+    stacked above `@method_decorator`, or one a project decorator returns),
+    or a URL pattern's wrapper around `as_view()`, whose code checks the user;
+  - (unknown decorators and URLconf wrappers that do not check the user are
+    not refused on this release line, and not reported);
+  - (AST, classes not imported at check time) `@method_decorator(<auth>,
+    name="dispatch")` with an auth decorator other than Django's four, or a
+    `dispatch()` body that checks the user and denies.
+
+  Not reported here: Django's `login_required`, `staff_member_required`,
+  `user_passes_test(...)` and `permission_required(...)` (applied with
+  `@method_decorator`, wrapped around `as_view()` in the URLconf or by an
+  `as_view()` override, or inside another package's decorator built on
+  `user_passes_test`) and Django's `LoginRequiredMixin` /
+  `PermissionRequiredMixin` / `UserPassesTestMixin`, all replayed on live
+  transports; code the runtime does not refuse (an override that only
+  reads the user, an unknown decorator or URLconf wrapper); and a refused view
+  defined by an installed package. A declared `login_required`
+  covers only a gate that reads `is_authenticated` / `is_anonymous` alone;
+  anything else needs `permission_required` or `check_permissions()` (the
+  message's fix names `login_required` only for a login-only gate). A view is
+  reported once, by the runtime scan when it can import the class.
+- **Fix**: Express the rule as djust's `login_required = True` /
+  `permission_required = ...` class attributes or a `check_permissions(self,
+  request)` method (honored on every transport). `login_required = False`
+  is not a declaration.
+- **Suppression**: `# noqa: S004` on the decorator or the `def dispatch`
+  line for the AST scan (like `S001`-`S003` in the same module, it does not
+  consult `DJUST_CONFIG['suppress_checks']`); the runtime scan honours
+  `DJUST_CONFIG = {'suppress_checks': ['S004']}`. Suppressing the check does
+  not change the runtime refusal or replay. Or
+  `SILENCED_SYSTEM_CHECKS = ["djust.S004"]` in settings (honored by
+  `python manage.py check`; note `python manage.py djust_check` does not
+  currently filter on Django's `is_silenced()`).
+- **False positives**: A plain Django `View` (not a `LiveView` subclass)
+  with a decorated `dispatch()` is correct HTTP-only usage and is not
+  flagged; a `dispatch()` override that does no auth work is not flagged.
 
 ---
 

@@ -22,6 +22,7 @@ from .websocket_utils import (
     _call_handler,
     _check_event_security,  # noqa: F401 - re-exported for tests
     _ensure_handler_rate_limit,  # noqa: F401 - re-exported for tests
+    _post_only_rules_deny,
     _safe_error,
     _validate_event_security,
     get_handler_coerce_setting,
@@ -1461,7 +1462,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         import time
 
         # --- security / validation (shared with handle_event) -----------
-        handler = await _validate_event_security(self, event_name, target_view, self._rate_limiter)
+        handler = await _validate_event_security(
+            self, event_name, target_view, self._rate_limiter, root_view=self.view_instance
+        )
         if handler is None:
             return
 
@@ -3267,7 +3270,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 # RESOLVED target (may be an embedded child) so a child's
                 # handler is what gets validated/called, not the parent's.
                 handler = await _validate_event_security(
-                    self, event_name, target_view, self._rate_limiter
+                    self,
+                    event_name,
+                    target_view,
+                    self._rate_limiter,
+                    root_view=self.view_instance,
                 )
                 if handler is None:
                     _tt_error = "permission_denied"
@@ -3395,7 +3402,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     try:
                         # Security checks (shared with actor and view paths)
                         handler = await _validate_event_security(
-                            self, event_name, component, self._rate_limiter
+                            self,
+                            event_name,
+                            component,
+                            self._rate_limiter,
+                            root_view=self.view_instance,
                         )
                         if handler is None:
                             _tt_c_error = "permission_denied"
@@ -3513,7 +3524,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                     # Use target_view for handler lookup (may be an embedded child)
                     # Security checks (shared with actor and component paths)
                     handler = await _validate_event_security(
-                        self, event_name, target_view, self._rate_limiter
+                        self,
+                        event_name,
+                        target_view,
+                        self._rate_limiter,
+                        root_view=self.view_instance,
                     )
                     if handler is None:
                         _tt_error = "permission_denied"
@@ -4360,6 +4375,12 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             await self.send_error("No uploads configured for this view")
             return
 
+        # An upload is part of an event on HTTP (a POST through the view's
+        # post()): what only post() runs applies to it as to every event.
+        if await _post_only_rules_deny(self.view_instance):
+            await self.send_error("Permission denied")
+            return
+
         mgr = self.view_instance._upload_manager
         entry = mgr.register_entry(
             upload_name=data.get("upload_name", ""),
@@ -4437,6 +4458,19 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             session_key=session_key,
             active_refs=(lambda _uid, _a=active: _a),
         )
+        if (
+            payload.get("status") == "resumed"
+            and self.view_instance is not None
+            and await _post_only_rules_deny(self.view_instance)
+        ):
+            # What only the view's post() runs applies to uploads too.
+            payload = {
+                "type": "upload_resumed",
+                "ref": upload_id,
+                "status": "not_found",
+                "bytes_received": 0,
+                "chunks_received": [],
+            }
         await self.send_json(payload)
 
     async def _handle_upload_frame(self, data: bytes) -> None:

@@ -13,9 +13,13 @@ class LoginRequiredLiveViewMixin:
     """Add to any LiveView to require authentication.
 
     Intercepts at dispatch() before get() -> mount() runs,
-    so no LiveView state is initialized for anonymous users.
+    so no LiveView state is initialized for anonymous users. Also sets
+    ``login_required = True``: the WebSocket/SSE mount, the HTTP POST event
+    fallback and embedded children never call dispatch(), and enforce the
+    declared attribute instead.
     """
 
+    login_required = True
     login_url = None  # Falls back to settings.LOGIN_URL
 
     def dispatch(self, request, *args, **kwargs):

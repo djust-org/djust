@@ -10,6 +10,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Security
 
 - **The live mount checks object permission after `handle_params()`.** The WebSocket mount ran `has_object_permission()` after `mount()` but before `handle_params()`, so a view that selects its object from the URL's query parameters in `handle_params()` was checked against the object `mount()` chose and then rendered the one the parameters selected. The mount through the SSE message endpoint (`ViewRuntime.dispatch_mount`) ran no object check at all. Both now run `mount()`, `handle_params()`, the object check, and then the first render: the order the HTTP GET render and `url_change` navigation already used. A refused WebSocket mount still sends its error frame and closes with 4403; a refused SSE message mount sends a `permission_denied` error and mounts no view.
+- **Live transports enforce or refuse access control that only the HTTP request runs.**
+  The WebSocket and SSE mount, events, the HTTP POST event fallback, the API
+  and `{% live_render %}` children never call a view's `setup()`,
+  `dispatch()`, `get()` or `post()`, and never run the wrappers the URLconf
+  puts around `as_view()`. djust replays its own declarations and Django's
+  `LoginRequiredMixin`, `PermissionRequiredMixin` and `UserPassesTestMixin`
+  there, but a custom `AccessMixin` subclass that checks the user in its own
+  `dispatch()`, a `@method_decorator(...)` on `dispatch`, `get` or `post`, an
+  overridden method that checks the user, or a URLconf wrapper such as
+  `path("x/", login_required(MyView.as_view()))` did not run at all.
+  `check_view_auth` now:
+  - replays Django's `login_required`, `staff_member_required`,
+    `user_passes_test(...)` and `permission_required(...)` applied with
+    `@method_decorator`, wrapped around `as_view()` in the URLconf (read from
+    the server's URLconf, not from the URL the client sends) or by an
+    `as_view()` override, and other packages' decorators built on
+    `user_passes_test`. The same users are admitted as on the HTTP request;
+    an authenticated user who fails the test gets `PermissionDenied`, where
+    Django's HTTP response would redirect to the login page. Async test
+    functions are awaited (called directly on the event loop's thread, the
+    check refuses instead of blocking). `login_not_required` is not access
+    control. A decorator applied only to `post` is checked for every event on
+    the page (the view's, its components', its embedded views' and uploads),
+    not for the mount;
+  - refuses a view whose custom `AccessMixin` subclass defines `dispatch()`,
+    unless it declares `permission_required` or `check_permissions()`
+    (`login_required = True` alone does not cover it);
+  - refuses a view whose `setup()`/`dispatch()`/`get()`/`post()` override, a
+    decorator on one (also under another decorator stacked above
+    `@method_decorator`, or returned by a project decorator that delegates to
+    it), or a URLconf wrapper checks the user (any attribute of it, such as
+    `is_staff`, `groups` or a role) and denies by any means (raises, including
+    `PermissionDenied` and `Http404`; calls `handle_no_permission()` or
+    `redirect_to_login()`; returns a redirect, an error response or a page of
+    its own such as `render(...)` or `HttpResponse(...)`; calls
+    `get_object_or_404()`), unless a declared rule covers it (`login_required` covers a check that reads only
+    `is_authenticated` / `is_anonymous`);
+  - does not refuse a view for any other decorator or URLconf wrapper that
+    is neither Django's nor djust's and whose code does not check the user (a
+    CSP, rate-limit or logging decorator); it does not run on live
+    transports.
+
+  Permitted users of views using Django's `login_required`,
+  `staff_member_required`, `user_passes_test` and `permission_required`
+  decorators and wrappers, or its three auth mixins, are unaffected. Views
+  whose access check lives in their own `setup()`, `dispatch()`, `get()`,
+  `post()`, decorators or URLconf wrappers are refused for every user until
+  the rule is declared. The HTTP GET page, which Django's dispatch already
+  gated, is unchanged. System check `djust.S004` (the dispatch-auth check; an Error, so
+  `manage.py check` and `migrate` stop until the view is fixed; on this release
+  line the id is shared with the DEBUG/ALLOWED_HOSTS check) names each refused
+  view defined in the project. Overrides that only read the user, unknown
+  decorators and wrappers, refused views that an installed package defines and
+  URLconf routes whose wrapper does not use `functools.wraps` are not
+  reported. `djust.S004` no longer reports Django's own decorators on
+  `dispatch()`, which are replayed. Only `djust` and
+  `djust.*` modules are treated as framework code: apps and packages named
+  `djust_*` are inspected, djust-auth's `LoginRequiredLiveViewMixin` is read
+  as `login_required = True`, and djust-tenants' `TenantMixin` is not
+  inspected. `LoginRequiredLiveViewMixin` in `djust.auth` now also sets
+  `login_required = True`.
+  **Upgrade note:** a view refused this way must declare its rule;
+  `login_required = False` is not a declaration.
 - **Theming URLs use a shared script-scheme denylist (backported from #3400, #3407, #3420).** Data-derived URLs in navigation, sidebar sections, breadcrumbs, pagination, avatars and auth/error/empty-state pages are neutralised to `"#"` for `javascript:`, `vbscript:` and `data:` schemes, including whitespace and control-character obfuscation. Avatar image sources retain `data:image/*`; links do not. Other schemes, including `sms:`, `geo:` and app deep links, remain unchanged. Developer-supplied button `href=` and `href`/`src`/`action`/`formaction` attributes passed to button, input, select and progress tags raise `ValueError`. Dictionary and object items in iterable collections are checked without mutating caller-owned items; pagination checks every formatted page, first, last, previous and next URL. Regression tests: `python/djust/tests/test_theming_url_scheme_guard.py`.
 - **`@rate_limit` now applies on the page-POST fallback.** The per-handler `@rate_limit` was checked on WebSocket/SSE and on the HTTP API, but the page-POST fallback (`mixins/request.post`), which also runs an `@event_handler` from the request body, did not consult it, so calls through it did not use the shared per-caller budget that F27 documents as "one budget per handler regardless of transport". The fallback now checks the limit at the same point as the WebSocket path (after the decorator and permission checks, before the handler runs) and answers `429` with `code: "rate_limited"` in its existing JSON error shape. Both HTTP transports share one implementation, `djust.rate_limit.http_handler_rate_check`, and one caller-key helper, `caller_key_for_request` (still behind `resolve_client_ip`, so `DJUST_TRUSTED_PROXY_COUNT` still applies); the HTTP API's behaviour is unchanged. Tests: `python/djust/tests/test_ratelimit_post_fallback.py`.
 - **One `@rate_limit` budget per handler function, whatever name reaches it.** The shared store keyed buckets on the caller and the name the route used (the client-supplied `event_name` on WebSocket/SSE, the function name on the HTTP API), so a method reachable under two names (an alias attribute, or a second name bound in `mount`) had a separate budget per name. The bucket is now keyed on the function that actually runs (`__func__` of a bound method), accepted only when that function is declared on the owning class; only the exact builtin `staticmethod`/`classmethod` wrappers are unwrapped, and membership is compared with `is`. A handler whose identity cannot be determined this way (a property or other descriptor, a `functools.partial`, a callable instance, a function from an unrelated class) is refused with a named error rather than given a budget of its own, and two handlers that resolve to one key with different limit settings are refused rather than sharing the first one's settings. Functions made by one factory keep separate budgets. Tests: `python/djust/tests/test_ratelimit_post_fallback.py`.

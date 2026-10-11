@@ -286,7 +286,7 @@ async def test_permission_denied_view_handler_records_with_error():
     consumer._rate_limiter = None
 
     # Stub _validate_event_security to return None (permission denied).
-    async def _fake_validate(self_arg, name, v, rl):
+    async def _fake_validate(self_arg, name, v, rl, **_kwargs):
         await self_arg.send_error("forbidden")
         return None
 
