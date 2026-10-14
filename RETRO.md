@@ -383,7 +383,7 @@ issue or be explicitly closed with a reason.
 | 341 | No gate ties a completed ROADMAP bucket to a RETRO.md entry — 14 buckets drifted; #2140 was a previous backfill of the same kind | Retro backfill v1.1.0-9..v1.2.0-5 | #2848 | Open | Suggested `scripts/check-retro-coverage.py`: parse ✅ milestone headings in ROADMAP.md, fail when RETRO.md has no entry |
 | 342 | False/stale claims in changelog fragments and PR bodies are unchecked — five instances across v1.2.0-1..3, one of which caused a regression (#2838) | Retro backfill v1.1.0-9..v1.2.0-5 | #2849 | Open | Extend the existing path/class reference checks (cf. #2652) to `changelog.d/*.md`; share `check-changelog-test-counts`' parser rather than adding a third |
 | 343 | **Rule row** — enumerate every caller of a shared cache/registry/dispatch and the invariant each needs before the first edit (v1.2.0-6 retro arc, rule 1) | Retro v1.2.0-6 | — | Open | pattern: fix-reproduces-own-bug  fired: —  re-violated: — (rule created at v1.2.0-6; origin instances #2147, #2146, #2838 r1-r3, #2846 are recorded on the page, not counted as re-violations since the rule did not exist for them) |
-| 344 | **Rule row** — verify a claim against the source before writing it, and cite path:line; delete a claim that cannot be checked (v1.2.0-6 retro arc, rule 2) | Retro v1.2.0-6 | — | Open | pattern: unverified-claim  fired: —  re-violated: — (rule created at v1.2.0-6; the ten origin instances — #2838, #2546, #2534, #2554, #2573, #2607, #2843, #2147 — predate it) |
+| 344 | **Rule row** — verify a claim against the source before writing it, and cite path:line; delete a claim that cannot be checked (v1.2.0-6 retro arc, rule 2) | Retro v1.2.0-6 | — | Open | pattern: unverified-claim  fired: #3463  re-violated: — (rule created at v1.2.0-6; the ten origin instances — #2838, #2546, #2534, #2554, #2573, #2607, #2843, #2147 — predate it) |
 | 345 | **Rule row** — a Code Review stage is not complete until the review is POSTED to the PR, and a bucket until `RETRO.md` has its entry (v1.2.0-6 retro arc, rule 3) | Retro v1.2.0-6 | #2848 | Open | pattern: retro-dropout  fired: —  re-violated: — (rule created at v1.2.0-6; #2837/#2838 merged with no review artifact and 14 buckets drifted before it. Mechanical half now exists: `scripts/check-retro-coverage.py`) |
 | 346 | Python and Rust root locators disagree when a quoted attribute value contains `<… dj-root>` | PR #3023 | #3030 | Open | pattern: parallel-path-drift. Needs author markup or `\|safe`, so not reachable from autoescaped content |
 | 347 | dj-root vs dj-view root precedence: Python searches dj-root first, the Rust VDOM takes the first element | PR #3023 | #3031 | Open | pattern: parallel-path-drift. Predates #3023; T005 warns about the split layout |
@@ -409,6 +409,8 @@ issue or be explicitly closed with a reason.
 | 367 | The `v1.3.0rc1` tag is not reachable from main (squash-merged release), so two changelog-pin tests fail in any local checkout with the tag, and the pin cannot see a deleted `[1.3.0rc1]` section | PR #3070 | #3072 | Open | Release process or gate rule: tag the main squash commit / merge the release branch back, or count a tag whose section exists on the branch. CI skips the tests (no tags) |
 | 368 | Registry `register_*`/`unregister_*` drop the replaced `Py` under the write lock; an attached reader blocked on a registry `RwLock` cannot join a 3.14t stop-the-world | PR #3087 | #3088 | Open | Pre-existing; found by the #3074 GIL-release review. Drop after unlocking; take locks detached or copy-on-write |
 | 369 | `PerformanceTracker`'s current tracker is a thread-local on the shared event-loop thread, so concurrent sessions' event turns overwrite each other's (debug timing only) | PR #3074 2/7 audit | #3089 | Open | Pre-existing, unchanged by the worker pool; make it a ContextVar |
+| 370 | WebSocket test teardown/receives use channels' 1 s default timeout (453 bare `.disconnect()` calls) and flake under machine load; give test communicators a generous default plus a gate against bare ones | Retro v1.3.0-10 / PR #3463 review | #3464 | Open | #3463 fixed only the two files named in #3456/#3451 |
+| 371 | Windows `djust ai inventory` hand-off: compare the discovered `manage.py`'s owner SID and DACL with the current user (the #3454 marker rule is a heuristic) | Retro v1.3.0-10 / PR #3463 review | #3462 | Open | Needs a native Windows CI job to test |
 
 ## Retro backfill — 14 un-retro'd drain buckets (v1.1.0-9 … v1.2.0-5)
 
@@ -1086,6 +1088,63 @@ The new guide is `docs/website/guides/scaling-across-cores.md`. A truth review c
 - Security: passed, with no findings.
 - Code Review: 1 🟡 (stripe-test tautology), fixed; 1 🟢 (`str()` vs `to_string()` for a non-string manifest), left.
 - Re-Review: passed, with 1 🟢 filed as #3178.
+
+## v1.3.0-10 — load-tolerant WS tests, toast docstring, Windows ai-inventory hand-off (PR #3463)
+
+**Date**: 2026-10-14
+**Scope**: One grouped drain PR (#3463, squash `980417a8c`) closing #3456 and #3451 (two WebSocket tests that timed out under machine load), #3450 (a docstring showing the wrong toast tag) and #3454 (`djust ai inventory`'s Windows hand-off had no trust check). Follow-up filed: #3462. Not drained: #3129 (the release security-audit tracker).
+**Tests at close**: 59 targeted tests (`test_ai_cli_3448`, `test_ws_receive_runtime_dispatch_1852`, `test_shared_room_clock_ws_3005`); each WebSocket file passed 5 runs in a row and once under synthetic CPU load; pre-push hook passed; CI 21 pass / 3 skipped; CodeQL 0 open alerts. Retro: https://github.com/djust-org/djust/pull/3463#issuecomment-6176725012.
+
+### What We Learned
+
+**1. A load-flake fix has to cover every implicit deadline, including library defaults.**
+The implementer raised every explicit 1–3 s deadline to 30 s and passed 5 runs in a row and one under 8 `yes` processes. The independent review then found `communicator.disconnect()` still on channels' 1 s default at 7 sites in the #3456 file and 3 in the #3451 file, which is the same `TimeoutError` the issues report. Synthetic load (8 busy processes) does not reproduce a load average of 79–520, so a green under-load run proved little. 453 bare `.disconnect()` calls remain elsewhere in the suite.
+
+**Action taken**: Open — tracked in Action Tracker #370 (GitHub #3464).
+
+**2. A security changelog has to state the limit of a heuristic.**
+The first draft filed #3454's change under `security` as "hardening" and closed the issue, but the rule (a project marker beside `manage.py` on Windows) is not an ownership check: whoever can plant `manage.py` can plant `pyproject.toml` too. The review caught the overclaim, an instance of `unverified-claim` (rule row 344 fired). The fragment and ROADMAP row were reworded to say what it stops (a bare planted `manage.py`) and what it doesn't, and the ownership check was split out.
+
+**Action taken**: Open — tracked in Action Tracker #371 (GitHub #3462).
+
+**3. The implementation brief contradicted the repo's own changelog rule.**
+The controller's brief asked for a direct `CHANGELOG.md` `[Unreleased]` edit; djust requires `changelog.d/` fragments (CLAUDE.md, "Do NOT edit CHANGELOG.md's [Unreleased] directly") and pre-commit refuses the edit. The controller reverted it and wrote `changelog.d/3450.documentation.md` and `changelog.d/3454.security.md` before committing.
+
+**Action taken**: Closed — the rule and its pre-commit gate already exist and would have refused the commit; the entries shipped as fragments in `9ad98c3b1` (#3463).
+
+### Insights
+
+- One grouped PR for four small, unrelated issues cost one CI run and one review, and the review still found an Important issue. Grouping did not dilute review quality.
+- The `check-changelog-fragment-references` hook (#2849) rejected a backticked example path that does not exist in the tree. The gate works on fragments as designed; example paths in fragments belong in prose.
+- The ROADMAP rows for the bucket were struck in the retro PR rather than the drain PR, to avoid a CI rerun for one line.
+
+### Review Stats
+
+| Metric | PR #3463 | Total |
+|--------|----------|-------|
+| Tests added | 6 (simulated-Windows hand-off cases in `test_ai_cli_3448`) | 6 |
+| 🔴 Findings | 0 | 0 |
+| 🟡 Findings | 1 (`disconnect()` 1 s default) | 1 |
+| 🟢 Findings | 8 | 8 |
+| Findings fixed | 1 🟡 + 4 🟢 (wait_until timeout, overclaim, WASI-safe `posix`, fragment wording); 🟢 doc reflow left | 5 |
+| CI failures | 0 | 0 |
+| Findings by pattern class | `unverified-claim`×1, `new`×0 (the timeout finding is a test-reliability defect with no pattern page) | |
+
+### Rule gate (Stage 3.7) — dry run
+
+First run of the gate in this repo, so nothing was changed. Rule rows 343 (`fix-reproduces-own-bug`), 344 (`unverified-claim`) and 345 (`retro-dropout`) have been in force since v1.2.0-6, but only this milestone's instances were counted: 344 fired once (#3463), and 343 and 345 had no instances. Dry-run decisions: 344 KEEP; 343 and 345 not decided (one milestone of data, where DEMOTE needs two consecutive empty ones). The gate applies from the next retro.
+
+### Process Improvements Applied
+
+**CLAUDE.md**: none.
+**Pipeline template**: none.
+**Checklist**: none.
+**Skills**: none.
+
+### Open Items
+
+- [ ] Give WebSocket test communicators a generous default timeout plus a gate — tracked in Action Tracker #370 (GitHub #3464)
+- [ ] Windows owner-SID check for the `ai inventory` hand-off — tracked in Action Tracker #371 (GitHub #3462)
 
 ## v1.3.0-9 — test git-env isolation (#3179)
 

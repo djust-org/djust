@@ -25,6 +25,7 @@ cause a *code* defect rather than a documentation one.
 | #2607 | `docs/TEMPLATE_BACKEND.md:260` still reports `47.09% (493 of 1047)` after a behaviour change moved it | corrected | no |
 | #2843 | PR body claimed a test "needs the compiled Rust extension, unavailable in this worktree env" — it runs (24 tests pass) and `import djust._rust` works | body corrected before merge | no |
 | #2147 | the issue's own premise — that a fix was in place — was false for the error arm | the arm was fixed | no |
+| #3463 | the first-draft `changelog.d/3454.security.md` and ROADMAP row presented a project-marker heuristic as Windows "security hardening"; it is not an ownership check (anyone who can plant `manage.py` can plant a marker) | reworded to state what it stops and what it doesn't; ownership check split to #3462 (independent review) | yes, fired |
 
 ## Detection
 
