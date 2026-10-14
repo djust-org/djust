@@ -133,8 +133,10 @@ not your project's installed configuration. There is no `manifest --json`.
 
 A discovered `manage.py` must be a regular file. On POSIX systems it must
 also be owned by the current user and not be group/world-writable, and its
-containing directory must not be world-writable; Windows has no equivalent
-mode bits, so only the regular-file and project-boundary rules apply there. Stat failures also reject
+containing directory must not be world-writable. On Windows, the directory
+containing `manage.py` must contain `pyproject.toml`, `setup.cfg`, `setup.py`,
+`requirements.txt`, or `.git`; mode bits do not provide the POSIX ownership
+check there. Stat failures also reject
 it. Rejection exits **2**, prints the specific reason and direct-invocation
 guidance, and does not continue searching for a different entry point.
 Explicitly invoking `python manage.py djust_ai ...` remains your own choice

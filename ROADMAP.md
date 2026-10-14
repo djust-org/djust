@@ -131,6 +131,17 @@ Two name shapes appear in this roadmap, with distinct meanings:
 |---|---|---|
 | ~~**P1**~~ | ~~#3179 — The pre-commit-wrapper and shared-git-config fixtures use `isolated_git_env()`; every test module that spawns git (14 swept) strips `GIT_EXECUTION_VARS` with an autouse fixture; the root `conftest.py` strips them for every test; `tests/test_git_env_guard_3179.py` adds a behavioural regression against a throwaway `GIT_DIR` and a static AST guard~~ ✅ (#3180) | v1.3.0 |
 
+### v1.3.0-10 — load-tolerant tests, toast docs, ai inventory on Windows (drain bucket)
+
+*Kind:* test reliability, documentation, and security hardening.
+
+| Priority | Task | Milestone |
+|---|---|---|
+| **P2** | #3456 — Make WebSocket runtime dispatch tests tolerant of machine load | v1.3.0 |
+| **P2** | #3451 — Make shared room clock WebSocket tests tolerant of machine load | v1.3.0 |
+| **P2** | #3450 — Correct the server event toast tag example | v1.3.0 |
+| **P2** | #3454 — Windows AI inventory hand-off requires a project marker in `manage.py`'s own directory (a heuristic against a bare planted `manage.py`; the real owner-SID check is #3462) | v1.3.0 |
+
 ## Next: v1.2.1 — non-breaking fixes (drain)
 
 > Planned 2026-09-24 from a triage of every open issue. **Policy:** non-breaking bug fixes ship in 1.2.1; anything breaking, new features, and parser/dependency upgrades go to 1.3. Issues split into a 1.2.1 part and a 1.3 part are marked. The ADR-034–038 stack (#2944, #2954) merges after 1.2.1 is cut. Already shipped toward 1.2.1 on `main`: #3009 (inline whitespace, #2999/#3010), the CSRF resolver (#2978), SerializerCache removal (#2992), the audit gate (#2989).
