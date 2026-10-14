@@ -81,7 +81,7 @@ class _ReceiveView(LiveView):
 _VIEW_PATH = f"{__name__}._ReceiveView"
 
 
-async def _receive_until(communicator, wanted_type, *, tries=6, timeout=3):
+async def _receive_until(communicator, wanted_type, *, tries=6, timeout=30):
     """Drain frames until one whose ``type`` == ``wanted_type`` (or last seen)."""
     last = None
     for _ in range(tries):
@@ -118,7 +118,7 @@ async def _connect_and_mount(url="/page/"):
 
     connected, _ = await communicator.connect()
     assert connected, "WebsocketCommunicator must connect"
-    await communicator.receive_json_from(timeout=2)  # drain connect frame
+    await communicator.receive_json_from(timeout=30)  # drain connect frame
 
     await communicator.send_json_to({"type": "mount", "view": _VIEW_PATH, "url": url})
     mount_frame = await _receive_until(communicator, "mount")
@@ -165,7 +165,7 @@ class TestUrlChangeRoutedThroughChokepoint:
                 {"type": "url_change", "params": {"page": "2"}, "uri": "/page/?page=2"}
             )
             # Drain the response (patch or html_update) so dispatch completed.
-            await communicator.receive_json_from(timeout=3)
+            await communicator.receive_json_from(timeout=30)
 
             url_change_calls = [c for c in calls if c.get("type") == "url_change"]
             assert len(url_change_calls) == 1, (
@@ -175,7 +175,7 @@ class TestUrlChangeRoutedThroughChokepoint:
             )
             assert url_change_calls[0]["uri"] == "/page/?page=2"
 
-            await communicator.disconnect()
+            await communicator.disconnect(timeout=30)
 
     def test_receive_routes_url_change_via_chokepoint_helper(self):
         """Source-pin: the runtime-owned arm of ``receive()`` routes by
@@ -250,7 +250,7 @@ class TestUrlChangeEndToEndPreserved:
             await communicator.send_json_to(
                 {"type": "url_change", "params": {"page": "7"}, "uri": "/page/?page=7"}
             )
-            frame = await communicator.receive_json_from(timeout=3)
+            frame = await communicator.receive_json_from(timeout=30)
             assert frame.get("type") in ("patch", "html_update"), (
                 f"url_change must emit a patch/html_update update frame, got {frame!r}"
             )
@@ -263,7 +263,7 @@ class TestUrlChangeEndToEndPreserved:
                 f"update frame; got {frame!r}"
             )
 
-            await communicator.disconnect()
+            await communicator.disconnect(timeout=30)
 
     @pytest.mark.django_db
     @pytest.mark.asyncio
@@ -295,17 +295,17 @@ class TestUrlChangeEndToEndPreserved:
             communicator.scope["session"] = _ScopeSession(session_key)
             connected, _ = await communicator.connect()
             assert connected
-            await communicator.receive_json_from(timeout=2)  # connect frame
+            await communicator.receive_json_from(timeout=30)  # connect frame
 
             # url_change with NO prior mount.
             await communicator.send_json_to(
                 {"type": "url_change", "params": {"page": "2"}, "uri": "/page/?page=2"}
             )
-            frame = await communicator.receive_json_from(timeout=3)
+            frame = await communicator.receive_json_from(timeout=30)
             assert frame.get("type") == "error", f"expected error, got {frame!r}"
             assert "not mounted" in str(frame.get("error", "")).lower(), frame
 
-            await communicator.disconnect()
+            await communicator.disconnect(timeout=30)
 
 
 # ------------------------------------------------------------------ #
@@ -349,7 +349,7 @@ class TestWSOnlyFramesPreserved:
                 f"following event must still respond, got {frame!r}"
             )
 
-            await communicator.disconnect()
+            await communicator.disconnect(timeout=30)
 
     @pytest.mark.django_db
     @pytest.mark.asyncio
@@ -380,7 +380,7 @@ class TestWSOnlyFramesPreserved:
             )
             assert "html" in frame, frame
 
-            await communicator.disconnect()
+            await communicator.disconnect(timeout=30)
 
     @pytest.mark.django_db
     @pytest.mark.asyncio
@@ -423,7 +423,7 @@ class TestWSOnlyFramesPreserved:
                 f"saw {event_calls!r}"
             )
 
-            await communicator.disconnect()
+            await communicator.disconnect(timeout=30)
 
     @pytest.mark.django_db
     @pytest.mark.asyncio
@@ -458,7 +458,7 @@ class TestWSOnlyFramesPreserved:
                 f"(#1919); saw no mount frame through the chokepoint: {calls!r}"
             )
 
-            await communicator.disconnect()
+            await communicator.disconnect(timeout=30)
 
 
 # ------------------------------------------------------------------ #

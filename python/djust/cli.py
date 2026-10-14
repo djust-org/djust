@@ -1108,6 +1108,10 @@ def cmd_serve(args: argparse.Namespace) -> int:
         return 2
 
 
+def _ai_is_windows() -> bool:
+    return os.name == "nt"
+
+
 def _find_ai_manage_py() -> str | None:
     """Discover an inventory entry point within the nearest project boundary."""
     import stat
@@ -1125,7 +1129,7 @@ def _find_ai_manage_py() -> str | None:
             # Ownership and group/world mode bits only mean something on POSIX;
             # Windows reports every writable file as 0o666, so checking them
             # there would reject every entry point.
-            posix = hasattr(os, "getuid")
+            posix = not _ai_is_windows() and hasattr(os, "getuid")
             reason = None
             if not stat.S_ISREG(info.st_mode):
                 reason = "entry point is not a regular file"
@@ -1135,6 +1139,18 @@ def _find_ai_manage_py() -> str | None:
                 reason = "entry point is group/world writable"
             elif posix and parent.st_mode & stat.S_IWOTH:
                 reason = "containing directory is world writable"
+            elif not posix and not any(
+                os.path.lexists(os.path.join(directory, marker))
+                for marker in (
+                    "pyproject.toml",
+                    "setup.cfg",
+                    "setup.py",
+                    "requirements.txt",
+                    ".git",
+                )
+            ):
+                # Windows mode bits cannot establish trust in a discovered entry point.
+                reason = "containing directory has no project marker"
             if reason:
                 raise ValueError(f"rejected {candidate}: {reason}")
             return candidate
