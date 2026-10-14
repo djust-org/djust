@@ -7,7 +7,7 @@ class ServerEventToastMixin:
     """Mixin for LiveViews that adds push_toast() capability.
 
     Sends a special ``__toast__`` event over WebSocket that the
-    ``{% toast_container %}`` template tag auto-renders.
+    ``{% server_toast_container %}`` template tag auto-renders.
 
     Usage::
 
@@ -24,7 +24,7 @@ class ServerEventToastMixin:
     In template::
 
         {% load djust_components %}
-        {% toast_container position="top-right" %}
+        {% server_toast_container position="top-right" %}
 
     Args for push_toast:
         message: Toast text content
@@ -47,7 +47,7 @@ class ServerEventToastMixin:
         """Push a toast notification to the client via WebSocket.
 
         Emits a ``__toast__`` event with the toast payload.
-        The ``{% toast_container %}`` tag's JS listener renders it.
+        The ``{% server_toast_container %}`` tag's JS listener renders it.
         """
         self.push_event(
             "__toast__",

@@ -197,10 +197,33 @@ def test_inventory_hands_off_on_windows_modes(tmp_path, monkeypatch):
     calls = []
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("DJANGO_SETTINGS_MODULE", raising=False)
-    monkeypatch.delattr(os, "getuid", raising=False)
+    (tmp_path / "pyproject.toml").touch()
+    monkeypatch.setattr(cli, "_ai_is_windows", lambda: True)
     monkeypatch.setattr(os, "stat", fake_stat)
     monkeypatch.setattr(
         subprocess, "run", lambda args, **kw: calls.append(args) or SimpleNamespace(returncode=0)
     )
     assert cli.cmd_ai(["inventory"]) == 0
     assert calls and str(manage) in calls[0]
+
+
+@pytest.mark.parametrize(
+    "marker", ["pyproject.toml", "setup.cfg", "setup.py", "requirements.txt", ".git"]
+)
+def test_inventory_windows_requires_local_project_marker(tmp_path, monkeypatch, capsys, marker):
+    manage = tmp_path / "manage.py"
+    manage.write_text("")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("DJANGO_SETTINGS_MODULE", raising=False)
+    monkeypatch.setattr(cli, "_ai_is_windows", lambda: True)
+    calls = []
+    monkeypatch.setattr(
+        subprocess, "run", lambda args, **kw: calls.append(args) or SimpleNamespace(returncode=0)
+    )
+
+    assert cli.cmd_ai(["inventory"]) == 2
+    assert not calls
+    assert str(manage) in capsys.readouterr().err
+    (tmp_path / marker).touch()
+    assert cli.cmd_ai(["inventory"]) == 0
+    assert calls == [[sys.executable, str(manage), "djust_ai", "inventory"]]

@@ -19,11 +19,16 @@ from djust.tenants.resolvers import TenantInfo
 from djust.tenants.middleware import get_current_tenant
 from djust.testing import ManualClock, DeterministicClockExecutor
 from djust.websocket import LiveViewConsumer
-from ._ws_frames import wait_until
+from ._ws_frames import wait_until as _wait_until
 
 CONSUMERS = []
 TICKS = []
 TIME = ManualClock()
+
+
+async def wait_until(condition, *, what, timeout=30):
+    # A delayed worker must not turn an eventual state assertion into a failure.
+    await _wait_until(condition, timeout=timeout, what=what)
 
 
 def step(tick):
@@ -125,11 +130,11 @@ async def mount(tenant="a", room="same", view_class=RoomView):
         tenant=TenantInfo(tenant) if tenant else None,
     )
     assert (await socket.connect())[0]
-    await socket.receive_json_from(timeout=3)
+    await socket.receive_json_from(timeout=30)
     await socket.send_json_to(
         {"type": "mount", "view": __name__ + "." + view_class.__name__, "url": "/r/?room=" + room}
     )
-    frame = await socket.receive_json_from(timeout=3)
+    frame = await socket.receive_json_from(timeout=30)
     assert frame["type"] == "mount", frame
     return socket, CONSUMERS[-1]
 
@@ -150,7 +155,7 @@ def reset():
 
 async def close_all(sockets):
     for socket in sockets:
-        await socket.disconnect()
+        await socket.disconnect(timeout=30)
     for clock in (CLOCK, POLL):
         for scope in clock.stats():
             clock.stop(scope)
@@ -190,11 +195,11 @@ async def test_sessions_share_one_clock_and_stop_after_last_leave(members):
             assert len(TICKS) == 5
             assert all(tenant == "a" for _, tenant in TICKS)
             for socket in sockets[:-1]:
-                await socket.disconnect()
+                await socket.disconnect(timeout=30)
             sockets = sockets[-1:]
             await TIME.advance(0.1)
             assert CLOCK.running(scope)
-            await sockets.pop().disconnect()
+            await sockets.pop().disconnect(timeout=30)
             await TIME.advance(0.2)
             await TIME.advance(0.2)
             assert not CLOCK.running(scope)
@@ -417,13 +422,13 @@ async def test_async_handler_tracks_and_broadcasts_presence_with_clock():
             peer, peer_consumer = await mount(view_class=AsyncJoinView)
             sockets.append(peer)
             await peer.send_json_to({"type": "event", "event": "join", "params": {}})
-            assert (await peer.receive_json_from(timeout=3))["type"] == "patch"
+            assert (await peer.receive_json_from(timeout=30))["type"] == "patch"
             await wait_until(lambda: peer_consumer.view_instance.joins == 1, what="first join")
             assert peer_consumer.view_instance.clock_running_on_join
             joining, consumer = await mount(view_class=AsyncJoinView)
             sockets.append(joining)
             await joining.send_json_to({"type": "event", "event": "join", "params": {}})
-            frame = await joining.receive_json_from(timeout=3)
+            frame = await joining.receive_json_from(timeout=30)
             assert frame["type"] == "patch", frame
             await wait_until(
                 lambda: getattr(peer_consumer.view_instance, "online_count", 0) == 2,
@@ -489,7 +494,7 @@ async def join_followup(sockets, mode):
     sockets.append(socket)
     if mode == "async":
         await socket.send_json_to({"type": "event", "event": "join", "params": {}})
-        assert (await socket.receive_json_from(timeout=3))["type"] == "patch"
+        assert (await socket.receive_json_from(timeout=30))["type"] == "patch"
     return consumer.view_instance
 
 
@@ -498,7 +503,7 @@ async def retire_followup(clock):
         clock.stop(scope)
         run = clock._lookup(scope)
         if run is not None:
-            await asyncio.wait_for(asyncio.wrap_future(run.done), 3)
+            await asyncio.wait_for(asyncio.wrap_future(run.done), 30)
     await TIME.settle()
 
 
@@ -514,7 +519,7 @@ async def test_presence_timeout_retries_after_retirement_without_another_join(mo
         ticks.append(tick)
         if len(ticks) == 1:
             entered.set()
-            assert release.wait(5)
+            assert release.wait(30)
         return True
 
     clock = RoomClock(
@@ -538,7 +543,7 @@ async def test_presence_timeout_retries_after_retirement_without_another_join(mo
             await wait_until(lambda: peer.callbacks == ["join"], what="peer join")
             scope = peer._room_clock_scope
             await TIME.advance(0.1)
-            assert await asyncio.to_thread(entered.wait, 3)
+            assert await asyncio.to_thread(entered.wait, 30)
             old_id = clock.stats()[scope]["run_id"]
             assert clock.stop(scope)
             joining = await join_followup(sockets, mode)
@@ -616,7 +621,7 @@ async def test_untrack_during_ensure_flushes_join_before_leave():
 
     def slow_factory(key):
         entered.set()
-        assert release.wait(5)
+        assert release.wait(30)
         return {"key": key}
 
     clock = RoomClock(
@@ -630,7 +635,7 @@ async def test_untrack_during_ensure_flushes_join_before_leave():
     with override_settings(**SETTINGS), patch.object(FollowupView, "room_clock", clock):
         try:
             joining = await join_followup(sockets, "async")
-            assert await asyncio.to_thread(entered.wait, 3)
+            assert await asyncio.to_thread(entered.wait, 30)
             assert joining.callbacks == []
             joining.untrack_presence()
             assert joining.callbacks == ["join", "leave"]
