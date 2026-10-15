@@ -26,6 +26,9 @@ cause a *code* defect rather than a documentation one.
 | #2843 | PR body claimed a test "needs the compiled Rust extension, unavailable in this worktree env" — it runs (24 tests pass) and `import djust._rust` works | body corrected before merge | no |
 | #2147 | the issue's own premise — that a fix was in place — was false for the error arm | the arm was fixed | no |
 | #3463 | the first-draft `changelog.d/3454.security.md` and ROADMAP row presented a project-marker heuristic as Windows "security hardening"; it is not an ownership check (anyone who can plant `manage.py` can plant a marker) | reworded to state what it stops and what it doesn't; ownership check split to #3462 (independent review) | yes, fired |
+| #3472 | first PR body said the new gates were "not PR gating"; the JavaScript job's lint step does run on PRs | review caught it before merge; body and fragment corrected | yes, fired |
+| #3473 | the issue asserted "no test assertion is involved" and a lost runner, from a `gh run view --log` copy truncated at ~8,000 of 24,882 lines; the real cause was a Python 3.14 test failure exposing GHSA-4h5m-xcmg-vvmw | raw job log via the API; CLAUDE.md rule (v1.3.0-11/12 arc) | yes, missed |
+| #3474 | the implementer's CodeQL report called #3004 a false positive by citing a different file, and #3042 a false positive when CodeQL was right | reviewer re-verified every dismissal against the source before filing it | yes, fired |
 
 ## Detection
 

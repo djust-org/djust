@@ -382,9 +382,9 @@ issue or be explicitly closed with a reason.
 | 340 | Enforce the review-artifact requirement mechanically (a Code Review that never reaches the PR) | Retro v1.2.0-6 (PRs #2837, #2838) | — | OUT-OF-REPO | The gate belongs in pipeline-skills' `pipeline-gates.sh` (repo `johnrtipton/pipeline-skills`), which already implements `changelog-boundary`/`docs-only`/`premerge`; upstream issue not yet filed (no verified access from here). In-repo mitigation is live: the Stage 11 rule in CLAUDE.md's v1.2.0-6 section |
 | 341 | No gate ties a completed ROADMAP bucket to a RETRO.md entry — 14 buckets drifted; #2140 was a previous backfill of the same kind | Retro backfill v1.1.0-9..v1.2.0-5 | #2848 | Open | Suggested `scripts/check-retro-coverage.py`: parse ✅ milestone headings in ROADMAP.md, fail when RETRO.md has no entry |
 | 342 | False/stale claims in changelog fragments and PR bodies are unchecked — five instances across v1.2.0-1..3, one of which caused a regression (#2838) | Retro backfill v1.1.0-9..v1.2.0-5 | #2849 | Open | Extend the existing path/class reference checks (cf. #2652) to `changelog.d/*.md`; share `check-changelog-test-counts`' parser rather than adding a third |
-| 343 | **Rule row** — enumerate every caller of a shared cache/registry/dispatch and the invariant each needs before the first edit (v1.2.0-6 retro arc, rule 1) | Retro v1.2.0-6 | — | Open | pattern: fix-reproduces-own-bug  fired: —  re-violated: — (rule created at v1.2.0-6; origin instances #2147, #2146, #2838 r1-r3, #2846 are recorded on the page, not counted as re-violations since the rule did not exist for them) |
-| 344 | **Rule row** — verify a claim against the source before writing it, and cite path:line; delete a claim that cannot be checked (v1.2.0-6 retro arc, rule 2) | Retro v1.2.0-6 | — | Open | pattern: unverified-claim  fired: #3463  re-violated: — (rule created at v1.2.0-6; the ten origin instances — #2838, #2546, #2534, #2554, #2573, #2607, #2843, #2147 — predate it) |
-| 345 | **Rule row** — a Code Review stage is not complete until the review is POSTED to the PR, and a bucket until `RETRO.md` has its entry (v1.2.0-6 retro arc, rule 3) | Retro v1.2.0-6 | #2848 | Open | pattern: retro-dropout  fired: —  re-violated: — (rule created at v1.2.0-6; #2837/#2838 merged with no review artifact and 14 buckets drifted before it. Mechanical half now exists: `scripts/check-retro-coverage.py`) |
+| 343 | **Rule row** — enumerate every caller of a shared cache/registry/dispatch and the invariant each needs before the first edit (v1.2.0-6 retro arc, rule 1) | Retro v1.2.0-6 | — | Closed | pattern: fix-reproduces-own-bug  fired: —  re-violated: — (rule created at v1.2.0-6; origin instances #2147, #2146, #2838 r1-r3, #2846 are recorded on the page, not counted as re-violations since the rule did not exist for them) **gate v1.3.0-11: DEMOTE** (no instance in v1.3.0-10, -11, -12); rule line removed from CLAUDE.md, page `docs/patterns/fix-reproduces-own-bug.md` is `wiki-only`. |
+| 344 | **Rule row** — verify a claim against the source before writing it, and cite path:line; delete a claim that cannot be checked (v1.2.0-6 retro arc, rule 2) | Retro v1.2.0-6 | — | Open | pattern: unverified-claim  fired: #3463, #3472, #3474  re-violated: #3473 (rule created at v1.2.0-6; the ten origin instances — #2838, #2546, #2534, #2554, #2573, #2607, #2843, #2147 — predate it) **gate v1.3.0-11/12: KEEP** (fired 2, missed 1). |
+| 345 | **Rule row** — a Code Review stage is not complete until the review is POSTED to the PR, and a bucket until `RETRO.md` has its entry (v1.2.0-6 retro arc, rule 3) | Retro v1.2.0-6 | #2848 | Open | pattern: retro-dropout  fired: #3483 (check-retro-coverage caught the missing v1.3.0-4 entry)  re-violated: #3474 (rule created at v1.2.0-6; #2837/#2838 merged with no review artifact and 14 buckets drifted before it. Mechanical half now exists: `scripts/check-retro-coverage.py`) **gate v1.3.0-11/12: KEEP** (#3474's review findings were posted only inside its retro comment, not as a review; one miss). |
 | 346 | Python and Rust root locators disagree when a quoted attribute value contains `<… dj-root>` | PR #3023 | #3030 | Open | pattern: parallel-path-drift. Needs author markup or `\|safe`, so not reachable from autoescaped content |
 | 347 | dj-root vs dj-view root precedence: Python searches dj-root first, the Rust VDOM takes the first element | PR #3023 | #3031 | Open | pattern: parallel-path-drift. Predates #3023; T005 warns about the split layout |
 | 348 | A view whose `mount()` raises keeps its tick task running (runtime keeps the half-mounted view on that branch) | PR #3035 | #3027 | Open | pattern: fix-reproduces-own-bug. Predates #3035; the #2945 fix exposes short-tick views to it too |
@@ -409,8 +409,9 @@ issue or be explicitly closed with a reason.
 | 367 | The `v1.3.0rc1` tag is not reachable from main (squash-merged release), so two changelog-pin tests fail in any local checkout with the tag, and the pin cannot see a deleted `[1.3.0rc1]` section | PR #3070 | #3072 | Open | Release process or gate rule: tag the main squash commit / merge the release branch back, or count a tag whose section exists on the branch. CI skips the tests (no tags) |
 | 368 | Registry `register_*`/`unregister_*` drop the replaced `Py` under the write lock; an attached reader blocked on a registry `RwLock` cannot join a 3.14t stop-the-world | PR #3087 | #3088 | Open | Pre-existing; found by the #3074 GIL-release review. Drop after unlocking; take locks detached or copy-on-write |
 | 369 | `PerformanceTracker`'s current tracker is a thread-local on the shared event-loop thread, so concurrent sessions' event turns overwrite each other's (debug timing only) | PR #3074 2/7 audit | #3089 | Open | Pre-existing, unchanged by the worker pool; make it a ContextVar |
-| 370 | WebSocket test teardown/receives use channels' 1 s default timeout (453 bare `.disconnect()` calls) and flake under machine load; give test communicators a generous default plus a gate against bare ones | Retro v1.3.0-10 / PR #3463 review | #3464 | Open | #3463 fixed only the two files named in #3456/#3451 |
-| 371 | Windows `djust ai inventory` hand-off: compare the discovered `manage.py`'s owner SID and DACL with the current user (the #3454 marker rule is a heuristic) | Retro v1.3.0-10 / PR #3463 review | #3462 | Open | Needs a native Windows CI job to test |
+| 370 | WebSocket test teardown/receives use channels' 1 s default timeout (453 bare `.disconnect()` calls) and flake under machine load; give test communicators a generous default plus a gate against bare ones | Retro v1.3.0-10 / PR #3463 review | #3464 | Closed | #3463 fixed only the two files named in #3456/#3451 Closed by #3474: a session-scoped autouse fixture in the root `conftest.py` raises the four channels communicator defaults to 30 s. |
+| 371 | Windows `djust ai inventory` hand-off: compare the discovered `manage.py`'s owner SID and DACL with the current user (the #3454 marker rule is a heuristic) | Retro v1.3.0-10 / PR #3463 review | #3462 | Closed | Needs a native Windows CI job to test Closed by #3474: `python/djust/_windows_acl.py` checks the owner (TokenUser or TokenOwner) and the DACL; the `windows-ai-inventory` CI job runs the real API path. |
+| 372 | A release run blocked by the pre-release audit raises no alert: v1.2.4 sat unpublished ~4 days; v1.3.0rc9 and v1.2.5 were caught only because the runs were being watched | Retro v1.3.0-11 (PR #3471) / v1.3.0-12 | #3482 | Open | |
 
 ## Retro backfill — 14 un-retro'd drain buckets (v1.1.0-9 … v1.2.0-5)
 
@@ -1146,6 +1147,137 @@ First run of the gate in this repo, so nothing was changed. Rule rows 343 (`fix-
 - [ ] Give WebSocket test communicators a generous default timeout plus a gate — tracked in Action Tracker #370 (GitHub #3464)
 - [ ] Windows owner-SID check for the `ai inventory` hand-off — tracked in Action Tracker #371 (GitHub #3462)
 
+## v1.3.0-11 — release-audit follow-ups from #3129 (PRs #3471, #3472)
+
+**Date**: 2026-10-15
+**Scope**: Follow-ups from the #3129 release audit.
+- #3471 (on `1.2`, `36c27ace4`): bumped `source-map-js` to clear the npm advisory that had blocked the v1.2.4 publish (#3466, closed by hand).
+- #3472 (squash `7bcacd303`): closed three issues.
+  - #3467: the CI dependency audits now gate. `pip-audit-gate.py`, `cargo audit --deny unsound` and `npm audit --audit-level=high` fail the job, and both `npm run lint` steps are no longer masked.
+  - #3468: the audit template's test path is now runnable as `make test-security`.
+  - #3469: an exact Decimal floor, with a magnitude bound, for `DJUST_TRUSTED_PROXY_COUNT`.
+
+**Tests at close**:
+- 93 targeted; `make test-security`: 1,183 passed, 1 skipped; `cargo test -p djust_vdom`: 379 passed.
+- Pre-push suite passed; PR CI 21 pass.
+
+### What We Learned
+
+**1. A blocked release is silent.**
+The pre-release audit did its job on v1.2.4 and refused to publish over a high-severity npm advisory. But nothing told anyone. The release sat as a tag and a Release Drafter draft for about four days. The same thing recurred in v1.3.0-12: rc9 and 1.2.5 were blocked by GHSA-8pqf-f4m5-798g and were noticed only because the runs were being watched.
+
+**Action taken**: Open — tracked in Action Tracker #372 (GitHub #3482).
+
+**2. "The same failure is on `main` too" is not a diagnosis.**
+The dispatched full matrix for #3472 failed py3.14 shard 2/4 and py3.15 shard 1/4. It was waved through because `main`'s push runs failed in the same cells, and #3473 was filed as a lost runner with "no test assertion". The log behind that claim came from `gh run view --log`, which had cut a 24,882-line log at about 8,000 lines. The raw job log named the real cause, `test_user_attributes_read`, a Python 3.14 bytecode change that turned out to be a security bug: GHSA-4h5m-xcmg-vvmw, fixed in 1.0.11, 1.1.8, 1.2.5 and 1.3.0rc9.
+
+**Action taken**: Added a rule to `CLAUDE.md`, section "Process canonicalizations from the v1.3.0-11/12 retro arc": fetch the raw job log before diagnosing, and treat a red `main` cell as a finding until its failing test is named.
+
+**3. An exact numeric coercion needs a magnitude bound.**
+Codex's Decimal floor for #3469 had no bound, so `"1e999999999"` would have built an enormous `int`. The controller's review caught it.
+
+**Action taken**: Closed — fixed by `_MAX_COUNT_DIGITS = 4` in `python/djust/_client_ip.py`, with its cases in `python/djust/tests/test_client_ip_trusted_proxy.py` (#3472).
+
+### Insights
+
+- The release audit's gates found two real, publish-blocking advisories in one day. Gating CI audits (#3467) was worth it: it moves those findings to PR time instead of tag time.
+- zsh `noclobber` silently kept an old file on a `>` rewrite (#3472), and later aborted a whole `2>>` loop in v1.3.0-12. Use `>|` and `2>&1` capture in scripts run from this shell.
+
+### Review Stats
+
+| Metric | PR #3471 | PR #3472 | Total |
+|--------|----------|----------|-------|
+| Tests added | 0 | yes (proxy-count, template-path, gate tests; count not recorded per PR) | — |
+| 🔴 Findings | 0 | 0 | 0 |
+| 🟡 Findings | 0 | 2 (unbounded Decimal; "not PR gating" claim) | 2 |
+| Findings fixed | 0 | 2 | 2 |
+| CI failures | 0 | 0 on the PR; the dispatched matrix's py3.14/3.15 cells were the pre-existing #3473 failure | 0 |
+| Findings by pattern class | — | `unverified-claim`×1 (fired), `new`×0 (the unbounded floor is a review catch with no page) | |
+
+### Rule gate (Stage 3.7)
+
+This is the second milestone with data since the v1.3.0-10 dry run, so the decisions are applied. They cover v1.3.0-10 through v1.3.0-12.
+- **344 `unverified-claim`: KEEP.** It fired three times (#3463, #3472, #3474) and was missed once (#3473).
+- **345 `retro-dropout`: KEEP.** It was missed once: #3474's review lived only inside its retro comment.
+- **343 `fix-reproduces-own-bug`: DEMOTE.** It had no instance in three buckets. Its line moves from `CLAUDE.md` to `docs/patterns/fix-reproduces-own-bug.md` (`wiki-only`).
+
+### Process Improvements Applied
+
+**CLAUDE.md**:
+- Added the v1.3.0-11/12 arc: raw CI logs, and listing the PR's code-scanning alerts.
+- Demoted the v1.2.0-6 cache-caller rule.
+
+**Pipeline template**: none.
+**Checklist**: none.
+**Skills**: none.
+
+### Open Items
+
+- [ ] Silent blocked releases — tracked in Action Tracker #372 (GitHub #3482)
+
+## v1.3.0-12 — code-scanning cleanup, WS test timeouts, Windows inventory trust, audit carry-forward (PRs #3474, #3475)
+
+**Date**: 2026-10-15
+**Scope**: One grouped drain PR, #3474 (squash `748a2e8c4`), and its follow-up #3475 (`ed8a7f550`).
+- Cleared every open CodeQL alert on `main`: 17 were fixed in code, 12 dismissed as false positives with reasons, and 2 dismissed as won't-fix (deliberate `BaseException` transfer into a `Future`).
+- #3464: channels communicator defaults raised to 30 s by a session-scoped autouse fixture.
+- #3462: Windows owner/DACL trust check for the `djust ai inventory` hand-off, with a new `windows-ai-inventory` CI job.
+- #3470: the unfinished #3129 items carried into the release-audit template.
+
+**Tests at close**:
+- Full pre-push suite passed (47,315 + new tests). PR CI: 22 pass, 3 skipping, including `windows-ai-inventory` on `windows-latest`.
+- Code-scanning alerts open on `main`: 0.
+
+### What We Learned
+
+**1. An implementer's "false positive" verdicts must be re-verified before they are filed.**
+Codex classed 13 of the 28 alerts as false positives. Two were wrong:
+- #3004 cited a different file than the flagged line; it was a bare `except BrokenBarrierError: pass`.
+- #3042 was a real dead store.
+
+Dismissing an alert is public and hides it from every later scan.
+
+**Action taken**: Closed — each dismissal was checked against the source before filing, and both were fixed in code instead (#3474, `95427d5a9`). The rule already exists as row 344 (`unverified-claim`); this instance is recorded on its page as fired.
+
+**2. A Windows "owned by me" rule has to accept the token's default owner.**
+The first implementation required the file owner to be the current user's SID. On Windows Server, an elevated administrator's new files are owned by BUILTIN\Administrators, which is `TokenOwner`. That rule would have refused every elevated-admin hand-off, and made the Windows-only test fail. The write mask also missed `FILE_DELETE_CHILD`, which on a directory lets a broad principal replace `manage.py`. Both were caught in review, before the first Windows CI run.
+
+**Action taken**: Closed — `python/djust/_windows_acl.py` accepts `TokenUser` or `TokenOwner` and counts `FILE_DELETE_CHILD`. The cases are in `python/djust/tests/test_ai_windows_acl_3462.py` (#3474, `95427d5a9`), and the first `windows-ai-inventory` run passed the real API path.
+
+**3. The CodeQL PR check does not show note-level alerts.**
+#3474 added `_windows_acl.py` with a `py/import-and-import-from` note (alert #3076). The PR's "CodeQL" check reported *neutral*, so the alert appeared only after merge, and #3475 had to follow.
+
+**Action taken**: Added a rule to `CLAUDE.md`, section "Process canonicalizations from the v1.3.0-11/12 retro arc": list `code-scanning/alerts?ref=refs/pull/<N>/merge` before merging a PR that adds Python or JS.
+
+### Insights
+
+- The new Windows job justified itself on its first run. It confirmed that the real ctypes path trusts an owned temp file, and it exposed a #3454 test that had never run on Windows, which had no project marker.
+- The pre-push suite failed twice for environmental reasons: a full disk, then load averages of 100–500. Under that load the user asked for `--no-verify` pushes, with CI's full suite as the gate. That is recorded as a working preference, not a repo rule.
+- The duration-coverage gate tipped at 10.008% because of the new tests. `make test-durations-from-ci RUN=<main run>` fixed it in one command.
+- The rc9 release PR (#3476) merged with a merge commit, so the tag is reachable from `main`. That departs from this file's `## Pipeline` note to squash-merge release PRs. Both satisfy the reachability rule (#3149).
+
+### Review Stats
+
+| Metric | PR #3474 | PR #3475 | Total |
+|--------|----------|----------|-------|
+| Tests added | `test_ws_communicator_defaults_3464.py`, `test_ai_windows_acl_3462.py` (+4 cases from review), the template check | 0 | — |
+| 🔴 Findings | 0 | 0 | 0 |
+| 🟡 Findings | 4 (`FILE_DELETE_CHILD`; TokenOwner; #3004 and #3042 misclassified) | 0 | 4 |
+| Findings fixed | 4 | 1 (alert #3076) | 5 |
+| CI failures | 1 (`windows-ai-inventory`: the #3454 test had no marker) | 0 | 1 |
+| Findings by pattern class | `unverified-claim`×1 (fired), `new`×0 | — | |
+
+### Process Improvements Applied
+
+**CLAUDE.md**: the v1.3.0-11/12 arc, shared with the v1.3.0-11 entry above.
+**Pipeline template**: none.
+**Checklist**: none.
+**Skills**: none.
+
+### Open Items
+
+- none. Rows 370 and 371 are closed by #3474.
+
 ## v1.3.0-9 — test git-env isolation (#3179)
 
 **Scope**: One djust PR (#3180), which fixed #3179. The main checkout's repo-local config gained `user.name = Test`, `user.email = test@example.com` and `commit.gpgsign = false`, and the 1.3.0rc3 release commit and `82247d27a` were authored "Test".
@@ -1336,6 +1468,57 @@ First run of the gate in this repo, so nothing was changed. Rule rows 343 (`fix-
   - The tick error path, the `group_send` error path and the guide note were fixed.
   - Accepted: the scheduling on 3.10 and 3.11, which changes order only.
   - Documented: a failing deferred check is logged and the task goes on.
+
+## v1.3.0-4 — overload behaviour (#3114) (PRs #3118, #3167) — backfill
+
+**Date**: 2026-10-15 (backfill; the bucket's work merged 2026-09-25 and 2026-09-26)
+**Scope**:
+- #3118 (`9a541bf27`): `djust.worker_pool.PooledHTTP` (opt-in) bounds HTTP request threads, and pool threads start from an empty context (#3114). On snake-arena at 64/192/256 clients, peak and after-idle RSS went from 2030 MB to 936 MB, and p95 RTT at 256 clients from about 7 s to 0.33 s.
+- #3116 was fixed inside the grouped drain PR #3167 (`ea97f6bfb`). Turn-scoped ContextVars now hold the owner weakly. That covers the owner slot, `djust_sql_capture_scope` and `djust_explicit_child_render`.
+- This bucket was complete in substance once #3167 merged, but its #3116 row stayed unstruck until the v1.3.0-11/12 retro. `check-retro-coverage` then flagged the missing entry.
+
+**Tests at close**:
+- #3118: six behavioural tests against Django's real `ASGIHandler`, added to the 3.14t CI subset.
+- #3167: `test_turn_context_copies_release_3116.py`, which drives a real `LiveViewConsumer`. Full suite: 34,500 passed.
+
+**Evidence available**:
+- #3118 has a full Retrospective comment.
+- #3167 has review comments but no retrospective, which is a `RETRO_GATE_VIOLATION`, backfilled as a comment on #3167 with this entry.
+
+### What We Learned
+
+**1. A "fixed" leak needs a reachability test against the real consumer, and a walk of every holder.**
+#3167's first #3116 fix removed the owner-slot edge. The independent review found that `djust_sql_capture_scope` still held the view strongly. Walking every turn-scoped ContextVar turned up a third holder, `djust_explicit_child_render`. Only a test that drives a real `LiveViewConsumer` through `copy_context()` and `create_task` proves the session is collectable.
+
+**Action taken**: Closed — `python/djust/tests/test_turn_context_copies_release_3116.py`, weak owner references in `observability/sql.py` and `_child_rendering._Render.release()` (#3167, `b24ddcf50`). The gate-offs show each mutation fails the new tests.
+
+**2. Measure retained pages before choosing a memory fix.**
+The issue's suspects were queues. tracemalloc against vmmap showed 89 MB live against 1.1 GB of mimalloc resident on 3.14t. So the fix was to bound peak threads, not to add an eviction policy.
+
+**Action taken**: Closed — the method and numbers are in the scaling guide's "Memory under overload" section, which shipped with `PooledHTTP` (#3118). The snake-arena adoption follow-up, djust-org/snake-arena#17, is closed.
+
+### Insights
+
+- An in-server sampler would have saved time on #3080 and #3114 alike. It would read RSS, the malloc zone, backlog counts and gc/tracemalloc/referrer chains on demand. It took about 30 minutes to build ad hoc for #3118. This is an idea only, not filed.
+- #3118's latency ratio was measured at load averages of 4–24, while #3095 ran on the same machine, so treat it as indicative. The memory conclusions don't depend on load.
+
+### Review Stats (partial)
+
+| Metric | PR #3118 | PR #3167 (#3116 share only) | Total |
+|--------|----------|-----------------------------|-------|
+| 🔴 Findings | 0 | 0 | 0 |
+| 🟡 Findings | 6 (Self-Review 2, Security 1, Code Review 3) | 1 (#3116 incomplete) | 7 |
+| 🟢 Findings | 1 | 1 (changelog) | 2 |
+| Findings fixed | all | all | all |
+| Findings by pattern class | not tagged at the time; deliberately not reconstructed | not tagged | |
+
+### Process Improvements Applied
+
+None in this bucket. The coverage gate that caught the missing entry, `check-retro-coverage` (#2848), is rule row 345's mechanical half, and it is recorded as fired.
+
+### Open Items
+
+- none
 
 ## v1.2.1-7 — state and rendering batch: v1.2.1-7, -8 and -9 (PR #3042)
 
