@@ -725,8 +725,7 @@ def write_ui_summary(report: ASTAuditReport, root: str) -> Tuple[Optional[str], 
             try:
                 os.unlink(temp_path)
             except FileNotFoundError:
-                # A missing temporary file is already cleaned up.
-                temp_path = None
+                pass  # A missing temporary file is already cleaned up.
             except OSError as exc:
                 result = None, exc.strerror or type(exc).__name__
     return result

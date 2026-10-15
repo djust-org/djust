@@ -20,6 +20,10 @@ from djust._windows_acl import _acl_is_trusted, windows_path_is_trusted
         ("S-1-5-21-1", "S-1-5-21-1", [(0, "S-1-1-0", 0x1200A9)], True),
         ("S-1-5-21-1", "S-1-5-21-1", [(1, "S-1-1-0", 0x2)], True),
         ("S-1-5-21-1", "S-1-5-21-1", [(5, "S-1-1-0", 0x2)], False),
+        ("S-1-5-21-1", "S-1-5-21-1", [(0, "S-1-5-11", 0x40)], False),  # FILE_DELETE_CHILD
+        # An elevated administrator's token assigns BUILTIN\\Administrators.
+        ("S-1-5-32-544", {"S-1-5-21-1", "S-1-5-32-544"}, [], True),
+        ("S-1-5-32-544", {"S-1-5-21-1"}, [], False),
     ],
 )
 def test_acl_decision(owner, user, aces, expected):
