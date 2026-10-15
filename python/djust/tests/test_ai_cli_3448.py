@@ -39,6 +39,7 @@ def test_ai_inventory_outside_a_project_exits_2(tmp_path, monkeypatch, capsys):
 def test_ai_delegates_to_manage_py(tmp_path, monkeypatch):
     manage = tmp_path / "manage.py"
     manage.write_text("")
+    (tmp_path / "pyproject.toml").write_text("")  # the Windows hand-off needs a marker (#3454)
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("DJANGO_SETTINGS_MODULE", raising=False)
     calls = []
