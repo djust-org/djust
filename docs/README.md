@@ -18,6 +18,8 @@ This directory contains comprehensive documentation for djust organized by topic
 - **[System Checks Reference](system-checks.md)** - Check IDs across the C/V/S/T/Q/Y categories, severities, suppression patterns, and false positives
 - **[API Stability & Deprecation Policy](API_STABILITY.md)** - What the djust 1.0 SemVer commitment covers, the deprecation process, and the support window
 - **[Upgrading to djust 1.0](website/guides/upgrade-to-1.0.md)** - What the 1.0 SemVer commitment means for a 0.9.x app, the deprecated symbols, and the new accessibility checks
+- **[Upgrading to djust 1.3](website/guides/upgrade-to-1.3.md)** - Diagnostics and fixes for upgrading a 1.2.x application
+- **[djust 1.3 release notes](website/releases/1.3.md)** - Features, behavior changes, security fixes, and upgrade steps
 - **[Accessibility (ARIA / WCAG)](website/guides/accessibility.md)** - Built-in component ARIA, the `Y` accessibility system checks, and theming color-contrast WCAG validation
 - **[Scaffolding Generator](website/guides/scaffolding.md)** - Generate CRUD LiveView scaffolds from model definitions
 
