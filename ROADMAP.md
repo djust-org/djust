@@ -142,6 +142,16 @@ Two name shapes appear in this roadmap, with distinct meanings:
 | ~~**P2**~~ | ~~#3450 — Correct the server event toast tag example~~ ✅ (#3463) | v1.3.0 |
 | ~~**P2**~~ | ~~#3454 — Windows AI inventory hand-off requires a project marker in `manage.py`'s own directory (a heuristic against a bare planted `manage.py`; the real owner-SID check is #3462)~~ ✅ (#3463) | v1.3.0 |
 
+### v1.3.0-11 — release-audit follow-ups from #3129 (drain bucket)
+
+*Kind:* CI gating, release checklist, and configuration hardening. #3466 (the `1.2` branch's `source-map-js`, blocking the 1.2.4 publish) is fixed on `1.2` in #3471; `main` already has 1.2.2.
+
+| Priority | Task | Milestone |
+|---|---|---|
+| **P1** | #3467 — `test.yml` masks `cargo audit`, `npm audit` and `safety` failures with `\|\| echo` | v1.3.0 |
+| **P2** | #3468 — `SECURITY_AUDIT_TEMPLATE.md` names a nonexistent `tests/security/` path (new `make test-security`) | v1.3.0 |
+| **P2** | #3469 — `DJUST_TRUSTED_PROXY_COUNT` coercion can round a misconfigured value up | v1.3.0 |
+
 ## Next: v1.2.1 — non-breaking fixes (drain)
 
 > Planned 2026-09-24 from a triage of every open issue. **Policy:** non-breaking bug fixes ship in 1.2.1; anything breaking, new features, and parser/dependency upgrades go to 1.3. Issues split into a 1.2.1 part and a 1.3 part are marked. The ADR-034–038 stack (#2944, #2954) merges after 1.2.1 is cut. Already shipped toward 1.2.1 on `main`: #3009 (inline whitespace, #2999/#3010), the CSRF resolver (#2978), SerializerCache removal (#2992), the audit gate (#2989).

@@ -18,6 +18,7 @@ is client-controlled / spoofable).
 from __future__ import annotations
 
 import logging
+from decimal import ROUND_FLOOR, Decimal, InvalidOperation
 from typing import Optional
 
 from django.conf import settings
@@ -25,18 +26,20 @@ from django.conf import settings
 logger = logging.getLogger(__name__)
 
 
+# A coerced (non-``int``) count with this many integer digits or more is
+# treated as invalid.
+_MAX_COUNT_DIGITS = 4
+
+
 def _trusted_proxy_count() -> int:
     """Number of trusted reverse-proxy hops in front of the app (>= 0).
 
     Integer values other than ``bool`` are clamped at zero; non-negative integers
     are used as given. ``None`` and values equal to zero return zero without
-    warning. Other values are converted through ``max(0, int(float(raw)))``;
-    ``TypeError``, ``ValueError`` or ``OverflowError`` yields zero. That
-    conversion path logs a warning on each call.
-
-    Configure an ``int``. The conversion rounds through ``float``, so a numeric
-    string can round *up*: ``"1.999999999999999999999999"`` yields 2, one hop more
-    than the exact decimal floor of the written value.
+    warning. Other values are converted to decimal and floored exactly, then
+    clamped at zero. Invalid and non-finite values, and values of 10,000 or
+    more, yield zero. This conversion
+    path logs a warning on each call. Configure an ``int`` to avoid coercion.
     """
     raw = getattr(settings, "DJUST_TRUSTED_PROXY_COUNT", 0)
     if isinstance(raw, int) and not isinstance(raw, bool):
@@ -44,8 +47,16 @@ def _trusted_proxy_count() -> int:
     if raw in (0, None):  # unset / explicit default — no warning
         return 0
     try:
-        coerced = max(0, int(float(raw)))
-    except (TypeError, ValueError, OverflowError):  # OverflowError: inf / -inf
+        decimal_value = Decimal(str(int(raw) if isinstance(raw, bool) else raw).strip())
+        # Non-finite values, and magnitudes no real proxy chain has (the
+        # exponent bound also keeps "1e999999999" from becoming a huge int),
+        # trust no hop rather than every hop.
+        coerced = (
+            max(0, int(decimal_value.to_integral_value(rounding=ROUND_FLOOR)))
+            if decimal_value.is_finite() and decimal_value.adjusted() < _MAX_COUNT_DIGITS
+            else 0
+        )
+    except (InvalidOperation, TypeError, ValueError, OverflowError):
         coerced = 0
     # Log the offending value's TYPE, not the value itself: the setting is read
     # from ``settings`` (which CodeQL py/clear-text-logging-sensitive-data treats
