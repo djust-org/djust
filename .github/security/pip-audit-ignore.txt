@@ -17,3 +17,4 @@
 # - Remove the entry as soon as a fixed version is locked.
 
 CVE-2026-77528  # autobahn 24.4.2 (Python 3.10 installs only, via channels[daphne]): the fix, 26.7.1, requires Python >=3.11, so no fixed autobahn exists for 3.10. Python 3.11+ locks 26.7.1. Drop with 3.10 support or if a 3.10 backport ships; review-by 2026-12-31
+GHSA-8pqf-f4m5-798g  # twisted 26.4.0 (CVE-2026-106454, PYSEC-2026-4304): ReDoS in the twisted.mail IMAP4 server wildcardToRegexp(); djust uses Twisted only through daphne for HTTP/WebSocket and never imports twisted.mail, so the code is unreachable; no fixed release exists yet; review-by 2026-11-15
