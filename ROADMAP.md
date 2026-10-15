@@ -142,26 +142,26 @@ Two name shapes appear in this roadmap, with distinct meanings:
 | ~~**P2**~~ | ~~#3450 — Correct the server event toast tag example~~ ✅ (#3463) | v1.3.0 |
 | ~~**P2**~~ | ~~#3454 — Windows AI inventory hand-off requires a project marker in `manage.py`'s own directory (a heuristic against a bare planted `manage.py`; the real owner-SID check is #3462)~~ ✅ (#3463) | v1.3.0 |
 
-### v1.3.0-11 — release-audit follow-ups from #3129 (drain bucket)
+### v1.3.0-11 — release-audit follow-ups from #3129 (drain bucket) ✅
 
 *Kind:* CI gating, release checklist, and configuration hardening. #3466 (the `1.2` branch's `source-map-js`, blocking the 1.2.4 publish) is fixed on `1.2` in #3471; `main` already has 1.2.2.
 
 | Priority | Task | Milestone |
 |---|---|---|
-| **P1** | #3467 — `test.yml` masks `cargo audit`, `npm audit` and `safety` failures with `\|\| echo` | v1.3.0 |
-| **P2** | #3468 — `SECURITY_AUDIT_TEMPLATE.md` names a nonexistent `tests/security/` path (new `make test-security`) | v1.3.0 |
-| **P2** | #3469 — `DJUST_TRUSTED_PROXY_COUNT` coercion can round a misconfigured value up | v1.3.0 |
+| ~~**P1**~~ | ~~#3467 — `test.yml` masks `cargo audit`, `npm audit` and `safety` failures with `\|\| echo`~~ ✅ (#3472) | v1.3.0 |
+| ~~**P2**~~ | ~~#3468 — `SECURITY_AUDIT_TEMPLATE.md` names a nonexistent `tests/security/` path (new `make test-security`)~~ ✅ (#3472) | v1.3.0 |
+| ~~**P2**~~ | ~~#3469 — `DJUST_TRUSTED_PROXY_COUNT` coercion can round a misconfigured value up~~ ✅ (#3472) | v1.3.0 |
 
-### v1.3.0-12 — code-scanning cleanup, WS test timeouts, Windows inventory trust, 1.3.0 audit carry-forward (drain bucket)
+### v1.3.0-12 — code-scanning cleanup, WS test timeouts, Windows inventory trust, 1.3.0 audit carry-forward (drain bucket) ✅
 
 *Kind:* static-analysis cleanup, test reliability, security hardening, release checklist.
 
 | Priority | Task | Milestone |
 |---|---|---|
-| **P2** | CodeQL — clear the 28 open code-scanning alerts on main (15 fixed, 13 dismissed as false positives) | v1.3.0 |
-| **P2** | #3464 — WebSocket test teardown uses channels' 1 s default timeout under machine load | v1.3.0 |
-| **P1** | #3462 — `djust ai inventory`: compare the Windows owner SID/DACL of a discovered `manage.py` | v1.3.0 |
-| **P2** | #3470 — carry the unfinished #3129 review items forward into the 1.3.0 final audit checklist | v1.3.0 |
+| ~~**P2**~~ | ~~CodeQL — clear the open code-scanning alerts on main~~ ✅ (#3474, #3475: 17 fixed in code, 12 dismissed as false positives, 2 as won't-fix) | v1.3.0 |
+| ~~**P2**~~ | ~~#3464 — WebSocket test teardown uses channels' 1 s default timeout under machine load~~ ✅ (#3474) | v1.3.0 |
+| ~~**P1**~~ | ~~#3462 — `djust ai inventory`: compare the Windows owner SID/DACL of a discovered `manage.py`~~ ✅ (#3474) | v1.3.0 |
+| ~~**P2**~~ | ~~#3470 — carry the unfinished #3129 review items forward into the 1.3.0 final audit checklist~~ ✅ (#3474) | v1.3.0 |
 
 ## Next: v1.2.1 — non-breaking fixes (drain)
 
