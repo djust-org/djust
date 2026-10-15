@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0rc9] - 2026-10-15
+
+A 1.3 pre-release with a security fix; upgrading from 1.3.0rc8 is recommended.
+
+### Added
+
+- **UI building blocks discovery (ADR-043 D4, #3448).** `djust_ai_context` in every format and `djust_ai manifest` share a use-case table, setup and discovery section with `docs/llms.txt`, `docs/llms-full.txt` and `docs/BEST_PRACTICES_AI.md`. Context output now uses manifest sections; `make ai-ui-section`, `make check-ai-ui-section` and a pre-commit hook maintain the generated docs. Covered by `python/djust/tests/test_ai_ui_section_3448.py` and `tests/test_generate_ai_ui_section.py`.
+
+### Changed
+
+- **Component-aware `djust new` scaffold (ADR-043 D4, #3448).** The themed scaffold enables `djust.components` and `djust.theming`, requests `djust[components]`, and uses an `{% app_shell %}` base template. `--bare` keeps core `djust` and writes `DJUST_CONFIG = {"suppress_checks": ["I002"]}`; generated `AGENTS.md` files point to discovery and audit commands. Missing component dependencies raise `ImproperlyConfigured` naming `djust[components]`. Behavior change: new projects only; existing projects unaffected. Covered by `python/djust/tests/test_scaffold_flag_projects.py` and `python/djust/tests/test_components_optional_dependencies_3448.py`.
+- **CI dependency audits now gate on findings (#3467).** The test workflow's security job (on `main`, the nightly schedule and manual runs) uses the locked pip-audit gate in place of `safety`, runs `cargo audit --deny unsound` and `npm audit --audit-level=high`, and no longer turns their failures into a passing step. ESLint (`--max-warnings 0`) now fails both the security job and the pull-request JavaScript job on any error or warning, where it used to print a message and pass.
+
+### Fixed
+
+- **Rust-engine `{% app_shell %}` main wrapper (#3448).** Restore the omitted `dj-app-shell__main` wrapper so header and content form a column rather than rendering side by side. Only a direct sidebar slot moves to the outer row; nested sidebars are kept, and the main content retains template order. Covered by `python/djust/tests/test_app_shell_rust_engine_3448.py`.
+- **Tailwind system check (C011) with prefixed `STATICFILES_DIRS` (#3449).** A `(prefix, path)` entry, which Django allows, no longer makes every `manage.py` command fail with `TypeError` during system checks; the check now looks for `input.css` and `output.css` under the entry's path. Covered by `TestC011MissingCompiledCss` in `python/tests/test_checks.py`.
+
+### Security
+
+- **`djust ai inventory` on Windows hands off only to a `manage.py` whose own directory holds a project marker (#3454).** Windows has no owner or mode bits to check, so the discovered entry point's directory must contain `pyproject.toml`, `setup.cfg`, `setup.py`, `requirements.txt` or `.git`; otherwise the CLI refuses and tells you to run `python manage.py djust_ai inventory` directly. This stops a bare `manage.py` left in a shared writable directory; it is not an ownership check (anyone who can plant `manage.py` can plant a marker), which is tracked in #3462. A layout with the marker only in a parent directory (for example a repository root with `.git` and `manage.py` one folder down) is now refused on Windows. POSIX checks are unchanged.
+- **Windows AI inventory hand-off now verifies ownership and write access (#3462).** A discovered `manage.py` and its directory must be owned by the current user (or, for an elevated administrator, by the owner its token assigns to new files, BUILTIN\Administrators) and must not grant broad principals write access through their DACLs; API failures reject the hand-off. The project-marker check still applies.
+- **A misconfigured `DJUST_TRUSTED_PROXY_COUNT` can no longer round up to an extra trusted hop (#3469).** A value that isn't an `int` was converted with `int(float(raw))`, so `"1.999999999999999999999999"` selected 2 hops. It is now floored exactly as a decimal (giving 1). Non-finite values, and values of 10,000 or more, give 0. Every coerced value still logs a warning naming its type. This affects only a misconfigured setting; an `int` setting is unchanged, and nothing here is reachable from a request.
+- **On Python 3.14 and later, a role, staff or group check read through a local variable in `dispatch()`/`get()` is no longer mistaken for a login-only check on live transports (GHSA-4h5m-xcmg-vvmw).** The check that refuses a live mount whose own access check goes beyond the declared rule reads which user attributes the method uses. Python 3.14 compiles a local read to `LOAD_FAST_BORROW`, which it did not recognise, so `user = request.user; if user.role != "admin": raise PermissionDenied` on a view that declares only `login_required` mounted over WebSocket and SSE for any logged-in user. Every `LOAD_FAST` form is now recognised, and a load of the user it cannot classify counts as a check beyond login. Python 3.13 and earlier were not affected. Regression cases in `python/djust/tests/test_live_auth_event_holders_and_user_checks.py`.
+
+### Documentation
+
+- **`ServerEventToastMixin`'s docstring now shows `{% server_toast_container position="top-right" %}` (#3450).** It showed `toast_container`, which takes no `position`.
+- **Security audit checklist now names a runnable test target (#3468).** `make test-security` selects security, XSS, auth and CSRF test files across the three Python test roots.
+- **Release audit checklist carries unfinished #3129 work forward (#3470).** The template keeps the raw HTML, dynamic attribute, escaping, permission, regression, penetration, deployment configuration, and sign-off reviews visible until their completing PRs remove them.
+
 ## [1.3.0rc8] - 2026-10-10
 
 The eighth 1.3 release candidate. It includes security fixes; upgrading from 1.3.0rc7 is recommended.
