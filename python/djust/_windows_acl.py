@@ -1,8 +1,10 @@
 """Windows ACL trust check for discovered AI inventory entry points."""
 
 import ctypes
-from ctypes import wintypes
+import ctypes.wintypes
 from typing import Iterable
+
+wintypes = ctypes.wintypes
 
 
 _BROAD_SIDS = {"S-1-1-0", "S-1-5-11", "S-1-5-32-545"}
