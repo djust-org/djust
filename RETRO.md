@@ -384,7 +384,7 @@ issue or be explicitly closed with a reason.
 | 342 | False/stale claims in changelog fragments and PR bodies are unchecked — five instances across v1.2.0-1..3, one of which caused a regression (#2838) | Retro backfill v1.1.0-9..v1.2.0-5 | #2849 | Open | Extend the existing path/class reference checks (cf. #2652) to `changelog.d/*.md`; share `check-changelog-test-counts`' parser rather than adding a third |
 | 343 | **Rule row** — enumerate every caller of a shared cache/registry/dispatch and the invariant each needs before the first edit (v1.2.0-6 retro arc, rule 1) | Retro v1.2.0-6 | — | Closed | pattern: fix-reproduces-own-bug  fired: —  re-violated: — (rule created at v1.2.0-6; origin instances #2147, #2146, #2838 r1-r3, #2846 are recorded on the page, not counted as re-violations since the rule did not exist for them) **gate v1.3.0-11: DEMOTE** (no instance in v1.3.0-10, -11, -12); rule line removed from CLAUDE.md, page `docs/patterns/fix-reproduces-own-bug.md` is `wiki-only`. |
 | 344 | **Rule row** — verify a claim against the source before writing it, and cite path:line; delete a claim that cannot be checked (v1.2.0-6 retro arc, rule 2) | Retro v1.2.0-6 | — | Open | pattern: unverified-claim  fired: #3463, #3472, #3474  re-violated: #3473 (rule created at v1.2.0-6; the ten origin instances — #2838, #2546, #2534, #2554, #2573, #2607, #2843, #2147 — predate it) **gate v1.3.0-11/12: KEEP** (fired 2, missed 1). |
-| 345 | **Rule row** — a Code Review stage is not complete until the review is POSTED to the PR, and a bucket until `RETRO.md` has its entry (v1.2.0-6 retro arc, rule 3) | Retro v1.2.0-6 | #2848 | Open | pattern: retro-dropout  fired: —  re-violated: #3474 (rule created at v1.2.0-6; #2837/#2838 merged with no review artifact and 14 buckets drifted before it. Mechanical half now exists: `scripts/check-retro-coverage.py`) **gate v1.3.0-11/12: KEEP** (#3474's review findings were posted only inside its retro comment, not as a review; one miss). |
+| 345 | **Rule row** — a Code Review stage is not complete until the review is POSTED to the PR, and a bucket until `RETRO.md` has its entry (v1.2.0-6 retro arc, rule 3) | Retro v1.2.0-6 | #2848 | Open | pattern: retro-dropout  fired: #3483 (check-retro-coverage caught the missing v1.3.0-4 entry)  re-violated: #3474 (rule created at v1.2.0-6; #2837/#2838 merged with no review artifact and 14 buckets drifted before it. Mechanical half now exists: `scripts/check-retro-coverage.py`) **gate v1.3.0-11/12: KEEP** (#3474's review findings were posted only inside its retro comment, not as a review; one miss). |
 | 346 | Python and Rust root locators disagree when a quoted attribute value contains `<… dj-root>` | PR #3023 | #3030 | Open | pattern: parallel-path-drift. Needs author markup or `\|safe`, so not reachable from autoescaped content |
 | 347 | dj-root vs dj-view root precedence: Python searches dj-root first, the Rust VDOM takes the first element | PR #3023 | #3031 | Open | pattern: parallel-path-drift. Predates #3023; T005 warns about the split layout |
 | 348 | A view whose `mount()` raises keeps its tick task running (runtime keeps the half-mounted view on that branch) | PR #3035 | #3027 | Open | pattern: fix-reproduces-own-bug. Predates #3035; the #2945 fix exposes short-tick views to it too |
@@ -1468,6 +1468,57 @@ The first implementation required the file owner to be the current user's SID. O
   - The tick error path, the `group_send` error path and the guide note were fixed.
   - Accepted: the scheduling on 3.10 and 3.11, which changes order only.
   - Documented: a failing deferred check is logged and the task goes on.
+
+## v1.3.0-4 — overload behaviour (#3114) (PRs #3118, #3167) — backfill
+
+**Date**: 2026-10-15 (backfill; the bucket's work merged 2026-09-25 and 2026-09-26)
+**Scope**:
+- #3118 (`9a541bf27`): `djust.worker_pool.PooledHTTP` (opt-in) bounds HTTP request threads, and pool threads start from an empty context (#3114). On snake-arena at 64/192/256 clients, peak and after-idle RSS went from 2030 MB to 936 MB, and p95 RTT at 256 clients from about 7 s to 0.33 s.
+- #3116 was fixed inside the grouped drain PR #3167 (`ea97f6bfb`). Turn-scoped ContextVars now hold the owner weakly. That covers the owner slot, `djust_sql_capture_scope` and `djust_explicit_child_render`.
+- This bucket was complete in substance once #3167 merged, but its #3116 row stayed unstruck until the v1.3.0-11/12 retro. `check-retro-coverage` then flagged the missing entry.
+
+**Tests at close**:
+- #3118: six behavioural tests against Django's real `ASGIHandler`, added to the 3.14t CI subset.
+- #3167: `test_turn_context_copies_release_3116.py`, which drives a real `LiveViewConsumer`. Full suite: 34,500 passed.
+
+**Evidence available**:
+- #3118 has a full Retrospective comment.
+- #3167 has review comments but no retrospective, which is a `RETRO_GATE_VIOLATION`, backfilled as a comment on #3167 with this entry.
+
+### What We Learned
+
+**1. A "fixed" leak needs a reachability test against the real consumer, and a walk of every holder.**
+#3167's first #3116 fix removed the owner-slot edge. The independent review found that `djust_sql_capture_scope` still held the view strongly. Walking every turn-scoped ContextVar turned up a third holder, `djust_explicit_child_render`. Only a test that drives a real `LiveViewConsumer` through `copy_context()` and `create_task` proves the session is collectable.
+
+**Action taken**: Closed — `python/djust/tests/test_turn_context_copies_release_3116.py`, weak owner references in `observability/sql.py` and `_child_rendering._Render.release()` (#3167, `b24ddcf50`). The gate-offs show each mutation fails the new tests.
+
+**2. Measure retained pages before choosing a memory fix.**
+The issue's suspects were queues. tracemalloc against vmmap showed 89 MB live against 1.1 GB of mimalloc resident on 3.14t. So the fix was to bound peak threads, not to add an eviction policy.
+
+**Action taken**: Closed — the method and numbers are in the scaling guide's "Memory under overload" section, which shipped with `PooledHTTP` (#3118). The snake-arena adoption follow-up, djust-org/snake-arena#17, is closed.
+
+### Insights
+
+- An in-server sampler would have saved time on #3080 and #3114 alike. It would read RSS, the malloc zone, backlog counts and gc/tracemalloc/referrer chains on demand. It took about 30 minutes to build ad hoc for #3118. This is an idea only, not filed.
+- #3118's latency ratio was measured at load averages of 4–24, while #3095 ran on the same machine, so treat it as indicative. The memory conclusions don't depend on load.
+
+### Review Stats (partial)
+
+| Metric | PR #3118 | PR #3167 (#3116 share only) | Total |
+|--------|----------|-----------------------------|-------|
+| 🔴 Findings | 0 | 0 | 0 |
+| 🟡 Findings | 6 (Self-Review 2, Security 1, Code Review 3) | 1 (#3116 incomplete) | 7 |
+| 🟢 Findings | 1 | 1 (changelog) | 2 |
+| Findings fixed | all | all | all |
+| Findings by pattern class | not tagged at the time; deliberately not reconstructed | not tagged | |
+
+### Process Improvements Applied
+
+None in this bucket. The coverage gate that caught the missing entry, `check-retro-coverage` (#2848), is rule row 345's mechanical half, and it is recorded as fired.
+
+### Open Items
+
+- none
 
 ## v1.2.1-7 — state and rendering batch: v1.2.1-7, -8 and -9 (PR #3042)
 
