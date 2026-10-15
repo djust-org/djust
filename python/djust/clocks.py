@@ -122,6 +122,7 @@ class _Pool:
         try:
             result.set_result(work.result())
         except BaseException as exc:
+            # Preserve worker cancellation while releasing the owner slot.
             result.set_exception(exc)
         finally:
             with self.lock:

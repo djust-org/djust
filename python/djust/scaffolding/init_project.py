@@ -163,7 +163,6 @@ def plan_settings(project: Project) -> Tuple[Optional[FileChange], Step]:
     )
 
 
-_DJUST_BACKEND = "djust.template_backend.DjustTemplateBackend"
 _DJANGO_BACKEND = "django.template.backends.django.DjangoTemplates"
 # Methods that change a list in place: a TEMPLATES edited like this is not the
 # literal the file shows.

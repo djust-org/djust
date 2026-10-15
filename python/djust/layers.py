@@ -314,6 +314,7 @@ class MultiLoopInMemoryChannelLayer(InMemoryChannelLayer):
                     waiters.remove(fut)
                     picked = False
                 except ValueError:
+                    # Another receiver may already have removed this waiter.
                     pass
                 if not waiters:
                     del self._waiters[channel]

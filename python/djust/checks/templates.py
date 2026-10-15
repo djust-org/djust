@@ -252,9 +252,6 @@ def _embedded_view_templates(source: str) -> set:
     return names
 
 
-_EXTENDS_TAG_RE = re.compile(r"\{%\s*extends\s+")
-
-
 def _included_elsewhere(real: str, real_dirs: list, included_by: dict) -> bool:
     """Whether another template ``{% include %}``s (or live_renders) this one.
 

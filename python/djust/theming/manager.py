@@ -329,7 +329,6 @@ class ThemeManager:
             ThemeState with current theme, preset and mode
         """
         from ._registry_accessor import get_registry
-        import logging
 
         logger = logging.getLogger(__name__)
 

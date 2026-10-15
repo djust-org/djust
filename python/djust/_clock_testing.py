@@ -54,6 +54,7 @@ class DeterministicClockExecutor:
         try:
             future.set_result(call())
         except BaseException as exc:
+            # Match Future's exception transfer, including cancellation.
             future.set_exception(exc)
         return future
 

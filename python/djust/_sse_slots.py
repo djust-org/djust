@@ -24,12 +24,9 @@ teardown.
 """
 
 import asyncio
-import logging
 from typing import Any, Dict, Optional
 
 from ._view_slots import PAGE_LEVEL_FRAMES, refusal_frame, valid_target_id
-
-logger = logging.getLogger(__name__)
 
 __all__ = ["SSESlot", "SSESlotSession", "valid_target_id"]
 
