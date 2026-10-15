@@ -15,3 +15,4 @@
 # - The reason and the review-by date are both required. The gate fails once a
 #   review-by date has passed, so an exception cannot outlive its review.
 # - Remove the entry as soon as a fixed version is locked.
+GHSA-8pqf-f4m5-798g  # twisted 26.4.0 (CVE-2026-106454, PYSEC-2026-4304): ReDoS in the twisted.mail IMAP4 server wildcardToRegexp(); djust uses Twisted only through daphne for HTTP/WebSocket and never imports twisted.mail, so the code is unreachable; no fixed release exists yet; review-by 2026-11-15
