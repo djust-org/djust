@@ -28,7 +28,7 @@ python manage.py djust_audit --ast
 rendered event bindings with handler ownership and parameters (rc3,
 [ADR-037](../../adr/037-event-contract-checks-and-executable-documentation.md)).
 `djust.I001`–`I003` report AI/UI discovery information; `djust_audit --ast`
-adds X101–X105 UI findings (rc8–rc9,
+adds X101–X105 UI findings (rc8,
 [AI discovery](ai-discovery.md)). **Who:** Any project whose check or audit
 pipeline treats warnings or INFO as failures. **How to tell:**
 `manage.py check --fail-level WARNING` fails on T019–T022;
@@ -98,12 +98,15 @@ CHANNEL_LAYERS = {
 }
 ```
 
-**What changed:** Admin CSS and highlight.js now carry Subresource Integrity
-and `crossorigin="anonymous"` (rc4, [ADR-040](../../adr/040-vendored-assets-and-sboms.md)).
-`djust.B008` can also run under `check --deploy` and `collectstatic` (rc4,
-#3144). **Who:** Apps with an absolute, cross-origin `STATIC_URL`, or a
-scanner-visible third-party asset manifest. **How to tell:** The browser
-blocks those assets on a CORS error, or B008 reports a manifest problem.
+**What changed:** Admin CSS and highlight.js now carry Subresource Integrity,
+and `crossorigin="anonymous"` when `STATIC_URL` is on another origin (rc4,
+[ADR-040](../../adr/040-vendored-assets-and-sboms.md)). `djust.B008` moves to
+`check --deploy` and `collectstatic` when `djust` is listed before
+`staticfiles` (rc4, #3144). **Who:** Apps with an absolute, cross-origin
+`STATIC_URL`, or with an SBOM file (`*.cdx.json`, `*.spdx.json`,
+`*.bom.json`) in a static directory. **How to tell:** The browser blocks those
+assets on a CORS error, or B008 reports that `collectstatic` would publish an
+SBOM.
 **Do:** Serve static files with an `Access-Control-Allow-Origin` response
 header for the app's origin and follow [Vendored assets](vendored-assets.md)
 for the manifest/SBOM check. Re-run `collectstatic` after the upgrade.
@@ -125,8 +128,8 @@ the paste handler to the component or child:
 ```python
 # The component that renders dj-paste owns the event.
 @event_handler()
-def paste(self, value: str = "", **kwargs):
-    self.pasted_text = value
+def paste(self, text: str = "", **kwargs):
+    self.pasted_text = text
 ```
 
 **What changed:** `LiveViewTestClient.send_event()` enforces handler and
@@ -196,7 +199,7 @@ client with the server ([Multiple views](multiple-views.md)).
 ## 6. Review UI and rendering changes
 
 **What changed:** The `djust` preset's labels and links use new contrast
-colours (rc3–rc5, #2996, #2885, #3165); a user-authored preset can now get
+colours (rc4–rc8, #2996, #3165, #2885); a user-authored preset can now get
 `djust_theming.W001` for status text on tinted surfaces and input borders
 (rc7, #3281). **Who:** Apps that customize preset tokens or rely on exact
 colours. **How to tell:** Visual comparison or W001. **Do:** Review the
@@ -204,7 +207,7 @@ reported pair and update your theme tokens; do not suppress a contrast
 failure without checking the actual rendered surface.
 
 **What changed:** `theme_context` HTML values are lazy objects rather than
-`str` instances (rc3, #3028). **Who:** Python code passing `theme_head` or
+`str` instances (rc8, #3028). **Who:** Python code passing `theme_head` or
 the other generated HTML values to `json.dumps`, `re`, `startswith`,
 `"".join` or `os.fspath`. **How to tell:** `TypeError`; template output
 remains the same. **Do:** Convert on use:
@@ -224,6 +227,14 @@ the check ID and template path when reviewing new diagnostics.
 colour a plain `<a class="btn">` (rc6, #3230). **Who:** Apps with that
 selector. **How to tell:** Compare the rendered link button after upgrade.
 **Do:** Set the intended colour with an explicit `.btn` rule.
+
+**What changed:** `{% csrf_token %}` now renders on the initial page outside
+`dj-root`, for example in a logout form in a shared `base.html` nav, even
+without the `csrf` context processor (rc7, #3294). Before, the page shell
+rendered it empty and such a form got a 403. **Who:** Tests that count or
+locate `csrfmiddlewaretoken` inputs across the whole page. **How to tell:** A
+test that expected *n* token inputs finds one more. **Do:** Scope the
+assertion to the form under test rather than the whole page.
 
 ## 7. Check opt-in policies and specialist integrations
 
@@ -254,7 +265,7 @@ and run post-navigation work after it; keep the current client and server
 assets together.
 
 **What changed:** A background task whose session/runtime has been collected
-now logs value-free failures and redacts SQL parameters (rc4, #3123).
+now logs value-free failures and redacts SQL parameters (rc4, #3116).
 **Who:** Long-lived tasks relying on detailed diagnostics after disconnect.
 **How to tell:** A static log line or redacted query parameters. **Do:**
 Capture safe diagnostic context while the view is live, or use an
