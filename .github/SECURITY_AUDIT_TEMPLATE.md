@@ -3,6 +3,19 @@
 This checklist tracks all security review steps required before releasing v{{VERSION}}.
 Complete each section and check off items as they are verified.
 
+## 0. Carried forward from earlier audits
+
+Remove an item from this section only in the PR that completes it.
+
+- [ ] **§2 raw HTML (#3129):** Trace each `mark_safe`, `|safe`, and raw grant to a server-validated source; the 618 inventoried `escape()` calls were not traced.
+- [ ] **§2 dynamic attributes (#3129):** Review all 255 shipped dynamic `setattr`/`getattr`/`delattr`/`hasattr` calls, including offline-sync action data, state restore, and component prop writes.
+- [ ] **§2 escaping coverage (#3129):** Decide which of the 203 registered tags need escaping pins; the existing suite references 21.
+- [ ] **§2 per-handler permissioning (#3129):** Review framework-shipped views and components.
+- [ ] **§3 regression evidence (#3129):** Record no form-validation or upload regressions and a full `make test` result at a fixed SHA.
+- [ ] **§4 penetration scenarios (#3129):** Run all seven scenarios against a running server; only the WebSocket reconnect probe exists so far.
+- [ ] **§5 deployment configuration (#3129):** Provide a deployment guide or check for DEBUG, cookie flags, and CORS/origins, accounting for each app's deployment.
+- [ ] **§7 sign-off (#3129):** Obtain the required release audit sign-off.
+
 ## 1. Automated Scans
 
 - [ ] **Bandit** (Python security linter) -- no high/critical findings

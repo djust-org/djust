@@ -117,6 +117,7 @@ def _discard(path: str) -> None:
     try:
         os.unlink(path)
     except FileNotFoundError:
+        # The temporary file was already removed.
         pass
 
 

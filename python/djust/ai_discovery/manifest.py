@@ -50,10 +50,12 @@ def render_ui_building_blocks() -> str:
     lines = [
         UI_SECTION_HEADING,
         "",
-        "djust ships template-tag components (`djust.components`) and a theming system "
-        "(`djust.theming`). Use them instead of hand-written tables, long reactive `<select>`s, overlays, "
-        "flash messages and color stylesheets: `python manage.py djust_audit --ast` flags "
-        "those (X101–X105).",
+        (
+            "djust ships template-tag components (`djust.components`) and a theming system "
+            "(`djust.theming`). Use them instead of hand-written tables, long reactive `<select>`s, overlays, "
+            "flash messages and color stylesheets: `python manage.py djust_audit --ast` flags "
+            "those (X101–X105)."
+        ),
         "",
         "| You need | Use |",
         "| --- | --- |",
@@ -71,13 +73,19 @@ def render_ui_building_blocks() -> str:
             "",
             "### Setup",
             "",
-            '- `pip install "djust[components]"`, then add `"djust.components"` and '
-            '`"djust.theming"` to `INSTALLED_APPS`; `djust new` does both.',
-            "- Load the tags with `{% load djust_components %}`; `python manage.py djust_ai "
-            'suggest "<what you need>"` prints a snippet with the required props.',
+            (
+                '- `pip install "djust[components]"`, then add `"djust.components"` and '
+                '`"djust.theming"` to `INSTALLED_APPS`; `djust new` does both.'
+            ),
+            (
+                "- Load the tags with `{% load djust_components %}`; `python manage.py djust_ai "
+                'suggest "<what you need>"` prints a snippet with the required props.'
+            ),
             '- Configure `LIVEVIEW_CONFIG["theme"]` with `"theme"`, `"preset"` and `"default_mode"`.',
-            "- In the base template: `{% load theme_tags %}` and `{% theme_head %}` "
-            "(it also links the components' stylesheet).",
+            (
+                "- In the base template: `{% load theme_tags %}` and `{% theme_head %}` "
+                "(it also links the components' stylesheet)."
+            ),
             "- List the built-in presets with `python manage.py djust_theme list-presets`.",
             "",
             "### Discovery commands",

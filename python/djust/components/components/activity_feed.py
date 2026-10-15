@@ -96,6 +96,7 @@ class ActivityFeed(Component):
             try:
                 attrs.append(f'data-max-items="{int(self.max_items)}"')
             except (ValueError, TypeError):
+                # Invalid optional limits leave the hook without this attribute.
                 pass
 
         visible = self.events[: self.max_items]

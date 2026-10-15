@@ -1227,6 +1227,7 @@ def _analyse(view_cls: type) -> _Analysis:
     try:
         _analysis_cache[view_cls] = result
     except TypeError:
+        # An uncacheable view class still uses the computed result.
         pass
     return result
 

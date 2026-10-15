@@ -39,6 +39,7 @@ def test_ai_inventory_outside_a_project_exits_2(tmp_path, monkeypatch, capsys):
 def test_ai_delegates_to_manage_py(tmp_path, monkeypatch):
     manage = tmp_path / "manage.py"
     manage.write_text("")
+    (tmp_path / "pyproject.toml").write_text("")  # the Windows hand-off needs a marker (#3454)
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("DJANGO_SETTINGS_MODULE", raising=False)
     calls = []
@@ -199,6 +200,7 @@ def test_inventory_hands_off_on_windows_modes(tmp_path, monkeypatch):
     monkeypatch.delenv("DJANGO_SETTINGS_MODULE", raising=False)
     (tmp_path / "pyproject.toml").touch()
     monkeypatch.setattr(cli, "_ai_is_windows", lambda: True)
+    monkeypatch.setattr(cli, "_ai_windows_path_trusted", lambda path: True)
     monkeypatch.setattr(os, "stat", fake_stat)
     monkeypatch.setattr(
         subprocess, "run", lambda args, **kw: calls.append(args) or SimpleNamespace(returncode=0)
@@ -216,6 +218,7 @@ def test_inventory_windows_requires_local_project_marker(tmp_path, monkeypatch, 
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("DJANGO_SETTINGS_MODULE", raising=False)
     monkeypatch.setattr(cli, "_ai_is_windows", lambda: True)
+    monkeypatch.setattr(cli, "_ai_windows_path_trusted", lambda path: True)
     calls = []
     monkeypatch.setattr(
         subprocess, "run", lambda args, **kw: calls.append(args) or SimpleNamespace(returncode=0)

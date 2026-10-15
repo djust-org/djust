@@ -1112,6 +1112,12 @@ def _ai_is_windows() -> bool:
     return os.name == "nt"
 
 
+def _ai_windows_path_trusted(path: str) -> bool:
+    from djust._windows_acl import windows_path_is_trusted
+
+    return windows_path_is_trusted(path)
+
+
 def _find_ai_manage_py() -> str | None:
     """Discover an inventory entry point within the nearest project boundary."""
     import stat
@@ -1139,6 +1145,10 @@ def _find_ai_manage_py() -> str | None:
                 reason = "entry point is group/world writable"
             elif posix and parent.st_mode & stat.S_IWOTH:
                 reason = "containing directory is world writable"
+            elif _ai_is_windows() and not _ai_windows_path_trusted(candidate):
+                reason = (
+                    "entry point or containing directory has untrusted Windows ownership or DACL"
+                )
             elif not posix and not any(
                 os.path.lexists(os.path.join(directory, marker))
                 for marker in (

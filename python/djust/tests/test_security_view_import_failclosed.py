@@ -117,7 +117,7 @@ async def test_ws_mount_does_not_import_arbitrary_module(sentinel_module):
     # Give the consumer time to process (and, pre-fix, to import the sentinel).
     for _ in range(3):
         try:
-            await asyncio.wait_for(comm.receive_from(), timeout=1)
+            await asyncio.wait_for(comm.receive_from(timeout=1), timeout=1)
         except BaseException:  # noqa: BLE001 — TimeoutError / CancelledError teardown noise
             break
 

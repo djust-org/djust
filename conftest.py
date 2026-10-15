@@ -25,6 +25,27 @@ pytest_plugins = [
 ]
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _load_tolerant_ws_communicator_defaults():
+    """Give Channels communicators time to finish under loaded test runners."""
+    from channels.testing import WebsocketCommunicator
+
+    methods = (
+        WebsocketCommunicator.disconnect,
+        WebsocketCommunicator.receive_output,
+        WebsocketCommunicator.receive_from,
+        WebsocketCommunicator.receive_json_from,
+    )
+    original = [method.__defaults__ for method in methods]
+    try:
+        for method, defaults in zip(methods, original):
+            method.__defaults__ = (*defaults[:-1], 30)
+        yield
+    finally:
+        for method, defaults in zip(methods, original):
+            method.__defaults__ = defaults
+
+
 def pytest_sessionstart(session):
     """Stop the hot-reload file watcher in every pytest process (#3099).
 

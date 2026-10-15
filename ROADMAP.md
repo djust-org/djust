@@ -152,6 +152,17 @@ Two name shapes appear in this roadmap, with distinct meanings:
 | **P2** | #3468 — `SECURITY_AUDIT_TEMPLATE.md` names a nonexistent `tests/security/` path (new `make test-security`) | v1.3.0 |
 | **P2** | #3469 — `DJUST_TRUSTED_PROXY_COUNT` coercion can round a misconfigured value up | v1.3.0 |
 
+### v1.3.0-12 — code-scanning cleanup, WS test timeouts, Windows inventory trust, 1.3.0 audit carry-forward (drain bucket)
+
+*Kind:* static-analysis cleanup, test reliability, security hardening, release checklist.
+
+| Priority | Task | Milestone |
+|---|---|---|
+| **P2** | CodeQL — clear the 28 open code-scanning alerts on main (15 fixed, 13 dismissed as false positives) | v1.3.0 |
+| **P2** | #3464 — WebSocket test teardown uses channels' 1 s default timeout under machine load | v1.3.0 |
+| **P1** | #3462 — `djust ai inventory`: compare the Windows owner SID/DACL of a discovered `manage.py` | v1.3.0 |
+| **P2** | #3470 — carry the unfinished #3129 review items forward into the 1.3.0 final audit checklist | v1.3.0 |
+
 ## Next: v1.2.1 — non-breaking fixes (drain)
 
 > Planned 2026-09-24 from a triage of every open issue. **Policy:** non-breaking bug fixes ship in 1.2.1; anything breaking, new features, and parser/dependency upgrades go to 1.3. Issues split into a 1.2.1 part and a 1.3 part are marked. The ADR-034–038 stack (#2944, #2954) merges after 1.2.1 is cut. Already shipped toward 1.2.1 on `main`: #3009 (inline whitespace, #2999/#3010), the CSRF resolver (#2978), SerializerCache removal (#2992), the audit gate (#2989).

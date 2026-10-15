@@ -299,6 +299,7 @@ def _request_save_executor() -> ThreadPoolExecutor:
                 try:
                     barrier.wait(timeout=5)
                 except threading.BrokenBarrierError:
+                    # A warm-up that timed out only leaves a thread to start lazily.
                     pass
 
             empty = contextvars.Context()
