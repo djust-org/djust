@@ -628,11 +628,17 @@ def _loads_user(inst: Any, tracked: "set[str]") -> "Optional[bool]":
     ``request.user`` or a local ``user``); None when it loads it together
     with another value (a fused instruction); False otherwise."""
     argval = inst.argval
-    if inst.opname in _NAME_LOADS:
-        return isinstance(argval, str) and argval in tracked
-    if inst.opname.startswith("LOAD_") and isinstance(argval, tuple):
-        # LOAD_FAST_LOAD_FAST and similar fused loads (Python 3.13+).
-        return None if any(isinstance(v, str) and v in tracked for v in argval) else False
+    if isinstance(argval, str):
+        # LOAD_FAST_BORROW (Python 3.14+) and any later LOAD_FAST variant.
+        if inst.opname in _NAME_LOADS or inst.opname.startswith("LOAD_FAST"):
+            return argval in tracked
+        if inst.opname.startswith("LOAD_") and inst.opname != "LOAD_CONST" and argval in tracked:
+            return None  # a load of the user djust cannot classify: fail closed
+        return False
+    if isinstance(argval, tuple) and any(isinstance(v, str) and v in tracked for v in argval):
+        # LOAD_FAST_LOAD_FAST, STORE_FAST_LOAD_FAST and similar fused
+        # instructions (Python 3.13+).
+        return None
     return False
 
 
