@@ -346,6 +346,12 @@ test-python: ## Run Python tests
 	@echo "$(GREEN)Running Python tests...$(NC)"
 	@PYTHONPATH=. $(PYTHON) -m pytest tests/ python/tests/ python/djust/tests/
 
+.PHONY: test-security
+test-security: ## Run security, XSS, auth and CSRF test files across all Python test roots
+	@set -- $$(find tests python/tests python/djust/tests -type f -name 'test_*.py' \( -name '*security*' -o -name '*xss*' -o -name '*auth*' -o -name '*csrf*' \) | LC_ALL=C sort); \
+	if [ "$$#" -eq 0 ]; then echo "No security test files found" >&2; exit 1; fi; \
+	PYTHONPATH=python:. $(PYTHON) -m pytest "$$@"
+
 .PHONY: test-python-parallel
 test-python-parallel: ## Run Python tests in parallel (requires pytest-xdist)
 	@echo "$(GREEN)Running Python tests in parallel...$(NC)"

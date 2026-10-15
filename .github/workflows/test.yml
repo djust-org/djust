@@ -518,7 +518,7 @@ jobs:
       - name: Run JavaScript linter (if configured)
         run: |
           if [ -f "package.json" ] && grep -q "lint" package.json; then
-            npm run lint || echo "No lint script found, skipping"
+            npm run lint
           fi
 
   # Playwright browser tests - runs in parallel (optional, doesn't block CI)
@@ -691,7 +691,7 @@ jobs:
             if [ -f "$f" ]; then kill $(cat "$f") || true; rm "$f"; fi
           done
 
-  # Security scanning job — bandit + safety + cargo-audit + npm-audit.
+  # Security scanning job — bandit + pip-audit + cargo-audit + npm-audit.
   # Runs on push to main, schedule, and manual dispatch; SKIPPED on PRs.
   #
   # Rationale: this job duplicates the heavier audit that
@@ -735,7 +735,7 @@ jobs:
 
       - name: Install security tools
         run: |
-          uv pip install bandit safety
+          uv pip install bandit
 
       - name: Run Bandit (Python security linter)
         run: |
@@ -743,10 +743,9 @@ jobs:
           # B301 (pickle for JIT), B102 (exec for JIT codegen)
           uv run bandit -r python/djust/ -ll -ii -x python/djust/tests/ -s B703,B308
 
-      - name: Run Safety (Python dependency vulnerabilities)
+      - name: Run pip-audit gate (Python dependency vulnerabilities)
         run: |
-          uv run safety check --full-report || echo "Safety check completed with warnings"
-        continue-on-error: true
+          UV_INDEX_URL=https://pypi.org/simple UV_DEFAULT_INDEX=https://pypi.org/simple uv run python scripts/pip-audit-gate.py
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
@@ -755,14 +754,13 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ~/.cargo/bin/cargo-audit
-          key: ${{ runner.os }}-cargo-audit-0.21
+          key: ${{ runner.os }}-cargo-audit-0.22
 
       - name: Install cargo-audit
-        run: command -v cargo-audit || cargo install cargo-audit
+        run: command -v cargo-audit || cargo install cargo-audit --locked --version '~0.22'
 
       - name: Run cargo-audit (Rust dependency vulnerabilities)
-        run: cargo audit || echo "Cargo audit completed with warnings"
-        continue-on-error: true
+        run: cargo audit --deny unsound
 
       - name: Set up Node.js
         uses: actions/setup-node@v7
@@ -774,12 +772,10 @@ jobs:
         run: npm ci
 
       - name: Run npm audit (JS dependency vulnerabilities)
-        run: npm audit --audit-level=high || echo "NPM audit completed with warnings"
-        continue-on-error: true
+        run: npm audit --audit-level=high
 
       - name: Run ESLint with security plugin
-        run: npm run lint || echo "ESLint completed with warnings"
-        continue-on-error: true
+        run: npm run lint
 
   # Security tests with coverage - runs in parallel
   security-tests:

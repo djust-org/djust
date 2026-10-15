@@ -6,6 +6,9 @@ value used for per-IP rate limiting + cooldown. An attacker could rotate XFF to
 bypass the connection cap, or spoof a victim IP to lock it out.
 """
 
+import logging
+
+import pytest
 from django.test import RequestFactory, override_settings
 
 from djust._client_ip import resolve_client_ip
@@ -72,6 +75,37 @@ def test_bool_setting_does_not_grant_a_hop_silently(caplog):
     with caplog.at_level(logging.WARNING, logger="djust._client_ip"):
         resolve_client_ip("6.6.6.6, 203.0.113.10", "lb")
     assert any("DJUST_TRUSTED_PROXY_COUNT" in r.message for r in caplog.records)
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("1.999999999999999999999999", 1),
+        (1.9999999999999999, 2),  # Already rounded to 2.0 as a Python float.
+        ("nan", 0),
+        ("inf", 0),
+        ("-inf", 0),
+        (" 2 ", 2),
+        ("2e0", 2),
+        ("1e999999999", 0),  # Absurd magnitude: invalid, not a huge int.
+        ("1e4", 0),
+        ("9999", 9999),  # Bounded, but longer than the chain: the peer.
+        (True, 1),
+        ("2", 2),
+        (2.9, 2),
+        (-2.9, 0),
+    ],
+)
+def test_non_integer_proxy_count_preserves_exact_floor_and_warning(value, expected, caplog):
+    with override_settings(DJUST_TRUSTED_PROXY_COUNT=value):
+        with caplog.at_level(logging.WARNING, logger="djust._client_ip"):
+            assert resolve_client_ip("first, second", "peer") == (
+                ("first", "second")[2 - expected] if expected in (1, 2) else "peer"
+            )
+    assert any(
+        "DJUST_TRUSTED_PROXY_COUNT" in record.message and type(value).__name__ in record.message
+        for record in caplog.records
+    )
 
 
 # --- WS adapter ---

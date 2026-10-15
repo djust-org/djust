@@ -48,7 +48,7 @@ Complete each section and check off items as they are verified.
 ## 3. Integration & Regression Testing
 
 - [ ] Full test suite passes (`make test`)
-- [ ] Security-specific tests pass (`pytest tests/security/ -v`)
+- [ ] Security-specific tests pass (`make test-security`)
 - [ ] Rust XSS prevention tests pass (`cargo test -p djust_vdom`)
 - [ ] No regressions in form validation or file upload handling
 - [ ] WebSocket reconnection does not bypass auth
