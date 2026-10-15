@@ -248,12 +248,16 @@ self.modal.hide()
 ### `TabsComponent`
 
 ```python
+from django.utils.html import format_html
+from django.utils.safestring import mark_safe
 from djust.components import TabsComponent
 
+# Tab content is escaped. Mark developer-built markup safe, or build it with
+# format_html when it includes values; never mark user input safe.
 self.tabs = TabsComponent(
     tabs=[
-        {"id": "tab1", "label": "Overview", "content": "<p>...</p>"},
-        {"id": "tab2", "label": "Settings", "content": "<p>...</p>", "badge": "3"},
+        {"id": "tab1", "label": "Overview", "content": mark_safe("<p>Overview</p>")},
+        {"id": "tab2", "label": "Settings", "content": format_html("<p>{}</p>", self.note), "badge": "3"},
     ],
     active="tab1",
 )

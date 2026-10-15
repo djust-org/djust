@@ -2,7 +2,7 @@
      {% if attrs.id %}id="{{ attrs.id }}"{% endif %}
      {{ extra_attrs }}>
     {% if slot_label %}
-    {{ slot_label|safe }}
+    {{ slot_label }}
     {% elif label %}
     <div class="{{ css_prefix }}progress-label">{{ label }}</div>
     {% endif %}

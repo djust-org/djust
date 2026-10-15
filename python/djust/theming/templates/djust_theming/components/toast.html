@@ -5,11 +5,11 @@
      data-duration="{{ duration }}"
      {% if attrs.id %}id="{{ attrs.id }}"{% endif %}>
     <div class="{{ css_prefix }}toast-content">
-        {% if slot_message %}{{ slot_message|safe }}{% else %}<div class="{{ css_prefix }}toast-message">{{ message }}</div>{% endif %}
+        {% if slot_message %}{{ slot_message }}{% else %}<div class="{{ css_prefix }}toast-message">{{ message }}</div>{% endif %}
     </div>
     {% if slot_actions %}
     <div class="{{ css_prefix }}toast-actions">
-        {{ slot_actions|safe }}
+        {{ slot_actions }}
     </div>
     {% endif %}
     <button class="{{ css_prefix }}toast-close" onclick="this.parentElement.remove()" aria-label="Dismiss">
