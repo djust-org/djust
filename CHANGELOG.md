@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.8] - 2026-10-15
+
+A 1.1 patch release with a security fix; upgrading from 1.1.7 is recommended.
+
 ### Security
 
 - **On Python 3.14 and later, a role, staff or group check read through a local variable in `dispatch()`/`get()` is no longer mistaken for a login-only check on live transports (GHSA-4h5m-xcmg-vvmw).** The check that refuses a live mount whose own access check goes beyond the declared rule reads which user attributes the method uses. Python 3.14 compiles a local read to `LOAD_FAST_BORROW`, which it did not recognise, so `user = request.user; if user.role != "admin": raise PermissionDenied` on a view that declares only `login_required` mounted over WebSocket and SSE for any logged-in user. Every `LOAD_FAST` form is now recognised, and a load of the user it cannot classify counts as a check beyond login. Python 3.13 and earlier were not affected. Regression cases in `python/djust/tests/test_live_auth_event_holders_and_user_checks.py`.
