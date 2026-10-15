@@ -315,6 +315,34 @@ LoginDeclaredAliasLoginView = _view(
 )
 
 
+# A role or staff check read through a local name: LOAD_FAST_BORROW on Python
+# 3.14+ (GHSA-4h5m-xcmg-vvmw).
+def _get_alias_role_raise(self, request, *args, **kwargs):
+    user = request.user
+    if user.role != "admin":
+        raise PermissionDenied
+    return LiveView.get(self, request, *args, **kwargs)
+
+
+def _dispatch_two_hop_alias_staff_redirect(self, request, *args, **kwargs):
+    u = request.user
+    who = u
+    if not who.is_staff:
+        return redirect("/")
+    return LiveView.dispatch(self, request, *args, **kwargs)
+
+
+LoginDeclaredAliasRoleView = _view(
+    "LoginDeclaredAliasRoleView", {"get": _get_alias_role_raise}, login_required=True
+)
+LoginDeclaredAliasStaffView = _view(
+    "LoginDeclaredAliasStaffView",
+    {"dispatch": _dispatch_two_hop_alias_staff_redirect},
+    login_required=True,
+)
+ALIAS_REFUSED = ["LoginDeclaredAliasRoleView", "LoginDeclaredAliasStaffView"]
+
+
 def _role_admin_required(view):
     """A project decorator whose code reads a user attribute and redirects."""
 
@@ -777,7 +805,8 @@ class TestUserAttributeGates:
 
     @pytest.mark.parametrize(
         "view_name",
-        ["LoginDeclaredGroupGateView", "LoginDeclaredRoleRaiseView", "RoleDecoratorView"],
+        ["LoginDeclaredGroupGateView", "LoginDeclaredRoleRaiseView", "RoleDecoratorView"]
+        + ALIAS_REFUSED,
     )
     @pytest.mark.parametrize("user_cls", [_MemberUser, _GroupUser, _StaffUser])
     async def test_login_rule_does_not_cover_it(self, view_name, user_cls):
@@ -794,7 +823,9 @@ class TestUserAttributeGates:
 
 @pytest.mark.django_db
 class TestUserAttributeGatesOnThePostFallback:
-    @pytest.mark.parametrize("view_name", F3_REFUSED + ["LoginDeclaredRoleRaiseView"])
+    @pytest.mark.parametrize(
+        "view_name", F3_REFUSED + ["LoginDeclaredRoleRaiseView"] + ALIAS_REFUSED
+    )
     def test_refused(self, view_name):
         response = _post(getattr(sys.modules[__name__], view_name), _StaffUser())
         assert response.status_code == 403
@@ -819,6 +850,8 @@ def test_user_attributes_read():
     assert attrs(_get_getattr_staff_redirect) == {"is_staff"}
     assert attrs(_get_anonymous_or_role_raise) == {"is_anonymous", "role"}
     assert attrs(_get_alias_login_raise) == {"is_authenticated"}
+    assert attrs(_get_alias_role_raise) == {"role"}
+    assert attrs(_dispatch_two_hop_alias_staff_redirect) == {"is_staff"}
 
     def helper_call(self, request):
         if not _has_role(request.user, "admin"):
@@ -829,6 +862,30 @@ def test_user_attributes_read():
 
 def _has_role(user, role):  # pragma: no cover - only its call is read
     return getattr(user, "role", None) == role
+
+
+class _Inst:
+    def __init__(self, opname, argval):
+        self.opname = opname
+        self.argval = argval
+
+
+@pytest.mark.parametrize(
+    "opname, argval, expected",
+    [
+        ("LOAD_FAST", "user", True),
+        ("LOAD_FAST_BORROW", "user", True),  # Python 3.14+
+        ("LOAD_FAST_SOME_FUTURE_FORM", "user", True),
+        ("LOAD_FAST_BORROW", "other", False),
+        ("LOAD_UNKNOWN_FUTURE_LOAD", "user", None),  # fail closed
+        ("LOAD_CONST", "user", False),  # the string "user", not the user
+        ("LOAD_FAST_BORROW_LOAD_FAST_BORROW", ("self", "user"), None),
+        ("STORE_FAST_LOAD_FAST", ("x", "user"), None),
+        ("LOAD_FAST_LOAD_FAST", ("self", "request"), False),
+    ],
+)
+def test_loads_user_recognises_every_local_load(opname, argval, expected):
+    assert core._loads_user(_Inst(opname, argval), {"user"}) is expected
 
 
 # --------------------------------------------------------------------------- #
