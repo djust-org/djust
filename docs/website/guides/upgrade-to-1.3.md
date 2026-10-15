@@ -152,6 +152,16 @@ test the live path as each user role. Declare custom admin filter and sort
 fields in `ModelAdmin.list_filter`, `list_display` or `ordering`. A 1.2.5 app
 already has these restrictions.
 
+**What changed:** `@rate_limit` on an `@event_handler` now also applies when
+the handler is reached through the page-POST fallback (an HTTP `POST` with
+`X-Djust-Event`), with one budget per handler function across transports
+(rc8; also in 1.2.4). Before, the fallback skipped the decorator. **Who:** Apps
+whose fallback-path callers or tests send more requests than the handler's
+`burst`. **How to tell:** A `429` with `{"code": "rate_limited"}` in the JSON
+error, where your own limit or message used to answer. **Do:** Size `rate`
+and `burst` for every transport, or remove the decorator if an app-level
+limit is the one you want.
+
 ## 5. Update presence and server-push integration
 
 **What changed:** A session with a templated `presence_key` joins its group
