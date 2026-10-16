@@ -1,11 +1,11 @@
 <fieldset class="{{ css_prefix }}radio-group {% if attrs.class %}{{ attrs.class }}{% endif %}" role="radiogroup">
     {% if slot_label %}
-    {{ slot_label|safe }}
+    {{ slot_label }}
     {% elif label %}
     <legend class="{{ css_prefix }}radio-legend">{{ label }}</legend>
     {% endif %}
     {% if slot_options %}
-    {{ slot_options|safe }}
+    {{ slot_options }}
     {% else %}
     {% for opt in options %}
     <div class="{{ css_prefix }}radio-option">

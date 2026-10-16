@@ -7,6 +7,8 @@ example dicts containing the kwargs that will be passed to its template tag.
 
 from dataclasses import fields as dataclass_fields
 
+from django.utils.safestring import mark_safe
+
 from djust.theming.contracts import COMPONENT_CONTRACTS
 from djust.theming.presets import ColorScale, ThemePreset, ThemeTokens, list_presets
 from djust.theming.theme_packs import DESIGN_SYSTEMS, DesignSystem
@@ -289,7 +291,7 @@ def _tooltip_examples():
             {
                 "text": f"Tooltip ({position})",
                 "position": position,
-                "slot_content": f"<button>Hover ({position})</button>",
+                "slot_content": mark_safe(f"<button>Hover ({position})</button>"),
             }
         )
     return examples

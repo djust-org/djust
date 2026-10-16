@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.12] - 2026-10-16
+
+A 1.0 patch release with a security fix; upgrading from 1.0.11 is recommended.
+
+### Security
+
+- **Theming component templates now escape plain-string slot values.** Every `slot_*` value that reaches a theming component or page template, whether it is passed as a `theme_*` tag argument or through `{% include %}`/`render_to_string`, plus the `content` of a `theme_tabs` dict, was inserted into the page as HTML. These values are now autoescaped like `{{ variable }}`. Values that are already safe still render as HTML: `mark_safe` and `format_html` output, and string literals written in the template itself. `{% djust_sw_register %}` now encodes `sw_url` and `scope` so that neither can end the inline script, and it escapes its CSP nonce attribute. The `MarkdownTextarea` preview strips control and whitespace characters before it checks a link's scheme, and then accepts only `http`, `https`, `mailto` and relative targets.
+
+  **Compatibility:** an app that passed HTML to one of these values as a plain string from Python now sees that markup as escaped text. Examples are `slot_body="<p>…</p>"` and tab `content` built from markup. Use `format_html` when the markup interpolates values, or `mark_safe` for constant markup. Never mark user-supplied text safe.
+
 ## [1.0.11] - 2026-10-15
 
 A 1.0 patch release with a security fix; upgrading from 1.0.10 is recommended.
