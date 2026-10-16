@@ -10,12 +10,12 @@
         {% if attrs.value %}value="{{ attrs.value }}"{% endif %}
     />
     {% if slot_label %}
-    {{ slot_label|safe }}
+    {{ slot_label }}
     {% elif label %}
     <label for="{{ name }}" class="{{ css_prefix }}checkbox-label">{{ label }}</label>
     {% endif %}
     {% if slot_description %}
-    <div class="{{ css_prefix }}checkbox-description">{{ slot_description|safe }}</div>
+    <div class="{{ css_prefix }}checkbox-description">{{ slot_description }}</div>
     {% elif description %}
     <div class="{{ css_prefix }}checkbox-description">{{ description }}</div>
     {% endif %}

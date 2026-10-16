@@ -2,12 +2,12 @@
      {% if attrs.id %}id="{{ attrs.id }}"{% endif %}>
     <table class="{{ css_prefix }}table {{ css_prefix }}table-{{ variant }}">
         {% if slot_caption %}
-        <caption>{{ slot_caption|safe }}</caption>
+        <caption>{{ slot_caption }}</caption>
         {% elif caption %}
         <caption>{{ caption }}</caption>
         {% endif %}
         {% if slot_header %}
-        <thead>{{ slot_header|safe }}</thead>
+        <thead>{{ slot_header }}</thead>
         {% else %}
         <thead>
             <tr>
@@ -18,7 +18,7 @@
         </thead>
         {% endif %}
         {% if slot_body %}
-        <tbody>{{ slot_body|safe }}</tbody>
+        <tbody>{{ slot_body }}</tbody>
         {% else %}
         <tbody>
             {% for row in rows %}
@@ -31,7 +31,7 @@
         </tbody>
         {% endif %}
         {% if slot_footer %}
-        <tfoot>{{ slot_footer|safe }}</tfoot>
+        <tfoot>{{ slot_footer }}</tfoot>
         {% endif %}
     </table>
 </div>

@@ -40,7 +40,17 @@ def _nonce_attr(context: Context | None) -> str:
     """
     request = context.get("request") if context else None
     nonce = get_csp_nonce(request)
-    return f' nonce="{nonce}"' if nonce else ""
+    return f' nonce="{escape(nonce)}"' if nonce else ""
+
+
+_SCRIPT_JSON_ESCAPES = str.maketrans(
+    {"<": "\\u003C", ">": "\\u003E", "&": "\\u0026", "\u2028": "\\u2028", "\u2029": "\\u2029"}
+)
+
+
+def _script_json(value: str) -> str:
+    """Encode a JS string without allowing HTML to terminate its script element."""
+    return json.dumps(value).translate(_SCRIPT_JSON_ESCAPES)
 
 
 @register.simple_tag
@@ -153,10 +163,8 @@ def djust_sw_register(
         static_url = getattr(settings, "STATIC_URL", "/static/")
         sw_url = "%ssw.js" % static_url
 
-    # Use json.dumps for safe injection into JavaScript contexts
-    # (HTML escape() is insufficient for JS strings — doesn't handle \, newlines, etc.)
-    safe_sw_url = json.dumps(sw_url)
-    safe_scope = json.dumps(scope)
+    safe_sw_url = _script_json(sw_url)
+    safe_scope = _script_json(scope)
 
     nonce_attr = _nonce_attr(context)  # #655
 

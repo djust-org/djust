@@ -4,11 +4,11 @@
      data-theme-sidebar-collapse
      {% if attrs.id %}id="{{ attrs.id }}"{% endif %}>
     {% if slot_header %}
-    <div class="{{ css_prefix }}sidebar-header">{{ slot_header|safe }}</div>
+    <div class="{{ css_prefix }}sidebar-header">{{ slot_header }}</div>
     {% endif %}
 
     {% if slot_sections %}
-        {{ slot_sections|safe }}
+        {{ slot_sections }}
     {% else %}
         {% for section in sections %}
         <div class="{{ css_prefix }}sidebar-section">
@@ -30,6 +30,6 @@
     {% endif %}
 
     {% if slot_footer %}
-    <div class="{{ css_prefix }}sidebar-footer">{{ slot_footer|safe }}</div>
+    <div class="{{ css_prefix }}sidebar-footer">{{ slot_footer }}</div>
     {% endif %}
 </nav>

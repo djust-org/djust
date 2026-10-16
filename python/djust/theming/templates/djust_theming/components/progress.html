@@ -1,7 +1,7 @@
 <div class="{{ css_prefix }}progress-wrapper {% if attrs.class %}{{ attrs.class }}{% endif %}"
      {% if attrs.id %}id="{{ attrs.id }}"{% endif %}>
     {% if slot_label %}
-    {{ slot_label|safe }}
+    {{ slot_label }}
     {% elif label %}
     <div class="{{ css_prefix }}progress-label">{{ label }}</div>
     {% endif %}
