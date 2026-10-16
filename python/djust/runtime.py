@@ -515,6 +515,35 @@ def _mount_tenant_scope(method: Callable[..., Awaitable[None]]) -> Callable[...,
     return scoped
 
 
+def _unmount_on_failure(method: Callable[..., Awaitable[None]]) -> Callable[..., Awaitable[None]]:
+    """Leave nothing mounted when a mount step raises after admission.
+
+    The steps most likely to raise (``mount()``, ``handle_params()``,
+    ``connected()``, the render) end through ``_fail_mount``; any other step
+    after ``on_view_mounted`` (the state restore, the route binding, the
+    baselines, the post-render hooks) raised out with the view still on the
+    runtime, in its groups and in presence. The exception still propagates,
+    so its error frame is unchanged."""
+
+    @wraps(method)
+    async def guarded(runtime: Any, *args: Any, **kwargs: Any) -> None:
+        runtime._admitted_mount_view = None
+        try:
+            await method(runtime, *args, **kwargs)
+        except Exception:
+            view = runtime._admitted_mount_view
+            if view is not None and runtime.view_instance is view:
+                await runtime._on_mount_failed(view)
+                runtime.view_instance = None
+                runtime._explicit_mount_binding = None
+                await _release_failed_view(view)
+            raise
+        finally:
+            runtime._admitted_mount_view = None
+
+    return guarded
+
+
 def _runtime_diagnostic_scope(
     method: Callable[..., Awaitable[None]],
 ) -> Callable[..., Awaitable[None]]:
@@ -3174,6 +3203,8 @@ class ViewRuntime:
         # with ``djust.renderers``; runtime use-site will cast.
         self.renderer_factory = renderer_factory
         self._explicit_mount_binding: Any = None
+        # The view a running mount admitted (see ``_unmount_on_failure``).
+        self._admitted_mount_view: Any = None
         # Explicit request/auth/save state is per turn, including the work
         # before entering a transport's render lock.
         self._explicit_event_lock = asyncio.Lock()
@@ -3273,6 +3304,7 @@ class ViewRuntime:
     # ------------------------------------------------------------------ #
 
     @_mount_tenant_scope
+    @_unmount_on_failure
     async def dispatch_mount(self, data: Dict[str, Any]) -> None:
         """Mount a LiveView from a mount frame.
 
@@ -3559,6 +3591,7 @@ class ViewRuntime:
         # becomes the SSE session's mounted view. Still BEFORE state restore and
         # mount(), so the db_notify join reads ``_listen_channels`` at the same
         # point it always has.
+        self._admitted_mount_view = view_instance
         on_view_mounted = getattr(self.transport, "on_view_mounted", None)
         if on_view_mounted is not None:
             result = on_view_mounted(view_instance)
