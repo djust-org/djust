@@ -1894,6 +1894,30 @@ function _parseRootHtmlLive(html, root) {
     return context;
 }
 
+/**
+ * `_parseRootHtmlLive`, made inert: the parse keeps the page's scripting
+ * flag (a `<noscript>` holds text), but its elements belong to the live
+ * document, so an `<img onerror>`, `<details open ontoggle>` or media
+ * element in it would run its handler for the parse alone. The parsed tree
+ * is copied into an inert document, and the live parse loses its handler
+ * attributes before any event can reach it, so a handler runs once, for the
+ * element the morph inserts.
+ *
+ * @param {string} html
+ * @param {Element|null} root
+ * @returns {Element} an inert copy of `_parseRootHtmlLive`'s element
+ */
+function _parseRootHtmlLiveInert(html, root) {
+    const live = _parseRootHtmlLive(html, root);
+    const copy = document.implementation.createHTMLDocument('').importNode(live, true);
+    for (const el of [live, ...live.querySelectorAll('*')]) {
+        for (const attr of Array.from(el.attributes)) {
+            if (attr.name.slice(0, 2).toLowerCase() === 'on') el.removeAttribute(attr.name);
+        }
+    }
+    return copy;
+}
+
 /** Does `scope` hold an HTML `<noscript>` element? */
 function _holdsHtmlNoscript(scope) {
     for (const el of scope.querySelectorAll('noscript')) {
@@ -1914,7 +1938,8 @@ function _holdsHtmlNoscript(scope) {
  * HTML `<noscript>` as markup, where the page (scripting enabled) has the
  * text the server wrote. A frame whose parse holds an HTML `<noscript>` is
  * therefore parsed again as the mount morph parses (`_parseRootHtmlLive`,
- * the page's scripting flag), so the `<noscript>` holds that text.
+ * the page's scripting flag), so the `<noscript>` holds that text, and kept
+ * inert (`_parseRootHtmlLiveInert`).
  *
  * @param {string} html
  * @param {Element} root
@@ -1932,7 +1957,7 @@ function _parseRootFrameHtml(html, root) {
         parsed = scope.querySelector('[dj-root]') || scope.body;
     }
     if (!_holdsHtmlNoscript(scope)) return parsed;
-    const live = _parseRootHtmlLive(html, root);
+    const live = _parseRootHtmlLiveInert(html, root);
     return live.querySelector('[dj-root]') || live;
 }
 
