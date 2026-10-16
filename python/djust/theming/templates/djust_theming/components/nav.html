@@ -4,14 +4,14 @@
      {% if attrs.id %}id="{{ attrs.id }}"{% endif %}>
     <div class="{{ css_prefix }}navbar-inner">
         {% if slot_brand %}
-        <div class="{{ css_prefix }}navbar-brand">{{ slot_brand|safe }}</div>
+        <div class="{{ css_prefix }}navbar-brand">{{ slot_brand }}</div>
         {% elif brand %}
         <div class="{{ css_prefix }}navbar-brand">{{ brand }}</div>
         {% endif %}
 
         <div class="{{ css_prefix }}navbar-nav">
             {% if slot_items %}
-                {{ slot_items|safe }}
+                {{ slot_items }}
             {% else %}
                 {% for item in items %}
                 <a href="{{ item.url }}" class="{{ css_prefix }}nav-link{% if item.active %} active{% endif %}"
@@ -25,7 +25,7 @@
         </div>
 
         {% if slot_actions %}
-        <div class="{{ css_prefix }}navbar-actions">{{ slot_actions|safe }}</div>
+        <div class="{{ css_prefix }}navbar-actions">{{ slot_actions }}</div>
         {% endif %}
     </div>
 </nav>

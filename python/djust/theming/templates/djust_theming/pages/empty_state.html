@@ -1,7 +1,7 @@
 <div class="{{ css_prefix }}page-utility {{ css_prefix }}page-empty-state {% if attrs.class %}{{ attrs.class }}{% endif %}">
     {% if slot_icon %}
     <div class="{{ css_prefix }}page-icon">
-        {{ slot_icon|safe }}
+        {{ slot_icon }}
     </div>
     {% endif %}
     <h2 class="{{ css_prefix }}page-title">{{ title }}</h2>

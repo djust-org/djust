@@ -7,7 +7,7 @@
             {% if not forloop.last %}
             <a href="{{ item.url }}" class="{{ css_prefix }}breadcrumb-link">{{ item.label }}</a>
             {% if slot_separator %}
-            <span class="{{ css_prefix }}breadcrumb-separator" aria-hidden="true">{{ slot_separator|safe }}</span>
+            <span class="{{ css_prefix }}breadcrumb-separator" aria-hidden="true">{{ slot_separator }}</span>
             {% else %}
             <span class="{{ css_prefix }}breadcrumb-separator" aria-hidden="true">{{ separator }}</span>
             {% endif %}

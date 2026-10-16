@@ -34,7 +34,8 @@ class Offcanvas(Component):
 
     Args:
         title: Offcanvas title text
-        body: Offcanvas body content (HTML allowed)
+        body: Offcanvas body content. Plain strings are escaped; pass
+            ``mark_safe`` or ``format_html`` output for developer-built HTML.
         placement: Side to slide from (start, end, top, bottom)
         backdrop: Whether to show backdrop overlay
         dismissable: Whether to show close button in header
@@ -42,9 +43,10 @@ class Offcanvas(Component):
         show: Whether offcanvas should be shown on page load
 
     Example:
+        >>> from django.utils.safestring import mark_safe
         >>> offcanvas = Offcanvas(
         ...     title="Navigation Menu",
-        ...     body="<nav><ul><li><a href='/'>Home</a></li></ul></nav>",
+        ...     body=mark_safe("<nav><ul><li><a href='/'>Home</a></li></ul></nav>"),
         ...     placement="start"
         ... )
         >>> offcanvas.render()
@@ -53,7 +55,7 @@ class Offcanvas(Component):
         >>> # Right side with no backdrop
         >>> filters = Offcanvas(
         ...     title="Filters",
-        ...     body="<form>...</form>",
+        ...     body=mark_safe("<form>...</form>"),
         ...     placement="end",
         ...     backdrop=False
         ... )
