@@ -104,6 +104,18 @@ class GuardedObject(Guarded):
         return False
 
 
+class GuardedLate(Guarded):
+    """Admitted by ``mount()``; a mount step after it raises."""
+
+    template = '<div dj-root dj-view="' + MOD + '.GuardedLate">{{ shown }}</div>'
+
+    def admitted(self, user):
+        return True
+
+    def _capture_dirty_baseline(self):
+        raise RuntimeError("baseline failed")
+
+
 class Page(LiveView):
     exposure_policy = "legacy"
     template = '<div dj-root dj-view="' + MOD + '.Page"><b>page</b></div>'
@@ -342,6 +354,23 @@ async def test_an_object_refusal_beside_the_page_leaves_no_view():
         await communicator.disconnect()
 
 
+async def test_a_mount_step_after_mount_that_raises_leaves_no_view():
+    """mount() ran (presence tracked, groups joined); a later step raises."""
+    communicator = await _connect()
+    try:
+        frames = await _mount(communicator, GuardedLate)
+        assert _types(frames) == ["error"], frames
+        assert "permission_denied" != frames[0].get("code")
+        consumer = CONSUMERS[-1]
+        assert consumer._runtime.view_instance is None
+        after = await _reveal(communicator)
+        assert _types(after) == ["error"], after
+        assert SECRET not in json.dumps(after)
+        _assert_left_nothing(consumer)
+    finally:
+        await communicator.disconnect()
+
+
 async def test_the_same_view_still_mounts_for_a_signed_in_user():
     user = await sync_to_async(get_user_model().objects.create_user)(
         "fm" + uuid.uuid4().hex[:8], password="x"
@@ -422,6 +451,14 @@ async def test_over_sse_a_page_view_whose_mount_raises_is_not_mounted(cls, code)
         _assert_left_nothing()
     finally:
         await stream.aclose()
+
+
+async def test_over_sse_a_mount_step_after_mount_that_raises_leaves_no_view():
+    """The exception still reaches the stream view, as before; nothing stays."""
+    with pytest.raises(RuntimeError, match="baseline failed"):
+        await _sse_open(GuardedLate)
+    assert _sse_sessions == {}
+    _assert_left_nothing()
 
 
 async def test_over_sse_a_message_mount_whose_mount_raises_is_refused_in_its_container():

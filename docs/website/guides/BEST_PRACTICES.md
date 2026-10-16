@@ -650,6 +650,8 @@ def delete_item(self, item_id: int = 0, **kwargs):
     item.delete()
 ```
 
+A `PermissionDenied` raised in `mount()` leaves no view mounted: the client gets a `permission_denied` error frame and the WebSocket closes with code 4403. Any other exception in `mount()` also leaves no view mounted, after the usual error frame.
+
 ### Input validation
 
 Always validate user input in event handlers:

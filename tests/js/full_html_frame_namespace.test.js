@@ -145,3 +145,60 @@ describe('full-HTML frames keep an HTML <noscript>\'s content as text', () => {
         expect(svgRoot.api._parseRootFrameHtml('<g></g>', svgRoot.root).ownerDocument).not.toBe(svgRoot.doc);
     });
 });
+
+describe('a full-HTML frame with a <noscript> runs a new element\'s handler once', () => {
+    const PAGE = '<div dj-root dj-view="app.V"><noscript>n</noscript><em>h</em><em>t</em></div>';
+    const FRAME = '<noscript>n</noscript><em>h</em><img src="x" onerror="__hit(\'new-img\')"><em>t</em>';
+
+    /**
+     * jsdom loads no images and, unlike a browser, ignores a handler
+     * attribute set while its element was in a document without a window,
+     * even once the element is inserted into the page. Stand in for the
+     * browser: every `<img>` of a document with a window, including those an
+     * `innerHTML` parse created (reached through its context element), fails
+     * to load and gets its `error` event, with its handler attribute live.
+     */
+    function failImageLoads(window) {
+        const parsed = [];
+        const desc = Object.getOwnPropertyDescriptor(window.Element.prototype, 'innerHTML');
+        Object.defineProperty(window.Element.prototype, 'innerHTML', {
+            ...desc,
+            set(value) {
+                desc.set.call(this, value);
+                parsed.push(this);
+            },
+        });
+        return () => {
+            const imgs = new Set(window.document.querySelectorAll('img'));
+            for (const context of parsed) context.querySelectorAll('img').forEach((img) => imgs.add(img));
+            for (const img of imgs) {
+                if (!img.ownerDocument.defaultView) continue;
+                const handler = img.getAttribute('onerror');
+                if (handler !== null) img.setAttribute('onerror', handler);
+                img.dispatchEvent(new window.Event('error'));
+            }
+        };
+    }
+
+    for (const type of ['html_update', 'html_recovery']) {
+        it(type, async () => {
+            const { api, root } = setup(PAGE);
+            const hits = [];
+            dom.window.__hit = (name) => hits.push(name);
+            const fireImageErrors = failImageLoads(dom.window);
+            await sendFrame(api, { type, html: FRAME, version: 2 });
+            fireImageErrors();
+            expect(names(root)).toEqual(['noscript', 'em', 'img', 'em']);
+            expect(root.querySelector('noscript').textContent).toBe('n');
+            expect(hits).toEqual(['new-img']);
+        });
+    }
+
+    it('the parse keeps an authored handler on the element the morph inserts', () => {
+        const { api, doc, root } = setup(PAGE);
+        const parsed = api._parseRootFrameHtml(FRAME, root);
+        expect(parsed.ownerDocument).not.toBe(doc);
+        expect(parsed.querySelector('img').getAttribute('onerror')).toBe("__hit('new-img')");
+        expect(parsed.querySelector('noscript').textContent).toBe('n');
+    });
+});
