@@ -13,11 +13,11 @@ Features:
 Example:
     from djust.components.ui import Card
 
-    # Simple card
+    # Simple card. Header, body and footer are escaped and render as text.
     card = Card(
         header="User Profile",
-        body="<p>John Doe</p>",
-        footer='<button class="btn btn-sm btn-primary">Edit</button>'
+        body="John Doe",
+        footer="Last edited today",
     )
 
 Performance:
@@ -51,9 +51,9 @@ class Card(Component):
     3. Python f-strings - fallback
 
     Args:
-        body: Body content (required)
-        header: Optional header
-        footer: Optional footer
+        body: Body text (required, escaped)
+        header: Optional header text (escaped)
+        footer: Optional footer text (escaped)
         variant: Style variant (default, outlined, elevated)
     """
 

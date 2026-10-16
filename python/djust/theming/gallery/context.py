@@ -8,6 +8,8 @@ example dicts containing the kwargs that will be passed to its template tag.
 from dataclasses import fields as dataclass_fields
 from typing import Any
 
+from django.utils.safestring import mark_safe
+
 from djust.theming.contracts import COMPONENT_CONTRACTS
 from djust.theming.presets import ColorScale, ThemePreset, ThemeTokens, list_presets
 from djust.theming.theme_packs import DESIGN_SYSTEMS, DesignSystem
@@ -141,7 +143,9 @@ def _dropdown_examples() -> list[dict[str, Any]]:
     `role="menuitem"` is not decoration: `51-keyboard-nav.js` and
     `components.js` both locate menu items with `[role="menuitem"], .dropdown-item`.
     """
-    items = (
+    # Slot arguments escape plain strings, so the menu markup is marked safe
+    # the way an app passes its own trusted markup.
+    items = mark_safe(
         '<a class="dropdown-item" role="menuitem" href="#">Edit</a>'
         '<a class="dropdown-item" role="menuitem" href="#">Duplicate</a>'
         '<a class="dropdown-item" role="menuitem" href="#">Archive</a>'
@@ -330,7 +334,7 @@ def _tooltip_examples() -> list[dict[str, Any]]:
             {
                 "text": f"Tooltip ({position})",
                 "position": position,
-                "slot_content": f"<button>Hover ({position})</button>",
+                "slot_content": mark_safe(f"<button>Hover ({position})</button>"),
             }
         )
     return examples

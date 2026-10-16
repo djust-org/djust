@@ -129,6 +129,23 @@ describe('markdown-textarea: XSS hardening', () => {
         expect(html).toContain('<a href="/relative/path">click</a>');
     });
 
+    it.each(['java\tscript:', '\x01javascript:', 'JaVaScRiPt:', '  javascript:'])(
+    'rejects browser-normalized script schemes: %j', (url) => {
+        const dom = setupDom(`[click](${url}alert)`);
+        expect(getPreviewHtml(dom)).toContain('<a href="#">click</a>');
+    });
+
+    it('does not turn a newline-obfuscated scheme into a link', () => {
+        const dom = setupDom('[click](java\nscript:alert)');
+        expect(getPreviewHtml(dom)).not.toContain('<a ');
+    });
+
+    it.each(['https://safe.example/path', '/path', '#anchor', 'mailto:user@example.com'])(
+    'keeps permitted link target %j', (url) => {
+        const dom = setupDom(`[click](${url})`);
+        expect(getPreviewHtml(dom)).toContain(`<a href="${url}">click</a>`);
+    });
+
     it('escapes fenced code block content (pre-existing behavior still works)', () => {
         const dom = setupDom('```\n<script>alert(1)</script>\n```');
         const html = getPreviewHtml(dom);

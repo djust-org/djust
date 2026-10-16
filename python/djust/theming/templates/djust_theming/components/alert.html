@@ -3,23 +3,23 @@
      {% if attrs.id %}id="{{ attrs.id }}"{% endif %}>
     {% if slot_icon %}
     <div class="{{ css_prefix }}alert-icon">
-        {{ slot_icon|safe }}
+        {{ slot_icon }}
     </div>
     {% endif %}
     <div class="{{ css_prefix }}alert-content">
         {% if title %}
         <div class="{{ css_prefix }}alert-title">{{ title }}</div>
         {% endif %}
-        {% if slot_message %}{{ slot_message|safe }}{% else %}<div class="{{ css_prefix }}alert-message">{{ message }}</div>{% endif %}
+        {% if slot_message %}{{ slot_message }}{% else %}<div class="{{ css_prefix }}alert-message">{{ message }}</div>{% endif %}
     </div>
     {% if slot_actions %}
     <div class="{{ css_prefix }}alert-actions">
-        {{ slot_actions|safe }}
+        {{ slot_actions }}
     </div>
     {% endif %}
     {% if dismissible %}
         {% if slot_dismiss %}
-        {{ slot_dismiss|safe }}
+        {{ slot_dismiss }}
         {% else %}
         <button class="{{ css_prefix }}alert-dismiss" onclick="this.parentElement.remove()" aria-label="Dismiss">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">

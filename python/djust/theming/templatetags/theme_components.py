@@ -465,7 +465,8 @@ def theme_tabs(
 
     Args:
         id: Unique tabs identifier
-        tabs: List of dicts with 'label' and 'content' keys
+        tabs: List of dicts with 'label' and 'content' keys. Both render as
+            text; pass ``mark_safe`` or ``format_html`` output for markup.
         active: Zero-based index of the active tab. Server-driven: the host
             LiveView's `Tabs` descriptor owns this and the tab buttons dispatch
             `set_tab` with their index.
@@ -944,10 +945,12 @@ def theme_tooltip(context: Context, text: str, position: str = "top", **attrs: A
     Args:
         text: Tooltip text shown on hover
         position: 'top', 'bottom', 'left', 'right'
-        **attrs: Additional HTML attributes (slot_content for wrapped content)
+        **attrs: Additional HTML attributes (slot_content for wrapped content).
+            A slot value from the context renders as text unless it is
+            ``mark_safe`` or ``format_html`` output.
 
     Usage:
-        {% theme_tooltip "Help text" position="top" slot_content="<button>Hover me</button>" %}
+        {% theme_tooltip "Help text" position="top" slot_content=trigger_html %}
     """
     slots, remaining_attrs = _extract_slots(attrs)
     request = context.get("request")
@@ -1097,11 +1100,13 @@ def theme_nav(
     Args:
         brand: Brand text or name
         items: List of dicts with 'label', 'url', and optional 'icon', 'active', 'badge' keys
-        **attrs: Additional HTML attributes (slot_brand, slot_items, slot_actions, class, id, etc.)
+        **attrs: Additional HTML attributes (slot_brand, slot_items, slot_actions, class, id, etc.).
+            A slot value from the context renders as text unless it is
+            ``mark_safe`` or ``format_html`` output.
 
     Usage:
         {% theme_nav brand="MyApp" items=nav_items %}
-        {% theme_nav brand="MyApp" slot_actions="<button>Login</button>" %}
+        {% theme_nav brand="MyApp" slot_actions=login_button %}
     """
     slots, remaining_attrs = _extract_slots(attrs)
     request = context.get("request")

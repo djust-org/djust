@@ -34,7 +34,7 @@
     </div>
     <div class="{{ css_prefix }}card-footer">
         {% if slot_footer %}
-        {{ slot_footer|safe }}
+        {{ slot_footer }}
         {% elif login_url %}
         <p class="{{ css_prefix }}page-footer-text">Already have an account? <a href="{{ login_url }}">Sign in</a></p>
         {% endif %}

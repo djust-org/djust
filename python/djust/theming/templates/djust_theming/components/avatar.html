@@ -1,11 +1,11 @@
 <div class="{{ css_prefix }}avatar {{ css_prefix }}avatar-{{ size }} {% if attrs.class %}{{ attrs.class }}{% endif %}"
      {% if attrs.id %}id="{{ attrs.id }}"{% endif %}>
     {% if slot_image %}
-    {{ slot_image|safe }}
+    {{ slot_image }}
     {% elif src %}
     <img src="{{ src }}" alt="{{ alt }}" class="{{ css_prefix }}avatar-image" />
     {% elif slot_fallback %}
-    {{ slot_fallback|safe }}
+    {{ slot_fallback }}
     {% else %}
     <span class="{{ css_prefix }}avatar-fallback">{{ initials }}</span>
     {% endif %}
