@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0rc10] - 2026-10-16
+
+A 1.3 pre-release with a security fix; upgrading from 1.3.0rc9 is recommended.
+
+### Fixed
+
+- **A view is cleaned up when a late mount step raises.** The steps of a live
+  mount outside `mount()`, `handle_params()`, `connected()` and the first render
+  (the session-state and signed-snapshot restore, the route binding, the
+  dirty-tracking baseline, the post-render hooks) could raise with the view
+  still set on the runtime, in its channel groups and listed in presence. Any
+  exception after the view is admitted now leaves no view mounted: its groups
+  are left, its presence is untracked and its `disconnected()` runs. The
+  exception and its error frame are unchanged. Regression cases in
+  `python/djust/tests/test_failed_mount_leaves_no_view.py`.
+- **`html_update` / `html_recovery` frames with a `<noscript>` no longer run new
+  element handlers twice.** Such a frame is parsed a second time with the
+  page's scripting flag, so the `<noscript>` holds text as in the full render.
+  That parse created its elements in the page's document, so an
+  `<img onerror>`, `<details open ontoggle>`, `<video>` / `<audio onerror>` or
+  SVG `<image onerror>` in the frame ran its handler for the parse and again
+  for the element the morph inserted. The parsed tree is now copied into an
+  inert document and the parse's own elements lose their handler attributes
+  before any event reaches them; the `<noscript>` content stays text.
+  Regression cases in `tests/js/full_html_frame_namespace.test.js`.
+
+### Security
+
+- **Theming component tags now escape plain-string arguments.** Every `slot_*` argument of the `theme_*` component and page tags, and the inline arguments that fill a slot (a card's `body`, an alert's message), plus the `content` of a `theme_tabs` dict were inserted into the page as HTML. They are now autoescaped like `{{ variable }}`. Values that are already safe still render as HTML: `mark_safe` and `format_html` output, the body of a `*_block` form, and string literals written in the template itself. `{% djust_sw_register %}` now encodes `sw_url` and `scope` so that neither can end the inline script, and it escapes its CSP nonce attribute. The `MarkdownTextarea` preview strips control and whitespace characters before it checks a link's scheme, and then accepts only `http`, `https`, `mailto` and relative targets.
+
+  **Compatibility:** an app that passed HTML to one of these arguments as a plain string from Python now sees that markup as escaped text. Examples are `body="<p>…</p>"` and tab `content` built from markup. Use the block form (`{% theme_card_block %}…{% end_theme_card_block %}`), `format_html` when the markup interpolates values, or `mark_safe` for constant markup. Never mark user-supplied text safe.
+
+### Documentation
+
+- **The lifecycle contract says what a failed mount leaves behind.** If any
+  step of a live mount raises, no view stays mounted; a `PermissionDenied`
+  from `mount()`, `handle_params()` or `connected()` sends a
+  `permission_denied` error frame and closes the WebSocket with code 4403,
+  and any other exception sends the usual error frame. Stated in the
+  LiveView API reference and the best-practices guide.
+
 ## [1.3.0rc9] - 2026-10-15
 
 A 1.3 pre-release with a security fix; upgrading from 1.3.0rc8 is recommended.
