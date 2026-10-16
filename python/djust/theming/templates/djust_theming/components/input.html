@@ -1,11 +1,11 @@
 <div class="{{ css_prefix }}input-group {% if attrs.class %}{{ attrs.class }}{% endif %}">
     {% if slot_label %}
-    {{ slot_label|safe }}
+    {{ slot_label }}
     {% elif label %}
     <label for="{{ field_id|default:name }}" class="{{ css_prefix }}input-label">{{ label }}</label>
     {% endif %}
     {% if slot_input %}
-    {{ slot_input|safe }}
+    {{ slot_input }}
     {% else %}
     <input
         type="{{ type }}"
@@ -21,9 +21,9 @@
     />
     {% endif %}
     {% if slot_help_text %}
-    <div class="{{ css_prefix }}input-help">{{ slot_help_text|safe }}</div>
+    <div class="{{ css_prefix }}input-help">{{ slot_help_text }}</div>
     {% endif %}
     {% if slot_error %}
-    <div class="{{ css_prefix }}input-error" role="alert">{{ slot_error|safe }}</div>
+    <div class="{{ css_prefix }}input-error" role="alert">{{ slot_error }}</div>
     {% endif %}
 </div>

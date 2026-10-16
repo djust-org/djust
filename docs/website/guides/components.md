@@ -1190,8 +1190,8 @@ Each has two spellings, and both are supported:
 ```html
 {% load theme_components %}
 
-{# Inline: the body is an argument, a plain string #}
-{% theme_card title="Welcome" body="Plain text only." %}
+{# Inline: the body is an argument; a value from the view renders as text #}
+{% theme_card title="Welcome" body=welcome_text %}
 
 {# Block: the body sits between the tags, so it can hold other template tags #}
 {% theme_card_block title="Welcome" %}
@@ -1235,10 +1235,16 @@ When to use which:
   (`{% theme_alert "Saved" variant="success" %}`).
 - Use the **block** form when the body holds markup or other template tags. The
   body is rendered by Django's template engine in your template's context, so
-  `{{ variable }}` inside it is autoescaped like anywhere else. Prefer it to
-  building HTML in Python and passing it through `body=` or a `slot_*` argument:
-  those are inserted without escaping, which is why a value derived from user
-  data does not belong there.
+  `{{ variable }}` inside it is autoescaped like anywhere else.
+
+Inline arguments are escaped like `{{ variable }}`: a plain string passed to
+`body=`, `title=`, a `slot_*` argument, or a `theme_tabs` dict's `label` and
+`content` renders as text. Markup you build yourself in Python has to say so:
+use `format_html` when it interpolates values, or `mark_safe` for a constant,
+and never mark user data safe. A string literal written in the template
+(`slot_content="<button>…</button>"`) is your own markup and is not escaped,
+the same as in any Django tag. The block form is usually simpler than
+building HTML in Python.
 
 Both forms work in LiveView templates (the Rust engine) as well as in Django
 templates, inside `dj-root`, in `{% for %}` and `{% if %}`, nested, and in a
@@ -1248,7 +1254,8 @@ body is trimmed (so a `<pre>` body should put its content inside the `<pre>`).
 closing tag, and `end_theme_card` raises an error that points to
 `theme_card_block`.
 
-Not covered: `theme_tabs` takes a list of `{label, content}` dicts and
+Not covered: `theme_tabs` takes a list of `{label, content}` dicts (wrap tab
+markup in `format_html` or `mark_safe`) and
 `theme_table`, `theme_nav` and `theme_sidebar_nav` take data, not a body, so a
 block form has nothing to wrap; `theme_toast`, `theme_badge` and `theme_button`
 take a short label rather than a container body.

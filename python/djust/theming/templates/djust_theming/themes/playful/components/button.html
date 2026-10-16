@@ -12,6 +12,6 @@
             {% if attrs.type %}type="{{ attrs.type }}"{% endif %}
             {{ extra_attrs }}>
     {% endif %}
-        {% if slot_loading %}{{ slot_loading|safe }}{% else %}{% if slot_icon %}{{ slot_icon|safe }} {% endif %}{% if slot_content %}{{ slot_content|safe }}{% else %}{{ text }}{% endif %}{% endif %}
+        {% if slot_loading %}{{ slot_loading }}{% else %}{% if slot_icon %}{{ slot_icon }} {% endif %}{% if slot_content %}{{ slot_content }}{% else %}{{ text }}{% endif %}{% endif %}
     {% if tag == "a" %}</a>{% else %}</button>{% endif %}
 </span>

@@ -42,7 +42,7 @@ rather than as a side effect of this one.
          {% if title %}aria-labelledby="{{ id }}-title"{% endif %}
          {% if attrs.id %}id="{{ attrs.id }}"{% endif %}>
         {% if slot_close %}
-        {{ slot_close|safe }}
+        {{ slot_close }}
         {% else %}
         <button class="{{ css_prefix }}modal-close" aria-label="Close"
                 data-theme-modal-close data-dj-close
@@ -56,7 +56,7 @@ rather than as a side effect of this one.
         {% endif %}
         {% if slot_header %}
         <div class="{{ css_prefix }}modal-header">
-            {{ slot_header|safe }}
+            {{ slot_header }}
         </div>
         {% elif title %}
         <div class="{{ css_prefix }}modal-header">
@@ -64,11 +64,11 @@ rather than as a side effect of this one.
         </div>
         {% endif %}
         <div class="{{ css_prefix }}modal-body">
-            {% if slot_body %}{{ slot_body|safe }}{% elif body %}{{ body }}{% endif %}
+            {% if slot_body %}{{ slot_body }}{% elif body %}{{ body }}{% endif %}
         </div>
         {% if slot_footer %}
         <div class="{{ css_prefix }}modal-footer">
-            {{ slot_footer|safe }}
+            {{ slot_footer }}
         </div>
         {% endif %}
     </div>
