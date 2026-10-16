@@ -358,9 +358,11 @@ def theme_maintenance_page(
         title: Page heading
         description: Description text
         **attrs: slot_illustration, slot_eta, slot_progress, class, id, etc.
+            A slot value from the context renders as text unless it is
+            ``mark_safe`` or ``format_html`` output.
 
     Usage:
-        {% theme_maintenance_page slot_eta="<p>Back at 2pm UTC</p>" %}
+        {% theme_maintenance_page slot_eta=eta_html %}
     """
     slots, remaining_attrs = _extract_slots(attrs)
     request = context.get("request")

@@ -28,13 +28,13 @@
         </form>
         {% if slot_social %}
         <div class="{{ css_prefix }}page-social">
-            {{ slot_social|safe }}
+            {{ slot_social }}
         </div>
         {% endif %}
     </div>
     <div class="{{ css_prefix }}card-footer">
         {% if slot_footer %}
-        {{ slot_footer|safe }}
+        {{ slot_footer }}
         {% elif register_url %}
         <p class="{{ css_prefix }}page-footer-text">Don't have an account? <a href="{{ register_url }}">Register</a></p>
         {% endif %}

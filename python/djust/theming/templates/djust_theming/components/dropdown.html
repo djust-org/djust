@@ -2,7 +2,7 @@
      data-theme-dropdown="{{ id }}"
      {% if attrs.id %}id="{{ attrs.id }}"{% endif %}>
     {% if slot_trigger %}
-    {{ slot_trigger|safe }}
+    {{ slot_trigger }}
     {% else %}
     <button class="{{ css_prefix }}dropdown-trigger"
             aria-haspopup="true"
@@ -18,6 +18,6 @@
          id="{{ id }}-menu"
          role="menu"
          style="display:none;">
-        {% if slot_menu %}{{ slot_menu|safe }}{% endif %}
+        {% if slot_menu %}{{ slot_menu }}{% endif %}
     </div>
 </div>

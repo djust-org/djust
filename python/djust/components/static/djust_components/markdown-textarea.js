@@ -123,14 +123,11 @@
   }
 
   function _sanitizeUrl(url) {
-    // Reject dangerous URL schemes (case-insensitive, leading whitespace
-    // tolerated). Relative URLs, http(s), mailto, anchors etc. pass through.
-    var trimmed = String(url).trim().toLowerCase();
-    if (
-      trimmed.indexOf("javascript:") === 0 ||
-      trimmed.indexOf("data:") === 0 ||
-      trimmed.indexOf("vbscript:") === 0
-    ) {
+    // Browsers discard ASCII controls/whitespace while parsing a URL scheme.
+    // Check that normalized scheme, while preserving the original safe URL.
+    var normalized = String(url).replace(/[\u0000-\u0020\u007f]/g, "");
+    var scheme = /^[a-z][a-z0-9+.-]*:/i.exec(normalized);
+    if (scheme && !/^(?:https?|mailto):$/i.test(scheme[0])) {
       return "#";
     }
     return url;

@@ -3,11 +3,11 @@
          {% if attrs.id %}id="{{ attrs.id }}"{% endif %}>
     <summary class="{{ css_prefix }}sidebar-title">
         {% if icon %}<span class="{{ css_prefix }}nav-group-icon">{{ icon }}</span>{% endif %}
-        {% if slot_label %}{{ slot_label|safe }}{% else %}{{ label }}{% endif %}
+        {% if slot_label %}{{ slot_label }}{% else %}{{ label }}{% endif %}
     </summary>
     <div class="{{ css_prefix }}sidebar-menu">
         {% if slot_items %}
-            {{ slot_items|safe }}
+            {{ slot_items }}
         {% else %}
             {% for item in items %}
             <a href="{{ item.url }}" class="{{ css_prefix }}sidebar-item">
