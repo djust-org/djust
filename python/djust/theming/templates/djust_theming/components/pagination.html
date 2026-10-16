@@ -4,7 +4,7 @@
     <ul class="{{ css_prefix }}pagination-list">
         <li>
             {% if slot_prev %}
-            {{ slot_prev|safe }}
+            {{ slot_prev }}
             {% elif current_page > 1 %}
             <a href="{{ prev_url }}" class="{{ css_prefix }}pagination-prev" aria-label="Previous page">&laquo; Prev</a>
             {% else %}
@@ -30,7 +30,7 @@
         {% endif %}
         <li>
             {% if slot_next %}
-            {{ slot_next|safe }}
+            {{ slot_next }}
             {% elif current_page < total_pages %}
             <a href="{{ next_url }}" class="{{ css_prefix }}pagination-next" aria-label="Next page">Next &raquo;</a>
             {% else %}

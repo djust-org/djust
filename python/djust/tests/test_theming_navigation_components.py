@@ -4,6 +4,7 @@ Tests for Phase 3.3 navigation components: nav_item, nav_group, nav, sidebar_nav
 Uses the ``ComponentTestCase`` harness from ``tests.component_test_base``.
 """
 
+from django.utils.safestring import mark_safe
 import django
 from django.conf import settings
 
@@ -197,7 +198,10 @@ class TestNavItemSlots(ComponentTestCase):
 
     def test_slot_icon(self):
         html = self.render_component(
-            "nav_item", label="Home", url="/", slot_icon='<svg class="custom-icon"></svg>'
+            "nav_item",
+            label="Home",
+            url="/",
+            slot_icon=mark_safe('<svg class="custom-icon"></svg>'),
         )
         self.assert_contains(html, '<svg class="custom-icon"></svg>')
 
@@ -206,7 +210,7 @@ class TestNavItemSlots(ComponentTestCase):
             "nav_item",
             label="Inbox",
             url="/inbox/",
-            slot_badge='<span class="custom-badge">99+</span>',
+            slot_badge=mark_safe('<span class="custom-badge">99+</span>'),
         )
         self.assert_contains(html, '<span class="custom-badge">99+</span>')
 
@@ -274,13 +278,13 @@ class TestNavGroupSlots(ComponentTestCase):
 
     def test_slot_label(self):
         html = self.render_component(
-            "nav_group", label="Admin", slot_label="<strong>Admin Panel</strong>"
+            "nav_group", label="Admin", slot_label=mark_safe("<strong>Admin Panel</strong>")
         )
         self.assert_contains(html, "<strong>Admin Panel</strong>")
 
     def test_slot_items(self):
         html = self.render_component(
-            "nav_group", label="Admin", slot_items='<a href="/custom/">Custom Link</a>'
+            "nav_group", label="Admin", slot_items=mark_safe('<a href="/custom/">Custom Link</a>')
         )
         self.assert_contains(html, '<a href="/custom/">Custom Link</a>')
 
@@ -343,15 +347,17 @@ class TestNavSlots(ComponentTestCase):
     """Test slot overrides for theme_nav."""
 
     def test_slot_brand(self):
-        html = self.render_component("nav", slot_brand='<img src="/logo.png" alt="Logo">')
+        html = self.render_component(
+            "nav", slot_brand=mark_safe('<img src="/logo.png" alt="Logo">')
+        )
         self.assert_contains(html, '<img src="/logo.png" alt="Logo">')
 
     def test_slot_items(self):
-        html = self.render_component("nav", slot_items='<a href="/custom/">Custom</a>')
+        html = self.render_component("nav", slot_items=mark_safe('<a href="/custom/">Custom</a>'))
         self.assert_contains(html, '<a href="/custom/">Custom</a>')
 
     def test_slot_actions(self):
-        html = self.render_component("nav", slot_actions="<button>Login</button>")
+        html = self.render_component("nav", slot_actions=mark_safe("<button>Login</button>"))
         self.assert_contains(html, "<button>Login</button>")
 
 
@@ -430,17 +436,19 @@ class TestSidebarNavSlots(ComponentTestCase):
     """Test slot overrides for theme_sidebar_nav."""
 
     def test_slot_header(self):
-        html = self.render_component("sidebar_nav", slot_header='<div class="logo">App Logo</div>')
+        html = self.render_component(
+            "sidebar_nav", slot_header=mark_safe('<div class="logo">App Logo</div>')
+        )
         self.assert_contains(html, '<div class="logo">App Logo</div>')
 
     def test_slot_sections(self):
         html = self.render_component(
-            "sidebar_nav", slot_sections='<div class="custom-section">Custom Nav</div>'
+            "sidebar_nav", slot_sections=mark_safe('<div class="custom-section">Custom Nav</div>')
         )
         self.assert_contains(html, '<div class="custom-section">Custom Nav</div>')
 
     def test_slot_footer(self):
         html = self.render_component(
-            "sidebar_nav", slot_footer='<div class="sidebar-footer">v1.0</div>'
+            "sidebar_nav", slot_footer=mark_safe('<div class="sidebar-footer">v1.0</div>')
         )
         self.assert_contains(html, '<div class="sidebar-footer">v1.0</div>')

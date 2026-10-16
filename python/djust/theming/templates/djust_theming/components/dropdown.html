@@ -27,7 +27,7 @@ deciding whether the contract should be enforced on caller-supplied markup.
      {% if is_open %}data-open="true"{% endif %}
      {% if attrs.id %}id="{{ attrs.id }}"{% endif %}>
     {% if slot_trigger %}
-    {{ slot_trigger|safe }}
+    {{ slot_trigger }}
     {% else %}
     <button class="{{ css_prefix }}dropdown-trigger"
             aria-haspopup="true"
@@ -46,6 +46,6 @@ deciding whether the contract should be enforced on caller-supplied markup.
          id="{{ id }}-menu"
          role="menu"
          {% if not is_open %}style="display:none;"{% endif %}>
-        {% if slot_menu %}{{ slot_menu|safe }}{% endif %}
+        {% if slot_menu %}{{ slot_menu }}{% endif %}
     </div>
 </div>

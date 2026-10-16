@@ -29,6 +29,7 @@ from pathlib import Path
 
 import pytest
 from django.template import Context, Engine, RequestContext
+from django.utils.safestring import mark_safe
 
 from djust.theming.contracts import COMPONENT_CONTRACTS
 from djust.theming.gallery.context import _EXAMPLE_BUILDERS
@@ -225,7 +226,8 @@ class TestSlotsReachTheTemplate:
         """Rendering with a slot must not put it in `attrs`."""
         tag = getattr(theme_components, f"theme_{name}")
         examples = _EXAMPLE_BUILDERS.get(name)
-        marker = "<em>slot-content</em>"
+        # Slot arguments escape plain strings; markup a caller means is marked safe.
+        marker = mark_safe("<em>slot-content</em>")
 
         # Give whichever slot this template reads a value.
         from djust.theming.gallery.catalogue import get_component_template_source
@@ -288,12 +290,15 @@ class TestUsageSnippetIsRealCode:
 
         # Rebuild the state the snippet's `mount` assigns, then render the tag
         # it documents. A snippet that raises here is a snippet nobody can use.
+        if "mark_safe(" in view_src:
+            assert "from django.utils.safestring import mark_safe" in view_src
         state: dict = {}
         for line in view_src.split("def mount(self, request, **kwargs):")[1].splitlines():
             stripped = line.strip()
             if stripped.startswith("self."):
                 key, value = stripped[len("self.") :].split(" = ", 1)
-                state[key] = eval(value, {})  # noqa: S307 — our own generated literal
+                # The snippet imports `mark_safe` for the slot markup it assigns.
+                state[key] = eval(value, {"mark_safe": mark_safe})  # noqa: S307 — our own generated literal
 
         self._engine().from_string(template_src).render(Context(state))
 

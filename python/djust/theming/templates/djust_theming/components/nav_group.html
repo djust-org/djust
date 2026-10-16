@@ -3,12 +3,12 @@
          {% if attrs.id %}id="{{ attrs.id }}"{% endif %}>
     <summary class="{{ css_prefix }}sidebar-title"{% if toggle_event %} dj-click="{{ toggle_event }}" data-value="{{ label }}"{% endif %}>
         {% if icon %}<span class="{{ css_prefix }}nav-group-icon">{{ icon }}</span>{% endif %}
-        {% if slot_label %}{{ slot_label|safe }}{% else %}{{ label }}{% endif %}
+        {% if slot_label %}{{ slot_label }}{% else %}{{ label }}{% endif %}
         {% if badge %}<span class="{{ css_prefix }}nav-group-badge">{{ badge }}</span>{% endif %}
     </summary>
     <div class="{{ css_prefix }}sidebar-menu">
         {% if slot_items %}
-            {{ slot_items|safe }}
+            {{ slot_items }}
         {% else %}
             {% for item in items %}
             {% comment %}

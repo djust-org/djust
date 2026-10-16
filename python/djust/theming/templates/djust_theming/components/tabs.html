@@ -49,7 +49,7 @@ moves.
          id="{{ id }}-panel-{{ forloop.counter0 }}"
          aria-labelledby="{{ id }}-tab-{{ forloop.counter0 }}"
          {% if forloop.counter0|stringformat:'s' != active|stringformat:'s' %}hidden{% endif %}>
-        {{ tab.content|safe }}
+        {{ tab.content }}
     </div>
     {% endfor %}
 </div>

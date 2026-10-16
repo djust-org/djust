@@ -4,6 +4,7 @@ Tests for component contracts, slot system, and rendering (Phase 2.2 / I11 / I27
 Uses the ``ComponentTestCase`` harness from ``tests.component_test_base``.
 """
 
+from django.utils.safestring import mark_safe
 import django
 from django.conf import settings
 
@@ -154,7 +155,7 @@ class TestButtonComponent(ComponentTestCase):
                     "size": "md",
                     "css_prefix": "",
                     "attrs": {},
-                    "slot_icon": '<svg class="icon-save"></svg>',
+                    "slot_icon": mark_safe('<svg class="icon-save"></svg>'),
                 }
             )
 
@@ -174,7 +175,7 @@ class TestButtonComponent(ComponentTestCase):
                     "size": "md",
                     "css_prefix": "",
                     "attrs": {},
-                    "slot_content": "<strong>Custom Content</strong>",
+                    "slot_content": mark_safe("<strong>Custom Content</strong>"),
                 }
             )
 
@@ -194,8 +195,8 @@ class TestButtonComponent(ComponentTestCase):
                     "size": "md",
                     "css_prefix": "",
                     "attrs": {},
-                    "slot_icon": "<svg></svg>",
-                    "slot_loading": '<span class="spinner"></span>',
+                    "slot_icon": mark_safe("<svg></svg>"),
+                    "slot_loading": mark_safe('<span class="spinner"></span>'),
                 }
             )
 
@@ -248,7 +249,7 @@ class TestCardComponent(ComponentTestCase):
                     "footer": None,
                     "css_prefix": "",
                     "attrs": {},
-                    "slot_header": "<h2>Custom Header</h2>",
+                    "slot_header": mark_safe("<h2>Custom Header</h2>"),
                 }
             )
 
@@ -268,7 +269,7 @@ class TestCardComponent(ComponentTestCase):
                     "footer": None,
                     "css_prefix": "",
                     "attrs": {},
-                    "slot_body": "<p>Replaced body</p>",
+                    "slot_body": mark_safe("<p>Replaced body</p>"),
                 }
             )
 
@@ -288,7 +289,7 @@ class TestCardComponent(ComponentTestCase):
                     "footer": "Old Footer",
                     "css_prefix": "",
                     "attrs": {},
-                    "slot_footer": "<div>Custom Footer</div>",
+                    "slot_footer": mark_safe("<div>Custom Footer</div>"),
                 }
             )
 
@@ -345,7 +346,7 @@ class TestAlertComponent(ComponentTestCase):
                     "dismissible": False,
                     "css_prefix": "",
                     "attrs": {},
-                    "slot_icon": '<svg class="info-icon"></svg>',
+                    "slot_icon": mark_safe('<svg class="info-icon"></svg>'),
                 }
             )
 
@@ -366,7 +367,7 @@ class TestAlertComponent(ComponentTestCase):
                     "dismissible": False,
                     "css_prefix": "",
                     "attrs": {},
-                    "slot_message": "<p>Custom message with <a href='#'>link</a></p>",
+                    "slot_message": mark_safe("<p>Custom message with <a href='#'>link</a></p>"),
                 }
             )
 
@@ -387,7 +388,7 @@ class TestAlertComponent(ComponentTestCase):
                     "dismissible": False,
                     "css_prefix": "",
                     "attrs": {},
-                    "slot_actions": '<button class="confirm">Yes</button>',
+                    "slot_actions": mark_safe('<button class="confirm">Yes</button>'),
                 }
             )
 
@@ -408,7 +409,7 @@ class TestAlertComponent(ComponentTestCase):
                     "dismissible": True,
                     "css_prefix": "",
                     "attrs": {},
-                    "slot_dismiss": '<button class="custom-dismiss">X</button>',
+                    "slot_dismiss": mark_safe('<button class="custom-dismiss">X</button>'),
                 }
             )
 
@@ -456,7 +457,7 @@ class TestBadgeComponent(ComponentTestCase):
                     "variant": "default",
                     "css_prefix": "",
                     "attrs": {},
-                    "slot_content": '<img src="icon.png"/> Custom',
+                    "slot_content": mark_safe('<img src="icon.png"/> Custom'),
                 }
             )
 
@@ -514,7 +515,9 @@ class TestInputComponent(ComponentTestCase):
                     "type": "text",
                     "css_prefix": "",
                     "attrs": {},
-                    "slot_label": '<label for="email" class="custom-label">Custom Label</label>',
+                    "slot_label": mark_safe(
+                        '<label for="email" class="custom-label">Custom Label</label>'
+                    ),
                 }
             )
 
@@ -536,7 +539,7 @@ class TestInputComponent(ComponentTestCase):
                     "type": "text",
                     "css_prefix": "",
                     "attrs": {},
-                    "slot_input": '<textarea name="bio" id="bio" rows="4"></textarea>',
+                    "slot_input": mark_safe('<textarea name="bio" id="bio" rows="4"></textarea>'),
                 }
             )
 

@@ -3,7 +3,7 @@
          {% if attrs.id %}id="{{ attrs.id }}"{% endif %}>
         {% if slot_header %}
         <div class="{{ css_prefix }}card-header">
-            {{ slot_header|safe }}
+            {{ slot_header }}
         </div>
         {% elif title %}
         <div class="{{ css_prefix }}card-header">
@@ -11,11 +11,11 @@
         </div>
         {% endif %}
         <div class="{{ css_prefix }}card-body">
-            {% if slot_body %}{{ slot_body|safe }}{% else %}{{ content }}{% endif %}
+            {% if slot_body %}{{ slot_body }}{% else %}{{ content }}{% endif %}
         </div>
         {% if slot_footer %}
         <div class="{{ css_prefix }}card-footer">
-            {{ slot_footer|safe }}
+            {{ slot_footer }}
         </div>
         {% elif footer %}
         <div class="{{ css_prefix }}card-footer">

@@ -4,6 +4,7 @@ Tests for Phase 2.1 Batch 1 components: modal, dropdown, tabs, table, pagination
 Uses the ``ComponentTestCase`` harness from ``tests.component_test_base``.
 """
 
+from django.utils.safestring import mark_safe
 import django
 from django.conf import settings
 
@@ -203,7 +204,7 @@ class TestModalComponent(ComponentTestCase):
                     "size": "md",
                     "css_prefix": "",
                     "attrs": {},
-                    "slot_header": "<h3>Custom Header</h3>",
+                    "slot_header": mark_safe("<h3>Custom Header</h3>"),
                 }
             )
         self.assert_contains(html, "<h3>Custom Header</h3>")
@@ -222,7 +223,7 @@ class TestModalComponent(ComponentTestCase):
                     "size": "md",
                     "css_prefix": "",
                     "attrs": {},
-                    "slot_body": "<p>Custom body content</p>",
+                    "slot_body": mark_safe("<p>Custom body content</p>"),
                 }
             )
         self.assert_contains(html, "<p>Custom body content</p>")
@@ -240,7 +241,7 @@ class TestModalComponent(ComponentTestCase):
                     "size": "md",
                     "css_prefix": "",
                     "attrs": {},
-                    "slot_footer": '<button class="confirm">OK</button>',
+                    "slot_footer": mark_safe('<button class="confirm">OK</button>'),
                 }
             )
         self.assert_contains(html, "modal-footer")
@@ -259,7 +260,7 @@ class TestModalComponent(ComponentTestCase):
                     "size": "md",
                     "css_prefix": "",
                     "attrs": {},
-                    "slot_close": '<button class="custom-close">X</button>',
+                    "slot_close": mark_safe('<button class="custom-close">X</button>'),
                 }
             )
         self.assert_contains(html, '<button class="custom-close">X</button>')
@@ -344,7 +345,9 @@ class TestDropdownComponent(ComponentTestCase):
                     "align": "left",
                     "css_prefix": "",
                     "attrs": {},
-                    "slot_trigger": '<button class="custom-trigger" aria-haspopup="true" aria-expanded="false">Custom</button>',
+                    "slot_trigger": mark_safe(
+                        '<button class="custom-trigger" aria-haspopup="true" aria-expanded="false">Custom</button>'
+                    ),
                 }
             )
         self.assert_contains(html, "custom-trigger")
@@ -363,7 +366,7 @@ class TestDropdownComponent(ComponentTestCase):
                     "align": "left",
                     "css_prefix": "",
                     "attrs": {},
-                    "slot_menu": '<a class="dropdown-item" role="menuitem">Edit</a>',
+                    "slot_menu": mark_safe('<a class="dropdown-item" role="menuitem">Edit</a>'),
                 }
             )
         self.assert_contains(html, 'role="menuitem"')
@@ -518,7 +521,7 @@ class TestTableComponent(ComponentTestCase):
                     "caption": None,
                     "css_prefix": "",
                     "attrs": {},
-                    "slot_header": '<tr><th class="custom-header">Custom</th></tr>',
+                    "slot_header": mark_safe('<tr><th class="custom-header">Custom</th></tr>'),
                 }
             )
         self.assert_contains(html, "custom-header")
@@ -538,7 +541,7 @@ class TestTableComponent(ComponentTestCase):
                     "caption": None,
                     "css_prefix": "",
                     "attrs": {},
-                    "slot_body": '<tr><td class="custom-cell">Custom</td></tr>',
+                    "slot_body": mark_safe('<tr><td class="custom-cell">Custom</td></tr>'),
                 }
             )
         self.assert_contains(html, "custom-cell")
@@ -557,7 +560,7 @@ class TestTableComponent(ComponentTestCase):
                     "caption": None,
                     "css_prefix": "",
                     "attrs": {},
-                    "slot_footer": "<tr><td>Total: 1</td></tr>",
+                    "slot_footer": mark_safe("<tr><td>Total: 1</td></tr>"),
                 }
             )
         self.assert_contains(html, "Total: 1")
@@ -577,7 +580,7 @@ class TestTableComponent(ComponentTestCase):
                     "caption": "Old Caption",
                     "css_prefix": "",
                     "attrs": {},
-                    "slot_caption": "<strong>Custom Caption</strong>",
+                    "slot_caption": mark_safe("<strong>Custom Caption</strong>"),
                 }
             )
         self.assert_contains(html, "Custom Caption")
@@ -680,7 +683,7 @@ class TestPaginationComponent(ComponentTestCase):
                     "next_url": "/p/3",
                     "css_prefix": "",
                     "attrs": {},
-                    "slot_prev": '<a href="/p/1" class="custom-prev">Back</a>',
+                    "slot_prev": mark_safe('<a href="/p/1" class="custom-prev">Back</a>'),
                 }
             )
         self.assert_contains(html, "custom-prev")
@@ -709,7 +712,7 @@ class TestPaginationComponent(ComponentTestCase):
                     "next_url": "/p/3",
                     "css_prefix": "",
                     "attrs": {},
-                    "slot_next": '<a href="/p/3" class="custom-next">Forward</a>',
+                    "slot_next": mark_safe('<a href="/p/3" class="custom-next">Forward</a>'),
                 }
             )
         self.assert_contains(html, "custom-next")
