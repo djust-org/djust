@@ -299,20 +299,6 @@ def _rss_kb(pid: int) -> int:
         return 0
 
 
-# A hard backstop under the polled ceiling: the poll is what classifies a
-# runaway, this only guarantees a runaway cannot exhaust the machine first.
-_HARD_CAP_BYTES = 4 * 1024 * 1024 * 1024
-
-
-def _cap_child_memory() -> None:
-    try:
-        import resource
-
-        resource.setrlimit(resource.RLIMIT_DATA, (_HARD_CAP_BYTES, _HARD_CAP_BYTES))
-    except (ImportError, ValueError, OSError):
-        pass  # macOS refuses; the poll still applies there
-
-
 def _drain(stream, sink: list[str]) -> None:
     for line in stream:
         sink.append(line)
@@ -349,7 +335,6 @@ def _render_in_child(
         stderr=subprocess.PIPE,
         text=True,
         bufsize=1,
-        preexec_fn=_cap_child_memory,
     )
     lines: list[str] = []
     errs: list[str] = []
@@ -368,7 +353,7 @@ def _render_in_child(
         if _rss_kb(proc.pid) > _RSS_CEILING_KB:
             reason = "RUNAWAY-MEMORY"
             break
-        time.sleep(0.1)
+        time.sleep(0.05)
     if reason is not None:
         proc.kill()
     proc.wait()
@@ -380,12 +365,7 @@ def _render_in_child(
             rec = json.loads(line)
             answers[tuple(rec["cell"])] = rec["out"]
     if reason is None and proc.returncode != 0:
-        tail = "".join(errs).strip()[-200:]
-        # Hitting the hard cap is the same finding as the polled ceiling.
-        if "MemoryError" in tail or "memory allocation of" in tail:
-            reason = "RUNAWAY-MEMORY"
-        else:
-            reason = f"CRASH rc={proc.returncode} {tail}"
+        reason = f"CRASH rc={proc.returncode} {''.join(errs).strip()[-200:]}"
     return answers, reason
 
 
