@@ -847,10 +847,26 @@ def reactive(func: Callable[..., Any]) -> "_ReactiveProperty":
             def count(self, value):
                 self._count = value
 
-    The host class must have an ``update()`` method (inherited from
-    ``LiveView``).  A ``TypeError`` is raised at class-definition time if
-    it doesn't, rather than silently no-opping at runtime.
+    The host class must have an ``update()`` method.  A ``TypeError`` is
+    raised at class-definition time if it doesn't, rather than silently
+    no-opping at runtime.
+
+    .. deprecated:: 1.4
+        Removed in djust 2.0. ``LiveView`` has no ``update()`` method, so
+        ``@reactive`` on a view raises ``TypeError``; on a ``LiveComponent``
+        the decorated function's body is never called and the setter's
+        ``update()`` call re-renders nothing. Use a plain attribute (djust
+        re-renders after every event handler) or ``@computed``.
     """
+    warn_deprecated(
+        "@reactive",
+        since="1.4",
+        removed_in="2.0.0",
+        instead="a plain attribute (djust re-renders after every handler) or @computed",
+        # stacklevel=3: warnings.warn -> warn_deprecated -> reactive -> the
+        # class body applying the decorator.
+        stacklevel=3,
+    )
     internal_name = f"_{func.__name__}_reactive"
 
     def _getter(self: Any) -> Any:

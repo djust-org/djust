@@ -255,3 +255,27 @@ def test_ready_emits_the_settings_warnings():
         if not ln.lstrip().startswith("#")
     )
     assert "warn_deprecated_settings()" in code
+
+
+# --- @reactive ------------------------------------------------------------------
+
+
+def test_reactive_warns_at_the_decorated_definition():
+    """``@reactive`` cannot work on a LiveView (no ``update()``), and on other
+    hosts the decorated body is never called, so 2.0 removes it."""
+    from djust.decorators import reactive
+
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+
+        class _Host:
+            def update(self):
+                pass
+
+            @reactive  # <- the user frame
+            def count(self):
+                return 1
+
+    hit = _one_deprecation(record, "@reactive")
+    assert "@computed" in str(hit.message)
+    assert os.path.basename(hit.filename) == THIS_FILE, hit.filename

@@ -99,6 +99,7 @@ version; it does not use `PendingDeprecationWarning`.
 | `@event` | `@event_handler` | 2.0.0 |
 | `LiveViewForm` | `django.forms.Form` | 2.0.0 |
 | `_legacy` theming module (`THEMES`, `get_theme()`, `list_themes()`) | `djust.theming.theme_packs` (`get_design_system`, etc.) | 2.0.0 |
+| `@reactive` | A plain attribute, or `@computed` | 2.0.0 |
 | `social_auth_providers` context processor | `{% auth_providers auth %}` | 2.0.0 |
 | `AccordionMixin`, `TabsMixin`, `ModalMixin`, `CollapsibleMixin`, `SheetMixin`, `DropdownMixin`, `TooltipMixin`, `CarouselMixin` | The matching component in `djust.components.descriptors` | 2.0.0 |
 | `djust.template_backend` | `djust.template` (`'djust.template.backend.DjustTemplateBackend'` in `TEMPLATES`) | 2.0.0 |

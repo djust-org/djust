@@ -219,6 +219,7 @@ carve-out floor of `>= 1.1.0`; the rest carry the standard floor of `2.0.0`.
 | `LiveViewForm` | 0.3 | **2.0.0** | `django.forms.Form` |
 | `_legacy` theming module (`THEMES`, `get_theme()`, `list_themes()`) | 0.5 | **2.0.0** | `DESIGN_SYSTEMS` / `get_design_system` / `get_all_design_systems` from `djust.theming.theme_packs` |
 | Dict-style reads of `block` in a Python-bridged tag (`block["super"]`, `block.get("super")`, `block.values()`, `block.items()`, `dict(block)`) | 1.3 | **2.0.0** | `context["block"].super()` |
+| `@reactive` (raises `TypeError` on a `LiveView`, which has no `update()`; elsewhere the decorated body is never called) | 1.4 | **2.0.0** | A plain attribute, or `@computed` |
 | `djust.auth.social.social_auth_providers` context processor | 1.3 | **2.0.0** | `{% auth_providers auth %}` from `{% load djust_auth %}` |
 | `AccordionMixin`, `TabsMixin`, `ModalMixin`, `CollapsibleMixin`, `SheetMixin`, `DropdownMixin`, `TooltipMixin`, `CarouselMixin` (subclassing warns) | 1.4 | **2.0.0** | The matching component in `djust.components.descriptors` (`Accordion`, `Tabs`, …) |
 | `djust.template_backend` module (and `'djust.template_backend.DjustTemplateBackend'` in `TEMPLATES`) | 1.4 | **2.0.0** | `djust.template` / `'djust.template.backend.DjustTemplateBackend'` |
