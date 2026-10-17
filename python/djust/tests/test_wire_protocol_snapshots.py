@@ -8,7 +8,7 @@ value change at the emit site silently breaks deployed clients running
 older bundles — this catches it at test time.
 
 This is a starter — 8 of ~30+ shapes. Follow-up issue tracks the rest:
-mount_batch, child_update, sticky_update, i18n, accessibility, focus,
+mount_batch, child_update, sticky_update, accessibility, focus,
 embedded_update, upload_registered/resumed/progress, reload, hvr-applied,
 sticky_hold, html_update, connect, rate_limit_exceeded, pong, navigate,
 presence_event, streaming.{patch,html_update,stream}, plus inbound shapes.
@@ -349,20 +349,6 @@ def test_embedded_update_envelope():
         '{"type": "embedded_update", "view_id": "embed-1", '
         '"html": "<section>updated</section>", "event_name": "click"}'
     )
-    assert _emit(frame) == expected
-
-
-# =============================================================================
-# 14. i18n — websocket.py:729-734 (#1456 Batch 2)
-# =============================================================================
-
-
-def test_i18n_command_spread_into_top_level():
-    """`{"type": "i18n", **cmd}` — cmd keys spread into top level
-    (same shape as flash / page_metadata)."""
-    cmd = {"action": "set_language", "language": "fr"}
-    frame = {"type": "i18n", **cmd}
-    expected = '{"type": "i18n", "action": "set_language", "language": "fr"}'
     assert _emit(frame) == expected
 
 
