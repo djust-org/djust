@@ -155,7 +155,16 @@ include = [
     { path = "README.md", format = "sdist" },
 ]
 # A stray editor/dev backup must never ship in the sdist or wheel (#3295).
-exclude = ["**/*.backup"]
+# Nor do djust's own tests, or the client's source modules: the shipped
+# client.js / client.min.js are their concatenation (scripts/build-client.sh),
+# and nothing at runtime imports djust.tests or reads static/djust/src/. The
+# leading `**/` matches whichever root maturin resolves the path against.
+# CI builds both artifacts and lists them (scripts/check-package-contents.py).
+exclude = [
+    "**/*.backup",
+    "**/djust/tests/**",
+    "**/djust/static/djust/src/**",
+]
 
 [tool.maturin.sbom]
 rust = true
