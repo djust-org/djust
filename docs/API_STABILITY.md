@@ -226,6 +226,7 @@ carve-out floor of `>= 1.1.0`; the rest carry the standard floor of `2.0.0`.
 | `djust.state_backend` module | 1.4 | **2.0.0** | `djust.state_backends` |
 | `djust.simple_live_view.LiveView` | 1.4 | **2.0.0** | `djust.simple_live_view.SimpleLiveView` |
 | `djust.rust_components.Button` | 1.4 | **2.0.0** | `djust.components.ui.Button` |
+| `StreamingMixin.stream_insert` / `stream_delete` (the async pair, reachable on a `LiveView` only as `StreamingMixin.stream_insert(self, ...)`) | 1.4 | **2.0.0** | `await self.astream_insert(...)` / `await self.astream_delete(...)` |
 | `DjustSSEEventView` (the SSE `sse/<id>/event/` endpoint) | 1.4 | **2.0.0** | `{"type": "event", ...}` posted to `sse/<id>/message/` |
 
 Deprecated **settings** warn once at startup, from `DjustConfig.ready()`

@@ -279,3 +279,46 @@ def test_reactive_warns_at_the_decorated_definition():
     hit = _one_deprecation(record, "@reactive")
     assert "@computed" in str(hit.message)
     assert os.path.basename(hit.filename) == THIS_FILE, hit.filename
+
+
+# --- async stream insert/delete names -----------------------------------------
+
+
+def test_the_old_async_stream_names_warn_and_delegate():
+    import asyncio
+
+    from djust.streaming import StreamingMixin
+
+    calls = []
+
+    class _View(StreamingMixin):
+        async def astream_insert(self, stream_name, html, at="append", target=None):
+            calls.append(("insert", stream_name, html, at, target))
+
+        async def astream_delete(self, stream_name, selector):
+            calls.append(("delete", stream_name, selector))
+
+    view = _View()
+
+    async def handler():  # <- the user frame
+        await StreamingMixin.stream_insert(view, "feed", "<li>x</li>", at="prepend")
+        await StreamingMixin.stream_delete(view, "feed", "#x")
+
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        asyncio.run(handler())
+    insert = _one_deprecation(record, "StreamingMixin.stream_insert")
+    delete = _one_deprecation(record, "StreamingMixin.stream_delete")
+    assert "astream_insert" in str(insert.message)
+    assert "astream_delete" in str(delete.message)
+    assert os.path.basename(insert.filename) == THIS_FILE, insert.filename
+    assert calls == [("insert", "feed", "<li>x</li>", "prepend", None), ("delete", "feed", "#x")]
+
+
+def test_liveview_reaches_the_new_async_names():
+    import inspect
+
+    from djust import LiveView
+
+    assert inspect.iscoroutinefunction(LiveView.astream_insert)
+    assert inspect.iscoroutinefunction(LiveView.astream_delete)
