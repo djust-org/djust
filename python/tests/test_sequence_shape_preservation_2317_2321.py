@@ -540,10 +540,7 @@ class TestEveryRebuildSiteIsAccountedFor:
             1,
             "dictsort/dictsortreversed — Django is sorted(), which returns a list",
         ),
-        "Ok(Value::List(chars))": (
-            1,
-            "make_list — Django is @stringfilter + list(str(value))",
-        ),
+        # `make_list` left in 2.0: it runs Django's own function.
         "Value::List(": (
             2,
             "safeseq and escapeseq — Django is a list comprehension in both",

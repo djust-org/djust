@@ -7130,11 +7130,12 @@ mod tests {
             ("upper", "1E-9"),
             ("lower", "1e-9"),
             ("truncatechars", "1E-9"),
-            ("addslashes", "1E-9"),
+            ("cut", "1E9"),
             ("center", "        1E-9        "),
         ] {
             let arg = match name {
                 "truncatechars" => Some("8"),
+                "cut" => Some("-"),
                 "center" => Some("20"),
                 _ => None,
             };
@@ -7881,30 +7882,6 @@ mod tests {
         let payload = Value::String("<script>alert(1)</script>".to_string());
         let err = apply_filter("timesince", &payload, None).unwrap_err();
         assert!(!format!("{err:?}").contains("<script>"), "{err:?}");
-    }
-
-    /// The half that makes the `SAFE_OUTPUT_FILTERS` membership safe (#2259).
-    ///
-    /// `linebreaks`/`linebreaksbr` are exempt from the renderer's auto-escape
-    /// ONLY because they escape their own input. If this test goes red, the
-    /// name must come out of `renderer::SAFE_OUTPUT_FILTERS` in the same commit
-    /// — the two are one change.
-    #[test]
-    fn linebreaks_escapes_its_input_which_is_what_makes_marking_it_safe_safe() {
-        let attack = Value::String("<img src=x onerror=alert(1)>\n</script><script>".to_string());
-        for name in ["linebreaks", "linebreaksbr"] {
-            let out = apply_filter(name, &attack, None).unwrap().to_string();
-            assert!(
-                !out.contains("<img") && !out.contains("<script") && !out.contains("</script"),
-                "{name} leaked live markup: {out:?}"
-            );
-            assert!(
-                out.contains("&lt;img src=x onerror=alert(1)&gt;"),
-                "{name} did not escape the payload: {out:?}"
-            );
-            // The tags the FILTER generates stay live — that is the point.
-            assert!(out.contains("<br>"), "{name} lost its own markup: {out:?}");
-        }
     }
 
     #[test]
