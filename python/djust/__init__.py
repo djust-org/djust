@@ -49,7 +49,6 @@ if TYPE_CHECKING:
     from .components.assigns import Assign, AssignValidationError, Slot
     from .components.function_component import component, clear_components
     from .decorators import (
-        reactive,
         event_handler,
         is_event_handler,
         action,
@@ -116,7 +115,6 @@ _LAZY: dict[str, tuple[str, str]] = {
     "Slot": ("djust.components.assigns", "Slot"),
     "component": ("djust.components.function_component", "component"),
     "clear_components": ("djust.components.function_component", "clear_components"),
-    "reactive": ("djust.decorators", "reactive"),
     "event_handler": ("djust.decorators", "event_handler"),
     "is_event_handler": ("djust.decorators", "is_event_handler"),
     "action": ("djust.decorators", "action"),
@@ -411,7 +409,6 @@ __all__ = [
     # Function components
     "component",
     "clear_components",
-    "reactive",
     "event_handler",
     "is_event_handler",
     "action",
