@@ -17,7 +17,7 @@ class CachedView(LiveView):
 def backend(monkeypatch):
     monkeypatch.setattr(LiveView, "_validate_exposure_configuration", lambda self: None)
     backend = InMemoryStateBackend()
-    monkeypatch.setattr("djust.state_backend.get_backend", lambda: backend)
+    monkeypatch.setattr("djust.state_backends.get_backend", lambda: backend)
     return backend
 
 
@@ -63,7 +63,7 @@ def test_explicit_rendering_does_not_even_resolve_a_legacy_backend(
     def forbidden():
         raise AssertionError("Legacy backend must not be consulted")
 
-    monkeypatch.setattr("djust.state_backend.get_backend", forbidden)
+    monkeypatch.setattr("djust.state_backends.get_backend", forbidden)
     view = initialize("explicit", transport, rf)
     view._rust_view.update_state({"display": "visible"})
     assert "visible" in view._rust_view.render()

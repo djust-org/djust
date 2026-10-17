@@ -42,7 +42,7 @@ Add `DjustTemplateBackend` to your `TEMPLATES` setting:
 TEMPLATES = [
     # Djust backend (Rust rendering; ~7-11x faster on filter-heavy templates)
     {
-        'BACKEND': 'djust.template_backend.DjustTemplateBackend',
+        'BACKEND': 'djust.template.backend.DjustTemplateBackend',
         'DIRS': [BASE_DIR / 'templates'],
         'APP_DIRS': True,
         'OPTIONS': {
@@ -406,7 +406,7 @@ TEMPLATES = [
 # settings.py
 TEMPLATES = [
     {
-        'BACKEND': 'djust.template_backend.DjustTemplateBackend',
+        'BACKEND': 'djust.template.backend.DjustTemplateBackend',
         'DIRS': [],
         'APP_DIRS': True,
         ...
@@ -635,7 +635,7 @@ error in a branch that never renders — `{% if False %}{% unknown %}{% endif %}
 ```python
 TEMPLATES = [
     {
-        'BACKEND': 'djust.template_backend.DjustTemplateBackend',
+        'BACKEND': 'djust.template.backend.DjustTemplateBackend',
         'DIRS': [BASE_DIR / 'templates'],  # Add template directories
         'APP_DIRS': True,  # Search app templates
         ...

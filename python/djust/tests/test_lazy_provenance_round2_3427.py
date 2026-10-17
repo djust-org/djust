@@ -124,7 +124,7 @@ def test_addresses_stable_across_pods_and_unrelated_edits(tmp_path, settings):
     def select(root):
         settings.TEMPLATES = [
             {
-                "BACKEND": "djust.template_backend.DjustTemplateBackend",
+                "BACKEND": "djust.template.backend.DjustTemplateBackend",
                 "DIRS": [str(root)],
                 "APP_DIRS": True,
             }
@@ -196,7 +196,7 @@ def test_documented_nonregistrations_emit_debug_log(tmp_path, settings, caplog, 
         )
     settings.TEMPLATES = [
         {
-            "BACKEND": "djust.template_backend.DjustTemplateBackend",
+            "BACKEND": "djust.template.backend.DjustTemplateBackend",
             "DIRS": [str(tmp_path)],
             "APP_DIRS": True,
         }

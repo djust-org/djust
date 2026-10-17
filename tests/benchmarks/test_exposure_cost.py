@@ -301,7 +301,7 @@ def memory_backend(monkeypatch):
     from djust.state_backends.memory import InMemoryStateBackend
 
     backend = InMemoryStateBackend()
-    monkeypatch.setattr("djust.state_backend.get_backend", lambda: backend)
+    monkeypatch.setattr("djust.state_backends.get_backend", lambda: backend)
     return backend
 
 

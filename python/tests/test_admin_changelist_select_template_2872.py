@@ -76,7 +76,7 @@ settings.configure(
     DATABASES={"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}},
     TEMPLATES=[
         {
-            "BACKEND": "djust.template_backend.DjustTemplateBackend",
+            "BACKEND": "djust.template.backend.DjustTemplateBackend",
             "DIRS": [],
             "APP_DIRS": True,
             "OPTIONS": {
@@ -149,7 +149,7 @@ results["change"] = change.status_code
 
 import tempfile
 
-from djust.template_backend import DjustTemplateBackend
+from djust.template import DjustTemplateBackend
 
 d1 = tempfile.mkdtemp()
 d2 = tempfile.mkdtemp()

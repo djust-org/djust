@@ -145,7 +145,7 @@ def test_http_filtered_super_cannot_mount_hidden_child(tmp_path, settings, filte
     (tmp_path / "base.html").write_text("{% block body %}<!--{% endblock %}")
     settings.TEMPLATES = [
         {
-            "BACKEND": "djust.template_backend.DjustTemplateBackend",
+            "BACKEND": "djust.template.backend.DjustTemplateBackend",
             "DIRS": [str(tmp_path)],
             "APP_DIRS": True,
         }

@@ -21,8 +21,7 @@ That was true for any subclass, always.
 which it is not. That is why grepping for ``SimpleLiveView`` found nothing and
 the module read as unused when it was merely unfindable — it went two PRs
 without anyone noticing it was a live render path (#2223). The class is now
-``SimpleLiveView``; ``LiveView`` remains as a module-level alias so any existing
-``from djust.simple_live_view import LiveView`` keeps working.
+``SimpleLiveView``. The ``LiveView`` alias for the old name was removed in 2.0.
 """
 
 import logging
@@ -169,12 +168,3 @@ class SimpleLiveView(View):
         """Handle GET requests."""
         self.mount(request, **kwargs)
         return HttpResponse(self.render_template())
-
-
-#: Back-compat alias for the pre-#2219 name.
-#:
-#: Kept because the module is importable and someone may have done
-#: ``from djust.simple_live_view import LiveView``. New code should use
-#: ``SimpleLiveView`` — the old name shadows ``djust.LiveView``, which is a
-#: different class with a different lifecycle.
-LiveView = SimpleLiveView

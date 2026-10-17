@@ -65,7 +65,7 @@ def test_http_rendered_branch_refuses_hidden_mount(source, payload):
 def test_inline_child_and_base_include_sites_have_isolated_state(tmp_path, settings, loop):
     settings.TEMPLATES = [
         {
-            "BACKEND": "djust.template_backend.DjustTemplateBackend",
+            "BACKEND": "djust.template.backend.DjustTemplateBackend",
             "DIRS": [str(tmp_path)],
             "APP_DIRS": True,
         }

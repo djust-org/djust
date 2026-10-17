@@ -70,7 +70,7 @@ def template_dir(tmp_path):
 def _templates_setting(template_dir):
     return [
         {
-            "BACKEND": "djust.template_backend.DjustTemplateBackend",
+            "BACKEND": "djust.template.backend.DjustTemplateBackend",
             "DIRS": [template_dir],
             "APP_DIRS": False,
             "OPTIONS": {

@@ -125,7 +125,7 @@ def djust_render_with_dirs(source: str, context: dict) -> str:
 
 def djust_backend_render(source: str, context: dict) -> str:
     """The full ``DjustTemplateBackend`` path — what a user's project runs."""
-    from djust.template_backend import DjustTemplateBackend
+    from djust.template import DjustTemplateBackend
 
     backend = DjustTemplateBackend(
         params={"NAME": "djust", "DIRS": [], "APP_DIRS": False, "OPTIONS": {}}

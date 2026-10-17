@@ -633,7 +633,7 @@ def sample_template():
 @pytest.fixture(autouse=True)
 def cleanup_session_cache():
     """Clean up session cache after each test."""
-    from djust.state_backend import set_backend, InMemoryStateBackend
+    from djust.state_backends import set_backend, InMemoryStateBackend
 
     backend = InMemoryStateBackend()
     set_backend(backend)
@@ -1064,7 +1064,7 @@ def cleanup():
     """Clean up after each test."""
     yield
     # Cleanup code here
-    from djust.state_backend import get_backend
+    from djust.state_backends import get_backend
     backend = get_backend()
     backend.cleanup_expired(ttl=0)
 ```

@@ -28,7 +28,7 @@ def cleanup_expired_sessions(ttl: Optional[int] = None) -> int:
     Returns:
         Number of sessions cleaned up
     """
-    from .state_backend import get_backend
+    from .state_backends import get_backend
 
     backend = get_backend()
     return backend.cleanup_expired(ttl)
@@ -41,7 +41,7 @@ def get_session_stats() -> Dict[str, Any]:
     Returns:
         Dictionary with cache statistics
     """
-    from .state_backend import get_backend
+    from .state_backends import get_backend
 
     backend = get_backend()
     return backend.get_stats()

@@ -49,7 +49,7 @@ def mock_request():
 
 TEMPLATES_WITH_CONTEXT_PROCESSORS = [
     {
-        "BACKEND": "djust.template_backend.DjustTemplateBackend",
+        "BACKEND": "djust.template.backend.DjustTemplateBackend",
         "DIRS": [],
         "APP_DIRS": True,
         "OPTIONS": {

@@ -126,7 +126,7 @@ def test_deliberate_models_render_natively_without_serializing_other_fields(view
     if engine == "django":
         output = Engine().from_string(source).render(Context(context))
     else:
-        from djust.template_backend import DjustTemplateBackend
+        from djust.template import DjustTemplateBackend
 
         backend = DjustTemplateBackend(
             params={"NAME": "djust", "DIRS": [], "APP_DIRS": False, "OPTIONS": {}}
