@@ -344,7 +344,6 @@ class TestModelBeforeDuckTyping:
 
 class TestRustFallback:
     @patch("djust.mixins.jit.extract_template_variables")
-    @patch("djust.mixins.jit.JIT_AVAILABLE", True)
     def test_jit_queryset_falls_back_when_rust_incomplete(self, mock_extract):
         """When Rust serialize_queryset returns fewer keys, codegen fallback is used."""
         mock_extract.return_value = {"posts": ["title", "url"]}

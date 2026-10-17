@@ -10,6 +10,7 @@ from urllib.parse import parse_qs, urlencode
 from django.utils.datastructures import MultiValueDict
 from django.utils.safestring import SafeData
 
+from .._rust import RustLiveView
 from .._exposure_providers import (
     RUST_RENDER_PROVIDER,
     ExplicitRenderContext,
@@ -71,11 +72,6 @@ _IMMUTABLE_TYPES_FOR_SYNC = (int, float, bool, str, bytes, type(None))
 # True when the key was absent, even when value is None/0/"" (which would
 # collide with a default-None fallback).
 _MISSING = object()
-
-try:
-    from .._rust import RustLiveView
-except ImportError:
-    RustLiveView = None  # type: ignore[assignment,misc]
 
 
 # Maximum recursion depth for ``_normalize_db_values``. Bounded to keep the

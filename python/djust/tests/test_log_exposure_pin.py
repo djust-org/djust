@@ -440,12 +440,6 @@ MIXIN_TABLES = {
             ("_register_builtins", "Could not import built-in handlers: %s"): (
                 "tag handler registration and imports"
             ),
-            ("decorator", "Could not register assign tag handler '%s': Rust"): (
-                "tag handler registration and imports"
-            ),
-            ("decorator", "Could not register tag handler '%s': Rust extens"): (
-                "tag handler registration and imports"
-            ),
             ("decorator", "Failed to register assign tag handler '%s': %s"): (
                 "tag handler registration and imports"
             ),
@@ -1058,15 +1052,7 @@ MIXIN_TABLES = {
             ("theme_inspector_api", "theme inspector API failed", 1): "theme inspector dev API",
         },
     ),
-    "theming/rust_handlers.py": (
-        {},
-        {
-            (
-                "register_with_rust_engine",
-                "Rust extension unavailable; theme tags work via ",
-            ): "theme tag registration",
-        },
-    ),
+    "theming/rust_handlers.py": (),
     "uploads/storage.py": (
         {},
         {

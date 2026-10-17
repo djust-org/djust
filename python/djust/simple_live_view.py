@@ -30,12 +30,7 @@ from typing import Any, Dict, Optional, Set
 from django.http import HttpRequest, HttpResponse
 from django.views import View
 
-try:
-    from ._rust import render_template_with_dirs
-
-    _RUST_AVAILABLE = True
-except ImportError:
-    _RUST_AVAILABLE = False
+from ._rust import render_template_with_dirs
 
 from ._class_snapshot import attribute_names
 from .render_env import apply_render_env
@@ -112,59 +107,57 @@ class SimpleLiveView(View):
         """
         if not self.template:
             return "<div>No template configured for this view</div>"
-        if _RUST_AVAILABLE:
-            try:
-                # Per-render Django settings the Rust engine cannot read for
-                # itself: the active timezone (#2209) and number format
-                # (#2221). This class shares no base with ``RustBridgeMixin``,
-                # so without the shared function it would render every
-                # timestamp in UTC while ``LiveView`` rendered it correctly.
-                apply_render_env()
-                from .sync_turn import run_sync_step
+        try:
+            # Per-render Django settings the Rust engine cannot read for
+            # itself: the active timezone (#2209) and number format
+            # (#2221). This class shares no base with ``RustBridgeMixin``,
+            # so without the shared function it would render every
+            # timestamp in UTC while ``LiveView`` rendered it correctly.
+            apply_render_env()
+            from .sync_turn import run_sync_step
 
-                context = run_sync_step(self, "render", self.get_context_data)
-                return str(
-                    render_template_with_dirs(
-                        self.template,
-                        context,
-                        get_template_dirs(),
-                    )
+            context = run_sync_step(self, "render", self.get_context_data)
+            return str(
+                render_template_with_dirs(
+                    self.template,
+                    context,
+                    get_template_dirs(),
                 )
-            except Exception as exc:
-                # The exception detail goes to the LOG, never to the response
-                # (CodeQL `py/stack-trace-exposure`, alert #2596; CWE-209).
-                #
-                # This used to render `f"<div>Template error: {e}</div>"` when
-                # `DEBUG` was on. Two separate defects; CodeQL names the
-                # SECOND, and the first was found only by reading the line it
-                # pointed at:
-                #
-                # 1. The message was interpolated **unescaped**, so an
-                #    exception carrying a `<` — and template errors routinely
-                #    echo the offending value — injected markup straight into
-                #    the page (CWE-79). `websocket.py:549` fixed exactly this
-                #    shape with `escape(str(e))`, and its comment says it
-                #    "mirrors the DEBUG gate in simple_live_view" — the copy
-                #    was fixed and the original it was modelled on was not
-                #    (#1646).
-                # 2. The detail flowed into the response at all — the
-                #    information-exposure rule CodeQL actually fired on.
-                #    Escaping fixes (1) and would have left (2) untouched, so
-                #    copying the sibling's fix verbatim would have closed the
-                #    real bug and left the alert open.
-                #
-                # `logger.exception` is strictly better for the developer this
-                # was meant to serve: a full traceback in the log rather than a
-                # one-line `str(e)` in a div. Nothing is DEBUG-gated any more,
-                # so dev and production return the same static string and there
-                # is no mode-dependent leak to reason about.
-                from ._exposure_diagnostics import log_failure_for
+            )
+        except Exception as exc:
+            # The exception detail goes to the LOG, never to the response
+            # (CodeQL `py/stack-trace-exposure`, alert #2596; CWE-209).
+            #
+            # This used to render `f"<div>Template error: {e}</div>"` when
+            # `DEBUG` was on. Two separate defects; CodeQL names the
+            # SECOND, and the first was found only by reading the line it
+            # pointed at:
+            #
+            # 1. The message was interpolated **unescaped**, so an
+            #    exception carrying a `<` — and template errors routinely
+            #    echo the offending value — injected markup straight into
+            #    the page (CWE-79). `websocket.py:549` fixed exactly this
+            #    shape with `escape(str(e))`, and its comment says it
+            #    "mirrors the DEBUG gate in simple_live_view" — the copy
+            #    was fixed and the original it was modelled on was not
+            #    (#1646).
+            # 2. The detail flowed into the response at all — the
+            #    information-exposure rule CodeQL actually fired on.
+            #    Escaping fixes (1) and would have left (2) untouched, so
+            #    copying the sibling's fix verbatim would have closed the
+            #    real bug and left the alert open.
+            #
+            # `logger.exception` is strictly better for the developer this
+            # was meant to serve: a full traceback in the log rather than a
+            # one-line `str(e)` in a div. Nothing is DEBUG-gated any more,
+            # so dev and production return the same static string and there
+            # is no mode-dependent leak to reason about.
+            from ._exposure_diagnostics import log_failure_for
 
-                log_failure_for(
-                    logger, (self,), exc, "[SimpleLiveView] template render failed", traceback=True
-                )
-                return "<div>An error occurred rendering this view.</div>"
-        return "<div>Rust backend not available</div>"
+            log_failure_for(
+                logger, (self,), exc, "[SimpleLiveView] template render failed", traceback=True
+            )
+            return "<div>An error occurred rendering this view.</div>"
 
     def get(self, request: HttpRequest, *args: Any, **kwargs: Any) -> HttpResponse:
         """Handle GET requests."""
