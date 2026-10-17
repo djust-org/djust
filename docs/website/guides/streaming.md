@@ -128,19 +128,18 @@ await self.stream_to("output", html="<p>Processing...</p>")
 
 ### Appending or prepending raw HTML
 
-`StreamingMixin` has an async `stream_insert(stream_name, html, at="append", target=None)`,
-but on a `LiveView` the name `self.stream_insert` resolves to the **sync collection-stream
-API** (`stream()` / `stream_insert(name, item, at=-1)`, see the [LiveView API reference](../api-reference/liveview.md#streaming)), which
-comes first in `LiveView`'s bases. `await self.stream_insert(..., html=...)` therefore
-raises `TypeError`. Call the streaming version explicitly:
+`await self.astream_insert(stream_name, html, at="append", target=None)` sends an HTML
+fragment into the stream container now. It is not the same as `self.stream_insert(name,
+item, at=-1)`, the sync collection-stream API (see the
+[LiveView API reference](../api-reference/liveview.md#streaming)), which batches an item into
+the next render.
 
 ```python
-from djust.streaming import StreamingMixin
-
-await StreamingMixin.stream_insert(
-    self, "messages", '<div class="msg">New message</div>', at="append"
-)
+await self.astream_insert("messages", '<div class="msg">New message</div>', at="append")
 ```
+
+(Before 2.0 the async method was also named `stream_insert`, the sync one shadowed it on a
+`LiveView`, and the only way to reach it was to call it on the mixin class with `self`.)
 
 `at` is `"append"` or `"prepend"`. The HTML is inserted as-is, so escape any user
 content you interpolate into it.
@@ -163,12 +162,11 @@ Signal stream lifecycle. Sets `data-stream-active="true"` on start, removes it o
 
 ### Removing an element by selector
 
-The same name clash applies: `self.stream_delete(name, item_or_id)` on a `LiveView` is the
-sync collection-stream method. To remove a DOM element by CSS selector, call the streaming
-version explicitly:
+`await self.astream_delete(stream_name, selector)` removes a DOM element by CSS selector
+now. `self.stream_delete(name, item_or_id)` is the sync collection-stream method.
 
 ```python
-await StreamingMixin.stream_delete(self, "messages", "#msg-42")
+await self.astream_delete("messages", "#msg-42")
 ```
 
 ## Template Directives
@@ -272,7 +270,7 @@ class AIChat(LiveView):  # streaming is built in — no StreamingMixin needed
 
 - Always wrap streaming loops in `try/except` and call `stream_error()` on failure to preserve partial content.
 - Use `stream_start()` and `stream_done()` to bracket streams so the client can show loading states via `data-stream-active`.
-- Use `stream_text()` for plain text (LLM tokens) and `stream_to(..., html=...)` or `StreamingMixin.stream_insert(self, ...)` when you need HTML structure (log lines, chat bubbles).
+- Use `stream_text()` for plain text (LLM tokens) and `stream_to(..., html=...)` or `astream_insert()` when you need HTML structure (log lines, chat bubbles).
 - Apply `overflow-y: auto` with a `max-height` on stream containers for auto-scroll behavior.
 - Throttling happens on the server and keeps only the newest op per ~16 ms window. Send accumulated text with `mode="replace"` rather than per-token appends (see [Throttling](#throttling-keeps-only-the-newest-op)).
 - Don't show the same reply through both the stream target and a normally rendered list: render the stream target only while streaming (as in the examples), or keep the reply out of the rendered list.
