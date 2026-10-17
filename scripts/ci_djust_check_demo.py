@@ -22,9 +22,9 @@ The gate fails (exit 1) on, and ONLY on:
 
   * any ERROR-severity djust check (errors are never intentional), AND
   * any *deprecated-attribute* finding — check IDs ``djust.T001`` (deprecated
-    ``@click``/``@input``), ``djust.T014`` (deprecated ``data-dj-id``), and
-    ``djust.T015`` (legacy root attributes). This is exactly the #1683 / #1697
-    bug class.
+    ``@click``/``@input``) and ``djust.T014`` (deprecated ``data-dj-id``).
+    This is exactly the #1683 / #1697 bug class. (``djust.T015``, legacy root
+    attributes, was removed in 2.0.)
 
 It deliberately does NOT fail on the demo's other warnings/info (e.g. S005
 public-view-without-auth, T012 partial fragments, V004 informational) — those
@@ -48,7 +48,7 @@ import subprocess
 import sys
 
 # Deprecated-attribute / dead-binding check IDs — the #1683 / #1697 bug class.
-DEPRECATED_ATTR_IDS = frozenset({"djust.T001", "djust.T014", "djust.T015"})
+DEPRECATED_ATTR_IDS = frozenset({"djust.T001", "djust.T014"})
 
 
 def _extract_json(stdout):
@@ -72,7 +72,7 @@ def evaluate(data):
     ``{"checks": [{"id", "severity", "message", ...}], "summary": {...}}``.
 
     Returns ``0`` when the demo is clean (no error-severity checks and no
-    deprecated-attribute findings T001/T014/T015) and ``1`` otherwise. This
+    deprecated-attribute findings T001/T014) and ``1`` otherwise. This
     is the single decision point shared by ``main()`` and the unit tests so
     both gate arms (error-severity and deprecated-attr ID-set) are exercised
     end-to-end without spawning a subprocess (#1713, #252 empirical canary).
@@ -98,7 +98,7 @@ def evaluate(data):
         print("")
         print(
             "FAIL: %d blocking finding(s) (errors + deprecated-attribute "
-            "classes T001/T014/T015):" % len(blocking)
+            "classes T001/T014):" % len(blocking)
         )
         for c in blocking:
             print("  - %s [%s] %s" % (c.get("id"), c.get("severity"), c.get("message")))
@@ -106,7 +106,7 @@ def evaluate(data):
         print("This is the #1683 dead-@click bug class. Fix the templates above.")
         return 1
 
-    print("OK: no errors and no deprecated-attribute findings (T001/T014/T015).")
+    print("OK: no errors and no deprecated-attribute findings (T001/T014).")
     return 0
 
 

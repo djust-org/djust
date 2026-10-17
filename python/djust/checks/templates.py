@@ -492,13 +492,6 @@ _DJ_NAVIGATE_RE = re.compile(r"dj-navigate\s*=")
 # whitespace) to silence T012 without introducing a global suppression.
 _DJ_PARTIAL_MARKER_RE = re.compile(r"\{#\s*djust\s*:\s*partial\s*#\}", re.IGNORECASE)
 _DEPRECATED_DATA_DJ_ID_RE = re.compile(r"""data-dj-id\s*=\s*["'][^"']*["']""")
-# T015 (#1602) — pre-1.0 legacy root attributes. djust 1.0 renamed the root
-# markers from `data-djust-root` / `data-djust-view` to `dj-root` / `dj-view`
-# (the `data-` prefix is no longer required). The negative-lookahead
-# `(?![\w-])` scopes the match to EXACTLY `data-djust-root` / `data-djust-view`
-# so legitimate sibling attributes (`data-djust-embedded`, `data-djust-activity`,
-# `data-djust-view-model`, `data-djust-rooted`, ...) never false-match.
-_LEGACY_ROOT_ATTR_RE = re.compile(r"data-djust-(root|view)(?![\w-])")
 # A090 — scanner for {% djust_markdown %} (v0.7.0). Fires info-level once
 # per project when the tag is detected, confirming the Rust-side safe
 # renderer is in use (raw HTML escaped, provisional-line splitter active).
@@ -955,9 +948,6 @@ def check_templates(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
 
         # T014 -- deprecated data-dj-id attribute (renamed to dj-id in v1.0)
         _check_deprecated_data_dj_id(content, relpath, filepath, errors)
-
-        # T015 -- legacy data-djust-root / data-djust-view root attributes
-        _check_legacy_root_attrs(content, relpath, filepath, errors)
 
         # T017 -- dj-view / dj-root on a table-section element (#1837)
         _check_table_section_root(content, relpath, filepath, errors)
@@ -1591,48 +1581,6 @@ def _check_deprecated_data_dj_id(
                 id="djust.T014",
                 fix_hint=(
                     "Replace 'data-dj-id=' with 'dj-id=' at line %d in `%s`." % (lineno, relpath)
-                ),
-                file_path=filepath,
-                line_number=lineno,
-            )
-        )
-
-
-def _check_legacy_root_attrs(
-    content: str, relpath: str, filepath: str, errors: list[CheckMessage]
-) -> None:
-    """T015 (#1602): Detect the pre-1.0 legacy root attributes.
-
-    djust 1.0 renamed the LiveView root markers from ``data-djust-root`` /
-    ``data-djust-view`` to ``dj-root`` / ``dj-view`` (the ``data-`` prefix is
-    no longer required). When a template still uses the old spelling, the
-    generic T012 ("dj-* directives but no dj-root or dj-view") doesn't recognise that a
-    view IS declared — just with the deprecated name — so the path from symptom
-    (the LiveView never connects over WebSocket) to fix is non-obvious. T015
-    names the rename explicitly.
-
-    SCOPE: this is a static system check only. It does NOT make the runtime
-    accept the legacy attributes (that's a separate, larger change).
-    """
-    if _is_check_suppressed("djust.T015"):
-        return
-    for match in _LEGACY_ROOT_ATTR_RE.finditer(content):
-        lineno = content[: match.start()].count("\n") + 1
-        old_attr = match.group(0)  # e.g. "data-djust-view"
-        new_attr = old_attr.replace("data-djust-", "dj-")  # -> "dj-view"
-        errors.append(
-            DjustWarning(
-                "%s:%d -- legacy '%s' attribute detected." % (relpath, lineno, old_attr),
-                hint=(
-                    "djust 1.0 renamed root attributes — change 'data-djust-view' to "
-                    "'dj-view' and 'data-djust-root' to 'dj-root'. The leading 'data-' "
-                    "prefix is no longer required. Suppress this check with "
-                    "DJUST_CONFIG = {'suppress_checks': ['T015']}."
-                ),
-                id="djust.T015",
-                fix_hint=(
-                    "Replace '%s' with '%s' at line %d in `%s`."
-                    % (old_attr, new_attr, lineno, relpath)
                 ),
                 file_path=filepath,
                 line_number=lineno,
