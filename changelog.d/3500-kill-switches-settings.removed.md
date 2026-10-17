@@ -1,6 +1,6 @@
 - **Removed three kill switches and the duplicate flat settings (#3500).**
   Startup now fails with an `ImproperlyConfigured` that names the replacement
-  when a project still sets one (`djust/_removed_settings.py`). It runs in
+  when a project still sets one (`python/djust/_removed_settings.py`). It runs in
   `DjustConfig.ready()` rather than as a system check because ASGI servers do
   not run checks, and a silently ignored `DJUST_STATE_BACKEND` would drop to
   the in-memory backend in production.
@@ -18,5 +18,5 @@
     setting went with the flat alias.
   - System check `djust.C018` (LIVEVIEW_CONFIG keys removed in 1.3) is gone;
     those keys are still ignored.
-  - `scripts/check-flag-default-consistency.py` and its pre-commit hook are
-    gone; `virtual_keyed_ops` was the only flag it tracked.
+  - The flag-default consistency script and its pre-commit hook are gone;
+    `virtual_keyed_ops` was the only flag it tracked.
