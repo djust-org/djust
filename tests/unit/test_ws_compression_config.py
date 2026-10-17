@@ -4,8 +4,8 @@ Verifies:
 - Default is True.
 - ``LIVEVIEW_CONFIG['websocket_compression']`` overrides it (the flat
   ``DJUST_WS_COMPRESSION`` alias was removed in 2.0).
-- The value reaches the injected client script as a
-  ``window.DJUST_WS_COMPRESSION`` literal.
+- The injected client script no longer emits ``window.DJUST_WS_COMPRESSION``
+  (no client code read it; removed in 2.0).
 """
 
 from __future__ import annotations
@@ -66,8 +66,8 @@ def test_explicit_true_setting_is_preserved():
     assert config.get("websocket_compression") is True
 
 
-def test_injected_script_emits_ws_compression_literal():
-    """The injected client bootstrap exposes window.DJUST_WS_COMPRESSION."""
+def test_injected_script_omits_unread_config_globals():
+    """The client reads none of these, so the bootstrap does not emit them (2.0)."""
     from djust.mixins.post_processing import PostProcessingMixin
 
     class _FakeView(PostProcessingMixin):
@@ -76,4 +76,7 @@ def test_injected_script_emits_ws_compression_literal():
 
     view = _FakeView()
     injected = view._inject_client_script("<html><body></body></html>")
-    assert "window.DJUST_WS_COMPRESSION" in injected
+    assert "window.DJUST_WS_COMPRESSION" not in injected
+    assert "window.DJUST_DEBUG_VDOM" not in injected
+    assert "window.DJUST_LOADING_GROUPING_CLASSES" not in injected
+    assert "window.DJUST_USE_WEBSOCKET" in injected
