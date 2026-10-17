@@ -19,7 +19,7 @@ from django.urls import path
 from djust import LiveView, event_handler
 from djust.observability import tracebacks
 from djust.runtime import WSConsumerTransport
-from djust.sse import DjustSSEEventView, DjustSSEMessageView, _sse_sessions
+from djust.sse import DjustSSEMessageView, _sse_sessions
 from djust.tests.test_exposure_event_diagnostics import EventFailureView
 from djust.tests.test_exposure_runtime import make_request
 from djust.tests.test_exposure_sse_navigation import FirstPage
@@ -28,7 +28,6 @@ from djust.websocket import LiveViewConsumer
 urlpatterns = [
     path("first/<int:pk>/", FirstPage.as_view()),
     path("djust/sse/<str:session_id>/message/", DjustSSEMessageView.as_view()),
-    path("djust/sse/<str:session_id>/event/", DjustSSEEventView.as_view()),
 ]
 
 
@@ -126,10 +125,7 @@ async def test_outer_ws_event_failure(monkeypatch, caplog, debug, initial, final
         ("legacy", "legacy"),
     ],
 )
-@pytest.mark.parametrize("endpoint", ["message", "event"])
-async def test_outer_sse_http_failure(
-    monkeypatch, caplog, debug, initial, final, transient, endpoint
-):
+async def test_outer_sse_http_failure(monkeypatch, caplog, debug, initial, final, transient):
     from django.conf import settings
     from django.test import AsyncClient
 
@@ -171,7 +167,7 @@ async def test_outer_sse_http_failure(
             client = AsyncClient(raise_request_exception=False)
             client.cookies[settings.SESSION_COOKIE_NAME] = key
             response = await client.post(
-                f"/djust/sse/{session.session_id}/{endpoint}/",
+                f"/djust/sse/{session.session_id}/message/",
                 data=json.dumps({"type": "event", "event": "change", "params": {}, "ref": 19}),
                 content_type="application/json",
             )

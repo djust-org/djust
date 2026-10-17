@@ -86,7 +86,6 @@ def _make_consumer(view):
     consumer = LiveViewConsumer()
     consumer.view_instance = view
     # Render path is mocked — server_push re-renders after applying state.
-    consumer.use_binary = False
     consumer.send = AsyncMock()
     consumer._send_update = AsyncMock()
     # render_with_diff returns (html, patches, version).

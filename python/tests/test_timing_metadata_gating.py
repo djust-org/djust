@@ -70,7 +70,6 @@ class _CapturingConsumer(LiveViewConsumer):
         # Don't call super().__init__() — it expects an ASGI scope.
         self.scope = {}
         self.channel_name = "test-channel"
-        self.use_binary = False
         self.view_instance = None
         self._sent: list = []
 
