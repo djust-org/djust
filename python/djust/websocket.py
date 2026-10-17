@@ -746,7 +746,6 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         # the actor build), so it is annotated as Any.
         self.actor_handle: Any = None
         self.session_id: Optional[str] = None
-        self.use_binary = False  # Use JSON for now (MessagePack support TODO)
         self.use_actors = False  # Will be set based on view class
         self._view_group: Optional[str] = None
         self._presence_group: Optional[str] = None
@@ -1366,10 +1365,6 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         If _async_tasks is set, spawn each callback as an asyncio task
         so they run after the current response is sent to the client.
         When each callback completes, re-render and send updated patches.
-
-        Supports both new multi-task dict format (_async_tasks) and
-        legacy single-task tuple format (_async_pending) for backward
-        compatibility.
         """
         if not self.view_instance:
             return
@@ -1386,7 +1381,6 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         if runtime is not None and runtime.view_instance is self.view_instance:
             runtime._dispatch_explicit_child_queues(event_name)
 
-        # New format: multiple named tasks
         tasks = getattr(self.view_instance, "_async_tasks", None)
         if tasks:
             # Spawn all pending tasks. Each is recorded as running until it
@@ -1399,18 +1393,6 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 track_running_async_task(self.view_instance, task_name, future)
             # Clear all scheduled tasks
             self.view_instance._async_tasks = {}
-
-        # Legacy format: single task (_async_pending)
-        # This maintains backward compatibility with existing code
-        pending = getattr(self.view_instance, "_async_pending", None)
-        if pending:
-            self.view_instance._async_pending = None
-            callback, args, kwargs = pending
-            future = asyncio.ensure_future(
-                self._run_async_work("_default", callback, args, kwargs, event_name=event_name)
-            )
-            track_async_task(self.view_instance, future)
-            track_running_async_task(self.view_instance, "_default", future)
 
     async def _run_async_work(
         self,
@@ -1948,55 +1930,51 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         # Note: patches=[] (empty list) is valid and should be sent as "patch" type
         # Only patches=None indicates we should send html_update
         if patches is not None:
-            if self.use_binary and parameter_contract_snapshot is None and not snapshot_fields:
-                patches_data = msgpack.packb(patches)
-                await self._send_frame(bytes_data=patches_data)
-            else:
-                response: Dict[str, Any] = {
-                    "type": "patch",
-                    "patches": patches,
-                    "version": version,
-                }
-                # Include HTML if provided (e.g., patch compression fallback)
-                if html:
-                    response["html"] = html
-                # #654: gate timing/performance on DEBUG or DJUST_EXPOSE_TIMING so
-                # production clients (including unauthenticated cross-origin
-                # observers under CSWSH) don't see server-side code-path timings.
-                # The browser debug panel is unaffected — it receives timing via
-                # _attach_debug_payload which has its own DEBUG gate.
-                if _should_expose_timing():
-                    if timing:
-                        response["timing"] = timing
-                    if performance:
-                        response["performance"] = performance
-                if reset_form:
-                    response["reset_form"] = True
-                if cache_request_id:
-                    response["cache_request_id"] = cache_request_id
-                if hotreload:
-                    response["hotreload"] = True
-                    if file_path:
-                        response["file"] = file_path
-                if broadcast:
-                    response["broadcast"] = True
-                if async_pending:
-                    response["async_pending"] = True
-                if event_name:
-                    response["event_name"] = event_name
-                if source:
-                    response["source"] = source
-                if ref is not None:
-                    response["ref"] = ref
-                self._attach_debug_payload(response, event_name, performance)
-                if parameter_contract_snapshot is not None:
-                    response.update(parameter_contract_snapshot)
-                    self._capture_recovery_contracts(response)
-                if snapshot_fields:
-                    # ADR-038: an explicit root's refreshed signed snapshot.
-                    response.update(snapshot_fields)
-                await self.send_json(response)
-                await self._flush_all_pending()
+            response: Dict[str, Any] = {
+                "type": "patch",
+                "patches": patches,
+                "version": version,
+            }
+            # Include HTML if provided (e.g., patch compression fallback)
+            if html:
+                response["html"] = html
+            # #654: gate timing/performance on DEBUG or DJUST_EXPOSE_TIMING so
+            # production clients (including unauthenticated cross-origin
+            # observers under CSWSH) don't see server-side code-path timings.
+            # The browser debug panel is unaffected — it receives timing via
+            # _attach_debug_payload which has its own DEBUG gate.
+            if _should_expose_timing():
+                if timing:
+                    response["timing"] = timing
+                if performance:
+                    response["performance"] = performance
+            if reset_form:
+                response["reset_form"] = True
+            if cache_request_id:
+                response["cache_request_id"] = cache_request_id
+            if hotreload:
+                response["hotreload"] = True
+                if file_path:
+                    response["file"] = file_path
+            if broadcast:
+                response["broadcast"] = True
+            if async_pending:
+                response["async_pending"] = True
+            if event_name:
+                response["event_name"] = event_name
+            if source:
+                response["source"] = source
+            if ref is not None:
+                response["ref"] = ref
+            self._attach_debug_payload(response, event_name, performance)
+            if parameter_contract_snapshot is not None:
+                response.update(parameter_contract_snapshot)
+                self._capture_recovery_contracts(response)
+            if snapshot_fields:
+                # ADR-038: an explicit root's refreshed signed snapshot.
+                response.update(snapshot_fields)
+            await self.send_json(response)
+            await self._flush_all_pending()
         else:
             response = {
                 "type": "html_update",
@@ -2451,12 +2429,6 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         if not getattr(settings, "DEBUG", False):
             return
 
-        # The debug payload (dir() + getattr + json.dumps per attribute) adds
-        # ~2-5ms per event. Skip it when the debug panel is explicitly closed.
-        # Default is True (backward compat) — panel sends debug_panel_close
-        # to opt out of the overhead.
-        if not getattr(self, "_debug_panel_active", True):
-            return
         if not self.view_instance:
             return
 
@@ -2830,8 +2802,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             # WS-ONLY EXTENSION SET (no runtime equivalent; binary upload
             # frames 0x01/0x02/0x03 are handled above before decode):
             #   mount_batch, ping, live_redirect_mount, upload_register,
-            #   upload_resume, presence_heartbeat, cursor_move, request_html,
-            #   debug_panel_open, debug_panel_close, time_travel_jump,
+            #   upload_resume, request_html, time_travel_jump,
             #   time_travel_component_jump, forward_replay, bug_capture_share.
             if msg_type in self.RUNTIME_OWNED_VERBS:
                 # Runtime-owned: route through the dispatch_message chokepoint
@@ -2851,8 +2822,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             elif msg_type == "unmount":
                 await self.handle_unmount(data)
             elif msg_type == "ping":
-                # The client pings every 30 s and never sends
-                # ``presence_heartbeat``, so the ping is the heartbeat: without
+                # The client pings every 30 s, and the ping is the presence
+                # heartbeat (there is no separate heartbeat frame): without
                 # it a tracked user expired after PRESENCE_TIMEOUT (60 s) on an
                 # open page (#2968). Refreshed before the pong, so the pong
                 # means the heartbeat landed. Every mounted view is refreshed,
@@ -2866,16 +2837,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 await self._route_to_view(data, "_handle_upload_register")
             elif msg_type == "upload_resume":
                 await self._route_to_view(data, "_handle_upload_resume")
-            elif msg_type == "presence_heartbeat":
-                await self.handle_presence_heartbeat(data)
-            elif msg_type == "cursor_move":
-                await self._route_to_view(data, "handle_cursor_move")
             elif msg_type == "request_html":
                 await self._route_to_view(data, "handle_request_html")
-            elif msg_type == "debug_panel_open":
-                self._debug_panel_active = True
-            elif msg_type == "debug_panel_close":
-                self._debug_panel_active = False
             elif msg_type == "time_travel_jump":
                 await self._route_to_view(data, "handle_time_travel_jump")
             elif msg_type == "time_travel_component_jump":
@@ -5089,7 +5052,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             runtime._replacement_sessions[presented] = replacement
 
     async def handle_presence_heartbeat(self, data: Dict[str, Any]) -> None:
-        """Handle presence heartbeat from client.
+        """Refresh presence on a client ``ping`` (the ping is the heartbeat).
 
         Refreshes the presence connection of every view mounted on the socket,
         or of the one view the frame names with ``target_id`` (#3254, #3252):
@@ -5108,19 +5071,6 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 await sync_to_async(view.update_presence_heartbeat)()
             except Exception as e:
                 self._log_view_hook_failure(view, e, "Error updating presence heartbeat: %s", e)
-
-    async def handle_cursor_move(self, data: Dict[str, Any]) -> None:
-        """Handle cursor movement for live cursors."""
-        if not self.view_instance or not hasattr(self.view_instance, "handle_cursor_move"):
-            return
-
-        view = self.view_instance
-        try:
-            x = data.get("x", 0)
-            y = data.get("y", 0)
-            await sync_to_async(view.handle_cursor_move)(x, y)
-        except Exception as e:
-            self._log_view_hook_failure(view, e, "Error handling cursor move: %s", e)
 
     def _log_view_hook_failure(
         self,
@@ -6188,8 +6138,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         The spliced frame is the same JSON object ``_send_update`` builds
         (``type``, ``patches``, ``version``, ``broadcast``, ``source``); it
         skips a ``fast_json_loads`` + ``json.dumps`` round trip of the patches
-        on the event loop. Anything that adds fields (binary mode, DEBUG's
-        debug payload, parameter contracts, a signed snapshot) takes the
+        on the event loop. Anything that adds fields (DEBUG's debug payload,
+        parameter contracts, a signed snapshot) takes the
         ``_send_update`` path unchanged. One wire version per frame, allocated
         (and recovery armed) before any branch.
         """
@@ -6204,7 +6154,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 **rendered.send_fields,
             )
             return
-        if isinstance(patches, str) and not rendered.send_fields and not self.use_binary:
+        if isinstance(patches, str) and not rendered.send_fields:
             from django.conf import settings
 
             if not getattr(settings, "DEBUG", False):

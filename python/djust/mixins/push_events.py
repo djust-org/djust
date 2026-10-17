@@ -13,7 +13,7 @@ Also provides ``push_commands()`` for server-initiated JS Command
 execution — see ADR-002 Phase 1a.
 """
 
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Tuple
 
 if TYPE_CHECKING:
     from djust.js import JSChain
@@ -30,12 +30,6 @@ class PushEventMixin:
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
         self._pending_push_events: List[Tuple[str, Dict[str, Any]]] = []
-        # Legacy stored callback — kept for backward compatibility but
-        # flush_push_events() now prefers the dynamic lookup via
-        # _ws_consumer._flush_push_events (set during mount/reconnect).
-        # This eliminates the need to re-wire the callback on reconnect
-        # (#698).
-        self._push_events_flush_callback: Optional[Any] = None
 
     def push_event(self, event: str, payload: Dict[str, Any] = None) -> None:
         """
@@ -153,12 +147,10 @@ class PushEventMixin:
         that makes ``TutorialMixin``'s per-step highlights arrive in real
         time instead of all at once when the task completes (#693).
 
-        Resolves the flush callback dynamically from ``_ws_consumer`` so
-        that it works after WebSocket reconnects without needing to
-        re-wire a stored callback (#698).  Falls back to the legacy
-        ``_push_events_flush_callback`` for backward compatibility.
+        Resolves the flush dynamically from ``_ws_consumer`` so that it
+        works after WebSocket reconnects without re-wiring anything (#698).
 
-        No-op if no consumer/callback is available (e.g. in tests or
+        No-op if no consumer is available (e.g. in tests or
         HTTP fallback mode).
 
         Usage::
@@ -180,10 +172,6 @@ class PushEventMixin:
         flush_fn = getattr(consumer, "_flush_push_events", None)
         if flush_fn is not None:
             await flush_fn()
-            return
-        # Legacy path: stored callback (pre-v0.4.2 wiring).
-        if self._push_events_flush_callback is not None:
-            await self._push_events_flush_callback()
 
     # Backward-compatible private alias used by TutorialMixin and tests.
     async def _flush_pending_push_events(self) -> None:
