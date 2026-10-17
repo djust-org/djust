@@ -86,7 +86,6 @@ if TYPE_CHECKING:
     from .mixins.notifications import NotificationMixin
     from .db import notify_on_save, send_pg_notify
     from .markdown import render_markdown as render_markdown
-    from . import rust_components  # noqa: F401
 
 __version__ = "2.0.0.dev0"
 
@@ -174,8 +173,6 @@ _LAZY: dict[str, tuple[str, str]] = {
     "notify_on_save": ("djust.db", "notify_on_save"),
     "send_pg_notify": ("djust.db", "send_pg_notify"),
     "render_markdown": ("djust.markdown", "render_markdown"),
-    # The optional Rust-components submodule itself; ``None`` when not built.
-    "rust_components": ("djust.rust_components", ""),
 }
 
 
@@ -184,14 +181,6 @@ def __getattr__(name: str):  # PEP 562
         module_name, attr = _LAZY[name]
     except KeyError:
         raise AttributeError(f"module 'djust' has no attribute {name!r}") from None
-    if not attr:
-        # ``rust_components``: the submodule is the export; optional build.
-        try:
-            value = importlib.import_module(module_name)
-        except ImportError:
-            value = None
-        globals()[name] = value
-        return value
     module = importlib.import_module(module_name)
     value = getattr(module, attr)
     globals()[name] = value
@@ -493,8 +482,6 @@ __all__ = [
     "cache",
     "client_state",
     "background",
-    # Rust components (optional)
-    "rust_components",
     # Database change notifications (pg_notify bridge)
     "NotificationMixin",
     "notify_on_save",

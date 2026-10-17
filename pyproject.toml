@@ -355,7 +355,6 @@ module = [
     "djust.simple_live_view",
     "djust.testing",
     "djust.react",
-    "djust.rust_components",
     "djust.frameworks",
     "djust.js",
     "djust.wizard",
