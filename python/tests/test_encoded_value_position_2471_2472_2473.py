@@ -172,7 +172,6 @@ REPO = pathlib.Path(__file__).resolve().parents[2]
 CORE = REPO / "crates" / "djust_core" / "src" / "lib.rs"
 RENDERER = REPO / "crates" / "djust_templates" / "src" / "renderer.rs"
 FILTERS = REPO / "crates" / "djust_templates" / "src" / "filters.rs"
-PPRINT = REPO / "crates" / "djust_templates" / "src" / "pprint.rs"
 
 #: Every operator ``{% if %}`` supports for two operands. All six, because a
 #: corpus with only ``==`` cannot tell "no equality arm" from "no ordering
@@ -899,8 +898,8 @@ class TestOneComparisonChokepoint:
             "the ENCODED_TAG msgpack payload stopped carrying `repr`/`cmp_key`"
         )
 
-    def test_pprint_and_py_repr_read_the_carried_repr(self) -> None:
-        assert "Value::Encoded(e) => e.repr.clone()" in PPRINT.read_text(encoding="utf-8")
+    def test_py_repr_reads_the_carried_repr(self) -> None:
+        # `pprint` is Django's own `pformat` since 2.0; `py_repr` is the native reader.
         assert "Value::Encoded(e) => e.repr.clone()" in CORE.read_text(encoding="utf-8")
 
     def test_python_int_value_names_the_family_a_TypeError(self) -> None:

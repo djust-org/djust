@@ -25,7 +25,6 @@ pub mod lexer;
 pub mod loop_cache;
 pub mod markdown;
 pub mod parser;
-pub mod pprint;
 pub mod provenance;
 pub mod registry;
 pub mod registry_scope;
@@ -33,10 +32,8 @@ pub mod render_env;
 pub mod renderer;
 pub mod stringformat;
 pub mod tags;
-pub mod textwrap;
 pub mod timezone;
 pub mod truncate;
-mod urlquote;
 
 pub use markdown::render_markdown;
 

@@ -666,13 +666,14 @@ class TestOneChokepointAnswersWhichExceptionPythonRaises:
     def test_the_constructor_is_reached_from_every_arm_that_can_refuse(self) -> None:
         """The COUNT, so an arm that grows a bespoke `Err` is visible.
 
-        Seven filters and eight call sites: `first`, `last`, the three
+        Six filters and seven call sites: `first`, `last`, the two native
         iterators and `phone2numeric` have one each, and `random` has two —
-        one for the subscript and one for the missing `len()`.
+        one for the subscript and one for the missing `len()`. (The third
+        iterator, `unordered_list`, is Django's own function since 2.0.)
         """
         source = production(FILTERS_RS)
         arm = source.split("fn apply_builtin_filter", 1)[1].split("\n}\n", 1)[0]
-        assert arm.count("value_op_error(") == 8, arm.count("value_op_error(")
+        assert arm.count("value_op_error(") == 7, arm.count("value_op_error(")
 
     def test_the_pin_goes_red_when_an_arm_stops_using_the_constructor(self) -> None:
         """Canary, direction one: a bespoke ``Err`` in every arm."""

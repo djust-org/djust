@@ -685,25 +685,6 @@ fn striptags_is_not_security_measure() {
 // 10. urlize Filter XSS Prevention
 // ===========================================================================
 
-#[test]
-fn urlize_escapes_surrounding_text() {
-    // Non-URL text around detected links must be HTML-escaped
-    let ctx = ctx_with("input", "<script>alert(1)</script> https://example.com");
-    let result = render("{{ input|urlize }}", &ctx);
-    // urlize is a safe_output_filter (no double-escaping), but it handles
-    // its own escaping of non-URL text
-    assert!(!result.contains("<script>"));
-}
-
-#[test]
-fn urlize_javascript_url_not_linked() {
-    // javascript: URLs should not become clickable links
-    let ctx = ctx_with("input", "javascript:alert(1)");
-    let result = render("{{ input|urlize }}", &ctx);
-    // urlize regex only matches http(s)://, ftp://, www., and emails
-    assert!(!result.contains("<a href=\"javascript:"));
-}
-
 // ===========================================================================
 // Bug: |safe filter renders empty for HTML in nested dict/list values
 // GitHub issue: https://github.com/djust-org/djust/issues/317
@@ -860,9 +841,7 @@ fn a_string_input_never_gets_an_unearned_safe_grant() {
     // payload is inert either way, which is the whole point of asserting on
     // what a browser would EXECUTE rather than on the bytes.
     for src in [
-        "{{ html|unordered_list }}",
         "{{ html|safeseq }}",
-        "{{ html|unordered_list|lower }}",
         "{{ html|safeseq|lower }}",
         // #2281: `escape` was a no-op, so `|safe` uncovered the raw value.
         "{{ html|escape|safe }}",
@@ -871,21 +850,6 @@ fn a_string_input_never_gets_an_unearned_safe_grant() {
         let out = render(src, &ctx);
         assert!(!out.contains("<img"), "{src} leaked live markup: {out:?}");
     }
-}
-
-#[test]
-fn a_real_list_still_gets_its_markup() {
-    // The other direction, so the fix above is not "escape everything": the
-    // shape these filters are actually for keeps emitting live `<li>` while
-    // escaping the items inside it.
-    let mut ctx = Context::new();
-    ctx.set(
-        "items".to_string(),
-        Value::List(vec![Value::String("<i>a</i>".to_string())]),
-    );
-    let out = render("{{ items|unordered_list }}", &ctx);
-    assert!(out.contains("<li>"), "lost its own markup: {out:?}");
-    assert!(out.contains("&lt;i&gt;"), "stopped escaping items: {out:?}");
 }
 
 #[test]

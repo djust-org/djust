@@ -611,20 +611,11 @@ class TestNoSecondMechanismWasAdded:
     was added anywhere.
     """
 
-    def _arm(self) -> str:
+    def test_the_arm_is_djangos_own_function(self) -> None:
+        """2.0 routes ``get_digit`` to ``django.template.defaultfilters``, so the
+        integer exit is Django's by construction rather than a port of it."""
         source = production(FILTERS_RS)
-        start = source.index('        "get_digit" => {')
-        return source[start : source.index('\n        "iriencode" => {', start)]
-
-    def test_the_arm_builds_an_Integer_and_no_longer_a_String(self) -> None:
-        arm = self._arm()
-        assert "Value::Integer(i64::from(b - b'0'))" in arm, arm[-900:]
-        assert "Value::Integer(0)" in arm, arm[-900:]
-        # The two spellings the fix removed. Their absence is what stops the
-        # `to_string()`-only assertions elsewhere passing for the wrong reason
-        # again.
-        assert "Value::String((*b as char).to_string())" not in arm
-        assert 'Value::String("0".to_string())' not in arm
+        assert '"get_digit" => filter_registry::apply_django_builtin_filter(' in source
 
     def test_no_new_get_digit_special_case_exists_in_the_crate(self) -> None:
         """The RENDERER does not know this filter by name.

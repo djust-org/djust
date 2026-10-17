@@ -631,15 +631,12 @@ class TestLinebreaksSafeMarking:
         try:
             with open(base + "renderer.rs", encoding="utf-8") as fh:
                 block = fh.read().split("const SAFE_OUTPUT_FILTERS", 1)[1].split("];", 1)[0]
-            with open(base + "filters.rs", encoding="utf-8") as fh:
-                body = fh.read().split("fn add_linenumbers", 1)[1].split("\nfn ", 1)[0]
         except OSError:
             pytest.skip("Rust source not available next to the built extension")
         assert '"linenumbers"' in block, "the safety grant went missing"
-        assert "html_escape(line)" in body, (
-            "the escape moved out of add_linenumbers while the safe-list grant "
-            "stayed — that arrangement IS the #2291 vulnerability"
-        )
+        # 2.0 routes `linenumbers` to Django's own function, which escapes each
+        # line itself under `autoescape` — the inner half of the pair is now
+        # Django's code, and the behaviour below is what pins it.
         # And the behaviour both halves exist to produce.
         for value in ["<b>x</b>", "a\n<i>", "&", '"q"', "'s'", "<img src=x onerror=alert(1)>"]:
             for src in ("{{ p|linenumbers }}", "{{ p|linenumbers|safe }}"):

@@ -385,8 +385,6 @@ Value::String("y".to_string()),
 user.insert("name".into(), Value::String("Alice".to_string()));
 context.set("user".to_string(), Value::Object(user));
 context.set("x".to_string(), Value::String("<b>hi</b>".to_string()));
-"x".to_string(),
-Value::String("Visit https://example.com".to_string()),
 context.set("x".to_string(), Value::String("<b>hi</b>".to_string()));
 context.set("x".to_string(), Value::String("<b>hi</b>".to_string()));
 context.set("active".to_string(), Value::Bool(false));
