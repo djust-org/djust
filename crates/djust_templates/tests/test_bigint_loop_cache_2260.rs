@@ -59,7 +59,7 @@ fn a_big_int_does_not_share_a_cache_entry_with_the_decimal_or_string_of_the_same
     // Tag 10 is what keeps these apart. All three spell the same digits and
     // RENDER the same, so the fragment substitution would be invisible here —
     // but they do not SERIALIZE the same (one leaves as an `int`, one as a
-    // `decimal.Decimal`, one as a `str`) and `repr`/`json_script` spell them
+    // `decimal.Decimal`, one as a `str`) and `pprint`/`json_script` spell them
     // differently, which is what makes the collision observable and what this
     // template exercises.
     let digits = "12345678901234567890";
@@ -73,10 +73,7 @@ fn a_big_int_does_not_share_a_cache_entry_with_the_decimal_or_string_of_the_same
         ]),
     );
     assert_eq!(
-        render_cached(
-            "{% for r in rows %}{{ r.v|stringformat:\"r\" }}|{% endfor %}",
-            &ctx
-        ),
+        render_cached("{% for r in rows %}{{ r.v|pprint }}|{% endfor %}", &ctx),
         // `&#x27;` — the renderer autoescapes, and `repr` puts quotes in.
         format!("{digits}|Decimal(&#x27;{digits}&#x27;)|&#x27;{digits}&#x27;|"),
         "a BigInt shared a loop-cache entry with the Decimal or String of the \
