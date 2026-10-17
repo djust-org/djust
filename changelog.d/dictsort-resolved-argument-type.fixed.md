@@ -5,3 +5,5 @@
   and the filter renders `""`; djust now does the same. A context `int` or
   `bool` still indexes, and a non-integer number (`1.5`, `Decimal("0")`)
   renders `""`, as in Django.
+  `dictsortreversed` also keeps equal keys in their input order, as
+  `sorted(..., reverse=True)` does; it reversed ties too.
