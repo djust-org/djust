@@ -11,7 +11,8 @@
 // mounted beside the page view. Each transport keeps only what is specific to
 // its wire: connecting, sending, connection and session frames, mount replies,
 // event replies (the WebSocket buffers server-initiated patches, #560) and
-// errors.
+// errors. The `djust:error` detail of a server error is built here for the
+// HTTP fallback too.
 
 /**
  * Receipt-time routing shared by the socket transports. Returns true when the
@@ -172,6 +173,23 @@ async function dispatchCommonFrame(transport, data, logPrefix) {
         default:
             return false;
     }
+}
+
+/**
+ * The ``djust:error`` detail fields every transport reports for a server
+ * error: the WebSocket and SSE ``error`` frames and the HTTP fallback's error
+ * body. ``primaryViewPath`` names the view when the error does not.
+ */
+function serverErrorDetail(data, primaryViewPath) {
+    return {
+        error: data.error,
+        // Stable machine-readable code (#3319), e.g. 'permission_denied'.
+        code: typeof data.code === 'string' ? data.code : null,
+        transient: data.transient === true,
+        view: typeof data.view === 'string' ? data.view : (primaryViewPath || null),
+        target_id: typeof data.target_id === 'string' ? data.target_id : null,
+        traceback: data.traceback || null,
+    };
 }
 
 // ----------------------------------------------------------------------------

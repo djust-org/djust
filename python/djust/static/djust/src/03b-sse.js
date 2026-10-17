@@ -349,14 +349,7 @@ class LiveViewSSE {
                     forgetSlot(data.target_id);
                 }
                 window.dispatchEvent(new CustomEvent('djust:error', {
-                    detail: {
-                        error: data.error,
-                        code: typeof data.code === 'string' ? data.code : null,
-                        transient: data.transient === true,
-                        view: typeof data.view === 'string' ? data.view : (this.primaryViewPath || null),
-                        target_id: typeof data.target_id === 'string' ? data.target_id : null,
-                        traceback: data.traceback || null
-                    }
+                    detail: serverErrorDetail(data, this.primaryViewPath)
                 }));
                 if (data.source !== 'async') {
                     cancelEventRequests(this, data.ref ?? null);

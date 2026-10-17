@@ -1166,13 +1166,7 @@ class LiveViewWebSocket {
                 // Dispatch event for dev tools (debug panel, toasts)
                 window.dispatchEvent(new CustomEvent('djust:error', {
                     detail: {
-                        error: data.error,
-                        // Stable machine-readable code (#3319), e.g. 'permission_denied'.
-                        code: typeof data.code === 'string' ? data.code : null,
-                        transient: data.transient === true,
-                        view: typeof data.view === 'string' ? data.view : (this.primaryViewPath || null),
-                        target_id: typeof data.target_id === 'string' ? data.target_id : null,
-                        traceback: data.traceback || null,
+                        ...serverErrorDetail(data, this.primaryViewPath),
                         event: data.event || this.lastEventName || null,
                         validation_details: data.validation_details || null
                     }

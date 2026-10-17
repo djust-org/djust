@@ -915,7 +915,8 @@ async function handleServerResponse(data, eventName, triggerElement, transport =
 // mounted beside the page view. Each transport keeps only what is specific to
 // its wire: connecting, sending, connection and session frames, mount replies,
 // event replies (the WebSocket buffers server-initiated patches, #560) and
-// errors.
+// errors. The `djust:error` detail of a server error is built here for the
+// HTTP fallback too.
 
 /**
  * Receipt-time routing shared by the socket transports. Returns true when the
@@ -1076,6 +1077,23 @@ async function dispatchCommonFrame(transport, data, logPrefix) {
         default:
             return false;
     }
+}
+
+/**
+ * The ``djust:error`` detail fields every transport reports for a server
+ * error: the WebSocket and SSE ``error`` frames and the HTTP fallback's error
+ * body. ``primaryViewPath`` names the view when the error does not.
+ */
+function serverErrorDetail(data, primaryViewPath) {
+    return {
+        error: data.error,
+        // Stable machine-readable code (#3319), e.g. 'permission_denied'.
+        code: typeof data.code === 'string' ? data.code : null,
+        transient: data.transient === true,
+        view: typeof data.view === 'string' ? data.view : (primaryViewPath || null),
+        target_id: typeof data.target_id === 'string' ? data.target_id : null,
+        traceback: data.traceback || null,
+    };
 }
 
 // ----------------------------------------------------------------------------
@@ -2332,13 +2350,7 @@ class LiveViewWebSocket {
                 // Dispatch event for dev tools (debug panel, toasts)
                 window.dispatchEvent(new CustomEvent('djust:error', {
                     detail: {
-                        error: data.error,
-                        // Stable machine-readable code (#3319), e.g. 'permission_denied'.
-                        code: typeof data.code === 'string' ? data.code : null,
-                        transient: data.transient === true,
-                        view: typeof data.view === 'string' ? data.view : (this.primaryViewPath || null),
-                        target_id: typeof data.target_id === 'string' ? data.target_id : null,
-                        traceback: data.traceback || null,
+                        ...serverErrorDetail(data, this.primaryViewPath),
                         event: data.event || this.lastEventName || null,
                         validation_details: data.validation_details || null
                     }
@@ -3270,14 +3282,7 @@ class LiveViewSSE {
                     forgetSlot(data.target_id);
                 }
                 window.dispatchEvent(new CustomEvent('djust:error', {
-                    detail: {
-                        error: data.error,
-                        code: typeof data.code === 'string' ? data.code : null,
-                        transient: data.transient === true,
-                        view: typeof data.view === 'string' ? data.view : (this.primaryViewPath || null),
-                        target_id: typeof data.target_id === 'string' ? data.target_id : null,
-                        traceback: data.traceback || null
-                    }
+                    detail: serverErrorDetail(data, this.primaryViewPath)
                 }));
                 if (data.source !== 'async') {
                     cancelEventRequests(this, data.ref ?? null);
@@ -8651,15 +8656,7 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
                 try {
                     const body = await response.json();
                     if (body && typeof body.error === 'string') {
-                        detail = {
-                            error: body.error,
-                            // Stable refusal code (#3319), e.g. 'permission_denied'.
-                            code: typeof body.code === 'string' ? body.code : null,
-                            transient: body.transient === true,
-                            view: typeof body.view === 'string' ? body.view : (_localEventTransport.primaryViewPath || null),
-                            target_id: typeof body.target_id === 'string' ? body.target_id : null,
-                            traceback: body.traceback || null,
-                        };
+                        detail = serverErrorDetail(body, _localEventTransport.primaryViewPath);
                     }
                 } catch (_e) { /* a non-JSON error body keeps the status message */ }
                 window.dispatchEvent(new CustomEvent('djust:error', {detail}));
