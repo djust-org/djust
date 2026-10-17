@@ -31,7 +31,7 @@ const SIGNED_BLOB =
 describe.each(['websocket', 'sse'])('explicit event snapshots (%s)', (transport) => {
     function makeHandler(window) {
         const handler = transport === 'websocket'
-            ? new window.LiveViewWebSocket() : new window.djust.LiveViewSSE();
+            ? new window.djust.LiveViewWebSocket() : new window.djust.LiveViewSSE();
         handler.primaryViewPath = 'app.views.Orders';
         handler._pendingViewPath = 'app.views.Orders';
         return handler;
@@ -165,7 +165,7 @@ function createEnv() {
 describe('signed state-snapshot: client stores + echoes the blob verbatim', () => {
     it('mount handler stores the opaque signed blob as a string', async () => {
         const { window } = createEnv();
-        const handler = new window.LiveViewWebSocket();
+        const handler = new window.djust.LiveViewWebSocket();
         await handler.handleMessage({
             type: 'mount',
             session_id: 's-1',
@@ -204,7 +204,7 @@ describe('signed state-snapshot: client stores + echoes the blob verbatim', () =
 
     it('mount handler does NOT cache legacy public_state', async () => {
         const { window } = createEnv();
-        const handler = new window.LiveViewWebSocket();
+        const handler = new window.djust.LiveViewWebSocket();
         await handler.handleMessage({
             type: 'mount',
             session_id: 's-1',

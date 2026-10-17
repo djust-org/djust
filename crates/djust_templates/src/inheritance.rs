@@ -340,7 +340,6 @@ fn node_references_block_super(node: &Node) -> bool {
         } => {
             any_expr(props.iter().map(|(_, v)| v.as_str())) || nodes_reference_block_super(children)
         }
-        Node::RustComponent { props, .. } => any_expr(props.iter().map(|(_, v)| v.as_str())),
         // `{% blocktranslate with s=block.super %}` — the operands are in
         // `args`, and the BODY is raw source that can name it in a placeholder.
         Node::RawBlockCustomTag { args, body, .. } => {
@@ -1238,11 +1237,6 @@ fn node_to_template_string(node: &Node) -> String {
         Node::Static(operand) => format!("{{% static {operand} %}}"),
         Node::ReactComponent { .. } => {
             // React components should be preserved as-is if possible
-            // For now, skip them as they're handled separately
-            String::new()
-        }
-        Node::RustComponent { .. } => {
-            // Rust components should be preserved as-is if possible
             // For now, skip them as they're handled separately
             String::new()
         }
