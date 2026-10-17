@@ -75,7 +75,7 @@ reconciles the container automatically:
 The absorb fallback is **append-only** — a loose row lands at the end. Keyed mid-list
 inserts/removals/reorders no longer depend on it: since 1.1.0 the differ is `dj-virtual`-aware
 and emits keyed splice ops, so a mid-list insert lands at its keyed position
-(`LIVEVIEW_CONFIG['virtual_keyed_ops']`, default **on**; set `False` to opt out).
+(`LIVEVIEW_CONFIG['virtual_keyed_ops']`, default **on**; setting it is deprecated, and 2.0 removes the opt-out).
 Finalize-patch landing for an item scrolled out of the current window is still open. For explicit control, set
 `container.__djVirtualItems` to an array of `HTMLElement` before `djust.refreshVirtualList(container)`
 to replace the pool wholesale.

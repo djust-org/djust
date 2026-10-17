@@ -74,7 +74,7 @@ def django_render(source: str, context: dict) -> str:
 
 def backend_render(source: str, context: dict) -> str:
     """The plain backend, with URL nodes dispatched during rendering."""
-    from djust.template_backend import DjustTemplateBackend
+    from djust.template import DjustTemplateBackend
 
     backend = DjustTemplateBackend(
         params={"NAME": "djust", "DIRS": [], "APP_DIRS": False, "OPTIONS": {}}

@@ -52,7 +52,7 @@ from djust.testing import LiveViewTestClient  # noqa: E402
 # The three real entries
 # ---------------------------------------------------------------------------
 def plain_render(source: str, context: dict) -> str:
-    from djust.template_backend import DjustTemplateBackend
+    from djust.template import DjustTemplateBackend
 
     backend = DjustTemplateBackend(
         params={"NAME": "djust", "DIRS": [], "APP_DIRS": False, "OPTIONS": {}}

@@ -283,13 +283,13 @@ def event(func: F) -> F:
     Deprecated alias for @event_handler. Use @event_handler instead.
 
     .. deprecated:: 0.3
-        ``@event`` is deprecated and will be removed no earlier than
-        djust 1.1.0. Use ``@event_handler`` instead.
+        ``@event`` is deprecated and is removed in
+        djust 2.0.0. Use ``@event_handler`` instead.
     """
     warn_deprecated(
         "@event",
         since="0.3",
-        removed_in="1.1.0",
+        removed_in="2.0.0",
         instead="@event_handler",
         # stacklevel=3: warnings.warn -> warn_deprecated -> event -> user.
         # Empirically verified (scratch sweep): 3 points the warning at the

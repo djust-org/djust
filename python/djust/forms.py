@@ -1215,7 +1215,7 @@ class LiveViewForm(forms.Form):
 
     .. deprecated:: 0.3
         ``LiveViewForm`` adds no functionality over ``forms.Form`` and will
-        be removed no earlier than djust 1.1.0. Use ``django.forms.Form``
+        be removed in djust 2.0.0. Use ``django.forms.Form``
         directly instead.
     """
 
@@ -1230,7 +1230,7 @@ class LiveViewForm(forms.Form):
         warn_deprecated(
             "LiveViewForm",
             since="0.3",
-            removed_in="1.1.0",
+            removed_in="2.0.0",
             instead="django.forms.Form",
             stacklevel=5,
         )

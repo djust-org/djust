@@ -382,7 +382,7 @@ reset** of the saved view state of tenant views.
 
 Nothing needs migrating. Views that do not use `TenantMixin` are not affected.
 
-`DJUST_STATE_BACKEND` (or `DJUST_CONFIG['STATE_BACKEND']`) accepts only
+`DJUST_CONFIG['STATE_BACKEND']` (or the deprecated flat `DJUST_STATE_BACKEND`) accepts only
 `'redis'` (or a `redis://` URL) and `'memory'`; **any other value, including a
 dotted path to a class, falls back to the in-process memory backend**. There is
 no tenant-specific state backend to configure, and the classes in

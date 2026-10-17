@@ -65,7 +65,7 @@ def cmd_stats(args: argparse.Namespace) -> None:
     setup_django()
 
     try:
-        from djust.state_backend import get_backend
+        from djust.state_backends import get_backend
 
         backend = get_backend()
 
@@ -120,7 +120,7 @@ def cmd_health(args: argparse.Namespace) -> int:
     setup_django()
 
     try:
-        from djust.state_backend import get_backend
+        from djust.state_backends import get_backend
 
         backend = get_backend()
 
@@ -677,7 +677,7 @@ def cmd_clear(args: argparse.Namespace) -> None:
     setup_django()
 
     try:
-        from djust.state_backend import get_backend
+        from djust.state_backends import get_backend
 
         backend = get_backend()
 

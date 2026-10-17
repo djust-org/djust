@@ -24,13 +24,21 @@ default-open hole.
 
 from __future__ import annotations
 
+from ._deprecation import warn_deprecated
 from .security.mount import is_view_path_allowed
 
 
 def is_view_import_allowed(view_path: str) -> bool:
     """Deprecated alias for :func:`djust.security.mount.is_view_path_allowed`.
 
-    Kept for backward compatibility. See module docstring for the (new)
-    allowlist semantics.
+    Kept for backward compatibility; removed in djust 2.0. See module
+    docstring for the (new) allowlist semantics.
     """
+    warn_deprecated(
+        "djust._view_resolution.is_view_import_allowed",
+        since="1.4",
+        removed_in="2.0.0",
+        instead="djust.security.mount.is_view_path_allowed",
+        stacklevel=3,
+    )
     return is_view_path_allowed(view_path)

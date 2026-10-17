@@ -379,7 +379,7 @@ def test_the_scan_is_complete_on_a_djust_only_templates_list(templates, tmp_path
 
     djust_only = [
         {
-            "BACKEND": "djust.template_backend.DjustTemplateBackend",
+            "BACKEND": "djust.template.backend.DjustTemplateBackend",
             "DIRS": [str(tmp_path / "templates")],
             "APP_DIRS": False,
             "OPTIONS": {},

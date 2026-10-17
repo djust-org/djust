@@ -45,6 +45,8 @@ class AccordionMixin(ComponentMixin):
     .. deprecated:: Use ``djust_components.descriptors.Accordion`` instead.
     """
 
+    _deprecated_replacement = "the Accordion component from djust.components.descriptors"
+
     component_name = "accordion"
     accordion_instances: Optional[Dict[str, "AccordionState"]] = None
 

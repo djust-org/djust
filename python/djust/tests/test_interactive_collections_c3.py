@@ -390,7 +390,7 @@ def test_members_render_in_both_engines(view_class, engine):
     if engine == "django":
         output = Engine().from_string(source).render(Context(context))
     else:
-        from djust.template_backend import DjustTemplateBackend
+        from djust.template import DjustTemplateBackend
 
         backend = DjustTemplateBackend(
             params={"NAME": "djust", "DIRS": [], "APP_DIRS": False, "OPTIONS": {}}

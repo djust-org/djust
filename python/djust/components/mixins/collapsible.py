@@ -40,6 +40,8 @@ class CollapsibleMixin(ComponentMixin):
     .. deprecated:: Use ``djust_components.descriptors.Collapsible`` instead.
     """
 
+    _deprecated_replacement = "the Collapsible component from djust.components.descriptors"
+
     component_name = "collapsible"
     collapsible_instances: Optional[Dict[str, "CollapsibleState"]] = None
 

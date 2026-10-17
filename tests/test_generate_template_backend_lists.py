@@ -103,7 +103,7 @@ import json, sys
 import django
 from django.conf import settings
 job = json.load(sys.stdin)
-templates = [{"BACKEND": "djust.template_backend.DjustTemplateBackend", "NAME": "djust",
+templates = [{"BACKEND": "djust.template.backend.DjustTemplateBackend", "NAME": "djust",
               "DIRS": [], "APP_DIRS": False, "OPTIONS": {}}]
 if job["with_django_engine"]:
     templates.append({"BACKEND": "django.template.backends.django.DjangoTemplates",

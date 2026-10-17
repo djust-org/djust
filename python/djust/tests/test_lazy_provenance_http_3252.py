@@ -435,7 +435,7 @@ def test_rendered_page_loop_keys_and_safe_forgery_counts(forged, count):
 def test_http_registration_from_inherited_page_shell_and_included_root(tmp_path, settings):
     settings.TEMPLATES = [
         {
-            "BACKEND": "djust.template_backend.DjustTemplateBackend",
+            "BACKEND": "djust.template.backend.DjustTemplateBackend",
             "DIRS": [str(tmp_path)],
             "APP_DIRS": True,
         }

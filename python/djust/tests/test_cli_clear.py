@@ -35,7 +35,7 @@ def mock_backend():
     backend = _make_backend()
     with (
         patch("djust.cli.setup_django"),
-        patch("djust.state_backend.get_backend", return_value=backend),
+        patch("djust.state_backends.get_backend", return_value=backend),
     ):
         yield backend
 
@@ -78,7 +78,7 @@ class TestCmdClearAll:
 
         with (
             patch("djust.cli.setup_django"),
-            patch("djust.state_backend.get_backend", return_value=backend),
+            patch("djust.state_backends.get_backend", return_value=backend),
             pytest.raises(SystemExit) as exc_info,
         ):
             cmd_clear(_make_args(all_flag=True))

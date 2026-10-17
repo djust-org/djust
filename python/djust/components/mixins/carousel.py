@@ -41,6 +41,8 @@ class CarouselMixin(ComponentMixin):
     .. deprecated:: Use ``djust_components.descriptors.Carousel`` instead.
     """
 
+    _deprecated_replacement = "the Carousel component from djust.components.descriptors"
+
     component_name = "carousel"
     carousel_instances: Optional[Dict[str, "CarouselState"]] = None
 

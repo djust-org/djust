@@ -44,6 +44,8 @@ class TooltipMixin(ComponentMixin):
     .. deprecated:: Use ``djust_components.descriptors.Tooltip`` instead.
     """
 
+    _deprecated_replacement = "the Tooltip component from djust.components.descriptors"
+
     component_name = "tooltip"
     tooltip_instances: Optional[Dict[str, "TooltipState"]] = None
 

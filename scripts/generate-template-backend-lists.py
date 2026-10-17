@@ -167,7 +167,7 @@ def _setup_django() -> None:
             STATIC_URL="/static/",
             TEMPLATES=[
                 {
-                    "BACKEND": "djust.template_backend.DjustTemplateBackend",
+                    "BACKEND": "djust.template.backend.DjustTemplateBackend",
                     "NAME": "djust",
                     "DIRS": [],
                     "APP_DIRS": False,

@@ -40,6 +40,8 @@ class TabsMixin(ComponentMixin):
     .. deprecated:: Use ``djust_components.descriptors.Tabs`` instead.
     """
 
+    _deprecated_replacement = "the Tabs component from djust.components.descriptors"
+
     component_name = "tabs"
     tabs_instances: Optional[Dict[str, "TabsState"]] = None
 
