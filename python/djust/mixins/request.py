@@ -1854,7 +1854,6 @@ class RequestMixin:
                 and not _compute_changed_keys(observation_before, _snapshot_assigns(self))
                 and not getattr(self, "_force_full_html", False)
                 and not getattr(self, "_async_tasks", None)
-                and not getattr(self, "_async_pending", None)
             ):
                 noop_response = {"type": "noop", "event_name": event_name, **snapshot_fields}
                 _inject_side_channels(noop_response)

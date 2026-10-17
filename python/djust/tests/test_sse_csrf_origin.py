@@ -8,7 +8,7 @@ as the victim via cookies), then POST to ``/djust/sse/<attacker-uuid>/message/``
 with ``credentials: include`` to fire state-changing event handlers as the victim.
 
 The fix mirrors the WebSocket transport's CSWSH defense (#653): every SSE endpoint
-(``DjustSSEStreamView.get``, ``DjustSSEEventView.post``, ``DjustSSEMessageView.post``)
+(``DjustSSEStreamView.get``, ``DjustSSEMessageView.post``)
 validates the ``Origin`` header against ``settings.ALLOWED_HOSTS`` via the shared
 ``djust.websocket._is_allowed_origin`` helper BEFORE creating/mounting a session or
 dispatching an event. A browser always sends ``Origin`` on cross-origin requests,
@@ -56,7 +56,6 @@ from unittest.mock import AsyncMock, MagicMock  # noqa: E402
 from djust.sse import (  # noqa: E402
     SSESession,
     DjustSSEStreamView,
-    DjustSSEEventView,
     DjustSSEMessageView,
     _sse_sessions,
 )
@@ -332,74 +331,3 @@ class TestSSEMessageOrigin:
 
         assert response.status_code == 200
         session.runtime.dispatch_message.assert_called_once()
-
-
-# ---------------------------------------------------------------------------
-# POST event endpoint (the legacy /event/ alias — same CSRF sink)
-# ---------------------------------------------------------------------------
-
-
-class TestSSEEventOrigin:
-    """``DjustSSEEventView.post`` (legacy alias) must reject cross-origin POSTs."""
-
-    def setup_method(self):
-        self.factory = _SameHostFactory()
-
-    @override_settings(ALLOWED_HOSTS=["example.com"])
-    @pytest.mark.asyncio
-    async def test_foreign_origin_event_post_rejected_with_403(self):
-        """Cross-origin POST to the legacy /event/ endpoint must be 403 and must
-        NOT dispatch the handler."""
-        session = _make_mounted_session()
-
-        request = self.factory.post(
-            f"/djust/sse/{session.session_id}/event/",
-            data=json.dumps({"event": "delete_account", "params": {}}),
-            content_type="application/json",
-            HTTP_ORIGIN=FOREIGN_ORIGIN,
-        )
-        view = DjustSSEEventView()
-        session.runtime.dispatch_event = AsyncMock(return_value=None)
-        response = await view.post(request, session_id=session.session_id)
-
-        assert response.status_code == 403
-        session.runtime.dispatch_event.assert_not_called()
-
-    @override_settings(ALLOWED_HOSTS=["example.com"])
-    @pytest.mark.asyncio
-    async def test_same_origin_event_post_not_403(self):
-        """Same-origin POST to /event/ reaches normal handling."""
-        session = _make_mounted_session()
-
-        request = self.factory.post(
-            f"/djust/sse/{session.session_id}/event/",
-            data=json.dumps({"event": "increment", "params": {}}),
-            content_type="application/json",
-            HTTP_ORIGIN=ALLOWED_ORIGIN,
-        )
-        _attach_owner(request)
-        view = DjustSSEEventView()
-        session.runtime.dispatch_event = AsyncMock(return_value=None)
-        response = await view.post(request, session_id=session.session_id)
-
-        assert response.status_code == 200
-        session.runtime.dispatch_event.assert_called_once()
-
-    @override_settings(ALLOWED_HOSTS=["example.com"])
-    @pytest.mark.asyncio
-    async def test_text_plain_event_post_rejected(self):
-        """``text/plain`` to /event/ is rejected with 415 (simple-request bypass)."""
-        session = _make_mounted_session()
-
-        request = self.factory.post(
-            f"/djust/sse/{session.session_id}/event/",
-            data=json.dumps({"event": "increment", "params": {}}),
-            content_type="text/plain",
-            HTTP_ORIGIN=ALLOWED_ORIGIN,
-        )
-        view = DjustSSEEventView()
-        session.runtime.dispatch_event = AsyncMock(return_value=None)
-        response = await view.post(request, session_id=session.session_id)
-
-        assert response.status_code == 415
-        session.runtime.dispatch_event.assert_not_called()

@@ -18,11 +18,9 @@ Three sub-folds:
     frames (a #1646 drift INSIDE the convergence target). LIVE for SSE +
     url_change async work today; WS post-flip.
 
-(3) binary-framing confirm — ``consumer.use_binary`` is dead (always False, never
-    set True). ``WSConsumerTransport.send`` routes through ``consumer.send_json``
-    (always JSON) and NEVER through the ``_send_update`` binary branch. We DESCOPE
-    (no new binary path) + PIN with a guard test so a future use_binary-enable is
-    a deliberate, tested change.
+(3) binary-framing confirm — ``WSConsumerTransport.send`` routes through
+    ``consumer.send_json`` (always JSON). The dead ``use_binary`` msgpack patch
+    branch was removed in 2.0; a guard test keeps it from coming back unnoticed.
 
 Each behavioral assertion is paired with a gate-off witness (#1468).
 """
@@ -42,7 +40,7 @@ from djust import LiveView
 from djust.config import config
 from djust.decorators import event_handler
 from djust.runtime import ViewRuntime, WSConsumerTransport
-from djust.sse import DjustSSEEventView, DjustSSEStreamView, _sse_sessions
+from djust.sse import DjustSSEMessageView, DjustSSEStreamView, _sse_sessions
 
 pytestmark = pytest.mark.django_db
 
@@ -162,22 +160,23 @@ async def _mount_stream(view_path, *, user, query=""):
 
 
 async def _post_event(session, sid, event, *, user, params=None):
-    """Drive the REAL /event/ endpoint against an owner-bound session.
+    """Drive the REAL /message/ endpoint with an ``event`` frame against an
+    owner-bound session.
 
     The session is bound to pk=7 at mount; ``user`` is the POSTer (also pk=7 so
     owner-binding passes, but with a possibly-revoked permission).
     """
     rf = RequestFactory()
     request = rf.post(
-        f"/djust/sse/{sid}/event/",
-        data=json.dumps({"event": event, "params": params or {}}),
+        f"/djust/sse/{sid}/message/",
+        data=json.dumps({"type": "event", "event": event, "params": params or {}}),
         content_type="application/json",
         HTTP_ORIGIN=ALLOWED_ORIGIN,
         HTTP_HOST="example.com",
         secure=True,
     )
     request.user = user
-    view = DjustSSEEventView()
+    view = DjustSSEMessageView()
     return await view.post(request, session_id=sid)
 
 
@@ -633,22 +632,18 @@ class TestAsyncSourceReconcile:
 
 
 # =========================================================================== #
-# Sub-fold 3 — binary-framing confirm. DESCOPE + PIN (use_binary is dead).
+# Sub-fold 3 — binary-framing confirm (the use_binary branch is gone, 2.0).
 # =========================================================================== #
 
 
 class TestBinaryFramingConfirm:
     @pytest.mark.asyncio
     async def test_ws_transport_send_emits_json_via_send_json(self):
-        """``WSConsumerTransport.send`` routes through ``consumer.send_json`` (always
-        JSON), NEVER through the dead ``_send_update`` ``use_binary`` branch
-        (websocket.py:580 = False always, 'MessagePack TODO'). This pins the live
-        WS behavior so a future use_binary-enable is a DELIBERATE, tested change."""
+        """``WSConsumerTransport.send`` routes through ``consumer.send_json``
+        (always JSON). This pins the live WS behavior so a binary wire format
+        would be a DELIBERATE, tested change."""
         consumer = MagicMock()
         consumer.send_json = AsyncMock()
-        # Even if a stray use_binary attr exists + is True, the transport.send path
-        # does not consult it — it calls send_json unconditionally.
-        consumer.use_binary = True
         transport = WSConsumerTransport(consumer)
 
         frame = {"type": "patch", "patches": [], "version": 1}
@@ -656,24 +651,16 @@ class TestBinaryFramingConfirm:
 
         consumer.send_json.assert_awaited_once_with(frame)
 
-    def test_use_binary_is_dead_default_false_and_never_enabled(self):
-        """Source-grep pin: ``use_binary`` is initialized to False and is never set
-        to True anywhere in the production package. If a future PR enables binary
-        framing it must update this pin (and add a real binary path + test)."""
+    def test_use_binary_is_gone_from_the_package(self):
+        """Source-grep pin: the ``use_binary`` msgpack patch path was removed in
+        2.0 (the client could never decode it). A binary wire format needs a
+        client decoder and its own tests, not a revived flag."""
         import pathlib
-        import re
 
         pkg = pathlib.Path(__import__("djust").__file__).parent
-        enabled = []
-        for py in pkg.rglob("*.py"):
-            if "tests" in py.parts:
-                continue
-            text = py.read_text(encoding="utf-8")
-            # Any assignment of use_binary to a truthy literal.
-            for m in re.finditer(r"use_binary\s*=\s*(\w+)", text):
-                if m.group(1) == "True":
-                    enabled.append(f"{py}: {m.group(0)}")
-        assert not enabled, (
-            "use_binary is documented as dead (JSON-only); a True assignment means "
-            f"a binary path was enabled without updating this pin: {enabled}"
-        )
+        found = [
+            str(py)
+            for py in pkg.rglob("*.py")
+            if "tests" not in py.parts and "use_binary" in py.read_text(encoding="utf-8")
+        ]
+        assert not found, f"use_binary reappeared in: {found}"

@@ -7,8 +7,8 @@ parses the result with the stdlib HTML parser into a VNode tree, and
 emits a single ``Replace`` patch (no diffing — full re-render per
 tick is fine for POC; real diffing reuses ``djust_vdom`` later).
 
-The output format is JSON (matches djust's WS default
-``use_binary = False`` at ``websocket.py:393``). Wire shape matches
+The output format is JSON, the only patch format djust's WebSocket sends.
+Wire shape matches
 ``HtmlRenderer``'s `(html, patches_json, version)` triple so the
 transport layer is unchanged.
 

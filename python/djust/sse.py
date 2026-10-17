@@ -5,13 +5,12 @@ Provides a fallback transport when WebSocket is unavailable (corporate proxies,
 certain enterprise environments). The SSE transport is one-directional:
 
 - Server → Client: EventSource (SSE stream at /djust/sse/<session_id>/)
-- Client → Server: HTTP POST to /djust/sse/<session_id>/event/
+- Client → Server: HTTP POST to /djust/sse/<session_id>/message/
 
 Feature limitations compared to WebSocket transport:
 - No binary file uploads (use WebSocket or direct HTTP upload endpoints)
 - No presence tracking (requires persistent bidirectional channel)
 - No actor-based state management
-- No MessagePack binary encoding
 - No embedded child-view scoped updates (full-page updates only)
 
 Usage: Add SSE URL patterns to your Django URL configuration::
@@ -26,11 +25,11 @@ Usage: Add SSE URL patterns to your Django URL configuration::
 
 Or register the views directly::
 
-    from djust.sse import DjustSSEStreamView, DjustSSEEventView
+    from djust.sse import DjustSSEStreamView, DjustSSEMessageView
 
     urlpatterns = [
         path("djust/sse/<str:session_id>/", DjustSSEStreamView.as_view()),
-        path("djust/sse/<str:session_id>/event/", DjustSSEEventView.as_view()),
+        path("djust/sse/<str:session_id>/message/", DjustSSEMessageView.as_view()),
     ]
 
 Transport negotiation is handled automatically in the djust client JS:
@@ -528,7 +527,7 @@ class SSESession:
         self._owner_user_pk: Optional[Any] = None
         self._owner_session_key: Optional[str] = None
 
-        # The live event-POST request, stamped by the /event/ + /message/ endpoints
+        # The live event-POST request, stamped by the /message/ endpoint
         # just before dispatch so the per-event auth re-check
         # (SSESessionTransport.recheck_event_auth, #1777) validates against the
         # CURRENT POSTer's request.user — not the stale mount request. None until
@@ -1588,107 +1587,6 @@ class DjustSSEStreamView(View):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
-class DjustSSEEventView(View):
-    """
-    POST endpoint for client → server events over the SSE transport.
-
-    Request body (JSON)::
-
-        {
-            "event": "handler_name",
-            "params": {"key": "value"}
-        }
-
-    Response: ``{"ok": true}`` — the actual DOM update is pushed via SSE.
-
-    ``@csrf_exempt`` removes Django's CSRF cookie/token check, so this endpoint's
-    CSRF defense is the **Origin allowlist** (``_sse_origin_allowed``) — the same
-    model as the WebSocket transport's CSWSH check (``AllowedHostsOriginValidator``
-    / ``_is_allowed_origin``, #653). The session_id in the URL is NOT a CSRF token:
-    it is client-chosen (``DjustSSEStreamView.get`` only validates UUID *format*),
-    so it provides no cross-origin protection. The Origin check + the
-    ``application/json`` content-type requirement together close Finding #7
-    (CWE-352): a cross-origin page cannot forge a same-origin ``Origin`` and cannot
-    send a custom content type without a CORS preflight it can't satisfy.
-    """
-
-    async def post(self, request: HttpRequest, session_id: str) -> HttpResponse:
-        # ---- SSE CSRF defense (Finding #7): Origin allowlist + JSON content type ----
-        if not _sse_origin_allowed(request):
-            logger.warning(
-                "SSE: rejected event POST from disallowed origin %s",
-                sanitize_for_log(request.META.get("HTTP_ORIGIN", "")),
-            )
-            return HttpResponseForbidden("Origin not allowed")
-        if not _sse_content_type_is_json(request):
-            return JsonResponse({"error": "Content-Type must be application/json"}, status=415)
-
-        session = _get_session(session_id)
-        if not session:
-            return JsonResponse(
-                {"error": "SSE session not found or expired. Please reload the page."}, status=404
-            )
-
-        # ---- Owner binding (Finding #24): the POSTer must own the session ----
-        # The client-chosen session_id is not an authorization capability; a
-        # leaked id must not let a third party drive the mounter's view with the
-        # mounter's captured request.user.
-        if not await sync_to_async(_request_owns_session)(request, session):
-            logger.warning(
-                "SSE: rejected event POST for session %s — requester is not the owner",
-                sanitize_for_log(session_id),
-            )
-            return JsonResponse({"error": "forbidden", "code": "permission_denied"}, status=403)
-
-        if not session.view_instance:
-            return JsonResponse({"error": "View not mounted yet"}, status=503)
-
-        try:
-            body = json.loads(request.body)
-        except (json.JSONDecodeError, ValueError):
-            return JsonResponse({"error": "Request body must be valid JSON"}, status=400)
-
-        event_name = body.get("event")
-        params = body.get("params") or {}
-        # Forward the client-sent ``ref`` (#560 ref echo, ADR-022 Iter 2 Phase
-        # 2.0; #1891). The runtime's ``_dispatch_event_render`` reads ``ref`` from
-        # the TOP LEVEL of the data dict (runtime.py:1489) to echo it on the noop /
-        # update frame so the client can match responses to requests. The original
-        # ``{type,event,params}`` rebuild dropped it, so the end-to-end ref echo
-        # worked via the SSE ``/message/`` endpoint (which forwards the raw body)
-        # but NOT via this ``/event/`` alias. Carry it through verbatim — the
-        # runtime coerces it to int / None, so no validation is needed here.
-        ref = body.get("ref")
-
-        if not event_name:
-            return JsonResponse({"error": "Missing 'event' field in request body"}, status=400)
-
-        if not isinstance(params, dict):
-            return JsonResponse({"error": "'params' must be a JSON object"}, status=400)
-
-        # Dispatch through the shared ViewRuntime (#1887, ADR-022 Iter 1):
-        # converges the legacy bespoke _sse_handle_event onto dispatch_event,
-        # the SAME spine the SSE /message/ endpoint already routes through, so
-        # the legacy /event/ alias can no longer drift from the runtime (#1646).
-        # The runtime's dispatch_event applies the tenant context, runs the same
-        # event security + param validation, renders, and (this PR) dispatches
-        # start_async / @background work + the full 8-queue flush. Data-dict
-        # shape matches the existing dispatch_message 'event' frame.
-        #
-        # Stamp the LIVE event-POST request on the session so the per-event auth
-        # re-check (SSESessionTransport.recheck_event_auth, #1777 / ADR-022 Iter 2
-        # Phase 2.3a) re-validates against the CURRENT POSTer's request.user — not
-        # the stale mount request. Owner-binding (Finding #24) already ran above,
-        # so this request is the session owner's.
-        await _dispatch_on_session_loop(
-            session,
-            request,
-            {"type": "event", "event": event_name, "params": params, "ref": ref},
-        )
-        return JsonResponse({"ok": True})
-
-
-@method_decorator(csrf_exempt, name="dispatch")
 class DjustSSEMessageView(View):
     """
     POST endpoint for client -> server messages over the SSE transport
@@ -1705,9 +1603,6 @@ class DjustSSEMessageView(View):
 
     Response body is always ``{"ok": true}`` — the actual DOM update (or
     error envelope) is pushed via the SSE stream.
-
-    The legacy ``DjustSSEEventView`` (``/event/``) remains as a deprecated
-    alias for back-compat.
 
     ``@csrf_exempt`` removes Django's CSRF check; the real CSRF defense is the
     **Origin allowlist** (``_sse_origin_allowed``) plus the ``application/json``
@@ -1735,8 +1630,7 @@ class DjustSSEMessageView(View):
             )
 
         # ---- Owner binding (Finding #24): the POSTer must own the session ----
-        # Same shared check as the legacy /event/ endpoint (don't duplicate the
-        # rule — #1646). A leaked session_id must not let a third party drive
+        # The shared check (don't duplicate the rule — #1646). A leaked session_id must not let a third party drive
         # the mounter's view with the mounter's captured request.user.
         if not await sync_to_async(_request_owns_session)(request, session):
             logger.warning(
@@ -1759,9 +1653,8 @@ class DjustSSEMessageView(View):
         #
         # Stamp the LIVE POST request so an ``event`` frame routed through
         # dispatch_message → dispatch_event re-validates per-event auth against the
-        # current POSTer (SSESessionTransport.recheck_event_auth, #1777). Same
-        # rationale as the /event/ alias; the /message/ endpoint carries the same
-        # owner-bound request.
+        # current POSTer (SSESessionTransport.recheck_event_auth, #1777); owner
+        # binding above already ran, so this is the session owner's request.
         from ._exposure_diagnostics import (
             diagnostic_scope,
             diagnostics_allowed,
@@ -1796,7 +1689,6 @@ from django.urls import path  # noqa: E402 — import here to keep module-level 
 
 sse_urlpatterns = [
     path("sse/<str:session_id>/", DjustSSEStreamView.as_view(), name="djust-sse-stream"),
-    path("sse/<str:session_id>/event/", DjustSSEEventView.as_view(), name="djust-sse-event"),
     path(
         "sse/<str:session_id>/message/",
         DjustSSEMessageView.as_view(),

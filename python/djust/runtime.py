@@ -1064,7 +1064,7 @@ class Transport(Protocol):
         owned that the runtime render path (which sends via ``transport.send``
         directly) dropped after THE FLIP (#1907):
 
-          1. the per-event ``_debug`` panel payload (DEBUG + ``_debug_panel_active``
+          1. the per-event ``_debug`` panel payload (DEBUG-
              gated) + the top-level ``timing`` / ``performance`` fields (gated on
              ``_should_expose_timing()`` = DEBUG or ``DJUST_EXPOSE_TIMING``); and
           3. the ``_current_event_name`` / ``_current_event_ref`` consumer attrs the
@@ -1228,8 +1228,7 @@ class Transport(Protocol):
         view is instantiated, BEFORE auth / mount / render.
 
         - WS: sets ``view._ws_consumer`` (streaming support, websocket.py:2128),
-          wires ``view._push_events_flush_callback`` to ``consumer._flush_push_events``
-          (websocket.py:2134-2135), registers the view in the observability
+          registers the view in the observability
           registry (websocket.py:2161-2167), and stashes the validated
           ``view._websocket_host`` / ``_websocket_secure`` (websocket.py:2268-2270).
         - SSE: a no-op — SSE has no consumer to back-reference; its identity
@@ -1822,7 +1821,7 @@ class WSConsumerTransport:
              (websocket.py:1407-1411); ``performance`` is the borrowed
              ``PerformanceTracker`` summary established by ``event_context``; and
           1b. the per-event ``_debug`` panel payload, via the consumer's existing
-             ``_attach_debug_payload`` (its own DEBUG + ``_debug_panel_active`` gate,
+             ``_attach_debug_payload`` (its own DEBUG gate,
              websocket.py:1627); plus
           3. the cosmetic ``_current_event_name`` / ``_current_event_ref`` consumer
              attrs the bespoke handler set for its no-arg ``_dispatch_async_work()``.
@@ -2286,10 +2285,9 @@ class WSConsumerTransport:
         Verbatim fold of the WS bespoke ``handle_mount`` post-instantiation
         stamps (#1915, Finding B):
 
-          * ``view._ws_consumer = consumer`` (streaming support, websocket.py:2128);
-          * ``view._push_events_flush_callback = consumer._flush_push_events`` so
-            ``@background`` handlers can flush push_commands mid-execution
-            (websocket.py:2134-2135) — only when the attr exists on the view;
+          * ``view._ws_consumer = consumer`` (streaming support, and the
+            ``flush_push_events()`` lookup that lets ``@background`` handlers
+            flush push_commands mid-execution);
           * observability ``register_view(session_id, view)`` (weakref registry;
             never break the connection, websocket.py:2161-2167);
           * ``view._websocket_host`` / ``view._websocket_secure`` from the
@@ -2302,8 +2300,6 @@ class WSConsumerTransport:
         slot_target = getattr(consumer, "target_id", None)
         if isinstance(slot_target, str) and slot_target:
             view._djust_slot_target = slot_target
-        if hasattr(view, "_push_events_flush_callback"):
-            view._push_events_flush_callback = consumer._flush_push_events
 
         # Observability registry (weakrefs — best-effort; must never break the
         # connection, mirroring websocket.py:2161-2167).
@@ -2703,7 +2699,7 @@ class SSESessionTransport:
         """Stamp SSE-transport identity on the mounted view (legacy parity).
 
         ``_sse_mount_view`` set ``session.view_instance`` (the endpoint-level
-        "is this session mounted?" reference the ``/event/`` + ``/message/``
+        "is this session mounted?" reference the ``/message/``
         guards read, plus SSE introspection) and ``_sse_session_id`` /
         ``_sse_session`` on the view, and the real ``_websocket_query_string``
         from the request. The runtime already sets ``_websocket_session_id`` /
@@ -2822,7 +2818,7 @@ class SSESessionTransport:
         """SSE per-event auth re-check against the LIVE event-POST request (#1777).
 
         SSE parity for the WS mid-session deauth gate. The owner-binding check
-        (Finding #24) already runs at the ``/event/`` + ``/message/`` endpoints
+        (Finding #24) already runs at the ``/message/`` endpoint
         BEFORE dispatch, so the POSTer is the session owner — but a still-owning
         principal whose ``login_required`` / ``permission_required`` posture was
         revoked mid-session would keep driving the view. When ``reauth_on_event``
@@ -3562,7 +3558,7 @@ class ViewRuntime(RuntimeTurnPort):
         # ``on_view_instantiated`` hook at the SAME point the bespoke WS
         # ``handle_mount`` stamps its consumer back-refs (websocket.py:2128 ff):
         # IMMEDIATELY after instantiation, BEFORE the actor branch / auth / mount /
-        # render. WS: stamps ``_ws_consumer`` / ``_push_events_flush_callback`` /
+        # render. WS: stamps ``_ws_consumer`` /
         # observability ``register_view`` / validated handshake host. SSE: no-op.
         # getattr-guarded so duck-typed test transport fakes that predate this
         # Protocol method (and the default-bearing Protocol itself) keep working.
@@ -8408,9 +8404,7 @@ class ViewRuntime(RuntimeTurnPort):
                 owners.append(child)
                 pending.append(child)
         for child in owners:
-            if not getattr(child, "_async_tasks", None) and not getattr(
-                child, "_async_pending", None
-            ):
+            if not getattr(child, "_async_tasks", None):
                 continue
             batch = AsyncBatch(child)
             if batch.token:
@@ -8421,8 +8415,7 @@ class ViewRuntime(RuntimeTurnPort):
     ) -> None:
         """Schedule any ``start_async`` callbacks queued during the handler.
 
-        Supports both the named-task dict (``_async_tasks``) and the legacy
-        single-task tuple (``_async_pending``) formats, matching
+        Drains the named-task dict (``_async_tasks``), matching
         ``LiveViewConsumer._dispatch_async_work``. Fire-and-forget: each task
         runs in its own ``ensure_future`` so the event POST returns promptly
         and results stream in via the transport when ready.
@@ -8459,16 +8452,6 @@ class ViewRuntime(RuntimeTurnPort):
                 track_async_task(view, future)
                 track_running_async_task(view, task_name, future)
             view._async_tasks = {}
-
-        pending = getattr(view, "_async_pending", None)
-        if pending:
-            view._async_pending = None
-            callback, args, kwargs = pending
-            future = asyncio.ensure_future(
-                self._execute_async_task("_default", callback, args, kwargs, event_name)
-            )
-            track_async_task(view, future)
-            track_running_async_task(view, "_default", future)
 
     async def _execute_async_task(
         self,

@@ -578,7 +578,7 @@ def check_liveviews(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
                 # ported here so main's split checks/ carries it too.
                 "handle_presence_join",  # presence.py track_presence()
                 "handle_presence_leave",  # presence.py untrack_presence()
-                "handle_cursor_move",  # websocket.py cursor_move (LiveCursorMixin)
+                "handle_cursor_move",  # presence.py LiveCursorMixin, called by the app
                 "handle_tick",  # websocket.py tick loop (LiveView)
                 "handle_async_result",  # websocket.py/sse.py background-work completion
                 "handle_component_event",  # mixins/components.py child-component callback

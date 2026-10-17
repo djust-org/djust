@@ -22,7 +22,7 @@ unauthorized / redirecting mount leaves no live POST-routable session).
 
 GATE-OFF (#1468):
   * Removing the owner check (e.g. ``if False and not _request_owns_session(...)``)
-    makes ``test_cross_user_event_post_is_forbidden_and_does_not_dispatch`` and
+    makes ``test_cross_user_message_post_is_forbidden_and_does_not_dispatch`` and
     ``test_anonymous_session_key_mismatch_forbidden`` fail (the POST would 200 and
     dispatch).
   * Removing the per-client cap (return early) makes
@@ -73,7 +73,6 @@ from django.test import RequestFactory, override_settings  # noqa: E402
 from djust.sse import (  # noqa: E402
     SSESession,
     DjustSSEStreamView,
-    DjustSSEEventView,
     DjustSSEMessageView,
     _sse_sessions,
     _request_owns_session,
@@ -123,19 +122,6 @@ def _make_session(*, owner_user_pk=None, owner_session_key=None, mounted=True):
     return session
 
 
-def _event_post(factory, session_id, *, user=None, session_key=None):
-    request = factory.post(
-        f"/djust/sse/{session_id}/event/",
-        data=json.dumps({"event": "delete_account", "params": {}}),
-        content_type="application/json",
-        HTTP_ORIGIN=ALLOWED_ORIGIN,
-        HTTP_HOST="example.com",
-        secure=True,
-    )
-    _bind_identity(request, user=user, session_key=session_key)
-    return request
-
-
 def _message_post(factory, session_id, *, user=None, session_key=None):
     request = factory.post(
         f"/djust/sse/{session_id}/message/",
@@ -176,22 +162,6 @@ class TestF24OwnerBinding:
 
     @override_settings(ALLOWED_HOSTS=["example.com"])
     @pytest.mark.asyncio
-    async def test_cross_user_event_post_is_forbidden_and_does_not_dispatch(self):
-        """Session created by user A; user B POSTs an event to it → 403, and the
-        handler does NOT run on A's view. This is the core hijack reproduction
-        (and the gate-off witness for the owner check)."""
-        session = _make_session(owner_user_pk=1)  # owned by user A (pk=1)
-        request = _event_post(self.factory, session.session_id, user=_auth_user(2))  # user B
-
-        view = DjustSSEEventView()
-        session.runtime.dispatch_event = AsyncMock(return_value=None)
-        response = await view.post(request, session_id=session.session_id)
-
-        assert response.status_code == 403
-        session.runtime.dispatch_event.assert_not_called()
-
-    @override_settings(ALLOWED_HOSTS=["example.com"])
-    @pytest.mark.asyncio
     async def test_cross_user_message_post_is_forbidden_and_does_not_dispatch(self):
         """Same hijack, message endpoint: user B can't drive user A's session."""
         session = _make_session(owner_user_pk=1)
@@ -203,20 +173,6 @@ class TestF24OwnerBinding:
 
         assert response.status_code == 403
         session.runtime.dispatch_message.assert_not_called()
-
-    @override_settings(ALLOWED_HOSTS=["example.com"])
-    @pytest.mark.asyncio
-    async def test_same_user_event_post_allowed(self):
-        """The owning user (same pk) reaches dispatch."""
-        session = _make_session(owner_user_pk=1)
-        request = _event_post(self.factory, session.session_id, user=_auth_user(1))
-
-        view = DjustSSEEventView()
-        session.runtime.dispatch_event = AsyncMock(return_value=None)
-        response = await view.post(request, session_id=session.session_id)
-
-        assert response.status_code == 200
-        session.runtime.dispatch_event.assert_called_once()
 
     @override_settings(ALLOWED_HOSTS=["example.com"])
     @pytest.mark.asyncio
@@ -237,32 +193,32 @@ class TestF24OwnerBinding:
         """Anonymous session bound to session-key X cannot be driven by a request
         carrying a different anonymous session-key Y → 403, no dispatch."""
         session = _make_session(owner_user_pk=None, owner_session_key="anon-key-X")
-        request = _event_post(
+        request = _message_post(
             self.factory, session.session_id, user=_anon_user(), session_key="anon-key-Y"
         )
 
-        view = DjustSSEEventView()
-        session.runtime.dispatch_event = AsyncMock(return_value=None)
+        view = DjustSSEMessageView()
+        session.runtime.dispatch_message = AsyncMock(return_value=None)
         response = await view.post(request, session_id=session.session_id)
 
         assert response.status_code == 403
-        session.runtime.dispatch_event.assert_not_called()
+        session.runtime.dispatch_message.assert_not_called()
 
     @override_settings(ALLOWED_HOSTS=["example.com"])
     @pytest.mark.asyncio
     async def test_anonymous_same_session_key_allowed(self):
         """Anonymous owner with the SAME session-key reaches dispatch."""
         session = _make_session(owner_user_pk=None, owner_session_key="anon-key-X")
-        request = _event_post(
+        request = _message_post(
             self.factory, session.session_id, user=_anon_user(), session_key="anon-key-X"
         )
 
-        view = DjustSSEEventView()
-        session.runtime.dispatch_event = AsyncMock(return_value=None)
+        view = DjustSSEMessageView()
+        session.runtime.dispatch_message = AsyncMock(return_value=None)
         response = await view.post(request, session_id=session.session_id)
 
         assert response.status_code == 200
-        session.runtime.dispatch_event.assert_called_once()
+        session.runtime.dispatch_message.assert_called_once()
 
     @override_settings(ALLOWED_HOSTS=["example.com"])
     @pytest.mark.asyncio
@@ -270,16 +226,16 @@ class TestF24OwnerBinding:
         """An anonymous-bound session is not owned by any authenticated user
         (their session_key won't match the bound anon key)."""
         session = _make_session(owner_user_pk=None, owner_session_key="anon-key-X")
-        request = _event_post(
+        request = _message_post(
             self.factory, session.session_id, user=_auth_user(99), session_key="anon-key-Y"
         )
 
-        view = DjustSSEEventView()
-        session.runtime.dispatch_event = AsyncMock(return_value=None)
+        view = DjustSSEMessageView()
+        session.runtime.dispatch_message = AsyncMock(return_value=None)
         response = await view.post(request, session_id=session.session_id)
 
         assert response.status_code == 403
-        session.runtime.dispatch_event.assert_not_called()
+        session.runtime.dispatch_message.assert_not_called()
 
     def test_owns_helper_rejects_unbound_session(self):
         """A session with no owner at all is unownable (defensive)."""
