@@ -16,6 +16,7 @@ from typing import (
     Iterator,
     List,
     Optional,
+    Set,
     Tuple,
 )
 
@@ -49,6 +50,35 @@ if TYPE_CHECKING:
     from django.http import HttpRequest
 
 logger = logging.getLogger(__name__)
+
+#: View classes already warned about background work on the HTTP fallback.
+_HTTP_BACKGROUND_WARNED: Set[type] = set()
+
+
+def _warn_http_background_work_dropped(owner: Any, event_name: str) -> None:
+    """Say so, once per class, when a handler queued background work over HTTP.
+
+    The HTTP POST fallback has no channel to deliver a background result and
+    does not run ``start_async`` / ``@background`` work: the queued tasks are
+    discarded with the request's view instance. What it should do instead is
+    an open 2.0 design question, so for now the drop is made visible rather
+    than silent. One WARNING per view class keeps a busy page from flooding
+    the log.
+    """
+    if not getattr(owner, "_async_tasks", None):
+        return
+    cls = type(owner)
+    if cls in _HTTP_BACKGROUND_WARNED:
+        return
+    _HTTP_BACKGROUND_WARNED.add(cls)
+    logger.warning(
+        "%s.%s queued background work (start_async / @background) during an "
+        "HTTP fallback event; background work does not run on the HTTP "
+        "fallback, so it was dropped. It runs over WebSocket and SSE.",
+        cls.__qualname__,
+        sanitize_for_log(event_name),
+    )
+
 
 #: Sent by the client when its HTTP scope holds strict contracts, so a response
 #: whose tree no longer has any carries an explicit clear (the stateless HTTP
@@ -1314,6 +1344,7 @@ class RequestMixin:
                 else:
                     handler(*call_args, **call_kwargs)
                 t_handler_ms = (time.perf_counter() - t0_handler) * 1000
+                _warn_http_background_work_dropped(owner, event_name)
 
             if child_view is not None:
                 return self._http_child_response(
