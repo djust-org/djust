@@ -266,8 +266,6 @@ const globalLoadingManager = {
 
 // Expose globalLoadingManager under djust namespace
 window.djust.globalLoadingManager = globalLoadingManager;
-// Backward compatibility
-window.globalLoadingManager = globalLoadingManager;
 
 // Generate unique request ID for cache tracking
 let cacheRequestCounter = 0;

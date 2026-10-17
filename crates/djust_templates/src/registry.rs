@@ -2375,10 +2375,9 @@ pub fn arm_scope_tags(names: Vec<String>) -> PyResult<()> {
 ///
 /// Arming is process-global and a `{% load i18n %}` re-arms on the next
 /// parse, so nothing in the framework's own reset path needs to call this:
-/// it exists so a test that must observe the UNARMED parse (an unloaded
+/// it exists so a Rust test that must observe the UNARMED parse (an unloaded
 /// `{% language %}` falling through to `UnsupportedTag`) can restore the
-/// process to that state.
-#[pyfunction]
+/// process to that state. Not exported to Python.
 pub fn clear_scope_tags() -> PyResult<()> {
     let _bump = BumpOnReturn;
     let mut set = ARMED_SCOPE_TAGS.write().map_err(|e| {

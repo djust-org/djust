@@ -267,7 +267,7 @@ function runLoadingTests() {
     console.log('[Test] Running client-side tests...');
 
     // Test 1: LoadingManager exists
-    const hasLoadingManager = typeof globalLoadingManager !== 'undefined';
+    const hasLoadingManager = typeof (window.djust && window.djust.globalLoadingManager) !== 'undefined';
     addClientTest(
         'LoadingManager Available',
         'globalLoadingManager should be defined',
