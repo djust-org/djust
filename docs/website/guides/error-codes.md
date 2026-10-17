@@ -1143,16 +1143,6 @@ The directives covered are every server-event directive the client binds (`dj-cl
 
 ---
 
-### T015: Legacy data-djust-view / data-djust-root attribute
-
-**Severity**: Warning
-
-**What causes it**: A template uses the pre-1.0 root attributes. Message: "<file>:<line> -- legacy '<attr>' attribute detected."
-
-**Fix**: Change `data-djust-view` to `dj-view` and `data-djust-root` to `dj-root`. Suppress with `DJUST_CONFIG = {"suppress_checks": ["T015"]}`.
-
----
-
 ### T016: dj-navigate with no LiveView routes
 
 **Severity**: Warning

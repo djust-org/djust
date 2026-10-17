@@ -228,7 +228,6 @@ Templates:
 | --- | --- | --- | --- |
 | `djust.T011` | Warning | `unsupported template tag '{% <tag_name> %}' will be silently ignored by Rust renderer.` | Yes |
 | `djust.T012` | Warning | `template uses dj-* directives that need a connected LiveView but has no dj-root or dj-view attribute, so the page never connects.` | Yes, wording differs |
-| `djust.T015` | Warning | `legacy '<attribute>' attribute detected.` | Yes |
 | `djust.T018` | Warning | `template references undefined variable '<name>' at line <line> (<template>) -- it resolves to nothing and renders as empty string, with no error.` | Yes |
 | `djust.T024` | Warning | `` `<path>` is always empty in a LiveView template: djust never serializes `<field>`. `` | No (main) |
 | `djust.T025` | Warning | `'<attribute>' is on <<tag>>, which is not supported and is ignored: no live view is mounted and the page stays a plain HTTP page. Put it on <body> or a <div>.` | No (main) |
