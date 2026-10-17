@@ -203,80 +203,65 @@ class TestRustPythonInterop:
         fixed in ``tests/unit/test_tag_registry.py`` (#2053, #1646-class).
         """
         yield
-        try:
-            from djust.template_tags import reregister_builtins
+        from djust.template_tags import reregister_builtins
 
-            reregister_builtins()
-        except ImportError:
-            pass  # Rust extension not available; nothing to restore
+        reregister_builtins()
 
     @pytest.mark.benchmark(group="rust_python_interop")
     def test_register_handler(self, benchmark):
         """Benchmark registering a handler with the Rust registry."""
-        try:
-            from djust._rust import (
-                register_tag_handler,
-                unregister_tag_handler,
-                clear_tag_handlers,
-            )
+        from djust._rust import (
+            register_tag_handler,
+            unregister_tag_handler,
+            clear_tag_handlers,
+        )
 
-            # Clear first
-            clear_tag_handlers()
+        # Clear first
+        clear_tag_handlers()
 
-            handler = MockTagHandler("bench-tag")
+        handler = MockTagHandler("bench-tag")
 
-            def register_and_unregister():
-                register_tag_handler("bench-tag", handler)
-                unregister_tag_handler("bench-tag")
+        def register_and_unregister():
+            register_tag_handler("bench-tag", handler)
+            unregister_tag_handler("bench-tag")
 
-            benchmark(register_and_unregister)
-
-        except ImportError:
-            pytest.skip("Rust extension not available")
+        benchmark(register_and_unregister)
 
     @pytest.mark.benchmark(group="rust_python_interop")
     def test_check_handler_exists(self, benchmark):
         """Benchmark checking if handler exists in Rust registry."""
-        try:
-            from djust._rust import (
-                register_tag_handler,
-                has_tag_handler,
-                clear_tag_handlers,
-            )
+        from djust._rust import (
+            register_tag_handler,
+            has_tag_handler,
+            clear_tag_handlers,
+        )
 
-            clear_tag_handlers()
-            handler = MockTagHandler("exists-tag")
-            register_tag_handler("exists-tag", handler)
+        clear_tag_handlers()
+        handler = MockTagHandler("exists-tag")
+        register_tag_handler("exists-tag", handler)
 
-            result = benchmark(has_tag_handler, "exists-tag")
-            assert result is True
+        result = benchmark(has_tag_handler, "exists-tag")
+        assert result is True
 
-            clear_tag_handlers()
-
-        except ImportError:
-            pytest.skip("Rust extension not available")
+        clear_tag_handlers()
 
     @pytest.mark.benchmark(group="rust_python_interop")
     def test_get_registered_tags(self, benchmark):
         """Benchmark getting list of registered tags."""
-        try:
-            from djust._rust import (
-                register_tag_handler,
-                get_registered_tags,
-                clear_tag_handlers,
-            )
+        from djust._rust import (
+            register_tag_handler,
+            get_registered_tags,
+            clear_tag_handlers,
+        )
 
-            clear_tag_handlers()
+        clear_tag_handlers()
 
-            # Register several handlers
-            for i in range(10):
-                handler = MockTagHandler(f"tag-{i}")
-                register_tag_handler(f"tag-{i}", handler)
+        # Register several handlers
+        for i in range(10):
+            handler = MockTagHandler(f"tag-{i}")
+            register_tag_handler(f"tag-{i}", handler)
 
-            result = benchmark(get_registered_tags)
-            assert len(result) == 10
+        result = benchmark(get_registered_tags)
+        assert len(result) == 10
 
-            clear_tag_handlers()
-
-        except ImportError:
-            pytest.skip("Rust extension not available")
+        clear_tag_handlers()

@@ -24,18 +24,6 @@ load-bearing, not decorative (#1468).
 
 import gc
 
-import pytest
-
-
-def _liveview_available():
-    """Return True if LiveView can be imported (Rust extension built)."""
-    try:
-        from djust.live_view import LiveView  # noqa: F401
-
-        return True
-    except ImportError:
-        return False
-
 
 def _force_gc():
     """Force garbage collection to clean up dynamically created subclasses."""
@@ -46,7 +34,6 @@ def _t018(errors):
     return [e for e in errors if e.id == "djust.T018"]
 
 
-@pytest.mark.skipif(not _liveview_available(), reason="Rust extension not available")
 class TestT018EmpiricalCanary:
     """The load-bearing canary: fires on the genuine bug, silent on every
     false-positive class the issue's caveat enumerates -- all in one
@@ -124,7 +111,6 @@ class TestT018EmpiricalCanary:
             _force_gc()
 
 
-@pytest.mark.skipif(not _liveview_available(), reason="Rust extension not available")
 class TestT018TemplateNameFilePath:
     """The ``template_name`` (file-based) path, and a literal
     ``get_context_data()`` dict return contributing a context key."""
@@ -169,7 +155,6 @@ class TestT018TemplateNameFilePath:
             _force_gc()
 
 
-@pytest.mark.skipif(not _liveview_available(), reason="Rust extension not available")
 class TestT018ExtendsSkipped:
     """Known v1 limitation: templates using {% extends %} are skipped
     entirely (block-override context is inheritance-scoped, and this
@@ -200,7 +185,6 @@ class TestT018ExtendsSkipped:
             _force_gc()
 
 
-@pytest.mark.skipif(not _liveview_available(), reason="Rust extension not available")
 class TestT018DynamicGetContextData:
     """Issue caveat #7: a get_context_data() this check can't statically
     follow (super() + subscript mutation) must never cause a false
@@ -291,7 +275,6 @@ class TestT018DynamicGetContextData:
             _force_gc()
 
 
-@pytest.mark.skipif(not _liveview_available(), reason="Rust extension not available")
 class TestT018AbstractAndSuppression:
     def test_abstract_base_class_is_skipped(self):
         from djust.live_view import LiveView
