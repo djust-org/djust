@@ -96,7 +96,7 @@ async def test_close_marks_connection_so_queued_frames_are_dropped():
 
 @pytest.mark.asyncio
 async def test_binary_frame_send_is_guarded_too():
-    """The binary patch path (use_binary) flows through the same guard."""
+    """A binary frame flows through the same guard."""
     base_send = AsyncMock(side_effect=RuntimeError(_UVICORN_SEND_AFTER_CLOSE))
     consumer = _consumer(base_send)
 

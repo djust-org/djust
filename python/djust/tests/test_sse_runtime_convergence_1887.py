@@ -7,12 +7,12 @@ SSE ``/message/`` endpoint + the WS ``url_change`` shim already use — retiring
 the SSE fork of the #1646 parallel-path-drift class.
 
 These tests drive the REAL Django views (``DjustSSEStreamView.get`` +
-``DjustSSEEventView.post``) end-to-end against a real-rendering LiveView, so they
+``DjustSSEMessageView.post``) end-to-end against a real-rendering LiveView, so they
 exercise the actual converged code path (not a unit-level dispatch_* call):
 
 * mount: GET stream → runtime.dispatch_mount → real render → ``mount`` frame +
   session registered (the 'mounted' gate is now ``runtime.view_instance``).
-* event: ``/event/`` POST → runtime.dispatch_event → handler + render →
+* event: ``/message/`` POST → runtime.dispatch_event → handler + render →
   ``patch`` / ``html_update`` frame.
 * object-perm denial blocks the mount (Iter 0 #1885 check, now on the live SSE
   path) — with a gate-off witness proving the assertion is non-tautological.
@@ -40,7 +40,7 @@ from django.test import RequestFactory, override_settings
 
 from djust import LiveView
 from djust.decorators import event_handler
-from djust.sse import DjustSSEEventView, DjustSSEStreamView, _sse_sessions
+from djust.sse import DjustSSEStreamView, _sse_sessions
 
 pytestmark = pytest.mark.django_db
 
@@ -144,33 +144,34 @@ async def _mount_stream(view_path, *, query=""):
 
 
 async def _post_event(session, sid, event, params=None, ref=None):
-    """Drive the REAL /event/ endpoint against an owner-bound session.
+    """Drive the REAL /message/ endpoint with an ``event`` frame against an
+    owner-bound session.
 
     Owner-binding (Finding #24) is an endpoint-level check, not part of the
     runtime convergence under test; bind the session to a known pk and stamp the
     event request's user with the same pk so the POST owns the session and
     reaches dispatch_event (mirrors _attach_owner in the other SSE test files).
 
-    Pass ``ref`` to drive the #560 ref echo through the ``/event/`` alias
-    (#1891): the body carries a top-level ``ref`` only when one is supplied, so
-    callers that don't care omit it (matching the original two-field body).
+    The body carries a top-level ``ref`` only when one is supplied.
     """
     from unittest.mock import MagicMock
 
+    from djust.sse import DjustSSEMessageView
+
     session._owner_user_pk = 7
     session._owner_session_key = None
-    body = {"event": event, "params": params or {}}
+    body = {"type": "event", "event": event, "params": params or {}}
     if ref is not None:
         body["ref"] = ref
     rf = RequestFactory()
     request = rf.post(
-        f"/djust/sse/{sid}/event/",
+        f"/djust/sse/{sid}/message/",
         data=json.dumps(body),
         content_type="application/json",
         HTTP_ORIGIN=ALLOWED_ORIGIN,
     )
     request.user = MagicMock(is_authenticated=True, pk=7)
-    view = DjustSSEEventView()
+    view = DjustSSEMessageView()
     return await view.post(request, session_id=sid)
 
 
@@ -178,9 +179,8 @@ async def _post_message(session, sid, body):
     """Drive the REAL /message/ endpoint (DjustSSEMessageView) against an
     owner-bound session, forwarding the FULL JSON envelope verbatim.
 
-    Unlike the /event/ alias (which rebuilds {type,event,params} and drops any
-    extra keys), /message/ → runtime.dispatch_message(body) passes the body
-    THROUGH unchanged, so a client-supplied ``ref`` reaches dispatch_event. This
+    /message/ → runtime.dispatch_message(body) passes the body THROUGH
+    unchanged, so a client-supplied ``ref`` reaches dispatch_event. This
     is the real SSE transport that exercises the Phase-2.0 ``ref`` echo
     end-to-end without touching websocket.py / sse.py (#1889, ADR-022).
     """
@@ -238,7 +238,7 @@ class TestSSEMountViaRuntime:
 
 
 # --------------------------------------------------------------------------- #
-# Event (/event/) — end-to-end through the converged runtime.
+# Event (/message/) — end-to-end through the converged runtime.
 # --------------------------------------------------------------------------- #
 
 
@@ -437,8 +437,8 @@ class TestSSEAsyncWorkViaRuntime:
 
 # --------------------------------------------------------------------------- #
 # Event-spine parity grows over the REAL SSE transport (ADR-022 Iter 2 Phase
-# 2.0, #1889). Drives the /message/ endpoint (which forwards the full envelope,
-# unlike the /event/ alias) so a client-supplied ``ref`` reaches dispatch_event
+# 2.0, #1889). Drives the /message/ endpoint (which forwards the full envelope)
+# so a client-supplied ``ref`` reaches dispatch_event
 # end-to-end and the Phase-2.0 grows (#560 ref echo + source/event_name; #700
 # identity push-only skip) are exercised on the actual SSE wire.
 # --------------------------------------------------------------------------- #
@@ -519,90 +519,3 @@ class TestSSEEventSpineParity:
         assert noops, f"push-only handler must emit a noop over SSE; got {msgs!r}"
         assert noops[0].get("ref") == 5, "the noop must still echo the ref"
         assert pushes, f"the push_event side-effect must reach the SSE client; got {msgs!r}"
-
-
-# --------------------------------------------------------------------------- #
-# Ref echo over the legacy ``/event/`` ALIAS (#1891).
-#
-# The ``/event/`` endpoint rebuilds the dispatch dict from the body instead of
-# forwarding it verbatim (unlike ``/message/``). Before #1891 the rebuild was
-# ``{type,event,params}`` and DROPPED the top-level ``ref``, so the #560 ref
-# echo (added in Phase 2.0) reached the client only via ``/message/``. These
-# tests drive the REAL ``/event/`` alias with a ``ref`` and assert it now
-# round-trips on both the update and noop frames; the gate-off witness re-drops
-# ``ref`` at the endpoint to prove the assertions are non-tautological.
-# --------------------------------------------------------------------------- #
-class TestSSEEventAliasRefEcho:
-    @override_settings(ALLOWED_HOSTS=["example.com"])
-    @pytest.mark.asyncio
-    async def test_event_alias_update_frame_echoes_ref(self):
-        """A state-changing event over the REAL SSE /event/ alias echoes the
-        client ``ref`` on the update frame (#560, #1891)."""
-        path = _register(_CounterSSEView)
-        with _allowlist():
-            _resp, session, sid = await _mount_stream(path)
-        _drain(session)
-
-        resp = await _post_event(session, sid, "increment", ref=77)
-        assert resp.status_code == 200
-        msgs = _drain(session)
-        render = [m for m in msgs if m.get("type") in ("patch", "html_update")]
-        assert render, f"increment must stream an update frame, got {msgs!r}"
-        f = render[0]
-        assert f.get("ref") == 77, (
-            f"the /event/ alias must forward the client ref so the update frame "
-            f"echoes it (#560/#1891); got {f!r}"
-        )
-
-    @override_settings(ALLOWED_HOSTS=["example.com"])
-    @pytest.mark.asyncio
-    async def test_event_alias_noop_frame_echoes_ref(self):
-        """A no-change event over the REAL SSE /event/ alias echoes the client
-        ``ref`` on the noop frame (#560, #1891)."""
-        path = _register(_CounterSSEView)
-        with _allowlist():
-            _resp, session, sid = await _mount_stream(path)
-        _drain(session)
-
-        resp = await _post_event(session, sid, "noop_event", ref=88)
-        assert resp.status_code == 200
-        msgs = _drain(session)
-        noops = [m for m in msgs if m.get("type") == "noop"]
-        assert noops, f"no-change event must stream a noop frame, got {msgs!r}"
-        assert noops[0].get("ref") == 88, (
-            f"the /event/ alias noop must echo the client ref (#560/#1891); got {noops[0]!r}"
-        )
-
-    @override_settings(ALLOWED_HOSTS=["example.com"])
-    @pytest.mark.asyncio
-    async def test_gate_off_event_alias_dropping_ref_loses_echo(self):
-        """Gate-off witness (#1468): if the /event/ rebuild drops ``ref`` (the
-        pre-#1891 ``{type,event,params}`` shape), the update frame carries NO
-        ref — proving the echo assertions above are non-tautological and that
-        the forwarding is what makes the echo reach the client.
-
-        We monkeypatch ``dispatch_event`` to strip the top-level ``ref`` before
-        the runtime sees it, reproducing the old rebuild's behavior without
-        reverting the source under test."""
-        path = _register(_CounterSSEView)
-        with _allowlist():
-            _resp, session, sid = await _mount_stream(path)
-        _drain(session)
-
-        runtime = session.runtime
-        orig_dispatch = runtime.dispatch_event
-
-        async def _drop_ref_dispatch(data):
-            stripped = {k: v for k, v in data.items() if k != "ref"}
-            return await orig_dispatch(stripped)
-
-        with patch.object(runtime, "dispatch_event", _drop_ref_dispatch):
-            resp = await _post_event(session, sid, "increment", ref=99)
-        assert resp.status_code == 200
-        msgs = _drain(session)
-        render = [m for m in msgs if m.get("type") in ("patch", "html_update")]
-        assert render, f"increment must still stream an update frame, got {msgs!r}"
-        assert render[0].get("ref") is None, (
-            "with ref dropped (pre-#1891 rebuild), the update frame must carry no "
-            f"ref — else the echo test is a tautology; got {render[0]!r}"
-        )

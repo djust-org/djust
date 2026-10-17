@@ -32,7 +32,6 @@ async def test_lost_background_baseline_delivers_html_and_arms_recovery(producer
     view._rust_view.reset()
     consumer = LiveViewConsumer()
     consumer.view_instance = view
-    consumer.use_binary = False
     consumer._last_sent_version = 7
     consumer.send_json = AsyncMock()
     consumer._flush_all_pending = AsyncMock()
