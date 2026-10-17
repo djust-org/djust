@@ -1,18 +1,10 @@
-"""`virtual_keyed_ops` reaches the Rust differ at startup (#2017, ADR-026).
+"""`[dj-virtual]` keyed VDOM ops are unconditional (#2017, ADR-026).
 
-2.0 removed the ``LIVEVIEW_CONFIG['virtual_keyed_ops']`` kill switch:
-``DjustConfig.ready()`` now turns the differ's flag on unconditionally. The
-history below explains why ON is the right, and now only, behaviour.
-
-Before this, `djust_vdom::diff::set_virtual_keyed_ops` had **no Python surface at
-all** — its only callers were that crate's own tests. So ADR-026 iteration 3
-("flag flips ON after a soak") was not a one-line default change; there was no
-switch for a Django user to reach.
-
-Why the flag is applied at startup rather than per view: the Rust side is a
-process-global ``AtomicBool``, unlike ``set_loop_render_cache_enabled`` (#1967)
-which is per-``RustLiveView`` state. Driving a process global from a per-view
-hook would be last-view-wins.
+2.0 removed the ``LIVEVIEW_CONFIG['virtual_keyed_ops']`` kill switch and then
+the Rust switch behind it (``set_virtual_keyed_ops`` /
+``virtual_keyed_ops_enabled``): the differ emits key-addressed ops for every
+``[dj-virtual]`` parent. The history below explains why ON is the right, and
+now only, behaviour.
 
 **The default is ON since 1.1.0.** It was OFF for several releases, and not for
 the reason this docstring gave for two
@@ -42,116 +34,25 @@ diagnoses. With them fixed the gate passed and the default flipped ON in 1.1.0
 
 from __future__ import annotations
 
-import pytest
+import json
 
 from djust import _rust
 
 
-@pytest.fixture(autouse=True)
-def _restore_flag():
-    """The switch is process-global — a leak would change every later test."""
-    before = _rust.virtual_keyed_ops_enabled()
-    yield
-    _rust.set_virtual_keyed_ops(before)
-
-
-# --- the surface exists at all --------------------------------------------
-
-
-def test_the_setter_and_getter_are_exposed():
-    # A setter with no getter cannot be tested end to end, which is why both
-    # are exported rather than just the one the config path needs.
-    assert callable(_rust.set_virtual_keyed_ops)
-    assert callable(_rust.virtual_keyed_ops_enabled)
-
-
-def test_the_setter_actually_moves_the_flag():
-    _rust.set_virtual_keyed_ops(True)
-    assert _rust.virtual_keyed_ops_enabled() is True
-    _rust.set_virtual_keyed_ops(False)
-    assert _rust.virtual_keyed_ops_enabled() is False
-
-
-# --- 2.0: no config key, always on ------------------------------------------
-
-
 def test_the_config_key_is_gone():
-    """2.0 removed the ``virtual_keyed_ops`` kill switch (#3500). Setting the key
-    now fails startup (``djust._removed_settings``)."""
+    """Setting the key now fails startup (``djust._removed_settings``)."""
     from djust.config import LiveViewConfig
 
     assert "virtual_keyed_ops" not in LiveViewConfig._defaults
 
 
-def test_ready_hard_wires_the_flag_on():
-    """Drives the REAL ``DjustConfig.ready()``: the differ's compiled default is
-    OFF, so ready() is what turns keyed ops on."""
-    import logging
-
-    from djust.apps import DjustConfig
-
-    _lg = logging.getLogger("djust")
-    _filters = list(_lg.filters)
-    try:
-        _rust.set_virtual_keyed_ops(False)  # opposite, so a no-op fails
-        app = DjustConfig.__new__(DjustConfig)
-        app.ready()
-        assert _rust.virtual_keyed_ops_enabled() is True
-    finally:
-        # In a `finally` so a mid-test failure cannot leak a filter into every
-        # later test in the session.
-        _lg.filters[:] = _filters
+def test_the_rust_switch_is_gone():
+    assert not hasattr(_rust, "set_virtual_keyed_ops")
+    assert not hasattr(_rust, "virtual_keyed_ops_enabled")
 
 
-# `test_the_applier_does_not_read_the_stale_config_singleton` lived here. It
-# was a source-grep over a fixed 1200-character window, and the Stage 11 review
-# measured it as a decorative pin (#1859): it stayed GREEN against three
-# reintroductions of the defect in different shapes (`get_config()`, a module-
-# attribute read, and one where only a COMMENT carried the tokens it searched
-# for — the `code_only` hole, 7th recurrence), while going RED against correct
-# code whose comment merely mentioned the banned string. Every case it caught
-# was already caught by `test_ready_applies_the_config_value_to_rust`, so it was
-# a strict subset with false-positive hazards.
-#
-# The property it was reaching for is now tested behaviourally, against the real
-# import order, in `test_config_settings_recovery_2166.py`.
-
-
-def test_apps_ready_wires_the_flag():
-    import inspect
-
-    from djust.apps import DjustConfig
-
-    src = inspect.getsource(DjustConfig)
-    assert "set_virtual_keyed_ops" in src, (
-        "the differ's compiled default is OFF; something must turn it on at startup"
-    )
-    assert 'hasattr(_rust, "set_virtual_keyed_ops")' in src, (
-        "guard the call so a Rust build predating the export cannot break "
-        "startup — the same defensive shape _apply_loop_render_cache_flag uses"
-    )
-
-
-# `test_the_applier_is_not_gated_on_pytest` lived here. It asserted
-# `indent <= 16`, and the shipped applier sits at exactly 16 — so relocating
-# it INSIDE the PYTEST_CURRENT_TEST guard also yields 16 and the assertion
-# could not tell the two apart. Proven: that relocation left this test green;
-# only `test_ready_applies_the_config_value_to_rust` caught it. A magic indent
-# threshold with zero margin is a decorative pin, and the protection it
-# claimed is already covered by invoking the real method.
-
-
-# --- the differ honours it --------------------------------------------------
-
-
-def test_the_differ_emits_keyed_ops_only_when_enabled():
-    """End-to-end through the real differ: the flag is what gates the op.
-
-    This is the half of ADR-026 that DOES work — iteration 1. Recorded here
-    because the browser gate found the client half does not land the op yet,
-    and a future reader needs to know which side was proven.
-    """
-    import json
+def test_the_differ_emits_keyed_ops_for_a_virtual_parent():
+    """End-to-end through the real differ, with nothing switched on first."""
 
     def html(note: str) -> str:
         rows = "".join(
@@ -160,23 +61,10 @@ def test_the_differ_emits_keyed_ops_only_when_enabled():
         )
         return f'<div dj-virtual="items" dj-virtual-item-height="32">{rows}</div>'
 
-    before, after = html(""), html("EDITED")
-
-    def as_text(v):
-        # diff_html is PyResult<String> (crates/djust_live/src/lib.rs), so this
-        # is always the str branch. Kept as a guard rather than asserting the
-        # type, but the earlier comment claiming it 'may hand back a parsed
-        # structure' was false — and a blind json.dumps double-encoded the
-        # string, which is what made the first version of this test miss.
-        return v if isinstance(v, str) else json.dumps(v)
-
-    _rust.set_virtual_keyed_ops(False)
-    off = as_text(_rust.diff_html(before, after))
-    assert "VirtualUpdate" not in off, "keyed ops must not be emitted while OFF"
-
-    _rust.set_virtual_keyed_ops(True)
-    on = as_text(_rust.diff_html(before, after))
-    assert "VirtualUpdate" in on, "keyed ops must be emitted while ON"
+    patches = _rust.diff_html(html(""), html("EDITED"))
+    # diff_html is PyResult<String> (crates/djust_live/src/lib.rs).
+    on = patches if isinstance(patches, str) else json.dumps(patches)
+    assert "VirtualUpdate" in on, "keyed ops must be emitted for [dj-virtual]"
     assert '"key": "k0"' in on or '"key":"k0"' in on, (
         "the op must carry the KEY — addressing by index is the bug it exists "
         "to fix, since index 7 means the 8th item to the differ and the 8th "

@@ -6113,12 +6113,6 @@ mod float_sink_set {
 
         let found = stringifying_arms(&files);
         let expected: Vec<(String, String)> = [
-            // `Display`'s legacy_display arm: the frozen pre-#2203 rendering,
-            // reached only when `django_value_repr()` is OFF. Rust's `{}` is
-            // the WRONG spelling and is the point — the flag exists to restore
-            // the old bytes. The one RUST_DISPLAY entry this set allows; a
-            // second one is the #2258/#2270 defect.
-            ("djust_core/src/lib.rs", "RUST_DISPLAY"),
             // `py_str` (#2324), `py_repr` (#2258) and `Display`'s live arm —
             // the three places a `Value::Float` becomes text in djust_core.
             ("djust_core/src/lib.rs", "python_float_repr"),

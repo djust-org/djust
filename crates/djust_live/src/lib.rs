@@ -295,14 +295,6 @@ pub struct RustLiveViewBackend {
     /// Transient: not part of `SerializableViewState` (rebuilt across
     /// serialize/deserialize, like `node_html_cache`).
     loop_render_cache: LoopRenderCache,
-    /// Django-parity auto-call of callables in the sidecar getattr walk
-    /// (ADR-024). Default ON; wired from
-    /// `LIVEVIEW_CONFIG['template_auto_call']` via `set_template_auto_call`
-    /// (mirrors the #1967 loop-cache flag plumbing). Stamped onto the
-    /// `Context` at every render that attaches `raw_py_values`. Transient:
-    /// not part of `SerializableViewState` — Python re-wires it on each
-    /// view (re)initialization.
-    template_auto_call: bool,
     /// Per-instance namespace stamped into this view's `<!--dj-if id=...-->`
     /// marker ids (#2686). Empty by default, so a plain LiveView's ids are
     /// byte-identical to before. Set by the Python `LiveComponent`
@@ -311,7 +303,7 @@ pub struct RustLiveViewBackend {
     /// namespace two instances both emit `if-<hash>-0` and the client, which
     /// resolves subtree patches by first match, patches the wrong instance.
     /// The `{% for %}` axis of the same problem is `Context::dj_if_loop_path`
-    /// (#1832). Transient, like `template_auto_call`.
+    /// (#1832). Transient, like `loop_render_cache`.
     dj_if_id_namespace: String,
     /// The render environment as per-view config (ADR-029, #2741): the
     /// timezone, number formats and ADR-027 flag Python pushed for this
@@ -321,7 +313,7 @@ pub struct RustLiveViewBackend {
     /// `ViewActor`'s tokio worker) reads the configured values, not the
     /// compiled defaults. `None` (never captured) leaves the cells alone,
     /// which is the pre-ADR-029 behaviour. Transient, like
-    /// `template_auto_call`.
+    /// `loop_render_cache`.
     render_env: Option<RenderEnv>,
 }
 
@@ -368,9 +360,6 @@ impl RustLiveViewBackend {
             // Default-OFF (#1967 / split-foundation #1122); flipped by
             // set_loop_render_cache_enabled from the Python config flag.
             loop_render_cache: LoopRenderCache::new(false),
-            // Default-ON (ADR-024, Django parity); the Python config
-            // kill-switch flips it via set_template_auto_call.
-            template_auto_call: true,
             // Empty = no namespace segment in marker ids (#2686). Only the
             // LiveComponent template_name entry sets one.
             dj_if_id_namespace: String::new(),
@@ -414,20 +403,6 @@ impl RustLiveViewBackend {
         self.loop_render_cache.is_enabled()
     }
 
-    /// Enable or disable Django-parity template auto-call (ADR-024).
-    ///
-    /// Wired from the Python `LIVEVIEW_CONFIG['template_auto_call']` flag
-    /// (default True — kill-switch only). When disabled, the sidecar
-    /// getattr walk never invokes callables, restoring pre-ADR behavior.
-    fn set_template_auto_call(&mut self, enabled: bool) {
-        self.template_auto_call = enabled;
-    }
-
-    /// Whether template auto-call is currently enabled (introspection).
-    fn template_auto_call_enabled(&self) -> bool {
-        self.template_auto_call
-    }
-
     /// Snapshot the CALLING thread's render environment onto this view
     /// (ADR-029, #2741).
     ///
@@ -435,8 +410,7 @@ impl RustLiveViewBackend {
     /// `djust.render_env.apply_render_env` has pushed the cells, so the
     /// snapshot is what that push made THIS thread read. Every render entry
     /// then installs it — on whatever thread the render runs — under a guard
-    /// that restores the previous values afterwards. The per-view twin of
-    /// `set_template_auto_call`, for the same reason: a field on the backend
+    /// that restores the previous values afterwards. A field on the backend
     /// reaches every entry on every thread; a thread-local reaches only the
     /// thread that pushed it.
     fn capture_render_env(&mut self) {
@@ -780,8 +754,8 @@ impl RustLiveViewBackend {
 
             // ADR-029: install this view's render environment into the
             // thread-local cells for the duration of this render, restoring
-            // the previous values on drop — applied beside `set_auto_call`
-            // at ALL THREE render entries so the paths cannot drift (#1646).
+            // the previous values on drop — applied at ALL THREE render
+            // entries so the paths cannot drift (#1646).
             let _render_env = self.render_env.as_ref().map(RenderEnvGuard::install);
 
             let _bridge_memo = djust_core::context::BridgeFrameCacheGuard;
@@ -802,9 +776,6 @@ impl RustLiveViewBackend {
                         .collect()
                 });
                 context.set_raw_py_objects(cloned);
-                // ADR-024: stamp the auto-call kill-switch onto this render's
-                // context (only meaningful when a sidecar is attached).
-                context.set_auto_call(self.template_auto_call);
             }
 
             // Use template loader for {% include %} support
@@ -860,8 +831,8 @@ impl RustLiveViewBackend {
 
             // ADR-029: install this view's render environment into the
             // thread-local cells for the duration of this render, restoring
-            // the previous values on drop — applied beside `set_auto_call`
-            // at ALL THREE render entries so the paths cannot drift (#1646).
+            // the previous values on drop — applied at ALL THREE render
+            // entries so the paths cannot drift (#1646).
             let _render_env = self.render_env.as_ref().map(RenderEnvGuard::install);
 
             let _bridge_memo = djust_core::context::BridgeFrameCacheGuard;
@@ -882,9 +853,6 @@ impl RustLiveViewBackend {
                         .collect()
                 });
                 context.set_raw_py_objects(cloned);
-                // ADR-024: stamp the auto-call kill-switch onto this render's
-                // context (only meaningful when a sidecar is attached).
-                context.set_auto_call(self.template_auto_call);
             }
 
             // Phase 1: Template render (partial if cache available)
@@ -1374,15 +1342,12 @@ impl RustLiveViewBackend {
             // Transient cache — not deserialized; rebuilt fresh, default-OFF
             // until the Python flag re-enables it post-restore (#1967).
             loop_render_cache: LoopRenderCache::new(false),
-            // Transient (ADR-024): default-ON; the Python flag re-wires it
-            // on view (re)initialization post-restore, like the loop cache.
-            template_auto_call: true,
             // Transient (#2686): empty post-restore. The component render
             // entry re-sets it on every render, and a restored view that is
             // not a component namespaces nothing — same as before this field.
             dj_if_id_namespace: String::new(),
             // Transient (ADR-029): `_apply_render_env` re-captures it on the
-            // next framework render post-restore, like `template_auto_call`.
+            // next framework render post-restore.
             render_env: None,
         })
     }
@@ -1430,8 +1395,8 @@ impl RustLiveViewBackend {
 
             // ADR-029: install this view's render environment into the
             // thread-local cells for the duration of this render, restoring
-            // the previous values on drop — applied beside `set_auto_call`
-            // at ALL THREE render entries so the paths cannot drift (#1646).
+            // the previous values on drop — applied at ALL THREE render
+            // entries so the paths cannot drift (#1646).
             let _render_env = self.render_env.as_ref().map(RenderEnvGuard::install);
 
             let _bridge_memo = djust_core::context::BridgeFrameCacheGuard;
@@ -1452,9 +1417,6 @@ impl RustLiveViewBackend {
                         .collect()
                 });
                 context.set_raw_py_objects(cloned);
-                // ADR-024: stamp the auto-call kill-switch onto this render's
-                // context (only meaningful when a sidecar is attached).
-                context.set_auto_call(self.template_auto_call);
             }
 
             // Phase 1: Template render (partial if cache available)
@@ -1957,11 +1919,6 @@ impl RustLiveViewBackend {
         self.render_env.as_ref()
     }
 
-    /// The ADR-024 auto-call flag (Rust API), for the same hand-down.
-    pub fn template_auto_call_rust(&self) -> bool {
-        self.template_auto_call
-    }
-
     /// Full-context truth for pure-Rust callers (#2592, the actor twin of
     /// #2564): drop every state key absent from `keys`, returning the removed
     /// keys.
@@ -2270,48 +2227,6 @@ fn render_markdown_py(
         };
         Ok(py.detach(|| djust_templates::markdown::render_markdown(&src, opts)))
     })
-}
-
-/// Fast template rendering
-/// Enable or disable the `[dj-virtual]` keyed splice ops in the VDOM differ
-/// (ADR-026, #2017 items 2-4).
-///
-/// This is a PROCESS-GLOBAL switch (`djust_vdom::diff::VIRTUAL_KEYED_OPS`), not
-/// per-view state, which is why it is a module function rather than a
-/// `RustLiveView` method like `set_loop_render_cache_enabled`. Applying a
-/// process global from a per-view hook would be last-view-wins.
-///
-/// Django wires it once at startup from `LIVEVIEW_CONFIG['virtual_keyed_ops']`
-/// (see `DjustConfig.ready`). The Rust default stays OFF so a non-Django
-/// embedder of this crate is never silently changed; the Python config default
-/// is what carries iteration 3's flip.
-#[pyfunction]
-fn set_virtual_keyed_ops(enabled: bool) {
-    djust_vdom::diff::set_virtual_keyed_ops(enabled);
-}
-
-/// Read the current `[dj-virtual]` keyed-splice-ops setting.
-///
-/// Exposed so the Python side can ASSERT the wiring took effect rather than
-/// assume it — a setter with no getter cannot be tested end to end.
-#[pyfunction]
-fn virtual_keyed_ops_enabled() -> bool {
-    djust_vdom::diff::virtual_keyed_ops_enabled()
-}
-
-/// Django-parity value rendering (#2203).
-///
-/// A process global for the same reason as `set_virtual_keyed_ops` above:
-/// `impl Display for Value` has nowhere to thread per-render config through.
-///
-/// Django wires it once at startup from
-/// `LIVEVIEW_CONFIG['django_value_repr']` (see `DjustConfig.ready`). Unlike
-/// `virtual_keyed_ops`, the RUST default is ON — an embedder of this crate
-/// with no Django settings should get the correct rendering, and the legacy
-/// output is the opt-out rather than the baseline.
-#[pyfunction]
-fn set_django_value_repr(enabled: bool) {
-    djust_core::set_django_value_repr(enabled);
 }
 
 /// Drop the ADR-027 handle on this value and on every value nested inside it
@@ -6208,14 +6123,11 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // How many block quotes / lists / list items the Markdown renderer keeps
     // open at once, exported so the tests read the real constant.
     m.add("MAX_MD_NESTING", djust_templates::markdown::MAX_MD_NESTING)?;
-    m.add_function(wrap_pyfunction!(set_virtual_keyed_ops, m)?)?;
-    m.add_function(wrap_pyfunction!(set_django_value_repr, m)?)?;
     m.add_function(wrap_pyfunction!(set_active_timezone, m)?)?;
     m.add_function(wrap_pyfunction!(active_timezone_name, m)?)?;
     m.add_function(wrap_pyfunction!(set_number_format, m)?)?;
     m.add_function(wrap_pyfunction!(active_number_format, m)?)?;
     m.add_function(wrap_pyfunction!(active_unlocalized_number_format, m)?)?;
-    m.add_function(wrap_pyfunction!(virtual_keyed_ops_enabled, m)?)?;
     m.add_function(wrap_pyfunction!(dj_model_fields_from_template, m)?)?;
 
     // Actor system exports

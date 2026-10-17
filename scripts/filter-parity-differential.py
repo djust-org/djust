@@ -3608,12 +3608,7 @@ ENTRY_POINTS_NOT_SWEPT = {
         "English format; a localized sweep is a second corpus, not a spelling"
     ),
     "set_active_timezone": "the timezone channel (#2227); same reason as set_number_format",
-    "set_django_value_repr": (
-        "the #2203 value-repr flag. Cells render under the shipped default; both "
-        "settings would double the corpus for one boolean"
-    ),
     "set_registry_namespace": "internal engine selection; covered by test_backend_registry_isolation_2709.py, not a filter semantic flag",
-    "set_virtual_keyed_ops": "a VDOM keyed-ops flag; nothing to do with template rendering",
     "register_library_loader": (
         "the `{% load %}` hook (#2547). A parse-time registry action rather than a "
         "render crossing: the `@i18n` cells go THROUGH the loader the framework "

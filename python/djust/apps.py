@@ -105,25 +105,6 @@ class DjustConfig(AppConfig):
         # auto-enable path itself patch that helper; see ``_no_pytest_env()``
         # in ``python/djust/tests/test_auto_hot_reload.py``.)
 
-        # Keyed [dj-virtual] VDOM ops (ADR-026) and Django-parity value repr
-        # (#2203) are process-global Rust AtomicBools. 2.0 removed their
-        # LIVEVIEW_CONFIG kill switches and hard-wires both on here: the
-        # differ's compiled default for virtual_keyed_ops is still OFF.
-        #
-        # Unconditional (not gated on PYTEST_CURRENT_TEST): the flags must hold
-        # the same value in tests as in production.
-        try:
-            from djust import _rust
-
-            if hasattr(_rust, "set_django_value_repr"):
-                _rust.set_django_value_repr(True)
-            if hasattr(_rust, "set_virtual_keyed_ops"):
-                _rust.set_virtual_keyed_ops(True)
-        except Exception:  # noqa: BLE001 - never let a flag break startup
-            logging.getLogger("djust").exception(
-                "[djust] applying virtual_keyed_ops to the Rust differ failed"
-            )
-
         if _running_under_pytest():
             _log_pytest_skip()
         else:
