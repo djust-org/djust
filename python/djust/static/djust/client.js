@@ -904,16 +904,18 @@ async function handleServerResponse(data, eventName, triggerElement, transport =
 })();
 
 // ============================================================================
-// Shared inbound frame handling (WebSocket + SSE)
+// Code shared by the socket transports (WebSocket + SSE)
 // ============================================================================
 //
-// The two socket transports receive the same wire frames. What they handle the
-// same way lives here, once, so a fix reaches both (#1646): the receipt-time
-// routing every frame passes through, the application of a frame addressed to
-// a view mounted beside the page view (#3252), and the side-channel frames.
-// Each transport keeps only what is specific to its wire: connection and
-// session frames, mount, event replies (the WebSocket buffers server-initiated
-// patches, #560) and errors.
+// The two socket transports speak the same wire frames. What they do the same
+// way lives here, once, so a fix reaches both (#1646). Inbound: the
+// receipt-time routing every frame passes through, the application of a frame
+// addressed to a view mounted beside the page view (#3252), and the
+// side-channel frames. Outbound: the mount and event frames, and the views
+// mounted beside the page view. Each transport keeps only what is specific to
+// its wire: connecting, sending, connection and session frames, mount replies,
+// event replies (the WebSocket buffers server-initiated patches, #560) and
+// errors.
 
 /**
  * Receipt-time routing shared by the socket transports. Returns true when the
@@ -1074,6 +1076,93 @@ async function dispatchCommonFrame(transport, data, logPrefix) {
         default:
             return false;
     }
+}
+
+// ----------------------------------------------------------------------------
+// Outbound
+// ----------------------------------------------------------------------------
+
+/** The browser's IANA timezone, or null when it cannot be read. */
+function detectClientTimezone(onError) {
+    try {
+        return Intl.DateTimeFormat().resolvedOptions().timeZone;
+    } catch (e) {
+        if (onError) onError(e);
+        return null;
+    }
+}
+
+/**
+ * A ``mount`` frame. ``url`` lets the server resolve URL kwargs (pk, slug, ...)
+ * from the page URL (#1237); ``targetId`` names the container of a view mounted
+ * beside the page view (#3252).
+ */
+function buildMountFrame(viewPath, params, hasPrerendered, clientTimezone, targetId = null) {
+    const frame = {
+        type: 'mount',
+        view: viewPath,
+        params: params,
+        url: window.location.pathname,
+        has_prerendered: hasPrerendered,
+        client_timezone: clientTimezone,
+    };
+    if (targetId) frame.target_id = targetId;
+    return frame;
+}
+
+/**
+ * Send an event and return the promise its reply settles (#1315). The request
+ * is registered before the send, so even an immediate reply finds it, and a
+ * send that fails releases it.
+ */
+function sendEventRequest(transport, eventName, params, triggerElement, slotId) {
+    const request = registerEventRequest(transport, eventName, triggerElement);
+    try {
+        if (transport.sendMessage({
+            type: 'event',
+            event: eventName,
+            params: params,
+            ref: request.ref,
+            // An event from inside a view mounted beside the page view runs on
+            // that view (#3252); the page view's carries no address.
+            ...slotFrameFields(slotId || slotIdFor(triggerElement))
+        }) === false) {
+            cancelEventRequests(transport, request.ref);
+        }
+    } catch (error) {
+        cancelEventRequests(transport, request.ref);
+        throw error;
+    }
+    return request.promise;
+}
+
+/**
+ * Mount again every view hydrated beside the page view on a new connection
+ * (a reconnect): the server holds no view for a connection that closed.
+ */
+function remountSlotViews(transport) {
+    const urlParams = Object.fromEntries(new URLSearchParams(window.location.search));
+    for (const [targetId, slot] of Array.from(_mountedSlots.entries())) {
+        if (!slotContainer(targetId)) {
+            forgetSlot(targetId);
+            continue;
+        }
+        _slotVersions.set(targetId, null);
+        transport.mount(slot.viewPath, urlParams, { targetId: targetId, hasPrerendered: true });
+    }
+}
+
+/**
+ * Tell the server a view hydrated beside the page view is gone (its container
+ * was removed). The page view and the other views stay live. ``canSend``: the
+ * transport can send now; the slot is forgotten either way.
+ */
+function unmountSlotView(transport, targetId, canSend) {
+    if (!_mountedSlots.has(targetId)) return false;
+    forgetSlot(targetId);
+    if (!canSend()) return false;
+    transport.sendMessage({ type: 'unmount', target_id: targetId });
+    return true;
 }
 
 // ============================================================================
@@ -2531,25 +2620,16 @@ class LiveViewWebSocket {
 
         if (globalThis.djustDebug) console.log('[LiveView] Mounting view:', viewPath);
         // Detect browser timezone for server-side local time rendering
-        let clientTimezone = null;
-        try {
-            clientTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-        } catch (e) {
-            console.warn('[LiveView] Could not detect browser timezone:', e);
-        }
+        const clientTimezone = detectClientTimezone(
+            e => console.warn('[LiveView] Could not detect browser timezone:', e));
 
-        const frame = {
-            type: 'mount',
-            view: viewPath,
-            params: params,
-            url: window.location.pathname,
-            has_prerendered: options.hasPrerendered ?? (this.skipMountHtml || false),  // Tell server we have pre-rendered content
-            client_timezone: clientTimezone  // IANA timezone string (e.g. "America/New_York")
-        };
         // A view mounted beside the page view (lazy hydration, #3252) names the
         // container it fills: the server adds it to the socket instead of
         // replacing the page view, and addresses its frames with this id.
-        if (options.targetId) frame.target_id = options.targetId;
+        const frame = buildMountFrame(viewPath, params,
+            // Tell the server we have pre-rendered content
+            options.hasPrerendered ?? (this.skipMountHtml || false),
+            clientTimezone, options.targetId);
         // #2966: a reconnecting page view asks whether its tracked assets
         // are stale (dj-track-static). Shared with the SSE mount (#1646).
         const trackStatic = globalThis.djust.djTrackStatic;
@@ -2610,16 +2690,7 @@ class LiveViewWebSocket {
      * (reconnect): the server holds no view for a connection that closed.
      */
     remountSlots() {
-        const urlParams = Object.fromEntries(new URLSearchParams(window.location.search));
-        for (const [targetId, slot] of Array.from(_mountedSlots.entries())) {
-            const container = slotContainer(targetId);
-            if (!container) {
-                forgetSlot(targetId);
-                continue;
-            }
-            _slotVersions.set(targetId, null);
-            this.mount(slot.viewPath, urlParams, { targetId: targetId, hasPrerendered: true });
-        }
+        remountSlotViews(this);
     }
 
     /**
@@ -2627,11 +2698,8 @@ class LiveViewWebSocket {
      * container was removed). The page view and the other views stay live.
      */
     unmountView(targetId) {
-        if (!_mountedSlots.has(targetId)) return false;
-        forgetSlot(targetId);
-        if (!this.enabled || !this.ws || this.ws.readyState !== WebSocket.OPEN) return false;
-        this.sendMessage({ type: 'unmount', target_id: targetId });
-        return true;
+        return unmountSlotView(this, targetId,
+            () => this.enabled && this.ws && this.ws.readyState === WebSocket.OPEN);
     }
 
     autoMount() {
@@ -2676,22 +2744,7 @@ class LiveViewWebSocket {
             return false;
         }
 
-        const request = registerEventRequest(this, eventName, triggerElement);
-        try {
-            this.sendMessage({
-                type: 'event',
-                event: eventName,
-                params: params,
-                ref: request.ref,
-                // An event from inside a view mounted beside the page view
-                // runs on that view (#3252).
-                ...slotFrameFields(slotId || slotIdFor(triggerElement))
-            });
-        } catch (error) {
-            cancelEventRequests(this, request.ref);
-            throw error;
-        }
-        return request.promise;
+        return sendEventRequest(this, eventName, params, triggerElement, slotId);
     }
 
     // Removed duplicate applyPatches and patch helper methods
@@ -3302,21 +3355,7 @@ class LiveViewSSE {
             return false;
         }
 
-        const request = registerEventRequest(this, eventName, triggerElement);
-        try {
-            // An event from inside a view mounted beside the page view runs on
-            // that view (#3252); the page view's carries no address.
-            if (!this.sendMessage({
-                type: 'event', event: eventName, params, ref: request.ref,
-                ...slotFrameFields(slotId || slotIdFor(triggerElement)),
-            })) {
-                cancelEventRequests(this, request.ref);
-            }
-        } catch (error) {
-            cancelEventRequests(this, request.ref);
-            throw error;
-        }
-        return request.promise;
+        return sendEventRequest(this, eventName, params, triggerElement, slotId);
     }
 
     /** A frame addressed to a view mounted beside the page view (#3252); see handleSlotFrame. */
@@ -3336,17 +3375,8 @@ class LiveViewSSE {
      */
     mount(viewPath, params = {}, options = {}) {
         if (!this.enabled || !this.viewMounted || !options.targetId) return false;
-        let clientTimezone = null;
-        try { clientTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone; } catch { /* noop */ }
-        return this.sendMessage({
-            type: 'mount',
-            view: viewPath,
-            params,
-            url: window.location.pathname,
-            has_prerendered: options.hasPrerendered ?? false,
-            client_timezone: clientTimezone,
-            target_id: options.targetId,
-        });
+        return this.sendMessage(buildMountFrame(viewPath, params,
+            options.hasPrerendered ?? false, detectClientTimezone(), options.targetId));
     }
 
     /**
@@ -3356,15 +3386,7 @@ class LiveViewSSE {
      */
     remountSlots() {
         if (!this.enabled || !this.viewMounted) return;
-        const urlParams = Object.fromEntries(new URLSearchParams(window.location.search));
-        for (const [targetId, slot] of Array.from(_mountedSlots.entries())) {
-            if (!slotContainer(targetId)) {
-                forgetSlot(targetId);
-                continue;
-            }
-            _slotVersions.set(targetId, null);
-            this.mount(slot.viewPath, urlParams, { targetId: targetId, hasPrerendered: true });
-        }
+        remountSlotViews(this);
     }
 
     /**
@@ -3372,10 +3394,7 @@ class LiveViewSSE {
      * container was removed). The page view and the other views stay live.
      */
     unmountView(targetId) {
-        if (!_mountedSlots.has(targetId)) return false;
-        forgetSlot(targetId);
-        if (!this.enabled || !this.viewMounted) return false;
-        return this.sendMessage({ type: 'unmount', target_id: targetId });
+        return unmountSlotView(this, targetId, () => this.enabled && this.viewMounted);
     }
 
     sendTeardownEvent(eventName, params, _triggerElement) {
@@ -3449,17 +3468,8 @@ class LiveViewSSE {
      * where SSE-mounted views with path params received empty kwargs.
      */
     _sendMountFrame(viewPath, params = {}) {
-        let tz = null;
-        try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone; } catch { /* noop */ }
         // dj-track-static URLs ride the stream GET, not this frame (#2966).
-        return this.sendMessage({
-            type: 'mount',
-            view: viewPath,
-            params,
-            url: window.location.pathname,
-            has_prerendered: false,
-            client_timezone: tz,
-        });
+        return this.sendMessage(buildMountFrame(viewPath, params, false, detectClientTimezone()));
     }
 
     /**

@@ -1454,25 +1454,16 @@ class LiveViewWebSocket {
 
         if (globalThis.djustDebug) console.log('[LiveView] Mounting view:', viewPath);
         // Detect browser timezone for server-side local time rendering
-        let clientTimezone = null;
-        try {
-            clientTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-        } catch (e) {
-            console.warn('[LiveView] Could not detect browser timezone:', e);
-        }
+        const clientTimezone = detectClientTimezone(
+            e => console.warn('[LiveView] Could not detect browser timezone:', e));
 
-        const frame = {
-            type: 'mount',
-            view: viewPath,
-            params: params,
-            url: window.location.pathname,
-            has_prerendered: options.hasPrerendered ?? (this.skipMountHtml || false),  // Tell server we have pre-rendered content
-            client_timezone: clientTimezone  // IANA timezone string (e.g. "America/New_York")
-        };
         // A view mounted beside the page view (lazy hydration, #3252) names the
         // container it fills: the server adds it to the socket instead of
         // replacing the page view, and addresses its frames with this id.
-        if (options.targetId) frame.target_id = options.targetId;
+        const frame = buildMountFrame(viewPath, params,
+            // Tell the server we have pre-rendered content
+            options.hasPrerendered ?? (this.skipMountHtml || false),
+            clientTimezone, options.targetId);
         // #2966: a reconnecting page view asks whether its tracked assets
         // are stale (dj-track-static). Shared with the SSE mount (#1646).
         const trackStatic = globalThis.djust.djTrackStatic;
@@ -1533,16 +1524,7 @@ class LiveViewWebSocket {
      * (reconnect): the server holds no view for a connection that closed.
      */
     remountSlots() {
-        const urlParams = Object.fromEntries(new URLSearchParams(window.location.search));
-        for (const [targetId, slot] of Array.from(_mountedSlots.entries())) {
-            const container = slotContainer(targetId);
-            if (!container) {
-                forgetSlot(targetId);
-                continue;
-            }
-            _slotVersions.set(targetId, null);
-            this.mount(slot.viewPath, urlParams, { targetId: targetId, hasPrerendered: true });
-        }
+        remountSlotViews(this);
     }
 
     /**
@@ -1550,11 +1532,8 @@ class LiveViewWebSocket {
      * container was removed). The page view and the other views stay live.
      */
     unmountView(targetId) {
-        if (!_mountedSlots.has(targetId)) return false;
-        forgetSlot(targetId);
-        if (!this.enabled || !this.ws || this.ws.readyState !== WebSocket.OPEN) return false;
-        this.sendMessage({ type: 'unmount', target_id: targetId });
-        return true;
+        return unmountSlotView(this, targetId,
+            () => this.enabled && this.ws && this.ws.readyState === WebSocket.OPEN);
     }
 
     autoMount() {
@@ -1599,22 +1578,7 @@ class LiveViewWebSocket {
             return false;
         }
 
-        const request = registerEventRequest(this, eventName, triggerElement);
-        try {
-            this.sendMessage({
-                type: 'event',
-                event: eventName,
-                params: params,
-                ref: request.ref,
-                // An event from inside a view mounted beside the page view
-                // runs on that view (#3252).
-                ...slotFrameFields(slotId || slotIdFor(triggerElement))
-            });
-        } catch (error) {
-            cancelEventRequests(this, request.ref);
-            throw error;
-        }
-        return request.promise;
+        return sendEventRequest(this, eventName, params, triggerElement, slotId);
     }
 
     // Removed duplicate applyPatches and patch helper methods

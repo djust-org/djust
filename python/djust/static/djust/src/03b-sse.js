@@ -434,21 +434,7 @@ class LiveViewSSE {
             return false;
         }
 
-        const request = registerEventRequest(this, eventName, triggerElement);
-        try {
-            // An event from inside a view mounted beside the page view runs on
-            // that view (#3252); the page view's carries no address.
-            if (!this.sendMessage({
-                type: 'event', event: eventName, params, ref: request.ref,
-                ...slotFrameFields(slotId || slotIdFor(triggerElement)),
-            })) {
-                cancelEventRequests(this, request.ref);
-            }
-        } catch (error) {
-            cancelEventRequests(this, request.ref);
-            throw error;
-        }
-        return request.promise;
+        return sendEventRequest(this, eventName, params, triggerElement, slotId);
     }
 
     /** A frame addressed to a view mounted beside the page view (#3252); see handleSlotFrame. */
@@ -468,17 +454,8 @@ class LiveViewSSE {
      */
     mount(viewPath, params = {}, options = {}) {
         if (!this.enabled || !this.viewMounted || !options.targetId) return false;
-        let clientTimezone = null;
-        try { clientTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone; } catch { /* noop */ }
-        return this.sendMessage({
-            type: 'mount',
-            view: viewPath,
-            params,
-            url: window.location.pathname,
-            has_prerendered: options.hasPrerendered ?? false,
-            client_timezone: clientTimezone,
-            target_id: options.targetId,
-        });
+        return this.sendMessage(buildMountFrame(viewPath, params,
+            options.hasPrerendered ?? false, detectClientTimezone(), options.targetId));
     }
 
     /**
@@ -488,15 +465,7 @@ class LiveViewSSE {
      */
     remountSlots() {
         if (!this.enabled || !this.viewMounted) return;
-        const urlParams = Object.fromEntries(new URLSearchParams(window.location.search));
-        for (const [targetId, slot] of Array.from(_mountedSlots.entries())) {
-            if (!slotContainer(targetId)) {
-                forgetSlot(targetId);
-                continue;
-            }
-            _slotVersions.set(targetId, null);
-            this.mount(slot.viewPath, urlParams, { targetId: targetId, hasPrerendered: true });
-        }
+        remountSlotViews(this);
     }
 
     /**
@@ -504,10 +473,7 @@ class LiveViewSSE {
      * container was removed). The page view and the other views stay live.
      */
     unmountView(targetId) {
-        if (!_mountedSlots.has(targetId)) return false;
-        forgetSlot(targetId);
-        if (!this.enabled || !this.viewMounted) return false;
-        return this.sendMessage({ type: 'unmount', target_id: targetId });
+        return unmountSlotView(this, targetId, () => this.enabled && this.viewMounted);
     }
 
     sendTeardownEvent(eventName, params, _triggerElement) {
@@ -581,17 +547,8 @@ class LiveViewSSE {
      * where SSE-mounted views with path params received empty kwargs.
      */
     _sendMountFrame(viewPath, params = {}) {
-        let tz = null;
-        try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone; } catch { /* noop */ }
         // dj-track-static URLs ride the stream GET, not this frame (#2966).
-        return this.sendMessage({
-            type: 'mount',
-            view: viewPath,
-            params,
-            url: window.location.pathname,
-            has_prerendered: false,
-            client_timezone: tz,
-        });
+        return this.sendMessage(buildMountFrame(viewPath, params, false, detectClientTimezone()));
     }
 
     /**
