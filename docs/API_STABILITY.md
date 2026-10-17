@@ -209,33 +209,8 @@ This is the core stability promise:
 
 ## Currently Deprecated Symbols
 
-One access pattern deprecated during the `1.x` series carries the standard floor
-of **`2.0.0`**.
-
-| Symbol | Deprecated since | Removed no earlier than | Replacement |
-| --- | --- | --- | --- |
-| Dict-style reads of `block` in a Python-bridged tag (`block["super"]`, `block.get("super")`, `block.values()`, `block.items()`, `dict(block)`) | 1.3 | **2.0.0** | `context["block"].super()` |
-
-### Dict-style `block.super` reads in a bridged tag → `block.super()`
-
-Before `{{ block.super }}` became lazy, a Python-bridged tag received `block` as a
-`dict` (`{"super": "<rendered parent>"}`). It now receives a lazy object with Django's
-own `BlockNode` shape, whose `super()` method renders the parent when it is read.
-The dict-style reads keep working as a deprecated compatibility path: each emits a
-`DeprecationWarning` pointing at the tag's own line, renders the parent once per
-read (no memoization), and lets the parent's own exception propagate. They are
-deprecated since 1.3 and removed no earlier than 2.0.0. Django's own resolution
-(`Variable("block.super")`, `{% blocktranslate with s=block.super %}`) is not
-affected and never warns. Under `-W error::DeprecationWarning` the legacy read raises
-the warning at the tag, before the parent runs.
-
-```python
-# Before
-parent_html = context["block"]["super"]
-
-# After
-parent_html = context["block"].super()
-```
+None. The one access pattern deprecated during the `1.x` series (dict-style
+`block.super` reads in a bridged tag) was removed in `2.0.0`; see below.
 
 ---
 
@@ -243,7 +218,8 @@ parent_html = context["block"].super()
 
 The three symbols that carried the 0.x carve-out floor were removed in
 djust `2.0.0`. Importing them now raises `ImportError` (or `AttributeError` for
-`djust.event` / `djust.LiveViewForm`).
+`djust.event` / `djust.LiveViewForm`). The dict-style `block.super` reads,
+deprecated in 1.3, were removed too.
 
 ### `@event` → `@event_handler`
 
@@ -307,6 +283,29 @@ theme = get_theme("dark")
 from djust.theming.theme_packs import get_design_system
 
 theme = get_design_system("dark")
+```
+
+### Dict-style `block.super` reads in a bridged tag → `block.super()`
+
+Before `{{ block.super }}` became lazy, a Python-bridged tag received `block` as a
+`dict` (`{"super": "<rendered parent>"}`). It now receives a lazy object with Django's
+own `BlockNode` shape, whose `super()` method renders the parent when it is read.
+The dict-style reads were deprecated in 1.3 and removed in 2.0.0:
+
+- `block["super"]` raises `TypeError` (not subscriptable), with a message naming
+  `block.super()`, and `dict(block)` raises the same error;
+- `block.get("super")`, `block.values()` and `block.items()` raise `AttributeError`.
+
+None of them renders the parent. Django's own resolution (`Variable("block.super")`,
+`{% blocktranslate with s=block.super %}`) is unaffected: it falls through the
+`TypeError` to `super()` exactly as it does for a `BlockNode`.
+
+```python
+# Before
+parent_html = context["block"]["super"]
+
+# After
+parent_html = context["block"].super()
 ```
 
 ---
