@@ -511,7 +511,7 @@ def _protect_http_entry(cls: type, view: Callable[..., Any]) -> Callable[..., An
     return protected
 
 
-class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(async) intentionally co-define stream_insert/stream_delete; see live_view.pyi overloads
+class LiveView(
     ContextProviderMixin,
     StreamsMixin,
     StreamingMixin,
