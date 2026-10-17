@@ -35,11 +35,6 @@ function initReactCounters() {
     });
 }
 
-// Stub function for todo items initialization (reserved for future use)
-function initTodoItems() {
-    // Currently no-op - todo functionality handled via LiveView events
-}
-
 // Smart default rate limiting by input type
 // Prevents VDOM version mismatches from high-frequency events.
 // Click-fired widgets (radio/checkbox/select) commit one value per user
@@ -238,11 +233,6 @@ window.djust.initReactCounters = initReactCounters;
  *   data-items:list="a,b,c"     -> { items: ["a", "b", "c"] }
  *   data-name="John"            -> { name: "John" } (default: string)
  *
- * Backward compatibility: Also reads dj-params='{"key": value}' JSON blob
- * for 0.3.2 → 0.3.6+ migration. The dj-params attribute is deprecated;
- * use individual data-* attributes instead. data-* attributes take
- * precedence over dj-params keys with the same name.
- *
  * @param {HTMLElement} element - Element to extract params from
  * @returns {Object} - Parameters with coerced types
  */
@@ -361,39 +351,8 @@ function extractTypedParams(element) {
         params[key] = value;
     }
 
-    // dj-params backward compatibility: merge JSON blob into params.
-    // data-* attributes take precedence over dj-params keys.
-    const djParamsAttr = element.getAttribute('dj-params');
-    if (djParamsAttr !== null) {
-        if (globalThis.djustDebug) {
-            console.warn(
-                '[LiveView] dj-params is deprecated and will be removed in a future release. ' +
-                'Replace with individual data-* attributes, e.g. data-todo-id:int="{{ todo.id }}". ' +
-                'See the 0.3.2 → 0.3.6 migration guide in CHANGELOG.md.'
-            );
-        }
-        if (djParamsAttr !== '') {
-            try {
-                const parsed = JSON.parse(djParamsAttr);
-                if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
-                    for (const [k, v] of Object.entries(parsed)) {
-                        // Prevent prototype pollution
-                        if (UNSAFE_KEYS.includes(k)) continue;
-                        // data-* attributes win; only fill in missing keys
-                        if (!(k in params)) {
-                            // eslint-disable-next-line security/detect-object-injection
-                            params[k] = v;
-                        }
-                    }
-                }
-            } catch {
-                if (globalThis.djustDebug) console.warn('[LiveView] Failed to parse dj-params JSON: "' + djParamsAttr + '"');
-            }
-        }
-    }
-
-    // Merge dj-value-* attributes. dj-value-* takes precedence over data-*
-    // and dj-params, matching Phoenix's phx-value-* semantics.
+    // Merge dj-value-* attributes. dj-value-* takes precedence over data-*,
+    // matching Phoenix's phx-value-* semantics.
     const djValues = collectDjValues(element);
     for (const [k, v] of Object.entries(djValues)) {
         // eslint-disable-next-line security/detect-object-injection

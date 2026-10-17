@@ -185,7 +185,6 @@ _T012_EXEMPT_ATTRIBUTES = frozenset(
         "dj-lock",
         "dj-no-recover",
         "dj-no-submit",
-        "dj-params",
         "dj-paste-suppress",
         "dj-poll-interval",
         "dj-shortcut-in-input",

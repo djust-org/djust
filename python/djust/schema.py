@@ -711,15 +711,6 @@ DIRECTIVES: List[Dict[str, Any]] = [
         "example": '<a dj-patch="?page=2" dj-patch-reload>Page 2</a>',
     },
     {
-        "name": "dj-params",
-        "category": "modifier",
-        "description": "DEPRECATED (0.3.2 -> 0.3.6+ migration): JSON blob of extra "
-        "params to send with an event. Use dj-value-* attributes instead — "
-        "data-*/dj-value-* keys take precedence over dj-params keys with the same name.",
-        "value": '\'{"key": "value"}\' JSON blob',
-        "example": '<button dj-click="save" dj-params=\'{"source": "toolbar"}\'>Save</button>',
-    },
-    {
         "name": "dj-value-*",
         "category": "modifier",
         "description": "Pass static context alongside any event directive as typed "
