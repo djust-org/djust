@@ -124,7 +124,8 @@ def test_explicit_unregister_of_known_shell_does_prune_its_state(rf):
     assert child_state_key(request.path, ("root",)) in stored
 
 
-def test_fragment_fallback_is_not_authority_to_prune_the_page_shell(rf, monkeypatch):
+def test_an_inheritance_failure_raises_instead_of_rendering_a_fragment(rf, monkeypatch):
+    """2.0: there is no fragment-only fallback left to prune from."""
     from djust import _rust
 
     _, original = mounted(rf)
@@ -137,12 +138,8 @@ def test_fragment_fallback_is_not_authority_to_prune_the_page_shell(rf, monkeypa
     page = Page()
     page.request = request
     page.show_root = False
-    page.get_template()
-    page.render_full_template(request)
-    assert page._explicit_child_render_scope == "root"
-    save_child_states(page, request)
-    stored = SessionStore(request.session.session_key).load()
-    assert child_state_key(request.path, ("shell",)) in stored
+    with pytest.raises(RuntimeError, match="could not resolve template inheritance"):
+        page.get_template()
 
 
 def test_failed_full_render_does_not_commit_nested_prune_plans(rf, monkeypatch):
