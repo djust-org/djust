@@ -402,14 +402,6 @@ class PostProcessingMixin:
         from django.conf import settings
 
         use_websocket = config.get("use_websocket", True)
-        debug_vdom = config.get("debug_vdom", False)
-        ws_compression = config.get("websocket_compression", True)
-        loading_grouping_classes = config.get(
-            "loading_grouping_classes",
-            ["d-flex", "btn-group", "input-group", "form-group", "btn-toolbar"],
-        )
-
-        loading_classes_js = json.dumps(loading_grouping_classes)
 
         debug_info_script = ""
         debug_css_link = ""
@@ -434,9 +426,6 @@ class PostProcessingMixin:
         <script data-turbo-track="reload">
             // djust configuration
             window.DJUST_USE_WEBSOCKET = {str(use_websocket).lower()};
-            window.DJUST_DEBUG_VDOM = {str(debug_vdom).lower()};
-            window.DJUST_WS_COMPRESSION = {str(ws_compression).lower()};
-            window.DJUST_LOADING_GROUPING_CLASSES = {loading_classes_js};
             // Enable debug logging for client-dev.js (development only)
             window.djustDebug = {str(settings.DEBUG).lower()};
             window.DEBUG_MODE = {str(settings.DEBUG).lower()};
