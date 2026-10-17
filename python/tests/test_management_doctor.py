@@ -15,6 +15,7 @@ from django.core.management import call_command
 from django.test import SimpleTestCase, override_settings
 
 from djust.management.commands.djust_doctor import (
+    _DJANGO_FLOOR,
     _CheckResult,
     check_asgi_configured,
     check_asgi_server,
@@ -65,10 +66,34 @@ class TestCheckPythonVersion(SimpleTestCase):
 class TestCheckDjangoVersion(SimpleTestCase):
     def test_current_django(self):
         result = check_django_version()
-        if django.VERSION >= (4, 0):
+        if django.VERSION[:2] >= _DJANGO_FLOOR:
             self.assertEqual(result.status, _CheckResult.OK)
         else:
             self.assertEqual(result.status, _CheckResult.WARN)
+
+    @patch.object(django, "VERSION", (4, 1, 13, "final", 0))
+    def test_below_the_floor_warns(self):
+        # 4.1 passed the old ``< (4, 0)`` threshold silently (#3504).
+        result = check_django_version()
+        self.assertEqual(result.status, _CheckResult.WARN)
+        self.assertIn(">= 4.2 required", result.message)
+
+    @patch.object(django, "VERSION", (4, 2, 29, "final", 0))
+    def test_the_floor_is_ok(self):
+        result = check_django_version()
+        self.assertEqual(result.status, _CheckResult.OK)
+
+    def test_floor_matches_pyproject(self):
+        """``_DJANGO_FLOOR`` is the major.minor of the declared ``Django>=``."""
+        import re
+        import tomllib
+        from pathlib import Path
+
+        pyproject = Path(__file__).resolve().parents[2] / "pyproject.toml"
+        deps = tomllib.loads(pyproject.read_text())["project"]["dependencies"]
+        (spec,) = [d for d in deps if re.match(r"(?i)django\s*[><=]", d)]
+        major, minor = re.search(r">=\s*(\d+)\.(\d+)", spec).groups()
+        self.assertEqual(_DJANGO_FLOOR, (int(major), int(minor)))
 
 
 class TestCheckRustExtension(SimpleTestCase):

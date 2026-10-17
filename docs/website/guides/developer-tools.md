@@ -68,7 +68,7 @@ djust doctor
 |------------|----------|-----------------|
 | `djust_version` | versions | djust package is installed |
 | `python_version` | versions | Python >= 3.11 |
-| `django_version` | versions | Django >= 4.0 |
+| `django_version` | versions | Django >= 4.2 |
 | `rust_extension` | versions | Rust PyO3 extension is loadable |
 | `channels_installed` | infrastructure | Django Channels is installed |
 | `asgi_configured` | infrastructure | `ASGI_APPLICATION` is set |
