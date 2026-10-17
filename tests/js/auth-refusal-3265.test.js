@@ -40,9 +40,11 @@ function harness() {
         stripClientOwnedFrameFlags: () => {}, _recordParameterContractFrame: () => {},
         storeSignedSnapshot: () => {},
     };
-    for (const name of ['02b-safe-nav.js', '03-websocket.js']) {
+    // The transport and the frame handling it shares with SSE run in one
+    // scope, as they do in the bundle.
+    for (const names of [['02b-safe-nav.js'], ['02c-frame-dispatch.js', '03-websocket.js']]) {
         // eslint-disable-next-line no-new-func
-        new Function(...Object.keys(scope), source(name))(...Object.values(scope));
+        new Function(...Object.keys(scope), names.map(source).join('\n'))(...Object.values(scope));
     }
     const client = new window.djust.LiveViewWebSocket();
     client.onTransportFailed = vi.fn();

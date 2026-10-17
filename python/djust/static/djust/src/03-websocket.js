@@ -711,20 +711,9 @@ class LiveViewWebSocket {
         // the context of the slot it is addressed to (`_handleSlotFrame`).
         if (!inSlot) {
             if (globalThis.djustDebug) console.log('[LiveView] Received: %s %o', String(data.type), data);
-            // #3036: a live navigation to a page with a different page shell is a
-            // full page load; the destination's root is not applied.
-            if (window.djust.fallBackToFullLoadOnShellChange?.(data)) return;
-            // ADR-038 D-n: compared before anything from this mount is cached.
-            if (window.djust._sw) window.djust._sw.applyMountMetadata(data);
-            storeSignedSnapshot(data, this.primaryViewPath);
-
-            // A frame addressed to a view mounted beside the page view (#3252)
-            // is applied to that view's container, in its own context.
-            if (typeof data.target_id === 'string' && data.target_id &&
-                _SLOT_FRAME_TYPES.has(data.type)) {
-                await this._handleSlotFrame(data);
-                return;
-            }
+            // Shell-change fallback, mount metadata, signed snapshot and the
+            // views mounted beside the page view (02c-frame-dispatch.js).
+            if (await routeInboundFrame(this, data)) return;
         }
 
         switch (data.type) {
@@ -973,13 +962,6 @@ class LiveViewWebSocket {
                 }
                 break;
             }
-
-            case 'view_refused':
-                // A view beside the page view is refused (login, permission, an
-                // `on_mount` redirect): its container shows it, the page does
-                // not navigate (#3252).
-                applyViewRefusal(data);
-                break;
 
             case 'mount_batch': {
                 // Mount-batch response (v0.6.0) — carries N per-view payloads.
@@ -1235,10 +1217,6 @@ class LiveViewWebSocket {
                 }
                 break;
 
-            case 'async_complete':
-                completeAsyncBatch(this, data.async_batch);
-                break;
-
             case 'pong':
                 // Heartbeat response
                 break;
@@ -1265,13 +1243,6 @@ class LiveViewWebSocket {
                 }
                 break;
 
-            case 'stream':
-                // Streaming partial DOM updates (LLM chat, live feeds)
-                if (window.djust.handleStreamMessage) {
-                    window.djust.handleStreamMessage(data);
-                }
-                break;
-
             case 'noop': {
                 // Server acknowledged event but no DOM changes needed (auto-detected
                 // or explicit _skip_render). Clear loading state unless async pending.
@@ -1294,18 +1265,6 @@ class LiveViewWebSocket {
                 break;
             }
 
-            case 'push_event':
-                // Server-pushed event for JS hooks
-                window.dispatchEvent(new CustomEvent('djust:push_event', {
-                    detail: { event: data.event, payload: data.payload }
-                }));
-                // Dispatch to dj-hook instances that registered via handleEvent
-                dispatchPushEventToHooks(data.event, data.payload);
-                // Clear loading state — when _skip_render is used, this is the
-                // only response the client gets (no patch/html_update follows).
-                globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
-                break;
-
             case 'presence_event':
                 // broadcast_to_presence() (and LiveCursorMixin's cursor_move)
                 // fanned out to every session in the presence group (#3501).
@@ -1314,11 +1273,6 @@ class LiveViewWebSocket {
                 window.dispatchEvent(new CustomEvent('djust:presence', {
                     detail: { event: data.event, payload: data.payload }
                 }));
-                break;
-
-            case 'embedded_update':
-                // Scoped HTML update for an embedded child LiveView
-                await handleEmbeddedResponse(data, this);
                 break;
 
             case 'child_update':
@@ -1373,64 +1327,6 @@ class LiveViewWebSocket {
                     this.lastEventName = null;
                     this.lastTriggerElement = null;
                 }
-                break;
-
-            case 'navigate': {
-                // Auth redirects use the same URL policy as the SSE transport.
-                const navTarget = window.djust.safeNavigationTarget(data.to);
-                if (navTarget) {
-                    window.location.href = navTarget; // codeql[js/xss] -- validated via safeNavigationTarget
-                } else if (globalThis.djustDebug) {
-                    console.warn('[LiveView] navigate target rejected: %s', String(data.to));
-                }
-                break;
-            }
-
-            case 'navigation':
-                // Server-side live_patch or live_redirect
-                if (window.djust.navigation) {
-                    window.djust.navigation.handleNavigation(data);
-                }
-                break;
-
-            case 'accessibility':
-                // Screen reader announcements from server
-                if (window.djust.accessibility) {
-                    window.djust.accessibility.processAnnouncements(data.announcements);
-                }
-                break;
-
-            case 'focus':
-                // Focus command from server
-                if (window.djust.accessibility) {
-                    window.djust.accessibility.processFocus([data.selector, data.options]);
-                }
-                break;
-
-            case 'flash':
-                // Flash message from server (put_flash / clear_flash)
-                if (window.djust.flash) {
-                    window.djust.flash.handleFlash(data);
-                }
-                break;
-
-            case 'page_metadata':
-                // Page metadata from server (page_title / page_meta)
-                if (window.djust.pageMetadata) {
-                    window.djust.pageMetadata.handlePageMetadata(data);
-                }
-                break;
-
-            case 'layout':
-                // Runtime layout switch (v0.6.0) — set_layout() on the server.
-                if (window.djust.djLayout && typeof window.djust.djLayout.applyLayout === 'function') {
-                    window.djust.djLayout.applyLayout(data);
-                }
-                break;
-
-            case 'reload':
-                // Hot reload: file changed, refresh the page
-                window.location.reload();
                 break;
 
             case 'hvr-applied':
@@ -1506,33 +1402,16 @@ class LiveViewWebSocket {
                     }
                 }
                 break;
+
+            default:
+                // The frames both transports apply alike (02c-frame-dispatch.js).
+                await dispatchCommonFrame(this, data, '[LiveView]');
         }
     }
 
-    /**
-     * Apply a frame the server addressed to a view mounted beside the page view
-     * (``target_id``, #3252). A ``mount`` reply fills the slot's container; any
-     * other frame is handled by the code that handles the page view's frames,
-     * run in the slot's context (``withSlot``), so it patches the slot's
-     * container against the slot's own VDOM version.
-     */
+    /** A frame addressed to a view mounted beside the page view (#3252); see handleSlotFrame. */
     async _handleSlotFrame(data) {
-        if (data.type === 'mount') {
-            this.viewMounted = true;
-            const container = slotContainer(data.target_id);
-            const hadContent = !!container && container.innerHTML.trim().length > 0;
-            applySlotMount(this, data, { html: hadContent ? 'morph' : 'replace' });
-            document.querySelectorAll('[dj-cloak]').forEach(el => el.removeAttribute('dj-cloak'));
-            return;
-        }
-        const applied = await withSlot(data.target_id, () => this._handleMessageImpl(data, true));
-        if (applied === undefined) {
-            // The slot's container is gone (the page replaced it): its frames
-            // have nowhere to go, but an event reply must still settle its request.
-            const event = acknowledgeEventRequest(this, data);
-            if (event && event.eventName) globalLoadingManager.stopLoading(event.eventName, event.trigger);
-        }
-        return;
+        return handleSlotFrame(this, data, true);
     }
 
     /**

@@ -242,20 +242,9 @@ class LiveViewSSE {
         // the context of the view it is addressed to (`_handleSlotFrame`).
         if (!inSlot) {
             if (globalThis.djustDebug) console.log('[SSE] Received:', data.type, data);
-            // #3036: a live navigation to a page with a different page shell is a
-            // full page load; the destination's root is not applied.
-            if (window.djust.fallBackToFullLoadOnShellChange?.(data)) return;
-            // ADR-038 D-n: compared before anything from this mount is cached.
-            if (window.djust._sw) window.djust._sw.applyMountMetadata(data);
-            storeSignedSnapshot(data, this.primaryViewPath);
-
-            // A frame addressed to a view mounted beside the page view (#3252)
-            // is applied to that view's container, in its own context.
-            if (typeof data.target_id === 'string' && data.target_id &&
-                _SLOT_FRAME_TYPES.has(data.type)) {
-                await this._handleSlotFrame(data);
-                return;
-            }
+            // Shell-change fallback, mount metadata, signed snapshot and the
+            // views mounted beside the page view (02c-frame-dispatch.js).
+            if (await routeInboundFrame(this, data)) return;
         }
 
         switch (data.type) {
@@ -352,10 +341,6 @@ class LiveViewSSE {
                 break;
             }
 
-            case 'embedded_update':
-                await handleEmbeddedResponse(data, this);
-                break;
-
             case 'error':
                 console.error('[SSE] Server error:', data.error);
                 // The view that frame names is not mounted on the server (its
@@ -395,90 +380,11 @@ class LiveViewSSE {
                 break;
             }
 
-            case 'view_refused':
-                // A view beside the page view is refused: its container shows it
-                // and the page does not navigate (#3252).
-                applyViewRefusal(data);
-                break;
-
-            case 'async_complete':
-                completeAsyncBatch(this, data.async_batch);
-                break;
-
-            case 'push_event':
-                window.dispatchEvent(new CustomEvent('djust:push_event', {
-                    detail: { event: data.event, payload: data.payload }
-                }));
-                dispatchPushEventToHooks(data.event, data.payload);
-                globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
-                break;
-
-            case 'navigation':
-                if (window.djust.navigation) {
-                    window.djust.navigation.handleNavigation(data);
-                }
-                break;
-
-            case 'navigate': {
-                // Auth redirect (sent by server when auth check fails).
-                // Validate scheme/origin via the shared guard so the SSE
-                // transport can't pivot to open-redirect / javascript: DOM-XSS
-                // and can't drift from the WS `navigate` path (#1646, finding #16).
-                const sseTarget = window.djust.safeNavigationTarget(data.to);
-                if (sseTarget) {
-                    window.location.href = sseTarget; // codeql[js/xss] -- validated via safeNavigationTarget
-                } else if (globalThis.djustDebug) {
-                    console.warn('[SSE] navigate target rejected: %s', String(data.to));
-                }
-                break;
-            }
-
-            case 'stream':
-                if (window.djust.handleStreamMessage) {
-                    window.djust.handleStreamMessage(data);
-                }
-                break;
-
-            case 'accessibility':
-                if (window.djust.accessibility) {
-                    window.djust.accessibility.processAnnouncements(data.announcements);
-                }
-                break;
-
-            case 'focus':
-                if (window.djust.accessibility) {
-                    window.djust.accessibility.processFocus([data.selector, data.options]);
-                }
-                break;
-
-            case 'flash':
-                // Flash message from server (put_flash / clear_flash)
-                if (window.djust.flash) {
-                    window.djust.flash.handleFlash(data);
-                }
-                break;
-
-            case 'page_metadata':
-                // Page metadata from server (page_title / page_meta)
-                if (window.djust.pageMetadata) {
-                    window.djust.pageMetadata.handlePageMetadata(data);
-                }
-                break;
-
-            case 'layout':
-                // Runtime layout switch (set_layout). The server sends it from the
-                // shared turn end, on this transport too.
-                if (window.djust.djLayout && typeof window.djust.djLayout.applyLayout === 'function') {
-                    window.djust.djLayout.applyLayout(data);
-                }
-                break;
-
-            case 'reload':
-                window.location.reload();
-                break;
-
             default:
-                if (globalThis.djustDebug) console.log('[SSE] Unknown message type:', data.type);
+                // The frames both transports apply alike (02c-frame-dispatch.js).
+                if (!(await dispatchCommonFrame(this, data, '[SSE]')) && globalThis.djustDebug) {
+                    console.log('[SSE] Unknown message type:', data.type);
+                }
         }
     }
 
@@ -546,27 +452,9 @@ class LiveViewSSE {
         return request.promise;
     }
 
-    /**
-     * Apply a frame the server addressed to a view mounted beside the page view
-     * (``target_id``, #3252): a ``mount`` reply fills the view's container, any
-     * other frame is handled by the code that handles the page view's frames,
-     * run in the view's context (``withSlot``).
-     */
+    /** A frame addressed to a view mounted beside the page view (#3252); see handleSlotFrame. */
     async _handleSlotFrame(data) {
-        if (data.type === 'mount') {
-            const container = slotContainer(data.target_id);
-            const hadContent = !!container && container.innerHTML.trim().length > 0;
-            applySlotMount(this, data, { html: hadContent ? 'morph' : 'replace' });
-            document.querySelectorAll('[dj-cloak]').forEach(el => el.removeAttribute('dj-cloak'));
-            return;
-        }
-        const applied = await withSlot(data.target_id, () => this._handleMessageImpl(data, true));
-        if (applied === undefined) {
-            // The container is gone (the page replaced it): its frames have
-            // nowhere to go, but an event reply must still settle its request.
-            const event = acknowledgeEventRequest(this, data);
-            if (event && event.eventName) globalLoadingManager.stopLoading(event.eventName, event.trigger);
-        }
+        return handleSlotFrame(this, data, false);
     }
 
     /**
