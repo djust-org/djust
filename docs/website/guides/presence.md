@@ -236,7 +236,27 @@ and leaves under *other* presence keys.
 | `presence_count()` | Returns count of active users (imperative method; for template binding prefer `{{ online_count }}`). |
 | `get_presence_key()` | Returns formatted presence key. Override for dynamic keys. |
 | `get_presence_user_id()` | Returns unique user ID. Defaults to `request.user.id` for authenticated users, `anon_conn_<ws_session_id>` if `presence_unique_per_connection=True`, else `anon_<session_key>`. |
-| `broadcast_to_presence(event, payload)` | Broadcast a custom event to all users in the group. |
+| `broadcast_to_presence(event, payload)` | Broadcast a custom event to all users in the group. Each browser receives it as a `djust:presence` event (below). |
+
+### Receiving broadcasts in the browser
+
+`broadcast_to_presence()` (and `LiveCursorMixin`'s cursor updates, sent as
+`cursor_move`) reach every WebSocket session in the presence group as a
+`djust:presence` event on `window`. Its `detail` holds the event name and
+the payload:
+
+```javascript
+window.addEventListener('djust:presence', ({ detail }) => {
+    if (detail.event === 'cursor_move') {
+        const { user_id, x, y, meta } = detail.payload;
+        // move that user's cursor marker
+    }
+});
+```
+
+Listen on `window`, not `document`: the event does not reach `document`
+listeners (system check `T004` flags that). Before #3501 the client dropped
+these frames. SSE connections do not track presence and never receive it.
 
 ### Callbacks
 
