@@ -168,7 +168,8 @@ class TestFlushQueueParity:
         ws_calls = _flush_calls_in_all_pending(_WEBSOCKET)
         rt_calls = _flush_calls_in_all_pending(_RUNTIME)
 
-        # WS is the canonical source: 8 queues in a fixed order.
+        # WS is the canonical source: 7 queues in a fixed order (the 8th,
+        # i18n, drained a queue nothing filled and was removed in #3502).
         expected = [
             "_flush_push_events",
             "_flush_flash",
@@ -177,10 +178,9 @@ class TestFlushQueueParity:
             "_flush_deferred",
             "_flush_navigation",
             "_flush_accessibility",
-            "_flush_i18n",
         ]
         assert ws_calls == expected, (
-            "WS _flush_all_pending drifted from the canonical 8-queue order this "
+            "WS _flush_all_pending drifted from the canonical 7-queue order this "
             f"net pins. Got {ws_calls!r}. If WS changed deliberately, update the "
             "expected order here AND the runtime to match."
         )
@@ -191,8 +191,8 @@ class TestFlushQueueParity:
             f"extra on runtime: {set(rt_calls) - set(ws_calls)}."
         )
 
-    def test_runtime_defines_all_eight_flush_methods(self):
-        """Each of the 8 queue-flush methods the parity order names actually exists
+    def test_runtime_defines_all_seven_flush_methods(self):
+        """Each of the 7 queue-flush methods the parity order names actually exists
         on ViewRuntime (so the order pin can't pass against phantom methods)."""
         from djust.runtime import ViewRuntime
 
@@ -204,7 +204,6 @@ class TestFlushQueueParity:
             "_flush_deferred",
             "_flush_navigation",
             "_flush_accessibility",
-            "_flush_i18n",
             "_flush_all_pending",
         ):
             assert hasattr(ViewRuntime, name), f"ViewRuntime missing {name}"

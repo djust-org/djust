@@ -64,7 +64,6 @@ class TestSendUpdateSourceAndRef:
         consumer.view_instance._drain_push_events = MagicMock(return_value=[])
         consumer.view_instance._drain_navigation = MagicMock(return_value=[])
         consumer.view_instance._drain_accessibility = MagicMock(return_value=[])
-        consumer.view_instance._drain_i18n = MagicMock(return_value=[])
 
         await consumer._send_update(
             patches=[{"op": "replace", "path": "/0", "value": "1"}],
@@ -96,7 +95,6 @@ class TestSendUpdateSourceAndRef:
         consumer.view_instance._drain_push_events = MagicMock(return_value=[])
         consumer.view_instance._drain_navigation = MagicMock(return_value=[])
         consumer.view_instance._drain_accessibility = MagicMock(return_value=[])
-        consumer.view_instance._drain_i18n = MagicMock(return_value=[])
 
         await consumer._send_update(
             patches=[],
@@ -129,7 +127,6 @@ class TestSendUpdateSourceAndRef:
         consumer.view_instance._drain_push_events = MagicMock(return_value=[])
         consumer.view_instance._drain_navigation = MagicMock(return_value=[])
         consumer.view_instance._drain_accessibility = MagicMock(return_value=[])
-        consumer.view_instance._drain_i18n = MagicMock(return_value=[])
 
         await consumer._send_update(
             patches=[],
@@ -159,7 +156,6 @@ class TestSendUpdateSourceAndRef:
         consumer.view_instance._drain_push_events = MagicMock(return_value=[])
         consumer.view_instance._drain_navigation = MagicMock(return_value=[])
         consumer.view_instance._drain_accessibility = MagicMock(return_value=[])
-        consumer.view_instance._drain_i18n = MagicMock(return_value=[])
 
         await consumer._send_update(
             html="<div>hello</div>",
@@ -313,7 +309,6 @@ class TestServerPushSourceBroadcast:
         consumer.view_instance._drain_push_events = MagicMock(return_value=[])
         consumer.view_instance._drain_navigation = MagicMock(return_value=[])
         consumer.view_instance._drain_accessibility = MagicMock(return_value=[])
-        consumer.view_instance._drain_i18n = MagicMock(return_value=[])
         consumer.view_instance._drain_flash = MagicMock(return_value=[])
         consumer.view_instance._skip_render = False
         consumer.view_instance._sync_state_to_rust = MagicMock()
@@ -348,7 +343,6 @@ class TestServerPushSourceBroadcast:
         consumer.view_instance._drain_push_events = MagicMock(return_value=[])
         consumer.view_instance._drain_navigation = MagicMock(return_value=[])
         consumer.view_instance._drain_accessibility = MagicMock(return_value=[])
-        consumer.view_instance._drain_i18n = MagicMock(return_value=[])
         consumer.view_instance._drain_flash = MagicMock(return_value=[])
         consumer.view_instance._skip_render = False
         consumer.view_instance._sync_state_to_rust = MagicMock()
@@ -384,7 +378,6 @@ class TestServerPushSourceBroadcast:
         consumer.view_instance._drain_push_events = MagicMock(return_value=[])
         consumer.view_instance._drain_navigation = MagicMock(return_value=[])
         consumer.view_instance._drain_accessibility = MagicMock(return_value=[])
-        consumer.view_instance._drain_i18n = MagicMock(return_value=[])
         consumer.view_instance._drain_flash = MagicMock(return_value=[])
         consumer.view_instance._async_tasks = {}
         consumer.view_instance._async_pending = None
@@ -435,7 +428,6 @@ class TestAsyncWorkSourceAsync:
         consumer.view_instance._drain_push_events = MagicMock(return_value=[])
         consumer.view_instance._drain_navigation = MagicMock(return_value=[])
         consumer.view_instance._drain_accessibility = MagicMock(return_value=[])
-        consumer.view_instance._drain_i18n = MagicMock(return_value=[])
         consumer.view_instance._drain_flash = MagicMock(return_value=[])
         consumer.view_instance._async_cancelled = set()
         consumer.view_instance._djust_child_disposed = False

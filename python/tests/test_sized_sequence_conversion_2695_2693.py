@@ -279,6 +279,14 @@ _RSS_CEILING_KB = 1_500_000
 
 
 def _rss_kb(pid: int) -> int:
+    # Linux: read /proc directly. Forking `ps` from a large xdist worker every
+    # poll was slow enough on a loaded CI runner for a child allocating at
+    # full speed to outrun the ceiling and take the runner down (py3.14).
+    try:
+        with open(f"/proc/{pid}/statm") as fh:
+            return int(fh.read().split()[1]) * (os.sysconf("SC_PAGE_SIZE") // 1024)
+    except (OSError, ValueError, IndexError):
+        pass
     try:
         out = subprocess.run(
             ["ps", "-o", "rss=", "-p", str(pid)],
@@ -345,7 +353,7 @@ def _render_in_child(
         if _rss_kb(proc.pid) > _RSS_CEILING_KB:
             reason = "RUNAWAY-MEMORY"
             break
-        time.sleep(0.1)
+        time.sleep(0.05)
     if reason is not None:
         proc.kill()
     proc.wait()

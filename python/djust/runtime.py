@@ -6489,8 +6489,8 @@ class ViewRuntime:
 
             # Full flush-queue parity with WS (#1885 / #1646): the url_change
             # path is the runtime's one production user, so flash / page_metadata
-            # / layout / a11y / i18n queued during handle_params() were being
-            # silently dropped before this. Drain ALL 8 queues in canonical order.
+            # / layout / a11y queued during handle_params() were being
+            # silently dropped before this. Drain every queue in canonical order.
             await self._flush_all_pending()
         except Exception as exc:
             response = handle_exception(
@@ -7952,11 +7952,12 @@ class ViewRuntime:
     # user (``url_change`` — dj-patch / popstate) silently dropped flash
     # messages, page-metadata updates, layout swaps, accessibility
     # announcements, and i18n commands queued during ``handle_params``
-    # (live #1646 instance INSIDE the convergence target). The 5 methods
-    # below + ``_flush_all_pending`` mirror WS ``websocket.py:888`` exactly:
+    # (live #1646 instance INSIDE the convergence target). The methods
+    # below + ``_flush_all_pending`` mirror WS ``_flush_all_pending`` exactly:
     # same queue set, same canonical drain order, same per-queue frame shape
     # and ``_drain_*`` method names (including the defensively hasattr-guarded
-    # a11y/i18n hooks that core views don't provide). ``_flush_all_pending``
+    # a11y hooks). The i18n flush went in #3502: nothing defined the
+    # ``_drain_i18n_commands`` it called. ``_flush_all_pending``
     # is the single source of the turn-end drain so a future queue addition
     # can never again be wired on one path and not the other.
     # ------------------------------------------------------------------ #
@@ -8052,14 +8053,6 @@ class ViewRuntime:
             except Exception:
                 logger.warning("Failed to flush focus command", exc_info=True)
 
-    async def _flush_i18n(self) -> None:
-        """Drain pending i18n commands and emit ``i18n`` frames (WS parity)."""
-        view = self.view_instance
-        if not view or not hasattr(view, "_drain_i18n_commands"):
-            return
-        for cmd in view._drain_i18n_commands():
-            await self.transport.send({"type": "i18n", **cmd})
-
     async def _flush_all_pending(self) -> None:
         """Drain every queued client side-effect at the end of a runtime turn,
         in WS's canonical order. Single source of truth for the turn-end drain
@@ -8069,7 +8062,7 @@ class ViewRuntime:
         so calling twice in one turn is a harmless no-op.
 
         Order matches WS exactly: push_events → flash → page_metadata →
-        pending_layout → deferred → navigation → accessibility → i18n. Layout
+        pending_layout → deferred → navigation → accessibility. Layout
         (replaces ``<body>``) goes after page_metadata so head mutations land
         first and survive the swap; deferred callbacks run after the visible
         side-effects so they observe post-patch state.
@@ -8081,7 +8074,6 @@ class ViewRuntime:
         await self._flush_deferred()
         await self._flush_navigation()
         await self._flush_accessibility()
-        await self._flush_i18n()
 
     # ------------------------------------------------------------------ #
     # Background work (start_async / @background) — runtime parity (#1887).
