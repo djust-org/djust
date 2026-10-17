@@ -123,8 +123,6 @@ PAGE_LEVEL_FRAMES = frozenset(
         "flash",
         "page_metadata",
         "layout",
-        "accessibility",
-        "focus",
         "reload",
         "hvr-applied",
         "push_event",

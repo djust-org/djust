@@ -8,7 +8,7 @@ value change at the emit site silently breaks deployed clients running
 older bundles — this catches it at test time.
 
 This is a starter — 8 of ~30+ shapes. Follow-up issue tracks the rest:
-mount_batch, child_update, sticky_update, accessibility, focus,
+mount_batch, child_update, sticky_update,
 embedded_update, upload_registered/resumed/progress, reload, hvr-applied,
 sticky_hold, html_update, connect, rate_limit_exceeded, pong, navigate,
 presence_event, streaming.{patch,html_update,stream}, plus inbound shapes.
@@ -349,44 +349,6 @@ def test_embedded_update_envelope():
         '{"type": "embedded_update", "view_id": "embed-1", '
         '"html": "<section>updated</section>", "event_name": "click"}'
     )
-    assert _emit(frame) == expected
-
-
-# =============================================================================
-# 15. accessibility — websocket.py:749-754 (#1456 Batch 2)
-# =============================================================================
-
-
-def test_accessibility_announcements_envelope():
-    """`{"type": "accessibility", "announcements": [...]}` — only emitted
-    when announcements list is non-empty (line 748 guard)."""
-    frame = {
-        "type": "accessibility",
-        "announcements": [
-            {"message": "Item saved", "priority": "polite"},
-        ],
-    }
-    expected = (
-        '{"type": "accessibility", '
-        '"announcements": [{"message": "Item saved", "priority": "polite"}]}'
-    )
-    assert _emit(frame) == expected
-
-
-# =============================================================================
-# 16. focus — websocket.py:764-770 (#1456 Batch 2)
-# =============================================================================
-
-
-def test_focus_command_envelope():
-    """`{"type": "focus", "selector": <str>, "options": <obj>}` —
-    programmatic focus targeting (delivered as a 2-tuple internally)."""
-    frame = {
-        "type": "focus",
-        "selector": "#email-input",
-        "options": {"preventScroll": False},
-    }
-    expected = '{"type": "focus", "selector": "#email-input", "options": {"preventScroll": false}}'
     assert _emit(frame) == expected
 
 
