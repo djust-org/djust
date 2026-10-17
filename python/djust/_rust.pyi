@@ -472,27 +472,6 @@ MAX_MD_NESTING: int
 :func:`render_markdown` keeps open at once. A container that starts deeper is
 rendered without its own tags; its content stays in place."""
 
-def set_virtual_keyed_ops(enabled: bool) -> None:
-    """Enable/disable `[dj-virtual]` keyed splice ops in the differ (ADR-026).
-
-    Process-global, unlike the per-view `set_loop_render_cache_enabled`.
-    `DjustConfig.ready` sets it on at startup (the `virtual_keyed_ops` kill
-    switch was removed in 2.0).
-    """
-
-def virtual_keyed_ops_enabled() -> bool:
-    """Current `[dj-virtual]` keyed-splice-ops setting."""
-
-def set_django_value_repr(enabled: bool) -> None:
-    """Enable/disable Django-parity value rendering (#2203).
-
-    When True (the default), `{{ }}` renders values as Python's `str()` does:
-    `True`, `None`, `1.0`, `[1, 2]`, `{'a': 1}`, `(1, 2)`. Process-global, for
-    the same reason as `set_virtual_keyed_ops` — `impl Display for Value` has
-    nowhere to thread per-render config. `DjustConfig.ready` sets it on at
-    startup (the `django_value_repr` kill switch was removed in 2.0).
-    """
-
 def set_active_timezone(name: Optional[str] = None) -> bool:
     """Set the active render timezone for the CALLING THREAD (#2209).
 
@@ -500,8 +479,7 @@ def set_active_timezone(name: Optional[str] = None) -> bool:
     which is what `USE_TZ = False` wants. Returns False if the name is not a
     zone the bundled tz database knows, leaving the previous value in place.
 
-    Thread-local rather than process-global — unlike `set_django_value_repr`
-    above — because djust renders run in `sync_to_async` worker threads and two
+    Thread-local rather than process-global because djust renders run in `sync_to_async` worker threads and two
     connections can have activated different zones. Mirrors Django, whose own
     `timezone._active` is a `Local()`. Applied per render by
     `RustBridgeMixin._apply_active_timezone`, not once at startup: a zone
@@ -1108,8 +1086,7 @@ class RustLiveView:
         (ADR-029, #2741) — the timezone, number formats and ADR-027 flag
         ``djust.render_env.apply_render_env`` just pushed. Every render entry
         then installs it, on whatever thread the render runs, under a guard
-        that restores the previous cell values afterwards. The per-view twin
-        of ``set_template_auto_call``.
+        that restores the previous cell values afterwards.
         """
         ...
 
@@ -1556,14 +1533,11 @@ __all__ = [
     "RustTextArea",
     "RustToast",
     "RustTooltip",
-    "set_virtual_keyed_ops",
-    "set_django_value_repr",
     "set_active_timezone",
     "active_timezone_name",
     "set_number_format",
     "active_number_format",
     "active_unlocalized_number_format",
-    "virtual_keyed_ops_enabled",
 ]
 
 def new_registry_namespace() -> int: ...

@@ -18,17 +18,11 @@
 use djust_core::Value;
 use indexmap::IndexMap;
 
-// `Display` reads a process-global; every test in this binary must hold the
-// lock, not only the one that toggles it. See `tests/value_repr_flag/mod.rs`.
-mod value_repr_flag;
-use value_repr_flag::FlagGuard;
-
 const BIG: &str = "12345678901234567890";
 const HUGE: &str = "1234567890123456789012345678901234567890123456789012345678901234567890";
 
 #[test]
 fn display_writes_every_digit() {
-    let _g = FlagGuard::on();
     // `numberformat.format` short-circuits an `int` before either the
     // >200-digit cut-off or the exponent rule, so `str(number)` is the whole
     // answer however many digits there are.
@@ -42,7 +36,6 @@ fn display_writes_every_digit() {
 
 #[test]
 fn a_nested_big_int_renders_bare_digits_where_a_decimal_renders_its_constructor() {
-    let _g = FlagGuard::on();
     // The first of the two reasons this is not `Value::Decimal`. `repr(int)` is
     // the digits; `repr(Decimal('123'))` is `Decimal('123')`, and `{{ p }}` on a
     // LIST renders its elements through `repr`.
@@ -144,11 +137,3 @@ fn a_user_dict_with_the_tag_name_but_a_second_key_is_still_a_dict() {
     assert!(matches!(back, Value::Object(_)), "{back:?}");
 }
 
-#[test]
-fn the_legacy_display_path_keeps_the_digits_too() {
-    // `django_value_repr` is the #2203 REPR switch. Restoring a precision loss
-    // through a rendering-parity flag would make the flag silently lossy —
-    // the same call the `Decimal` arm makes.
-    let _g = FlagGuard::off();
-    assert_eq!(Value::BigInt(BIG.into()).to_string(), BIG);
-}

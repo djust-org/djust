@@ -12,15 +12,8 @@ fn dec(s: &str) -> Value {
     Value::Decimal(s.to_string())
 }
 
-// The serial guard for the process-global `django_value_repr`. Was a copy of
-// `test_display_django_parity_2203.rs`'s; shared since #2260, which was about
-// to add a third and a fourth. See `tests/value_repr_flag/mod.rs`.
-mod value_repr_flag;
-use value_repr_flag::FlagGuard;
-
 #[test]
 fn a_decimal_renders_its_exact_digits() {
-    let _g = FlagGuard::on();
     // `str(Decimal('19.99'))` is `'19.99'` — `str()` on a Decimal never
     // reformats, so rendering the digits verbatim IS the parity.
     assert_eq!(dec("19.99").to_string(), "19.99");
@@ -37,7 +30,6 @@ fn a_decimal_renders_its_exact_digits() {
 
 #[test]
 fn a_nested_decimal_renders_the_constructor_form() {
-    let _g = FlagGuard::on();
     // `str([Decimal('19.99')])` is `"[Decimal('19.99')]"` — the str/repr split
     // that stops containers reusing Display for their elements (#2203).
     assert_eq!(
@@ -147,17 +139,6 @@ fn the_decimal_tag_does_not_capture_an_ordinary_dict() {
 
 #[test]
 fn an_exponent_form_decimal_expands_for_display() {
-    // A guard even though this test only READS the flag, which is what
-    // `value_repr_flag`'s docstring requires and what this test was missing:
-    // its last assertion renders a `Value::List`, and a CONTAINER is spelled
-    // `[List]` on the legacy path and `[Decimal('1E-9')]` on the parity one.
-    // `the_legacy_display_path_is_not_lossy` below holds the flag OFF, cargo
-    // runs them on parallel threads in one binary, and this read the flag
-    // mid-flip — exactly the "roughly one run in three red" the helper
-    // records. It survives 25/25 runs in ISOLATION, because the race needs
-    // the contention of the full workspace run to open the window; it was
-    // caught by `make test-rust`.
-    let _g = FlagGuard::on();
     // Django renders through `"{:f}".format(...)`, not `str()`. Verified
     // against Django by a 6,901-case randomized sweep; these are the shapes
     // that sweep found, kept as a fast in-suite guard.
@@ -183,24 +164,6 @@ fn an_exponent_form_decimal_expands_for_display() {
     );
 }
 
-#[test]
-fn the_legacy_display_path_is_not_lossy() {
-    // `django_value_repr` is the #2203 *repr* switch. Restoring the #2214
-    // precision loss through it would make a rendering-parity flag silently
-    // destroy digits, so the OFF path keeps them too.
-    let _g = FlagGuard::off();
-    assert_eq!(
-        dec("12345678901234567890.123456789").to_string(),
-        "12345678901234567890.123456789"
-    );
-    // The EXPANSION half of the same arm, which the digits above do not reach:
-    // that value has no exponent form, so dropping `expand_decimal_exponent`
-    // here left the whole suite green in both profiles. On the previous release
-    // this rendered `0.000000001`, because the value was an f64 (#2240 round 8).
-    assert_eq!(dec("1E-9").to_string(), "0.000000001");
-    // `_g`'s Drop restores the default.
-}
-
 // ---------------------------------------------------------------------------
 // The two early-return guards, and the `"0"` floor. All three were claimed
 // unreachable or left unmentioned; all three are load-bearing (#2240 round 4).
@@ -208,7 +171,6 @@ fn the_legacy_display_path_is_not_lossy() {
 
 #[test]
 fn the_empty_and_punctuation_guard_is_load_bearing() {
-    let _g = FlagGuard::on();
     // A previous version asserted this guard was "measured to be so:
     // no input distinguishes" it. That measurement ran only the guard-ON arm
     // and called it a comparison — no control. With the guard removed these
@@ -228,7 +190,6 @@ fn the_empty_and_punctuation_guard_is_load_bearing() {
 
 #[test]
 fn the_non_digit_guard_is_load_bearing() {
-    let _g = FlagGuard::on();
     // Distinct from the guard above: these have a coefficient AND an exponent,
     // so they reach the digit check rather than the empty check. With it
     // removed, `abcE+5` renders `abc00000` and `xyzE+200` renders `x.yze+202`
@@ -240,7 +201,6 @@ fn the_non_digit_guard_is_load_bearing() {
 
 #[test]
 fn an_all_zero_coefficient_over_the_cutoff_does_not_panic() {
-    let _g = FlagGuard::on();
     // The `"0"` floor in `significant` is the only thing between these and a
     // hard render crash: stripping every zero leaves an empty string, and the
     // scientific branch does `significant.split_at(1)` on it —
