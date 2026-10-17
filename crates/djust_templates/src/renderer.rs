@@ -4447,7 +4447,8 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
 
         #[cfg(feature = "liveview")]
         Node::RustComponent { name, props } => {
-            // Render Rust component server-side
+            // Deprecated in 1.4, removed in 2.0.0: warn, then render as before.
+            warn_rust_component_tag(name)?;
             render_rust_component(name, props, context).map(R::from)
         }
 
@@ -4980,6 +4981,37 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
             };
             render_nodes_output::<L, R>(children, context, loader)
         }
+    }
+}
+
+/// The standard djust deprecation for a JSX-style `<RustX …/>` tag (removed in
+/// 2.0.0). The same route as the dict-style `block["super"]` read
+/// (`djust_core::context::warn_dict_style`): `djust._deprecation.warn_deprecated`.
+///
+/// No interpreter (a pure-Rust test) or no `djust` package (a bare embedded
+/// interpreter) is not an error; a warning the caller's filters promote to an
+/// exception is, and crosses whole.
+#[cfg(feature = "liveview")]
+fn warn_rust_component_tag(name: &str) -> Result<()> {
+    use pyo3::prelude::*;
+
+    let warned = Python::try_attach(|py| -> PyResult<()> {
+        let Ok(module) = py.import("djust._deprecation") else {
+            return Ok(());
+        };
+        let kwargs = pyo3::types::PyDict::new(py);
+        kwargs.set_item("since", "1.4")?;
+        kwargs.set_item("removed_in", "2.0.0")?;
+        kwargs.set_item("instead", "a djust.components.ui component")?;
+        module.getattr("warn_deprecated")?.call(
+            (format!("The JSX-style `<{name} />` template tag"),),
+            Some(&kwargs),
+        )?;
+        Ok(())
+    });
+    match warned {
+        Some(Err(err)) => Err(DjangoRustError::PythonException(err)),
+        _ => Ok(()),
     }
 }
 
