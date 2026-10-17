@@ -2101,6 +2101,19 @@ pub fn register_raw_block_tag_handler(
     Ok(())
 }
 
+/// Unregister a raw-block tag handler (#2558).
+#[pyfunction]
+pub fn unregister_raw_block_tag_handler(name: &str) -> PyResult<bool> {
+    let _bump = BumpOnReturn;
+    let mut registry = RAW_BLOCK_HANDLERS.write().map_err(|e| {
+        PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
+    })?;
+    let removed = registry.remove(name);
+    drop(registry);
+    drop(_bump);
+    Ok(removed.is_some())
+}
+
 /// Check if a raw-block tag handler is registered (#2558).
 #[pyfunction]
 pub fn has_raw_block_tag_handler(name: &str) -> PyResult<bool> {
@@ -2110,7 +2123,8 @@ pub fn has_raw_block_tag_handler(name: &str) -> PyResult<bool> {
     Ok(registry.contains_key(name))
 }
 
-/// Clear all raw-block handlers. Rust tests only; not exported to Python.
+/// Clear all raw-block handlers (primarily for testing).
+#[pyfunction]
 pub fn clear_raw_block_tag_handlers() -> PyResult<()> {
     let _bump = BumpOnReturn;
     let mut registry = RAW_BLOCK_HANDLERS.write().map_err(|e| {

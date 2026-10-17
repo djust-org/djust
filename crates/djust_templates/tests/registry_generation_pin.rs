@@ -61,10 +61,9 @@ fn scan(file: &str, extra_names: &[&str]) -> (usize, Vec<String>) {
 #[test]
 fn every_tag_registry_mutation_bumps_after_the_write() {
     let (checked, missing) = scan("src/registry.rs", &["arm_scope_tags"]);
-    // 19 since 2.0 removed `unregister_raw_block_tag_handler`.
     assert!(
-        checked >= 19,
-        "expected ≥19 tag-registry mutation fns, found {checked}"
+        checked >= 20,
+        "expected ≥20 tag-registry mutation fns, found {checked}"
     );
     assert!(
         missing.is_empty(),

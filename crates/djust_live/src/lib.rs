@@ -6268,7 +6268,15 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m
     )?)?;
     m.add_function(wrap_pyfunction!(
+        djust_templates::registry::unregister_raw_block_tag_handler,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
         djust_templates::registry::has_raw_block_tag_handler,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        djust_templates::registry::clear_raw_block_tag_handlers,
         m
     )?)?;
     m.add_function(wrap_pyfunction!(

@@ -700,7 +700,9 @@ def register_library_loader(callable: Callable[[List[str]], None]) -> None:
     ...
 
 def register_raw_block_tag_handler(tag_name: str, end_tag: str, handler: Any) -> None: ...
+def unregister_raw_block_tag_handler(tag_name: str) -> bool: ...
 def has_raw_block_tag_handler(tag_name: str) -> bool: ...
+def clear_raw_block_tag_handlers() -> None: ...
 def register_translator(
     callable: Callable[[str], str],
     format_resolver: Optional[Callable[..., str]] = None,
@@ -1500,7 +1502,9 @@ __all__ = [
     "has_library_loader",
     # Raw-block handlers, the `_("…")` translator, and the scope hooks (#2558)
     "register_raw_block_tag_handler",
+    "unregister_raw_block_tag_handler",
     "has_raw_block_tag_handler",
+    "clear_raw_block_tag_handlers",
     "register_translator",
     "clear_translator",
     "arm_scope_tags",
