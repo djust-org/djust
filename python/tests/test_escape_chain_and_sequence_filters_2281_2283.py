@@ -457,8 +457,12 @@ class TestNonIterableFallThrough:
         with pytest.raises(Exception) as caught:
             _rust.render_template("{{ p|%s }}" % name, normalize_django_value({"p": value}))
         message = str(caught.value)
-        assert f"filter '{name}'" in message, message
-        assert "TypeError" in message, message
+        if name == "unordered_list":
+            # Django's own function since 2.0: its TypeError crosses whole.
+            assert isinstance(caught.value, TypeError), message
+        else:
+            assert f"filter '{name}'" in message, message
+            assert "TypeError" in message, message
         # Django's own answer, run rather than transcribed.
         with pytest.raises(TypeError):
             DjangoTemplate("{{ p|%s }}" % name).render(DjangoContext({"p": value}))
