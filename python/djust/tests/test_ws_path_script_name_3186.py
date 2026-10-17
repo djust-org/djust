@@ -52,7 +52,7 @@ def page_template():
     (tmp / "ws3186" / "page.html").write_text(_TEMPLATE)
     templates = [
         {
-            "BACKEND": "djust.template_backend.DjustTemplateBackend",
+            "BACKEND": "djust.template.backend.DjustTemplateBackend",
             "DIRS": [str(tmp)],
             "APP_DIRS": True,
             "OPTIONS": {"context_processors": ["django.template.context_processors.request"]},

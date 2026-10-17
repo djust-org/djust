@@ -142,7 +142,7 @@ def test_event_alias_still_warns_with_concrete_version():
         event(sample)
     msg = str(record[0].message)
     assert "@event" in msg
-    assert "1.1" in msg
+    assert "2.0.0" in msg
     assert "@event_handler" in msg
     assert "future release" not in msg
 
@@ -163,7 +163,7 @@ def test_liveviewform_warns_with_corrected_version():
     msg = str(record[0].message)
     assert "LiveViewForm" in msg
     assert "0.4" not in msg
-    assert "1.1" in msg
+    assert "2.0.0" in msg
     assert "django.forms.Form" in msg
 
 
@@ -175,7 +175,7 @@ def test_legacy_theming_warns_with_concrete_version():
         _ = THEMES["material"]
     msg = str(record[0].message)
     assert "THEMES" in msg
-    assert "1.1" in msg
+    assert "2.0.0" in msg
 
 
 def test_legacy_theming_get_theme_warns_with_concrete_version():
@@ -186,7 +186,7 @@ def test_legacy_theming_get_theme_warns_with_concrete_version():
         get_theme("material")
     msg = str(record[0].message)
     assert "get_theme" in msg
-    assert "1.1" in msg
+    assert "2.0.0" in msg
 
 
 def test_legacy_theming_list_themes_warns_with_concrete_version():
@@ -197,7 +197,7 @@ def test_legacy_theming_list_themes_warns_with_concrete_version():
         list_themes()
     msg = str(record[0].message)
     assert "list_themes" in msg
-    assert "1.1" in msg
+    assert "2.0.0" in msg
 
 
 def test_no_deprecation_warning_when_helper_unused():

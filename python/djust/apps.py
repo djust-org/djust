@@ -58,6 +58,11 @@ class DjustConfig(AppConfig):
                 "[djust] recovering the config settings load in ready() failed"
             )
 
+        # Settings djust 2.0 removes warn once, at startup (1.4 deprecations).
+        from djust._deprecated_settings import warn_deprecated_settings
+
+        warn_deprecated_settings()
+
         # Import checks module so @register() decorators are executed
         import djust.checks  # noqa: F401
 

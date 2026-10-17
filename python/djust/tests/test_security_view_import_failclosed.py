@@ -21,7 +21,7 @@ import sys
 import pytest
 from django.test import override_settings
 
-from djust._view_resolution import is_view_import_allowed
+from djust.security.mount import is_view_path_allowed as is_view_import_allowed
 
 
 # --------------------------------------------------------------------------

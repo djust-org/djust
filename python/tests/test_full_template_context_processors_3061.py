@@ -84,7 +84,7 @@ def template_dir():
     (tmp / "child_3061.html").write_text(_CHILD)
     templates = [
         {
-            "BACKEND": "djust.template_backend.DjustTemplateBackend",
+            "BACKEND": "djust.template.backend.DjustTemplateBackend",
             "DIRS": [str(tmp)],
             "APP_DIRS": False,
             "OPTIONS": {"context_processors": _DEFAULT_PROCESSORS},

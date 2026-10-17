@@ -41,7 +41,7 @@ def _warn_legacy(name: str, stacklevel: int = 4) -> None:
     warn_deprecated(
         name,
         since="0.5",
-        removed_in="1.1.0",
+        removed_in="2.0.0",
         instead=_LEGACY_INSTEAD,
         stacklevel=stacklevel,
     )
@@ -920,7 +920,7 @@ def get_theme(name: str) -> Optional[Theme]:
     """Get a theme by name.
 
     .. deprecated:: 0.5
-        ``get_theme()`` will be removed no earlier than djust 1.1.0.
+        ``get_theme()`` is removed in djust 2.0.0.
         Use ``get_design_system`` from ``djust.theming.theme_packs`` instead.
     """
     _warn_legacy("get_theme()")
@@ -932,7 +932,7 @@ def list_themes() -> Dict[str, Theme]:
     """Get all available themes.
 
     .. deprecated:: 0.5
-        ``list_themes()`` will be removed no earlier than djust 1.1.0.
+        ``list_themes()`` is removed in djust 2.0.0.
         Use ``get_all_design_systems`` from ``djust.theming.theme_packs``
         instead.
     """

@@ -363,7 +363,7 @@ class TestUsageWithEvents:
                 return template.render(Context(view.get_context_data()))
 
         else:
-            from djust.template_backend import DjustTemplateBackend
+            from djust.template import DjustTemplateBackend
 
             template = DjustTemplateBackend(
                 {"NAME": "usage-test", "DIRS": [], "APP_DIRS": True, "OPTIONS": {}}

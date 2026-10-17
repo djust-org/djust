@@ -33,7 +33,7 @@ SESSION_ENGINE = "django.contrib.sessions.backends.signed_cookies"
 STATIC_URL = "/static/"
 LIVEVIEW_CONFIG = {"hot_reload_auto_enable": False}
 DJUST_LIVE_RENDER_ALLOWED_MODULES = ["lazyfixture.views"]
-TEMPLATES = [{"BACKEND": "djust.template_backend.DjustTemplateBackend", "APP_DIRS": True}]
+TEMPLATES = [{"BACKEND": "djust.template.backend.DjustTemplateBackend", "APP_DIRS": True}]
 """,
     "lazyfixture/urls.py": """
 from django.urls import path

@@ -31,7 +31,7 @@ class StreamingMixin:
         """
         ...
 
-    async def stream_insert(
+    async def astream_insert(
         self,
         stream_name: str,
         html: str,
@@ -111,7 +111,7 @@ class StreamingMixin:
         """
         ...
 
-    async def stream_delete(
+    async def astream_delete(
         self,
         stream_name: str,
         selector: str,
@@ -123,6 +123,20 @@ class StreamingMixin:
             stream_name: Logical name for the stream
             selector: CSS selector of element to remove
         """
+        ...
+
+    async def stream_insert(
+        self,
+        stream_name: str,
+        html: str,
+        at: str = "append",
+        target: Optional[str] = None,
+    ) -> None:
+        """Deprecated name of ``astream_insert`` (removed in djust 2.0)."""
+        ...
+
+    async def stream_delete(self, stream_name: str, selector: str) -> None:
+        """Deprecated name of ``astream_delete`` (removed in djust 2.0)."""
         ...
 
     async def push_state(self) -> None:

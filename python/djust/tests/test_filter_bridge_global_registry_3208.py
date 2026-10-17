@@ -58,7 +58,7 @@ def test_first_bootstrap_inside_another_backends_render_serves_every_render():
     happens inside a separate ``DjustTemplateBackend`` render (what
     ``test_catalogue_ux``'s rust-backend case does), then a root LiveView
     renders ``{{ view|field_value:"name" }}``."""
-    from djust.template_backend import DjustTemplateBackend
+    from djust.template import DjustTemplateBackend
 
     _rust.clear_custom_filters()
     tf._CUSTOM_FILTERS_BRIDGED = False  # a fresh worker: nothing bridged yet

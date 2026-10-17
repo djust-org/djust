@@ -204,22 +204,42 @@ This is the core stability promise:
   (`@event`, `LiveViewForm`, and the `_legacy` theming module — see below).
   SemVer permitted removing them in any `0.x` release. Rather than yank them at
   `1.0.0`, the policy gives 1.0 adopters one full minor cycle of overlap:
-  **these three symbols are scheduled for removal no earlier than `1.1.0`.**
+  **these three symbols were scheduled for removal no earlier than `1.1.0`.**
+  djust `2.0.0` removes them, and their warnings name `2.0.0` from 1.4 on.
 
 ---
 
 ## Currently Deprecated Symbols
 
-Three symbols deprecated during `0.x` carry the 0.x carve-out removal floor of
-**`>= 1.1.0`**. One access pattern deprecated during the `1.x` series carries the
-standard floor of **`2.0.0`**.
+Every symbol below is removed in djust **`2.0.0`**, and each one emits a
+`DeprecationWarning` that says so. The three `0.x` symbols carried the 0.x
+carve-out floor of `>= 1.1.0`; the rest carry the standard floor of `2.0.0`.
 
 | Symbol | Deprecated since | Removed no earlier than | Replacement |
 | --- | --- | --- | --- |
-| `@event` decorator | 0.3 | **1.1.0** | `@event_handler` |
-| `LiveViewForm` | 0.3 | **1.1.0** | `django.forms.Form` |
-| `_legacy` theming module (`THEMES`, `get_theme()`, `list_themes()`) | 0.5 | **1.1.0** | `DESIGN_SYSTEMS` / `get_design_system` / `get_all_design_systems` from `djust.theming.theme_packs` |
+| `@event` decorator | 0.3 | **2.0.0** | `@event_handler` |
+| `LiveViewForm` | 0.3 | **2.0.0** | `django.forms.Form` |
+| `_legacy` theming module (`THEMES`, `get_theme()`, `list_themes()`) | 0.5 | **2.0.0** | `DESIGN_SYSTEMS` / `get_design_system` / `get_all_design_systems` from `djust.theming.theme_packs` |
 | Dict-style reads of `block` in a Python-bridged tag (`block["super"]`, `block.get("super")`, `block.values()`, `block.items()`, `dict(block)`) | 1.3 | **2.0.0** | `context["block"].super()` |
+| `@reactive` (raises `TypeError` on a `LiveView`, which has no `update()`; elsewhere the decorated body is never called) | 1.4 | **2.0.0** | A plain attribute, or `@computed` |
+| `djust.auth.social.social_auth_providers` context processor | 1.3 | **2.0.0** | `{% auth_providers auth %}` from `{% load djust_auth %}` |
+| `AccordionMixin`, `TabsMixin`, `ModalMixin`, `CollapsibleMixin`, `SheetMixin`, `DropdownMixin`, `TooltipMixin`, `CarouselMixin` (subclassing warns) | 1.4 | **2.0.0** | The matching component in `djust.components.descriptors` (`Accordion`, `Tabs`, …) |
+| `djust.template_backend` module (and `'djust.template_backend.DjustTemplateBackend'` in `TEMPLATES`) | 1.4 | **2.0.0** | `djust.template` / `'djust.template.backend.DjustTemplateBackend'` |
+| `djust.state_backend` module | 1.4 | **2.0.0** | `djust.state_backends` |
+| `djust.simple_live_view.LiveView` | 1.4 | **2.0.0** | `djust.simple_live_view.SimpleLiveView` |
+| `djust.rust_components.Button` | 1.4 | **2.0.0** | `djust.components.ui.Button` |
+| `StreamingMixin.stream_insert` / `stream_delete` (the async pair, reachable on a `LiveView` only as `StreamingMixin.stream_insert(self, ...)`) | 1.4 | **2.0.0** | `await self.astream_insert(...)` / `await self.astream_delete(...)` |
+| `DjustSSEEventView` (the SSE `sse/<id>/event/` endpoint) | 1.4 | **2.0.0** | `{"type": "event", ...}` posted to `sse/<id>/message/` |
+
+Deprecated **settings** warn once at startup, from `DjustConfig.ready()`
+(`python/djust/_deprecated_settings.py`); djust 2.0 refuses to start while one is set:
+
+| Setting | Deprecated since | Removed no earlier than | Replacement |
+| --- | --- | --- | --- |
+| `DJUST_WS_COMPRESSION` | 1.4 | **2.0.0** | `LIVEVIEW_CONFIG['websocket_compression']` |
+| `DJUST_VDOM_CACHE_ENABLED` / `_TTL_SECONDS` / `_MAX_ENTRIES` | 1.4 | **2.0.0** | `LIVEVIEW_CONFIG['service_worker']['vdom_cache_enabled' / 'vdom_cache_ttl_seconds' / 'vdom_cache_max_entries']` |
+| `DJUST_STATE_BACKEND` / `DJUST_REDIS_URL` | 1.4 | **2.0.0** | `DJUST_CONFIG['STATE_BACKEND']` (`'memory'` or `'redis'`) / `DJUST_CONFIG['REDIS_URL']` |
+| `LIVEVIEW_CONFIG` keys `template_auto_call`, `virtual_keyed_ops`, `django_value_repr` | 1.4 | **2.0.0** | None: 2.0 always enables what each one could switch off. Delete the key. |
 
 ### `@event` → `@event_handler`
 
@@ -264,8 +284,9 @@ class ContactForm(forms.Form):
 
 > **Note on the corrected warning text.** Before djust 1.0, the `LiveViewForm`
 > deprecation warning said it would be "removed in djust 0.4" — a version
-> already long past. That stale text has been corrected to the policy-compliant
-> `>= 1.1.0` floor.
+> already long past. That stale text was corrected to the policy-compliant
+> `>= 1.1.0` floor, and from 1.4 the warning names `2.0.0`, the release that
+> removes it.
 
 ### The `_legacy` theming module
 

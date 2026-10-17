@@ -12,9 +12,12 @@ Mixin state should only contain UI state (which item is open, which tab
 is active), never application data or secrets.
 """
 
-from typing import Any, Dict, Optional, Type, TypeVar
+import sys
+from types import FrameType
+from typing import Any, ClassVar, Dict, Optional, Type, TypeVar
 
 from ..._class_snapshot import attribute_names
+from ..._deprecation import warn_deprecated
 
 __all__ = ["ComponentMixin", "TypedState"]
 
@@ -98,6 +101,26 @@ class TypedState(dict):
         return cls(**d)
 
 
+def _frames_to_caller() -> int:
+    """How many frames above this one's caller the first non-djust frame is.
+
+    A deprecated mixin's warning must point at the user's ``class`` statement.
+    ``__init_subclass__`` runs at a depth that depends on the user's base order
+    (another base's ``__init_subclass__`` can chain to ours), so the stacklevel
+    is counted rather than fixed. Test modules (``djust.tests.*``) count as
+    callers.
+    """
+    frame: Optional[FrameType] = sys._getframe(2)  # the caller of _frames_to_caller's caller
+    depth = 1
+    while frame is not None:
+        name = frame.f_globals.get("__name__", "")
+        if not name.startswith("djust.") or name.startswith("djust.tests."):
+            return depth
+        frame = frame.f_back
+        depth += 1
+    return 1
+
+
 class ComponentMixin:
     """Base for per-component interactive mixins.
 
@@ -107,6 +130,25 @@ class ComponentMixin:
     """
 
     component_name = ""
+
+    #: Set on a deprecated mixin (DEP-002): the replacement its
+    #: ``DeprecationWarning`` names. A class that subclasses such a mixin
+    #: directly gets the warning; the mixin's own definition does not.
+    _deprecated_replacement: ClassVar[Optional[str]] = None
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        for base in cls.__bases__:
+            replacement = base.__dict__.get("_deprecated_replacement")
+            if replacement and "_deprecated_replacement" not in cls.__dict__:
+                # +2: warnings.warn -> warn_deprecated -> this frame.
+                warn_deprecated(
+                    base.__name__,
+                    since="1.4",
+                    removed_in="2.0.0",
+                    instead=replacement,
+                    stacklevel=2 + _frames_to_caller(),
+                )
 
     def _instances_attr(self) -> str:
         """Return the attribute name for this mixin's instance dict."""

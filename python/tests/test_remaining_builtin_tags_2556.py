@@ -37,7 +37,7 @@ from django.test import RequestFactory
 from django.utils.datastructures import MultiValueDict
 from django.utils.lorem_ipsum import COMMON_P, WORDS
 
-from djust.template_backend import DjustTemplateBackend
+from djust.template import DjustTemplateBackend
 
 # `render_full_template` saves the request session (the LiveView HTTP-GET entry).
 pytestmark = pytest.mark.django_db

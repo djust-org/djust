@@ -1007,7 +1007,11 @@ DECORATORS: List[Dict[str, Any]] = [
     {
         "name": "@reactive",
         "import": "from djust.decorators import reactive",
-        "description": "Create a reactive property that triggers re-render on change.",
+        "description": "DEPRECATED (removed in 2.0) and BROKEN — LiveView has no "
+        "update() method, so @reactive on a view raises TypeError at class "
+        "definition; on other hosts the decorated function's body is never "
+        "called. Do not recommend it: use a plain attribute (djust re-renders "
+        "after every event handler) or @computed.",
         "params": {},
         "usage": [
             "@reactive\ndef count(self):\n    return self._count",

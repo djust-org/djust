@@ -660,7 +660,7 @@ def _gallery_template_backend() -> BaseEngine:
     The gallery used ``django.template.base.Template``, which compiles through
     ``Engine.get_default()`` and therefore REQUIRES a ``DjangoTemplates`` entry
     in ``TEMPLATES``. A project scaffolded by ``djust new`` — and djust's own
-    demo — configures only ``djust.template_backend.DjustTemplateBackend``, so
+    demo — configures only ``djust.template.backend.DjustTemplateBackend``, so
     every snippet raised ``ImproperlyConfigured: No DjangoTemplates backend is
     configured`` and every component in the gallery rendered as the red
     "Render error" placeholder rather than the component.

@@ -1589,6 +1589,17 @@ class DjustSSEEventView(View):
     """
 
     async def post(self, request: HttpRequest, session_id: str) -> HttpResponse:
+        # Only clients older than #1237 post here; the shipped client posts to
+        # /message/. Removed in djust 2.0.
+        from ._deprecation import warn_deprecated
+
+        warn_deprecated(
+            "The SSE /event/ endpoint (djust.sse.DjustSSEEventView)",
+            since="1.4",
+            removed_in="2.0.0",
+            instead='a {"type": "event", ...} POST to sse/<session_id>/message/',
+            stacklevel=2,
+        )
         # ---- SSE CSRF defense (Finding #7): Origin allowlist + JSON content type ----
         if not _sse_origin_allowed(request):
             logger.warning(

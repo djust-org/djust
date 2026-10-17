@@ -43,7 +43,7 @@ _OPTIONS = {
     "no-options": {},
 }
 _BACKENDS = {
-    "djust": "djust.template_backend.DjustTemplateBackend",
+    "djust": "djust.template.backend.DjustTemplateBackend",
     "django": "django.template.backends.django.DjangoTemplates",
 }
 

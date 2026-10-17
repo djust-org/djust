@@ -47,12 +47,12 @@ _CHILD = textwrap.dedent(
         SECRET_KEY="x",
         DEBUG=False,
         TEMPLATES=[{
-            "BACKEND": "djust.template_backend.DjustTemplateBackend",
+            "BACKEND": "djust.template.backend.DjustTemplateBackend",
             "NAME": "djust", "DIRS": [], "APP_DIRS": False, "OPTIONS": {},
         }],
     )
     django.setup()
-    from djust.template_backend import DjustTemplateBackend
+    from djust.template import DjustTemplateBackend
 
     backend = DjustTemplateBackend(
         params={"NAME": "djust", "DIRS": [], "APP_DIRS": False, "OPTIONS": {}}
@@ -301,7 +301,7 @@ def _render_leaf(depth: int) -> str:
     version of this test rendered ``{{ v|length }}`` of the root, which is
     ``1`` at any ceiling ≥ 1 and stayed green with the ceiling gated off (the
     #2673 review)."""
-    from djust.template_backend import DjustTemplateBackend
+    from djust.template import DjustTemplateBackend
 
     backend = DjustTemplateBackend(
         params={"NAME": "djust", "DIRS": [], "APP_DIRS": False, "OPTIONS": {}}

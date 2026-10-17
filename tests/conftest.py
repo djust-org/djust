@@ -91,7 +91,7 @@ def _reset_djust_globals():
 def cleanup_session_cache():
     """Clean up session cache after each test."""
     # Setup: Ensure we use in-memory backend for tests
-    from djust.state_backend import set_backend, InMemoryStateBackend
+    from djust.state_backends import set_backend, InMemoryStateBackend
 
     backend = InMemoryStateBackend()
     set_backend(backend)

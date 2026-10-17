@@ -40,6 +40,8 @@ class DropdownMixin(ComponentMixin):
     .. deprecated:: Use ``djust_components.descriptors.Dropdown`` instead.
     """
 
+    _deprecated_replacement = "the Dropdown component from djust.components.descriptors"
+
     component_name = "dropdown"
     dropdown_instances: Optional[Dict[str, "DropdownState"]] = None
 
