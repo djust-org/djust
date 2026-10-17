@@ -1778,9 +1778,14 @@ def _client_hook_sources() -> str:
 
     djust_root = Path(__file__).resolve().parents[2]
     texts = []
-    for folder in (_components_static_dir(), djust_root / "static" / "djust" / "src"):
-        if folder.is_dir():
-            texts += [f.read_text(errors="ignore") for f in sorted(folder.glob("*.js"))]
+    folder = _components_static_dir()
+    if folder.is_dir():
+        texts += [f.read_text(errors="ignore") for f in sorted(folder.glob("*.js"))]
+    # client.js, not static/djust/src/: the bundle is the concatenation of
+    # those modules, and the modules themselves are not in the wheel.
+    client = djust_root / "static" / "djust" / "client.js"
+    if client.is_file():
+        texts.append(client.read_text(errors="ignore"))
     return "\n".join(texts)
 
 

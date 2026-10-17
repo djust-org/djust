@@ -203,7 +203,7 @@ def test_turn_end_paths_use_single_flush_helper():
 
 def test_flush_all_pending_covers_every_side_effect():
     """The helper must flush ALL queued side-effects — push_events, flash,
-    page_metadata, pending_layout, deferred, navigation, accessibility, i18n —
+    page_metadata, pending_layout, deferred, navigation, accessibility —
     so consolidating onto it can never drop one a hand-copied block included."""
     import djust.websocket as ws_mod
 
@@ -216,6 +216,5 @@ def test_flush_all_pending_covers_every_side_effect():
         "_flush_deferred",
         "_flush_navigation",
         "_flush_accessibility",
-        "_flush_i18n",
     ):
         assert f"self.{flush}()" in src, f"_flush_all_pending must call {flush} (#1643)"

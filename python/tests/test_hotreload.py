@@ -22,7 +22,6 @@ def mock_view_instance():
     view._drain_navigation = Mock(return_value=[])
     view._drain_announcements = Mock(return_value=[])
     view._drain_focus = Mock(return_value=None)
-    view._drain_i18n_commands = Mock(return_value=[])
     return view
 
 
