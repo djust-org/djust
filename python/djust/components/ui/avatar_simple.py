@@ -35,14 +35,7 @@ from django.utils.html import conditional_escape
 
 from djust.components.utils import url_attr
 
-# Try to import Rust implementation
-try:
-    from djust._rust import RustAvatar  # type: ignore[attr-defined]
-
-    _RUST_AVAILABLE = True
-except ImportError:
-    _RUST_AVAILABLE = False
-    RustAvatar = None  # type: ignore[assignment, misc]
+from djust._rust import RustAvatar
 
 
 class Avatar(Component):
@@ -63,7 +56,7 @@ class Avatar(Component):
         status: Status indicator (online, offline, busy, away)
     """
 
-    _rust_impl_class = RustAvatar if _RUST_AVAILABLE else None
+    _rust_impl_class = RustAvatar
 
     # Template for hybrid rendering
     template = """<div class="avatar avatar-{{ size }}{% if shape == "square" %} avatar-square{% endif %}{% if status %} avatar-{{ status }}{% endif %}">{% if src %}

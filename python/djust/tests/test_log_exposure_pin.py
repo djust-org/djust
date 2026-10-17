@@ -59,8 +59,6 @@ FRAMEWORK_ONLY = {
     ("_clear_live_handles", "%s failed during teardown"): (
         "teardown step names; confirm no application hook runs there"
     ),
-    ("_flush_accessibility", "Failed to flush accessibility announcements"): "frame send",
-    ("_flush_accessibility", "Failed to flush focus command"): "frame send",
     ("_attach_debug_payload", "Failed to attach debug payload: %s"): "debug payload assembly",
     ("disconnect", "Error shutting down actor: %s"): "Rust actor shutdown",
     ("_scope_session_key", "failed to read the session key: %s"): "session key read",
@@ -131,8 +129,6 @@ RUNTIME_FRAMEWORK_ONLY = {
     ),
     ("on_view_instantiated", "Failed to register view in observability registr"): "registry",
     ("on_mount_render_ready", "failed to emit sticky_hold frame before mount"): "frame send",
-    ("_flush_accessibility", "Failed to flush accessibility announcements"): "frame send",
-    ("_flush_accessibility", "Failed to flush focus command"): "frame send",
 }
 
 RUNTIME_KNOWN_OPEN = {}
@@ -261,12 +257,6 @@ MIXIN_TABLES = {
             ("_get_template_content", "Could not load template for JIT: %s"): (
                 "JIT serialization is reached only from get_context_data's legacy continuation"
             ),
-            ("_jit_serialize_model", "JIT serialization failed for %s: %s"): (
-                "JIT serialization is reached only from get_context_data's legacy continuation"
-            ),
-            ("_jit_serialize_queryset", "[JIT ERROR] Serialization failed for '%s': %s"): (
-                "JIT serialization is reached only from get_context_data's legacy continuation"
-            ),
             ("replacer", "Failed to read included template %s: %s"): (
                 "JIT serialization is reached only from get_context_data's legacy continuation"
             ),
@@ -316,14 +306,7 @@ MIXIN_TABLES = {
             ),
         },
     ),
-    "mixins/template.py": (
-        {},
-        {
-            ("get_template", "[LiveView] Template inheritance resolution faile"): (
-                "template inheritance resolution over template files"
-            ),
-        },
-    ),
+    "mixins/template.py": (),
     "mixins/notifications.py": (
         {},
         {
@@ -435,12 +418,6 @@ MIXIN_TABLES = {
                 "tag handler registration and imports"
             ),
             ("_register_builtins", "Could not import built-in handlers: %s"): (
-                "tag handler registration and imports"
-            ),
-            ("decorator", "Could not register assign tag handler '%s': Rust"): (
-                "tag handler registration and imports"
-            ),
-            ("decorator", "Could not register tag handler '%s': Rust extens"): (
                 "tag handler registration and imports"
             ),
             ("decorator", "Failed to register assign tag handler '%s': %s"): (
@@ -1051,15 +1028,7 @@ MIXIN_TABLES = {
             ("theme_inspector_api", "theme inspector API failed", 1): "theme inspector dev API",
         },
     ),
-    "theming/rust_handlers.py": (
-        {},
-        {
-            (
-                "register_with_rust_engine",
-                "Rust extension unavailable; theme tags work via ",
-            ): "theme tag registration",
-        },
-    ),
+    "theming/rust_handlers.py": (),
     "uploads/storage.py": (
         {},
         {

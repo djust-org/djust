@@ -38,9 +38,7 @@ context-string form (#1435) renders once per request, on first read, and is chea
 the same tag appears multiple times on a page. The tag form exists for
 customization-with-args and docs parity.
 
-Registration is wired in :meth:`DjustThemingConfig.ready`. It degrades
-gracefully when the Rust extension is unavailable (Django-engine templates
-keep working via ``{% load theme_tags %}``).
+Registration is wired in :meth:`DjustThemingConfig.ready`.
 """
 
 from __future__ import annotations
@@ -169,15 +167,7 @@ def register_with_rust_engine() -> None:
     extension is unavailable so Django-engine templates keep working via
     ``{% load theme_tags %}``.
     """
-    try:
-        from djust._rust import has_tag_handler, register_tag_handler
-    except ImportError as exc:  # pragma: no cover - exercised only sans-Rust
-        logger.debug(
-            "Rust extension unavailable; theme tags work via the Django "
-            "template engine only ({%% load theme_tags %%}): %s",
-            exc,
-        )
-        return
+    from djust._rust import has_tag_handler, register_tag_handler
 
     for tag_name in _THEME_TAG_NAMES:
         if has_tag_handler(tag_name):

@@ -295,19 +295,6 @@ fn the_chokepoint_carries_pythons_int_spellings() {
     assert_eq!(render(r#"{{ p|ljust:"1_0" }}"#, &c), "ab        ");
 }
 
-/// A bare float truncates (`int(2.7)`); a QUOTED one raises (`int("2.7")`).
-/// One character of template syntax separates them.
-#[test]
-fn the_quoting_hint_separates_truncation_from_a_raise() {
-    let mut c = Context::new();
-    c.set("p".to_string(), Value::String("aa bb".into()));
-    assert_eq!(render("{{ p|wordwrap:2.7 }}", &c), "aa\nbb");
-    assert!(Template::new(r#"{{ p|wordwrap:"2.7" }}"#)
-        .expect("template should parse")
-        .render(&c)
-        .is_err());
-}
-
 /// Rust's format spec holds its width in a `u16`, so `format!("{s:<width$}")`
 /// panics at exactly one past `u16::MAX` with "Formatting argument out of
 /// range" — a `PanicException` across the PyO3 boundary, which derives from

@@ -18,16 +18,9 @@ except (ImportError, SystemError):
 
 # Rust template walker that derives the dj-model allowlist from the TEMPLATE
 # SOURCE (immune to rendered-output poisoning; see _dj_model_fields below).
-# Resolve once, tolerating both the package-relative import and the
-# direct-file import the unit tests use (when this module is loaded standalone
-# the ``..`` parent package doesn't exist).
-try:
-    from .._rust import dj_model_fields_from_template  # type: ignore[attr-defined]
-except (ImportError, SystemError):
-    try:
-        from djust._rust import dj_model_fields_from_template  # type: ignore[no-redef]
-    except (ImportError, SystemError):  # pragma: no cover — Rust ext unavailable
-        dj_model_fields_from_template = None  # type: ignore[assignment]
+# Absolute, not ``.._rust``: the unit tests load this file standalone, where the
+# parent package does not exist.
+from djust._rust import dj_model_fields_from_template
 
 
 logger = logging.getLogger(__name__)
@@ -146,7 +139,7 @@ class ModelBindingMixin:
         (``dj_model_fields_from_template``). Same security property as
         :meth:`_record_dj_model_fields_from_rust` (Text-node literals only).
         """
-        if not template_source or dj_model_fields_from_template is None:
+        if not template_source:
             self._dj_model_fields = frozenset()
             return
         try:

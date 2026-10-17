@@ -189,15 +189,6 @@ class TestUrlizetruncEllipsis:
         assert "http://example.com/aaaa</a>" in out
         assert out == django_render('{{ p|urlizetrunc:"999" }}', URL_TEXT)
 
-    def test_the_ascii_spelling_is_gone_from_the_source(self) -> None:
-        """The pin, because a literal `…` and a literal `...` are hard to tell
-        apart in a diff — which is how the three-dot spelling survived #2203's
-        fix to the neighbouring filter."""
-        body = FILTERS_RS.read_text(encoding="utf-8")
-        body = body.split("fn truncate_url_display(", 1)[1].split("\n}", 1)[0]
-        assert '"..."' not in body and "{truncated}..." not in body, body
-        assert "URL_TRUNCATE" in body
-
     def test_truncatechars_still_spells_it_the_same_way(self) -> None:
         """The neighbour whose fix this one was missing (#2203). Pinned so the
         two cannot drift apart again in the other direction."""

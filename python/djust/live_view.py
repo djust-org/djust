@@ -57,23 +57,14 @@ from .mixins import (
     ActivityMixin,
 )
 
+from ._rust import (
+    RustLiveView,
+    SessionActorHandle,
+    extract_template_variables,  # noqa: F401 — re-exported, used by JIT and template tests
+)
+
 # Configure logger
 logger = logging.getLogger(__name__)
-
-try:
-    from ._rust import (
-        RustLiveView,
-        SessionActorHandle,
-        extract_template_variables,  # noqa: F401 — re-exported, used by JIT and template tests
-    )
-except ImportError:
-    # Optional PyO3 fallback: when the Rust extension is absent these names
-    # become None at runtime. mypy follows the try-branch (the classes), so
-    # ``Optional[RustLiveView]`` stays a valid annotation; the None rebinds
-    # below are masked from static typing via a narrow ignore.
-    RustLiveView = None  # type: ignore[assignment,misc]
-    SessionActorHandle = None  # type: ignore[assignment,misc]
-    extract_template_variables = None  # type: ignore[assignment]  # noqa: F401 — fallback re-export
 
 __all__ = [
     "LiveView",
@@ -511,7 +502,7 @@ def _protect_http_entry(cls: type, view: Callable[..., Any]) -> Callable[..., An
     return protected
 
 
-class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(async) intentionally co-define stream_insert/stream_delete; see live_view.pyi overloads
+class LiveView(
     ContextProviderMixin,
     StreamsMixin,
     StreamingMixin,

@@ -309,14 +309,13 @@ class TestTheChokepointIsTheOnlyIntValueReader:
     fifth filter that grows its own ``parse`` on the value goes red here.
     """
 
-    #: Django's four value-side ``int()`` call sites, as
+    #: Django's value-side ``int()`` call sites among the NATIVE built-ins, as
     #: ``filter -> the exceptions its own ``except`` does NOT catch``. A SET:
-    #: deleting a row fails this too.
+    #: deleting a row fails this too. (``get_digit`` and ``filesizeformat`` run
+    #: Django's own function since 2.0, so their ``int()`` is Python's.)
     EXPECTED_CALLERS = {
         "divisibleby": "Value, Type, Overflow",
-        "get_digit": "Type, Overflow",
         "add": "Overflow",
-        "filesizeformat": "Overflow",
     }
 
     @staticmethod
@@ -417,7 +416,7 @@ class TestRandomisedDifferential:
         '{% widthratio 10 2 p|get_digit:"1" %}',
     ]
 
-    #: The two divergences the sweep DOES find, each pre-existing, each a
+    #: The divergence the sweep DOES find, pre-existing, a
     #: different mechanism from ``int(value)``, and each named rather than
     #: dropped from the corpus — a shape removed from a sweep is a shape
     #: nobody measures again.
@@ -434,13 +433,9 @@ class TestRandomisedDifferential:
             # that raise, and the disagreement is at the rendering boundary
             # rather than at `int()`. Asserted as its own premise below.
             return "django-cannot-render-a-nonfinite-decimal"
-        if "filesizeformat" in source and du.startswith("0"):
-            # `filesize_to_int` carries an `i128`; Python's `int` has no
-            # ceiling, so a magnitude past ~1.7e38 gives up and renders
-            # `0 bytes` where Django scales it. Pre-existing and untouched by
-            # this change, which only adds the OverflowError refusal for a
-            # genuine infinity.
-            return "filesizeformat-past-i128"
+        # `filesizeformat-past-i128` used to be the second named residue: the
+        # native port carried an `i128`. 2.0 runs Django's own function, so it
+        # cannot occur any more and is not listed.
         return None
 
     def test_the_sweep_agrees_on_every_cell(self) -> None:
@@ -465,7 +460,6 @@ class TestRandomisedDifferential:
         assert not bad, f"{len(bad)}/{cells} disagree, first three: {bad[:3]!r}"
         assert set(explained) == {
             "django-cannot-render-a-nonfinite-decimal",
-            "filesizeformat-past-i128",
         }, f"the named residues are no longer the ones that occur: {explained}"
 
     def test_django_itself_cannot_render_a_nonfinite_decimal(self) -> None:

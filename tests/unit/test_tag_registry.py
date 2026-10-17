@@ -55,22 +55,18 @@ def _isolate_tag_registries():
     ``test_handler_exception_returns_error``) is wiped on teardown — it
     cannot leak into ``test_assign_tag.py`` or other downstream files.
     """
-    try:
-        from djust._rust import (
-            clear_tag_handlers,
-            clear_block_tag_handlers,
-            clear_assign_tag_handlers,
-        )
-        from djust.template_tags import reregister_builtins
-        from djust.theming.rust_handlers import (
-            register_with_rust_engine as _register_theme_tags,
-        )
-        from djust.components.rust_handlers import (
-            register_with_rust_engine as _register_component_tags,
-        )
-    except ImportError:
-        pytest.skip("Rust extension not available")
-        return
+    from djust._rust import (
+        clear_tag_handlers,
+        clear_block_tag_handlers,
+        clear_assign_tag_handlers,
+    )
+    from djust.template_tags import reregister_builtins
+    from djust.theming.rust_handlers import (
+        register_with_rust_engine as _register_theme_tags,
+    )
+    from djust.components.rust_handlers import (
+        register_with_rust_engine as _register_component_tags,
+    )
 
     def _reset() -> None:
         clear_tag_handlers()

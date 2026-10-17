@@ -31,7 +31,7 @@ class StreamingMixin:
         """
         ...
 
-    async def stream_insert(
+    async def astream_insert(
         self,
         stream_name: str,
         html: str,
@@ -111,7 +111,7 @@ class StreamingMixin:
         """
         ...
 
-    async def stream_delete(
+    async def astream_delete(
         self,
         stream_name: str,
         selector: str,

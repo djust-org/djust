@@ -1105,16 +1105,6 @@ class TestC012ManualClientJs:
 # ---------------------------------------------------------------------------
 
 
-def _liveview_available():
-    """Return True if LiveView can be imported (Rust extension built)."""
-    try:
-        from djust.live_view import LiveView  # noqa: F401
-
-        return True
-    except ImportError:
-        return False
-
-
 def _force_gc():
     """Force garbage collection to clean up dynamically created subclasses."""
     import gc
@@ -1218,10 +1208,6 @@ class TestV001MissingTemplateName:
 
     def test_v001_no_template_name(self):
         """V001 fires for a LiveView subclass missing template_name."""
-        import pytest
-
-        if not _liveview_available():
-            pytest.skip("Rust extension not available")
 
         from djust.live_view import LiveView
         from djust.checks import check_liveviews
@@ -1238,10 +1224,6 @@ class TestV001MissingTemplateName:
 
     def test_v001_passes_with_template_name(self):
         """V001 should not fire when template_name is present."""
-        import pytest
-
-        if not _liveview_available():
-            pytest.skip("Rust extension not available")
 
         from djust.live_view import LiveView
         from djust.checks import check_liveviews
@@ -1266,10 +1248,6 @@ class TestV002MissingMount:
 
     def test_v002_no_mount(self):
         """V002 fires for a LiveView subclass without mount()."""
-        import pytest
-
-        if not _liveview_available():
-            pytest.skip("Rust extension not available")
 
         from djust.live_view import LiveView
         from djust.checks import check_liveviews
@@ -1290,10 +1268,6 @@ class TestV002MissingMount:
 
     def test_v002_passes_with_mount(self):
         """V002 should not fire when mount() is defined."""
-        import pytest
-
-        if not _liveview_available():
-            pytest.skip("Rust extension not available")
 
         from djust.live_view import LiveView
         from djust.checks import check_liveviews
@@ -1321,10 +1295,6 @@ class TestV003MountSignature:
 
     def test_v003_mount_missing_request_param(self):
         """V003 fires when mount() does not accept 'request' as second param."""
-        import pytest
-
-        if not _liveview_available():
-            pytest.skip("Rust extension not available")
 
         from djust.live_view import LiveView
         from djust.checks import check_liveviews
@@ -1348,10 +1318,6 @@ class TestV003MountSignature:
 
     def test_v003_mount_wrong_second_param_name(self):
         """V003 fires when second param is not named 'request'."""
-        import pytest
-
-        if not _liveview_available():
-            pytest.skip("Rust extension not available")
 
         from djust.live_view import LiveView
         from djust.checks import check_liveviews
@@ -1375,10 +1341,6 @@ class TestV003MountSignature:
 
     def test_v003_passes_correct_signature(self):
         """V003 should not fire when mount(self, request, **kwargs) is correct."""
-        import pytest
-
-        if not _liveview_available():
-            pytest.skip("Rust extension not available")
 
         from djust.live_view import LiveView
         from djust.checks import check_liveviews
@@ -1406,10 +1368,6 @@ class TestV004MissingEventHandlerDecorator:
 
     def test_v004_handler_like_prefix_without_decorator(self):
         """V004 fires for a submit_* method without @event_handler."""
-        import pytest
-
-        if not _liveview_available():
-            pytest.skip("Rust extension not available")
 
         from djust.live_view import LiveView
         from djust.checks import check_liveviews
@@ -1443,10 +1401,6 @@ class TestV004MissingEventHandlerDecorator:
         """#3002: an undecorated handle_* method is the server-push-only
         pattern (server_push calls it; browsers cannot). Both V004 fixes
         break it, so V004 does not flag handle_*."""
-        import pytest
-
-        if not _liveview_available():
-            pytest.skip("Rust extension not available")
 
         from djust.live_view import LiveView
         from djust.checks import check_liveviews
@@ -1478,10 +1432,6 @@ class TestV004MissingEventHandlerDecorator:
 
     def test_v004_passes_with_decorator(self):
         """V004 should not fire for a properly decorated method."""
-        import pytest
-
-        if not _liveview_available():
-            pytest.skip("Rust extension not available")
 
         from djust.live_view import LiveView
         from djust.decorators import event_handler
@@ -1515,10 +1465,6 @@ class TestV004MissingEventHandlerDecorator:
 
     def test_v004_private_method_ignored(self):
         """V004 should not fire for _private methods."""
-        import pytest
-
-        if not _liveview_available():
-            pytest.skip("Rust extension not available")
 
         from djust.live_view import LiveView
         from djust.checks import check_liveviews
@@ -1554,10 +1500,6 @@ class TestV005AllowedModules:
 
     def test_v005_module_not_allowed(self, settings):
         """V005 fires when module is not in LIVEVIEW_ALLOWED_MODULES."""
-        import pytest
-
-        if not _liveview_available():
-            pytest.skip("Rust extension not available")
 
         from djust.live_view import LiveView
         from djust.checks import check_liveviews
@@ -1584,10 +1526,6 @@ class TestV005AllowedModules:
 
     def test_v005_module_allowed(self, settings):
         """V005 should not fire when module is in LIVEVIEW_ALLOWED_MODULES."""
-        import pytest
-
-        if not _liveview_available():
-            pytest.skip("Rust extension not available")
 
         from djust.live_view import LiveView
         from djust.checks import check_liveviews
@@ -1613,10 +1551,6 @@ class TestV005AllowedModules:
 
     def test_v005_no_setting_configured(self, settings):
         """V005 should not fire when LIVEVIEW_ALLOWED_MODULES is not set."""
-        import pytest
-
-        if not _liveview_available():
-            pytest.skip("Rust extension not available")
 
         from djust.live_view import LiveView
         from djust.checks import check_liveviews
@@ -1653,10 +1587,6 @@ class TestS005UnauthenticatedViews:
 
     def test_s005_fires_when_auth_not_addressed(self):
         """S005 fires when neither login_required nor permission_required is set."""
-        import pytest
-
-        if not _liveview_available():
-            pytest.skip("Rust extension not available")
 
         from djust.live_view import LiveView
         from djust.checks import check_configuration
@@ -1684,10 +1614,6 @@ class TestS005UnauthenticatedViews:
 
     def test_s005_suppressed_with_login_required_true(self):
         """S005 should not fire when login_required = True."""
-        import pytest
-
-        if not _liveview_available():
-            pytest.skip("Rust extension not available")
 
         from djust.live_view import LiveView
         from djust.checks import check_configuration
@@ -1716,10 +1642,6 @@ class TestS005UnauthenticatedViews:
 
     def test_s005_suppressed_with_login_required_false(self):
         """S005 should not fire when login_required = False (intentionally public)."""
-        import pytest
-
-        if not _liveview_available():
-            pytest.skip("Rust extension not available")
 
         from djust.live_view import LiveView
         from djust.checks import check_configuration
@@ -2724,10 +2646,6 @@ class TestV007Retired:
     encouraged, not suspicious. The ID is never emitted and never reused."""
 
     def test_closed_legacy_signature_is_not_reported(self):
-        import pytest
-
-        if not _liveview_available():
-            pytest.skip("Rust extension not available")
 
         from djust.live_view import LiveView
         from djust.decorators import event_handler
@@ -4133,10 +4051,6 @@ class TestV004LifecycleMethods:
     """V004 must not fire on known djust lifecycle methods."""
 
     def _make_view_with_methods(self, method_names):
-        import pytest
-
-        if not _liveview_available():
-            pytest.skip("Rust extension not available")
 
         from djust.live_view import LiveView
         from djust.checks import check_liveviews
@@ -4411,10 +4325,6 @@ class TestV009OnMountValidation:
 
     def test_v009_non_list_on_mount(self):
         """V009 fires when on_mount is not a list."""
-        import pytest
-
-        if not _liveview_available():
-            pytest.skip("Rust extension not available")
 
         from djust.live_view import LiveView
         from djust.checks import check_liveviews
@@ -4443,10 +4353,6 @@ class TestV009OnMountValidation:
 
     def test_v009_non_callable_item(self):
         """V009 fires when on_mount list contains a non-callable."""
-        import pytest
-
-        if not _liveview_available():
-            pytest.skip("Rust extension not available")
 
         from djust.live_view import LiveView
         from djust.checks import check_liveviews
@@ -4475,10 +4381,6 @@ class TestV009OnMountValidation:
 
     def test_v009_valid_on_mount_no_warning(self):
         """V009 should not fire for a valid on_mount list of callables."""
-        import pytest
-
-        if not _liveview_available():
-            pytest.skip("Rust extension not available")
 
         from djust.live_view import LiveView
         from djust.hooks import on_mount

@@ -68,10 +68,6 @@ class MarkdownTagHandler(TagHandler):
     through :func:`djust._rust.render_markdown` with the requested GFM options.
     The Rust side guarantees the output is safe HTML; we do not apply
     additional escaping.
-
-    If the Rust extension is unavailable (e.g. in a degraded CI environment)
-    the handler falls back to Django ``escape()`` on the raw source so the
-    template still renders — just without formatting.
     """
 
     def render(self, args: List[str], context: Dict[str, Any]) -> str:
@@ -81,19 +77,7 @@ class MarkdownTagHandler(TagHandler):
             )
             return ""
 
-        try:
-            from djust._rust import render_markdown as _rust_render_markdown
-        except ImportError:
-            logger.error(
-                "djust._rust.render_markdown not available — Rust extension "
-                "not built. Falling back to escape()."
-            )
-            from django.utils.html import escape
-
-            src_fallback = self._resolve_arg(args[0], context)
-            # escape() returns a SafeString (str subclass); Django is untyped
-            # under the lenient global config so it is seen as ``Any`` — coerce.
-            return str(escape("" if src_fallback is None else str(src_fallback)))
+        from djust._rust import render_markdown as _rust_render_markdown
 
         src_raw = self._resolve_arg(args[0], context)
         if isinstance(src_raw, tuple):

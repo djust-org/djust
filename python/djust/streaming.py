@@ -106,7 +106,7 @@ class StreamingMixin:
         # Batch or send immediately
         await self._send_or_queue_stream_op(stream_name, op, now, elapsed)
 
-    async def stream_insert(
+    async def astream_insert(
         self,
         stream_name: str,
         html: str,
@@ -114,7 +114,11 @@ class StreamingMixin:
         target: Optional[str] = None,
     ) -> None:
         """
-        Insert HTML into a stream container.
+        Insert HTML into a stream container, sent now (not with the next render).
+
+        Named ``astream_insert`` (2.0) so it does not collide with the sync
+        collection-stream ``StreamsMixin.stream_insert``, which comes first in
+        ``LiveView``'s bases and used to shadow it.
 
         Args:
             stream_name: Logical name for the stream
@@ -228,13 +232,14 @@ class StreamingMixin:
         }
         await self._send_terminal_stream_op(stream_name, op)
 
-    async def stream_delete(
+    async def astream_delete(
         self,
         stream_name: str,
         selector: str,
     ) -> None:
         """
-        Remove an element from the DOM.
+        Remove an element from the DOM, sent now. ``astream_delete`` for the
+        same reason as :meth:`astream_insert`.
 
         Args:
             stream_name: Logical name for the stream

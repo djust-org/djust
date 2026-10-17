@@ -49,7 +49,6 @@ if TYPE_CHECKING:
     from .components.assigns import Assign, AssignValidationError, Slot
     from .components.function_component import component, clear_components
     from .decorators import (
-        reactive,
         event_handler,
         is_event_handler,
         action,
@@ -88,17 +87,8 @@ if TYPE_CHECKING:
 
 __version__ = "2.0.0.dev0"
 
-# Import Rust functions
-try:
-    from ._rust import render_template, diff_html, RustLiveView
-except ImportError as e:
-    # Fallback for when Rust extension isn't built
-    import warnings
-
-    warnings.warn(f"Could not import Rust extension: {e}. Performance will be degraded.")
-    render_template = None  # type: ignore[assignment]
-    diff_html = None  # type: ignore[assignment]
-    RustLiveView = None  # type: ignore[assignment,misc]
+# The Rust extension is required (2.0): a missing build fails here, loudly.
+from ._rust import render_template, diff_html, RustLiveView  # noqa: E402
 
 # Register template tag handlers (url, static, etc.)
 # This imports the template_tags module which auto-registers handlers with
@@ -125,7 +115,6 @@ _LAZY: dict[str, tuple[str, str]] = {
     "Slot": ("djust.components.assigns", "Slot"),
     "component": ("djust.components.function_component", "component"),
     "clear_components": ("djust.components.function_component", "clear_components"),
-    "reactive": ("djust.decorators", "reactive"),
     "event_handler": ("djust.decorators", "event_handler"),
     "is_event_handler": ("djust.decorators", "is_event_handler"),
     "action": ("djust.decorators", "action"),
@@ -420,7 +409,6 @@ __all__ = [
     # Function components
     "component",
     "clear_components",
-    "reactive",
     "event_handler",
     "is_event_handler",
     "action",

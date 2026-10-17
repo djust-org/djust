@@ -49,7 +49,7 @@ class LiveView(
     - NavigationMixin: live_patch(), live_redirect(), handle_params()
     - PushEventMixin: push_event()
     - StreamsMixin: stream(), stream_insert(), stream_delete(), stream_reset()
-    - StreamingMixin: stream_to(), push_state() (async methods)
+    - StreamingMixin: stream_to(), astream_insert(), astream_delete(), push_state() (async)
     """
 
     template_name: Optional[str] = None
@@ -96,12 +96,8 @@ class LiveView(
         reset: bool = False,
         limit: Optional[int] = None,
     ) -> Stream: ...
-    def stream_insert(  # type: ignore[misc, override]  # sync StreamsMixin form; async StreamingMixin form below
-        self, name: str, item: Any, at: int = -1
-    ) -> None: ...
-    def stream_delete(  # type: ignore[misc, override]  # sync StreamsMixin form; async StreamingMixin form below
-        self, name: str, item_or_id: Any
-    ) -> None: ...
+    def stream_insert(self, name: str, item: Any, at: int = -1) -> None: ...
+    def stream_delete(self, name: str, item_or_id: Any) -> None: ...
     def stream_reset(self, name: str, items: Any = None) -> None: ...
 
     # StreamingMixin async methods
@@ -111,7 +107,7 @@ class LiveView(
         target: Optional[str] = None,
         html: Optional[str] = None,
     ) -> None: ...
-    async def stream_insert(  # type: ignore[misc, override, no-redef]  # noqa: F811  # async StreamingMixin form; co-defined with sync StreamsMixin form above
+    async def astream_insert(
         self,
         stream_name: str,
         html: str,
@@ -141,7 +137,7 @@ class LiveView(
         stream_name: str,
         target: Optional[str] = None,
     ) -> None: ...
-    async def stream_delete(  # type: ignore[misc, override, no-redef]  # noqa: F811  # async StreamingMixin form; co-defined with sync StreamsMixin form above
+    async def astream_delete(
         self,
         stream_name: str,
         selector: str,

@@ -12,14 +12,7 @@ from django.utils.html import conditional_escape
 from typing import Any
 
 
-# Try to import Rust implementation (will be added later)
-try:
-    from djust._rust import RustBadge  # type: ignore[attr-defined]
-
-    _RUST_AVAILABLE = True
-except (ImportError, AttributeError):
-    _RUST_AVAILABLE = False
-    RustBadge = None  # type: ignore[assignment, misc]
+from djust._rust import RustBadge
 
 
 class Badge(Component):
@@ -69,8 +62,8 @@ class Badge(Component):
         size_lg = Badge("Large", variant="primary", size="lg")
     """
 
-    # Link to Rust implementation if available
-    _rust_impl_class = RustBadge if _RUST_AVAILABLE else None
+    # The Rust implementation
+    _rust_impl_class = RustBadge
 
     # Fallback: Hybrid rendering with template
     # Note: This will use Rust template engine if available, Django templates otherwise

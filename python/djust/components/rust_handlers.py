@@ -2037,15 +2037,10 @@ def register_with_rust_engine() -> None:
     Called from DjustComponentsConfig.ready(). Safe to call multiple times
     (subsequent calls overwrite existing registrations).
     """
-    try:
-        from djust._rust import (  # type: ignore[import]
-            register_block_tag_handler,
-            register_tag_handler,
-        )
-    except ImportError:
-        # djust not installed — skip silently (components still work via
-        # Django template engine with {% load djust_components %})
-        return
+    from djust._rust import (  # type: ignore[import]
+        register_block_tag_handler,
+        register_tag_handler,
+    )
 
     for tag_name, handler in INLINE_HANDLERS:
         register_tag_handler(tag_name, handler)
@@ -2091,16 +2086,10 @@ def register_with_rust_engine() -> None:
     # not get Rust VDOM identity. Parity is the right trade for a component
     # whose entire output is the split structure — and the alternative was not
     # "render in Rust" but "raise on every use".
-    try:
-        from djust._rust import register_raw_block_tag_handler  # type: ignore[import]
-        from djust.template_libraries import LibraryRawBlockTagHandler
+    from djust._rust import register_raw_block_tag_handler  # type: ignore[import]
+    from djust.template_libraries import LibraryRawBlockTagHandler
 
-        from .templatetags import djust_components as _components_lib
-    except ImportError:
-        # `djust._rust` absent — the earlier import already returned, but the
-        # template_libraries import is separate and must not take the whole
-        # registration down if it is unavailable.
-        return
+    from .templatetags import djust_components as _components_lib
 
     register_raw_block_tag_handler(
         "split_pane",

@@ -304,7 +304,9 @@ class TestTheAsymmetryTheIssueMissed:
         """
         inf = du('{{ p|get_digit:"1" }}', Decimal("Infinity"))
         assert inf[0] == "raised", inf
-        assert "OverflowError" in inf[2], inf
+        # `get_digit` is Django's own function since 2.0, so the class itself
+        # crosses rather than a djust message naming it.
+        assert inf[1] == "OverflowError", inf
         # …and the NaN one renders, as the class says.
         assert du('{{ p|get_digit:"1" }}', Decimal("NaN")) == "NaN"
 
