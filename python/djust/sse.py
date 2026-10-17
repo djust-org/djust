@@ -1049,8 +1049,14 @@ class SSESession:
     # ------------------------------------------------------------------ #
 
     async def send_error(self, error: str, **kwargs: Any) -> None:
-        """Push an error message to the SSE client."""
-        self.push({"type": "error", "error": error, **kwargs})
+        """Push an error message to the SSE client.
+
+        Built by the same ``build_error_frame`` as the WebSocket consumer's
+        ``send_error``, so both transports handle debug fields in one place.
+        """
+        from .security.error_handling import build_error_frame
+
+        self.push(build_error_frame(error, **kwargs))
 
     async def close(self, code: int = 1000) -> None:
         """Called by rate-limit logic to force-close the transport."""

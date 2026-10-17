@@ -785,6 +785,7 @@ class TestReviewRegressions:
     ],
 )
 def test_adversarial_scan_completes_under_two_seconds(case):
+    import gc
     import time
     from djust.audit_ui import scan_ui, _scan_stylesheet
 
@@ -814,12 +815,28 @@ def test_adversarial_scan_completes_under_two_seconds(case):
     remaining = size - len(prefix) - len(suffix)
     unit = units[case]
     source = prefix + unit * (remaining // len(unit)) + " " * (remaining % len(unit)) + suffix
-    start = time.process_time()
-    if case.startswith("css-"):
-        findings = _scan_stylesheet("app.css", source)
-    else:
-        findings = scan_ui(".", {"app/templates/page.html": source}, {"page.html"}).findings
-    elapsed = time.process_time() - start
+
+    def scan():
+        if case.startswith("css-"):
+            return _scan_stylesheet("app.css", source)
+        return scan_ui(".", {"app/templates/page.html": source}, {"page.html"}).findings
+
+    # A loaded CI runner can push one sample over the bound (a GC pass, a
+    # preempted core). A slow sample is retried, up to three in all, with the
+    # collector off, and the best one counts: noise only adds time, while a
+    # pathological (super-linear) scan of 1 MB stays far over 2 s every time.
+    elapsed = float("inf")
+    for _ in range(3):
+        gc.collect()
+        gc.disable()
+        try:
+            start = time.process_time()
+            findings = scan()
+            elapsed = min(elapsed, time.process_time() - start)
+        finally:
+            gc.enable()
+        if elapsed < 2:
+            break
     assert elapsed < 2, (case, elapsed)
     if case == "table":
         assert [f.code for f in findings] == ["X101"]

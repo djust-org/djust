@@ -39,6 +39,7 @@ from .log_sanitizer import (
     MAX_LOG_LENGTH,
 )
 from .error_handling import (
+    build_error_frame,
     create_safe_error_response,
     safe_error_message,
     handle_exception,
@@ -72,6 +73,7 @@ __all__ = [
     "DjustLogSanitizerFilter",
     "MAX_LOG_LENGTH",
     # Error handling
+    "build_error_frame",
     "create_safe_error_response",
     "safe_error_message",
     "handle_exception",
