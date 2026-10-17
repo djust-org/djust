@@ -9,7 +9,6 @@ use pyo3::types::{PyAnyMethods, PyDict, PyList, PyString};
 use serde::de::{self, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::fmt;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 pub mod context;
 pub mod decimal;
@@ -2961,31 +2960,6 @@ impl Value {
 // implementation checks for a `"__str__"` entry first and renders
 // its string value when present, falling back to `"[Object]"` only
 // for dicts that weren't produced by the model serializer.
-/// Django-parity value rendering (#2203).
-///
-/// A process-global rather than a per-render parameter because `Display` has no
-/// place to thread config through — the same reason `virtual_keyed_ops` is one
-/// (#2017). Applied once from `DjustConfig.ready()`.
-///
-/// Default ON: `{{ flag }}` renders `True`, matching Django. Set
-/// `LIVEVIEW_CONFIG['django_value_repr'] = False` to restore the pre-1.2
-/// rendering — the escape hatch for a template that embeds a bool directly in
-/// a script block, where `True` is a JS `ReferenceError`. (Django has the same
-/// hazard; the Django-correct forms are `|yesno:"true,false"` and
-/// `json_script`.)
-pub static DJANGO_VALUE_REPR: AtomicBool = AtomicBool::new(true);
-
-/// Set the rendering mode. Called once at startup from Python config.
-pub fn set_django_value_repr(enabled: bool) {
-    DJANGO_VALUE_REPR.store(enabled, Ordering::Relaxed);
-}
-
-/// Read the rendering mode. Exposed so the setter can be tested end to end —
-/// a setter alone cannot be (#2017).
-pub fn django_value_repr() -> bool {
-    DJANGO_VALUE_REPR.load(Ordering::Relaxed)
-}
-
 /// The code points CPython's `repr()` escapes: the union of the general
 /// categories `Cc`, `Cf`, `Cs`, `Co`, `Zl`, `Zp` and `Zs`, minus `U+0020`.
 ///
@@ -3305,55 +3279,10 @@ impl Value {
             other => other.to_string(),
         }
     }
-
-    /// The pre-#2203 rendering, kept verbatim for the flag's OFF path.
-    fn legacy_display(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Value::Missing | Value::None => write!(f, ""),
-            Value::Bool(b) => write!(f, "{b}"),
-            Value::Integer(i) => write!(f, "{i}"),
-            Value::Float(fl) => write!(f, "{fl}"),
-            // Exact digits even on the legacy path: `django_value_repr` is the
-            // #2203 repr switch, and restoring the #2214 precision loss through
-            // it would make a rendering-parity flag silently lossy. Same for
-            // `BigInt` and the #2260 loss.
-            Value::Decimal(d) => write!(f, "{}", expand_decimal_exponent(d)),
-            Value::BigInt(d) => write!(f, "{d}"),
-            Value::String(s) | Value::SafeString(s) => write!(f, "{s}"),
-            // The DISPLAY spelling on both display paths — an `Encoded` is
-            // exactly the `Value::String(str(o))` this used to be, plus the two
-            // fields nothing outside `json_script` and the refusal filters
-            // reads (#2448).
-            Value::Encoded(e) => write!(f, "{}", e.display),
-            // A dict VIEW joins the `[List]` placeholder rather than naming
-            // itself (#2340), and that is deliberate: this arm is the
-            // pre-#2203 rendering, and before #2340 a view WAS a
-            // `Value::List`, so `[List]` is exactly what `{{ d.items }}`
-            // printed here. Spelling it `dict_items([…])` under the flag would
-            // make a legacy-rendering switch less legacy.
-            //
-            // The first version of this change did name it, on a comment
-            // asserting "the container spelling is Python's on BOTH display
-            // paths" — a prose invariant that had never been run. The gate-off
-            // surfaced it as a surviving mutation and the test written to close
-            // that gap failed on the first execution (CLAUDE.md #1867).
-            Value::List(_)
-            | Value::Tuple(_)
-            | Value::NamedTuple { .. }
-            | Value::DictView { .. } => write!(f, "[List]"),
-            Value::Object(_) => match self.object_str() {
-                Some(s) => write!(f, "{s}"),
-                None => write!(f, "[Object]"),
-            },
-        }
-    }
 }
 
 impl fmt::Display for Value {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if !django_value_repr() {
-            return self.legacy_display(f);
-        }
         match self {
             // Django's `string_if_invalid` — an ABSENT value renders nothing.
             // Distinct from `None`, and the reason the old `Null` was split:
@@ -3406,8 +3335,8 @@ impl fmt::Display for Value {
             // either rule, and its non-grouping path is `str(number)` (#2260).
             Value::BigInt(d) => write!(f, "{d}"),
             Value::String(s) | Value::SafeString(s) => write!(f, "{s}"),
-            // See the `legacy_display` arm: the display spelling is `str(o)`
-            // on both paths, and only `json_script` reads the other one.
+            // The display spelling is `str(o)`; only `json_script` reads the
+            // other one.
             //
             // EXCEPT for a carrier the conversion declined for LENGTH whose
             // spelling is its items' list repr — a `list`, a `QuerySet`, a

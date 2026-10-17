@@ -417,8 +417,9 @@ class TestTheFalsinessResidueIsNamed:
     * a resolved `str` `"0"` / `"None"` / `"False"` was read as the falsy
       object it spells; it is now truthy, and djust raises exactly where Django
       does;
-    * an empty list under `legacy_display` (which renders EVERY sequence as
-      `[List]`) was indistinguishable from a full one; the `Value` is not;
+    * an empty list under the old legacy rendering (which spelled EVERY
+      sequence `[List]`) was indistinguishable from a full one; the `Value` is
+      not;
     * `timedelta(0)` could not be accepted at all, because its `Display` text
       `"0:00:00"` is shared with a perfectly ordinary truthy `str` — which is
       the whole of why #2458 needed a value-typed bit rather than a text edit.
@@ -429,64 +430,23 @@ class TestTheFalsinessResidueIsNamed:
     string and has no other spelling.
     """
 
-    def test_the_legacy_render_mode_spells_False_differently_and_is_handled(self) -> None:
-        """`Display` has TWO modes, and only one of them is the default.
+    def test_the_sequence_residue_is_CLOSED_by_the_value_typed_answer(self) -> None:
+        """An empty list and a full one are both non-dates, so Django measures
+        from now for the first and raises for the second (#2458).
 
-        `django_value_repr` (on by default since #2203) spells a bool
-        `True`/`False`; `legacy_display` — the flag's OFF path — spells it
-        Rust's `true`/`false`, and renders `None` as the empty string. A
-        falsiness rule that only knew the default would answer differently
-        under a flag whose entire purpose is rendering parity, which is the
-        parallel-path shape one mode over (#1646).
-
-        Django is unaffected by the flag: `False` is falsy either way, so the
-        expected answer is the same and only djust's input text changes.
+        `ArgType::is_falsy` reads the `Value`, which is `List([])`, rather than
+        its rendered text, so djust agrees with Django.
         """
-        _rust.set_django_value_repr(False)
-        try:
-            for value in (False, None, ""):
-                out = djust_render("{{ p|timesince:q }}", {"p": NOON, "q": value})
-                assert out == djust_render("{{ p|timesince }}", {"p": NOON}), repr(value)
-            # And a truthy non-date still raises in legacy mode.
-            assert raises_djust("{{ p|timesince:q }}", {"p": NOON, "q": "notadate"})
-            assert raises_djust("{{ p|timesince:q }}", {"p": NOON, "q": True})
-        finally:
-            _rust.set_django_value_repr(True)
-        # The default mode is restored, and still right.
-        assert djust_render("{{ p|timesince:q }}", {"p": NOON, "q": False}) == djust_render(
+        assert not raises_django("{{ p|timesince:q }}", {"p": NOON, "q": []})
+        assert not raises_djust("{{ p|timesince:q }}", {"p": NOON, "q": []})
+        assert djust_render("{{ p|timesince:q }}", {"p": NOON, "q": []}) == djust_render(
             "{{ p|timesince }}", {"p": NOON}
         )
-
-    def test_the_legacy_mode_sequence_residue_is_CLOSED_by_the_value_typed_answer(
-        self,
-    ) -> None:
-        """The residue the two-mode TEXT rule could not close, now closed
-        (#2458).
-
-        `legacy_display` renders EVERY sequence as the literal `[List]`, so an
-        empty list and a full one had the same text — and both are non-dates,
-        so Django measures from now for the first and raises for the second
-        while djust raised for both.
-
-        `ArgType::is_falsy` reads the `Value`, which is `List([])` either way
-        the renderer would have spelled it, so the flag cannot reach the
-        answer at all. Both modes now agree with Django.
-        """
-        for repr_mode in (False, True):
-            _rust.set_django_value_repr(repr_mode)
-            try:
-                assert not raises_django("{{ p|timesince:q }}", {"p": NOON, "q": []})
-                assert not raises_djust("{{ p|timesince:q }}", {"p": NOON, "q": []}), repr_mode
-                assert djust_render("{{ p|timesince:q }}", {"p": NOON, "q": []}) == djust_render(
-                    "{{ p|timesince }}", {"p": NOON}
-                ), repr_mode
-                # Non-vacuity: a NON-empty list is truthy and is not a date, so
-                # it must still raise. A rule that accepted every list would
-                # pass the assertions above and be wrong here.
-                assert raises_django("{{ p|timesince:q }}", {"p": NOON, "q": ["a"]})
-                assert raises_djust("{{ p|timesince:q }}", {"p": NOON, "q": ["a"]}), repr_mode
-            finally:
-                _rust.set_django_value_repr(True)
+        # Non-vacuity: a NON-empty list is truthy and is not a date, so it must
+        # still raise. A rule that accepted every list would pass the
+        # assertions above and be wrong here.
+        assert raises_django("{{ p|timesince:q }}", {"p": NOON, "q": ["a"]})
+        assert raises_djust("{{ p|timesince:q }}", {"p": NOON, "q": ["a"]})
 
     def test_the_falsiness_question_is_answered_ONCE_and_value_typed(self) -> None:
         """Mechanical, and pointed at the mechanism that now answers (#1859: a

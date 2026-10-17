@@ -2,7 +2,7 @@
 
 Doc-claim-verbatim tests (#1046): one asserting test per row of the ADR-024
 semantics table, the two reported symptoms as regressions through the real
-render path, the kill-switch gate-off (#1468), and the eager-site guard sweep
+render path, the removed kill switch (2.0), and the eager-site guard sweep
 (Decision 2; #1104 — N sites, N tests).
 
 The sidecar tests route values through ``get_context_data`` from a private
@@ -136,26 +136,15 @@ class TestAutoCallSemantics:
             _render("<div>{{ probe.raises_valueerror }}</div>")
 
 
-@pytest.mark.django_db
-class TestKillSwitch:
-    """The Rust view's ``set_template_auto_call`` gate-off (#1468).
+class TestNoKillSwitch:
+    """2.0 removed ``LIVEVIEW_CONFIG['template_auto_call']`` and then the Rust
+    view's ``set_template_auto_call`` / ``template_auto_call_enabled``."""
 
-    2.0 removed ``LIVEVIEW_CONFIG['template_auto_call']`` and its Python
-    wiring; the Rust setter stays exported until the Rust stream removes it.
-    """
+    def test_the_rust_view_has_no_auto_call_switch(self):
+        from djust._rust import RustLiveView
 
-    def test_kill_switch_restores_plain_getattr_walk(self):
-        """With auto-call disabled on the Rust view, the pre-ADR behavior
-        returns: the bound method stringifies instead of being called. This
-        is the behavioral gate-off — it fails if the kill-switch stops
-        gating the new code path."""
-        client = LiveViewTestClient(_make_view("<div>{{ probe.get_greeting }}</div>"))
-        client.mount()
-        client.render_with_patches()  # _rust_view initializes lazily on first render
-        client.view_instance._rust_view.set_template_auto_call(False)
-        html, _, _ = client.render_with_patches()
-        assert "hello-from-method" not in html
-        assert "bound method" in html  # the pre-ADR stringified method object
+        assert not hasattr(RustLiveView, "set_template_auto_call")
+        assert not hasattr(RustLiveView, "template_auto_call_enabled")
 
 
 @pytest.mark.django_db
@@ -301,30 +290,6 @@ class TestSidecarSerializationFloor:
         html, _, _ = client.render_with_patches()
         assert "pbkdf2" not in html, f"request-scoped password leaked: {html}"
         assert "pw=[]" in html and "su=[]" in html
-
-    def test_floor_holds_with_kill_switch_off(self):
-        """The floor is NOT gated on template_auto_call — flipping the
-        kill-switch off must not re-open the field leak (the #1986 review
-        confirmed the retention was ungated)."""
-        u = self._user()
-
-        class _V(LiveView):
-            template = "<div>pw=[{{ m.password }}]</div>"
-
-            def mount(self, request, **kwargs):
-                self._m = u
-
-            def get_context_data(self, **kwargs):
-                ctx = super().get_context_data(**kwargs)
-                ctx["m"] = self._m
-                return ctx
-
-        client = LiveViewTestClient(_V)
-        client.mount()
-        client.render_with_patches()  # lazy _rust_view init
-        client.view_instance._rust_view.set_template_auto_call(False)
-        html, _, _ = client.render_with_patches()
-        assert "pbkdf2" not in html, f"kill-switch-off leaked password: {html}"
 
     def test_legit_methods_and_managers_still_work(self):
         """The proxy must NOT over-block: safe fields, get_* methods, and

@@ -78,20 +78,35 @@ def test_ready_rejects_before_registering_checks():
     assert code.index("reject_removed_settings()") < code.index("import djust.checks")
 
 
+_REMOVED_RUST_SWITCHES = (
+    "set_template_auto_call",
+    "template_auto_call_enabled",
+    "set_virtual_keyed_ops",
+    "virtual_keyed_ops_enabled",
+    "set_django_value_repr",
+    "django_value_repr_enabled",
+)
+
+
+def test_the_rust_kill_switches_are_gone():
+    from djust import _rust
+
+    for name in _REMOVED_RUST_SWITCHES:
+        assert not hasattr(_rust, name), name
+        assert not hasattr(_rust.RustLiveView, name), name
+
+
 def test_no_framework_module_wires_the_removed_kill_switches():
-    """The Python wiring is gone; the Rust setters stay exported for now."""
     import pathlib
 
     import djust
 
     root = pathlib.Path(djust.__file__).parent
     offenders = [
-        str(path.relative_to(root))
+        f"{path.relative_to(root)}: {name}"
         for path in root.rglob("*.py")
         if "tests" not in path.parts
-        and (
-            "set_template_auto_call(" in path.read_text(encoding="utf-8", errors="replace")
-            or "template_auto_call_enabled" in path.read_text(encoding="utf-8", errors="replace")
-        )
+        for name in _REMOVED_RUST_SWITCHES
+        if name in path.read_text(encoding="utf-8", errors="replace")
     ]
     assert offenders == []
