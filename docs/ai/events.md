@@ -6,7 +6,7 @@ The rules below are the default legacy policy. For new code, prefer the strict
 policy (`@event_handler(parameter_policy="strict")`, or project-wide
 `LIVEVIEW_CONFIG = {"event_parameter_policy": "strict"}`; ADR-036):
 - Closed, annotated signatures are the contract; `**kwargs` is not required.
-- Pass arguments with `dj-value-*` only (never `data-*` or `dj-params`); no type suffix is needed.
+- Pass arguments with `dj-value-*` only (never `data-*`); no type suffix is needed.
 - The browser sends a generated value (`value`/`field` for input/change, form fields for submit, `key`/`code` for keyboard) only when the handler declares that parameter name or a `**` catch-all.
 - A `dj-value-*` name colliding with a generated name is rejected. `_target` is never sent: use `field` or `dj-value-*`.
 - Invalid input is rejected before the handler runs, so don't add defaults just to survive malformed events.
