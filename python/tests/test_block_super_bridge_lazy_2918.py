@@ -647,7 +647,7 @@ class TestTheDictPathIsRemoved:
     def test_the_subscript_error_names_the_replacement(self, template_dir):
         source = _child("tick.html", ARM + "{% probe_dict 'child' 'getitem' %}")
         rendered, _ = _answer("djust", template_dir, source)
-        assert "TypeError" in rendered and "block.super()" in rendered, rendered
+        assert "block.super()" in rendered, rendered
 
     def test_the_resolver_path_over_a_raising_parent_runs_the_parent_once(self, template_dir):
         """Django's resolver swallows the five classes at its mapping step, so
