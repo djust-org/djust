@@ -48,9 +48,12 @@ def _render_template_string(template_str: str, context: Dict[str, Any]) -> str:
     """
     Render a component template string through the Rust engine.
 
-    A Rust render error propagates. Before 2.0 it was caught here and the
-    template was rendered again with Django's ``Template``, so a template the
-    Rust engine rejected rendered differently, silently, instead of failing.
+    The project's template directories are passed in, so ``{% include %}`` and
+    ``{% extends %}`` resolve in Rust. A Rust render error propagates. Before
+    2.0 it was caught here and the template was rendered again with Django's
+    ``Template`` (which is how ``{% include %}`` used to work in a component),
+    so a template the Rust engine rejected rendered differently, silently,
+    instead of failing.
 
     Args:
         template_str: Template string to render
@@ -59,9 +62,10 @@ def _render_template_string(template_str: str, context: Dict[str, Any]) -> str:
     Returns:
         Rendered HTML string (not marked as safe - caller should mark_safe if needed)
     """
-    from djust._rust import render_template
+    from djust._rust import render_template_with_dirs
 
     from ..render_env import apply_render_env_once
+    from ..utils import get_template_dirs
 
     # The FOURTH framework render entry, and it was the one missing from
     # the ambient-settings handoff (#2209 / #2221 / #2539): a component
@@ -75,7 +79,7 @@ def _render_template_string(template_str: str, context: Dict[str, Any]) -> str:
     # every thread-local correctly. See that function for what the first
     # push still buys and what the sentinel deliberately does not cover.
     apply_render_env_once()
-    return cast(str, render_template(template_str, context))
+    return cast(str, render_template_with_dirs(template_str, context, get_template_dirs()))
 
 
 def _load_template_source(template_name: str) -> Optional[str]:
