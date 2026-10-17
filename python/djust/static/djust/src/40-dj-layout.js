@@ -17,18 +17,29 @@
 //     stylesheets or scripts, add them to the original layout's <head>.
 //   - Dispatches djust:layout-changed on document for app-level hooks.
 
+// The pre-1.0 [data-djust-root] marker warns once per page (removed in 2.0.0).
+let _legacyRootWarned = false;
+
 function _findRoot(scope) {
     // Sticky LiveViews (Phase B): exclude [dj-sticky-root] wrappers so
     // a sticky child embedded via {% live_render ... sticky=True %}
     // does not masquerade as the layout root. Sticky subtrees carry
     // [dj-sticky-root] on their outermost [dj-view]; the parent view's
     // [dj-root] is always outside of them.
-    return (
+    const root = (
         scope.querySelector('[data-djust-root]:not([dj-sticky-root])')
         || scope.querySelector('[dj-root]:not([dj-sticky-root])')
         || scope.querySelector('[data-djust-root]')
         || scope.querySelector('[dj-root]')
     );
+    if (root && !_legacyRootWarned && root.hasAttribute('data-djust-root') && !root.hasAttribute('dj-root')) {
+        _legacyRootWarned = true;
+        console.warn(
+            '[djust:layout] The data-djust-root marker is deprecated and removed in djust 2.0.0. ' +
+            'Use dj-root instead.'
+        );
+    }
+    return root;
 }
 
 function _applyLayout(payload) {

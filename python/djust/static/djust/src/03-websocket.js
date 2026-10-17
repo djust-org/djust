@@ -1873,8 +1873,8 @@ window.djust._runInsertedScripts = _runInsertedScripts;
 // #2058: exposed so every insertion path (and tests) can warn about a
 // classic <script> a morph/patch left dead.
 window.djust._warnDeadScripts = _warnDeadScripts;
-// Backward compatibility
-window.LiveViewWebSocket = LiveViewWebSocket;
+// Backward compatibility (removed in 2.0.0)
+defineDeprecatedGlobal('LiveViewWebSocket', LiveViewWebSocket, 'window.djust.LiveViewWebSocket');
 
 // Global WebSocket instance.
 // `let` (NOT const) — 14-init.js reassigns this when switching transports

@@ -102,7 +102,7 @@
      */
     function initHotReload(retryCount = 0) {
         // Wait for LiveViewWebSocket to be defined by client.js
-        if (typeof window.LiveViewWebSocket === 'undefined') {
+        if (typeof window.djust?.LiveViewWebSocket === 'undefined') {
             if (retryCount < 20) {  // Max 1 second (20 * 50ms)
                 console.log('[djust:dev] Waiting for LiveViewWebSocket to load...');
                 // Retry after a short delay
@@ -115,10 +115,10 @@
         }
 
         // Store original handleMessage
-        const originalHandleMessage = window.LiveViewWebSocket.prototype.handleMessage;
+        const originalHandleMessage = window.djust.LiveViewWebSocket.prototype.handleMessage;
 
         // Override handleMessage to add hot reload logging and visual feedback
-        window.LiveViewWebSocket.prototype.handleMessage = function(data) {
+        window.djust.LiveViewWebSocket.prototype.handleMessage = function(data) {
             // Log hot reload patches
             if (data.type === 'patch' && data.hotreload) {
                 const fileName = data.file.split('/').pop();
