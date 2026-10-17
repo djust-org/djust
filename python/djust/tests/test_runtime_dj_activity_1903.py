@@ -27,7 +27,7 @@ Two layers, both with reproduce-first + gate-off (#1468):
 1. **Direct-runtime** tests (``runtime.dispatch_event`` against a MockTransport
    with a real-rendering activity LiveView) — the runtime gained the behavior
    independently of any transport.
-2. **Real-SSE end-to-end** tests (GET-stream + /event/ POST through the real
+2. **Real-SSE end-to-end** tests (GET-stream + /message/ POST through the real
    Django SSE views) — proving the behavior is LIVE on the SSE transport.
 """
 
@@ -504,19 +504,19 @@ async def _post_event(session, sid, event, params=None):
 
     from django.test import RequestFactory
 
-    from djust.sse import DjustSSEEventView
+    from djust.sse import DjustSSEMessageView
 
     session._owner_user_pk = 7
     session._owner_session_key = None
     rf = RequestFactory()
     request = rf.post(
-        f"/djust/sse/{sid}/event/",
-        data=json.dumps({"event": event, "params": params or {}}),
+        f"/djust/sse/{sid}/message/",
+        data=json.dumps({"type": "event", "event": event, "params": params or {}}),
         content_type="application/json",
         HTTP_ORIGIN=ALLOWED_ORIGIN,
     )
     request.user = MagicMock(is_authenticated=True, pk=7)
-    view = DjustSSEEventView()
+    view = DjustSSEMessageView()
     return await view.post(request, session_id=sid)
 
 
@@ -549,7 +549,7 @@ class TestSSEActivityViaRuntime:
     @pytest.mark.asyncio
     async def test_flip_visible_drains_over_sse_same_round_trip(self):
         """Over SSE: queue while hidden, then flip visible → the queued event
-        drains in the same /event/ round-trip."""
+        drains in the same /message/ round-trip."""
         from django.test import override_settings
 
         with override_settings(ALLOWED_HOSTS=["example.com"]):

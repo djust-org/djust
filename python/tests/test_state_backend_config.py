@@ -1,11 +1,13 @@
 """
-Tests for state backend configuration via top-level Django settings (#1354).
+Tests for state backend configuration (#1354).
 
 Covers:
-- Top-level ``DJUST_STATE_BACKEND="redis://..."`` (URL form) is honoured.
-- Top-level ``DJUST_STATE_BACKEND="redis"`` + ``DJUST_REDIS_URL=...`` is honoured.
-- ``DJUST_CONFIG["STATE_BACKEND"]`` regression guard (existing behaviour).
+- ``DJUST_CONFIG["STATE_BACKEND"]`` / ``["REDIS_URL"]`` select the backend.
 - ``logger.warning`` fires when DEBUG=False and backend defaults to memory.
+
+The top-level ``DJUST_STATE_BACKEND`` / ``DJUST_REDIS_URL`` aliases were removed
+in 2.0; ``python/djust/tests/test_removed_settings_2_0.py`` covers the startup
+error that replaced them.
 """
 
 import logging
@@ -40,70 +42,12 @@ def _stub_redis_module():
     return mock.patch.dict(sys.modules, {"redis": fake_redis})
 
 
-class TestTopLevelStateBackendSetting:
-    """Top-level ``DJUST_STATE_BACKEND`` should be honoured (#1354)."""
-
-    @override_settings(DJUST_STATE_BACKEND="redis://localhost:6379/0")
-    def test_url_shaped_top_level_resolves_to_redis_backend(self):
-        """``DJUST_STATE_BACKEND="redis://..."`` should produce RedisStateBackend.
-
-        URL-shaped values are auto-split into ``backend_type="redis"`` plus
-        ``REDIS_URL=<value>``.
-        """
-        with _stub_redis_module():
-            # Strip DJUST_CONFIG so only the top-level setting is in play.
-            with override_settings(DJUST_CONFIG={}):
-                backend = get_backend()
-        assert isinstance(backend, RedisStateBackend), (
-            f"Expected RedisStateBackend from top-level DJUST_STATE_BACKEND URL, "
-            f"got {type(backend).__name__}"
-        )
-
-    @override_settings(DJUST_STATE_BACKEND="rediss://secure.example.com:6380/0")
-    def test_rediss_tls_url_resolves_to_redis_backend(self):
-        """``rediss://`` (TLS) URLs are recognized like plain ``redis://``."""
-        with _stub_redis_module():
-            with override_settings(DJUST_CONFIG={}):
-                backend = get_backend()
-        assert isinstance(backend, RedisStateBackend)
-
-    @override_settings(
-        DJUST_STATE_BACKEND="redis+sentinel://sentinel-1:26379,sentinel-2:26379/mymaster/0"
-    )
-    def test_redis_sentinel_url_resolves_to_redis_backend(self):
-        """``redis+sentinel://`` URLs are recognized as Redis (#1354).
-
-        Sentinel HA is common in production; previously this scheme
-        was passed through verbatim and the factory raised
-        ``Unknown backend type`` on
-        ``backend_type="redis+sentinel://..."``.
-        """
-        with _stub_redis_module():
-            with override_settings(DJUST_CONFIG={}):
-                backend = get_backend()
-        assert isinstance(backend, RedisStateBackend)
-
-    @override_settings(
-        DJUST_STATE_BACKEND="redis",
-        DJUST_REDIS_URL="redis://localhost:6379/0",
-        DJUST_CONFIG={},
-    )
-    def test_top_level_pair_resolves_to_redis_backend(self):
-        """``DJUST_STATE_BACKEND="redis"`` + ``DJUST_REDIS_URL`` work together.
-
-        Two-setting form (no URL embedded in DJUST_STATE_BACKEND).
-        """
-        with _stub_redis_module():
-            backend = get_backend()
-        assert isinstance(backend, RedisStateBackend), (
-            f"Expected RedisStateBackend from DJUST_STATE_BACKEND+DJUST_REDIS_URL, "
-            f"got {type(backend).__name__}"
-        )
+class TestProductionFallbackWarning:
+    """The in-memory fallback warns in production (#1354)."""
 
     @override_settings(
         DEBUG=False,
         DJUST_CONFIG={},
-        DJUST_STATE_BACKEND=None,
     )
     def test_production_fallback_emits_warning(self, caplog):
         """When DEBUG=False and no backend config, emit a warning (#1354).
@@ -111,12 +55,6 @@ class TestTopLevelStateBackendSetting:
         Reasonable production deploy: forgets to set the state backend,
         falls back to in-memory, multi-replica deployments lose state.
         Logger should fire so this gets caught in startup logs.
-
-        ``DJUST_STATE_BACKEND=None`` is short-circuited at the
-        top-level alias merge step (``utils.py:_merge_top_level_aliases``
-        skips ``None`` values), so this is equivalent to "no top-level
-        alias is set" without depending on the test class's outer
-        scope.
         """
         with caplog.at_level(logging.WARNING, logger="djust.utils"):
             backend = get_backend()
@@ -167,24 +105,3 @@ class TestDjustConfigRegression:
         with _stub_redis_module():
             backend = get_backend()
         assert isinstance(backend, RedisStateBackend)
-
-    @override_settings(
-        DJUST_CONFIG={"STATE_BACKEND": "redis", "REDIS_URL": "redis://djust-config:6379/0"},
-        DJUST_STATE_BACKEND="redis://top-level-loses:6379/0",
-    )
-    def test_djust_config_wins_over_top_level(self):
-        """When BOTH are set, ``DJUST_CONFIG`` wins (backwards-compatible)."""
-        captured_url = {}
-
-        def _capturing_from_url(url, *args, **kwargs):
-            captured_url["url"] = url
-            return mock.MagicMock()
-
-        fake_redis = mock.MagicMock()
-        fake_redis.from_url = _capturing_from_url
-        with mock.patch.dict(sys.modules, {"redis": fake_redis}):
-            backend = get_backend()
-        assert isinstance(backend, RedisStateBackend)
-        assert captured_url["url"] == "redis://djust-config:6379/0", (
-            f"Expected DJUST_CONFIG REDIS_URL to win, got {captured_url}"
-        )

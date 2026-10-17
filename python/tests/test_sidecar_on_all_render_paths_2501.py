@@ -1572,24 +1572,6 @@ class TestTheAutoCallKillSwitch:
         assert _rust.render_template("{{ o.label }}", {"o": Witness()}) == "presenter-method"
         assert called == ["yes"]
 
-    def test_the_backend_path_reads_the_project_config(self, monkeypatch):
-        """The wiring, not the flag: `DjustTemplate.render` is the only caller
-        that knows the project's `LIVEVIEW_CONFIG`."""
-        from djust import config as djust_config
-
-        class _FakeConfig:
-            def get(self, key, default=None):
-                return False if key == "template_auto_call" else default
-
-        monkeypatch.setattr(djust_config, "get_config", lambda: _FakeConfig())
-        # Positively, for the reason `test_the_flag_off_stops_the_call` gives:
-        # `!=` passes on a crash-to-empty as readily as on a working
-        # kill-switch.
-        assert backend_render("{{ o.label }}", {"o": Presenter()}).startswith("&lt;bound method")
-        # And the guard against a vacuous pass: ON is the default and renders.
-        monkeypatch.undo()
-        assert backend_render("{{ o.label }}", {"o": Presenter()}) == "presenter-method"
-
 
 # ---------------------------------------------------------------------------
 # Stage-11 review findings (#2508): container shapes the floor descent missed,

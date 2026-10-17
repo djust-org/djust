@@ -240,7 +240,6 @@ def _make_fake_consumer():
             self.channel_name = "test-channel"
             self.use_actors = False
             self.actor_handle = None
-            self._debug_panel_active = False
             # Wire-version counter attrs the runtime mount path reads via the
             # next_mount_version hook (#1919 THE MOUNT FLIP: handle_mount is now a
             # thin shim over ViewRuntime.dispatch_mount, so these fakes drive the
@@ -640,33 +639,37 @@ class TestServiceWorkerChecks:
 
     def test_c301_fires_on_zero_ttl(self):
         """TTL of 0 must produce djust.C301 error."""
-        errors = self._run_check(DJUST_VDOM_CACHE_TTL_SECONDS=0)
+        errors = self._run_check(LIVEVIEW_CONFIG={"service_worker": {"vdom_cache_ttl_seconds": 0}})
         ids = [e.id for e in errors]
         assert "djust.C301" in ids
 
     def test_c301_fires_on_negative_ttl(self):
-        errors = self._run_check(DJUST_VDOM_CACHE_TTL_SECONDS=-60)
+        errors = self._run_check(
+            LIVEVIEW_CONFIG={"service_worker": {"vdom_cache_ttl_seconds": -60}}
+        )
         ids = [e.id for e in errors]
         assert "djust.C301" in ids
 
     def test_c301_clean_for_positive_ttl(self):
-        errors = self._run_check(DJUST_VDOM_CACHE_TTL_SECONDS=1800)
+        errors = self._run_check(
+            LIVEVIEW_CONFIG={"service_worker": {"vdom_cache_ttl_seconds": 1800}}
+        )
         ids = [e.id for e in errors]
         assert "djust.C301" not in ids
 
     def test_c302_fires_on_zero_max_entries(self):
         """max_entries < 1 must produce djust.C302 error."""
-        errors = self._run_check(DJUST_VDOM_CACHE_MAX_ENTRIES=0)
+        errors = self._run_check(LIVEVIEW_CONFIG={"service_worker": {"vdom_cache_max_entries": 0}})
         ids = [e.id for e in errors]
         assert "djust.C302" in ids
 
     def test_c303_info_when_disabled(self):
-        errors = self._run_check(DJUST_VDOM_CACHE_ENABLED=False)
+        errors = self._run_check(LIVEVIEW_CONFIG={"service_worker": {"vdom_cache_enabled": False}})
         ids = [e.id for e in errors]
         assert "djust.C303" in ids
 
     def test_c303_silent_when_enabled(self):
-        errors = self._run_check(DJUST_VDOM_CACHE_ENABLED=True)
+        errors = self._run_check(LIVEVIEW_CONFIG={"service_worker": {"vdom_cache_enabled": True}})
         ids = [e.id for e in errors]
         assert "djust.C303" not in ids
 
@@ -678,20 +681,14 @@ class TestServiceWorkerChecks:
 
 class TestConfigAliases:
     def test_top_level_settings_aliases_reach_service_worker_dict(self):
+        """Only ``DJUST_STATE_SNAPSHOT_ENABLED`` survives; 2.0 removed the
+        ``DJUST_VDOM_CACHE_*`` aliases (``djust._removed_settings``)."""
         from django.test import override_settings
         from djust.config import LiveViewConfig
 
-        with override_settings(
-            DJUST_VDOM_CACHE_ENABLED=False,
-            DJUST_VDOM_CACHE_TTL_SECONDS=42,
-            DJUST_VDOM_CACHE_MAX_ENTRIES=7,
-            DJUST_STATE_SNAPSHOT_ENABLED=False,
-        ):
+        with override_settings(DJUST_STATE_SNAPSHOT_ENABLED=False):
             cfg = LiveViewConfig()
             sw = cfg.get("service_worker")
-            assert sw["vdom_cache_enabled"] is False
-            assert sw["vdom_cache_ttl_seconds"] == 42
-            assert sw["vdom_cache_max_entries"] == 7
             assert sw["state_snapshot_enabled"] is False
 
 

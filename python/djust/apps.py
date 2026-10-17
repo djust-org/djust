@@ -58,6 +58,11 @@ class DjustConfig(AppConfig):
                 "[djust] recovering the config settings load in ready() failed"
             )
 
+        # Settings 2.0 removed fail startup with their replacement (#3500).
+        from djust._removed_settings import reject_removed_settings
+
+        reject_removed_settings()
+
         # Import checks module so @register() decorators are executed
         import djust.checks  # noqa: F401
 
@@ -99,42 +104,6 @@ class DjustConfig(AppConfig):
         # ``_running_under_pytest``. (Tests that need to exercise the
         # auto-enable path itself patch that helper; see ``_no_pytest_env()``
         # in ``python/djust/tests/test_auto_hot_reload.py``.)
-
-        # Wire LIVEVIEW_CONFIG['virtual_keyed_ops'] -> the process-global Rust
-        # switch (ADR-026 iteration 3, #2017). Done HERE rather than in
-        # rust_bridge's per-view `_apply_*_flag` hooks because the Rust side is
-        # a process-global AtomicBool, and applying a global from a per-view
-        # hook is last-view-wins.
-        #
-        # Unconditional (not gated on PYTEST_CURRENT_TEST): the flag must hold
-        # the same value in tests as in production, or the suite verifies a
-        # configuration nobody runs.
-        try:
-            from djust import _rust
-            from djust.config import config as _cfg
-
-            # Reads the singleton, which the ensure_settings_loaded() at the top
-            # of ready() has already made trustworthy. Deliberately NOT a direct
-            # `settings.LIVEVIEW_CONFIG` read: that would skip the documented
-            # `DJUST_CONFIG` fallback (#1993) and the flat `DJUST_*` aliases, so
-            # a value set there would read ON through `config.get()` while the
-            # differ ran OFF — a NEW silent asymmetry, the exact class this is
-            # fixing. It also keeps `_defaults` the single source of the default
-            # (ADR-026 iteration 3 flips it there, and this must follow).
-            # Same reasoning for django_value_repr (#2203): a process-global
-            # AtomicBool behind `impl Display for Value`, wired once here.
-            if hasattr(_rust, "set_django_value_repr"):
-                _rust.set_django_value_repr(bool(_cfg.get("django_value_repr")))
-            if hasattr(_rust, "set_virtual_keyed_ops"):
-                # No literal fallback here on purpose: `_defaults` is the single
-                # source of the default (the comment above says so), and a second
-                # hardcoded value silently wins if the key is ever missing —
-                # which is how a default drifts out of sync with itself.
-                _rust.set_virtual_keyed_ops(bool(_cfg.get("virtual_keyed_ops")))
-        except Exception:  # noqa: BLE001 - never let a flag break startup
-            logging.getLogger("djust").exception(
-                "[djust] applying virtual_keyed_ops to the Rust differ failed"
-            )
 
         if _running_under_pytest():
             _log_pytest_skip()

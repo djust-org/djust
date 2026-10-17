@@ -326,10 +326,8 @@ class TestCancelAsyncAll:
         w = _Work()
         w.start_async(w.cb, name="a")
         w.start_async(w.cb)
-        w._async_pending = (w.cb, (), {})
         w.cancel_async_all()
         assert w._async_tasks == {}
-        assert w._async_pending is None
         # A task scheduled later under the same name is NOT pre-cancelled.
         assert "a" not in getattr(w, "_async_cancelled", set())
 

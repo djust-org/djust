@@ -258,23 +258,22 @@ def test_the_mixin_captures_the_env_it_pushed():
 
 
 def test_the_component_entry_captures_too():
-    """The `template_name` LiveComponent entry wires the env beside the
-    auto-call flag it already wires (components/base.py)."""
+    """The `template_name` LiveComponent entry captures the env too
+    (components/base.py)."""
     src = Path(__file__).resolve().parents[1] / "components" / "base.py"
     body = src.read_text()
     fn = body[body.index("def _render_template_name_with_markers") :]
     fn = fn[: fn.index("\nclass ")]
-    assert "set_template_auto_call(" in fn and "capture_render_env()" in fn
+    assert "capture_render_env()" in fn
 
 
 # ---------------------------------------------------------------------------
 # Structural pin (#2727 / #1125): the set of backend entries that apply the
-# env is DERIVED from the source and must equal the set that applies
-# `auto_call` — the per-view-config precedent ADR-029 copies.
+# env is DERIVED from the source and must be exactly the three render bodies.
 # ---------------------------------------------------------------------------
 
 
-def test_every_backend_entry_that_applies_auto_call_applies_the_env():
+def test_every_backend_render_entry_applies_the_env():
     lib = Path(__file__).resolve().parents[3] / "crates" / "djust_live" / "src" / "lib.rs"
     body = lib.read_text()
     # One `fn <name>(` header per entry, then its body up to the next `    fn `.
@@ -283,7 +282,6 @@ def test_every_backend_entry_that_applies_auto_call_applies_the_env():
         start = m.end()
         nxt = body.find("\n    fn ", start)
         entries[m.group(1)] = body[start : nxt if nxt != -1 else len(body)]
-    auto_call = {n for n, b in entries.items() if "set_auto_call(self.template_auto_call)" in b}
     env = {
         n
         for n, b in entries.items()
@@ -295,9 +293,11 @@ def test_every_backend_entry_that_applies_auto_call_applies_the_env():
     assert "self.render_result(true)" in entries["render_with_provenance"]
     # `render_with_diff` detaches from the interpreter and delegates to
     # `render_with_diff_detached`, which holds the render body (#3074).
-    assert (
-        auto_call == env == {"render_result", "render_with_diff_detached", "render_binary_diff"}
-    ), f"auto_call entries {sorted(auto_call)} vs env entries {sorted(env)}"
+    assert env == {
+        "render_result",
+        "render_with_diff_detached",
+        "render_binary_diff",
+    }, f"env entries {sorted(env)}"
 
 
 # ---------------------------------------------------------------------------

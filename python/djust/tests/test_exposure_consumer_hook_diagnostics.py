@@ -1,9 +1,10 @@
 """ADR-038 E1: consumer message hooks that call application code.
 
-``presence_heartbeat`` and ``cursor_move`` are dispatched by
-``LiveViewConsumer.receive`` straight to view methods an application may
-override (``update_presence_heartbeat``, ``handle_cursor_move``). Their catches
-log the exception. For a nonlegacy view that is the same leak ``handle_exception``
+A ``ping`` refreshes presence by calling ``update_presence_heartbeat``, a
+view method an application may override, straight from
+``LiveViewConsumer.receive``. Its catch logs the exception. (The
+``presence_heartbeat`` and ``cursor_move`` frames no client sent were removed
+in 2.0.) For a nonlegacy view that is the same leak ``handle_exception``
 refuses: undeclared state can occur in an exception's message.
 
 Contract (ADR-038 D-a, revised 2026-09-22): in production (``DEBUG=False``) a
@@ -29,29 +30,21 @@ from .test_exposure_runtime import make_request
 class HookFailureView(LiveView):
     exposure_policy = "legacy"
     template = "<div dj-root>hooks</div>"
+    # A tracked view is what makes the ping refresh presence.
+    _presence_tracked = True
 
     def update_presence_heartbeat(self):
         raise ValueError("PRESENCE_HOOK_SENTINEL")
-
-    def handle_cursor_move(self, x, y):
-        raise ValueError("CURSOR_HOOK_SENTINEL")
 
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
 @pytest.mark.parametrize("debug", [False, True])
 @pytest.mark.parametrize("policy", ["legacy", "explicit", None, "invalid"])
-@pytest.mark.parametrize(
-    "message,sentinel",
-    [
-        ({"type": "presence_heartbeat"}, "PRESENCE_HOOK_SENTINEL"),
-        ({"type": "cursor_move", "x": 1, "y": 2}, "CURSOR_HOOK_SENTINEL"),
-    ],
-    ids=["presence_heartbeat", "cursor_move"],
-)
 async def test_hook_failure_logs_are_value_free_for_nonlegacy_views(
-    monkeypatch, caplog, debug, policy, message, sentinel
+    monkeypatch, caplog, debug, policy
 ):
+    sentinel = "PRESENCE_HOOK_SENTINEL"
     monkeypatch.setattr(LiveView, "_validate_exposure_configuration", lambda self: None)
     with override_settings(
         LIVEVIEW_ALLOWED_MODULES=[__name__], DEBUG=debug, DJUST_TENANTS=None, DJUST_CONFIG={}
@@ -71,8 +64,7 @@ async def test_hook_failure_logs_are_value_free_for_nonlegacy_views(
             monkeypatch.setattr(HookFailureView, "exposure_policy", policy)
             caplog.clear()
             with caplog.at_level(logging.DEBUG):
-                await socket.send_json_to(message)
-                # The hooks send nothing back; a ping round-trip orders the log.
+                # The heartbeat runs before the pong, so the pong orders the log.
                 await socket.send_json_to({"type": "ping"})
                 assert (await socket.receive_json_from(timeout=3))["type"] == "pong"
 
