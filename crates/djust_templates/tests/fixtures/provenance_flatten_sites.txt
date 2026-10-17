@@ -180,6 +180,7 @@ Ok((html).into())
 Ok((String::new()).into())
 Ok((html).into())
 Ok((html).into())
+(format!("The JSX-style `<{name} />` template tag"),),
 DjangoRustError::TemplateError(format!("Failed to render RustButton: {e}"))
 DjangoRustError::TemplateError(format!("Failed to render RustInput: {e}"))
 DjangoRustError::TemplateError(format!("Failed to render RustText: {e}"))
