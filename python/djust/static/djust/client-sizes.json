@@ -6,12 +6,12 @@
     "kb": 78.0,
     "note": "What a user downloads. This is the number README should quote."
   },
-  "minified_raw": { "artifact": "client.min.js", "bytes": 306074 },
+  "minified_raw": { "artifact": "client.min.js", "bytes": 306207 },
   "unminified": {
     "artifact": "client.js",
-    "bytes": 1008586,
-    "gz_bytes": 264956,
-    "gz_kb": 258.7,
+    "bytes": 1008963,
+    "gz_bytes": 265035,
+    "gz_kb": 258.8,
     "modules": 58,
     "note": "A build INPUT, not a deliverable. Claims about it need <!-- size-claim: unminified --> on the line."
   }
