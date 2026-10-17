@@ -76,7 +76,7 @@ _CHILD = textwrap.dedent(
             "BACKEND": (
                 "django.template.backends.django.DjangoTemplates"
                 if ENGINE == "django"
-                else "djust.template_backend.DjustTemplateBackend"
+                else "djust.template.backend.DjustTemplateBackend"
             ),
             "NAME": "e", "DIRS": [], "APP_DIRS": False, "OPTIONS": {},
         }],

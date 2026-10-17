@@ -750,7 +750,7 @@ class TestPreviewTagNeedsNoDjangoTemplatesBackend:
         from djust.theming.templatetags.theme_tags import component_preview
 
         with override_settings(
-            TEMPLATES=[{"BACKEND": "djust.template_backend.DjustTemplateBackend"}]
+            TEMPLATES=[{"BACKEND": "djust.template.backend.DjustTemplateBackend"}]
         ):
             html = component_preview("badge", "python", [{"text": "New"}], {})
         assert "dc-preview" in html and "New" in html

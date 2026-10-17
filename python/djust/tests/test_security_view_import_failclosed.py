@@ -7,7 +7,7 @@ path) called `__import__(client_module_path)` — executing the module's top-lev
 code — before the LiveView-subclass check / auth, and the allowlist gate was
 fail-open (`if allowed_modules:`, skipped when LIVEVIEW_ALLOWED_MODULES unset).
 
-The fix (`djust._view_resolution.is_view_import_allowed`) is fail-CLOSED: a
+The fix (now `djust.security.mount.is_view_path_allowed`) is fail-CLOSED: a
 client view path resolves only if its module is already loaded (no new code
 runs) or it is explicitly allowlisted on a module-segment boundary.
 """
@@ -21,7 +21,7 @@ import sys
 import pytest
 from django.test import override_settings
 
-from djust._view_resolution import is_view_import_allowed
+from djust.security.mount import is_view_path_allowed as is_view_import_allowed
 
 
 # --------------------------------------------------------------------------

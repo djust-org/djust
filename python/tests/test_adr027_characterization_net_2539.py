@@ -273,7 +273,7 @@ def django_render(source: str, context: dict) -> str:
 
 def plain_render(source: str, context: dict) -> str:
     """The user-facing plain entry: `DjustTemplateBackend`."""
-    from djust.template_backend import DjustTemplateBackend
+    from djust.template import DjustTemplateBackend
 
     backend = DjustTemplateBackend(
         params={"NAME": "djust", "DIRS": [], "APP_DIRS": False, "OPTIONS": {}}
@@ -713,7 +713,7 @@ settings.configure(
     DATABASES={"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}},
     TEMPLATES=[
         {
-            "BACKEND": "djust.template_backend.DjustTemplateBackend",
+            "BACKEND": "djust.template.backend.DjustTemplateBackend",
             "NAME": "djust",
             "DIRS": [],
             "APP_DIRS": False,
@@ -725,7 +725,7 @@ urlpatterns = []
 django.setup()
 
 from djust.live_view import LiveView
-from djust.template_backend import DjustTemplateBackend
+from djust.template import DjustTemplateBackend
 from djust.testing import LiveViewTestClient
 
 
@@ -1646,7 +1646,7 @@ class TestStringIfInvalidReachesTheLiveWalk2628:
     def _engines(marker: str):
         from django.template.backends.django import DjangoTemplates
 
-        from djust.template_backend import DjustTemplateBackend
+        from djust.template import DjustTemplateBackend
 
         params = {
             "NAME": "sii",

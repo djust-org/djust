@@ -34,7 +34,7 @@ from djust.checks import check_configuration
 from djust.checks.configuration import _check_templates_shape
 from djust.management.commands.djust_check import _category_for_check
 
-DJUST = "djust.template_backend.DjustTemplateBackend"
+DJUST = "djust.template.backend.DjustTemplateBackend"
 DJUST_LONG = "djust.template.backend.DjustTemplateBackend"
 DJANGO = "django.template.backends.django.DjangoTemplates"
 MY_DJANGO_SUBCLASS = __name__ + ".MyDjangoTemplates"

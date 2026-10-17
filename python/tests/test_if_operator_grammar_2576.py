@@ -57,7 +57,7 @@ from django.template import Template as DjangoTemplate  # noqa: E402
 from django.template import TemplateSyntaxError  # noqa: E402
 
 from djust import _rust  # noqa: E402
-from djust.template_backend import DjustTemplateBackend  # noqa: E402
+from djust.template import DjustTemplateBackend  # noqa: E402
 
 
 # ---------------------------------------------------------------------------

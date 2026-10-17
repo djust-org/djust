@@ -141,7 +141,7 @@ class TestTemplateBackendContextSerialization:
 
     def test_serialize_context_with_datetime(self):
         """Context with datetime should be serializable for Rust."""
-        from djust.template_backend import DjustTemplate
+        from djust.template import DjustTemplate
 
         # Create a mock template
         template = MagicMock(spec=DjustTemplate)
@@ -226,7 +226,7 @@ class TestSerializeContextFunction:
 
     def test_serialize_context_handles_all_types(self):
         """serialize_context should handle all special types."""
-        from djust.template_backend import serialize_context
+        from djust.template import serialize_context
 
         test_uuid = uuid4()
         mock_file = MagicMock()
@@ -260,7 +260,7 @@ class TestSerializeContextFunction:
 
     def test_serialize_context_handles_nested_dict(self):
         """serialize_context should handle nested dictionaries."""
-        from djust.template_backend import serialize_context
+        from djust.template import serialize_context
 
         context = {
             "user": {
@@ -278,7 +278,7 @@ class TestSerializeContextFunction:
 
     def test_serialize_context_handles_list_of_dicts(self):
         """serialize_context should handle lists containing dicts with special types."""
-        from djust.template_backend import serialize_context
+        from djust.template import serialize_context
 
         context = {
             "events": [
@@ -294,7 +294,7 @@ class TestSerializeContextFunction:
 
     def test_serialize_context_preserves_none(self):
         """serialize_context should preserve None values."""
-        from djust.template_backend import serialize_context
+        from djust.template import serialize_context
 
         context = {
             "optional_field": None,
@@ -308,7 +308,7 @@ class TestSerializeContextFunction:
 
     def test_serialize_context_handles_empty_file(self):
         """serialize_context should handle FieldFile without a file."""
-        from djust.template_backend import serialize_context
+        from djust.template import serialize_context
 
         mock_file = MagicMock()
         mock_file.name = ""
@@ -335,7 +335,7 @@ class TestCSRFTokenSerialization:
         from django.middleware.csrf import _get_new_csrf_string
         from django.test import RequestFactory
 
-        from djust.template_backend import DjustTemplateBackend
+        from djust.template import DjustTemplateBackend
 
         # Create backend with minimal config
         backend = DjustTemplateBackend(
@@ -373,7 +373,7 @@ class TestCSRFTokenSerialization:
         from django.middleware.csrf import _get_new_csrf_string
         from django.test import RequestFactory
 
-        from djust.template_backend import DjustTemplateBackend
+        from djust.template import DjustTemplateBackend
 
         # Create backend with minimal config
         backend = DjustTemplateBackend(

@@ -204,7 +204,7 @@ class TestFormRenderingInTemplate:
 
     def test_form_field_renders_in_template(self):
         """{{ form.first_name }} should produce <input> HTML, not empty or [Object]."""
-        from djust.template_backend import DjustTemplateBackend
+        from djust.template import DjustTemplateBackend
 
         backend = DjustTemplateBackend(
             params={
@@ -226,7 +226,7 @@ class TestFormRenderingInTemplate:
 
     def test_multiple_form_fields_render(self):
         """Multiple form fields in a template all render correctly."""
-        from djust.template_backend import DjustTemplateBackend
+        from djust.template import DjustTemplateBackend
 
         backend = DjustTemplateBackend(
             params={
@@ -249,7 +249,7 @@ class TestFormRenderingInTemplate:
 
     def test_form_html_not_escaped(self):
         """Widget HTML must not be escaped — < and > must appear literally."""
-        from djust.template_backend import DjustTemplateBackend
+        from djust.template import DjustTemplateBackend
 
         backend = DjustTemplateBackend(
             params={

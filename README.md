@@ -176,7 +176,7 @@ render through Rust, with no WebSocket and no client runtime:
 ```python
 TEMPLATES = [
     {
-        "BACKEND": "djust.template_backend.DjustTemplateBackend",
+        "BACKEND": "djust.template.backend.DjustTemplateBackend",
         "DIRS": [BASE_DIR / "templates"],
         "APP_DIRS": True,
         "OPTIONS": {"context_processors": [...]},

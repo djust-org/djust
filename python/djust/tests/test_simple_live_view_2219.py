@@ -160,12 +160,12 @@ def test_a_property_that_returns_a_value_is_included():
 # ---------------------------------------------------------------------------
 
 
-def test_the_old_name_still_imports_and_is_the_same_class():
-    # The class was renamed because `LiveView` shadowed `djust.LiveView`. The
-    # module is importable, so the old name stays as an alias.
-    from djust.simple_live_view import LiveView as OldName
+def test_the_old_name_is_gone():
+    # The class was renamed because `LiveView` shadowed `djust.LiveView`; the
+    # back-compat alias for the old name was removed in 2.0.
+    import djust.simple_live_view as module
 
-    assert OldName is SimpleLiveView
+    assert not hasattr(module, "LiveView")
 
 
 def test_it_is_not_the_websocket_live_view():

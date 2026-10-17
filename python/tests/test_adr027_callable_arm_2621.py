@@ -135,7 +135,7 @@ def django_render(source: str, context: dict) -> str:
 
 
 def plain_render(source: str, context: dict) -> str:
-    from djust.template_backend import DjustTemplateBackend
+    from djust.template import DjustTemplateBackend
 
     backend = DjustTemplateBackend(
         params={"NAME": "djust", "DIRS": [], "APP_DIRS": False, "OPTIONS": {}}

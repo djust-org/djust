@@ -745,7 +745,7 @@ No cleanup job is needed. The in-memory backend has applied `SESSION_TTL` by its
 
 ```python
 from django.http import JsonResponse
-from djust.state_backend import get_backend
+from djust.state_backends import get_backend
 
 def health_check(request):
     try:

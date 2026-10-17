@@ -21,6 +21,36 @@ def _running_under_pytest() -> bool:
     return "pytest" in sys.modules or bool(os.environ.get("PYTEST_CURRENT_TEST"))
 
 
+#: Module paths removed in djust 2.0 that a TEMPLATES entry may still name.
+_REMOVED_TEMPLATE_BACKENDS = {
+    "djust.template_backend.DjustTemplateBackend": "djust.template.backend.DjustTemplateBackend",
+}
+
+
+def _reject_removed_template_backends() -> None:
+    """Fail startup with the replacement when TEMPLATES names a removed path.
+
+    Without this, the first template lookup raises a bare
+    ``ModuleNotFoundError: No module named 'djust.template_backend'``, and
+    ``manage.py check`` hits it in Django's own template check, whose order
+    against djust's checks is not fixed.
+    """
+    from django.conf import settings
+    from django.core.exceptions import ImproperlyConfigured
+
+    templates = getattr(settings, "TEMPLATES", None)
+    if not isinstance(templates, (list, tuple)):
+        return
+    for i, entry in enumerate(templates):
+        backend = entry.get("BACKEND") if isinstance(entry, dict) else None
+        replacement = _REMOVED_TEMPLATE_BACKENDS.get(backend) if isinstance(backend, str) else None
+        if replacement:
+            raise ImproperlyConfigured(
+                "TEMPLATES[%d]['BACKEND'] is %r, a module path removed in djust 2.0. "
+                "Use %r instead." % (i, backend, replacement)
+            )
+
+
 def _log_pytest_skip() -> None:
     logging.getLogger("djust").debug(
         "[djust] pytest is running: skipping the hot reload auto-enable, the "
@@ -57,6 +87,8 @@ class DjustConfig(AppConfig):
             logging.getLogger("djust").exception(
                 "[djust] recovering the config settings load in ready() failed"
             )
+
+        _reject_removed_template_backends()
 
         # Import checks module so @register() decorators are executed
         import djust.checks  # noqa: F401

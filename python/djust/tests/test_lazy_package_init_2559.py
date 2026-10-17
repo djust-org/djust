@@ -92,9 +92,6 @@ ALLOWLIST_BACKEND = ALLOWLIST_PACKAGE | frozenset(
 assert len(ALLOWLIST_BACKEND) == 35
 
 
-# The compat shim (``djust/template_backend.py``) is one extra module.
-ALLOWLIST_BACKEND_SHIM = ALLOWLIST_BACKEND | {"djust.template_backend"}
-
 # After ``django.setup()`` on a templates-only project: ``DjustConfig.ready()``
 # registers the system checks, applies the differ flags, warms the filter
 # bridge (through ``djust.template_filters`` — NOT ``djust.mixins``, #2565)
@@ -255,16 +252,9 @@ class TestImportFootprint:
             f"missing={sorted(ALLOWLIST_BACKEND - set(report['djust']))}"
         )
 
-    def test_backend_shim_import_loads_exactly_the_allowlist(self):
-        report = _fresh_import("import djust.template_backend")
-        assert set(report["djust"]) == ALLOWLIST_BACKEND_SHIM, (
-            f"extra={sorted(set(report['djust']) - ALLOWLIST_BACKEND_SHIM)} "
-            f"missing={sorted(ALLOWLIST_BACKEND_SHIM - set(report['djust']))}"
-        )
-
     @pytest.mark.parametrize(
         "stmt",
-        ["import djust", "import djust.template.backend", "import djust.template_backend"],
+        ["import djust", "import djust.template.backend"],
     )
     def test_import_never_loads_the_liveview_stack(self, stmt):
         _assert_none_forbidden(_fresh_import(stmt), stmt)

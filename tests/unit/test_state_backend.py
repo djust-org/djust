@@ -14,7 +14,7 @@ import time
 from unittest.mock import patch
 
 import pytest
-from djust.state_backend import (
+from djust.state_backends import (
     InMemoryStateBackend,
     RedisStateBackend,
     get_backend,
