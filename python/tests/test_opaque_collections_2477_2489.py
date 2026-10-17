@@ -308,11 +308,8 @@ REFUSAL_CLASS_ONLY = {
     ("complex-zero", "{% for x in p %}[{{ x }}]{% empty %}EMPTY{% endfor %}"),
     ("complex-one", "{% for x in p %}[{{ x }}]{% empty %}EMPTY{% endfor %}"),
     ("o-bool-false", "{% for x in p %}[{{ x }}]{% empty %}EMPTY{% endfor %}"),
-    # `b"ab".lower()` is `b"ab"`, so Django's `"".join(… for c in phone)`
-    # joins INTS and raises TypeError; the carrier has no `lower` at all and
-    # refuses with AttributeError. Both refuse. Newly measurable: a `bytes`
-    # was in `EARLIER` and never swept until #2704 carried it.
-    ("bytes", "{{ p|phone2numeric }}"),
+    # `("bytes", "{{ p|phone2numeric }}")` left in 2.0: the filter is
+    # Django's own function, so both engines raise the same TypeError.
     # `mappingproxy` `{{ p|first }}` / `{{ p|last }}` used to sit here: a
     # `mappingproxy[0]` is a KEY lookup, so Django raised KeyError where the
     # carrier answered `'mappingproxy' object is not subscriptable`. #2704

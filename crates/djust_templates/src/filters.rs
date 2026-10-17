@@ -1644,17 +1644,13 @@ fn apply_builtin_filter(
             autoescape,
             input_safety,
         ),
-        "capfirst" => {
-            // capfirst filter: capitalizes first character
-            let s = value.to_string();
-            let mut chars = s.chars();
-            match chars.next() {
-                None => Ok(Value::String(String::new())),
-                Some(first) => Ok(Value::String(
-                    first.to_uppercase().collect::<String>() + chars.as_str(),
-                )),
-            }
-        }
+        "capfirst" => filter_registry::apply_django_builtin_filter(
+            filter_name,
+            value,
+            django_filter_arg(arg, resolved_arg),
+            autoescape,
+            input_safety,
+        ),
         // Django's body, statement for statement (#2401):
         //
         //     if arg is None:      arg = gettext("yes,no,maybe")
@@ -1712,22 +1708,20 @@ fn apply_builtin_filter(
             };
             Ok(Value::String(chosen.to_string()))
         }
-        "linebreaks" => {
-            // linebreaks filter: converts newlines to <p> and <br> tags.
-            // `needs_autoescape=True` (#2284) — see `apply_filter_full_safe`.
-            Ok(Value::String(linebreaks(
-                &value.to_string(),
-                autoescape && !input_safety.container,
-            )))
-        }
-        "linebreaksbr" => {
-            // linebreaksbr filter: converts newlines to <br> tags.
-            // `needs_autoescape=True` (#2284) — see `apply_filter_full_safe`.
-            Ok(Value::String(linebreaksbr(
-                &value.to_string(),
-                autoescape && !input_safety.container,
-            )))
-        }
+        "linebreaks" => filter_registry::apply_django_builtin_filter(
+            filter_name,
+            value,
+            django_filter_arg(arg, resolved_arg),
+            autoescape,
+            input_safety,
+        ),
+        "linebreaksbr" => filter_registry::apply_django_builtin_filter(
+            filter_name,
+            value,
+            django_filter_arg(arg, resolved_arg),
+            autoescape,
+            input_safety,
+        ),
         "cut" => {
             // cut filter: removes all occurrences of arg from string
             let remove_str = arg.unwrap_or("");
@@ -2111,11 +2105,13 @@ fn apply_builtin_filter(
                 _ => Ok(value.clone()),
             }
         }
-        "wordcount" => {
-            // wordcount filter: count the number of words
-            let count = value.to_string().split_whitespace().count();
-            Ok(Value::Integer(count as i64))
-        }
+        "wordcount" => filter_registry::apply_django_builtin_filter(
+            filter_name,
+            value,
+            django_filter_arg(arg, resolved_arg),
+            autoescape,
+            input_safety,
+        ),
         "wordwrap" => filter_registry::apply_django_builtin_filter(
             filter_name,
             value,
@@ -2123,19 +2119,20 @@ fn apply_builtin_filter(
             autoescape,
             input_safety,
         ),
-        "striptags" => {
-            // striptags filter: strip HTML tags from string
-            Ok(Value::String(strip_tags(&value.to_string())))
-        }
-        "addslashes" => {
-            // addslashes filter: escape \, ', " with backslashes
-            let s = value.to_string();
-            let escaped = s
-                .replace('\\', "\\\\")
-                .replace('\'', "\\'")
-                .replace('"', "\\\"");
-            Ok(Value::String(escaped))
-        }
+        "striptags" => filter_registry::apply_django_builtin_filter(
+            filter_name,
+            value,
+            django_filter_arg(arg, resolved_arg),
+            autoescape,
+            input_safety,
+        ),
+        "addslashes" => filter_registry::apply_django_builtin_filter(
+            filter_name,
+            value,
+            django_filter_arg(arg, resolved_arg),
+            autoescape,
+            input_safety,
+        ),
         "ljust" => {
             // `value.ljust(int(arg))` — `int()` raises, so the argument takes
             // the chokepoint's `Raise` arm (#2328).
@@ -2237,12 +2234,13 @@ fn apply_builtin_filter(
                 format!("{}{s}{}", " ".repeat(left), " ".repeat(marg - left))
             }))
         }
-        "make_list" => {
-            // make_list filter: split string into list of characters
-            let s = value.to_string();
-            let chars: Vec<Value> = s.chars().map(|c| Value::String(c.to_string())).collect();
-            Ok(Value::List(chars))
-        }
+        "make_list" => filter_registry::apply_django_builtin_filter(
+            filter_name,
+            value,
+            django_filter_arg(arg, resolved_arg),
+            autoescape,
+            input_safety,
+        ),
         "json_script" => {
             // `json.dumps(d.keys())` raises `TypeError`. Same treatment as
             // `random` above (#2340).
@@ -2351,16 +2349,13 @@ fn apply_builtin_filter(
             autoescape,
             input_safety,
         ),
-        // `"".join(char2number.get(c, c) for c in phone.lower())` — a
-        // `@keep_lazy_text` function, NOT a `@stringfilter`, so Django never
-        // coerces the value and `.lower()` on anything but a string is an
-        // `AttributeError` it does not catch (#2451). `str(value)` here meant
-        // `{{ p|phone2numeric }}` over `None` rendered `6663`, and over a list
-        // rendered the keypad spelling of its repr.
-        "phone2numeric" => match python_lower(value) {
-            Ok(lowered) => Ok(Value::String(phone2numeric(&lowered))),
-            Err(err) => Err(value_op_error(filter_name, value, &err)),
-        },
+        "phone2numeric" => filter_registry::apply_django_builtin_filter(
+            filter_name,
+            value,
+            django_filter_arg(arg, resolved_arg),
+            autoescape,
+            input_safety,
+        ),
         "pprint" => {
             // Django's `pprint` filter is `pprint.pformat(value)` — which WRAPS
             // at width 80. The single-line builder this replaced diverged by
@@ -2470,40 +2465,20 @@ fn apply_builtin_filter(
             autoescape,
             input_safety,
         ),
-        "truncatechars_html" => {
-            match int_arg!(
-                filter_name,
-                arg,
-                arg_was_quoted,
-                arg_int_is_type_error,
-                20,
-                BadArg::ReturnInput
-            ) {
-                Some(n) => Ok(Value::String(crate::truncate::html_chars(
-                    &value.to_string(),
-                    n,
-                    None,
-                ))),
-                None => Ok(value.clone()),
-            }
-        }
-        "truncatewords_html" => {
-            match int_arg!(
-                filter_name,
-                arg,
-                arg_was_quoted,
-                arg_int_is_type_error,
-                10,
-                BadArg::ReturnInput
-            ) {
-                Some(n) => Ok(Value::String(crate::truncate::html_words(
-                    &value.to_string(),
-                    n,
-                    Some(WORDS_TRUNCATE),
-                ))),
-                None => Ok(value.clone()),
-            }
-        }
+        "truncatechars_html" => filter_registry::apply_django_builtin_filter(
+            filter_name,
+            value,
+            django_filter_arg(arg, resolved_arg),
+            autoescape,
+            input_safety,
+        ),
+        "truncatewords_html" => filter_registry::apply_django_builtin_filter(
+            filter_name,
+            value,
+            django_filter_arg(arg, resolved_arg),
+            autoescape,
+            input_safety,
+        ),
         // Not a built-in — signal the caller to try the custom-filter
         // registry. (The custom fallback lives in ``apply_filter_full_safe``
         // so it can capture the result's runtime safeness, #1660.)
@@ -4587,139 +4562,6 @@ fn get_dict_value(value: &Value, key: &str) -> Value {
     }
 }
 
-/// `django.utils.text.normalize_newlines` — `re.sub(r"\r\n|\r|\n", "\n", ...)`.
-///
-/// Both `linebreaks` and `linebreaksbr` call it first, so `a\r\nb` renders
-/// `a<br>b` and not `a\r<br>b` (#2259). `linenumbers` deliberately does NOT —
-/// Django splits it on a bare `"\n"`.
-fn normalize_newlines(s: &str) -> String {
-    s.replace("\r\n", "\n").replace('\r', "\n")
-}
-
-/// `re.split(r"\n{2,}", value)` — split on a run of TWO OR MORE newlines.
-///
-/// Not `split("\n\n")`: `a\n\n\nb` is ONE separator to Django and two to a
-/// literal split, which is how the old implementation grew a spurious
-/// `<p><br>b</p>`. Runs are consumed whole, and empty pieces are KEPT (Django
-/// does not filter them — `""` is one empty paragraph, and `"\n\n"` is two).
-///
-/// Byte indexing is safe because `\n` is ASCII, so every boundary it produces is
-/// a `char` boundary.
-fn split_on_blank_lines(s: &str) -> Vec<&str> {
-    let bytes = s.as_bytes();
-    let mut out = Vec::new();
-    let mut start = 0usize;
-    let mut i = 0usize;
-    while i < bytes.len() {
-        if bytes[i] != b'\n' {
-            i += 1;
-            continue;
-        }
-        let run_start = i;
-        while i < bytes.len() && bytes[i] == b'\n' {
-            i += 1;
-        }
-        if i - run_start >= 2 {
-            out.push(&s[start..run_start]);
-            start = i;
-        }
-    }
-    out.push(&s[start..]);
-    out
-}
-
-/// `{{ value|linebreaks }}` — `django.utils.html.linebreaks`, then `mark_safe`
-/// (#2259), with the `autoescape` argument #2284 made real.
-///
-/// **This filter escapes its own input UNLESS that input was already
-/// `SafeData`, and that is what earns it a place in
-/// `renderer::SAFE_OUTPUT_FILTERS`.** (Read the `# autoescape` section below
-/// before changing either half — the exemption rests on both arms, not on the
-/// escape alone.) Django's registration is
-/// `@register.filter("linebreaks", is_safe=True, needs_autoescape=True)`, whose
-/// body is `mark_safe(linebreaks(value, autoescape))` — the markup it builds is
-/// exempt from escaping precisely BECAUSE `escape(p)` has already been applied
-/// to every paragraph of the user's text. Marking the output safe without that
-/// inner escape would turn `{{ comment|linebreaks }}` into an XSS sink; the two
-/// halves are one change and must never be separated.
-///
-/// # `autoescape` (#2284)
-///
-/// Django's registration is `needs_autoescape=True`, and the filter body opens
-/// `autoescape = autoescape and not isinstance(value, SafeData)`. The engine has
-/// no `{% autoescape %}` block (the tag is rejected by the parser), so the first
-/// term is pinned true and the caller passes `!input_safety.container` — Django's
-/// `SafeData` clause, which #2259 left unreproduced and #2284 closed. When it is
-/// `false` the paragraph text is emitted verbatim, exactly as
-/// `django.utils.html.linebreaks(value, autoescape=False)` does, so
-/// `{{ p|safe|linebreaks }}` on `<b>x</b>` renders `<p><b>x</b></p>` rather than
-/// escaping markup the view deliberately marked safe.
-///
-/// **The `SAFE_OUTPUT_FILTERS` membership survives that**, and the reason it
-/// does is worth stating because it changed: the output is exempt from
-/// auto-escaping because it is safe under BOTH arms — either this filter
-/// escaped the input itself (`autoescape = true`, the hostile-input case), or
-/// the input was already `SafeData` and the caller took responsibility for it
-/// (`autoescape = false`). A value that was never marked safe still takes the
-/// escape, so nothing that reaches a page unescaped today reaches it unescaped
-/// after #2284.
-///
-/// Four defects beyond the escaping, all of which made `''` and multi-paragraph
-/// text render wrong:
-///
-/// * paragraphs were split on a literal `"\n\n"` rather than `\n{2,}`;
-/// * they were joined with `"\n"` where Django joins with `"\n\n"`;
-/// * empty paragraphs were FILTERED OUT, so `''` rendered `''` where Django
-///   renders `<p></p>`;
-/// * `\r\n` was not normalized.
-fn linebreaks(s: &str, autoescape: bool) -> String {
-    let normalized = normalize_newlines(s);
-    split_on_blank_lines(&normalized)
-        .iter()
-        // `"<p>%s</p>" % escape(p).replace("\n", "<br>")`. Escape FIRST, as
-        // Django does — `escape` leaves `\n` alone, so the order is not
-        // load-bearing, but mirroring it keeps the two readable side by side.
-        .map(|p| {
-            let body = if autoescape {
-                html_escape(p)
-            } else {
-                (*p).to_string()
-            };
-            format!("<p>{}</p>", body.replace('\n', "<br>"))
-        })
-        .collect::<Vec<_>>()
-        .join("\n\n")
-}
-
-/// `{{ value|linebreaksbr }}` — the same contract as [`linebreaks`] (#2259),
-/// including its `needs_autoescape` handling (#2284).
-///
-/// The issue listed this one as a neighbour to *check* rather than to fix; it
-/// diverges too, on both axes. It escapes its input and is `is_safe=True` in
-/// Django exactly like `linebreaks`, and it needs the same
-/// `normalize_newlines` — a single-line differential misses it only because it
-/// emits no tag at all until the input contains a newline.
-fn linebreaksbr(s: &str, autoescape: bool) -> String {
-    let normalized = normalize_newlines(s);
-    let body = if autoescape {
-        html_escape(&normalized)
-    } else {
-        normalized
-    };
-    body.replace('\n', "<br>")
-}
-
-/// `django.utils.html.strip_tags`, ported in `crate::htmlparser` (#2273).
-///
-/// The scan this replaced treated EVERY `<` as opening a tag, so `a < b`
-/// rendered as `a ` -- everything from the `<` to the next `>` (or to the end
-/// of the input) was deleted. Django runs a real `HTMLParser`, which emits a
-/// `<` that is not followed by a letter / `/` / `!` / `?` as data, and repeats
-/// the strip until the tag count stops falling.
-fn strip_tags(s: &str) -> String {
-    crate::htmlparser::strip_tags(s)
-}
-
 /// Django's `_json_script_escapes`, applied to the assembled JSON document —
 /// the second of the two steps `json_script` composes.
 ///
@@ -6651,22 +6493,6 @@ fn index_error_answer() -> Value {
     Value::String(String::new())
 }
 
-/// Python's `value.lower()`, which only a `str` has (#2451).
-///
-/// `phone2numeric` is the one built-in that calls a string METHOD on a value
-/// Django never coerced — it is `@keep_lazy_text`, not `@stringfilter` — so
-/// anything but a string is an `AttributeError` there and was `str(value)`
-/// here. That made `{{ p|phone2numeric }}` over `None` render `6663`, the
-/// keypad spelling of the word "None".
-pub(crate) fn python_lower(value: &Value) -> std::result::Result<String, ValueOpError> {
-    match value {
-        Value::String(s) | Value::SafeString(s) => Ok(s.to_lowercase()),
-        // `string_if_invalid` is a `str`; `"".lower()` is `""`.
-        Value::Missing => Ok(String::new()),
-        _ => Err(ValueOpError::NoAttribute("lower")),
-    }
-}
-
 enum DecimalSpecial {
     Nan,
     Infinite,
@@ -6753,22 +6579,6 @@ pub(crate) fn strip_python_underscores(body: &str) -> Option<String> {
         }
     }
     Some(out)
-}
-
-fn phone2numeric(s: &str) -> String {
-    s.chars()
-        .map(|c| match c.to_ascii_uppercase() {
-            'A' | 'B' | 'C' => '2',
-            'D' | 'E' | 'F' => '3',
-            'G' | 'H' | 'I' => '4',
-            'J' | 'K' | 'L' => '5',
-            'M' | 'N' | 'O' => '6',
-            'P' | 'Q' | 'R' | 'S' => '7',
-            'T' | 'U' | 'V' => '8',
-            'W' | 'X' | 'Y' | 'Z' => '9',
-            other => other,
-        })
-        .collect()
 }
 
 pub mod tags {
@@ -7320,11 +7130,12 @@ mod tests {
             ("upper", "1E-9"),
             ("lower", "1e-9"),
             ("truncatechars", "1E-9"),
-            ("addslashes", "1E-9"),
+            ("cut", "1E9"),
             ("center", "        1E-9        "),
         ] {
             let arg = match name {
                 "truncatechars" => Some("8"),
+                "cut" => Some("-"),
                 "center" => Some("20"),
                 _ => None,
             };
@@ -7995,13 +7806,6 @@ mod tests {
     }
 
     #[test]
-    fn test_capfirst_filter() {
-        let value = Value::String("hello world".to_string());
-        let result = apply_filter("capfirst", &value, None).unwrap();
-        assert_eq!(result.to_string(), "Hello world");
-    }
-
-    #[test]
     fn test_yesno_filter() {
         let value = Value::Bool(true);
         let result = apply_filter("yesno", &value, Some("yeah,nope,dunno")).unwrap();
@@ -8078,90 +7882,6 @@ mod tests {
         let payload = Value::String("<script>alert(1)</script>".to_string());
         let err = apply_filter("timesince", &payload, None).unwrap_err();
         assert!(!format!("{err:?}").contains("<script>"), "{err:?}");
-    }
-
-    #[test]
-    fn test_linebreaks_filter() {
-        // Was `contains("<p>")` + `contains("<br>")`, which is true of the old
-        // output too — it passed while the paragraph JOIN was `\n` instead of
-        // Django's `\n\n` (#2259). Exact bytes, so the join is pinned.
-        let value = Value::String("Line 1\nLine 2\n\nParagraph 2".to_string());
-        let result = apply_filter("linebreaks", &value, None).unwrap();
-        assert_eq!(
-            result.to_string(),
-            "<p>Line 1<br>Line 2</p>\n\n<p>Paragraph 2</p>"
-        );
-    }
-
-    #[test]
-    fn test_linebreaksbr_filter() {
-        let value = Value::String("Line 1\nLine 2\nLine 3".to_string());
-        let result = apply_filter("linebreaksbr", &value, None).unwrap();
-        assert_eq!(result.to_string(), "Line 1<br>Line 2<br>Line 3");
-    }
-
-    /// The half that makes the `SAFE_OUTPUT_FILTERS` membership safe (#2259).
-    ///
-    /// `linebreaks`/`linebreaksbr` are exempt from the renderer's auto-escape
-    /// ONLY because they escape their own input. If this test goes red, the
-    /// name must come out of `renderer::SAFE_OUTPUT_FILTERS` in the same commit
-    /// — the two are one change.
-    #[test]
-    fn linebreaks_escapes_its_input_which_is_what_makes_marking_it_safe_safe() {
-        let attack = Value::String("<img src=x onerror=alert(1)>\n</script><script>".to_string());
-        for name in ["linebreaks", "linebreaksbr"] {
-            let out = apply_filter(name, &attack, None).unwrap().to_string();
-            assert!(
-                !out.contains("<img") && !out.contains("<script") && !out.contains("</script"),
-                "{name} leaked live markup: {out:?}"
-            );
-            assert!(
-                out.contains("&lt;img src=x onerror=alert(1)&gt;"),
-                "{name} did not escape the payload: {out:?}"
-            );
-            // The tags the FILTER generates stay live — that is the point.
-            assert!(out.contains("<br>"), "{name} lost its own markup: {out:?}");
-        }
-    }
-
-    /// The SECOND arm of that contract, added with #2284.
-    ///
-    /// The test above proves the escape happens; since #2284 the escape is
-    /// CONDITIONAL, so proving it happens is only half of what
-    /// `SAFE_OUTPUT_FILTERS` membership now rests on. This pins the other half
-    /// in both directions: `autoescape=false` really does emit the input
-    /// verbatim (or the flag is dead and #2284 is a no-op), and it is
-    /// reachable ONLY through the flag — `apply_filter`, the entry point with
-    /// no view of the chain, still escapes.
-    ///
-    /// If either assertion goes red, the four names must come out of
-    /// `renderer::SAFE_OUTPUT_FILTERS` in the same commit.
-    #[test]
-    fn the_needs_autoescape_filters_skip_the_escape_only_when_told_to() {
-        let attack = "<img src=x onerror=alert(1)>\nsecond line";
-
-        // autoescape = false: verbatim. Django's `linebreaks(v, False)`.
-        assert!(linebreaks(attack, false).contains("<img src=x onerror=alert(1)>"));
-        assert!(linebreaksbr(attack, false).contains("<img src=x onerror=alert(1)>"));
-
-        // autoescape = true: escaped, and no live payload survives.
-        for out in [linebreaks(attack, true), linebreaksbr(attack, true)] {
-            assert!(!out.contains("<img"), "leaked live markup: {out:?}");
-            assert!(
-                out.contains("&lt;img src=x onerror=alert(1)&gt;"),
-                "did not escape the payload: {out:?}"
-            );
-        }
-
-        // And the flag is the ONLY way in: the chain-blind entry point escapes.
-        let value = Value::String(attack.to_string());
-        for name in ["linebreaks", "linebreaksbr"] {
-            let out = apply_filter(name, &value, None).unwrap().to_string();
-            assert!(
-                !out.contains("<img"),
-                "{name} via apply_filter leaked: {out:?}"
-            );
-        }
     }
 
     #[test]
@@ -8611,20 +8331,6 @@ mod tests {
     }
 
     #[test]
-    fn test_wordcount_filter() {
-        let value = Value::String("one two three four".to_string());
-        let result = apply_filter("wordcount", &value, None).unwrap();
-        assert!(matches!(result, Value::Integer(4)));
-    }
-
-    #[test]
-    fn test_wordcount_filter_empty() {
-        let value = Value::String("".to_string());
-        let result = apply_filter("wordcount", &value, None).unwrap();
-        assert!(matches!(result, Value::Integer(0)));
-    }
-
-    #[test]
     fn test_wordwrap_filter_default() {
         // Same as `test_stringformat_filter_default`: `wordwrap`'s argument is
         // required, so there is no no-argument behaviour to pin (#2400).
@@ -8633,30 +8339,6 @@ mod tests {
         assert!(
             format!("{err:?}").contains("wordwrap requires 2 arguments, 1 provided"),
             "{err:?}"
-        );
-    }
-
-    #[test]
-    fn test_striptags_filter() {
-        let value = Value::String("<b>Hello</b> <i>world</i>".to_string());
-        let result = apply_filter("striptags", &value, None).unwrap();
-        assert_eq!(result.to_string(), "Hello world");
-    }
-
-    #[test]
-    fn test_striptags_filter_nested() {
-        let value = Value::String("<div><p>Text</p></div>".to_string());
-        let result = apply_filter("striptags", &value, None).unwrap();
-        assert_eq!(result.to_string(), "Text");
-    }
-
-    #[test]
-    fn test_addslashes_filter() {
-        let value = Value::String("it's a \"test\" with \\ backslash".to_string());
-        let result = apply_filter("addslashes", &value, None).unwrap();
-        assert_eq!(
-            result.to_string(),
-            "it\\'s a \\\"test\\\" with \\\\ backslash"
         );
     }
 
@@ -8835,21 +8517,6 @@ mod tests {
                 .to_string(),
             "0"
         );
-    }
-
-    #[test]
-    fn test_make_list_filter() {
-        let value = Value::String("abc".to_string());
-        let result = apply_filter("make_list", &value, None).unwrap();
-        match result {
-            Value::List(items) | Value::Tuple(items) => {
-                assert_eq!(items.len(), 3);
-                assert_eq!(items[0].to_string(), "a");
-                assert_eq!(items[1].to_string(), "b");
-                assert_eq!(items[2].to_string(), "c");
-            }
-            _ => panic!("Expected List value"),
-        }
     }
 
     #[test]
@@ -9143,13 +8810,6 @@ mod tests {
     }
 
     #[test]
-    fn test_phone2numeric_filter() {
-        let value = Value::String("1-800-COLLECT".to_string());
-        let result = apply_filter("phone2numeric", &value, None).unwrap();
-        assert_eq!(result.to_string(), "1-800-2655328");
-    }
-
-    #[test]
     fn test_safeseq_filter() {
         let value = Value::List(vec![
             Value::String("<b>bold</b>".to_string()),
@@ -9179,44 +8839,5 @@ mod tests {
         } else {
             panic!("Expected List value");
         }
-    }
-
-    #[test]
-    fn test_truncatechars_html_filter() {
-        // Truncate and close tags
-        let value = Value::String("<p>Hello <b>world</b> this is long</p>".to_string());
-        let result = apply_filter("truncatechars_html", &value, Some("11")).unwrap();
-        let s = result.to_string();
-        // Should preserve tags, count only visible chars, and close open tags
-        assert!(s.contains("<p>"));
-        // `…` not `...` — #2203. Django renders
-        // `<p>Hello <b>worl…</b></p>` for this input.
-        assert!(s.contains("…"));
-        // Open tags should be closed
-        assert!(s.ends_with("</p>") || s.ends_with("</b></p>"));
-
-        // Short text unchanged
-        let value = Value::String("<b>Hi</b>".to_string());
-        let result = apply_filter("truncatechars_html", &value, Some("20")).unwrap();
-        assert_eq!(result.to_string(), "<b>Hi</b>");
-    }
-
-    #[test]
-    fn test_truncatewords_html_filter() {
-        // Truncate by words, preserving tags
-        let value = Value::String("<p>one two <b>three four</b> five six</p>".to_string());
-        let result = apply_filter("truncatewords_html", &value, Some("3")).unwrap();
-        let s = result.to_string();
-        assert!(s.contains("one"));
-        assert!(s.contains("two"));
-        assert!(s.contains("three"));
-        // `…` not `...` — #2203. Django renders
-        // `<p>one two <b>three …</b></p>` for this input.
-        assert!(s.contains("…"));
-
-        // Short text unchanged
-        let value = Value::String("<b>one two</b>".to_string());
-        let result = apply_filter("truncatewords_html", &value, Some("10")).unwrap();
-        assert_eq!(result.to_string(), "<b>one two</b>");
     }
 }

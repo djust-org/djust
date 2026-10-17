@@ -374,28 +374,6 @@ pub(crate) fn py_is_line_break(c: char) -> bool {
     )
 }
 
-/// Python's `str.splitlines()` (the default, `keepends=False`).
-///
-/// Derived from [`py_splitlines_keepends`] rather than re-scanning: the
-/// terminator is by construction the last character of each piece (a `\r\n`
-/// pair counts as one), so dropping it is a truncation, and the two forms
-/// cannot drift on the boundary set.
-pub(crate) fn py_splitlines(s: &str) -> Vec<String> {
-    py_splitlines_keepends(s)
-        .into_iter()
-        .map(|mut line| {
-            if line.ends_with("\r\n") {
-                line.truncate(line.len() - 2);
-            } else if let Some(last) = line.chars().next_back() {
-                if py_is_line_break(last) {
-                    line.truncate(line.len() - last.len_utf8());
-                }
-            }
-            line
-        })
-        .collect()
-}
-
 /// `re.findall(r'\S*\s*', line)` with its always-empty final match dropped.
 ///
 /// Each part is a run of non-space followed by the run of space that follows it,
