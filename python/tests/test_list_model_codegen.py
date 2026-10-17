@@ -149,7 +149,6 @@ class TestListModelFallback:
     context.py falls back to _jit_serialize_model."""
 
     @patch("djust.mixins.jit.extract_template_variables")
-    @patch("djust.mixins.jit.JIT_AVAILABLE", True)
     def test_no_paths_uses_jit_serialize_model(self, mock_extract):
         """Without paths, _jit_serialize_model is called per item."""
         mock_extract.return_value = {}  # No paths for any variable

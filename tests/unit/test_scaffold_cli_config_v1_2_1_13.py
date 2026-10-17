@@ -271,7 +271,6 @@ def test_init_comment_no_longer_cites_the_fixed_admin_bug_as_a_blocker():
 def test_jit_serialization_setting_is_honoured(enabled, jit_called):
     from django.contrib.auth.models import User
 
-    import djust.mixins.context as context_module
     from djust.config import config
     from djust.live_view import LiveView
 
@@ -284,7 +283,6 @@ def test_jit_serialization_setting_is_honoured(enabled, jit_called):
     config.set("jit_serialization", enabled)
     try:
         with (
-            patch.object(context_module, "JIT_AVAILABLE", True),
             patch.object(view, "_get_template_content", return_value=view.template) as gtc,
         ):
             ctx = view.get_context_data()

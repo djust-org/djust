@@ -10,12 +10,7 @@ from ..base import Component
 
 from django.utils.html import conditional_escape
 
-try:
-    from djust._rust import RustSwitch
-
-    _RUST_AVAILABLE = True
-except ImportError:
-    _RUST_AVAILABLE = False
+from djust._rust import RustSwitch
 
 
 class Switch(Component):
@@ -67,7 +62,7 @@ class Switch(Component):
         ... )
     """
 
-    _rust_impl_class = RustSwitch if _RUST_AVAILABLE else None
+    _rust_impl_class = RustSwitch
 
     template = """<div class="mb-3">
     <div class="form-check form-switch{% if inline %} form-check-inline{% endif %}">

@@ -375,12 +375,6 @@ def register_assign(name: str) -> Callable[[Type[AssignTagHandler]], Type[Assign
             register_assign_tag_handler(name, handler)
             _registered_handlers[name] = handler
             logger.debug("Registered assign tag handler: %s", name)
-        except ImportError as e:
-            logger.warning(
-                "Could not register assign tag handler '%s': Rust extension not available (%s)",
-                name,
-                e,
-            )
         except Exception as e:
             logger.error("Failed to register assign tag handler '%s': %s", name, e)
 
@@ -419,10 +413,6 @@ def register(name: str) -> Callable[[Type[TagHandler]], Type[TagHandler]]:
             register_tag_handler(name, handler)
             _registered_handlers[name] = handler
             logger.debug("Registered template tag handler: %s", name)
-        except ImportError as e:
-            logger.warning(
-                "Could not register tag handler '%s': Rust extension not available (%s)", name, e
-            )
         except Exception as e:
             logger.error("Failed to register tag handler '%s': %s", name, e)
 
@@ -457,12 +447,9 @@ def is_registered(name: str) -> bool:
     bool
         True if a handler is registered
     """
-    try:
-        from djust._rust import has_tag_handler
+    from djust._rust import has_tag_handler
 
-        return has_tag_handler(name)
-    except ImportError:
-        return name in _registered_handlers
+    return bool(has_tag_handler(name))
 
 
 # Auto-register built-in handlers on import
@@ -501,7 +488,7 @@ def _register_builtins() -> None:
 
 def _install_library_loader() -> None:
     """Install ``djust.template_libraries.load_libraries`` as the parser's
-    ``{% load %}`` hook (#2547). No-op without the Rust extension."""
+    ``{% load %}`` hook (#2547)."""
     try:
         from ..template_libraries import install_loader
     except ImportError as e:  # pragma: no cover — defensive
@@ -511,8 +498,7 @@ def _install_library_loader() -> None:
 
 
 def _install_i18n_hooks() -> None:
-    """Install the #2558 i18n hooks (translator + scope hooks). No-op
-    without the Rust extension."""
+    """Install the #2558 i18n hooks (translator + scope hooks)."""
     try:
         from ..render_env import install_scope_hooks
         from ..template_libraries import install_translator
@@ -535,7 +521,6 @@ def reregister_builtins() -> None:
     re-registers every already-instantiated built-in handler from
     ``_registered_handlers`` to its correct registry, mirroring the
     theme/component ``register_with_rust_engine`` restore path (#1928).
-    No-op without the Rust extension.
 
     Also strips each handler from the OTHER (wrong) registry (#2053). The
     Rust parser decides a tag's node type at PARSE time by checking the
@@ -554,15 +539,13 @@ def reregister_builtins() -> None:
     function a complete cure regardless of which polluter (existing or
     future) caused the cross-registry drift.
     """
-    try:
-        from djust._rust import (
-            register_assign_tag_handler,
-            register_tag_handler,
-            unregister_assign_tag_handler,
-            unregister_tag_handler,
-        )
-    except ImportError:
-        return
+    from djust._rust import (
+        register_assign_tag_handler,
+        register_tag_handler,
+        unregister_assign_tag_handler,
+        unregister_tag_handler,
+    )
+
     for name, handler in list(_registered_handlers.items()):
         try:
             if isinstance(handler, AssignTagHandler):

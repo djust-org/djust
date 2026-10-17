@@ -9,6 +9,9 @@ import re
 import sys
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
 
+from .._rust import extract_template_variables
+from ..optimization.codegen import compile_serializer, generate_serializer_code
+from ..optimization.query_optimizer import analyze_queryset_optimization, optimize_queryset
 from ..serialization import model_identity, normalize_django_value
 from ..session_utils import _jit_serializer_cache, _get_model_hash
 
@@ -30,12 +33,6 @@ _INCLUDE_RE = re.compile(
 )
 
 
-try:
-    from .._rust import extract_template_variables
-
-except ImportError:
-    extract_template_variables = None  # type: ignore[assignment]
-
 # Cache template content hash → extract_template_variables() result.
 # Keyed by SHA-256 content hash (not id()) so it survives GC and works across requests.
 # Hot reload is safe: changed template content produces a different hash.
@@ -48,11 +45,8 @@ _VARIABLE_EXTRACTION_CACHE_MAX = 256
 def _cached_extract_template_variables(template_content: str) -> Optional[dict]:
     """Extract template variables with caching by content hash.
 
-    Returns the variable paths map, or None if extraction is unavailable.
+    Returns the variable paths map, or None if extraction failed.
     """
-    if extract_template_variables is None:
-        return None
-
     # Compute SHA-256 directly from content — safe regardless of GC/id reuse.
     # ~2µs for a ~10KB string, negligible vs the Rust FFI call being cached.
     content_hash = hashlib.sha256(template_content.encode()).hexdigest()[:8]
@@ -76,15 +70,6 @@ def _cached_extract_template_variables(template_content: str) -> Optional[dict]:
 
     _variable_extraction_cache[content_hash] = result
     return result
-
-
-try:
-    from ..optimization.query_optimizer import analyze_queryset_optimization, optimize_queryset
-    from ..optimization.codegen import generate_serializer_code, compile_serializer
-
-    JIT_AVAILABLE = True
-except ImportError:
-    JIT_AVAILABLE = False
 
 
 # A `_full_template` that is nothing but `{% extends "x" %}`: the child's
@@ -238,9 +223,6 @@ class JITMixin:
         3. Compiles custom serializer function
         4. Caches serializer for reuse
         """
-        if not JIT_AVAILABLE:
-            return [normalize_django_value(obj) for obj in queryset]
-
         try:
             variable_paths_map = _cached_extract_template_variables(template_content)
             if variable_paths_map is None:
@@ -380,9 +362,6 @@ class JITMixin:
         """
         Apply JIT auto-serialization to a single Django Model instance.
         """
-        if not JIT_AVAILABLE:
-            return cast(Dict[str, Any], normalize_django_value(obj))
-
         try:
             variable_paths_map = _cached_extract_template_variables(template_content)
             if variable_paths_map is None:
@@ -394,7 +373,7 @@ class JITMixin:
                 # (e.g. ``{{ user }}`` relying on __str__, or a public attr used
                 # only in handlers). Emit ONLY the safe identity subset —
                 # least-exposure, since no field of the object is referenced in
-                # the template. The other fallbacks (JIT unavailable, extraction
+                # the template. The other fallbacks (extraction
                 # None, exception) still call normalize_django_value because they
                 # genuinely need the data; the denylist there keeps them safe.
                 # One producer for the identity map (#2322). This site DID

@@ -23,36 +23,23 @@ from django.utils.safestring import SafeString
 if TYPE_CHECKING:
     from .backend import DjustTemplateBackend
 
+from djust._rust import extract_template_variables, serialize_queryset
+from djust.optimization.query_optimizer import analyze_queryset_optimization, optimize_queryset
+from djust.serialization import normalize_django_value
+
+# Import from the true source module (re-exported via djust.live_view for
+# back-compat) so the type checker resolves the symbols directly.
+from djust.session_utils import (
+    _get_model_hash,
+    _jit_serializer_cache,  # Shared cache - cleared by clear_jit_cache()
+)
+
 from .serialization import serialize_context
 
-# OUTSIDE the JIT try-block below on purpose (#2322): the two sites that call
-# this are the JIT-unavailable and serialization-raised fallbacks, so importing
-# it alongside `DjangoJSONEncoder` would leave it undefined in exactly the two
-# cases that need it. `djust.serialization` is pure Python and is already a
-# hard dependency of this module's happy path.
+# The identity map the serialization-raised fallback returns (#2322).
 from ..serialization import model_identity
 
 logger = logging.getLogger(__name__)
-
-# Try to import JIT optimization utilities
-try:
-    from djust._rust import extract_template_variables, serialize_queryset
-    from djust.optimization.query_optimizer import analyze_queryset_optimization, optimize_queryset
-    from djust.serialization import DjangoJSONEncoder, normalize_django_value
-
-    # Import from the true source module (re-exported via djust.live_view for
-    # back-compat) so the type checker resolves the symbols directly.
-    from djust.session_utils import (
-        _get_model_hash,
-        _jit_serializer_cache,  # Shared cache - cleared by clear_jit_cache()
-    )
-
-    JIT_AVAILABLE = True
-except ImportError:
-    JIT_AVAILABLE = False
-    DjangoJSONEncoder = None  # type: ignore[misc,assignment]
-    _get_model_hash = None  # type: ignore[assignment]
-    _jit_serializer_cache = {}  # Fallback empty cache when JIT not available
 
 
 class _TemplateSourceWrapper:
@@ -308,11 +295,6 @@ class DjustTemplate:
         Returns:
             List of serialized dictionaries
         """
-        if not JIT_AVAILABLE:
-            # Fallback to DjangoJSONEncoder
-            logger.debug("[JIT] Not available, using DjangoJSONEncoder for '%s'", variable_name)
-            return [normalize_django_value(obj) for obj in queryset]
-
         try:
             # Extract variable paths from template
             variable_paths_map = extract_template_variables(self.template_string)
@@ -397,13 +379,6 @@ class DjustTemplate:
         Returns:
             Serialized dictionary with 'id' and 'pk' keys (both native types)
         """
-        if not JIT_AVAILABLE or DjangoJSONEncoder is None:
-            # Fallback to the identity map — one producer for it (#2322), so
-            # this answers exactly what the main path does. Before that, whether
-            # a serialized model carried `__model__` depended on whether the JIT
-            # extension happened to be importable.
-            return model_identity(model_instance)
-
         try:
             return cast(dict, normalize_django_value(model_instance))
         except Exception as e:

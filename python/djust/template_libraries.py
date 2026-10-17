@@ -428,12 +428,10 @@ def rendering_with_backend(
 def install_loader() -> bool:
     """Install :func:`load_libraries` as the parser's ``{% load %}`` hook.
 
-    Idempotent; ``False`` without the Rust extension.
+    Idempotent. Always ``True`` since the extension is required (2.0).
     """
-    try:
-        from djust._rust import register_library_loader
-    except ImportError:
-        return False
+    from djust._rust import register_library_loader
+
     register_library_loader(load_libraries)
     return True
 
@@ -487,12 +485,10 @@ def resolve_default_timezone() -> str:
 def install_translator() -> bool:
     """Install the translation and date-format hooks for the active language.
 
-    Idempotent; ``False`` without the Rust extension.
+    Idempotent. Always ``True`` since the extension is required (2.0).
     """
-    try:
-        from djust._rust import register_translator
-    except ImportError:
-        return False
+    from djust._rust import register_translator
+
     register_translator(translate_msgid, resolve_date_format, resolve_default_timezone)
     return True
 
@@ -576,16 +572,14 @@ def reassert() -> None:
     global _installed_cache
     with _lock:
         _installed_cache = None
-        try:
-            from djust._rust import (
-                register_block_tag_handler,
-                register_raw_block_tag_handler,
-                register_tag_handler,
-                unregister_block_tag_handler,
-                unregister_tag_handler,
-            )
-        except ImportError:
-            return
+        from djust._rust import (
+            register_block_tag_handler,
+            register_raw_block_tag_handler,
+            register_tag_handler,
+            unregister_block_tag_handler,
+            unregister_tag_handler,
+        )
+
         for name, (_label, handler) in list(_engine_state("_owned_tags", _owned_tags).items()):
             if isinstance(handler, LibraryRawBlockTagHandler):
                 register_raw_block_tag_handler(name, handler.end_name, handler)
@@ -827,11 +821,8 @@ def _arm_scope_tags(module: str) -> None:
     names = _NATIVE_SCOPE_TAGS.get(module)
     if not names:
         return
-    try:
-        from djust._rust import arm_scope_tags
-    except ImportError:
-        logger.warning("djust._rust extension not available; scope tags stay unarmed")
-        return
+    from djust._rust import arm_scope_tags
+
     arm_scope_tags(list(names))
 
 
@@ -856,16 +847,8 @@ def _bridge_raw_block_tag(label: str, name: str, compile_func: Callable[..., Any
             name,
         )
         return
-    try:
-        from djust._rust import register_raw_block_tag_handler, unregister_tag_handler
-    except ImportError:
-        logger.warning(
-            "djust._rust extension not available; tag '%s' from '%s' will not work "
-            "in the Rust engine",
-            name,
-            label,
-        )
-        return
+    from djust._rust import register_raw_block_tag_handler, unregister_tag_handler
+
     handler = _engine_state("_handlers", _handlers).get(compile_func)
     if not isinstance(handler, LibraryRawBlockTagHandler) or handler.end_name != "end" + name:
         handler = LibraryRawBlockTagHandler(label, name, compile_func)
@@ -885,21 +868,13 @@ def _bridge_tag(label: str, name: str, compile_func: Callable[..., Any]) -> None
             name,
         )
         return
-    try:
-        from djust._rust import (
-            register_block_tag_handler,
-            register_tag_handler,
-            unregister_block_tag_handler,
-            unregister_tag_handler,
-        )
-    except ImportError:
-        logger.warning(
-            "djust._rust extension not available; tag '%s' from '%s' will not work "
-            "in the Rust engine",
-            name,
-            label,
-        )
-        return
+    from djust._rust import (
+        register_block_tag_handler,
+        register_tag_handler,
+        unregister_block_tag_handler,
+        unregister_tag_handler,
+    )
+
     handler = _engine_state("_handlers", _handlers).get(compile_func)
     if kind == "simple_block_tag":
         # Per-NAME, not per-compile-function (#2558): decorator aliases
@@ -956,10 +931,8 @@ def _may_override(name: str) -> bool:
     """Collision policy: never displace a handler this module does not own."""
     if name in _engine_state("_owned_tags", _owned_tags) or name in _owned_tags:
         return True
-    try:
-        from djust._rust import has_assign_tag_handler, has_block_tag_handler, has_tag_handler
-    except ImportError:
-        return True
+    from djust._rust import has_assign_tag_handler, has_block_tag_handler, has_tag_handler
+
     return not (
         has_tag_handler(name) or has_block_tag_handler(name) or has_assign_tag_handler(name)
     )
@@ -1788,11 +1761,8 @@ def _bridge_bespoke_block_tag(label: str, name: str) -> None:
             name,
         )
         return
-    try:
-        from djust._rust import register_block_tag_handler, unregister_tag_handler
-    except ImportError:  # pragma: no cover — the extension is a hard dependency
-        logger.warning("djust._rust extension not available; '%s' not bridged", name)
-        return
+    from djust._rust import register_block_tag_handler, unregister_tag_handler
+
     handler = CacheTagHandler()
     register_block_tag_handler(name, _BESPOKE_BLOCK_TAGS[name], handler)
     unregister_tag_handler(name)

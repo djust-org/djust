@@ -44,13 +44,13 @@ def _is_debug_mode() -> bool:
         return True
 
 
-def _render_template_with_fallback(template_str: str, context: Dict[str, Any]) -> str:
+def _render_template_string(template_str: str, context: Dict[str, Any]) -> str:
     """
-    Render a template string with Rust acceleration, falling back to Django templates.
+    Render a component template string through the Rust engine.
 
-    Tries Rust template rendering first for performance. Falls back to Django's
-    Template engine if Rust is unavailable or encounters an error (e.g., for
-    {% include %} tags that Rust doesn't support).
+    A Rust render error propagates. Before 2.0 it was caught here and the
+    template was rendered again with Django's ``Template``, so a template the
+    Rust engine rejected rendered differently, silently, instead of failing.
 
     Args:
         template_str: Template string to render
@@ -59,31 +59,23 @@ def _render_template_with_fallback(template_str: str, context: Dict[str, Any]) -
     Returns:
         Rendered HTML string (not marked as safe - caller should mark_safe if needed)
     """
-    try:
-        from djust._rust import render_template
+    from djust._rust import render_template
 
-        from ..render_env import apply_render_env_once
+    from ..render_env import apply_render_env_once
 
-        # The FOURTH framework render entry, and it was the one missing from
-        # the ambient-settings handoff (#2209 / #2221 / #2539): a component
-        # rendered on a thread that had not already rendered a page got UTC
-        # timestamps, unlocalized numbers and — since ADR-027 — a resolution
-        # flag stuck at its default.
-        #
-        # `_once`, not `apply_render_env`, and the difference is N+1: this
-        # runs once per component INSTANCE, so a parent with N components paid
-        # N pushes at ~12us each inside a render whose own push already set
-        # every thread-local correctly. See that function for what the first
-        # push still buys and what the sentinel deliberately does not cover.
-        apply_render_env_once()
-        return render_template(template_str, context)
-    except (ImportError, AttributeError, RuntimeError):
-        # Rust not available or template error, fall back to Django templates
-        from django.template import Context, Template
-
-        template = Template(template_str)
-        django_context = Context(context)
-        return cast(str, template.render(django_context))
+    # The FOURTH framework render entry, and it was the one missing from
+    # the ambient-settings handoff (#2209 / #2221 / #2539): a component
+    # rendered on a thread that had not already rendered a page got UTC
+    # timestamps, unlocalized numbers and — since ADR-027 — a resolution
+    # flag stuck at its default.
+    #
+    # `_once`, not `apply_render_env`, and the difference is N+1: this
+    # runs once per component INSTANCE, so a parent with N components paid
+    # N pushes at ~12us each inside a render whose own push already set
+    # every thread-local correctly. See that function for what the first
+    # push still buys and what the sentinel deliberately does not cover.
+    apply_render_env_once()
+    return cast(str, render_template(template_str, context))
 
 
 def _load_template_source(template_name: str) -> Optional[str]:
@@ -135,10 +127,8 @@ def _render_template_name_with_markers(
     state, ``SafeString`` paths marked safe, raw objects (models behind the
     serialization floor) on the ``set_raw_py_values`` sidecar.
     """
-    try:
-        from djust._rust import RustLiveView
-    except ImportError:
-        return None
+    from djust._rust import RustLiveView
+
     try:
         source = _load_template_source(template_name)
     except Exception:
@@ -598,7 +588,7 @@ class Component(TemplateMutatorGuard, ABC):
             # admits.
             context["component_key"] = self._component_key
             context["_component_key"] = self._component_key
-            return cast(str, mark_safe(_render_template_with_fallback(self.template, context)))
+            return cast(str, mark_safe(_render_template_string(self.template, context)))
 
         # 3. Fall back to custom Python rendering (flexible)
         return cast(str, mark_safe(self._render_custom()))
@@ -857,7 +847,7 @@ class BoundComponent:
         context = dict(state)
         context["component_id"] = self.component_id
         if template:
-            html: Optional[str] = _render_template_with_fallback(template, context)
+            html: Optional[str] = _render_template_string(template, context)
         else:
             assert template_name is not None
             html = _render_template_name_with_markers(template_name, context)
@@ -1321,7 +1311,7 @@ class LiveComponent(TemplateMutatorGuard, ContextProviderMixin):
         if self.template:
             from django.utils.html import format_html
 
-            html = _render_template_with_fallback(self.template, context)
+            html = _render_template_string(self.template, context)
             # Wrap with component ID for LiveComponent tracking (html is already safe from template engine)
             return cast(
                 str,
