@@ -102,10 +102,6 @@ pub enum Node {
         props: Vec<(String, String)>,
         children: Vec<Node>,
     },
-    RustComponent {
-        name: String,
-        props: Vec<(String, String)>,
-    },
     /// Custom template tag handled by a Python callback.
     ///
     /// This is used for Django-specific tags like `{% url %}` and `{% static %}`
@@ -461,7 +457,6 @@ macro_rules! child_lists {
             | Node::CsrfToken
             | Node::DjustAudio
             | Node::Static(_)
-            | Node::RustComponent { .. }
             | Node::CustomTag { .. }
             | Node::WidthRatio { .. }
             | Node::FirstOf { .. }
@@ -2197,28 +2192,28 @@ fn parse_token_inner(
             children,
             ..
         } => {
-            // Check if this is a Rust component (starts with "Rust")
+            // `<RustButton …/>`-style tags rendered `djust_components::ui`
+            // server-side until 2.0. Refuse them by name rather than turning
+            // them into React placeholders that render as an empty div.
             if name.starts_with("Rust") {
-                // Rust components are rendered server-side, no children support
-                Ok(Some(Node::RustComponent {
-                    name: name.clone(),
-                    props: props.clone(),
-                }))
-            } else {
-                // Convert token children to Node children for React components
-                let mut child_nodes = Vec::new();
-                for child in children {
-                    if let Token::Text(text) = child {
-                        child_nodes.push(Node::Text(text.clone()));
-                    }
-                }
-
-                Ok(Some(Node::ReactComponent {
-                    name: name.clone(),
-                    props: props.clone(),
-                    children: child_nodes,
-                }))
+                return Err(DjangoRustError::TemplateError(format!(
+                    "<{name} /> component tags were removed in djust 2.0. \
+                     Use a djust component template tag or a Python component instead."
+                )));
             }
+            // Convert token children to Node children for React components
+            let mut child_nodes = Vec::new();
+            for child in children {
+                if let Token::Text(text) = child {
+                    child_nodes.push(Node::Text(text.clone()));
+                }
+            }
+
+            Ok(Some(Node::ReactComponent {
+                name: name.clone(),
+                props: props.clone(),
+                children: child_nodes,
+            }))
         }
 
         // Inline comments create no Django node. Block comments do, and
@@ -2883,7 +2878,7 @@ fn collect_dj_model_fields_depth<L: crate::inheritance::TemplateLoader>(
             }
 
             // Leaf / non-child variants carry no template Text. Note
-            // `RustComponent`, `CustomTag`, `AssignTag`, `Variable`, etc. never
+            // `CustomTag`, `AssignTag`, `Variable`, etc. never
             // hold raw `dj-model=` markup, so there is nothing to scan.
             _ => {
                 for children in node.child_lists().into_iter().flatten() {
@@ -3194,12 +3189,6 @@ fn extract_from_nodes(
                 }
                 // Recurse into children
                 extract_from_nodes(children, variables);
-            }
-            Node::RustComponent { props, name: _ } => {
-                // Extract from component props
-                for (_prop_name, prop_value) in props {
-                    extract_from_operand(prop_value, variables);
-                }
             }
             Node::AssignTag { args, name: _ } => {
                 // Extract variable references from the assign tag's
@@ -6088,7 +6077,6 @@ mod dep_tests {
             Node::Static(_) => "Static",
             Node::With { .. } => "With",
             Node::ReactComponent { .. } => "ReactComponent",
-            Node::RustComponent { .. } => "RustComponent",
             Node::CustomTag { .. } => "CustomTag",
             Node::BlockCustomTag { .. } => "BlockCustomTag",
             Node::RawBlockCustomTag { .. } => "RawBlockCustomTag",
@@ -6170,10 +6158,6 @@ mod dep_tests {
                 name: "MyComp".into(),
                 props: vec![("foo".into(), "bar".into())],
                 children: vec![],
-            },
-            Node::RustComponent {
-                name: "MyRust".into(),
-                props: vec![("foo".into(), "bar".into())],
             },
             Node::CustomTag {
                 name: "url".into(),
