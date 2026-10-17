@@ -680,10 +680,7 @@ impl ViewActor {
                 // per-view config as its parent — the ADR-024 auto-call
                 // flag and the render environment — instead of a bare
                 // `Context::from_dict` that reads every default.
-                actor.set_render_config(
-                    self.backend.template_auto_call_rust(),
-                    self.backend.render_env_rust().cloned(),
-                );
+                actor.set_render_config(true, self.backend.render_env_rust().cloned());
                 // Spawn the component actor
                 tokio::spawn(actor.run());
 
