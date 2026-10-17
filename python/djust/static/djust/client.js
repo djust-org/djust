@@ -1873,11 +1873,6 @@ class LiveViewWebSocket {
                 // [dj-view] element, track per-target VDOM versions, and run
                 // reinitAfterDOMUpdate() ONCE after the batch is applied.
                 this.viewMounted = true;
-                // #1031: clear the lazy-hydration in-flight batch so a late
-                // arriving error frame doesn't trigger a phantom fallback.
-                if (window.djust && window.djust.lazyHydration) {
-                    window.djust.lazyHydration.inFlightBatch = null;
-                }
                 const views = Array.isArray(data.views) ? data.views : [];
                 const failed = Array.isArray(data.failed) ? data.failed : [];
                 if (!window.djust._clientVdomVersions) {
@@ -2081,19 +2076,6 @@ class LiveViewWebSocket {
                 if (data.traceback) {
                     // codeql[js/log-injection] -- data.traceback is a server-provided stack trace, not user input
                     console.error('Traceback:', data.traceback);
-                }
-
-                // #1031: if the error is about mount_batch (older server
-                // doesn't recognize the frame type), fall back to per-view
-                // mounts so the lazy-hydrated views still come up.
-                if (
-                    typeof data.error === 'string'
-                    && /mount_batch|unknown\s+message\s+type/i.test(data.error)
-                    && window.djust && window.djust.lazyHydration
-                    && typeof window.djust.lazyHydration.handleMountBatchFallback === 'function'
-                ) {
-                    window.djust.lazyHydration.handleMountBatchFallback();
-                    break;
                 }
 
                 // Non-recoverable errors (e.g. server restart lost state) — auto-reload
@@ -2767,8 +2749,6 @@ window.djust._runInsertedScripts = _runInsertedScripts;
 // #2058: exposed so every insertion path (and tests) can warn about a
 // classic <script> a morph/patch left dead.
 window.djust._warnDeadScripts = _warnDeadScripts;
-// Backward compatibility
-window.LiveViewWebSocket = LiveViewWebSocket;
 
 // Global WebSocket instance.
 // `let` (NOT const) — 14-init.js reassigns this when switching transports
@@ -3780,8 +3760,6 @@ function setCacheConfig(config) {
 
 // Expose setCacheConfig under djust namespace
 window.djust.setCacheConfig = setCacheConfig;
-// Backward compatibility
-window.setCacheConfig = setCacheConfig;
 
 /**
  * Build a cache key from event name and parameters.
@@ -4686,11 +4664,6 @@ function initReactCounters() {
     });
 }
 
-// Stub function for todo items initialization (reserved for future use)
-function initTodoItems() {
-    // Currently no-op - todo functionality handled via LiveView events
-}
-
 // Smart default rate limiting by input type
 // Prevents VDOM version mismatches from high-frequency events.
 // Click-fired widgets (radio/checkbox/select) commit one value per user
@@ -4889,11 +4862,6 @@ window.djust.initReactCounters = initReactCounters;
  *   data-items:list="a,b,c"     -> { items: ["a", "b", "c"] }
  *   data-name="John"            -> { name: "John" } (default: string)
  *
- * Backward compatibility: Also reads dj-params='{"key": value}' JSON blob
- * for 0.3.2 → 0.3.6+ migration. The dj-params attribute is deprecated;
- * use individual data-* attributes instead. data-* attributes take
- * precedence over dj-params keys with the same name.
- *
  * @param {HTMLElement} element - Element to extract params from
  * @returns {Object} - Parameters with coerced types
  */
@@ -5012,39 +4980,8 @@ function extractTypedParams(element) {
         params[key] = value;
     }
 
-    // dj-params backward compatibility: merge JSON blob into params.
-    // data-* attributes take precedence over dj-params keys.
-    const djParamsAttr = element.getAttribute('dj-params');
-    if (djParamsAttr !== null) {
-        if (globalThis.djustDebug) {
-            console.warn(
-                '[LiveView] dj-params is deprecated and will be removed in a future release. ' +
-                'Replace with individual data-* attributes, e.g. data-todo-id:int="{{ todo.id }}". ' +
-                'See the 0.3.2 → 0.3.6 migration guide in CHANGELOG.md.'
-            );
-        }
-        if (djParamsAttr !== '') {
-            try {
-                const parsed = JSON.parse(djParamsAttr);
-                if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
-                    for (const [k, v] of Object.entries(parsed)) {
-                        // Prevent prototype pollution
-                        if (UNSAFE_KEYS.includes(k)) continue;
-                        // data-* attributes win; only fill in missing keys
-                        if (!(k in params)) {
-                            // eslint-disable-next-line security/detect-object-injection
-                            params[k] = v;
-                        }
-                    }
-                }
-            } catch {
-                if (globalThis.djustDebug) console.warn('[LiveView] Failed to parse dj-params JSON: "' + djParamsAttr + '"');
-            }
-        }
-    }
-
-    // Merge dj-value-* attributes. dj-value-* takes precedence over data-*
-    // and dj-params, matching Phoenix's phx-value-* semantics.
+    // Merge dj-value-* attributes. dj-value-* takes precedence over data-*,
+    // matching Phoenix's phx-value-* semantics.
     const djValues = collectDjValues(element);
     for (const [k, v] of Object.entries(djValues)) {
         // eslint-disable-next-line security/detect-object-injection
@@ -7707,7 +7644,7 @@ function clearOptimisticState(eventName) {
  *
  * Call this after any operation that replaces or morphs DOM content
  * (html_update, html_recovery, TurboNav, embedded view update, etc.)
- * instead of manually calling initReactCounters + initTodoItems +
+ * instead of manually calling initReactCounters +
  * bindLiveViewEvents + updateHooks + bindModelElements individually.
  */
 // WeakSet to track elements that have already been scrolled into view.
@@ -7717,7 +7654,6 @@ const _scrolledElements = new WeakSet();
 
 function reinitAfterDOMUpdate(scope) {
     initReactCounters();
-    initTodoItems();
     bindLiveViewEvents(scope);
     // A clear_draft() from an event handler arrives in a patch (#2971).
     applyDraftClearFlag();
@@ -8282,8 +8218,6 @@ const globalLoadingManager = {
 
 // Expose globalLoadingManager under djust namespace
 window.djust.globalLoadingManager = globalLoadingManager;
-// Backward compatibility
-window.globalLoadingManager = globalLoadingManager;
 
 // Generate unique request ID for cache tracking
 let cacheRequestCounter = 0;
@@ -12077,12 +12011,6 @@ const lazyHydrationManager = {
     // Queue of elements waiting for WebSocket connection
     pendingMounts: [],
 
-    // In-flight mount_batch — populated when a mount_batch frame is sent, cleared
-    // when the server responds (success or known error). #1031: enables fallback
-    // to per-view mount when an old server returns "Unknown message type:
-    // mount_batch" instead of handling the batch frame.
-    inFlightBatch: null,
-
     // Initialize lazy hydration
     init() {
         // Clear pending mounts on reinit (e.g., TurboNav navigation)
@@ -12294,10 +12222,6 @@ const lazyHydrationManager = {
             try {
                 clientTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
             } catch (_e) { /* tz detect failure — omit */ }
-            // #1031: stash the original mounts so the websocket error
-            // handler can fall back to per-view mounts if the server
-            // returns "Unknown message type: mount_batch".
-            this.inFlightBatch = mounts;
             liveViewWS.sendMessage({
                 type: 'mount_batch',
                 views: viewEntries,
@@ -12307,27 +12231,6 @@ const lazyHydrationManager = {
         }
 
         mounts.forEach(({ element, viewPath }) => {
-            this.mountElement(element, viewPath);
-        });
-    },
-
-    // #1031: invoked from the websocket error handler when the server
-    // doesn't recognize the mount_batch frame. Falls back to per-view
-    // mount calls so older servers (pre-v0.6.0) keep working with newer
-    // clients. Idempotent — clears inFlightBatch before iterating so a
-    // late mount_batch response can't double-trigger.
-    handleMountBatchFallback() {
-        if (!this.inFlightBatch) return;
-        const mounts = this.inFlightBatch;
-        this.inFlightBatch = null;
-        if (globalThis.djustDebug) {
-            console.warn('[LiveView:lazy] mount_batch unsupported by server — falling back to %d per-view mounts', mounts.length);
-        }
-        mounts.forEach(({ element, viewPath }) => {
-            // Reset the data-live-hydrated attr that processPendingMounts
-            // set optimistically; mountElement will set it again on success.
-            element.removeAttribute('data-live-hydrated');
-            element.setAttribute('dj-lazy', '');
             this.mountElement(element, viewPath);
         });
     },
@@ -14494,11 +14397,9 @@ window.djust.getActiveStreams = getActiveStreams;
      * after a handler calls live_patch() or live_redirect().
      */
     function handleNavigation(data) {
-        // Use data.action (set by server alongside type:"navigation") to distinguish
-        // live_patch from live_redirect. Falls back to data.type for any legacy messages
-        // that were sent without an action field.
-        // TODO(deprecation): data.type fallback for pre-#307 clients — remove in next minor release
-        const action = data.action || data.type;
+        // data.action (sent alongside type:"navigation") distinguishes
+        // live_patch from live_redirect.
+        const action = data.action;
         if (action === 'live_patch') {
             handleLivePatch(data);
         } else if (action === 'live_redirect') {
@@ -20185,7 +20086,7 @@ globalThis.djust.djTrackStatic = {
 // Handles the {"type": "layout", "path": ..., "html": ...} WebSocket
 // frame emitted by LayoutMixin.set_layout(). Swaps the document body
 // with the new layout while physically moving the live
-// [dj-root] / [data-djust-root] element into the new layout's
+// [dj-root] element into the new layout's
 // root-shaped slot — preserving all inner LiveView state (form values,
 // scroll position, focused element, dj-hook bookkeeping, third-party
 // widget instances hanging off live nodes).
@@ -20205,9 +20106,7 @@ function _findRoot(scope) {
     // [dj-sticky-root] on their outermost [dj-view]; the parent view's
     // [dj-root] is always outside of them.
     return (
-        scope.querySelector('[data-djust-root]:not([dj-sticky-root])')
-        || scope.querySelector('[dj-root]:not([dj-sticky-root])')
-        || scope.querySelector('[data-djust-root]')
+        scope.querySelector('[dj-root]:not([dj-sticky-root])')
         || scope.querySelector('[dj-root]')
     );
 }
@@ -20229,7 +20128,7 @@ function _applyLayout(payload) {
     const currentRoot = _findRoot(document);
     if (!newRoot || !currentRoot) {
         console.warn(
-            '[djust:layout] could not locate dj-root / data-djust-root in ' +
+            '[djust:layout] could not locate dj-root in ' +
             (newRoot ? 'current document' : 'incoming layout') + '; ignoring swap'
         );
         return;

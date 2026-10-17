@@ -4,7 +4,7 @@
 // Handles the {"type": "layout", "path": ..., "html": ...} WebSocket
 // frame emitted by LayoutMixin.set_layout(). Swaps the document body
 // with the new layout while physically moving the live
-// [dj-root] / [data-djust-root] element into the new layout's
+// [dj-root] element into the new layout's
 // root-shaped slot — preserving all inner LiveView state (form values,
 // scroll position, focused element, dj-hook bookkeeping, third-party
 // widget instances hanging off live nodes).
@@ -24,9 +24,7 @@ function _findRoot(scope) {
     // [dj-sticky-root] on their outermost [dj-view]; the parent view's
     // [dj-root] is always outside of them.
     return (
-        scope.querySelector('[data-djust-root]:not([dj-sticky-root])')
-        || scope.querySelector('[dj-root]:not([dj-sticky-root])')
-        || scope.querySelector('[data-djust-root]')
+        scope.querySelector('[dj-root]:not([dj-sticky-root])')
         || scope.querySelector('[dj-root]')
     );
 }
@@ -48,7 +46,7 @@ function _applyLayout(payload) {
     const currentRoot = _findRoot(document);
     if (!newRoot || !currentRoot) {
         console.warn(
-            '[djust:layout] could not locate dj-root / data-djust-root in ' +
+            '[djust:layout] could not locate dj-root in ' +
             (newRoot ? 'current document' : 'incoming layout') + '; ignoring swap'
         );
         return;
