@@ -109,9 +109,6 @@ WIRES = ["ws", "sse", "http"]
 
 #: (wire, turn) -> the gap. Each closes in a transport-core PR.
 KNOWN_GAPS: Dict[tuple, str] = {
-    ("http", "push_it"): "HTTP answers carry no push events until #3541 reaches 2.0",
-    ("http", "layout_it"): "HTTP answers carry no layout until #3541 reaches 2.0",
-    ("http", "defer_it"): "HTTP runs no defer() callbacks until #3541 reaches 2.0",
     ("http", "async_it"): "HTTP never runs start_async work (transport-core open question 3)",
 }
 

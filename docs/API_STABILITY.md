@@ -62,12 +62,14 @@ The **public API** — the surface SemVer covers — is exactly the following:
    supported, stable import.
 
 2. **The documented decorators.** Every name in `djust.decorators.__all__`
-   (19 names as of 2.0). These include the core decorators (`event_handler`,
-   `server_function`, `push_handler`, `permission_required`, `rate_limit`,
+   (21 names as of 2.0). These include the core decorators (`event_handler`,
+   `action`, `server_function`, `push_handler`, `permission_required`, `rate_limit`,
    `state`, `computed`, `debounce`, `throttle`, `optimistic`, `cache`,
    `client_state`, `background`, `on_mount`) and the
-   introspection predicates `is_event_handler`, `is_server_function` and
-   `is_push_handler`.
+   introspection predicates `is_event_handler`, `is_action`,
+   `is_server_function` and `is_push_handler`. Two names are deliberately in
+   `djust.decorators.__all__` only, not at the top level: `StateProperty` (the
+   type `state()` returns) and `alters_data` (the Django-parity marker).
 
 3. **Public `LiveView` / `LiveComponent` / `Component` methods.** The
    documented public methods and lifecycle hooks of these classes —

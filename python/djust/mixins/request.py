@@ -16,6 +16,7 @@ from typing import (
     Iterator,
     List,
     Optional,
+    Set,
     Tuple,
 )
 
@@ -49,6 +50,138 @@ if TYPE_CHECKING:
     from django.http import HttpRequest
 
 logger = logging.getLogger(__name__)
+
+#: View classes already warned about background work on the HTTP fallback.
+_HTTP_BACKGROUND_WARNED: Set[type] = set()
+
+
+def _warn_http_background_work_dropped(owner: Any, event_name: str) -> None:
+    """Say so, once per class, when a handler queued background work over HTTP.
+
+    The HTTP POST fallback has no channel to deliver a background result and
+    does not run ``start_async`` / ``@background`` work: the queued tasks are
+    discarded with the request's view instance. What it should do instead is
+    an open 2.0 design question, so for now the drop is made visible rather
+    than silent. One WARNING per view class keeps a busy page from flooding
+    the log.
+    """
+    if not getattr(owner, "_async_tasks", None):
+        return
+    cls = type(owner)
+    if cls in _HTTP_BACKGROUND_WARNED:
+        return
+    _HTTP_BACKGROUND_WARNED.add(cls)
+    logger.warning(
+        "%s.%s queued background work (start_async / @background) during an "
+        "HTTP fallback event; background work does not run on the HTTP "
+        "fallback, so it was dropped. It runs over WebSocket and SSE.",
+        cls.__qualname__,
+        sanitize_for_log(event_name),
+    )
+
+
+def _drain_http_side_channels(view: Any, resp_data: Dict[str, Any]) -> None:
+    """Put ``view``'s queued client side effects on an HTTP fallback answer.
+
+    The WebSocket turn sends each queue as its own frame
+    (``LiveViewConsumer._flush_all_pending``). An HTTP answer carries them as
+    keys the client's ``applyHttpSideChannels`` applies: ``_flash``,
+    ``_page_metadata``, ``_push_events`` (``push_event`` / ``push_commands``,
+    in the ``push_event`` frame's ``{event, payload}`` shape) and ``_layout``
+    (``set_layout``, the ``layout`` frame's ``{path, html}``). Then the
+    ``defer()`` callbacks run, last, as they do on the socket. Before this, the
+    fallback carried only flash and page metadata, and dropped the other three
+    queues on the floor.
+    """
+    if hasattr(view, "_drain_flash"):
+        flash_commands = view._drain_flash()
+        if flash_commands:
+            resp_data["_flash"] = flash_commands
+    if hasattr(view, "_drain_page_metadata"):
+        meta_commands = view._drain_page_metadata()
+        if meta_commands:
+            resp_data["_page_metadata"] = meta_commands
+    if hasattr(view, "_drain_push_events"):
+        events = view._drain_push_events()
+        if isinstance(events, list) and events:
+            resp_data["_push_events"] = [
+                {"event": event_name, "payload": payload} for event_name, payload in events
+            ]
+    if hasattr(view, "_drain_pending_layout"):
+        layout_path = view._drain_pending_layout()
+        if layout_path:
+            layout = _render_http_layout(view, layout_path)
+            if layout is not None:
+                resp_data["_layout"] = layout
+    _run_http_deferred(view)
+
+
+def _render_http_layout(view: Any, layout_path: str) -> Optional[Dict[str, str]]:
+    """``set_layout``'s ``{path, html}``, with the socket's error handling."""
+    from django.conf import settings as django_settings
+    from django.template.exceptions import TemplateDoesNotExist
+
+    from .._exposure_diagnostics import log_failure_for
+    from .layout import render_pending_layout
+
+    try:
+        html = render_pending_layout(view, layout_path)
+    except TemplateDoesNotExist:
+        logger.warning("set_layout(%r) — template not found; ignoring swap request", layout_path)
+        return None
+    except Exception as exc:  # noqa: BLE001 — a layout error must not fail the event answer
+        log_failure_for(
+            logger,
+            (view,),
+            exc,
+            "set_layout(%r) — template rendering raised; ignoring swap request",
+            layout_path,
+            traceback=True,
+        )
+        # In DEBUG, re-raise so programmer errors are visible (the socket does).
+        if getattr(django_settings, "DEBUG", False):
+            raise
+        return None
+    return {"path": layout_path, "html": html}
+
+
+def _run_http_deferred(view: Any) -> None:
+    """Run ``view.defer(...)`` callbacks after an HTTP answer's render.
+
+    Mirrors ``LiveViewConsumer._flush_deferred``: each callback runs once, a
+    failure is logged at WARN and the next one still runs, and a coroutine a
+    callback returns is awaited. A callback that calls ``defer()`` again queues
+    for the next event, as on the socket.
+    """
+    if not hasattr(view, "_drain_deferred"):
+        return
+    callbacks = view._drain_deferred()
+    if not isinstance(callbacks, list) or not callbacks:
+        return
+    from asgiref.sync import async_to_sync
+
+    from .._exposure_diagnostics import log_failure_for
+
+    async def _await(awaitable: Any) -> Any:
+        return await awaitable
+
+    for callback, args, kwargs in callbacks:
+        try:
+            result = callback(*args, **kwargs)
+            if inspect.iscoroutine(result):
+                async_to_sync(_await)(result)
+        except Exception as exc:  # noqa: BLE001 — see docstring
+            log_failure_for(
+                logger,
+                (view,),
+                exc,
+                "[djust HTTP] Deferred callback %s on %s raised; continuing to next",
+                getattr(callback, "__qualname__", repr(callback)),
+                view.__class__.__name__,
+                level="warning",
+                traceback=True,
+            )
+
 
 #: Sent by the client when its HTTP scope holds strict contracts, so a response
 #: whose tree no longer has any carries an explicit clear (the stateless HTTP
@@ -922,14 +1055,7 @@ class RequestMixin:
                 )
         if navigation_frames:
             response["_navigation"] = navigation_frames
-        if hasattr(child, "_drain_flash"):
-            flash_commands = child._drain_flash()
-            if flash_commands:
-                response["_flash"] = flash_commands
-        if hasattr(child, "_drain_page_metadata"):
-            meta_commands = child._drain_page_metadata()
-            if meta_commands:
-                response["_page_metadata"] = meta_commands
+        _drain_http_side_channels(child, response)
         if any(frame["action"] == "live_redirect" for frame in navigation_frames):
             # The event leaves the page: nothing is rendered or saved for it.
             return JsonResponse(response)
@@ -990,14 +1116,7 @@ class RequestMixin:
             def _inject_side_channels(resp_data: Dict[str, Any]) -> None:
                 if navigation_frames:
                     resp_data["_navigation"] = navigation_frames
-                if hasattr(self, "_drain_flash"):
-                    flash_commands = self._drain_flash()
-                    if flash_commands:
-                        resp_data["_flash"] = flash_commands
-                if hasattr(self, "_drain_page_metadata"):
-                    meta_commands = self._drain_page_metadata()
-                    if meta_commands:
-                        resp_data["_page_metadata"] = meta_commands
+                _drain_http_side_channels(self, resp_data)
 
             # --- Authorization layer 1 of 3: view-level ---------------------
             # login_required / permission_required / check_permissions().
@@ -1314,6 +1433,7 @@ class RequestMixin:
                 else:
                     handler(*call_args, **call_kwargs)
                 t_handler_ms = (time.perf_counter() - t0_handler) * 1000
+                _warn_http_background_work_dropped(owner, event_name)
 
             if child_view is not None:
                 return self._http_child_response(

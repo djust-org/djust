@@ -1307,6 +1307,8 @@ from .hooks import on_mount  # noqa: E402 — re-export for public API
 __all__ = [
     "event_handler",
     "is_event_handler",
+    "action",
+    "is_action",
     "server_function",
     "is_server_function",
     "push_handler",
