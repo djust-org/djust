@@ -2460,15 +2460,6 @@ fn active_timezone_name() -> Option<String> {
     djust_templates::timezone::active_timezone_name()
 }
 
-/// Read the current value-rendering mode.
-///
-/// Exposed so the Python side can ASSERT the wiring took effect rather than
-/// assume it — a setter with no getter cannot be tested end to end.
-#[pyfunction]
-fn django_value_repr_enabled() -> bool {
-    djust_core::django_value_repr()
-}
-
 /// Convert a Python dict-shaped context to `HashMap<String, Value>` without
 /// PyO3's own blanket `HashMap<K, V>: FromPyObject` impl (#2510, round 4).
 ///
@@ -6219,7 +6210,6 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("MAX_MD_NESTING", djust_templates::markdown::MAX_MD_NESTING)?;
     m.add_function(wrap_pyfunction!(set_virtual_keyed_ops, m)?)?;
     m.add_function(wrap_pyfunction!(set_django_value_repr, m)?)?;
-    m.add_function(wrap_pyfunction!(django_value_repr_enabled, m)?)?;
     m.add_function(wrap_pyfunction!(set_active_timezone, m)?)?;
     m.add_function(wrap_pyfunction!(active_timezone_name, m)?)?;
     m.add_function(wrap_pyfunction!(set_number_format, m)?)?;
@@ -6278,15 +6268,7 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m
     )?)?;
     m.add_function(wrap_pyfunction!(
-        djust_templates::registry::unregister_raw_block_tag_handler,
-        m
-    )?)?;
-    m.add_function(wrap_pyfunction!(
         djust_templates::registry::has_raw_block_tag_handler,
-        m
-    )?)?;
-    m.add_function(wrap_pyfunction!(
-        djust_templates::registry::clear_raw_block_tag_handlers,
         m
     )?)?;
     m.add_function(wrap_pyfunction!(
@@ -6299,10 +6281,6 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
     m.add_function(wrap_pyfunction!(
         djust_templates::registry::arm_scope_tags,
-        m
-    )?)?;
-    m.add_function(wrap_pyfunction!(
-        djust_templates::registry::clear_scope_tags,
         m
     )?)?;
     m.add_function(wrap_pyfunction!(
