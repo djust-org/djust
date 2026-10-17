@@ -221,8 +221,6 @@ function setCacheConfig(config) {
 
 // Expose setCacheConfig under djust namespace
 window.djust.setCacheConfig = setCacheConfig;
-// Backward compatibility
-window.setCacheConfig = setCacheConfig;
 
 /**
  * Build a cache key from event name and parameters.
