@@ -3,7 +3,7 @@
  *
  * The module exposes `window.djust.djLayout.applyLayout(payload)` which
  * swaps the document body with a new layout's body while physically
- * moving the existing [data-djust-root] / [dj-root] element into the
+ * moving the existing [dj-root] element into the
  * new layout, preserving its identity and inner state.
  */
 
@@ -13,7 +13,7 @@ import fs from 'fs';
 
 const clientCode = fs.readFileSync('./python/djust/static/djust/client.js', 'utf-8');
 
-function createDom(bodyHtml = '<div data-djust-root></div>') {
+function createDom(bodyHtml = '<div dj-root></div>') {
     const dom = new JSDOM(
         `<!DOCTYPE html><html><head></head><body>${bodyHtml}</body></html>`,
         { runScripts: 'dangerously', url: 'http://localhost/' }
@@ -36,11 +36,11 @@ describe('dj-layout', () => {
     it('swaps the document body and preserves the live dj-root identity', () => {
         dom = createDom(`
             <header id="old-header">OLD</header>
-            <div data-djust-root>
+            <div dj-root>
                 <input id="msg" value="unsent" />
             </div>
         `);
-        const originalRoot = dom.window.document.querySelector('[data-djust-root]');
+        const originalRoot = dom.window.document.querySelector('[dj-root]');
         // Tag the live root so we can verify it's the SAME element after swap,
         // not a re-parse of the server-sent HTML (which would lose inner state).
         originalRoot._djTag = 'alive';
@@ -49,7 +49,7 @@ describe('dj-layout', () => {
             path: 'layouts/fullscreen.html',
             html: `<!doctype html><html><head></head><body>
                 <header id="new-header">NEW</header>
-                <div data-djust-root>REPLACE_ME</div>
+                <div dj-root>REPLACE_ME</div>
                 <footer id="new-footer">NEW</footer>
             </body></html>`,
         });
@@ -62,7 +62,7 @@ describe('dj-layout', () => {
         expect(newFooter).toBeTruthy();
         expect(oldHeader).toBeNull();  // old layout gone
 
-        const afterRoot = dom.window.document.querySelector('[data-djust-root]');
+        const afterRoot = dom.window.document.querySelector('[dj-root]');
         expect(afterRoot).toBeTruthy();
         expect(afterRoot._djTag).toBe('alive');  // identity preserved
         // Inner state preserved: the <input value="unsent"> is still there.
@@ -70,13 +70,13 @@ describe('dj-layout', () => {
     });
 
     it('dispatches djust:layout-changed on document', () => {
-        dom = createDom('<div data-djust-root></div>');
+        dom = createDom('<div dj-root></div>');
         const events = [];
         dom.window.document.addEventListener('djust:layout-changed', (e) => events.push(e.detail));
 
         dom.window.djust.djLayout.applyLayout({
             path: 'layouts/app.html',
-            html: '<!doctype html><html><head></head><body><div data-djust-root></div></body></html>',
+            html: '<!doctype html><html><head></head><body><div dj-root></div></body></html>',
         });
 
         expect(events.length).toBe(1);
@@ -84,7 +84,7 @@ describe('dj-layout', () => {
     });
 
     it('ignores the swap when the incoming html has no dj-root', () => {
-        dom = createDom('<div data-djust-root><p>keep me</p></div>');
+        dom = createDom('<div dj-root><p>keep me</p></div>');
         const before = dom.window.document.body.innerHTML;
 
         dom.window.djust.djLayout.applyLayout({
@@ -98,7 +98,7 @@ describe('dj-layout', () => {
     });
 
     it('ignores empty html payload', () => {
-        dom = createDom('<div data-djust-root></div>');
+        dom = createDom('<div dj-root></div>');
         const before = dom.window.document.body.innerHTML;
 
         dom.window.djust.djLayout.applyLayout({ path: 'x', html: '' });
@@ -107,16 +107,16 @@ describe('dj-layout', () => {
         expect(dom.window.document.body.innerHTML).toBe(before);
     });
 
-    it('supports [dj-root] as well as [data-djust-root]', () => {
-        dom = createDom('<div dj-root><p id="keep">live</p></div>');
+    it('no longer treats the pre-1.0 [data-djust-root] marker as the root', () => {
+        dom = createDom('<div data-djust-root><p>keep me</p></div>');
+        const before = dom.window.document.body.innerHTML;
 
         dom.window.djust.djLayout.applyLayout({
             path: 'layouts/app.html',
-            html: '<!doctype html><html><head></head><body><nav>N</nav><div dj-root></div></body></html>',
+            html: '<!doctype html><html><head></head><body><nav>N</nav><div data-djust-root></div></body></html>',
         });
 
-        expect(dom.window.document.querySelector('nav').textContent).toBe('N');
-        expect(dom.window.document.getElementById('keep').textContent).toBe('live');
+        expect(dom.window.document.body.innerHTML).toBe(before);
     });
 
     it('exposes applyLayout on window.djust.djLayout', () => {
