@@ -8,7 +8,7 @@ functions and classes.
 Generated for djust framework - see crates/djust_live/src/lib.rs
 """
 
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
+from typing import Any, Awaitable, Callable, Dict, List, NoReturn, Optional, Tuple
 
 # ============================================================================
 # Core Template Rendering Functions
@@ -80,36 +80,21 @@ class LazyBlock:
     for the keys, renders nothing. It has Django's shape
     (``context["block"].super()``, and ``Variable("block.super")``).
 
-    .. deprecated:: 1.3
-        The dict-style reads ``block["super"]``, ``get("super")``, ``values()``,
-        ``items()`` and ``dict(block)`` (the shape of the ``dict`` this replaced)
-        still work but emit a ``DeprecationWarning``; they are removed no
-        earlier than 2.0.0. Use ``block.super()``. Django's own resolver never
-        reaches them: ``__getitem__`` answers it ``TypeError`` (not
-        subscriptable) exactly as a ``BlockNode`` does.
+    The dict-style reads of the ``dict`` this replaced were removed in 2.0
+    (deprecated since 1.3): ``block["super"]`` raises ``TypeError`` (not
+    subscriptable), exactly as a ``BlockNode`` does, so Django's resolver falls
+    through to ``super()``. Use ``block.super()``.
     """
 
     def super(self) -> str: ...
-    def get(self, key: object, default: object = None) -> object:
-        """.. deprecated:: 1.3  Reading ``"super"`` this way; use ``super()``."""
-        ...
-
-    def __getitem__(self, key: object) -> str:
-        """.. deprecated:: 1.3  Use ``super()``."""
+    def __getitem__(self, key: object) -> NoReturn:
+        """Always raises ``TypeError``; use ``super()``."""
         ...
 
     def __contains__(self, key: object) -> bool: ...
     def __len__(self) -> int: ...
     def __iter__(self) -> object: ...
     def keys(self) -> list[str]: ...
-    def values(self) -> list[str]:
-        """.. deprecated:: 1.3  Use ``super()``."""
-        ...
-
-    def items(self) -> list[tuple[str, str]]:
-        """.. deprecated:: 1.3  Use ``super()``."""
-        ...
-
     def __copy__(self) -> LazyBlock: ...
     def __deepcopy__(self, memo: object) -> LazyBlock: ...
 

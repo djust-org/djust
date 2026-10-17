@@ -1106,7 +1106,6 @@ let blank_html = if output.0 == text {
 output.3.blank_html
 blank_html,
 blank_openings: Vec::new(),
-_ => Err(pyo3::exceptions::PyKeyError::new_err(key.to_string())),
 let path = path.into();
 let namespace = namespace.into();
 let path = path.into();
@@ -1259,6 +1258,7 @@ ctx.mark_safe("pp".to_string());
 ctx.mark_safe("p.a".to_string());
 fn render_block_super(&self, _ctx: &Context) -> crate::Result<String> {
 Ok(format!("p{n}"))
+assert!(err.to_string().contains("block.super()"), "{err}");
 provenance.rs
 text.into()
 text.into()
