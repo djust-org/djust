@@ -35,8 +35,8 @@ def _make_view():
     view._stream_flush_task = None
     for name in (
         "stream_to",
-        "stream_insert",
-        "stream_delete",
+        "astream_insert",
+        "astream_delete",
         "stream_text",
         "stream_error",
         "stream_start",
@@ -78,14 +78,14 @@ def test_stream_to_no_consumer():
     asyncio.run(view.stream_to("messages", html="<p>test</p>"))  # no error
 
 
-# ── stream_insert tests ───────────────────────────────────────────────
+# ── astream_insert tests ───────────────────────────────────────────────
 
 
 def test_stream_insert_append():
     view = _make_view()
     consumer = FakeConsumer()
     view._ws_consumer = consumer
-    asyncio.run(view.stream_insert("feed", "<li>New</li>", at="append"))
+    asyncio.run(view.astream_insert("feed", "<li>New</li>", at="append"))
     assert consumer.sent_messages[0]["ops"][0]["op"] == "append"
 
 
@@ -93,7 +93,7 @@ def test_stream_insert_prepend():
     view = _make_view()
     consumer = FakeConsumer()
     view._ws_consumer = consumer
-    asyncio.run(view.stream_insert("feed", "<li>First!</li>", at="prepend"))
+    asyncio.run(view.astream_insert("feed", "<li>First!</li>", at="prepend"))
     assert consumer.sent_messages[0]["ops"][0]["op"] == "prepend"
 
 
@@ -101,7 +101,7 @@ def test_stream_insert_default_target():
     view = _make_view()
     consumer = FakeConsumer()
     view._ws_consumer = consumer
-    asyncio.run(view.stream_insert("notifications", "<div>Alert</div>"))
+    asyncio.run(view.astream_insert("notifications", "<div>Alert</div>"))
     op = consumer.sent_messages[0]["ops"][0]
     assert op["target"] == "[dj-stream='notifications']"
     assert op["html"] == "<div>Alert</div>"
@@ -111,25 +111,25 @@ def test_stream_insert_custom_target():
     view = _make_view()
     consumer = FakeConsumer()
     view._ws_consumer = consumer
-    asyncio.run(view.stream_insert("feed", "<p>Item</p>", target="#custom-list"))
+    asyncio.run(view.astream_insert("feed", "<p>Item</p>", target="#custom-list"))
     assert consumer.sent_messages[0]["ops"][0]["target"] == "#custom-list"
 
 
-# ── stream_delete tests ──────────────────────────────────────────────
+# ── astream_delete tests ──────────────────────────────────────────────
 
 
 def test_stream_delete():
     view = _make_view()
     consumer = FakeConsumer()
     view._ws_consumer = consumer
-    asyncio.run(view.stream_delete("messages", "#msg-42"))
+    asyncio.run(view.astream_delete("messages", "#msg-42"))
     op = consumer.sent_messages[0]["ops"][0]
     assert op == {"op": "delete", "target": "#msg-42"}
 
 
 def test_stream_delete_no_consumer():
     view = _make_view()
-    asyncio.run(view.stream_delete("messages", "#msg-1"))  # no error
+    asyncio.run(view.astream_delete("messages", "#msg-1"))  # no error
 
 
 # ── stream_text tests ────────────────────────────────────────────────
@@ -446,3 +446,26 @@ def test_stream_error_preserves_partial():
     assert consumer.sent_messages[0]["ops"][0]["op"] == "text"
     assert consumer.sent_messages[1]["ops"][0]["op"] == "error"
     assert consumer.sent_messages[1]["ops"][0]["error"] == "LLM provider error"
+
+
+# ── 2.0: the async insert/delete are reachable on a LiveView ──────────────
+
+
+def test_liveview_exposes_both_stream_apis_without_shadowing():
+    """``StreamsMixin`` comes first in LiveView's bases, so while both mixins
+    named their methods ``stream_insert`` / ``stream_delete`` the async
+    StreamingMixin pair was unreachable as ``self.<name>``. 2.0 names it
+    ``astream_insert`` / ``astream_delete``."""
+    import inspect
+
+    from djust import LiveView
+    from djust.mixins.streams import StreamsMixin
+
+    assert LiveView.stream_insert is StreamsMixin.stream_insert
+    assert LiveView.stream_delete is StreamsMixin.stream_delete
+    assert not inspect.iscoroutinefunction(LiveView.stream_insert)
+    assert LiveView.astream_insert is StreamingMixin.astream_insert
+    assert LiveView.astream_delete is StreamingMixin.astream_delete
+    assert inspect.iscoroutinefunction(LiveView.astream_insert)
+    assert not hasattr(StreamingMixin, "stream_insert")
+    assert not hasattr(StreamingMixin, "stream_delete")
