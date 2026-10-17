@@ -15,7 +15,6 @@ use djust_core::Value;
 
 pub mod html;
 pub mod simple;
-pub mod ui; // Simple stateless components (pure Rust PyO3)
 
 pub use html::HtmlBuilder;
 pub use simple::{
