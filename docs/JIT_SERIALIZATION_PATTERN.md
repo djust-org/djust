@@ -576,7 +576,7 @@ with every concrete field (minus the sensitive-field denylist) rather than the
 fields the template reads, and no `select_related` / `prefetch_related` is
 added. Before 1.2.1 the key was read by nothing and had no effect (#2984). The
 `jit_cache_backend`, `jit_cache_dir` and `jit_redis_url` keys were never read
-and were removed in 1.3; `djust.C018` warns when one is still set.
+and were removed in 1.3.
 
 ### Debugging Serialization Issues
 

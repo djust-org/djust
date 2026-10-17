@@ -186,26 +186,33 @@ Enable it in the registration call:
 djust.registerServiceWorker({ vdomCache: true });
 ```
 
-The `DJUST_VDOM_CACHE_*` settings below are validated by the C301–C303
+The `LIVEVIEW_CONFIG['service_worker']` keys below are validated by the C301–C303
 system checks, but they are not currently sent to the service worker:
 the SW uses its built-in defaults (30-minute TTL, 50 entries), which
 happen to match the setting defaults.
 
 ```python
 # settings.py
-DJUST_VDOM_CACHE_ENABLED = True
-DJUST_VDOM_CACHE_TTL_SECONDS = 1800        # default — entries expire after 30 min
-DJUST_VDOM_CACHE_MAX_ENTRIES = 50          # default — LRU evict beyond this cap
+LIVEVIEW_CONFIG = {
+    "service_worker": {
+        "vdom_cache_enabled": True,
+        "vdom_cache_ttl_seconds": 1800,  # default — entries expire after 30 min
+        "vdom_cache_max_entries": 50,  # default — LRU evict beyond this cap
+    },
+}
 ```
+
+(The flat `DJUST_VDOM_CACHE_*` settings were removed in 2.0; startup fails if
+one is still set.)
 
 Three system checks guard the configuration ranges so a typo (e.g.
 negative TTL) fails fast at `manage.py check`:
 
 | Check ID  | Severity | Fires when |
 |---|---|---|
-| `djust.C301` | error | `DJUST_VDOM_CACHE_TTL_SECONDS` ≤ 0 |
-| `djust.C302` | error | `DJUST_VDOM_CACHE_MAX_ENTRIES` < 1 |
-| `djust.C303` | info | `DJUST_VDOM_CACHE_ENABLED = False` |
+| `djust.C301` | error | `vdom_cache_ttl_seconds` ≤ 0 |
+| `djust.C302` | error | `vdom_cache_max_entries` < 1 |
+| `djust.C303` | info | `vdom_cache_enabled` is `False` |
 
 Entries are keyed by URL only, within one browser profile; `Vary`
 headers are not honored. If the signed-in user or the language changes

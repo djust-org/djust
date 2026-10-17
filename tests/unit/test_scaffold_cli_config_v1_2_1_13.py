@@ -296,41 +296,6 @@ def test_jit_serialization_setting_is_honoured(enabled, jit_called):
         assert view._jit_serialized_keys == set()
 
 
-def _c018(**settings):
-    from djust.checks.configuration import _check_dead_config_keys
-
-    errors: list = []
-    with override_settings(**settings):
-        _check_dead_config_keys(errors)
-    return [e for e in errors if e.id == "djust.C018"]
-
-
-def test_c018_flags_dead_keys_in_either_dict():
-    found = _c018(
-        LIVEVIEW_CONFIG={"jit_cache_backend": "redis", "jit_debug": True},
-        DJUST_CONFIG={"component_loading_class": "busy"},
-    )
-    assert len(found) == 1
-    assert "LIVEVIEW_CONFIG['jit_cache_backend']" in found[0].msg
-    assert "DJUST_CONFIG['component_loading_class']" in found[0].msg
-    assert "jit_debug" not in found[0].msg
-    assert "removed in djust 1.3" in found[0].msg  # #2984: removed, not pending
-
-
-def test_c018_silent_for_live_keys():
-    assert _c018(LIVEVIEW_CONFIG={"jit_serialization": False, "jit_debug": True}) == []
-
-
-def test_c018_can_be_suppressed():
-    assert (
-        _c018(
-            LIVEVIEW_CONFIG={"debug_components": True},
-            DJUST_CONFIG={"suppress_checks": ["C018"]},
-        )
-        == []
-    )
-
-
 # --- #3006 ----------------------------------------------------------------------
 
 _ADVISORY = {

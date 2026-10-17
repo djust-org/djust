@@ -783,54 +783,6 @@ def _check_unknown_extensions(errors: list) -> None:
             )
 
 
-#: LIVEVIEW_CONFIG keys removed in 1.3 (#2984). Nothing ever read them; their
-#: defaults are gone, and C018 warns a project that still sets one.
-DEAD_LIVEVIEW_CONFIG_KEYS = (
-    "jit_cache_backend",
-    "jit_cache_dir",
-    "jit_redis_url",
-    "debug_components",
-    "component_wrapper_class",
-    "component_loading_class",
-)
-
-
-def _check_dead_config_keys(errors: list) -> None:
-    """C018 -- a LIVEVIEW_CONFIG key removed in djust 1.3 is still set (#2984)."""
-    from django.conf import settings
-
-    if _is_check_suppressed("djust.C018"):
-        return
-    found: list[str] = []
-    for setting in ("LIVEVIEW_CONFIG", "DJUST_CONFIG"):
-        cfg = getattr(settings, setting, None)
-        if isinstance(cfg, dict):
-            found.extend(
-                "%s['%s']" % (setting, key) for key in DEAD_LIVEVIEW_CONFIG_KEYS if key in cfg
-            )
-    if not found:
-        return
-    errors.append(
-        DjustWarning(
-            "%s %s set, but %s removed in djust 1.3 and djust never read %s; "
-            "setting %s has no effect."
-            % (
-                ", ".join(found),
-                "is" if len(found) == 1 else "are",
-                "that key was" if len(found) == 1 else "those keys were",
-                "it" if len(found) == 1 else "them",
-                "it" if len(found) == 1 else "them",
-            ),
-            hint=(
-                "Remove the key%s from settings. Suppress with DJUST_CONFIG = "
-                "{'suppress_checks': ['C018']}." % ("" if len(found) == 1 else "s")
-            ),
-            id="djust.C018",
-            fix_hint="Delete %s from your Django settings file." % ", ".join(found),
-        )
-    )
-
-
 def _check_presence_backend(errors: list) -> None:
     """C019 -- unknown ``DJUST_CONFIG['PRESENCE_BACKEND']`` value (#2973).
 
@@ -1315,9 +1267,6 @@ def check_configuration(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
 
     # C016 -- TEMPLATES backend order / DjangoTemplates fallback (#2562)
     _check_templates_shape(errors)
-
-    # C018 -- Deprecated LIVEVIEW_CONFIG keys that nothing reads (#2984)
-    _check_dead_config_keys(errors)
 
     # C019 -- Unknown DJUST_CONFIG['PRESENCE_BACKEND'] value (#2973)
     _check_presence_backend(errors)
