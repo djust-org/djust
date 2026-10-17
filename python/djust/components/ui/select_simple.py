@@ -1,7 +1,7 @@
 """
 Select component for djust.
 
-Simple stateless select dropdown with automatic Rust optimization.
+Simple stateless select dropdown.
 """
 
 from typing import Any, Dict, List, Optional, Union
@@ -9,21 +9,13 @@ from ..base import Component
 
 from django.utils.html import conditional_escape
 
-try:
-    from djust._rust import RustSelect  # type: ignore[attr-defined]
-
-    _RUST_AVAILABLE = True
-except ImportError:
-    _RUST_AVAILABLE = False
-
 
 class Select(Component):
     """
     Select dropdown component (Bootstrap 5).
 
     Features:
-    - Automatic Rust optimization (~1μs rendering)
-    - Template fallback if Rust unavailable
+    - Rendered through its template (there is no native Rust implementation)
     - Python fallback with f-strings
     - Label, help text support
     - Validation states
@@ -56,8 +48,6 @@ class Select(Component):
         >>> select.render()
         '<div class="mb-3">...'
     """
-
-    _rust_impl_class = RustSelect if _RUST_AVAILABLE else None
 
     # Note: Using Python fallback for simplicity with dynamic lists
 

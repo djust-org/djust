@@ -12,25 +12,13 @@ from ..base import Component
 from django.utils.html import conditional_escape
 
 
-# Try to import Rust implementation (will be added later)
-try:
-    from djust._rust import RustTable  # type: ignore[attr-defined]
-
-    _RUST_AVAILABLE = True
-except (ImportError, AttributeError):
-    _RUST_AVAILABLE = False
-    RustTable = None  # type: ignore[assignment, misc]
-
-
 class Table(Component):
     """
-    Simple, stateless table component with automatic Rust optimization.
+    Simple, stateless table component.
 
-    This component automatically uses pure Rust implementation if available,
-    otherwise falls back to Python rendering (uses loops for rows/columns).
+    There is no native Rust implementation; it renders in Python.
 
     Performance:
-        - Pure Rust (if available): ~1μs per render
         - Python fallback: ~50-200μs per render (depends on data size)
 
     Use Cases:
@@ -96,9 +84,6 @@ class Table(Component):
         ]
         table = Table(columns=columns, data=data)
     """
-
-    # Link to Rust implementation if available
-    _rust_impl_class = RustTable if _RUST_AVAILABLE else None
 
     # Note: Not using template because nested loops are needed
     # Using Python _render_custom() which is still fast (~50-200μs)
