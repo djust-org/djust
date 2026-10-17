@@ -370,7 +370,6 @@ _KNOWN_UNGUARDED_SIZE_CLAIMS = {
     "docs/adr/025-js-extension-sockets.md": "third-party (Stimulus) and per-adapter delta figures",
     "docs/archive/PR_SUMMARY.md": "archived PR write-up; a delta, not a total",
     "docs/example-site/EXAMPLE_SITE_PHASE5_PLAN.md": "competitor column (Phoenix/Livewire)",
-    "docs/plans/2.0.0-plan.md": "a plan: the figures are estimates for a future bundle split",
     "docs/internal/IMPROVEMENT_BRAINSTORM-2026-07.md": (
         "brotli figure + a quoted stale target, neither named by the manifest"
     ),
