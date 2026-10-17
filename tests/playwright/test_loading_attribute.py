@@ -72,7 +72,7 @@ async def test_loading_attribute():
             # Direct check: LoadingManager available
             print("\n🔍 LoadingManager Check:")
             has_loading_manager = await page.evaluate(
-                "() => typeof globalLoadingManager !== 'undefined'"
+                "() => typeof window.djust?.globalLoadingManager !== 'undefined'"
             )
             print(f"  globalLoadingManager available: {has_loading_manager}")
 

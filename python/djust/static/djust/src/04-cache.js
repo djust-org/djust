@@ -221,8 +221,8 @@ function setCacheConfig(config) {
 
 // Expose setCacheConfig under djust namespace
 window.djust.setCacheConfig = setCacheConfig;
-// Backward compatibility
-window.setCacheConfig = setCacheConfig;
+// Backward compatibility (removed in 2.0.0)
+defineDeprecatedGlobal('setCacheConfig', setCacheConfig, 'window.djust.setCacheConfig');
 
 /**
  * Build a cache key from event name and parameters.

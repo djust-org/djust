@@ -39,6 +39,8 @@ function harness() {
         cancelEventRequests: vi.fn(), takeServerUpdates: vi.fn(), clearOptimisticPending: vi.fn(),
         stripClientOwnedFrameFlags: () => {}, _recordParameterContractFrame: () => {},
         storeSignedSnapshot: () => {},
+        // From 00-namespace.js: publishes the deprecated window global.
+        defineDeprecatedGlobal: () => {},
     };
     for (const name of ['02b-safe-nav.js', '03-websocket.js']) {
         // eslint-disable-next-line no-new-func

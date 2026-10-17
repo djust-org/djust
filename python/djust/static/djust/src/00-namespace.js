@@ -7,6 +7,30 @@
 // Create djust namespace at the top to ensure it's available for all exports
 window.djust = window.djust || {};
 
+/**
+ * Publish a deprecated window global that warns once, on first read, that
+ * djust 2.0.0 removes it. Assigning it replaces the alias with a plain value.
+ */
+function defineDeprecatedGlobal(name, value, replacement) {
+    let warned = false;
+    Object.defineProperty(window, name, {
+        configurable: true,
+        enumerable: true,
+        get() {
+            if (!warned) {
+                warned = true;
+                console.warn(`[LiveView] window.${name} is deprecated and removed in djust 2.0.0. Use ${replacement} instead.`);
+            }
+            return value;
+        },
+        set(newValue) {
+            Object.defineProperty(window, name, {
+                value: newValue, writable: true, configurable: true, enumerable: true,
+            });
+        },
+    });
+}
+
 // ============================================================================
 // API prefix resolution (#987) — FORCE_SCRIPT_NAME / sub-path mount support
 // ============================================================================
