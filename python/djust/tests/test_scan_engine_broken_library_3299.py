@@ -57,7 +57,7 @@ def project(tmp_path):
 
     config = [
         {
-            "BACKEND": "djust.template_backend.DjustTemplateBackend",
+            "BACKEND": "djust.template.backend.DjustTemplateBackend",
             "DIRS": [str(templates)],
             "APP_DIRS": False,
             "OPTIONS": {},

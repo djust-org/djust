@@ -196,7 +196,7 @@ _DJANGO_FALLBACK = {
 
 def _djust_entry(processors):
     return {
-        "BACKEND": "djust.template_backend.DjustTemplateBackend",
+        "BACKEND": "djust.template.backend.DjustTemplateBackend",
         "DIRS": [],
         "APP_DIRS": True,
         "OPTIONS": {"context_processors": processors},
@@ -260,7 +260,7 @@ def test_init_comment_no_longer_cites_the_fixed_admin_bug_as_a_blocker():
     assert "deliberately untouched" not in block
     namespace = {"TEMPLATES": [{"BACKEND": "django.template.backends.django.DjangoTemplates"}]}
     exec(templates.TEMPLATES_BLOCK, namespace)  # noqa: S102 — trusted template
-    assert namespace["TEMPLATES"][0]["BACKEND"] == ("djust.template_backend.DjustTemplateBackend")
+    assert namespace["TEMPLATES"][0]["BACKEND"] == ("djust.template.backend.DjustTemplateBackend")
 
 
 # --- #2984 ----------------------------------------------------------------------

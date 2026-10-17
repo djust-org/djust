@@ -26,6 +26,12 @@ REMOVED_FLAT_SETTINGS: dict[str, str] = {
     "DJUST_REDIS_URL": "DJUST_CONFIG['REDIS_URL']",
 }
 
+#: ``TEMPLATES[...]['BACKEND']`` module paths 2.0 removed. Without this, the
+#: first template lookup raises a bare ``ModuleNotFoundError``.
+REMOVED_TEMPLATE_BACKENDS: dict[str, str] = {
+    "djust.template_backend.DjustTemplateBackend": "djust.template.backend.DjustTemplateBackend",
+}
+
 #: ``LIVEVIEW_CONFIG`` / ``DJUST_CONFIG`` keys for kill switches 2.0 hard-wired on.
 REMOVED_CONFIG_KEYS: dict[str, str] = {
     "template_auto_call": "Django's nullary auto-call in templates is always on",
@@ -41,6 +47,15 @@ def removed_settings_in_use(settings: Any) -> list[str]:
         for name, replacement in REMOVED_FLAT_SETTINGS.items()
         if hasattr(settings, name)
     ]
+    templates = getattr(settings, "TEMPLATES", None)
+    if isinstance(templates, (list, tuple)):
+        for i, entry in enumerate(templates):
+            backend = entry.get("BACKEND") if isinstance(entry, dict) else None
+            if isinstance(backend, str) and backend in REMOVED_TEMPLATE_BACKENDS:
+                problems.append(
+                    "TEMPLATES[%d]['BACKEND'] is %r, a module path removed in djust 2.0; "
+                    "use %r." % (i, backend, REMOVED_TEMPLATE_BACKENDS[backend])
+                )
     for setting in ("LIVEVIEW_CONFIG", "DJUST_CONFIG"):
         cfg = getattr(settings, setting, None)
         if not isinstance(cfg, dict):

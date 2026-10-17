@@ -1055,7 +1055,7 @@ def _check_templates_shape(errors: list) -> None:
                         id="djust.C016",
                         fix_hint=(
                             "Reorder TEMPLATES so the "
-                            "'djust.template_backend.DjustTemplateBackend' entry precedes "
+                            "'djust.template.backend.DjustTemplateBackend' entry precedes "
                             "'django.template.backends.django.DjangoTemplates'."
                         ),
                     )

@@ -20,15 +20,13 @@ logger = logging.getLogger(__name__)
 # couldn't find the child template and ``{% extends %}`` pages degraded to
 # fragment-only on the initial GET (#1801).
 #
-# ``djust.template_backend.DjustTemplateBackend`` is a back-compat shim that
-# re-exports the same class, so both dotted paths are recognized. The literal
-# set is only the fast path: ``is_app_dirs_template_backend`` resolves any
-# other spelling (or a project subclass) through the class itself (#3307).
+# The literal set is only the fast path: ``is_app_dirs_template_backend``
+# resolves any other spelling (or a project subclass) through the class itself
+# (#3307).
 _APP_DIRS_TEMPLATE_BACKENDS = frozenset(
     {
         "django.template.backends.django.DjangoTemplates",
         "djust.template.backend.DjustTemplateBackend",
-        "djust.template_backend.DjustTemplateBackend",
     }
 )
 
@@ -68,9 +66,8 @@ def _resolve_backend_class(path: str) -> Optional[type]:
 def is_app_dirs_template_backend(backend: Any) -> bool:
     """True when ``TEMPLATES[...]["BACKEND"]`` names the Django or the djust backend.
 
-    Matches by class, not by spelling (#3307): ``djust.template.backend`` and the
-    ``djust.template_backend`` shim name one class, and a project subclass of
-    either is the same kind of backend. djust's backend is identified by its
+    Matches by class, not by spelling (#3307): a project subclass of
+    ``djust.template.backend.DjustTemplateBackend`` is the same kind of backend. djust's backend is identified by its
     ``_is_djust_template_backend`` marker so this module never imports the
     backend (which would drag in the Rust extension).
     """

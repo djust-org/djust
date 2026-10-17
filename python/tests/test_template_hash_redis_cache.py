@@ -357,7 +357,7 @@ def test_multi_template_caveat_sub_template_edit_does_not_flip_primary_hash(tmp_
     deterministic" (already covered by
     ``test_compute_template_hash_stable_across_rebuilds``).
     """
-    from djust.template_backend import DjustTemplateBackend
+    from djust.template import DjustTemplateBackend
 
     templates_dir = tmp_path / "templates"
     templates_dir.mkdir()
@@ -599,7 +599,7 @@ def test_initialize_rust_view_cache_hit_does_not_call_get_template():
     from django.test import RequestFactory
 
     from djust import LiveView
-    from djust.state_backend import get_backend
+    from djust.state_backends import get_backend
 
     DynView = type(
         "DynViewCacheHitNoLoad",

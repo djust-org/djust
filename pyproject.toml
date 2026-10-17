@@ -309,7 +309,6 @@ module = [
     "djust._client_ip",
     "djust._log_utils",
     "djust._html",
-    "djust._view_resolution",
     "djust._deprecation",
     "djust._context_provider",
 ]
@@ -1165,8 +1164,6 @@ module = [
     "djust.urls",
     "djust.hooks",
     "djust.hot_view_replacement",
-    "djust.state_backend",
-    "djust.template_backend",
     "djust.template_filters",
     "djust.time_travel",
     "djust.utils",
