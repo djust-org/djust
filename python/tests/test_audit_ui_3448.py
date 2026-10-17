@@ -917,6 +917,7 @@ def test_summary_temp_cleanup_only_before_successful_replace(tmp_path, monkeypat
 
 @pytest.mark.parametrize("case", ["div", "table"])
 def test_adversarial_scan_scales_linearly(case):
+    import gc
     import time
     from djust.audit_ui import scan_ui
 
@@ -927,11 +928,25 @@ def test_adversarial_scan_scales_linearly(case):
     for size in (262144, 1048576):
         remaining = size - len(prefix) - len(suffix)
         source = prefix + unit * (remaining // len(unit)) + " " * (remaining % len(unit)) + suffix
-        start = time.process_time()
-        findings = scan_ui(".", {"app/templates/page.html": source}, {"page.html"}).findings
-        timings.append(time.process_time() - start)
-        assert [f.code for f in findings] == ([] if case == "div" else ["X101"])
-    assert timings[1] <= 6 * timings[0], (case, timings)
+        # One wall-clock or CPU sample is noisy on a loaded CI runner (a GC
+        # pass or a preempted core inflates it). Take the best of three with
+        # the collector off: noise only ever adds time, so the minimum is the
+        # closest to the real cost.
+        samples = []
+        for _ in range(3):
+            gc.collect()
+            gc.disable()
+            try:
+                start = time.process_time()
+                findings = scan_ui(".", {"app/templates/page.html": source}, {"page.html"}).findings
+                samples.append(time.process_time() - start)
+            finally:
+                gc.enable()
+            assert [f.code for f in findings] == ([] if case == "div" else ["X101"])
+        timings.append(min(samples))
+    # 4x the input: a linear scan costs ~4x and a quadratic one ~16x. 8x is the
+    # geometric midpoint, so it tolerates noise and still fails a quadratic.
+    assert timings[1] <= 8 * timings[0], (case, timings)
 
 
 @pytest.mark.parametrize(
