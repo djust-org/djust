@@ -59,8 +59,6 @@ FRAMEWORK_ONLY = {
     ("_clear_live_handles", "%s failed during teardown"): (
         "teardown step names; confirm no application hook runs there"
     ),
-    ("_flush_accessibility", "Failed to flush accessibility announcements"): "frame send",
-    ("_flush_accessibility", "Failed to flush focus command"): "frame send",
     ("_attach_debug_payload", "Failed to attach debug payload: %s"): "debug payload assembly",
     ("disconnect", "Error shutting down actor: %s"): "Rust actor shutdown",
     ("_scope_session_key", "failed to read the session key: %s"): "session key read",
@@ -131,8 +129,6 @@ RUNTIME_FRAMEWORK_ONLY = {
     ),
     ("on_view_instantiated", "Failed to register view in observability registr"): "registry",
     ("on_mount_render_ready", "failed to emit sticky_hold frame before mount"): "frame send",
-    ("_flush_accessibility", "Failed to flush accessibility announcements"): "frame send",
-    ("_flush_accessibility", "Failed to flush focus command"): "frame send",
 }
 
 RUNTIME_KNOWN_OPEN = {}

@@ -1245,45 +1245,6 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         await self._flush_pending_layout()
         await self._flush_deferred()
         await self._flush_navigation()
-        await self._flush_accessibility()
-
-    async def _flush_accessibility(self) -> None:
-        """
-        Send any pending accessibility commands (announcements, focus)
-        queued by the view during handler execution.
-        """
-        if not self.view_instance:
-            return
-
-        # Flush screen reader announcements
-        if hasattr(self.view_instance, "_drain_announcements"):
-            try:
-                announcements = self.view_instance._drain_announcements()
-                if announcements and isinstance(announcements, list) and len(announcements) > 0:
-                    await self.send_json(
-                        {
-                            "type": "accessibility",
-                            "announcements": announcements,
-                        }
-                    )
-            except Exception:
-                logger.warning("Failed to flush accessibility announcements", exc_info=True)
-
-        # Flush focus command
-        if hasattr(self.view_instance, "_drain_focus"):
-            try:
-                focus_cmd = self.view_instance._drain_focus()
-                if focus_cmd and isinstance(focus_cmd, tuple) and len(focus_cmd) == 2:
-                    selector, options = focus_cmd
-                    await self.send_json(
-                        {
-                            "type": "focus",
-                            "selector": selector,
-                            "options": options,
-                        }
-                    )
-            except Exception:
-                logger.warning("Failed to flush focus command", exc_info=True)
 
     async def send_error(self, error: str, **context: Any) -> None:
         """
