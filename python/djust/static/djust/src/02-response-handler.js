@@ -237,7 +237,8 @@ async function handleServerResponse(data, eventName, triggerElement) {
             if (form) form.reset();
         }
 
-        // Process side-channel commands from HTTP response (flash, page metadata)
+        // Process side-channel commands from HTTP response (flash, page
+        // metadata, push events, layout swap)
         if (data._flash && window.djust.flash) {
             data._flash.forEach(function(cmd) {
                 window.djust.flash.handleFlash(cmd);
@@ -247,6 +248,18 @@ async function handleServerResponse(data, eventName, triggerElement) {
             data._page_metadata.forEach(function(cmd) {
                 window.djust.pageMetadata.handlePageMetadata(cmd);
             });
+        }
+        if (Array.isArray(data._push_events)) {
+            // The WebSocket push_event case, per queued event.
+            data._push_events.forEach(function(frame) {
+                window.dispatchEvent(new CustomEvent('djust:push_event', {
+                    detail: { event: frame.event, payload: frame.payload }
+                }));
+                dispatchPushEventToHooks(frame.event, frame.payload);
+            });
+        }
+        if (data._layout && window.djust.djLayout && typeof window.djust.djLayout.applyLayout === 'function') {
+            window.djust.djLayout.applyLayout(data._layout);
         }
 
         // Forward debug info to debug panel (HTTP-only mode)
