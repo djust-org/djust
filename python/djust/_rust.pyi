@@ -535,9 +535,6 @@ def set_django_value_repr(enabled: bool) -> None:
     `LIVEVIEW_CONFIG['django_value_repr']`; see `DjustConfig.ready`.
     """
 
-def django_value_repr_enabled() -> bool:
-    """Current Django-parity value-rendering setting."""
-
 def set_active_timezone(name: Optional[str] = None) -> bool:
     """Set the active render timezone for the CALLING THREAD (#2209).
 
@@ -758,7 +755,6 @@ def register_translator(
 ) -> None: ...
 def clear_translator() -> None: ...
 def arm_scope_tags(names: List[str]) -> None: ...
-def clear_scope_tags() -> None: ...
 def register_language_scope_hooks(
     enter: Callable[[str], Any], exit: Callable[[Any], None]
 ) -> None: ...
@@ -1569,7 +1565,6 @@ __all__ = [
     "register_translator",
     "clear_translator",
     "arm_scope_tags",
-    "clear_scope_tags",
     "register_language_scope_hooks",
     "register_timezone_scope_hooks",
     "register_tag_handler",
@@ -1620,7 +1615,6 @@ __all__ = [
     "RustTooltip",
     "set_virtual_keyed_ops",
     "set_django_value_repr",
-    "django_value_repr_enabled",
     "set_active_timezone",
     "active_timezone_name",
     "set_number_format",
