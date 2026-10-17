@@ -727,6 +727,51 @@ pub fn release_namespace(namespace: u64) -> PyResult<()> {
         .map_err(pyo3::exceptions::PyRuntimeError::new_err)
 }
 
+/// The Python object Django's own filter would receive for `value`.
+///
+/// Unlike the generic `IntoPyObject` (whose display-string contract protects a
+/// CUSTOM filter from live model objects, #2509), a routed built-in is
+/// Django's own code and gets what Django hands it:
+///
+/// * an absent variable is `string_if_invalid` — `""` — not `None`;
+/// * a carrier with a live handle is the object itself, so iteration, `repr`
+///   and the exception a bad type raises are the object's own;
+/// * a dict view is a real `dict_keys` / `dict_values` / `dict_items`.
+fn django_object<'py>(py: Python<'py>, value: &Value) -> PyResult<Bound<'py, PyAny>> {
+    match value {
+        Value::Missing => Ok(PyString::new(py, "").into_any()),
+        Value::Encoded(e) => match &e.live {
+            Some(live) => Ok(live.bind(py).clone()),
+            None => value.clone().into_pyobject(py),
+        },
+        Value::DictView { kind, items } => {
+            let dict = PyDict::new(py);
+            match kind {
+                djust_core::DictViewKind::Items => {
+                    for item in items {
+                        let pair = item.clone().into_pyobject(py)?;
+                        dict.set_item(pair.get_item(0)?, pair.get_item(1)?)?;
+                    }
+                    dict.call_method0("items")
+                }
+                djust_core::DictViewKind::Keys => {
+                    for key in items {
+                        dict.set_item(key.clone().into_pyobject(py)?, py.None())?;
+                    }
+                    dict.call_method0("keys")
+                }
+                djust_core::DictViewKind::Values => {
+                    for (index, item) in items.iter().enumerate() {
+                        dict.set_item(index, item.clone().into_pyobject(py)?)?;
+                    }
+                    dict.call_method0("values")
+                }
+            }
+        }
+        _ => value.clone().into_pyobject(py),
+    }
+}
+
 /// Run Django's own `django.template.defaultfilters.<name>` for a built-in that
 /// djust routes to Django instead of reimplementing it (2.0 plan §3).
 ///
@@ -754,9 +799,9 @@ pub(crate) fn apply_django_builtin_filter(
             .getattr("needs_autoescape")
             .and_then(|flag| flag.is_truthy())
             .unwrap_or(false);
-        let py_value = mark_input_safety(py, value.clone().into_pyobject(py)?, input_safety)?;
+        let py_value = mark_input_safety(py, django_object(py, value)?, input_safety)?;
         let args = match arg {
-            Some(arg) => PyTuple::new(py, [py_value, arg.into_pyobject(py)?])?,
+            Some(arg) => PyTuple::new(py, [py_value, django_object(py, &arg)?])?,
             None => PyTuple::new(py, [py_value])?,
         };
         let kwargs = if needs_autoescape {

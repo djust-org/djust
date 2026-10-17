@@ -763,7 +763,8 @@ class TestChokepointIsTheOnlyParser:
         rather than written down.
         """
         arms = re.findall(self.CALL_SITE_RE, self.source())
-        assert len(arms) == 11, f"{len(arms)} dispatch arms reach the chokepoint"
+        # 8 since 2.0 routed `wordwrap`, `get_digit` and `urlizetrunc` to Django.
+        assert len(arms) == 8, f"{len(arms)} dispatch arms reach the chokepoint"
         # Plus `floatformat`, which reaches `filter_int_arg` directly from its
         # own module rather than through the macro.
         floatformat_rs = FILTERS_RS.with_name("floatformat.rs").read_text(encoding="utf-8")
@@ -863,7 +864,7 @@ class TestTheValueAxisIsUntouched:
     def test_a_parsed_width_of_zero_still_raises_for_its_own_reason(self) -> None:
         """`wordwrap:0` is `textwrap._wrap_chunks`'s guard, not `int()`'s, and
         the two must stay distinguishable in the message (#2293)."""
-        with pytest.raises(RuntimeError, match="invalid width 0"):
+        with pytest.raises(ValueError, match="invalid width 0"):
             _rust.render_template('{{ p|wordwrap:"0" }}', {"p": "a b"})
 
     def test_decimal_values_still_reach_the_filters(self) -> None:

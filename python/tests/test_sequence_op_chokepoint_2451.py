@@ -794,10 +794,10 @@ class TestTheResidueThisDoesNotTouch:
         with pytest.raises(TypeError):
             DjangoTemplate('{{ p|get_digit:"1" }}').render(DjangoContext({"p": value}))
         for context in (normalize_django_value({"p": value}), {"p": value}):
-            with pytest.raises(RuntimeError) as exc:
+            # `get_digit` is Django's own function since 2.0: the TypeError
+            # itself crosses.
+            with pytest.raises(TypeError):
                 _rust.render_template('{{ p|get_digit:"1" }}', context)
-            assert "TypeError" in str(exc.value), str(exc.value)
-            assert "calls int() on its value" in str(exc.value), str(exc.value)
             # The control: both paths carry the real Python type, which is what
             # #2448 established for the raw path and #2467 for the normalized
             # one. Without this the reason above is prose again.

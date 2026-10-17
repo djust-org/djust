@@ -2361,13 +2361,20 @@ fn apply_builtin_filter(
             Ok(lowered) => Ok(Value::String(phone2numeric(&lowered))),
             Err(err) => Err(value_op_error(filter_name, value, &err)),
         },
-        "pprint" => filter_registry::apply_django_builtin_filter(
-            filter_name,
-            value,
-            django_filter_arg(arg, resolved_arg),
-            autoescape,
-            input_safety,
-        ),
+        "pprint" => {
+            // Django's `pprint` filter is `pprint.pformat(value)` — which WRAPS
+            // at width 80. The single-line builder this replaced diverged by
+            // every newline and every indent space above that width (#2277).
+            //
+            // `container_spelling` first: `pformat` reads the value WHOLE, so a
+            // carrier the conversion declined for length must be spelled from
+            // its live handle here or it prints `str(o)` of djust's own
+            // serialization dicts (#2717). One of the three sinks that need
+            // it; the other two are `json_script` below and `Display`.
+            Ok(Value::String(crate::pprint::pformat(
+                value.container_spelling().as_ref().unwrap_or(value),
+            )))
+        }
         // `[mark_safe(obj) for obj in value]`. `mark_safe(obj)` is
         // `SafeString(str(obj))`, so it does not merely MARK an item — it
         // replaces it with its `str()`, for every input (#2324). A list of ints
@@ -5853,6 +5860,7 @@ mod float_sink_set {
                 "python_float_trunc_digits",
             ),
             ("djust_templates/src/floatformat.rs", "python_float_repr"),
+            ("djust_templates/src/pprint.rs", "python_float_repr"),
             // `{% ifchanged %}`'s key was registered here while its
             // `Value::Float` arm spelled the float inline. The arm now
             // delegates to `renderer::numeric_key`, which is where the
@@ -9037,6 +9045,21 @@ mod tests {
         assert_eq!(json_float_body(f64::NAN), "NaN");
     }
 
+    /// The two sinks disagree on the non-finite values, so one helper cannot
+    /// serve both — and Rust's `{}` was accidentally right on half of each.
+    #[test]
+    fn pprint_and_json_spell_the_non_finite_floats_differently_2270() {
+        for (input, want_pprint, want_json) in [
+            (f64::INFINITY, "inf", "Infinity"),
+            (f64::NEG_INFINITY, "-inf", "-Infinity"),
+        ] {
+            assert_eq!(crate::pprint::pformat(&Value::Float(input)), want_pprint);
+            assert_eq!(json_float_body(input), want_json);
+        }
+        assert_eq!(crate::pprint::pformat(&Value::Float(f64::NAN)), "nan");
+        assert_eq!(json_float_body(f64::NAN), "NaN");
+    }
+
     /// Both filters RECURSE, so the container arms are part of the surface.
     #[test]
     fn a_nested_float_takes_the_same_spelling_2270() {
@@ -9045,9 +9068,11 @@ mod tests {
                 .into_iter()
                 .collect(),
         )]);
+        assert_eq!(crate::pprint::pformat(&nested), "[{'k': 1e+20}]");
         assert_eq!(value_to_json(&nested), "[{\"k\": 1e+20}]");
 
         let integral = Value::Tuple(vec![Value::Float(1.0), Value::Float(-0.0)]);
+        assert_eq!(crate::pprint::pformat(&integral), "(1.0, -0.0)");
         assert_eq!(value_to_json(&integral), "[1.0, -0.0]");
     }
 
@@ -9087,6 +9112,34 @@ mod tests {
         let result = apply_filter("escapejs", &value, None).unwrap();
         assert!(result.to_string().contains("\\u2028"));
         assert!(result.to_string().contains("\\u2029"));
+    }
+
+    #[test]
+    fn test_pprint_filter() {
+        // String value
+        let value = Value::String("hello".to_string());
+        let result = apply_filter("pprint", &value, None).unwrap();
+        assert_eq!(result.to_string(), "'hello'");
+
+        // Integer
+        let value = Value::Integer(42);
+        let result = apply_filter("pprint", &value, None).unwrap();
+        assert_eq!(result.to_string(), "42");
+
+        // List
+        let value = Value::List(vec![Value::Integer(1), Value::Integer(2)]);
+        let result = apply_filter("pprint", &value, None).unwrap();
+        assert_eq!(result.to_string(), "[1, 2]");
+
+        // Bool
+        let value = Value::Bool(true);
+        let result = apply_filter("pprint", &value, None).unwrap();
+        assert_eq!(result.to_string(), "True");
+
+        // Null
+        let value = Value::Missing;
+        let result = apply_filter("pprint", &value, None).unwrap();
+        assert_eq!(result.to_string(), "None");
     }
 
     #[test]

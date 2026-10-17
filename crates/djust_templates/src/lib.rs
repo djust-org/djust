@@ -25,6 +25,7 @@ pub mod lexer;
 pub mod loop_cache;
 pub mod markdown;
 pub mod parser;
+pub mod pprint;
 pub mod provenance;
 pub mod registry;
 pub mod registry_scope;

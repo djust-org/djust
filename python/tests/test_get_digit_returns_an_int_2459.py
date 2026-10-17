@@ -539,14 +539,12 @@ class TestTheInputExitsAreUntouched:
         source = '{{ p|get_digit:"0"|pprint }}'
         assert dj(source, value) == du(source, value), value
 
-    def test_landing_on_the_minus_sign_is_STILL_the_documented_divergence(self) -> None:
-        """Django raises on ``int('-')``; djust hands the value back.
-
-        Unchanged by this fix, and asserted rather than assumed: this arm is
-        the neighbour of both exits that changed.
-        """
+    def test_landing_on_the_minus_sign_raises_as_django_does(self) -> None:
+        """Django raises on ``int('-')``. The Rust port handed the value back
+        (a documented divergence); since 2.0 ``get_digit`` is Django's own
+        function, so djust raises too."""
         assert dj('{{ p|get_digit:"3" }}', -42) == "<<ValueError>>"
-        assert du('{{ p|get_digit:"3" }}', -42) == "-42"
+        assert du('{{ p|get_digit:"3" }}', -42) == "<<ValueError>>"
 
     def test_a_negative_still_indexes_past_the_sign_correctly(self) -> None:
         """``str(-42)`` is four characters and Django indexes into that."""

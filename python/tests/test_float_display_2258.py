@@ -172,19 +172,11 @@ def test_get_digit_reads_int_of_the_value_not_the_rendering(n: int, value: float
         # `int('-')` a negative value's sign position produces both escape and
         # 500 the page.
         #
-        # djust used to RENDER `str(value)` here; #2435 routed `get_digit`
-        # through the `int(value)` chokepoint, which knows an OverflowError is
-        # not a ValueError, so an infinity now refuses the template as Django
-        # does. The `int('-')` sign-position case is a different arm — it never
-        # reaches `int(value)` at all — and still fails soft, so both outcomes
-        # are asserted rather than one blanket `pytest.raises`, and neither can
-        # silently become a fabricated digit.
-        try:
-            djust_out = _rust.render_template(source, normalize_django_value({"p": value}))
-        except RuntimeError as exc:
-            assert "calls int() on its value" in str(exc), f"{value!r} -> {exc}"
-            return
-        assert djust_out == str(value), f"{value!r} -> {djust_out!r}"
+        # Since 2.0 `get_digit` is Django's own function, so djust raises the
+        # same exception class Django does — including the `int('-')`
+        # sign-position case the Rust port used to fail soft on.
+        with pytest.raises((OverflowError, ValueError)):
+            _rust.render_template(source, normalize_django_value({"p": value}))
         return
     _, djust_out = render_both(source, value)
     assert djust_out == django_out

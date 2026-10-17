@@ -320,12 +320,11 @@ class TestWidthArgument:
         source = '{{ p|wordwrap:"%s" }}' % width
         with pytest.raises(ValueError) as django_exc:
             DjangoTemplate(source).render(DjangoContext({"p": "a b"}))
-        with pytest.raises(RuntimeError) as djust_exc:
+        # `wordwrap` is Django's own function since 2.0, so Django's ValueError
+        # crosses whole, message and class.
+        with pytest.raises(ValueError) as djust_exc:
             _rust.render_template(source, {"p": "a b"})
-        # djust's template errors surface as `RuntimeError("Template error: ...")`
-        # rather than the original Python exception type — a property of the
-        # engine boundary, not of this filter. The MESSAGE is Django's verbatim.
-        assert str(django_exc.value) in str(djust_exc.value)
+        assert str(django_exc.value) == str(djust_exc.value)
         assert str(django_exc.value) == f"invalid width {width} (must be > 0)"
 
     def test_the_empty_string_is_the_one_input_that_does_not_raise(self) -> None:
@@ -334,7 +333,7 @@ class TestWidthArgument:
         assert django_wrap("", 0) == ""
         assert _rust.render_template('{{ p|wordwrap:"0" }}', {"p": ""}) == ""
         # One line is enough to reach the guard.
-        with pytest.raises(RuntimeError):
+        with pytest.raises(ValueError):
             _rust.render_template('{{ p|wordwrap:"0" }}', {"p": "\n"})
 
     def test_an_unparseable_width_raises_in_both_engines(self) -> None:
@@ -344,7 +343,7 @@ class TestWidthArgument:
         # `int("nope")` has no answer.
         with pytest.raises(ValueError):
             DjangoTemplate('{{ p|wordwrap:"nope" }}').render(DjangoContext({"p": "a"}))
-        with pytest.raises(RuntimeError, match="needs an integer argument"):
+        with pytest.raises(ValueError):
             _rust.render_template('{{ p|wordwrap:"nope" }}', {"p": "word " * 30})
 
     def test_a_width_with_surrounding_space_parses_as_django_parses_it(self) -> None:
