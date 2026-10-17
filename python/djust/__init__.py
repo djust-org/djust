@@ -87,7 +87,7 @@ if TYPE_CHECKING:
     from .db import notify_on_save, send_pg_notify
     from .markdown import render_markdown as render_markdown
 
-__version__ = "1.3.0rc10"
+__version__ = "2.0.0.dev0"
 
 # Import Rust functions
 try:
