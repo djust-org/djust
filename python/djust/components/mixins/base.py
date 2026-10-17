@@ -13,6 +13,7 @@ is active), never application data or secrets.
 """
 
 import sys
+from types import FrameType
 from typing import Any, ClassVar, Dict, Optional, Type, TypeVar
 
 from ..._class_snapshot import attribute_names
@@ -109,7 +110,7 @@ def _frames_to_caller() -> int:
     is counted rather than fixed. Test modules (``djust.tests.*``) count as
     callers.
     """
-    frame = sys._getframe(2)  # the caller of _frames_to_caller's caller
+    frame: Optional[FrameType] = sys._getframe(2)  # the caller of _frames_to_caller's caller
     depth = 1
     while frame is not None:
         name = frame.f_globals.get("__name__", "")
