@@ -1,7 +1,7 @@
 """
 Input component for djust.
 
-Simple stateless input field with automatic Rust optimization.
+Simple stateless input field.
 """
 
 from typing import Any, Optional
@@ -9,21 +9,13 @@ from ..base import Component
 
 from django.utils.html import conditional_escape
 
-try:
-    from djust._rust import RustInput  # type: ignore[attr-defined]
-
-    _RUST_AVAILABLE = True
-except ImportError:
-    _RUST_AVAILABLE = False
-
 
 class Input(Component):
     """
     Input field component (Bootstrap 5).
 
     Features:
-    - Automatic Rust optimization (~1μs rendering)
-    - Template fallback if Rust unavailable
+    - Rendered through its template (there is no native Rust input)
     - Python fallback with f-strings
     - Label, placeholder, help text support
     - Validation states
@@ -55,8 +47,6 @@ class Input(Component):
         '<div class="mb-3">...'
     """
 
-    _rust_impl_class = RustInput if _RUST_AVAILABLE else None
-
     template = """<div class="mb-3">{% if label %}
     <label for="{{ input_id }}" class="form-label">{{ label }}{% if required %} <span class="text-danger">*</span>{% endif %}</label>{% endif %}
     <input type="{{ input_type }}"
@@ -86,7 +76,7 @@ class Input(Component):
         # Use name as ID if not provided
         input_id = id or name
 
-        # Pass kwargs to parent to create Rust instance
+        # Pass kwargs to the parent Component
         super().__init__(
             name=name,
             id=input_id,

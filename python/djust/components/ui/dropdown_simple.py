@@ -14,26 +14,12 @@ from django.utils.html import conditional_escape
 from djust.components.utils import url_attr
 
 
-# Try to import Rust implementation (will be added later)
-try:
-    from djust._rust import RustDropdown  # type: ignore[attr-defined]
-
-    _RUST_AVAILABLE = True
-except (ImportError, AttributeError):
-    _RUST_AVAILABLE = False
-    RustDropdown = None  # type: ignore[assignment, misc]
-
-
 class Dropdown(Component):
     """
-    Simple, stateless dropdown component with automatic Rust optimization.
+    Simple, stateless dropdown component.
 
-    This component automatically uses pure Rust implementation if available,
-    otherwise falls back to hybrid rendering with Rust template engine.
-
-    Performance:
-        - Pure Rust (if available): ~1μs per render
-        - Python fallback: ~50-100μs per render (uses loops)
+    There is no native Rust dropdown; it renders in Python (~50-100μs per
+    render, because it loops over the items).
 
     Use Cases:
         - Display-only dropdown menus (rendered but @click handled by parent)
@@ -89,9 +75,6 @@ class Dropdown(Component):
         success = Dropdown("Success", items=items, variant="success")
         danger = Dropdown("Danger", items=items, variant="danger")
     """
-
-    # Link to Rust implementation if available
-    _rust_impl_class = RustDropdown if _RUST_AVAILABLE else None
 
     # Note: Not using template because loops are needed for items
     # Using Python _render_custom() which is still fast (~50-100μs)
