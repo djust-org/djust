@@ -1,20 +1,13 @@
 """
 Offcanvas (sidebar drawer) component for djust.
 
-Simple stateless offcanvas drawer with automatic Rust optimization.
+Simple stateless offcanvas drawer.
 """
 
 from typing import Any, Optional
 from ..base import Component
 
 from django.utils.html import conditional_escape
-
-try:
-    from djust._rust import RustOffcanvas  # type: ignore[attr-defined]
-
-    _RUST_AVAILABLE = True
-except ImportError:
-    _RUST_AVAILABLE = False
 
 
 class Offcanvas(Component):
@@ -25,8 +18,7 @@ class Offcanvas(Component):
     navigation menus, filters, or additional content.
 
     Features:
-    - Automatic Rust optimization (~1μs rendering)
-    - Template fallback if Rust unavailable
+    - Rendered through its template (there is no native Rust implementation)
     - Python fallback with f-strings
     - Slide-in from any side (start, end, top, bottom)
     - Backdrop overlay support
@@ -61,8 +53,6 @@ class Offcanvas(Component):
         ... )
     """
 
-    _rust_impl_class = RustOffcanvas if _RUST_AVAILABLE else None
-
     template = """<div class="offcanvas offcanvas-{{ placement }}{% if show %} show{% endif %}" tabindex="-1" id="{{ id }}" aria-labelledby="{{ id }}Label"{% if not backdrop %} data-bs-backdrop="false"{% endif %}>{% if title %}
     <div class="offcanvas-header">
         <h5 class="offcanvas-title" id="{{ id }}Label">{{ title }}</h5>{% if dismissable %}
@@ -90,7 +80,7 @@ class Offcanvas(Component):
                 f"Invalid placement: {placement}. Must be 'start', 'end', 'top', or 'bottom'"
             )
 
-        # Pass kwargs to parent to create Rust instance
+        # Pass kwargs to the parent Component
         super().__init__(
             body=body,
             id=id,

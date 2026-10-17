@@ -13,25 +13,13 @@ from django.utils.html import conditional_escape
 from djust.components.utils import url_attr
 
 
-# Try to import Rust implementation (will be added later)
-try:
-    from djust._rust import RustBreadcrumb  # type: ignore[attr-defined]
-
-    _RUST_AVAILABLE = True
-except (ImportError, AttributeError):
-    _RUST_AVAILABLE = False
-    RustBreadcrumb = None  # type: ignore[assignment, misc]
-
-
 class Breadcrumb(Component):
     """
-    Simple, stateless breadcrumb component with automatic Rust optimization.
+    Simple, stateless breadcrumb component.
 
-    This component automatically uses pure Rust implementation if available,
-    otherwise falls back to Python rendering with loops.
+    There is no native Rust implementation; it renders in Python.
 
     Performance:
-        - Pure Rust (if available): ~1μs per render
         - Pure Python fallback: ~50-100μs per render
 
     Use Cases:
@@ -83,9 +71,6 @@ class Breadcrumb(Component):
             show_home=True
         )
     """
-
-    # Link to Rust implementation if available
-    _rust_impl_class = RustBreadcrumb if _RUST_AVAILABLE else None
 
     # Note: Not using template because Rust template engine doesn't support
     # forloop.counter0 and forloop.last reliably
