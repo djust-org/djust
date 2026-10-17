@@ -1,0 +1,116 @@
+name: Filter parity compare
+
+# The two-build half of scripts/filter-parity-differential.py, on demand:
+# builds the extension at BASE and at HEAD, measures the filter corpus with
+# each ref's own script, and compares the two with HEAD's `--compare`.
+#
+# Run it for a change that moves filter behaviour (for example routing a
+# built-in to Django's own function) before that change merges:
+#
+#     gh workflow run filter-parity-compare.yml -f base_ref=2.0 -f head_ref=my-branch
+#
+# The compare output goes to the job summary and, with both measurements, to
+# the `filter-parity-compare` artifact. The job fails when `--compare` does
+# (a cell that agreed and now disagrees, or a newly permissive cell).
+
+on:
+  workflow_dispatch:
+    inputs:
+      base_ref:
+        description: Baseline branch, tag or SHA
+        required: true
+        default: main
+      head_ref:
+        description: Branch, tag or SHA to compare against the baseline
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Check out the baseline
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.base_ref }}
+          path: base
+
+      - name: Check out the head
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.head_ref }}
+          path: head
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Set up Python
+        id: python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Build and measure the baseline
+        working-directory: base
+        env:
+          PYTHON_PATH: ${{ steps.python.outputs.python-path }}
+        run: |
+          uv sync --frozen --extra dev --no-install-project --python "$PYTHON_PATH"
+          export UV_PYTHON="$PWD/.venv/bin/python"
+          uv run --no-sync maturin develop --release
+          PYTHONPATH="$PWD/python" .venv/bin/python scripts/filter-parity-differential.py "$RUNNER_TEMP/base.json"
+
+      - name: Build and measure the head
+        working-directory: head
+        env:
+          PYTHON_PATH: ${{ steps.python.outputs.python-path }}
+        run: |
+          uv sync --frozen --extra dev --no-install-project --python "$PYTHON_PATH"
+          export UV_PYTHON="$PWD/.venv/bin/python"
+          uv run --no-sync maturin develop --release
+          PYTHONPATH="$PWD/python" .venv/bin/python scripts/filter-parity-differential.py "$RUNNER_TEMP/after.json"
+
+      - name: Compare
+        id: compare
+        working-directory: head
+        env:
+          BASE_REF: ${{ inputs.base_ref }}
+          HEAD_REF: ${{ inputs.head_ref }}
+        run: |
+          set +e
+          PYTHONPATH="$PWD/python" .venv/bin/python scripts/filter-parity-differential.py \
+            --compare "$RUNNER_TEMP/base.json" "$RUNNER_TEMP/after.json" > "$RUNNER_TEMP/compare.txt" 2>&1
+          status=$?
+          set -e
+          cat "$RUNNER_TEMP/compare.txt"
+          {
+            echo "## Filter parity compare"
+            echo
+            echo "base \`$BASE_REF\` → head \`$HEAD_REF\`, \`--compare\` exit status: $status"
+            echo
+            echo '```'
+            cat "$RUNNER_TEMP/compare.txt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+
+      - name: Upload the measurements and the compare output
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: filter-parity-compare
+          path: |
+            ${{ runner.temp }}/base.json
+            ${{ runner.temp }}/after.json
+            ${{ runner.temp }}/compare.txt
+          if-no-files-found: warn
+
+      - name: Fail when the compare failed
+        if: steps.compare.outputs.status != '0'
+        run: exit 1
