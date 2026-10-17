@@ -1,4 +1,8 @@
-"""`virtual_keyed_ops` reaches the Rust differ from Django config (#2017, ADR-026).
+"""`virtual_keyed_ops` reaches the Rust differ at startup (#2017, ADR-026).
+
+2.0 removed the ``LIVEVIEW_CONFIG['virtual_keyed_ops']`` kill switch:
+``DjustConfig.ready()`` now turns the differ's flag on unconditionally. The
+history below explains why ON is the right, and now only, behaviour.
 
 Before this, `djust_vdom::diff::set_virtual_keyed_ops` had **no Python surface at
 all** — its only callers were that crate's own tests. So ADR-026 iteration 3
@@ -68,109 +72,34 @@ def test_the_setter_actually_moves_the_flag():
     assert _rust.virtual_keyed_ops_enabled() is False
 
 
-# --- the config key ---------------------------------------------------------
+# --- 2.0: no config key, always on ------------------------------------------
 
 
-def test_the_config_default_is_on():
-    """Iteration 3 shipped in 1.1.0. This pin is now the inverse of what it was.
-
-    It spent several releases asserting ``is False`` with the message "the
-    evidence did not support it". The evidence now does, and it is recorded
-    here so a future reader can tell a deliberate flip from a drift — which is
-    the only reason this pin exists.
-
-    Measured on a healthy, initialised ``[dj-virtual]`` list (which required
-    #2185 and #2194 to be fixed first — before those, the list was
-    intermittently never initialised, so BOTH arms of every earlier A/B were
-    really the OFF arm). Same start state, flag the only variable:
-
-    ==========================  =======================  ==================
-    case                        OFF                      ON
-    ==========================  =======================  ==================
-    insert at position 5        pool index 60 (tail)     pool index 5
-    remove at 3                 size unchanged, k3 kept  k3 gone, no dupes
-    reverse                     not reordered            exact reversal
-    edit a scrolled row         correct                  correct
-    ==========================  =======================  ==================
-
-    OFF fails every mid-list structural mutation; ON fixes all three and
-    regresses none. If this ever flips back, that too must carry evidence.
-    """
+def test_the_config_key_is_gone():
+    """2.0 removed the ``virtual_keyed_ops`` kill switch (#3500). Setting the key
+    now fails startup (``djust._removed_settings``)."""
     from djust.config import LiveViewConfig
 
-    assert LiveViewConfig._defaults["virtual_keyed_ops"] is True, (
-        "the dj-virtual keyed splice ops default OFF again. ON is the shipped "
-        "behaviour since 1.1.0 (ADR-026 iteration 3) — turning it back off "
-        "reintroduces tail-landing inserts, dropped removals and ignored "
-        "reorders on every windowed list. Revert deliberately, with evidence."
-    )
+    assert "virtual_keyed_ops" not in LiveViewConfig._defaults
 
 
-def test_the_config_key_is_documented_where_it_is_defined():
-    import inspect
-
-    from djust import config as config_mod
-
-    src = inspect.getsource(config_mod).splitlines()
-    idx = next(n for n, ln in enumerate(src) if '"virtual_keyed_ops"' in ln)
-    # Walk back over the CONTIGUOUS comment block above the key. A fixed
-    # character window was the first version and it broke the moment the
-    # comment grew — the property is "the key carries an explanation", not
-    # "the explanation fits in 900 bytes".
-    block = []
-    for n in range(idx - 1, -1, -1):
-        if src[n].strip().startswith("#"):
-            block.append(src[n])
-        elif src[n].strip() == "":
-            continue
-        else:
-            break
-    preamble = "\n".join(block)
-    assert "dj-virtual" in preamble and "ADR-026" in preamble, (
-        "a bare flag name in the defaults tells a reader nothing about what "
-        f"turning it on does; comment block found:\n{preamble}"
-    )
-
-
-# --- the startup applier ----------------------------------------------------
-
-
-def test_ready_applies_the_config_value_to_rust(monkeypatch):
-    """Drives the REAL `DjustConfig.ready()` and checks the flag actually moves.
-
-    An earlier version evaluated `want if True else cfg.get(...)`, setting the
-    flag to whatever the test had already decided — it would have passed with
-    `ready()` deleted. Invoking the real method is the only way to know the
-    wiring runs.
-
-    Patches the SINGLETON, which is what `ready()` reads. That was the wrong
-    thing to patch while `ready()` bypassed it (#2164) — the test passed on a
-    path no deployment had. It is the right thing to patch now that `ready()`
-    recovers the singleton first, and the singleton's own correctness under a
-    hostile import order is pinned separately, in
-    `test_config_settings_recovery_2166.py`. Neither test is sufficient alone:
-    this one proves the value is forwarded, that one proves the value is real.
-    """
+def test_ready_hard_wires_the_flag_on():
+    """Drives the REAL ``DjustConfig.ready()``: the differ's compiled default is
+    OFF, so ready() is what turns keyed ops on."""
     import logging
-
-    from djust.config import config
 
     from djust.apps import DjustConfig
 
     _lg = logging.getLogger("djust")
     _filters = list(_lg.filters)
     try:
-        for want in (True, False):
-            _rust.set_virtual_keyed_ops(not want)  # opposite, so a no-op fails
-            monkeypatch.setitem(config._config, "virtual_keyed_ops", want)
-            app = DjustConfig.__new__(DjustConfig)
-            app.ready()
-            assert _rust.virtual_keyed_ops_enabled() is want, (
-                f"ready() did not forward virtual_keyed_ops={want} to the differ"
-            )
+        _rust.set_virtual_keyed_ops(False)  # opposite, so a no-op fails
+        app = DjustConfig.__new__(DjustConfig)
+        app.ready()
+        assert _rust.virtual_keyed_ops_enabled() is True
     finally:
-        # In a `finally` so a mid-loop assertion failure cannot leak a filter
-        # into every later test in the session.
+        # In a `finally` so a mid-test failure cannot leak a filter into every
+        # later test in the session.
         _lg.filters[:] = _filters
 
 
@@ -195,7 +124,7 @@ def test_apps_ready_wires_the_flag():
 
     src = inspect.getsource(DjustConfig)
     assert "set_virtual_keyed_ops" in src, (
-        "the config key is inert unless something applies it at startup"
+        "the differ's compiled default is OFF; something must turn it on at startup"
     )
     assert 'hasattr(_rust, "set_virtual_keyed_ops")' in src, (
         "guard the call so a Rust build predating the export cannot break "

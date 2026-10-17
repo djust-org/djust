@@ -244,14 +244,11 @@ def test_the_scan_refuses_a_read_it_cannot_resolve():
 
 
 def test_a_flat_alias_override_reaches_the_config_and_is_undone():
-    before = config.get("websocket_compression")
-    with override_settings(DJUST_WS_COMPRESSION=not before):
-        assert config.get("websocket_compression") is (not before)
-    assert config.get("websocket_compression") == before
-    ttl = config.get("service_worker.vdom_cache_ttl_seconds")
-    with override_settings(DJUST_VDOM_CACHE_TTL_SECONDS=12345):
-        assert config.get("service_worker.vdom_cache_ttl_seconds") == 12345
-    assert config.get("service_worker.vdom_cache_ttl_seconds") == ttl
+    # DJUST_STATE_SNAPSHOT_ENABLED is the one flat alias 2.0 kept.
+    before = config.get("service_worker.state_snapshot_enabled")
+    with override_settings(DJUST_STATE_SNAPSHOT_ENABLED=not before):
+        assert config.get("service_worker.state_snapshot_enabled") is (not before)
+    assert config.get("service_worker.state_snapshot_enabled") == before
 
 
 def test_a_reload_swaps_the_config_in_one_step():
