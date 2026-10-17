@@ -3,6 +3,7 @@ RequestMixin - HTTP GET/POST request handling for LiveView.
 """
 
 import asyncio
+import inspect
 import json
 import logging
 import time
@@ -43,6 +44,98 @@ if TYPE_CHECKING:
     from django.http import HttpRequest
 
 logger = logging.getLogger(__name__)
+
+
+def _drain_http_side_channels(view: Any, resp_data: Dict[str, Any]) -> None:
+    """Put ``view``'s queued client side effects on an HTTP fallback answer.
+
+    The WebSocket turn sends each queue as its own frame. An HTTP answer
+    carries them as keys the client's ``handleServerResponse`` applies:
+    ``_flash``, ``_page_metadata``, ``_push_events`` (``push_event`` /
+    ``push_commands``, in the ``push_event`` frame's ``{event, payload}``
+    shape) and ``_layout`` (``set_layout``, the ``layout`` frame's
+    ``{path, html}``). Then the ``defer()`` callbacks run, last, as they do on
+    the socket. Before this, the fallback carried only flash and page metadata,
+    and dropped the other three queues.
+    """
+    if hasattr(view, "_drain_flash"):
+        flash_commands = view._drain_flash()
+        if flash_commands:
+            resp_data["_flash"] = flash_commands
+    if hasattr(view, "_drain_page_metadata"):
+        meta_commands = view._drain_page_metadata()
+        if meta_commands:
+            resp_data["_page_metadata"] = meta_commands
+    if hasattr(view, "_drain_push_events"):
+        events = view._drain_push_events()
+        if isinstance(events, list) and events:
+            resp_data["_push_events"] = [
+                {"event": event_name, "payload": payload} for event_name, payload in events
+            ]
+    if hasattr(view, "_drain_pending_layout"):
+        layout_path = view._drain_pending_layout()
+        if layout_path:
+            layout = _render_http_layout(view, layout_path)
+            if layout is not None:
+                resp_data["_layout"] = layout
+    _run_http_deferred(view)
+
+
+def _render_http_layout(view: Any, layout_path: str) -> Optional[Dict[str, str]]:
+    """``set_layout``'s ``{path, html}``, with the socket's error handling
+    (``LiveViewConsumer._flush_pending_layout``)."""
+    from django.conf import settings as django_settings
+    from django.template.exceptions import TemplateDoesNotExist
+    from django.template.loader import render_to_string
+
+    try:
+        context = view.get_context_data() if hasattr(view, "get_context_data") else {}
+        html = render_to_string(layout_path, context)
+    except TemplateDoesNotExist:
+        logger.warning("set_layout(%r) — template not found; ignoring swap request", layout_path)
+        return None
+    except Exception:  # noqa: BLE001 — a layout error must not fail the event answer
+        logger.exception(
+            "set_layout(%r) — template rendering raised; ignoring swap request",
+            layout_path,
+        )
+        # In DEBUG, re-raise so programmer errors are visible (the socket does).
+        if getattr(django_settings, "DEBUG", False):
+            raise
+        return None
+    return {"path": layout_path, "html": html}
+
+
+def _run_http_deferred(view: Any) -> None:
+    """Run ``view.defer(...)`` callbacks after an HTTP answer's render.
+
+    Mirrors ``LiveViewConsumer._flush_deferred``: each callback runs once, a
+    failure is logged at WARN and the next one still runs, and a coroutine a
+    callback returns is awaited. A callback that calls ``defer()`` again queues
+    for the next event, as on the socket.
+    """
+    if not hasattr(view, "_drain_deferred"):
+        return
+    callbacks = view._drain_deferred()
+    if not isinstance(callbacks, list) or not callbacks:
+        return
+    from asgiref.sync import async_to_sync
+
+    async def _await(awaitable: Any) -> Any:
+        return await awaitable
+
+    for callback, args, kwargs in callbacks:
+        try:
+            result = callback(*args, **kwargs)
+            if inspect.iscoroutine(result):
+                async_to_sync(_await)(result)
+        except Exception:
+            logger.warning(
+                "[djust HTTP] Deferred callback %s on %s raised; continuing to next",
+                getattr(callback, "__qualname__", repr(callback)),
+                view.__class__.__name__,
+                exc_info=True,
+            )
 
 
 class RequestMixin:
@@ -909,14 +1002,7 @@ class RequestMixin:
 
             if _resolve_skip_render(self):
                 skip_response: Dict[str, Any] = {"patches": []}
-                if hasattr(self, "_drain_flash"):
-                    flash_commands = self._drain_flash()
-                    if flash_commands:
-                        skip_response["_flash"] = flash_commands
-                if hasattr(self, "_drain_page_metadata"):
-                    meta_commands = self._drain_page_metadata()
-                    if meta_commands:
-                        skip_response["_page_metadata"] = meta_commands
+                _drain_http_side_channels(self, skip_response)
                 return JsonResponse(skip_response)
 
             # Apply context processors so the render includes auth context
@@ -1000,17 +1086,11 @@ class RequestMixin:
                     except Exception:
                         logger.debug("Failed to inject debug info", exc_info=True)
 
-            # Drain side-channel commands (flash, page metadata) so they
-            # are delivered in the HTTP response, not only via WebSocket.
+            # Drain side-channel commands (flash, page metadata, push events,
+            # layout) so they are delivered in the HTTP response, not only via
+            # WebSocket, then run the defer() callbacks.
             def _inject_side_channels(resp_data: Dict[str, Any]) -> None:
-                if hasattr(self, "_drain_flash"):
-                    flash_commands = self._drain_flash()
-                    if flash_commands:
-                        resp_data["_flash"] = flash_commands
-                if hasattr(self, "_drain_page_metadata"):
-                    meta_commands = self._drain_page_metadata()
-                    if meta_commands:
-                        resp_data["_page_metadata"] = meta_commands
+                _drain_http_side_channels(self, resp_data)
 
             if patches_json:
                 patches = json_module.loads(patches_json)
