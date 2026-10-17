@@ -10,8 +10,8 @@ wires them), and the bespoke WS ``handle_mount`` keeps doing all of this inline
 The 5 hooks (on the ``Transport`` protocol + ``WSConsumerTransport`` real impl +
 ``SSESessionTransport`` no-op/raw):
 
-1. ``on_view_instantiated(view)`` — WS: ``view._ws_consumer`` /
-   ``_push_events_flush_callback`` (websocket.py:2128/2134-2135), ``register_view``
+1. ``on_view_instantiated(view)`` — WS: ``view._ws_consumer``
+   (websocket.py:2128), ``register_view``
    observability (2161-2167), ``_websocket_host`` / ``_secure`` stash
    (2268-2270). SSE: no-op.
 2. ``uses_actors_for_mount(view) -> bool`` — WS:
@@ -64,8 +64,6 @@ class _FakeView:
     def __init__(self, *, use_actors: bool = False) -> None:
         if use_actors:
             self.use_actors = True
-        # _push_events_flush_callback present so on_view_instantiated wires it.
-        self._push_events_flush_callback = None
         self._register_calls: list = []
 
     def get_context_data(self, **kwargs):
@@ -155,8 +153,8 @@ def test_ws_on_view_instantiated_stamps_consumer_backrefs():
     transport.on_view_instantiated(view)
 
     assert view._ws_consumer is consumer, "must stamp view._ws_consumer (websocket.py:2128)"
-    assert view._push_events_flush_callback == consumer._flush_push_events, (
-        "must wire the push-events flush callback (websocket.py:2134-2135)"
+    assert not hasattr(view, "_push_events_flush_callback"), (
+        "the legacy flush callback is gone; flush_push_events() reads _ws_consumer"
     )
     # host/secure stash present (None/False for a non-browser scope).
     assert hasattr(view, "_websocket_host")

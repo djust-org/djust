@@ -153,16 +153,12 @@ def has_pending_async_work(view: Any) -> bool:
     Drives the ``async_pending`` wire flag that keeps the client's loading
     state (``dj-loading``, ``dj-disable-with``, ``dj-lock``) up until the
     work's ``source="async"`` result frame arrives. ``start_async`` (and
-    ``@background``, which calls it) queues into ``_async_tasks``; the legacy
-    single-task ``_async_pending`` tuple is still honoured. Reading only the
-    legacy field left the flag permanently off (#2963). Every site that sets
-    the flag must call this, so the transports cannot drift.
+    ``@background``, which calls it) queues into ``_async_tasks``. Every site
+    that sets the flag must call this, so the transports cannot drift (#2963).
     """
     if view is None:
         return False
-    return bool(getattr(view, "_async_tasks", None)) or (
-        getattr(view, "_async_pending", None) is not None
-    )
+    return bool(getattr(view, "_async_tasks", None))
 
 
 class AsyncWorkMixin:
@@ -284,8 +280,7 @@ class AsyncWorkMixin:
         """
         Cancel every scheduled and running ``start_async`` task on this view.
 
-        Tasks that have not started are dropped (including a legacy
-        ``_async_pending`` task). Dispatched callbacks are cancelled
+        Tasks that have not started are dropped. Dispatched callbacks are cancelled
         cooperatively: the work generation advances, so a callback that
         completes afterwards cannot reach its completion handler or render,
         and each dispatched task is cancelled on its owning loop. Names that are
@@ -306,7 +301,6 @@ class AsyncWorkMixin:
             tasks.clear()
         else:
             self._async_tasks = {}
-        self._async_pending = None
         running = getattr(self, "_async_running", None)
         if running:
             if not hasattr(self, "_async_cancelled"):
