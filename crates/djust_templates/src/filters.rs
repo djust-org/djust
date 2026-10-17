@@ -2012,10 +2012,25 @@ fn apply_builtin_filter(
             // key. `arg_was_quoted` is the only thing that separates them, and
             // `{{ p|dictsort:0 }}` vs `{{ p|dictsort:"1" }}` on the same list
             // of strings is the cell that proves it.
-            let index = if arg_was_quoted {
-                None
-            } else {
-                sort_key.parse::<usize>().ok()
+            //
+            // A VARIABLE argument is typed by what it resolved to, not by its
+            // spelling: `_property_resolver` tries `float(arg)` on the object,
+            // so a context string `"3"` builds `itemgetter("3")`, a KEY
+            // lookup, and an `int` indexes. Reading the resolved text as an
+            // unquoted literal sorted a list of strings by its fourth
+            // character where Django's `str["3"]` raises and renders `""`.
+            let index = match resolved_arg {
+                Some(Value::Integer(n)) => usize::try_from(*n).ok(),
+                Some(Value::Bool(b)) => Some(usize::from(*b)),
+                Some(Value::String(_) | Value::SafeString(_)) => None,
+                // `itemgetter(2.5)` / `itemgetter(Decimal("0"))`: no sequence
+                // item accepts a non-integer index, so Django's
+                // `except TypeError` returns `""`.
+                Some(Value::Float(_) | Value::Decimal(_)) => {
+                    return Some(Ok(Value::String(String::new())));
+                }
+                _ if arg_was_quoted => None,
+                _ => sort_key.parse::<usize>().ok(),
             };
             let sorted = match value {
                 // A dict VIEW sorts (#2340). Django's `dictsort` is
