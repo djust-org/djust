@@ -11,7 +11,6 @@ from datetime import date, datetime, time
 from decimal import Decimal
 from uuid import UUID
 
-import pytest
 
 from djust.serialization import DjangoJSONEncoder, normalize_django_value
 
@@ -185,16 +184,6 @@ class TestSetSerialization:
         json.dumps(result)
 
 
-def _rust_available():
-    """Check if Rust extensions are available."""
-    try:
-        from djust._rust import RustLiveView  # noqa: F401
-
-        return True
-    except ImportError:
-        return False
-
-
 class TestDictRoundTrip:
     """#612: dict state must survive round-trip through Rust state sync."""
 
@@ -251,10 +240,6 @@ class TestDictRoundTrip:
         stored = normalize_django_value(original, state_roundtrip=True)
         assert stored["meta"]["created"] == "2024-01-01"
 
-    @pytest.mark.skipif(
-        not _rust_available(),
-        reason="Rust extensions not built",
-    )
     def test_dict_survives_rust_msgpack_roundtrip(self):
         """Dict must survive MessagePack round-trip through Rust (#612).
 
@@ -300,10 +285,6 @@ class TestVNodeMsgpackRoundTrip:
     entry on the exception, losing cross-reconnect state continuity.
     """
 
-    @pytest.mark.skipif(
-        not _rust_available(),
-        reason="Rust extensions not built",
-    )
     def test_vnode_djust_id_none_survives_msgpack_roundtrip(self):
         """A view whose last_vdom has djust_id-less text nodes must round-trip."""
         from djust._rust import RustLiveView
@@ -331,10 +312,6 @@ class TestVNodeMsgpackRoundTrip:
         assert "Hello" in restored_html
         assert "world" in restored_html
 
-    @pytest.mark.skipif(
-        not _rust_available(),
-        reason="Rust extensions not built",
-    )
     def test_vnode_text_only_template_survives_msgpack_roundtrip(self):
         """A nested template with multiple text nodes must round-trip."""
         from djust._rust import RustLiveView

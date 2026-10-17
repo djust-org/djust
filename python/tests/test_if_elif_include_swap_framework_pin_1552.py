@@ -77,15 +77,8 @@ import tempfile
 import threading
 from pathlib import Path
 
-import pytest
 
-try:
-    from djust._rust import RustLiveView
-except ImportError:  # pragma: no cover
-    RustLiveView = None
-
-
-pytestmark = pytest.mark.skipif(RustLiveView is None, reason="Rust extensions not built")
+from djust._rust import RustLiveView
 
 
 # The reporter's exact shape: parent template containing {% if/elif %}

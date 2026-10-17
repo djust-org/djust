@@ -598,10 +598,9 @@ class TestDebugPanelSvgEscaping:
 
     def test_vdom_roundtrip_preserves_svg_attributes(self):
         """SVG attributes must survive the Rust VDOM parse -> to_html cycle."""
-        try:
-            from djust._rust import RustView
-        except ImportError:
-            pytest.skip("Rust extension not available")
+        # Was `RustView`, which does not exist: the guard skipped this test
+        # on every run.
+        from djust._rust import RustLiveView as RustView
 
         # Template with inline SVG — this goes through the Rust VDOM pipeline
         template = (
