@@ -2,7 +2,7 @@
 
 Doc-claim-verbatim tests (#1046): one asserting test per row of the ADR-024
 semantics table, the two reported symptoms as regressions through the real
-render path, the kill-switch gate-off (#1468), and the eager-site guard sweep
+render path, the removed kill switch (2.0), and the eager-site guard sweep
 (Decision 2; #1104 — N sites, N tests).
 
 The sidecar tests route values through ``get_context_data`` from a private
@@ -136,41 +136,15 @@ class TestAutoCallSemantics:
             _render("<div>{{ probe.raises_valueerror }}</div>")
 
 
-@pytest.mark.django_db
-class TestKillSwitch:
-    """LIVEVIEW_CONFIG['template_auto_call'] — gate-off (#1468) + wiring."""
+class TestNoKillSwitch:
+    """2.0 removed ``LIVEVIEW_CONFIG['template_auto_call']`` and then the Rust
+    view's ``set_template_auto_call`` / ``template_auto_call_enabled``."""
 
-    def test_kill_switch_restores_plain_getattr_walk(self):
-        """With auto-call disabled on the Rust view, the pre-ADR behavior
-        returns: the bound method stringifies instead of being called. This
-        is the behavioral gate-off — it fails if the kill-switch stops
-        gating the new code path."""
-        client = LiveViewTestClient(_make_view("<div>{{ probe.get_greeting }}</div>"))
-        client.mount()
-        client.render_with_patches()  # _rust_view initializes lazily on first render
-        client.view_instance._rust_view.set_template_auto_call(False)
-        html, _, _ = client.render_with_patches()
-        assert "hello-from-method" not in html
-        assert "bound method" in html  # the pre-ADR stringified method object
+    def test_the_rust_view_has_no_auto_call_switch(self):
+        from djust._rust import RustLiveView
 
-    def test_flag_wiring_reads_config(self, monkeypatch):
-        """_apply_template_auto_call_flag forwards the config value to Rust
-        (mirrors the #1967 loop-cache flag plumbing)."""
-        client = LiveViewTestClient(_make_view("<div>x</div>"))
-        client.mount()
-        client.render_with_patches()  # _rust_view initializes lazily on first render
-        view = client.view_instance
-        assert view._rust_view.template_auto_call_enabled() is True  # default ON
-
-        from djust import config as djust_config
-
-        class _FakeConfig:
-            def get(self, key, default=None):
-                return False if key == "template_auto_call" else default
-
-        monkeypatch.setattr(djust_config, "get_config", lambda: _FakeConfig())
-        view._apply_template_auto_call_flag()
-        assert view._rust_view.template_auto_call_enabled() is False
+        assert not hasattr(RustLiveView, "set_template_auto_call")
+        assert not hasattr(RustLiveView, "template_auto_call_enabled")
 
 
 @pytest.mark.django_db
@@ -316,30 +290,6 @@ class TestSidecarSerializationFloor:
         html, _, _ = client.render_with_patches()
         assert "pbkdf2" not in html, f"request-scoped password leaked: {html}"
         assert "pw=[]" in html and "su=[]" in html
-
-    def test_floor_holds_with_kill_switch_off(self):
-        """The floor is NOT gated on template_auto_call — flipping the
-        kill-switch off must not re-open the field leak (the #1986 review
-        confirmed the retention was ungated)."""
-        u = self._user()
-
-        class _V(LiveView):
-            template = "<div>pw=[{{ m.password }}]</div>"
-
-            def mount(self, request, **kwargs):
-                self._m = u
-
-            def get_context_data(self, **kwargs):
-                ctx = super().get_context_data(**kwargs)
-                ctx["m"] = self._m
-                return ctx
-
-        client = LiveViewTestClient(_V)
-        client.mount()
-        client.render_with_patches()  # lazy _rust_view init
-        client.view_instance._rust_view.set_template_auto_call(False)
-        html, _, _ = client.render_with_patches()
-        assert "pbkdf2" not in html, f"kill-switch-off leaked password: {html}"
 
     def test_legit_methods_and_managers_still_work(self):
         """The proxy must NOT over-block: safe fields, get_* methods, and
@@ -756,65 +706,3 @@ class TestFilterArgErrorPolicy2202:
         with pytest.raises(Exception) as raised:
             _render("<div>{{ blank|default:probe.raises_valueerror }}</div>")
         assert "does not resolve" not in str(raised.value)
-
-
-class TestOneSharedFlagReader:
-    """Every framework path reads the flag through ONE function (#2508, #1646).
-
-    The #2508 fix converged three of the four framework readers and left
-    ``RustBridgeMixin._apply_template_auto_call_flag`` on its own inline
-    ``get_config().get(...)`` — while its own docstring claimed to be the
-    single reader and enumerated three paths. No behavioural drift had
-    occurred, because both copies were identical; the parallel path #1646
-    exists to retire was simply still standing.
-
-    Pinning the reader SET (not a floor) is what makes the convergence
-    mechanical rather than a claim: a new inline read fails this immediately.
-    """
-
-    def test_no_module_reads_the_flag_inline(self):
-        """Grep the SINK, not the callers you expect — that omission is
-        exactly how the fourth reader survived the fix that cited #1646."""
-        import pathlib
-
-        import djust
-
-        root = pathlib.Path(djust.__file__).parent
-        offenders = []
-        for path in root.rglob("*.py"):
-            if "/tests/" in str(path) or path.name.startswith("test_"):
-                continue
-            text = path.read_text(encoding="utf-8", errors="replace")
-            if 'get("template_auto_call"' in text or "get('template_auto_call'" in text:
-                # config.py IS the shared reader; everything else must call it.
-                if path.name != "config.py":
-                    offenders.append(str(path.relative_to(root)))
-        assert not offenders, (
-            "these read LIVEVIEW_CONFIG['template_auto_call'] inline instead of "
-            f"calling config.template_auto_call_enabled(): {offenders}"
-        )
-
-    def test_every_framework_render_path_calls_the_shared_reader(self):
-        """The four paths the shared reader's docstring names, pinned."""
-        import pathlib
-
-        import djust
-
-        root = pathlib.Path(djust.__file__).parent
-        expected = {
-            "template/rendering.py",
-            "simple_live_view.py",
-            "components/base.py",
-            "mixins/rust_bridge.py",
-        }
-        actual = set()
-        for p in root.rglob("*.py"):
-            # NOT `if "/tests/" in str(p) is False` — Python chains that into
-            # `("/tests/" in s) and (s is False)`, which is always False, so
-            # the set came out empty and the assertion passed vacuously in the
-            # other direction. Caught on the first run.
-            if "/tests/" in str(p) or p.name == "config.py":
-                continue
-            if "template_auto_call_enabled" in p.read_text(encoding="utf-8", errors="replace"):
-                actual.add(str(p.relative_to(root)))
-        assert expected <= actual, f"a framework path stopped calling it: {expected - actual}"

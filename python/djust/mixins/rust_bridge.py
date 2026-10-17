@@ -345,32 +345,6 @@ class RustBridgeMixin:
                 streak,
             )
 
-    def _apply_template_auto_call_flag(self) -> None:
-        """Wire ``LIVEVIEW_CONFIG['template_auto_call']`` → Rust (ADR-024).
-
-        Reads the (default-True) kill-switch and forwards it to the Rust
-        ``RustLiveView`` via ``set_template_auto_call``. Mirrors the #1967
-        ``_apply_loop_render_cache_flag`` plumbing: idempotent, cheap (one
-        bool set), called on every ``_rust_view`` (re)initialization —
-        including cache HITs and msgpack restores, where the flag is not
-        part of the serialized view state. A no-op if the Rust build
-        predates the setter (defensive ``hasattr`` guard).
-
-        The flag itself is read by the one shared
-        :func:`djust.config.template_auto_call_enabled`, which every framework
-        render path calls. This was the FOURTH reader — #2508 converged three
-        of them and left this one, while claiming in its own docstring to be
-        the single reader (#2508 re-review). No drift had occurred yet; the
-        point is that the parallel path #1646 exists to retire was still
-        standing.
-        """
-        rust_view = getattr(self, "_rust_view", None)
-        if rust_view is None or not hasattr(rust_view, "set_template_auto_call"):
-            return
-        from ..config import template_auto_call_enabled
-
-        rust_view.set_template_auto_call(template_auto_call_enabled())
-
     def _initialize_rust_view(self, request: Any = None) -> None:
         """Initialize the Rust LiveView backend"""
 
@@ -392,7 +366,6 @@ class RustBridgeMixin:
                 _ensure_custom_filters_bridged()
                 self._rust_view = RustLiveView(self.get_template(), get_template_dirs())
                 self._apply_loop_render_cache_flag()
-                self._apply_template_auto_call_flag()
                 self._rust_view_explicit = True
             return
 
@@ -488,7 +461,6 @@ class RustBridgeMixin:
                     # loop_render_cache flag is transient (not serialized);
                     # re-apply it from config after a cache hit (#1967).
                     self._apply_loop_render_cache_flag()
-                    self._apply_template_auto_call_flag()
                     logger.debug("[LiveView] Cache HIT! Using cached RustLiveView")
                     backend.set(cache_key, cached_view)
                     return
@@ -526,7 +498,6 @@ class RustBridgeMixin:
                     # loop_render_cache flag is transient (not serialized);
                     # re-apply it from config after a cache hit (#1967).
                     self._apply_loop_render_cache_flag()
-                    self._apply_template_auto_call_flag()
                     logger.debug("[LiveView] Cache HIT! Using cached RustLiveView")
                     backend.set(cache_key, cached_view)
                     return
@@ -553,7 +524,6 @@ class RustBridgeMixin:
             self._rust_view = RustLiveView(template_source, template_dirs)
             # Apply the per-item loop render cache flag (#1967, default OFF).
             self._apply_loop_render_cache_flag()
-            self._apply_template_auto_call_flag()
 
             if self._cache_key:
                 from ..state_backends import get_backend
@@ -749,8 +719,7 @@ class RustBridgeMixin:
         below snapshots them onto the view as per-view config, so a render
         entry running on a thread that never pushed — the ``ViewActor``'s
         tokio worker — installs the configured values rather than reading the
-        worker's compiled defaults. The per-view twin of
-        :meth:`_wire_template_auto_call`.
+        worker's compiled defaults.
         """
         apply_render_env()
         rust_view = self._rust_view

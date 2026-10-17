@@ -98,6 +98,7 @@ assert len(ALLOWLIST_BACKEND) == 35
 # and installs the ``{% load %}`` hooks. Exact, like the rows above.
 ALLOWLIST_SETUP = ALLOWLIST_BACKEND | frozenset(
     {
+        "djust._removed_settings",  # 2.0 removed-settings startup guard (#3500)
         "djust.apps",
         "djust.assets",  # ADR-040 asset registry (setting_changed receiver)
         "djust.checks",
@@ -132,7 +133,7 @@ ALLOWLIST_SETUP = ALLOWLIST_BACKEND | frozenset(
         "djust.template_filters",
     }
 )
-assert len(ALLOWLIST_SETUP) == 67
+assert len(ALLOWLIST_SETUP) == 68
 
 # ``DEBUG=True`` additionally auto-enables hot reload: the file watcher only.
 # ``djust.websocket`` (and ``channels``) are deferred to a change event (#2566).

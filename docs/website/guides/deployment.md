@@ -139,11 +139,11 @@ When a VDOM patch fails on the client, djust falls back to the server-rendered "
 
 ## Channel Layer (for cross-process push)
 
-`DJUST_STATE_BACKEND` and Django Channels' `CHANNEL_LAYERS` are **two separate concerns** that both happen to use Redis. Don't conflate them:
+`DJUST_CONFIG['STATE_BACKEND']` and Django Channels' `CHANNEL_LAYERS` are **two separate concerns** that both happen to use Redis. Don't conflate them:
 
 | Concern | Setting | What it does |
 |---|---|---|
-| **State backend** | `DJUST_STATE_BACKEND` (or `DJUST_CONFIG['STATE_BACKEND']`) | Caches each session's compiled view (`RustLiveView`) as the diff baseline for its next WebSocket mount. It does not restore a view's state (its assigns) on another process: that needs `enable_state_snapshot` or `state(..., persist="server")` plus a session store every process shares (see [Option B](scaling.md#option-b-redis-between-processes)). |
+| **State backend** | `DJUST_CONFIG['STATE_BACKEND']` (and `DJUST_CONFIG['REDIS_URL']`) | Caches each session's compiled view (`RustLiveView`) as the diff baseline for its next WebSocket mount. It does not restore a view's state (its assigns) on another process: that needs `enable_state_snapshot` or `state(..., persist="server")` plus a session store every process shares (see [Option B](scaling.md#option-b-redis-between-processes)). |
 | **Channel layer** | `CHANNEL_LAYERS` (Django Channels) | Carries messages between sessions: `push_to_view()`, presence, cursor tracking and DB-change notifications. Messages between processes need a Redis layer. |
 
 **Required configuration** any time more than one process serves WebSockets, **or** any code calls [`push_to_view` / `apush_to_view`](../advanced/server-push.md) from another process (Celery workers, management commands, cron jobs):
@@ -379,8 +379,12 @@ config.get("websocket_compression")  # True by default
 
 ```python
 # settings.py
-DJUST_WS_COMPRESSION = False  # disable permessage-deflate negotiation
+LIVEVIEW_CONFIG = {
+    "websocket_compression": False,  # disable permessage-deflate negotiation
+}
 ```
+
+(The flat `DJUST_WS_COMPRESSION` setting was removed in 2.0; startup fails if it is still set.)
 
 Note that disabling compression in djust's config is **advisory** — the actual wire-level compression is negotiated by the ASGI server. To enforce the no-compression decision at the server level, pass the appropriate flag to Uvicorn / Daphne (e.g. Uvicorn's `--ws-per-message-deflate=false` when using `websockets`). See the [Deployment Checklist](#deployment-checklist) for the full set of ASGI-server flags.
 

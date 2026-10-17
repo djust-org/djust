@@ -568,16 +568,6 @@ class DjustTemplate:
 
             _ensure_custom_filters_bridged()
             template_dirs = [str(d) for d in self.backend.template_dirs]
-            # ADR-024 auto-call kill-switch. The Rust entry point defaults it
-            # ON (Django's behaviour) for a caller that reaches it directly;
-            # this path is a project's render, so the project's
-            # `LIVEVIEW_CONFIG['template_auto_call']` governs it — the same
-            # flag `_apply_template_auto_call_flag` wires on the LiveView path
-            # (#2501). One shared reader, called by all three framework render
-            # paths (#2508 review).
-            from ..config import template_auto_call_enabled
-
-            auto_call = template_auto_call_enabled()
             # The backend a bridged `inclusion_tag` renders its template
             # through, and the library map a `{% load %}` in THIS parse
             # resolves against (#2547). A ContextVar, NOT a context-dict
@@ -597,7 +587,9 @@ class DjustTemplate:
                     context_dict,
                     template_dirs,
                     safe_keys or None,
-                    auto_call,
+                    # Django's nullary auto-call is always on (ADR-024); the
+                    # `template_auto_call` kill switch was removed in 2.0.
+                    True,
                     getattr(self.backend, "string_if_invalid", "") or None,
                     # This template's own name, for relative `{% extends %}`
                     # (#2517). `Origin.template_name` is what Django's

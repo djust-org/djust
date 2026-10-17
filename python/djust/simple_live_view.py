@@ -38,7 +38,6 @@ except ImportError:
     _RUST_AVAILABLE = False
 
 from ._class_snapshot import attribute_names
-from .config import template_auto_call_enabled
 from .render_env import apply_render_env
 from .utils import get_template_dirs
 
@@ -122,15 +121,11 @@ class SimpleLiveView(View):
                 # timestamp in UTC while ``LiveView`` rendered it correctly.
                 apply_render_env()
                 context = self.get_context_data()
-                # A framework render path, so the project's auto-call setting
-                # governs rather than the Rust default (#2508).
                 return str(
                     render_template_with_dirs(
                         self.template,
                         context,
                         get_template_dirs(),
-                        None,
-                        template_auto_call_enabled(),
                     )
                 )
             except Exception as exc:
