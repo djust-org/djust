@@ -509,7 +509,8 @@ class TestTheResiduesThisPRDoesNotTouch:
         expected, got = _both("{{ p|get_digit:1 }}", {"p": VALUES[key]})
         assert expected.startswith("<<EXC TypeError:"), expected
         assert _raised(got), got
-        assert "calls int() on its value" in got, got
+        # Django's own function since 2.0: the same TypeError crosses.
+        assert got.startswith("<<EXC TypeError:"), got
 
     def test_get_digit_over_a_datetime_now_raises_too(self) -> None:
         """**CLOSED by #2473**, and this pin read "is still the extraction
@@ -529,5 +530,6 @@ class TestTheResiduesThisPRDoesNotTouch:
         expected, got = _both("{{ p|get_digit:1 }}", {"p": VALUES["datetime"]})
         assert expected.startswith("<<EXC TypeError:"), expected
         assert _raised(got), got
-        assert "calls int() on its value" in got, got
+        # Django's own function since 2.0: the same TypeError crosses.
+        assert got.startswith("<<EXC TypeError:"), got
         assert "TypeError" in got, got

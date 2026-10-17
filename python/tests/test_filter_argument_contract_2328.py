@@ -326,7 +326,9 @@ class TestTheTwoPolicies:
     both arms must be independently reachable or one is decorative.
     """
 
-    RAISE = ["center", "ljust", "rjust", "wordwrap", "urlizetrunc", "divisibleby"]
+    # `wordwrap` and `urlizetrunc` left this list in 2.0: they run Django's own
+    # function, so a bad argument raises Django's `ValueError` itself.
+    RAISE = ["center", "ljust", "rjust", "divisibleby"]
     RETURN_INPUT = [
         "truncatechars",
         "truncatewords",
@@ -420,7 +422,9 @@ class TestIntSpellingsTheScatteredParsesRefused:
         this is the load-bearing half of `python_int_arg`.
         """
         assert _rust.render_template("{{ p|wordwrap:2.7 }}", {"p": "aa bb"}) == "aa\nbb"
-        with pytest.raises(RuntimeError, match="needs an integer argument"):
+        # `wordwrap` is Django's own function since 2.0: `int("2.7")` raises
+        # Django's ValueError, which crosses whole.
+        with pytest.raises(ValueError):
             _rust.render_template('{{ p|wordwrap:"2.7" }}', {"p": "aa bb"})
 
 
@@ -448,9 +452,9 @@ class TestErrorsSurfaceUsefully:
 
     def test_the_message_names_the_filter_and_the_argument(self) -> None:
         with pytest.raises(RuntimeError) as raised:
-            _rust.render_template('{{ p|wordwrap:"seventy" }}', {"p": "a b"})
+            _rust.render_template('{{ p|center:"seventy" }}', {"p": "a b"})
         message = str(raised.value)
-        assert "wordwrap" in message
+        assert "center" in message
         assert "seventy" in message
 
     def test_the_resolve_miss_message_names_the_identifier(self) -> None:
@@ -693,12 +697,9 @@ class TestChokepointIsTheOnlyParser:
             ("10", "BadArg::ReturnInput"),  # truncatewords
             ("20", "BadArg::ReturnInput"),  # truncatechars
             ("1", "BadArg::Raise"),  # divisibleby
-            ("75", "BadArg::Raise"),  # wordwrap
             ("0", "BadArg::Raise"),  # ljust
             ("0", "BadArg::Raise"),  # rjust
             ("0", "BadArg::Raise"),  # center
-            ("0", "BadArg::ReturnInput"),  # get_digit
-            ("0", "BadArg::Raise"),  # urlizetrunc
             ("20", "BadArg::ReturnInput"),  # truncatechars_html
             ("10", "BadArg::ReturnInput"),  # truncatewords_html
         ]
@@ -762,7 +763,8 @@ class TestChokepointIsTheOnlyParser:
         rather than written down.
         """
         arms = re.findall(self.CALL_SITE_RE, self.source())
-        assert len(arms) == 11, f"{len(arms)} dispatch arms reach the chokepoint"
+        # 8 since 2.0 routed `wordwrap`, `get_digit` and `urlizetrunc` to Django.
+        assert len(arms) == 8, f"{len(arms)} dispatch arms reach the chokepoint"
         # Plus `floatformat`, which reaches `filter_int_arg` directly from its
         # own module rather than through the macro.
         floatformat_rs = FILTERS_RS.with_name("floatformat.rs").read_text(encoding="utf-8")
@@ -862,7 +864,7 @@ class TestTheValueAxisIsUntouched:
     def test_a_parsed_width_of_zero_still_raises_for_its_own_reason(self) -> None:
         """`wordwrap:0` is `textwrap._wrap_chunks`'s guard, not `int()`'s, and
         the two must stay distinguishable in the message (#2293)."""
-        with pytest.raises(RuntimeError, match="invalid width 0"):
+        with pytest.raises(ValueError, match="invalid width 0"):
             _rust.render_template('{{ p|wordwrap:"0" }}', {"p": "a b"})
 
     def test_decimal_values_still_reach_the_filters(self) -> None:

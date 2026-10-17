@@ -129,11 +129,6 @@ pub(crate) fn py_is_space(c: char) -> bool {
     c.is_whitespace() || ('\u{1c}'..='\u{1f}').contains(&c)
 }
 
-/// Python's `\w` for `str` patterns: alphanumeric or underscore.
-fn py_is_word(c: char) -> bool {
-    c.is_alphanumeric() || c == '_'
-}
-
 /// `str.split()` with no argument: split on runs of whitespace, no empties.
 pub(crate) fn py_split_whitespace(s: &str) -> Vec<&str> {
     s.split(py_is_space).filter(|p| !p.is_empty()).collect()
@@ -446,49 +441,6 @@ pub fn html_words(text: &str, length: i64, truncate: Option<&str>) -> String {
 // ---------------------------------------------------------------------------
 // slugify / title / urlencode
 // ---------------------------------------------------------------------------
-
-/// `django.utils.text.slugify(value, allow_unicode=False)`.
-///
-/// Opens with `unicodedata.normalize("NFKD", …).encode("ascii", "ignore")`
-/// (#2319): decompose, then DROP every non-ASCII code point. That is what
-/// turns `café` into `cafe` — the accent becomes a separate combining mark
-/// which the ASCII filter then discards, leaving the bare `e`. Dropping the
-/// character outright without decomposing first (the faithful-minus-NFKD
-/// reading) would give `caf` and turn every non-English slug into rubble.
-///
-/// **NFKD, not NFD**: the COMPATIBILITY decomposition is what folds `ﬁ` to
-/// `fi` and `²` to `2`. A canonical-only implementation passes the accent
-/// cases and fails those.
-///
-/// Order matters and matches the reference: fold to ASCII FIRST, lowercase
-/// SECOND. Doing it the other way changes the answer for characters whose
-/// lowercase form is not ASCII even though their NFKD fold is.
-///
-/// Everything after the fold — delete anything outside `[\w\s-]`, collapse
-/// runs of `[-\s]` to one `-`, strip `-_` from both ends — was already exact:
-/// a `.` is *deleted*, never mapped to a separator.
-pub fn slugify(value: &str) -> String {
-    // `.encode("ascii", "ignore")` — after NFKD, keep only what survives the
-    // ASCII round trip.
-    let folded: String = value.nfkd().filter(char::is_ascii).collect();
-    let lowered = folded.to_lowercase();
-    let mut out = String::with_capacity(lowered.len());
-    let mut prev_sep = false;
-    for c in lowered.chars() {
-        if c == '-' || py_is_space(c) {
-            if !prev_sep {
-                out.push('-');
-                prev_sep = true;
-            }
-        } else if py_is_word(c) {
-            out.push(c);
-            prev_sep = false;
-        }
-        // Anything else is deleted, and deleting it does NOT break a run:
-        // `re.sub` removes it before the collapse pass ever sees the string.
-    }
-    out.trim_matches(|c| c == '-' || c == '_').to_string()
-}
 
 /// The 135 codepoints where Python's titlecase mapping
 /// (`_PyUnicode_ToTitleFull`) differs from `char::to_uppercase`.
@@ -1468,15 +1420,6 @@ mod tests {
         assert_eq!(html_words("{'a': 1}", 2, Some(" …")), "{&#x27;a&#x27;: 1}");
     }
 
-    #[test]
-    fn slugify_deletes_rather_than_separates() {
-        assert_eq!(slugify("3.5"), "35");
-        assert_eq!(slugify("<b>x</b>"), "bxb");
-        assert_eq!(slugify("-1.5e+300"), "15e300");
-        assert_eq!(slugify("  hello   world  "), "hello-world");
-        assert_eq!(slugify("_a_"), "a");
-    }
-
     // -----------------------------------------------------------------------
     // #2319 — NFC, the combining skip, and the NFKD fold
     //
@@ -1485,22 +1428,6 @@ mod tests {
     // disk by editors and agent file-writers, which is exactly the
     // transformation under test.
     // -----------------------------------------------------------------------
-
-    #[test]
-    fn slugify_folds_nfkd_to_ascii() {
-        // Decomposed and precomposed spellings must give the same slug.
-        assert_eq!(slugify("cafe\u{301}"), "cafe");
-        assert_eq!(slugify("caf\u{e9}"), "cafe");
-        assert_eq!(slugify("u\u{308}ber"), "uber");
-        // NFKD is a COMPATIBILITY decomposition: a canonical-only (NFD)
-        // implementation passes the accent cases above and fails these.
-        assert_eq!(slugify("\u{fb01}n"), "fin");
-        assert_eq!(slugify("x\u{b2}"), "x2");
-        // No ASCII fold exists, so everything drops rather than surviving.
-        assert_eq!(slugify("\u{4e2d}\u{6587}"), "");
-        // The fold runs BEFORE lowercasing, matching the reference's order.
-        assert_eq!(slugify("\u{c9}"), "e");
-    }
 
     #[test]
     fn text_chars_normalizes_nfc_unconditionally() {

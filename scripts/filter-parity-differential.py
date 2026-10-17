@@ -2609,10 +2609,9 @@ def _required_chain_filters() -> dict[str, str]:
 def _required_whitespace() -> dict[str, str]:
     """Every character the engine's own whitespace predicates branch on."""
     out = {}
-    for module, predicate in (
-        ("pprint", "py_is_line_break"),
-        ("textwrap", "is_textwrap_space"),
-    ):
+    # `textwrap.rs::is_textwrap_space` was a second entry until 2.0 routed
+    # `wordwrap` to Django's own `textwrap`, which removed the module.
+    for module, predicate in (("pprint", "py_is_line_break"),):
         for char in _rust_char_set(module, predicate):
             out.setdefault(f"U+{ord(char):04X}", f"{module}.rs::{predicate}")
     # `truncate::py_is_space` is a RANGE, not a literal set, so it cannot be

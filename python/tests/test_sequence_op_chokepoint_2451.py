@@ -666,13 +666,14 @@ class TestOneChokepointAnswersWhichExceptionPythonRaises:
     def test_the_constructor_is_reached_from_every_arm_that_can_refuse(self) -> None:
         """The COUNT, so an arm that grows a bespoke `Err` is visible.
 
-        Seven filters and eight call sites: `first`, `last`, the three
+        Six filters and seven call sites: `first`, `last`, the two native
         iterators and `phone2numeric` have one each, and `random` has two —
-        one for the subscript and one for the missing `len()`.
+        one for the subscript and one for the missing `len()`. (The third
+        iterator, `unordered_list`, is Django's own function since 2.0.)
         """
         source = production(FILTERS_RS)
         arm = source.split("fn apply_builtin_filter", 1)[1].split("\n}\n", 1)[0]
-        assert arm.count("value_op_error(") == 8, arm.count("value_op_error(")
+        assert arm.count("value_op_error(") == 7, arm.count("value_op_error(")
 
     def test_the_pin_goes_red_when_an_arm_stops_using_the_constructor(self) -> None:
         """Canary, direction one: a bespoke ``Err`` in every arm."""
@@ -793,10 +794,10 @@ class TestTheResidueThisDoesNotTouch:
         with pytest.raises(TypeError):
             DjangoTemplate('{{ p|get_digit:"1" }}').render(DjangoContext({"p": value}))
         for context in (normalize_django_value({"p": value}), {"p": value}):
-            with pytest.raises(RuntimeError) as exc:
+            # `get_digit` is Django's own function since 2.0: the TypeError
+            # itself crosses.
+            with pytest.raises(TypeError):
                 _rust.render_template('{{ p|get_digit:"1" }}', context)
-            assert "TypeError" in str(exc.value), str(exc.value)
-            assert "calls int() on its value" in str(exc.value), str(exc.value)
             # The control: both paths carry the real Python type, which is what
             # #2448 established for the raw path and #2467 for the normalized
             # one. Without this the reason above is prose again.
