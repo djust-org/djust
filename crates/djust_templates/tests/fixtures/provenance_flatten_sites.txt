@@ -129,7 +129,6 @@ ctx_value.to_string()
 ctx_value.to_string()
 format!(
 output.push_str(&filters::html_escape_attr(&format!(
-Node::RustComponent { name, .. } => Err(DjangoRustError::TemplateError(format!(
 .map(|v| v.to_string())
 Ok((format!(
 .into())
@@ -180,23 +179,6 @@ Ok((html).into())
 Ok((String::new()).into())
 Ok((html).into())
 Ok((html).into())
-DjangoRustError::TemplateError(format!("Failed to render RustButton: {e}"))
-DjangoRustError::TemplateError(format!("Failed to render RustInput: {e}"))
-DjangoRustError::TemplateError(format!("Failed to render RustText: {e}"))
-DjangoRustError::TemplateError(format!("Failed to render RustCard: {e}"))
-DjangoRustError::TemplateError(format!("Failed to render RustAlert: {e}"))
-DjangoRustError::TemplateError(format!("Failed to render RustModal: {e}"))
-label: label.to_string(),
-value: value.to_string(),
-DjangoRustError::TemplateError(format!("Failed to render RustDropdown: {e}"))
-id: tab_id.to_string(),
-label: label.to_string(),
-content: content.to_string(),
-DjangoRustError::TemplateError(format!("Failed to render RustTabs: {e}"))
-_ => Err(DjangoRustError::TemplateError(format!(
-return Ok(ctx_value.to_string());
-return Ok(ctx_value.to_string());
-Err(DjangoRustError::TemplateError(format!(
 .replace(&format!("\\{quote}"), &quote.to_string())
 .replace(&format!("\\{quote}"), &quote.to_string())
 Some(format!("{sign}{body}"))
