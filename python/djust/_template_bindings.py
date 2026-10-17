@@ -73,7 +73,7 @@ class Directive:
     #: ``call``: ``name`` or ``name(args)``; ``raw``: the whole value is the
     #: event name; ``shortcut``: ``[mod+]key:name[:prevent]`` entries.
     grammar: str
-    #: ``element``: data-*, dj-params and dj-value-* of the element (legacy);
+    #: ``element``: data-* and dj-value-* of the element (legacy);
     #: ``field``: the triggering form field; ``form``: the form's fields;
     #: ``fixed``: only ``generated``.
     payload: str
@@ -155,7 +155,6 @@ NON_EVENT_ATTRIBUTES = frozenset(
         "dj-no-recover",
         "dj-no-submit",
         "dj-offline-hide",
-        "dj-params",
         "dj-paste-suppress",
         "dj-patch",
         "dj-patch-reload",
@@ -703,7 +702,7 @@ def _literal(value: str) -> Optional[str]:
 
 
 def _element_payload(element: Element, payload: Payload) -> None:
-    """data-*, dj-params and dj-value-* of one element (extractTypedParams)."""
+    """data-* and dj-value-* of one element (extractTypedParams)."""
     legacy = payload.legacy
     for attribute, value in element.attrs:
         parsed = _data_key(attribute)
@@ -714,24 +713,6 @@ def _element_payload(element: Element, payload: Payload) -> None:
         if key in legacy:
             payload.legacy_duplicates.append((legacy[key][0], attribute, key))
         legacy[key] = (attribute, _literal(value), hint)
-    params = element.attr("dj-params")
-    if params is not None:
-        if is_dynamic(params):
-            payload.legacy_complete = False
-        elif params.strip():
-            try:
-                parsed_params = json.loads(params)
-            except ValueError:
-                parsed_params = None
-            if isinstance(parsed_params, dict):
-                for key in parsed_params:
-                    if key in _UNSAFE_KEYS:
-                        continue
-                    if key in legacy:
-                        payload.legacy_duplicates.append((legacy[key][0], "dj-params", key))
-                        continue
-                    literal = parsed_params[key]
-                    legacy[key] = ("dj-params", literal if isinstance(literal, str) else None, None)
     _value_payload(element, payload, into_legacy=True)
 
 
