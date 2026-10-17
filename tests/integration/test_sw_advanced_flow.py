@@ -87,7 +87,6 @@ class _FakeConsumer(LiveViewConsumer):
         self.channel_name = "integration-channel"
         self.use_actors = False
         self.actor_handle = None
-        self._debug_panel_active = False
         # Wire-version + rate-limiter attrs the runtime mount path reads (#1919
         # THE MOUNT FLIP: handle_mount is now a thin shim over
         # ViewRuntime.dispatch_mount, constructed in _get_runtime with
