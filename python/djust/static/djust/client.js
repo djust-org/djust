@@ -2794,6 +2794,14 @@ class LiveViewSSE {
                 }
                 break;
 
+            case 'layout':
+                // Runtime layout switch (set_layout). The server sends it from the
+                // shared turn end, on this transport too.
+                if (window.djust.djLayout && typeof window.djust.djLayout.applyLayout === 'function') {
+                    window.djust.djLayout.applyLayout(data);
+                }
+                break;
+
             case 'reload':
                 window.location.reload();
                 break;
