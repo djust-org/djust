@@ -36,23 +36,17 @@ SECRET_KEY = "config-recovery-probe"
 INSTALLED_APPS = ["django.contrib.contenttypes", "django.contrib.auth", "djust"]
 DATABASES = {}
 LIVEVIEW_CONFIG = {
-    "virtual_keyed_ops": False,         # default True since 1.1.1 (ADR-026 iter 3)
     "loop_render_cache_enabled": False,  # default True  (shipped kill-switch)
-    "template_auto_call": False,         # default True
     "filter_bridge_warm": False,         # default True
 }
 """
 
 _REPORT = """
 from djust.config import config
-from djust import _rust
 import json
 print("PROBE" + json.dumps({
-    "virtual_keyed_ops": config.get("virtual_keyed_ops"),
     "loop_render_cache_enabled": config.get("loop_render_cache_enabled"),
-    "template_auto_call": config.get("template_auto_call"),
     "filter_bridge_warm": config.get("filter_bridge_warm"),
-    "rust_flag": _rust.virtual_keyed_ops_enabled(),
 }))
 """
 
@@ -83,20 +77,11 @@ import djust.config
 )
 
 EXPECTED = {
-    # False, because the probe sets it False and the DEFAULT is now True — so
-    # this key still distinguishes "settings were read" from "defaults kept".
-    # It briefly stopped doing so when iteration 3 flipped the default to True
-    # while the probe still said True: the two became indistinguishable and the
-    # gate-off went quiet on this key AND on rust_flag (pytest reported
-    # "Omitting 2 identical items"), losing the only end-to-end proof that the
-    # flag reaches Rust through real startup order.
-    "virtual_keyed_ops": False,
+    # Each False is the opposite of its default, so "settings were read" and
+    # "defaults kept" stay distinguishable. (virtual_keyed_ops and
+    # template_auto_call used to be probed here; 2.0 removed both keys.)
     "loop_render_cache_enabled": False,
-    "template_auto_call": False,
     "filter_bridge_warm": False,
-    # Follows virtual_keyed_ops: ready() applies config.get() to the Rust
-    # static unconditionally, so a False in settings must land as False here.
-    "rust_flag": False,
 }
 
 
@@ -180,9 +165,9 @@ def test_recovery_reloads_and_reports_when_the_import_time_load_failed():
     # False, not True: the DEFAULT is now True, so overriding to True would make
     # "recovered" and "kept the default" indistinguishable — the same tautology
     # the probe block at the top of this file warns about, recurring here.
-    with override_settings(LIVEVIEW_CONFIG={"virtual_keyed_ops": False}):
+    with override_settings(LIVEVIEW_CONFIG={"loop_render_cache_enabled": False}):
         assert cfg.ensure_settings_loaded() is True, "must report it recovered"
-    assert cfg.get("virtual_keyed_ops") is False, (
+    assert cfg.get("loop_render_cache_enabled") is False, (
         "recovery must have re-read settings; True would mean it kept _defaults"
     )
     assert cfg._settings_loaded is True
@@ -210,7 +195,7 @@ def test_ready_calls_the_recovery_before_anything_reads_config():
     recovery_at = code.index("ensure_settings_loaded")
     # Every config-dependent thing ready() goes on to do. Each must come after
     # the recovery, or it reads the stale singleton.
-    for reader in ("set_virtual_keyed_ops", "hot_reload_auto_enable", "_warm_filter_bridge"):
+    for reader in ("hot_reload_auto_enable", "_warm_filter_bridge"):
         assert reader in code, f"expected ready() to still perform {reader!r}"
         assert recovery_at < code.index(reader), (
             f"{reader} reads config BEFORE the recovery — it would see defaults"

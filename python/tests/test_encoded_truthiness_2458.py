@@ -427,20 +427,6 @@ class TestTheConvergenceDividend:
         assert self._raises_django(src, ctx), f"Django changed for {text!r}"
         assert self._raises_djust(src, ctx), text
 
-    def test_an_empty_sequence_under_legacy_display_is_falsy(self) -> None:
-        """`legacy_display` renders EVERY sequence as the literal `[List]`, so
-        the text rule could not tell `[]` from `['a']` and raised for both."""
-        _rust.set_django_value_repr(False)
-        try:
-            src = "{{ p|timesince:q }}"
-            assert not self._raises_django(src, {"p": self.NOON, "q": []})
-            assert not self._raises_djust(src, {"p": self.NOON, "q": []})
-            # Non-vacuity: the full list is truthy and is not a date.
-            assert self._raises_django(src, {"p": self.NOON, "q": ["a"]})
-            assert self._raises_djust(src, {"p": self.NOON, "q": ["a"]})
-        finally:
-            _rust.set_django_value_repr(True)
-
 
 class TestTheSinkHasExactlyTheCallersItClaims:
     """Grep the SINK, and pin the caller SET rather than a floor (#1125).

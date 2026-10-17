@@ -441,11 +441,9 @@ pub struct Context {
     /// sidecar is logically immutable after construction.
     raw_py_objects: Option<std::sync::Arc<HashMap<String, Py<PyAny>>>>,
     /// Django-parity auto-call of callables during sidecar `getattr`
-    /// resolution (ADR-024). Default `true`; the Python side wires
-    /// `LIVEVIEW_CONFIG["template_auto_call"]` through
-    /// `RustLiveView::set_template_auto_call` (mirroring the #1967
-    /// `loop_render_cache_enabled` flag plumbing). `false` restores the
-    /// pre-ADR plain-getattr walk (kill-switch).
+    /// resolution (ADR-024). Default `true`. Only the `auto_call` argument of
+    /// the plain `render_template*` entries and the actor component config
+    /// set it; `false` is the pre-ADR plain-getattr walk.
     auto_call: bool,
     /// Emit the `<!--dj-if-->` placeholder (#295) and the
     /// `<!--dj-if id="if-…"-->…<!--/dj-if-->` boundary pair (#1358/#1832)
