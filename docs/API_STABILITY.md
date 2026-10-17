@@ -58,12 +58,12 @@ document takes effect at **1.0.0**.
 The **public API** — the surface SemVer covers — is exactly the following:
 
 1. **Top-level package exports.** Every name in `djust.__init__.py`'s `__all__`
-   (63 symbols as of 2.0). `from djust import X` for any such `X` is a
+   (61 symbols as of 2.0). `from djust import X` for any such `X` is a
    supported, stable import.
 
 2. **The documented decorators.** Every name in `djust.decorators.__all__`
-   (22 names as of 2.0). These include the core decorators (`event_handler`,
-   `action`, `server_function`, `push_handler`, `permission_required`, `rate_limit`, `reactive`,
+   (21 names as of 2.0). These include the core decorators (`event_handler`,
+   `action`, `server_function`, `push_handler`, `permission_required`, `rate_limit`,
    `state`, `computed`, `debounce`, `throttle`, `optimistic`, `cache`,
    `client_state`, `background`, `on_mount`) and the
    introspection predicates `is_event_handler`, `is_action`,

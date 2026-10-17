@@ -802,78 +802,6 @@ def is_push_only(owner: Any, name: str, handler: Any = None) -> bool:
     return False
 
 
-class _ReactiveProperty:
-    """Descriptor for @reactive properties with __set_name__ validation (#1287).
-
-    Validates at class-definition time that the host class has an ``update()``
-    method, rather than silently no-opping at runtime when it doesn't.
-    """
-
-    def __init__(
-        self,
-        fget: Callable[[Any], Any],
-        fset: Optional[Callable[[Any, Any], None]] = None,
-    ) -> None:
-        self.fget = fget
-        self.fset = fset
-
-    def __set_name__(self, owner: type, name: str) -> None:
-        if not hasattr(owner, "update"):
-            raise TypeError(
-                f"@reactive property '{name}' on {owner.__name__} requires "
-                f"the host class to have an 'update()' method (typically "
-                f"inherited from LiveView)."
-            )
-
-    def __get__(self, obj: Any, objtype: Optional[type] = None) -> Any:
-        if obj is None:
-            return self
-        return self.fget(obj)
-
-    def __set__(self, obj: Any, value: Any) -> None:
-        if self.fset is None:
-            raise AttributeError("can't set attribute")
-        old_value = self.fget(obj)
-        self.fset(obj, value)
-        if old_value != value:
-            obj.update()
-
-    def setter(self, fset: Callable[[Any, Any], None]) -> "_ReactiveProperty":
-        return type(self)(self.fget, fset)
-
-
-def reactive(func: Callable[..., Any]) -> "_ReactiveProperty":
-    """
-    Create a reactive property that triggers re-render on change.
-
-    Usage::
-
-        class MyView(LiveView):
-            @reactive
-            def count(self):
-                return self._count
-
-            @count.setter
-            def count(self, value):
-                self._count = value
-
-    The host class must have an ``update()`` method (inherited from
-    ``LiveView``).  A ``TypeError`` is raised at class-definition time if
-    it doesn't, rather than silently no-opping at runtime.
-    """
-    internal_name = f"_{func.__name__}_reactive"
-
-    def _getter(self: Any) -> Any:
-        return getattr(self, internal_name, None)
-
-    def _setter(self: Any, value: Any) -> None:
-        setattr(self, internal_name, value)
-
-    prop = _ReactiveProperty(_getter, _setter)
-    prop.__doc__ = func.__doc__
-    return prop
-
-
 def computed(*deps: Any) -> Any:
     """
     Decorator to mark a method as a computed property.
@@ -1427,7 +1355,6 @@ __all__ = [
     "is_push_handler",
     "permission_required",
     "rate_limit",
-    "reactive",
     "state",
     "StateProperty",
     "computed",

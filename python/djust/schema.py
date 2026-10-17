@@ -999,15 +999,6 @@ DECORATORS: List[Dict[str, Any]] = [
         ],
     },
     {
-        "name": "@reactive",
-        "import": "from djust.decorators import reactive",
-        "description": "Create a reactive property that triggers re-render on change.",
-        "params": {},
-        "usage": [
-            "@reactive\ndef count(self):\n    return self._count",
-        ],
-    },
-    {
         "name": "state()",
         "import": "from djust.decorators import state",
         "description": "Descriptor for reactive state. Cleaner than setting attributes in mount(). "
