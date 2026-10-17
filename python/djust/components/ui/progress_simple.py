@@ -11,12 +11,7 @@ from django.utils.html import conditional_escape
 
 from djust.components.utils import safe_css_length
 
-try:
-    from djust._rust import RustProgress
-
-    _RUST_AVAILABLE = True
-except ImportError:
-    _RUST_AVAILABLE = False
+from djust._rust import RustProgress
 
 
 class Progress(Component):
@@ -45,7 +40,7 @@ class Progress(Component):
         '<div class="progress">...'
     """
 
-    _rust_impl_class = RustProgress if _RUST_AVAILABLE else None
+    _rust_impl_class = RustProgress
 
     template = """<div class="progress"{% if height %} style="height: {{ height }}"{% endif %}>
     <div class="progress-bar{% if striped %} progress-bar-striped{% endif %}{% if animated %} progress-bar-animated{% endif %} bg-{{ variant }}"

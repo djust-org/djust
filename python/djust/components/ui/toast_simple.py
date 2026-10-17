@@ -12,14 +12,7 @@ from django.utils.html import conditional_escape
 from typing import Any
 
 
-# Try to import Rust implementation
-try:
-    from djust._rust import RustToast  # type: ignore[attr-defined]
-
-    _RUST_AVAILABLE = True
-except (ImportError, AttributeError):
-    _RUST_AVAILABLE = False
-    RustToast = None  # type: ignore[assignment, misc]
+from djust._rust import RustToast
 
 
 class Toast(Component):
@@ -71,8 +64,8 @@ class Toast(Component):
         auto_hide = Toast("Info", "Will hide soon", variant="info", auto_hide=True)
     """
 
-    # Link to Rust implementation if available
-    _rust_impl_class = RustToast if _RUST_AVAILABLE else None
+    # The Rust implementation
+    _rust_impl_class = RustToast
 
     # Fallback: Hybrid rendering with template
     # Bootstrap 5 toast structure

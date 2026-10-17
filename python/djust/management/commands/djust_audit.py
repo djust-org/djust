@@ -270,7 +270,7 @@ def _audit_class(
     # Exposed state (always included — core security info)
     exposed_state = _extract_exposed_state(cls)
 
-    # Template variable sub-paths (optional, requires Rust extension)
+    # Template variable sub-paths (verbose only)
     template_vars = None
     if verbose:
         template_vars = _extract_vars(cls)
@@ -296,11 +296,8 @@ def _audit_class(
 
 
 def _extract_vars(cls: type) -> Optional[Any]:
-    """Try to extract template variables using the Rust extension."""
-    try:
-        from djust._rust import extract_template_variables
-    except ImportError:
-        return None
+    """Extract template variables using the Rust extension."""
+    from djust._rust import extract_template_variables
 
     template_name = getattr(cls, "template_name", None)
     if not template_name:
@@ -345,7 +342,7 @@ class Command(BaseCommand):
         parser.add_argument(
             "--verbose",
             action="store_true",
-            help="Include template variable sub-paths for exposed state (requires Rust extension)",
+            help="Include template variable sub-paths for exposed state",
         )
         parser.add_argument(
             "--permissions",
@@ -883,17 +880,14 @@ class Command(BaseCommand):
         audits: list[Any] = []
 
         # Discover LiveViews
-        try:
-            from djust.live_view import LiveView
+        from djust.live_view import LiveView
 
-            for cls in _walk_subclasses(LiveView):
-                if not _is_user_class(cls):
-                    continue
-                if app_label and _app_label_for_class(cls) != app_label:
-                    continue
-                audits.append(_audit_class(cls, "LiveView", verbose, base_classes=[LiveView]))
-        except ImportError:
-            pass  # LiveView not available (Rust extension not built)
+        for cls in _walk_subclasses(LiveView):
+            if not _is_user_class(cls):
+                continue
+            if app_label and _app_label_for_class(cls) != app_label:
+                continue
+            audits.append(_audit_class(cls, "LiveView", verbose, base_classes=[LiveView]))
 
         # Discover LiveComponents
         try:

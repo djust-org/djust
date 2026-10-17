@@ -25,7 +25,7 @@ from __future__ import annotations
 import djust  # noqa: F401
 
 from djust._rust import render_template
-from djust.template_tags.markdown import MarkdownTagHandler
+from djust.template_tags.markdown import MarkdownTagHandler  # noqa: F401 — registers {% markdown %}
 
 
 def test_tag_basic_render():
@@ -112,25 +112,3 @@ def test_tag_streaming_append_sequence():
         out_prev = head
         # Paragraph for 'hello world' always present.
         assert "<p>hello world</p>" in out
-
-
-def test_tag_import_error_fallback(monkeypatch):
-    """If djust._rust.render_markdown is unavailable, the handler falls
-    back to Django's escape() — the page still renders, just without
-    Markdown formatting.
-    """
-    # Delete the attribute so `from djust._rust import render_markdown`
-    # raises ImportError, exercising the fallback branch.
-    monkeypatch.delattr(
-        "djust._rust.render_markdown",
-        raising=False,
-    )
-
-    handler = MarkdownTagHandler()
-    out = handler.render(
-        ["body"],
-        {"body": "<script>alert(1)</script>"},
-    )
-    assert out == "&lt;script&gt;alert(1)&lt;/script&gt;", (
-        "fallback path must Django-escape the source, got: %r" % out
-    )

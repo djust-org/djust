@@ -12,14 +12,7 @@ from django.utils.html import conditional_escape
 from typing import Any
 
 
-# Try to import Rust implementation (will be added later)
-try:
-    from djust._rust import RustButton  # type: ignore[attr-defined]
-
-    _RUST_AVAILABLE = True
-except (ImportError, AttributeError):
-    _RUST_AVAILABLE = False
-    RustButton = None  # type: ignore[assignment, misc]
+from djust._rust import RustButton
 
 
 class Button(Component):
@@ -80,8 +73,8 @@ class Button(Component):
         disabled = Button("Disabled", disabled=True)
     """
 
-    # Link to Rust implementation if available
-    _rust_impl_class = RustButton if _RUST_AVAILABLE else None
+    # The Rust implementation
+    _rust_impl_class = RustButton
 
     # Fallback: Hybrid rendering with template
     # Note: Avoiding elif due to Rust template engine bug - using separate if blocks instead
