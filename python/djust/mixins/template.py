@@ -615,42 +615,20 @@ class TemplateMixin:
                 )
 
                 # --- Resolve template inheritance in Rust ---
-                # This is the ONLY step that legitimately needs the raw-template
-                # fallback (a template that genuinely can't be resolved as a
-                # standalone inheritance document). It is scoped to a tight
-                # try/except that LOGS at WARNING so a resolution error can never
-                # again silently degrade an ``{% extends %}`` page to
-                # fragment-only without a trace (#1801). Post-resolution work
-                # (VDOM extraction / whitespace strip) is OUTSIDE this try — if
-                # that raises it is an unexpected framework bug that must surface,
-                # not be swallowed.
-                try:
-                    from djust._rust import resolve_template_inheritance
+                # A resolution error RAISES (2.0). Before, it logged a warning
+                # and served the dj-root fragment WITHOUT the base template's
+                # <head> (#1801), which hid a misconfigured template dir behind
+                # a page that half-worked.
+                from djust._rust import resolve_template_inheritance
 
+                try:
                     resolved = resolve_template_inheritance(self.template_name, template_dirs_str)
                 except Exception as e:
-                    logger.warning(
-                        "[LiveView] Template inheritance resolution failed for %s "
-                        "(searched %d dirs); falling back to raw template source — "
-                        "the initial HTTP GET will render the dj-root fragment "
-                        "WITHOUT the base template <head> (#1801). Error: %s",
-                        self.template_name,
-                        len(template_dirs_str),
-                        e,
-                    )
-                    # Set to None so render_full_template won't try to render a
-                    # template that contains {% extends %} tags as a standalone
-                    # document.
-                    self._full_template = None
-                    extracted = self._extract_liveview_root_with_wrapper(template_source)
-                    extracted = self._normalize_source_for_render(extracted)
-
-                    logger.debug(
-                        "[LiveView] Extracted and stripped liveview-root: %d chars (from %d chars)",
-                        len(extracted),
-                        len(template_source),
-                    )
-                    return extracted
+                    raise RuntimeError(
+                        f"djust could not resolve template inheritance for "
+                        f"{self.template_name!r} (searched {len(template_dirs_str)} template "
+                        f"dirs: {template_dirs_str}): {e}"
+                    ) from e
 
                 # Verify Rust found the same template as Django
                 if django_resolved_path:
