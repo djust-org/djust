@@ -2,7 +2,8 @@
 
 Verifies:
 - Default is True.
-- ``DJUST_WS_COMPRESSION`` Django setting overrides it.
+- ``LIVEVIEW_CONFIG['websocket_compression']`` overrides it (the flat
+  ``DJUST_WS_COMPRESSION`` alias was removed in 2.0).
 - The value reaches the injected client script as a
   ``window.DJUST_WS_COMPRESSION`` literal.
 """
@@ -19,7 +20,7 @@ def _reset_djust_config():
 
     These tests re-read settings into the singleton via ``config.reset()``
     inside an ``override_settings`` block; this fixture re-reads the
-    *restored* settings afterwards so a ``DJUST_WS_COMPRESSION`` override
+    *restored* settings afterwards so a ``websocket_compression`` override
     does not leak into later tests via the singleton's ``_config``.
     """
     yield
@@ -53,29 +54,16 @@ def test_default_is_true():
     assert config.get("websocket_compression") is True
 
 
-@override_settings(DJUST_WS_COMPRESSION=False)
+@override_settings(LIVEVIEW_CONFIG={"websocket_compression": False})
 def test_setting_overrides_to_false():
     config = _fresh_config()
     assert config.get("websocket_compression") is False
 
 
-@override_settings(DJUST_WS_COMPRESSION=True)
+@override_settings(LIVEVIEW_CONFIG={"websocket_compression": True})
 def test_explicit_true_setting_is_preserved():
     config = _fresh_config()
     assert config.get("websocket_compression") is True
-
-
-@override_settings(DJUST_WS_COMPRESSION=1)
-def test_truthy_non_bool_coerced():
-    """Accepts truthy non-bool (e.g. int 1) and coerces to bool."""
-    config = _fresh_config()
-    assert config.get("websocket_compression") is True
-
-
-@override_settings(DJUST_WS_COMPRESSION=0)
-def test_falsy_non_bool_coerced():
-    config = _fresh_config()
-    assert config.get("websocket_compression") is False
 
 
 def test_injected_script_emits_ws_compression_literal():

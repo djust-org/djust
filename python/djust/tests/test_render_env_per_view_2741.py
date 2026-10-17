@@ -258,13 +258,13 @@ def test_the_mixin_captures_the_env_it_pushed():
 
 
 def test_the_component_entry_captures_too():
-    """The `template_name` LiveComponent entry wires the env beside the
-    auto-call flag it already wires (components/base.py)."""
+    """The `template_name` LiveComponent entry captures the env too
+    (components/base.py)."""
     src = Path(__file__).resolve().parents[1] / "components" / "base.py"
     body = src.read_text()
     fn = body[body.index("def _render_template_name_with_markers") :]
     fn = fn[: fn.index("\nclass ")]
-    assert "set_template_auto_call(" in fn and "capture_render_env()" in fn
+    assert "capture_render_env()" in fn
 
 
 # ---------------------------------------------------------------------------

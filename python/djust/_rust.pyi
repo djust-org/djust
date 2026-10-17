@@ -43,8 +43,8 @@ def render_template(
         context: Template context variables as a dictionary
         auto_call: Django-parity auto-call of callables reached through the
             sidecar (ADR-024). ``None`` means ON, which is Django's behaviour;
-            ``DjustTemplate.render`` passes the project's
-            ``LIVEVIEW_CONFIG['template_auto_call']``.
+            djust's own render paths always pass ON (the
+            ``template_auto_call`` kill switch was removed in 2.0).
         string_if_invalid: Django's ``Engine.string_if_invalid`` — what a
             MISSING variable renders. ``None``/absent means the empty string
             (render nothing). A non-empty value also SKIPS the filter chain,
@@ -476,8 +476,8 @@ def set_virtual_keyed_ops(enabled: bool) -> None:
     """Enable/disable `[dj-virtual]` keyed splice ops in the differ (ADR-026).
 
     Process-global, unlike the per-view `set_loop_render_cache_enabled`.
-    Django applies it once at startup from
-    `LIVEVIEW_CONFIG['virtual_keyed_ops']`; see `DjustConfig.ready`.
+    `DjustConfig.ready` sets it on at startup (the `virtual_keyed_ops` kill
+    switch was removed in 2.0).
     """
 
 def virtual_keyed_ops_enabled() -> bool:
@@ -489,8 +489,8 @@ def set_django_value_repr(enabled: bool) -> None:
     When True (the default), `{{ }}` renders values as Python's `str()` does:
     `True`, `None`, `1.0`, `[1, 2]`, `{'a': 1}`, `(1, 2)`. Process-global, for
     the same reason as `set_virtual_keyed_ops` — `impl Display for Value` has
-    nowhere to thread per-render config. Django applies it once at startup from
-    `LIVEVIEW_CONFIG['django_value_repr']`; see `DjustConfig.ready`.
+    nowhere to thread per-render config. `DjustConfig.ready` sets it on at
+    startup (the `django_value_repr` kill switch was removed in 2.0).
     """
 
 def django_value_repr_enabled() -> bool:

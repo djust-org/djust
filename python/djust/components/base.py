@@ -62,7 +62,6 @@ def _render_template_with_fallback(template_str: str, context: Dict[str, Any]) -
     try:
         from djust._rust import render_template
 
-        from ..config import template_auto_call_enabled
         from ..render_env import apply_render_env_once
 
         # The FOURTH framework render entry, and it was the one missing from
@@ -77,9 +76,7 @@ def _render_template_with_fallback(template_str: str, context: Dict[str, Any]) -
         # every thread-local correctly. See that function for what the first
         # push still buys and what the sentinel deliberately does not cover.
         apply_render_env_once()
-        # A framework render path, so the project's auto-call setting governs
-        # rather than the Rust entry point's Django-matching default (#2508).
-        return render_template(template_str, context, template_auto_call_enabled())
+        return render_template(template_str, context)
     except (ImportError, AttributeError, RuntimeError):
         # Rust not available or template error, fall back to Django templates
         from django.template import Context, Template
@@ -148,7 +145,6 @@ def _render_template_name_with_markers(
         return None
     if source is None or "{% extends" in source:
         return None
-    from ..config import template_auto_call_enabled
     from ..mixins.rust_bridge import _collect_safe_keys
     from ..render_env import apply_render_env_once
     from ..serialization import build_render_sidecar, normalize_django_value
@@ -156,10 +152,8 @@ def _render_template_name_with_markers(
 
     apply_render_env_once()
     rust_view = RustLiveView(source, get_template_dirs())
-    if hasattr(rust_view, "set_template_auto_call"):
-        rust_view.set_template_auto_call(template_auto_call_enabled())
-    # ADR-029 (#2741): snapshot the pushed environment onto this view, beside
-    # the auto-call flag, so every render entry applies it on any thread.
+    # ADR-029 (#2741): snapshot the pushed environment onto this view, so
+    # every render entry applies it on any thread.
     if hasattr(rust_view, "capture_render_env"):
         rust_view.capture_render_env()
     # #2686: give this instance its own dj-if id namespace, so two instances of

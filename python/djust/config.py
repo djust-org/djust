@@ -18,12 +18,7 @@ from typing import Any, ClassVar, Dict, Optional, Tuple
 logger = logging.getLogger(__name__)
 
 #: Flat ``DJUST_*`` settings aliasing keys of the ``service_worker`` dict.
-_SERVICE_WORKER_ALIASES = (
-    ("DJUST_VDOM_CACHE_ENABLED", "vdom_cache_enabled", bool),
-    ("DJUST_VDOM_CACHE_TTL_SECONDS", "vdom_cache_ttl_seconds", int),
-    ("DJUST_VDOM_CACHE_MAX_ENTRIES", "vdom_cache_max_entries", int),
-    ("DJUST_STATE_SNAPSHOT_ENABLED", "state_snapshot_enabled", bool),
-)
+_SERVICE_WORKER_ALIASES = (("DJUST_STATE_SNAPSHOT_ENABLED", "state_snapshot_enabled", bool),)
 
 
 def _detached(value: Any) -> Any:
@@ -127,8 +122,7 @@ class LiveViewConfig:
         # JSON.stringify optimization that only helps without the
         # wire-level compress). Costs ~64 KB of zlib context per open
         # connection — disable on extreme-connection-density
-        # deployments (100k+/worker). Override via
-        # settings.DJUST_WS_COMPRESSION.
+        # deployments (100k+/worker).
         "websocket_compression": True,
         # Debug settings
         "debug_vdom": False,  # Enable detailed VDOM patching debug logs
@@ -210,8 +204,7 @@ class LiveViewConfig:
         "jit_debug": False,  # Debug logging for JIT serialization
         # jit_cache_backend / jit_cache_dir / jit_redis_url and
         # debug_components / component_wrapper_class / component_loading_class
-        # were removed in 1.3 (#2984): nothing read them. djust.C018 warns when
-        # one is still set.
+        # were removed in 1.3 (#2984): nothing read them.
         "serialization_max_depth": 3,  # Max depth for nested model serialization (e.g., lease.tenant.user = 3 levels)
         # Serialization behavior (issue #292)
         # When False (default): non-serializable values are converted via str() fallback with a warning log
@@ -234,76 +227,9 @@ class LiveViewConfig:
         # after a streak of low-hit renders (#3071; see
         # RustBridgeMixin._LOOP_CACHE_BYPASS_AFTER).
         "loop_render_cache_enabled": True,
-        # `[dj-virtual]` keyed splice ops in the VDOM differ (ADR-026, #2017
-        # items 2-4). A windowed list holds off-window rows DETACHED, so the
-        # index-addressed ops the differ normally emits are meaningless for it:
-        # index 7 means "the 8th item" to the differ and "the 8th VISIBLE item"
-        # to the DOM. These ops address items by KEY instead, so an insert in
-        # the middle, a removal, or an update to an off-window row all land
-        # correctly instead of at the tail.
-        #
-        # Wired to the process-global Rust switch once at startup by
-        # `DjustConfig.ready()` — it is not per-view state.
-        #
-        # ADR-026 iteration 3: default ON since 1.1.0.
-        #
-        # Gated on real browser evidence (ROADMAP), and the A/B that finally
-        # produced it needed BOTH #2185 and #2194 fixed first — until then the
-        # list was intermittently never initialised, so the control arm was as
-        # broken as the test arm and no comparison meant anything. Measured on
-        # a healthy, initialised [dj-virtual] list, same start state, flag the
-        # only variable:
-        #
-        #                              OFF                       ON
-        #   insert at position 5   pool index 60 (tail)      pool index 5
-        #   remove at 3            size unchanged, k3 kept   k3 gone, no dupes
-        #   reverse                not reordered             exact reversal
-        #   edit a scrolled row    correct                   correct
-        #
-        # So OFF is broken for every mid-list structural mutation on a windowed
-        # list, and ON fixes all three without regressing the one case OFF got
-        # right. 0 console errors, no VirtualInsert/Move/Remove warnings.
-        #
-        # Scope: the ops are emitted ONLY for a container carrying `dj-virtual`
-        # (`emits_virtual_ops` in crates/djust_vdom/src/diff.rs), so a project
-        # that does not use dj-virtual sees no wire change at all.
-        #
-        # Version skew: a cached PRE-1.1.0 client bundle talking to a 1.1.0+
-        # server receives Virtual* ops its applier does not know. That degrades
-        # to the existing patch-failure path — the client requests recovery HTML
-        # and morphs — rather than breaking. Set this to False to opt out.
-        "virtual_keyed_ops": True,
-        # Django-parity value rendering (#2203). When True (default), a value
-        # interpolated with `{{ }}` renders as Python's `str()` does — which is
-        # what Django does:
-        #
-        #     {{ flag }}   -> True      (was: true)
-        #     {{ none }}   -> None      (was: empty; an ABSENT variable still
-        #                                renders empty, as Django's
-        #                                string_if_invalid does)
-        #     {{ 1.0 }}    -> 1.0       (was: 1)
-        #     {{ [1, 2] }} -> [1, 2]    (was: the placeholder [List])
-        #     {{ {'a':1} }}-> {'a': 1}  (was: the placeholder [Object])
-        #     {{ (1, 2) }} -> (1, 2)    (was: [List])
-        #
-        # This is not only cosmetic: `Display` is the lookup key for
-        # `{% if x in some_dict %}`, so `{% if True in d %}` used to MISS where
-        # Django hits.
-        #
-        # Set to False if a template interpolates a bool directly into a script
-        # block — `var f = {{ flag }};` renders valid JS today and becomes a
-        # ReferenceError under Django semantics. Django has the same hazard; its
-        # answers are `|yesno:"true,false"` and `{{ data|json_script:"id" }}`,
-        # and those work here too.
-        "django_value_repr": True,
-        # Django-parity template auto-call (ADR-024). When True (default),
-        # the Rust engine's sidecar getattr walk invokes callables exactly
-        # like Django's Variable._resolve_lookup ({{ user.get_full_name }},
-        # {{ workspace.memberships.count }}), honoring
-        # do_not_call_in_templates and refusing alters_data. False restores
-        # the pre-ADR plain-getattr behavior — a kill-switch only, not a
-        # feature toggle (candidate for removal at 2.0).
-        "template_auto_call": True,
+        # `virtual_keyed_ops`, `django_value_repr` and `template_auto_call`
+        # were kill switches that defaulted ON; 2.0 hard-wired all three and
+        # removed the keys (see `djust._removed_settings`).
         # #1987: TYPE-based serialization floor (defense-in-depth over the
         # name/method floor). A list of Django field CLASS names (matched
         # anywhere in a field's MRO) to always exclude from client-bound
@@ -395,9 +321,7 @@ class LiveViewConfig:
             "reconnect_buffer_cap": 50,  # max buffered WS messages per connection id
             # VDOM patch cache (v0.6.0) — per-URL HTML snapshots served
             # instantly on popstate, then reconciled against the live
-            # WebSocket mount reply. Top-level setting aliases are
-            # ``DJUST_VDOM_CACHE_ENABLED`` / ``DJUST_VDOM_CACHE_TTL_SECONDS``
-            # / ``DJUST_VDOM_CACHE_MAX_ENTRIES``.
+            # WebSocket mount reply.
             "vdom_cache_enabled": True,
             "vdom_cache_ttl_seconds": 1800,  # 30 minutes
             "vdom_cache_max_entries": 50,
@@ -494,19 +418,10 @@ class LiveViewConfig:
                             "DJUST_CONFIG (its documented home is LIVEVIEW_CONFIG)",
                             key,
                         )
-            # Top-level flat ``DJUST_*`` settings — convenience aliases for a few
-            # specific nested keys, for discoverability of operator-facing
-            # toggles. (The nested ``DJUST_CONFIG`` *dict* is handled just above,
-            # #1993 — these are the separate flat scalars.)
-            if hasattr(settings, "DJUST_WS_COMPRESSION"):
-                target["websocket_compression"] = bool(settings.DJUST_WS_COMPRESSION)
-                contrib["websocket_compression"] = target["websocket_compression"]
-            # Service-worker advanced features (v0.6.0) — top-level aliases
-            # for the ``service_worker`` nested dict. Modifying the nested
-            # dict directly also works; these aliases exist for operator
-            # discoverability and to match the
-            # ``DJUST_{VDOM_CACHE,STATE_SNAPSHOT}_*`` naming seen in the
-            # v0.6.0 release notes.
+            # ``DJUST_STATE_SNAPSHOT_ENABLED``, a top-level alias for the
+            # ``service_worker`` dict's ``state_snapshot_enabled``. The other
+            # flat ``DJUST_*`` aliases were removed in 2.0
+            # (``djust._removed_settings``).
             sw_cfg = target.setdefault("service_worker", {})
             for setting_name, key, cast in _SERVICE_WORKER_ALIASES:
                 if hasattr(settings, setting_name):
@@ -777,7 +692,7 @@ config = LiveViewConfig()
 #: helpers included (#3218), by ``test_config_follows_override_settings_3217``,
 #: which lists the reads that deliberately do not reload (``DEBUG``).
 _CONFIG_SETTINGS = frozenset(
-    {"LIVEVIEW_CONFIG", "DJUST_CONFIG", "DJUST_WS_COMPRESSION"}
+    {"LIVEVIEW_CONFIG", "DJUST_CONFIG"}
     | {setting_name for setting_name, _, _ in _SERVICE_WORKER_ALIASES}
 )
 
@@ -828,33 +743,3 @@ def get_djust_config() -> Dict[str, Any]:
         return result
     except Exception:
         return {}
-
-
-def template_auto_call_enabled() -> bool:
-    """Whether Django's nullary auto-call is enabled for this project (ADR-024).
-
-    The single reader of ``LIVEVIEW_CONFIG['template_auto_call']``. The Rust
-    entry points default the flag ON (Django's behaviour) for a caller that
-    reaches them directly; every FRAMEWORK render path must consult the
-    project's setting instead, and there are FOUR such paths:
-
-    - ``DjustTemplateBackend`` (``template/rendering.py``)
-    - ``SimpleLiveView.render_template`` (``simple_live_view.py``)
-    - ``Component._render_template_with_fallback`` (``components/base.py``)
-    - ``RustBridgeMixin._apply_template_auto_call_flag`` (``mixins/rust_bridge.py``)
-
-    Wiring the flag at one of them and reading it inline is what let the
-    others keep auto-calling in a project that had switched it off. The first
-    version of this docstring said "three", having enumerated the callers it
-    expected rather than grepping the sink — so the LiveView reader stayed
-    un-converged in the very change that cited #1646 to retire it (#2508
-    re-review). Any new render path belongs on this list and must call this.
-
-    A config read that raises must not take a render down, so it fails ON,
-    matching the Rust default.
-    """
-    try:
-        return bool(get_config().get("template_auto_call", True))
-    except Exception:  # pragma: no cover - defensive
-        logger.debug("[djust] template_auto_call flag read failed; defaulting ON")
-        return True

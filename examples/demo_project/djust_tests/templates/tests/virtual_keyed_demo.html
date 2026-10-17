@@ -15,8 +15,7 @@
     That A/B only became measurable once <b>#2185</b> and <b>#2194</b> were
     fixed: before them the list was intermittently never initialised, so both
     arms were really the OFF arm — which is how this feature accumulated four
-    withdrawn diagnoses. Opt out with
-    <code>LIVEVIEW_CONFIG['virtual_keyed_ops'] = False</code>.
+    withdrawn diagnoses. The ops are always on since djust 2.0.
   </p>
 
   <p id="log" style="font-family:monospace;background:#eee;padding:.5rem">{{ log }}</p>
