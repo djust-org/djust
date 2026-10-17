@@ -8212,9 +8212,10 @@ class ViewRuntime(RuntimeTurnPort):
     # (live #1646 instance INSIDE the convergence target). The methods
     # below + ``_flush_all_pending`` mirror WS ``_flush_all_pending`` exactly:
     # same queue set, same canonical drain order, same per-queue frame shape
-    # and ``_drain_*`` method names (including the defensively hasattr-guarded
-    # a11y hooks). The i18n flush went in #3502: nothing defined the
-    # ``_drain_i18n_commands`` it called. ``_flush_all_pending``
+    # and ``_drain_*`` method names. The i18n flush went in #3502 and the
+    # accessibility flush in 2.0 (#3500): nothing defined the
+    # ``_drain_i18n_commands`` / ``_drain_announcements`` / ``_drain_focus``
+    # they called. ``_flush_all_pending``
     # is the single source of the turn-end drain so a future queue addition
     # can never again be wired on one path and not the other.
     # ------------------------------------------------------------------ #
@@ -8285,31 +8286,6 @@ class ViewRuntime(RuntimeTurnPort):
             return
         await self.transport.send({"type": "layout", "path": layout_path, "html": layout_html})
 
-    async def _flush_accessibility(self) -> None:
-        """Drain queued screen-reader announcements + focus command (WS parity)."""
-        view = self.view_instance
-        if not view:
-            return
-        if hasattr(view, "_drain_announcements"):
-            try:
-                announcements = view._drain_announcements()
-                if announcements and isinstance(announcements, list):
-                    await self.transport.send(
-                        {"type": "accessibility", "announcements": announcements}
-                    )
-            except Exception:
-                logger.warning("Failed to flush accessibility announcements", exc_info=True)
-        if hasattr(view, "_drain_focus"):
-            try:
-                focus_cmd = view._drain_focus()
-                if focus_cmd and isinstance(focus_cmd, tuple) and len(focus_cmd) == 2:
-                    selector, options = focus_cmd
-                    await self.transport.send(
-                        {"type": "focus", "selector": selector, "options": options}
-                    )
-            except Exception:
-                logger.warning("Failed to flush focus command", exc_info=True)
-
     async def _flush_all_pending(self) -> None:
         """Drain every queued client side-effect at the end of a runtime turn,
         in WS's canonical order. Single source of truth for the turn-end drain
@@ -8319,7 +8295,7 @@ class ViewRuntime(RuntimeTurnPort):
         so calling twice in one turn is a harmless no-op.
 
         Order matches WS exactly: push_events → flash → page_metadata →
-        pending_layout → deferred → navigation → accessibility. Layout
+        pending_layout → deferred → navigation. Layout
         (replaces ``<body>``) goes after page_metadata so head mutations land
         first and survive the swap; deferred callbacks run after the visible
         side-effects so they observe post-patch state.
@@ -8330,7 +8306,6 @@ class ViewRuntime(RuntimeTurnPort):
         await self._flush_pending_layout()
         await self._flush_deferred()
         await self._flush_navigation()
-        await self._flush_accessibility()
 
     # ------------------------------------------------------------------ #
     # Background work (start_async / @background) — runtime parity (#1887).
