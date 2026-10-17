@@ -70,4 +70,3 @@ fn the_ordinary_shapes_are_unchanged() {
     assert_eq!(render(1e-5), "0.00001");
     assert_eq!(render(123456789.125), "123456789.125");
 }
-

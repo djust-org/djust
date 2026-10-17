@@ -136,4 +136,3 @@ fn a_user_dict_with_the_tag_name_but_a_second_key_is_still_a_dict() {
     let back: Value = rmp_serde::from_slice(&bytes).expect("decode");
     assert!(matches!(back, Value::Object(_)), "{back:?}");
 }
-

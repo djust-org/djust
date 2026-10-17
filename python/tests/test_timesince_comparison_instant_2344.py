@@ -447,6 +447,7 @@ class TestTheFalsinessResidueIsNamed:
         # assertions above and be wrong here.
         assert raises_django("{{ p|timesince:q }}", {"p": NOON, "q": ["a"]})
         assert raises_djust("{{ p|timesince:q }}", {"p": NOON, "q": ["a"]})
+
     def test_the_falsiness_question_is_answered_ONCE_and_value_typed(self) -> None:
         """Mechanical, and pointed at the mechanism that now answers (#1859: a
         pin that is not derived from the thing it pins is decorative).
