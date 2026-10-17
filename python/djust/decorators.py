@@ -13,7 +13,6 @@ from typing import Callable, Any, TypeVar, Union, cast, List, Optional, Literal,
 
 from asgiref.sync import iscoroutinefunction
 
-from ._deprecation import warn_deprecated
 from ._state import StateProperty as StateProperty
 from ._state import state as state
 from .change_detection import deep_fingerprint, fingerprints_by_content
@@ -186,8 +185,6 @@ def event_handler(
             "optional": ["value"],
             "coerce_types": True
         }
-
-    Note: The @event alias is deprecated. Use @event_handler directly.
     """
 
     if parameter_policy not in (None, "legacy", "strict"):
@@ -275,28 +272,6 @@ def event_handler(
 
     # Called as @event_handler() or @event_handler(params=..., description=...)
     return decorator
-
-
-# Shorter alias for event_handler (deprecated)
-def event(func: F) -> F:
-    """
-    Deprecated alias for @event_handler. Use @event_handler instead.
-
-    .. deprecated:: 0.3
-        ``@event`` is deprecated and will be removed no earlier than
-        djust 1.1.0. Use ``@event_handler`` instead.
-    """
-    warn_deprecated(
-        "@event",
-        since="0.3",
-        removed_in="1.1.0",
-        instead="@event_handler",
-        # stacklevel=3: warnings.warn -> warn_deprecated -> event -> user.
-        # Empirically verified (scratch sweep): 3 points the warning at the
-        # caller's file, not decorators.py.
-        stacklevel=3,
-    )
-    return event_handler(func)
 
 
 def is_event_handler(func: Any) -> bool:
@@ -1403,7 +1378,6 @@ from .hooks import on_mount  # noqa: E402 — re-export for public API
 
 __all__ = [
     "event_handler",
-    "event",
     "is_event_handler",
     "server_function",
     "is_server_function",
