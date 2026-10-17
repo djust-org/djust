@@ -17,11 +17,12 @@
 #                     `collectstatic` with MissingFileError (#2662). Load the
 #                     map manually in DevTools ("Add source map…") when needed.
 #
-# Same layout for debug-panel.js. Minification is skipped gracefully if
-# terser isn't installed, so contributors can still iterate on the raw
-# source modules without an npm install.
+# debug-panel.js is concatenated only: it is served solely under DEBUG, and
+# unminified. Minification is skipped gracefully if terser isn't installed,
+# so contributors can still iterate on the raw source modules without an npm
+# install.
 #
-# #2054: client.js / client.min.js (and their debug-panel.js equivalents) are
+# #2054: client.js / client.min.js (and debug-panel.js) are
 # committed to git — terser is npm-pinned via package-lock.json, so their
 # output is byte-identical across every contributor's machine. The .gz / .br
 # / .map siblings are gitignored, build-time-only artifacts: they are NOT
@@ -150,7 +151,9 @@ DEBUG_OUT="$STATIC_DIR/debug-panel.js"
 if [ -d "$DEBUG_SRC_DIR" ]; then
     cat "$DEBUG_SRC_DIR"/[0-9]*.js > "$DEBUG_OUT"
     echo "Built debug-panel.js from $(ls "$DEBUG_SRC_DIR"/[0-9]*.js | wc -l | tr -d ' ') modules ($(wc -c < "$DEBUG_OUT" | tr -d ' ') bytes)"
-    minify_and_compress "$DEBUG_OUT"
+    # Not minified: the panel is injected only under DEBUG, and always as the
+    # readable debug-panel.js (mixins/post_processing.py), so a .min.js would
+    # be shipped in every wheel and never served.
 fi
 
 # ---------------------------------------------------------------------------
