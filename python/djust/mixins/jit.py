@@ -111,28 +111,34 @@ class JITMixin:
             return self.template
 
         if hasattr(self, "template_name") and self.template_name:
-            # Try Rust template inheritance resolution first
+            # Rust template inheritance resolution. An error RAISES (2.0); it
+            # used to be swallowed, silently dropping JIT extraction to the
+            # single-file source below.
+            from djust._rust import resolve_template_inheritance
+
+            # Use the shared get_template_dirs() helper so JIT extraction
+            # resolves templates with the SAME search-dir collection (incl.
+            # djust's own backend under APP_DIRS) as get_template() and
+            # render_full_template — a hardcoded DjangoTemplates-only check
+            # here dropped app-template dirs under the djust backend, the
+            # same defect class as #1801 (#1646 parallel-path cure).
+            from ..utils import get_template_dirs
+
+            template_dirs = get_template_dirs()
+
             try:
-                from djust._rust import resolve_template_inheritance
-
-                # Use the shared get_template_dirs() helper so JIT extraction
-                # resolves templates with the SAME search-dir collection (incl.
-                # djust's own backend under APP_DIRS) as get_template() and
-                # render_full_template — a hardcoded DjangoTemplates-only check
-                # here dropped app-template dirs under the djust backend, the
-                # same defect class as #1801 (#1646 parallel-path cure).
-                from ..utils import get_template_dirs
-
-                template_dirs = get_template_dirs()
-
                 resolved = resolve_template_inheritance(self.template_name, template_dirs)
-                if resolved:
-                    # Also inline {% include %} directives so variable extraction
-                    # discovers variables used in included templates
-                    resolved = self._inline_includes(resolved, template_dirs)
-                    return resolved
-            except Exception:
-                pass  # Rust resolver unavailable or failed; fall back to Django loader
+            except Exception as e:
+                raise RuntimeError(
+                    f"djust could not resolve template inheritance for "
+                    f"{self.template_name!r} (searched {len(template_dirs)} template "
+                    f"dirs: {template_dirs}): {e}"
+                ) from e
+            if resolved:
+                # Also inline {% include %} directives so variable extraction
+                # discovers variables used in included templates
+                resolved = self._inline_includes(resolved, template_dirs)
+                return resolved
 
             # Fallback to single-file template source
             try:
@@ -317,16 +323,11 @@ class JITMixin:
             return result
 
         except Exception as e:
-            # exc_info, not a formatted traceback argument: the log sanitizer
-            # (#2947) flattens and truncates string arguments, and the
-            # traceback belongs in the record's exception text anyway.
-            logger.error(
-                "[JIT ERROR] Serialization failed for '%s': %s",
-                variable_name,
-                e,
-                exc_info=True,
-            )
-            return [normalize_django_value(obj) for obj in queryset]
+            # Raises (2.0); it used to log and re-serialize every row through
+            # normalize_django_value, which re-ran the query and shipped every
+            # concrete field instead of the ones the template reads. The cause
+            # is chained, not interpolated, so no value reaches the message.
+            raise RuntimeError(f"djust JIT serialization failed for {variable_name!r}") from e
 
     def _jit_serialize_model_list(
         self, items: Any, template_content: str, variable_name: str
@@ -404,5 +405,5 @@ class JITMixin:
             return cast(Dict[str, Any], serializer(obj))
 
         except Exception as e:
-            logger.debug("JIT serialization failed for %s: %s", variable_name, e)
-            return cast(Dict[str, Any], normalize_django_value(obj))
+            # Raises (2.0) instead of falling back to normalize_django_value.
+            raise RuntimeError(f"djust JIT serialization failed for {variable_name!r}") from e

@@ -261,12 +261,6 @@ MIXIN_TABLES = {
             ("_get_template_content", "Could not load template for JIT: %s"): (
                 "JIT serialization is reached only from get_context_data's legacy continuation"
             ),
-            ("_jit_serialize_model", "JIT serialization failed for %s: %s"): (
-                "JIT serialization is reached only from get_context_data's legacy continuation"
-            ),
-            ("_jit_serialize_queryset", "[JIT ERROR] Serialization failed for '%s': %s"): (
-                "JIT serialization is reached only from get_context_data's legacy continuation"
-            ),
             ("replacer", "Failed to read included template %s: %s"): (
                 "JIT serialization is reached only from get_context_data's legacy continuation"
             ),
@@ -316,14 +310,7 @@ MIXIN_TABLES = {
             ),
         },
     ),
-    "mixins/template.py": (
-        {},
-        {
-            ("get_template", "[LiveView] Template inheritance resolution faile"): (
-                "template inheritance resolution over template files"
-            ),
-        },
-    ),
+    "mixins/template.py": (),
     "mixins/notifications.py": (
         {},
         {
