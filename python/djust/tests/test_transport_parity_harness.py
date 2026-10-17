@@ -194,11 +194,10 @@ async def _run_ws(turn: str) -> Dict[str, Any]:
         frames: List[Dict[str, Any]] = []
 
         async def collect():
-            while True:
-                try:
-                    frames.append(await socket.receive_json_from(timeout=0.2))
-                except asyncio.TimeoutError:
-                    return
+            # ``receive_nothing`` polls without cancelling the application;
+            # a timed-out ``receive_json_from`` would cancel the consumer.
+            while not await socket.receive_nothing(timeout=0.2):
+                frames.append(await socket.receive_json_from(timeout=3))
 
         await collect()
         await _settle(collect, turn == "async_it")
