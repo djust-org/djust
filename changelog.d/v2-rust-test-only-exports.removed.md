@@ -1,4 +1,3 @@
-- **Four unused `djust._rust` functions.** `django_value_repr_enabled`,
-  `unregister_raw_block_tag_handler`, `clear_raw_block_tag_handlers` and
-  `clear_scope_tags` had no caller in djust's Python code or tests. They are no
-  longer exported. The two `clear_*` functions remain as Rust-side test helpers.
+- **Two unused `djust._rust` functions.** `django_value_repr_enabled` had no
+  caller and is deleted. `clear_scope_tags` was only called from Rust unit
+  tests, so it is no longer exported to Python and stays as a Rust test helper.
