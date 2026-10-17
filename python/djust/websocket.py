@@ -1229,24 +1229,6 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 }
             )
 
-    async def _flush_i18n(self) -> None:
-        """
-        Send any pending i18n commands (language changes, etc.)
-        queued by the view during handler execution.
-        """
-        if not self.view_instance:
-            return
-        if not hasattr(self.view_instance, "_drain_i18n_commands"):
-            return
-        commands = self.view_instance._drain_i18n_commands()
-        for cmd in commands:
-            await self.send_json(
-                {
-                    "type": "i18n",
-                    **cmd,
-                }
-            )
-
     async def _flush_all_pending(self) -> None:
         """Flush every queued client side-effect at the end of a WS turn, in
         canonical order. Single source of truth: every turn-end path (event,
@@ -1264,7 +1246,6 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         await self._flush_deferred()
         await self._flush_navigation()
         await self._flush_accessibility()
-        await self._flush_i18n()
 
     async def _flush_accessibility(self) -> None:
         """

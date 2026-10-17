@@ -232,7 +232,7 @@ async def test_consumer_cancel_path_sends_the_settle_frame_only_for_an_event():
         view.exposure_policy = "legacy"
         view._async_cancelled = {"job"}
         view.render_with_diff = MagicMock(return_value=("<div dj-root>x</div>", "[]", 2))
-        for drain in ("push_events", "navigation", "accessibility", "i18n", "flash"):
+        for drain in ("push_events", "navigation", "accessibility", "flash"):
             setattr(view, f"_drain_{drain}", MagicMock(return_value=[]))
         consumer.view_instance = view
         await consumer._run_async_work("job", lambda: None, (), {}, event_name=event_name)

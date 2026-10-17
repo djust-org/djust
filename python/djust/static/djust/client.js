@@ -2191,6 +2191,16 @@ class LiveViewWebSocket {
                 globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
                 break;
 
+            case 'presence_event':
+                // broadcast_to_presence() (and LiveCursorMixin's cursor_move)
+                // fanned out to every session in the presence group (#3501).
+                // A page-level frame (no target_id), dispatched on window like
+                // djust:push_event, so system check T004 holds for it too.
+                window.dispatchEvent(new CustomEvent('djust:presence', {
+                    detail: { event: data.event, payload: data.payload }
+                }));
+                break;
+
             case 'embedded_update':
                 // Scoped HTML update for an embedded child LiveView
                 await handleEmbeddedResponse(data, this);

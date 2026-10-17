@@ -398,6 +398,17 @@ jobs:
         if: matrix.group == 1
         run: .venv/bin/python scripts/check-lockfile-versions.py
 
+      # The wheel and sdist leave out djust's tests and the client source
+      # modules (pyproject [tool.maturin] exclude). A glob that matches
+      # nothing fails silently, so build both and list them. The build reuses
+      # the release artifacts `maturin develop --release` left in target/.
+      - name: Wheel and sdist ship no tests or client sources
+        if: matrix.group == 1
+        run: |
+          uv run --no-sync maturin build --release --compatibility linux -i .venv/bin/python --out "$RUNNER_TEMP/dist"
+          uv run --no-sync maturin sdist --out "$RUNNER_TEMP/dist"
+          .venv/bin/python scripts/check-package-contents.py "$RUNNER_TEMP"/dist/*
+
   # Free-threaded (no-GIL) leg - #1534 / #1432, extended for #3074.
   # Targeted, NOT a full suite run: a 3.14t runner can hit unrelated
   # free-threaded-ecosystem gaps. It runs the multi-core core subset — the

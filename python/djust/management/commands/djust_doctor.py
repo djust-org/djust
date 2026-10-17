@@ -26,6 +26,11 @@ logger = logging.getLogger(__name__)
 # Probe timeout in seconds for network checks (e.g., Redis)
 _PROBE_TIMEOUT = 2
 
+# The oldest Django djust supports: the major.minor of pyproject.toml's
+# ``Django>=`` requirement (python/tests/test_management_doctor.py keeps the
+# two in step).
+_DJANGO_FLOOR = (4, 2)
+
 
 class _CheckResult:
     """Result of a single diagnostic check."""
@@ -116,9 +121,12 @@ def check_django_version() -> "_CheckResult":
     import django
 
     ver = "%d.%d.%d" % django.VERSION[:3]
-    if django.VERSION < (4, 0):
+    if django.VERSION[:2] < _DJANGO_FLOOR:
         return _CheckResult(
-            "django_version", "versions", _CheckResult.WARN, "Django %s (>= 4.0 recommended)" % ver
+            "django_version",
+            "versions",
+            _CheckResult.WARN,
+            "Django %s (>= %d.%d required)" % ((ver,) + _DJANGO_FLOOR),
         )
     return _CheckResult("django_version", "versions", _CheckResult.OK, "Django %s" % ver)
 
