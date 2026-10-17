@@ -490,7 +490,7 @@ The attribute sits on each `<input>`, never on the wrapper. The bundled CSS uses
 Three reasons:
 
 - **Zero new Python.** `RadioSelect(attrs={...})` is already supported by Django; we just document the attribute name.
-- **Composes with anything.** Works with `forms.Form`, `LiveViewForm`, third-party form libraries, ModelForms, Django admin — anything that renders a `RadioSelect`.
+- **Composes with anything.** Works with `forms.Form`, third-party form libraries, ModelForms, Django admin — anything that renders a `RadioSelect`.
 - **Skip-able.** Don't want our CSS? Don't link the file. Want different styling? Write your own rule on `[data-dj-inline]` — the contract is the attribute name, not the visual treatment.
 
 ### Customizing the visual treatment

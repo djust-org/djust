@@ -44,7 +44,8 @@ and the [API Stability & Deprecations guide](api-stability.md).
 Three symbols are deprecated as of 0.9.7. **All three still work** — they are
 still present in 1.2 — and each carries the 0.x carve-out removal floor of
 **`>= 1.1.0`**: removal is allowed no earlier than 1.1.0 and will be announced
-in the CHANGELOG. Nothing was removed in 1.0 itself.
+in the CHANGELOG. Nothing was removed in 1.0 itself. djust 2.0.0 removed all
+three.
 
 | Symbol | Use instead | Removed no earlier than |
 | --- | --- | --- |

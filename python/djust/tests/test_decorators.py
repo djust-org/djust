@@ -10,7 +10,6 @@ import pytest
 from djust import LiveView
 from djust.decorators import (
     event_handler,
-    event,
     debounce,
     throttle,
     optimistic,
@@ -111,19 +110,6 @@ class TestEventHandlerDecorator:
             pass
 
         assert hasattr(my_handler, "_djust_decorators")
-
-    def test_event_alias(self):
-        """Test @event alias works but emits deprecation warning"""
-
-        with pytest.warns(DeprecationWarning, match="@event is deprecated"):
-
-            @event
-            def my_handler(self, value: str):
-                """Test handler"""
-                pass
-
-        assert hasattr(my_handler, "_djust_decorators")
-        assert "event_handler" in my_handler._djust_decorators
 
     def test_event_handler_metadata_structure(self):
         """Test complete metadata structure"""
