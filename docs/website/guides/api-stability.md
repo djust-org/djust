@@ -89,19 +89,19 @@ version; it does not use `PendingDeprecationWarning`.
   public symbol is never removed in a MINOR or PATCH release. It survives until
   at least the next MAJOR.
 - **0.x carve-out.** Three symbols deprecated back in the 0.x series get one
-  full minor cycle of overlap rather than being yanked at 1.0 — they are
-  scheduled for removal **no earlier than `1.1.0`**.
+  full minor cycle of overlap rather than being yanked at 1.0 — they were
+  scheduled for removal **no earlier than `1.1.0`**, and 2.0.0 removed them.
 
-## Currently deprecated
+## Removed in 2.0.0
 
-| API | Replacement | Removed no earlier than |
-| --- | --- | --- |
-| `@event` | `@event_handler` | 1.1.0 |
-| `LiveViewForm` | `django.forms.Form` | 1.1.0 |
-| `_legacy` theming module (`THEMES`, `get_theme()`, `list_themes()`) | `djust.theming.theme_packs` (`get_design_system`, etc.) | 1.1.0 |
+| API | Replacement |
+| --- | --- |
+| `@event` | `@event_handler` |
+| `LiveViewForm` | `django.forms.Form` |
+| `_legacy` theming module (`THEMES`, `get_theme()`, `list_themes()`) | `djust.theming.theme_packs` (`get_design_system`, etc.) |
 
 Migrating is mechanical in every case — see the
-[full reference](https://github.com/djust-org/djust/blob/main/docs/API_STABILITY.md#currently-deprecated-symbols)
+[full reference](https://github.com/djust-org/djust/blob/main/docs/API_STABILITY.md#removed-in-200)
 for before/after snippets.
 
 ## Template-syntax deprecations

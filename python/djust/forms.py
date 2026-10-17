@@ -28,7 +28,6 @@ from django.http import Http404
 from django.utils.safestring import SafeString
 
 from ._class_snapshot import namespace
-from ._deprecation import warn_deprecated
 from ._exposure import ExposureConfigurationError, ExposureError, ProviderContract
 from ._exposure_providers import provide_context_items
 from ._state import StateProperty
@@ -1207,42 +1206,3 @@ class ModelFormMixin(FormMixin, Generic[_ModelT]):
                 self, context, _MANAGED_OBJECT_PROVIDER, self._djust_render_only_context()
             )
         return context
-
-
-class LiveViewForm(forms.Form):
-    """
-    Base form class for LiveView usage.
-
-    .. deprecated:: 0.3
-        ``LiveViewForm`` adds no functionality over ``forms.Form`` and will
-        be removed no earlier than djust 1.1.0. Use ``django.forms.Form``
-        directly instead.
-    """
-
-    def __init_subclass__(cls, **kwargs: Any) -> None:
-        super().__init_subclass__(**kwargs)
-        # stacklevel=5: __init_subclass__ runs inside Django's
-        # DeclarativeFieldsMetaclass __new__ chain, which adds two metaclass
-        # frames. Chain: warnings.warn -> warn_deprecated -> __init_subclass__
-        # -> widgets.py metaclass __new__ -> forms.py metaclass __new__ ->
-        # user `class` statement. Empirically verified (scratch sweep): 5
-        # points the warning at the user's file, not forms.py / widgets.py.
-        warn_deprecated(
-            "LiveViewForm",
-            since="0.3",
-            removed_in="1.1.0",
-            instead="django.forms.Form",
-            stacklevel=5,
-        )
-
-    def get_field_errors_json(self) -> str:
-        """Get field errors as JSON string"""
-        import json
-
-        return json.dumps({field: errors for field, errors in self.errors.items()})
-
-    def get_field_value(self, field_name: str, default: Any = "") -> Any:
-        """Get cleaned value for a field"""
-        if hasattr(self, "cleaned_data"):
-            return self.cleaned_data.get(field_name, default)
-        return self.data.get(field_name, default)

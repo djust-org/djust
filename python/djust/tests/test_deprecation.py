@@ -1,10 +1,9 @@
 """Unit tests for the internal ``djust._deprecation`` helper.
 
 Covers the standardized ``warn_deprecated`` helper (message format, warning
-category, ``stacklevel`` correctness, optional kwargs) plus regression tests
-that the three migrated call sites (``@event``, ``LiveViewForm``, the legacy
-theming module) still emit a ``DeprecationWarning`` with a corrected,
-concrete ``removed_in`` version.
+category, ``stacklevel`` correctness, optional kwargs). The call-site tests
+for ``@event``, ``LiveViewForm`` and the legacy theming module went with
+those APIs in 2.0.
 """
 
 import os
@@ -122,171 +121,8 @@ def test_warn_deprecated_keyword_only_args():
         warn_deprecated("thing", "1.0", "2.0.0")  # type: ignore[misc]
 
 
-# ---------------------------------------------------------------------------
-# Migration regression tests — the 3 fixed call sites
-# ---------------------------------------------------------------------------
-
-
-def test_event_alias_still_warns_with_concrete_version():
-    """@event still emits a DeprecationWarning naming a concrete removal floor.
-
-    Gate-off check: this assertion fails if the message reverts to the vague
-    "a future release" text.
-    """
-    from djust.decorators import event
-
-    def sample(self):  # pragma: no cover - body never executed
-        pass
-
-    with pytest.warns(DeprecationWarning) as record:
-        event(sample)
-    msg = str(record[0].message)
-    assert "@event" in msg
-    assert "1.1" in msg
-    assert "@event_handler" in msg
-    assert "future release" not in msg
-
-
-def test_liveviewform_warns_with_corrected_version():
-    """Subclassing LiveViewForm warns; the message no longer says "0.4".
-
-    F1-regression test (Action #254 gate-off): reverting the forms.py edit
-    makes this fail on the "0.4"-absent assertion.
-    """
-    from djust.forms import LiveViewForm
-
-    with pytest.warns(DeprecationWarning) as record:
-
-        class _MyForm(LiveViewForm):
-            pass
-
-    msg = str(record[0].message)
-    assert "LiveViewForm" in msg
-    assert "0.4" not in msg
-    assert "1.1" in msg
-    assert "django.forms.Form" in msg
-
-
-def test_legacy_theming_warns_with_concrete_version():
-    """Accessing the legacy THEMES dict warns with a concrete removal version."""
-    from djust.theming.themes._legacy import THEMES
-
-    with pytest.warns(DeprecationWarning) as record:
-        _ = THEMES["material"]
-    msg = str(record[0].message)
-    assert "THEMES" in msg
-    assert "1.1" in msg
-
-
-def test_legacy_theming_get_theme_warns_with_concrete_version():
-    """get_theme() still warns with a concrete removal version."""
-    from djust.theming.themes._legacy import get_theme
-
-    with pytest.warns(DeprecationWarning) as record:
-        get_theme("material")
-    msg = str(record[0].message)
-    assert "get_theme" in msg
-    assert "1.1" in msg
-
-
-def test_legacy_theming_list_themes_warns_with_concrete_version():
-    """list_themes() still warns with a concrete removal version."""
-    from djust.theming.themes._legacy import list_themes
-
-    with pytest.warns(DeprecationWarning) as record:
-        list_themes()
-    msg = str(record[0].message)
-    assert "list_themes" in msg
-    assert "1.1" in msg
-
-
 def test_no_deprecation_warning_when_helper_unused():
     """Sanity: importing the helper alone emits nothing."""
     with warnings.catch_warnings():
         warnings.simplefilter("error", DeprecationWarning)
         import djust._deprecation  # noqa: F401  (re-import is a no-op, no warning)
-
-
-# ---------------------------------------------------------------------------
-# Per-site stacklevel regression tests — the warning must point at the USER's
-# frame (this test file), not at a djust-internal module. These tests fail on
-# a wrong stacklevel and pass once it is correct (Action #1196 — verify the
-# wiring; Action #254 — gate-off self-test for each migrated site).
-# ---------------------------------------------------------------------------
-
-_THIS_FILE = "test_deprecation.py"
-
-
-def test_event_alias_stacklevel_points_at_user_frame():
-    """@event's warning filename is the caller's file, not decorators.py.
-
-    Chain: warnings.warn -> warn_deprecated -> event -> THIS test (the user).
-    Correct stacklevel is 3. A stacklevel of 2 makes the warning point at
-    decorators.py — this assertion fails in that case.
-    """
-    from djust.decorators import event
-
-    def sample(self):  # pragma: no cover - body never executed
-        pass
-
-    with pytest.warns(DeprecationWarning) as record:
-        event(sample)  # <- this line is the user frame
-    assert os.path.basename(record[0].filename) == _THIS_FILE, (
-        f"@event warning points at {record[0].filename!r}; "
-        "expected the caller's file (wrong stacklevel)"
-    )
-
-
-def test_liveviewform_stacklevel_points_at_user_frame():
-    """LiveViewForm's warning filename is the user's file, not forms.py/widgets.py.
-
-    The warning fires inside __init_subclass__, which runs within Django's
-    DeclarativeFieldsMetaclass __new__ chain (two extra metaclass frames).
-    Chain: warnings.warn -> warn_deprecated -> __init_subclass__ ->
-    widgets.py metaclass __new__ -> forms.py metaclass __new__ ->
-    user `class` statement. Correct stacklevel is 5. A stacklevel of 3
-    makes the warning point at Django's widgets.py — this assertion fails.
-    """
-    from djust.forms import LiveViewForm
-
-    with pytest.warns(DeprecationWarning) as record:
-
-        class _MyForm(LiveViewForm):  # <- this `class` statement is the user frame
-            pass
-
-    assert os.path.basename(record[0].filename) == _THIS_FILE, (
-        f"LiveViewForm warning points at {record[0].filename!r}; "
-        "expected the caller's file (wrong stacklevel)"
-    )
-
-
-def test_legacy_theming_getitem_stacklevel_points_at_user_frame():
-    """Legacy THEMES.__getitem__ warning points at the user's file, not _legacy.py.
-
-    Chain: warnings.warn -> warn_deprecated -> _warn_legacy ->
-    __getitem__ -> THIS test (the user). Correct stacklevel is 4.
-    """
-    from djust.theming.themes._legacy import THEMES
-
-    with pytest.warns(DeprecationWarning) as record:
-        _ = THEMES["material"]  # <- this line is the user frame
-    assert os.path.basename(record[0].filename) == _THIS_FILE, (
-        f"legacy THEMES warning points at {record[0].filename!r}; "
-        "expected the caller's file (wrong stacklevel)"
-    )
-
-
-def test_legacy_theming_get_theme_stacklevel_points_at_user_frame():
-    """Legacy get_theme() warning points at the user's file, not _legacy.py.
-
-    Chain: warnings.warn -> warn_deprecated -> _warn_legacy ->
-    get_theme -> THIS test (the user). Correct stacklevel is 4.
-    """
-    from djust.theming.themes._legacy import get_theme
-
-    with pytest.warns(DeprecationWarning) as record:
-        get_theme("material")  # <- this line is the user frame
-    assert os.path.basename(record[0].filename) == _THIS_FILE, (
-        f"legacy get_theme() warning points at {record[0].filename!r}; "
-        "expected the caller's file (wrong stacklevel)"
-    )

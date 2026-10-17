@@ -23,8 +23,9 @@ the public API of djust 1.0 will keep working across every 1.x release.
 4. [Deprecation Policy](#deprecation-policy)
 5. [The Support Window](#the-support-window)
 6. [Currently Deprecated Symbols](#currently-deprecated-symbols)
-7. [Template-Syntax Deprecations](#template-syntax-deprecations)
-8. [Known Documented Items](#known-documented-items)
+7. [Removed in 2.0.0](#removed-in-200)
+8. [Template-Syntax Deprecations](#template-syntax-deprecations)
+9. [Known Documented Items](#known-documented-items)
 
 ---
 
@@ -57,15 +58,14 @@ document takes effect at **1.0.0**.
 The **public API** — the surface SemVer covers — is exactly the following:
 
 1. **Top-level package exports.** Every name in `djust.__init__.py`'s `__all__`
-   (65 symbols as of 1.3). `from djust import X` for any such `X` is a
+   (63 symbols as of 2.0). `from djust import X` for any such `X` is a
    supported, stable import.
 
 2. **The documented decorators.** Every name in `djust.decorators.__all__`
-   (23 names as of 1.3). These include the core decorators (`event_handler`,
+   (22 names as of 2.0). These include the core decorators (`event_handler`,
    `action`, `server_function`, `push_handler`, `permission_required`, `rate_limit`, `reactive`,
    `state`, `computed`, `debounce`, `throttle`, `optimistic`, `cache`,
-   `client_state`, `background`, `on_mount`), the deprecated alias `event`
-   (see [Currently Deprecated Symbols](#currently-deprecated-symbols)), and the
+   `client_state`, `background`, `on_mount`) and the
    introspection predicates `is_event_handler`, `is_action`,
    `is_server_function` and `is_push_handler`. Two names are deliberately in
    `djust.decorators.__all__` only, not at the top level: `StateProperty` (the
@@ -204,86 +204,19 @@ This is the core stability promise:
   (`@event`, `LiveViewForm`, and the `_legacy` theming module — see below).
   SemVer permitted removing them in any `0.x` release. Rather than yank them at
   `1.0.0`, the policy gives 1.0 adopters one full minor cycle of overlap:
-  **these three symbols are scheduled for removal no earlier than `1.1.0`.**
+  **these three symbols were scheduled for removal no earlier than `1.1.0`**,
+  and djust `2.0.0` removed them (see [Removed in 2.0.0](#removed-in-200)).
 
 ---
 
 ## Currently Deprecated Symbols
 
-Three symbols deprecated during `0.x` carry the 0.x carve-out removal floor of
-**`>= 1.1.0`**. One access pattern deprecated during the `1.x` series carries the
-standard floor of **`2.0.0`**.
+One access pattern deprecated during the `1.x` series carries the standard floor
+of **`2.0.0`**.
 
 | Symbol | Deprecated since | Removed no earlier than | Replacement |
 | --- | --- | --- | --- |
-| `@event` decorator | 0.3 | **1.1.0** | `@event_handler` |
-| `LiveViewForm` | 0.3 | **1.1.0** | `django.forms.Form` |
-| `_legacy` theming module (`THEMES`, `get_theme()`, `list_themes()`) | 0.5 | **1.1.0** | `DESIGN_SYSTEMS` / `get_design_system` / `get_all_design_systems` from `djust.theming.theme_packs` |
 | Dict-style reads of `block` in a Python-bridged tag (`block["super"]`, `block.get("super")`, `block.values()`, `block.items()`, `dict(block)`) | 1.3 | **2.0.0** | `context["block"].super()` |
-
-### `@event` → `@event_handler`
-
-`@event` is a deprecated alias for `@event_handler`. It has identical behavior;
-only the name differs. Migration is a mechanical rename:
-
-```python
-# Before
-from djust.decorators import event
-
-@event
-def increment(self):
-    self.count += 1
-
-# After
-from djust.decorators import event_handler
-
-@event_handler
-def increment(self):
-    self.count += 1
-```
-
-### `LiveViewForm` → `django.forms.Form`
-
-`LiveViewForm` adds no functionality over Django's own `forms.Form`. djust's
-form reactivity comes from `FormMixin` on the `LiveView`, not from a special
-form base class. Migrate by subclassing `django.forms.Form` directly:
-
-```python
-# Before
-from djust.forms import LiveViewForm
-
-class ContactForm(LiveViewForm):
-    name = forms.CharField()
-
-# After
-from django import forms
-
-class ContactForm(forms.Form):
-    name = forms.CharField()
-```
-
-> **Note on the corrected warning text.** Before djust 1.0, the `LiveViewForm`
-> deprecation warning said it would be "removed in djust 0.4" — a version
-> already long past. That stale text has been corrected to the policy-compliant
-> `>= 1.1.0` floor.
-
-### The `_legacy` theming module
-
-The `djust.theming.themes._legacy` module — its `THEMES` dict and the
-`get_theme()` / `list_themes()` functions — is wholly deprecated. Every access
-emits a `DeprecationWarning`. Migrate to the design-system API:
-
-```python
-# Before
-from djust.theming.themes._legacy import get_theme
-
-theme = get_theme("dark")
-
-# After
-from djust.theming.theme_packs import get_design_system
-
-theme = get_design_system("dark")
-```
 
 ### Dict-style `block.super` reads in a bridged tag → `block.super()`
 
@@ -304,6 +237,78 @@ parent_html = context["block"]["super"]
 
 # After
 parent_html = context["block"].super()
+```
+
+---
+
+## Removed in 2.0.0
+
+The three symbols that carried the 0.x carve-out floor were removed in
+djust `2.0.0`. Importing them now raises `ImportError` (or `AttributeError` for
+`djust.event` / `djust.LiveViewForm`).
+
+### `@event` → `@event_handler`
+
+`@event` was a deprecated alias for `@event_handler`, with identical behavior.
+Migration is a mechanical rename:
+
+```python
+# Before
+from djust.decorators import event
+
+@event
+def increment(self):
+    self.count += 1
+
+# After
+from djust.decorators import event_handler
+
+@event_handler
+def increment(self):
+    self.count += 1
+```
+
+### `LiveViewForm` → `django.forms.Form`
+
+djust's form reactivity comes from `FormMixin` on the `LiveView`, not from a
+special form base class; `LiveViewForm` only added two helpers to Django's
+`forms.Form`. Migrate by subclassing `django.forms.Form` directly. If you called
+`form.get_field_errors_json()`, use `json.dumps(form.errors)`; for
+`form.get_field_value(name)`, read `form.cleaned_data` (or `form.data` before
+validation):
+
+```python
+# Before
+from djust.forms import LiveViewForm
+
+class ContactForm(LiveViewForm):
+    name = forms.CharField()
+
+# After
+from django import forms
+
+class ContactForm(forms.Form):
+    name = forms.CharField()
+```
+
+### The `_legacy` theming module
+
+The `djust.theming.themes._legacy` module — its `THEMES` dict and the
+`get_theme()` / `list_themes()` functions, and the `Theme`, `Typography`,
+`Spacing`, `BorderRadius`, `Shadows`, `Animations` and `ComponentStyles` classes
+that `djust.theming.themes` re-exported from it — is gone. Migrate to the
+design-system API:
+
+```python
+# Before
+from djust.theming.themes._legacy import get_theme
+
+theme = get_theme("dark")
+
+# After
+from djust.theming.theme_packs import get_design_system
+
+theme = get_design_system("dark")
 ```
 
 ---
