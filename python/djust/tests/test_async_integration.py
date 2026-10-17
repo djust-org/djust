@@ -299,29 +299,6 @@ class TestConsumerAsyncDispatch:
         # Tasks should be cleared after dispatch
         assert len(view._async_tasks) == 0
 
-    async def test_legacy_async_pending_compatibility(self):
-        """Consumer still supports old _async_pending format."""
-        from djust.websocket import LiveViewConsumer
-
-        consumer = LiveViewConsumer()
-        view = AsyncTestView()
-        view.mount(None)
-        consumer.view_instance = view
-
-        # Use legacy format
-        view._async_pending = (lambda: None, (), {})
-
-        with patch.object(asyncio, "ensure_future") as mock_ensure_future:
-            await consumer._dispatch_async_work()
-
-            # Should dispatch the legacy task
-            assert mock_ensure_future.call_count == 1
-
-            assert _close_swallowed_coroutines(mock_ensure_future) == 1
-
-        # Should be cleared
-        assert view._async_pending is None
-
 
 @pytest.mark.django_db
 @pytest.mark.asyncio

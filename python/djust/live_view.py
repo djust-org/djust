@@ -133,7 +133,6 @@ _FRAMEWORK_INTERNAL_ATTRS: frozenset = frozenset(
         "_djust_waiters_closed",
         "_async_task_handles",
         "_async_tasks",
-        "_async_pending",
         "_async_task_counter",
         "_async_cancelled",
         "_async_work_generation",
@@ -1011,7 +1010,7 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
         # _framework_attrs snapshot-order invariant (#1393):
         #   BEFORE this snapshot → framework state (excluded from
         #   user-private serialization, reset on reconnect). Examples:
-        #   self._object cache (v0.9.5-1a), self._async_pending.
+        #   self._object cache (v0.9.5-1a), self._async_tasks.
         #   AFTER this snapshot → user state (included in change tracking,
         #   persisted across reconnects). Examples: self._action_state
         #   (PR #1324), self._<user_attr>.

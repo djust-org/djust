@@ -1,13 +1,14 @@
 """Tests for push event flushing in @background tasks (#693).
 
 Verifies that ``_flush_pending_push_events()`` / ``flush_push_events()``
-correctly flushes queued push events mid-task when a callback is
-registered, and is a safe no-op otherwise.
+correctly flushes queued push events mid-task through the view's
+``_ws_consumer``, and is a safe no-op otherwise.
 """
 
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 
 import pytest
 
@@ -35,14 +36,14 @@ class TestFlushPushEvents:
 
     @pytest.mark.asyncio
     async def test_flush_sends_queued_events_via_callback(self):
-        """When a flush callback is set, flush_push_events drains the queue."""
+        """With a consumer attached, flush_push_events drains the queue."""
         view = _View()
         flushed = []
 
         async def fake_flush():
             flushed.extend(view._drain_push_events())
 
-        view._push_events_flush_callback = fake_flush
+        view._ws_consumer = SimpleNamespace(_flush_push_events=fake_flush)
 
         view.push_event("step", {"n": 1})
         view.push_event("step", {"n": 2})
@@ -57,11 +58,11 @@ class TestFlushPushEvents:
         assert len(view._pending_push_events) == 0
 
     @pytest.mark.asyncio
-    async def test_flush_noop_when_no_callback(self):
-        """Without a callback (test/HTTP mode), flush is a safe no-op."""
+    async def test_flush_noop_when_no_consumer(self):
+        """Without a consumer (test/HTTP mode), flush is a safe no-op."""
         view = _View()
         view.push_event("hello", {"x": 1})
-        assert view._push_events_flush_callback is None
+        assert getattr(view, "_ws_consumer", None) is None
 
         # Should not raise
         await view.flush_push_events()
@@ -78,7 +79,7 @@ class TestFlushPushEvents:
         async def fake_flush():
             called.append(True)
 
-        view._push_events_flush_callback = fake_flush
+        view._ws_consumer = SimpleNamespace(_flush_push_events=fake_flush)
         await view.flush_push_events()
         assert len(called) == 0
 
@@ -91,7 +92,7 @@ class TestFlushPushEvents:
         async def fake_flush():
             flushed.extend(view._drain_push_events())
 
-        view._push_events_flush_callback = fake_flush
+        view._ws_consumer = SimpleNamespace(_flush_push_events=fake_flush)
         view.push_event("test", {})
         await view._flush_pending_push_events()
         assert len(flushed) == 1
@@ -105,7 +106,7 @@ class TestFlushPushEvents:
         async def fake_flush():
             all_flushed.append(list(view._drain_push_events()))
 
-        view._push_events_flush_callback = fake_flush
+        view._ws_consumer = SimpleNamespace(_flush_push_events=fake_flush)
 
         # Batch 1
         view.push_event("a", {"n": 1})
@@ -136,7 +137,7 @@ class TestPushCommandsFlush:
         async def fake_flush():
             flushed.extend(view._drain_push_events())
 
-        view._push_events_flush_callback = fake_flush
+        view._ws_consumer = SimpleNamespace(_flush_push_events=fake_flush)
 
         chain = JS.add_class("highlight", to="#btn")
         view.push_commands(chain)
@@ -171,7 +172,7 @@ class TestTutorialMixinFlush:
             events = view._drain_push_events()
             flush_calls.append(list(events))
 
-        view._push_events_flush_callback = track_flush
+        view._ws_consumer = SimpleNamespace(_flush_push_events=track_flush)
 
         step = TutorialStep(
             target="#test",

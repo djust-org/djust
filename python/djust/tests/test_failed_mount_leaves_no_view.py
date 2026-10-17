@@ -38,7 +38,7 @@ from django.utils.functional import SimpleLazyObject
 
 from djust import LiveView, event_handler, sse
 from djust.presence import PresenceManager, PresenceMixin
-from djust.sse import DjustSSEEventView, DjustSSEMessageView, DjustSSEStreamView, _sse_sessions
+from djust.sse import DjustSSEMessageView, DjustSSEStreamView, _sse_sessions
 from djust.websocket import LiveViewConsumer
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.django_db(transaction=True)]
@@ -429,11 +429,6 @@ async def _sse_open(cls):
     return sid, key, stream, first
 
 
-async def _sse_event(sid, key, body):
-    request = await sync_to_async(_request)("POST", f"/djust/sse/{sid}/event/", body, key)
-    return await DjustSSEEventView().post(request, session_id=sid)
-
-
 async def _sse_message(sid, key, body):
     request = await sync_to_async(_request)("POST", f"/djust/sse/{sid}/message/", body, key)
     return await DjustSSEMessageView().post(request, session_id=sid)
@@ -445,7 +440,7 @@ async def test_over_sse_a_page_view_whose_mount_raises_is_not_mounted(cls, code)
     try:
         assert first["type"] == "error" and first.get("code") == code, first
         assert _sse_sessions.get(sid) is None, "the refused stream was registered"
-        response = await _sse_event(sid, key, {"event": "reveal", "params": {}})
+        response = await _sse_message(sid, key, {"type": "event", "event": "reveal", "params": {}})
         assert response.status_code >= 400
         assert SECRET not in response.content.decode()
         _assert_left_nothing()
