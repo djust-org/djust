@@ -746,8 +746,8 @@ endif
 	@echo "$(GREEN)Bumping version to $(VERSION)...$(NC)"
 	@# Update pyproject.toml (portable sed - works on both macOS and Linux)
 	@sed 's/^version = ".*"/version = "$(VERSION)"/' pyproject.toml > pyproject.toml.tmp && mv pyproject.toml.tmp pyproject.toml
-	@# Convert Python version to Cargo version (0.2.0a1 -> 0.2.0-alpha.1)
-	@CARGO_VERSION=$$(echo "$(VERSION)" | sed 's/a/-alpha./; s/b/-beta./; s/rc/-rc./'); \
+	@# Convert Python version to Cargo version (0.2.0a1 -> 0.2.0-alpha.1, 2.0.0.dev0 -> 2.0.0-dev.0)
+	@CARGO_VERSION=$$(echo "$(VERSION)" | sed 's/\.dev/-dev./; s/a/-alpha./; s/b/-beta./; s/rc/-rc./'); \
 	sed 's/^version = ".*"/version = "'$$CARGO_VERSION'"/' Cargo.toml > Cargo.toml.tmp && mv Cargo.toml.tmp Cargo.toml
 	@# Update __version__ in Python source files
 	@sed 's/^__version__ = ".*"/__version__ = "$(VERSION)"/' python/djust/__init__.py > python/djust/__init__.py.tmp && mv python/djust/__init__.py.tmp python/djust/__init__.py
