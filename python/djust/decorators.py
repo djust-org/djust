@@ -1421,6 +1421,8 @@ __all__ = [
     "event_handler",
     "event",
     "is_event_handler",
+    "action",
+    "is_action",
     "server_function",
     "is_server_function",
     "push_handler",

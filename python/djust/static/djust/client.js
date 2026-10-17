@@ -464,8 +464,11 @@ async function handleEmbeddedResponse(data, transport) {
  * Apply the side-channel commands an HTTP fallback response carries: the
  * navigation the handler queued (live_patch / live_redirect, #3303; each entry
  * is a WebSocket-shaped navigation frame, and unconnected a live_redirect
- * becomes a full-page navigation), flash messages and page metadata. Shared by
- * the page's own answers and an embedded child's (#3104): one path, not two.
+ * becomes a full-page navigation), flash messages, page metadata, push events
+ * (push_event / push_commands, each in the push_event frame's {event, payload}
+ * shape) and a set_layout swap ({path, html}, the layout frame's shape). The
+ * last two were dropped on HTTP before #3541. Shared by the page's own answers
+ * and an embedded child's (#3104): one path, not two.
  */
 function applyHttpSideChannels(data) {
     if (Array.isArray(data._navigation) && window.djust.navigation) {
@@ -482,6 +485,18 @@ function applyHttpSideChannels(data) {
         data._page_metadata.forEach(function(cmd) {
             window.djust.pageMetadata.handlePageMetadata(cmd);
         });
+    }
+    if (Array.isArray(data._push_events)) {
+        // The WebSocket push_event case, per queued event.
+        data._push_events.forEach(function(frame) {
+            window.dispatchEvent(new CustomEvent('djust:push_event', {
+                detail: { event: frame.event, payload: frame.payload }
+            }));
+            dispatchPushEventToHooks(frame.event, frame.payload);
+        });
+    }
+    if (data._layout && window.djust.djLayout && typeof window.djust.djLayout.applyLayout === 'function') {
+        window.djust.djLayout.applyLayout(data._layout);
     }
 }
 
@@ -3297,6 +3312,14 @@ class LiveViewSSE {
                 // Page metadata from server (page_title / page_meta)
                 if (window.djust.pageMetadata) {
                     window.djust.pageMetadata.handlePageMetadata(data);
+                }
+                break;
+
+            case 'layout':
+                // Runtime layout switch (set_layout). The server sends it from the
+                // shared turn end, on this transport too.
+                if (window.djust.djLayout && typeof window.djust.djLayout.applyLayout === 'function') {
+                    window.djust.djLayout.applyLayout(data);
                 }
                 break;
 
