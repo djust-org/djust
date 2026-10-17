@@ -726,3 +726,99 @@ pub fn release_namespace(namespace: u64) -> PyResult<()> {
         .release(namespace)
         .map_err(pyo3::exceptions::PyRuntimeError::new_err)
 }
+
+/// The Python object Django's own filter would receive for `value`.
+///
+/// Unlike the generic `IntoPyObject` (whose display-string contract protects a
+/// CUSTOM filter from live model objects, #2509), a routed built-in is
+/// Django's own code and gets what Django hands it:
+///
+/// * an absent variable is `string_if_invalid` — `""` — not `None`;
+/// * a carrier with a live handle is the object itself, so iteration, `repr`
+///   and the exception a bad type raises are the object's own;
+/// * a dict view is a real `dict_keys` / `dict_values` / `dict_items`.
+fn django_object<'py>(py: Python<'py>, value: &Value) -> PyResult<Bound<'py, PyAny>> {
+    match value {
+        Value::Missing => Ok(PyString::new(py, "").into_any()),
+        Value::Encoded(e) => match &e.live {
+            Some(live) => Ok(live.bind(py).clone()),
+            None => value.clone().into_pyobject(py),
+        },
+        Value::DictView { kind, items } => {
+            let dict = PyDict::new(py);
+            match kind {
+                djust_core::DictViewKind::Items => {
+                    for item in items {
+                        let pair = item.clone().into_pyobject(py)?;
+                        dict.set_item(pair.get_item(0)?, pair.get_item(1)?)?;
+                    }
+                    dict.call_method0("items")
+                }
+                djust_core::DictViewKind::Keys => {
+                    for key in items {
+                        dict.set_item(key.clone().into_pyobject(py)?, py.None())?;
+                    }
+                    dict.call_method0("keys")
+                }
+                djust_core::DictViewKind::Values => {
+                    for (index, item) in items.iter().enumerate() {
+                        dict.set_item(index, item.clone().into_pyobject(py)?)?;
+                    }
+                    dict.call_method0("values")
+                }
+            }
+        }
+        _ => value.clone().into_pyobject(py),
+    }
+}
+
+/// Run Django's own `django.template.defaultfilters.<name>` for a built-in that
+/// djust routes to Django instead of reimplementing it (2.0 plan §3).
+///
+/// The name stays a BUILT-IN everywhere else — the arity table, the
+/// stringfilter list, the safe-output lists, parse-time refusal — so only the
+/// implementation moves. Input `SafeData` is restored exactly as for a custom
+/// filter ([`mark_input_safety`]), a `needs_autoescape` filter gets the
+/// `autoescape` kwarg, and a `SafeString` result comes back as
+/// `Value::SafeString`. A Python exception crosses WHOLE
+/// (`DjangoRustError::PythonException`), so the class a caller sees is the one
+/// Django raises.
+///
+/// `arg` is the typed argument (a resolved context value or a numeric
+/// literal), or the literal text as a string.
+pub(crate) fn apply_django_builtin_filter(
+    name: &str,
+    value: &Value,
+    arg: Option<Value>,
+    autoescape: bool,
+    input_safety: InputSafety,
+) -> djust_core::Result<Value> {
+    Python::attach(|py| -> PyResult<Value> {
+        let func = py.import("django.template.defaultfilters")?.getattr(name)?;
+        let needs_autoescape = func
+            .getattr("needs_autoescape")
+            .and_then(|flag| flag.is_truthy())
+            .unwrap_or(false);
+        let py_value = mark_input_safety(py, django_object(py, value)?, input_safety)?;
+        let args = match arg {
+            Some(arg) => PyTuple::new(py, [py_value, django_object(py, &arg)?])?,
+            None => PyTuple::new(py, [py_value])?,
+        };
+        let kwargs = if needs_autoescape {
+            let kw = PyDict::new(py);
+            kw.set_item("autoescape", autoescape)?;
+            Some(kw)
+        } else {
+            None
+        };
+        let out = func.call(args, kwargs.as_ref())?;
+        let is_safe = py_value_is_safe_string(&out);
+        let result: Value = out.extract()?;
+        Ok(if is_safe {
+            Value::SafeString(result.to_string())
+        } else {
+            result
+        })
+    })
+    .map_err(djust_core::DjangoRustError::PythonException)
+}

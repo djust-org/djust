@@ -8033,31 +8033,6 @@ mod tests {
     }
 
     #[test]
-    fn test_cycle_urlize_filter_not_double_escaped() {
-        // {% cycle x|urlize y %} — urlize produces its own <a href=...> HTML; it
-        // must not be re-escaped (urlize is a name-based safe_output_filter).
-        // Two operands: a one-operand `{% cycle x|urlize %}` is Django's
-        // REFERENCE form and raises `No named cycles in template` (#2556).
-        let tokens = tokenize("{% cycle x|urlize y %}").unwrap();
-        let nodes = parse(&tokens).unwrap();
-        let mut context = Context::new();
-        context.set(
-            "x".to_string(),
-            Value::String("Visit https://example.com".to_string()),
-        );
-        let result = render_nodes(&nodes, &context).unwrap();
-        // urlize's <a href="..."> must survive verbatim, not become &lt;a ...
-        assert!(
-            result.contains("<a href=\"https://example.com\""),
-            "urlize output was re-escaped: {result}"
-        );
-        assert!(
-            !result.contains("&lt;a"),
-            "urlize output was double-escaped: {result}"
-        );
-    }
-
-    #[test]
     fn test_firstof_nonsafe_filter_still_escaped() {
         // {% firstof x|upper %} — `upper` is NOT a safe_output_filter, so HTML
         // in its output must STILL be escaped (fail-safe: only whitelisted

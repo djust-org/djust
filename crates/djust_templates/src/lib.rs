@@ -33,10 +33,8 @@ pub mod render_env;
 pub mod renderer;
 pub mod stringformat;
 pub mod tags;
-pub mod textwrap;
 pub mod timezone;
 pub mod truncate;
-mod urlquote;
 
 pub use markdown::render_markdown;
 

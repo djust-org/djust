@@ -510,12 +510,13 @@ class TestGetDigitFilter:
 class TestIriencodeFilter:
     """Tests for iriencode filter."""
 
-    def test_iriencode_preserves_non_ascii(self):
-        """Test iriencode preserves non-ASCII characters."""
+    def test_iriencode_percent_encodes_non_ascii_as_django_does(self):
+        """Django's ``iri_to_uri`` percent-encodes non-ASCII as UTF-8; the Rust
+        port kept it literal. ``iriencode`` is Django's own function since 2.0."""
         template = "{{ text|iriencode }}"
         context = {"text": "café"}
         result = render_template(template, context)
-        assert "café" in result
+        assert result == "caf%C3%A9"
 
     def test_iriencode_encodes_spaces(self):
         """Test iriencode encodes spaces."""
