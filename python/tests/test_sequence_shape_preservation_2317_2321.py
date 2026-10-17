@@ -536,7 +536,9 @@ class TestEveryRebuildSiteIsAccountedFor:
     #: ``str(item)`` the way ``mark_safe`` does — so a set alone could not tell
     #: two such sites from three.
     LIST_ALWAYS = {
-        "Ok(Value::List(items))": (
+        # The `Some(items) =>` arm since the dictsortreversed tie fix moved
+        # the reversal into the sorting helpers.
+        "Some(items) => Ok(Value::List(items)),": (
             1,
             "dictsort/dictsortreversed — Django is sorted(), which returns a list",
         ),
