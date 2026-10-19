@@ -48,7 +48,7 @@
 //! **Where each applies, which is not uniform**:
 //!
 //! * `text_chars` — NFC *and* the combining skip.
-//! * [`html_chars`] — NFC **only**. `TruncateCharsHTMLParser.process` counts
+//! * `html_chars` (gone in 2.0: `truncatechars_html` is Django's own function) — NFC **only**. `TruncateCharsHTMLParser.process` counts
 //!   with a plain `len(data)`, so a combining mark DOES cost a character
 //!   there. #2319 reported both `chars` filters as having the same defect;
 //!   they do not.
@@ -69,13 +69,8 @@
 //! points assigned after the interpreter's version; for anything already
 //! assigned the two agree by policy.
 
-use std::collections::VecDeque;
-
 use unicode_normalization::char::canonical_combining_class;
 use unicode_normalization::UnicodeNormalization;
-
-use crate::filters::html_escape;
-use crate::htmlparser::{char_at, Sink, SinkResult, Stop, Tokenizer};
 
 /// `unicodedata.combining(c) != 0` — a character that does not add to a
 /// string's length for `Truncator.chars` (#2319).
@@ -95,31 +90,6 @@ fn nfc(text: &str) -> String {
 
 /// Django's default truncation text: `pgettext(..., "%(truncated_text)s…")`.
 const DEFAULT_TRUNCATE: &str = "%(truncated_text)s…";
-
-/// `django.utils.html.VOID_ELEMENTS` — the WHATWG list plus the two deprecated
-/// tags Django keeps. `frame` and `spacer` are the two the previous ad-hoc list
-/// was missing.
-pub fn is_void_element(tag: &str) -> bool {
-    matches!(
-        tag,
-        "area"
-            | "base"
-            | "br"
-            | "col"
-            | "embed"
-            | "hr"
-            | "img"
-            | "input"
-            | "link"
-            | "meta"
-            | "param"
-            | "source"
-            | "track"
-            | "wbr"
-            | "frame"
-            | "spacer"
-    )
-}
 
 /// Python's `str.isspace()` / `\s` for `str` patterns.
 ///
@@ -231,211 +201,6 @@ pub fn text_words(text: &str, length: i64, truncate: Option<&str>) -> String {
 enum Mode {
     Chars { length: i64, processed_chars: i64 },
     Words,
-}
-
-/// `TruncateHTMLParser` minus the tokenizer: the handler half only.
-///
-/// `raw` and `cdata_elem` moved to [`Tokenizer`] with the state machine; what
-/// is left here is the truncation budget and the tag stack, which is the only
-/// state Django's subclass actually adds. `raw_chars` stays because
-/// `process_chars` compares against the length of the WHOLE input.
-struct TruncateSink<'a> {
-    raw_chars: usize,
-    tags: VecDeque<String>,
-    output: String,
-    output_chars: usize,
-    remaining: i64,
-    replacement: Option<&'a str>,
-    mode: Mode,
-}
-
-impl<'a> TruncateSink<'a> {
-    fn new(raw: &'a str, length: i64, replacement: Option<&'a str>, words: bool) -> Self {
-        let (mode, remaining) = if words {
-            (Mode::Words, length)
-        } else {
-            (
-                Mode::Chars {
-                    length,
-                    processed_chars: 0,
-                },
-                calculate_truncate_chars_length(length, replacement),
-            )
-        };
-        TruncateSink {
-            raw_chars: raw.chars().count(),
-            tags: VecDeque::new(),
-            output: String::new(),
-            output_chars: 0,
-            remaining,
-            replacement,
-            mode,
-        }
-    }
-
-    fn push_out(&mut self, s: &str) {
-        self.output.push_str(s);
-        self.output_chars += s.chars().count();
-    }
-
-    /// `TruncateHTMLParser.feed`'s `except` branch.
-    fn finish_truncated(&mut self) {
-        let closing: String = self.tags.iter().map(|t| format!("</{t}>")).collect();
-        self.output.push_str(&closing);
-        self.tags.clear();
-    }
-}
-
-impl Sink for TruncateSink<'_> {
-    fn handle_starttag(&mut self, tag: &str, starttag_text: &str) {
-        self.push_out(starttag_text);
-        if !is_void_element(tag) {
-            self.tags.push_front(tag.to_string());
-        }
-    }
-
-    fn handle_endtag(&mut self, tag: &str) {
-        if !is_void_element(tag) {
-            self.push_out(&format!("</{tag}>"));
-            if self.tags.front().map(|t| t == tag).unwrap_or(false) {
-                self.tags.pop_front();
-            }
-        }
-    }
-
-    fn handle_startendtag(&mut self, tag: &str, starttag_text: &str) {
-        self.handle_starttag(tag, starttag_text);
-        if !is_void_element(tag) {
-            self.handle_endtag(tag);
-        }
-    }
-
-    fn handle_data(&mut self, data: &str) -> SinkResult {
-        let (data_len, out) = match self.mode {
-            Mode::Chars { .. } => self.process_chars(data)?,
-            Mode::Words => self.process_words(data),
-        };
-        if self.remaining < data_len {
-            self.remaining = 0;
-            let t = add_truncation_text(&out, self.replacement);
-            self.push_out(&t);
-            return Err(Stop);
-        }
-        self.remaining -= data_len;
-        self.push_out(&out);
-        Ok(())
-    }
-}
-
-impl TruncateSink<'_> {
-    /// `TruncateCharsHTMLParser.process`.
-    fn process_chars(&mut self, data: &str) -> Result<(i64, String), Stop> {
-        let dlen = data.chars().count() as i64;
-        let special = if let Mode::Chars {
-            length,
-            processed_chars,
-        } = &mut self.mode
-        {
-            *processed_chars += dlen;
-            *processed_chars == *length
-        } else {
-            false
-        };
-        // `len(self.output) + len(data) == len(self.rawdata)`: the whole input
-        // is one run of text of exactly `length` characters. Django emits it
-        // RAW — no escape, no truncation text — which is divergences #1 and #2.
-        if special && self.output_chars as i64 + dlen == self.raw_chars as i64 {
-            self.push_out(data);
-            return Err(Stop);
-        }
-        let take = self.remaining.max(0) as usize;
-        let kept: String = data.chars().take(take).collect();
-        Ok((dlen, html_escape(&kept)))
-    }
-
-    /// `TruncateWordsHTMLParser.process`: `re.split(r"(?<=\S)\s+(?=\S)", data)`.
-    fn process_words(&mut self, data: &str) -> (i64, String) {
-        let parts = split_interior_whitespace(data);
-        let take = self.remaining.max(0) as usize;
-        let joined = parts
-            .iter()
-            .take(take)
-            .copied()
-            .collect::<Vec<_>>()
-            .join(" ");
-        (parts.len() as i64, html_escape(&joined))
-    }
-}
-
-/// `re.split(r"(?<=\S)\s+(?=\S)", data)` — split only on whitespace runs that
-/// have a non-space on both sides, so leading and trailing padding stays glued
-/// to the first and last part.
-fn split_interior_whitespace(data: &str) -> Vec<&str> {
-    let mut parts = Vec::new();
-    let mut start = 0usize;
-    let mut i = 0usize;
-    let n = data.len();
-    while i < n {
-        let c = char_at(data, i).unwrap();
-        if !py_is_space(c) {
-            i += c.len_utf8();
-            continue;
-        }
-        let run_start = i;
-        while i < n {
-            let c = char_at(data, i).unwrap();
-            if py_is_space(c) {
-                i += c.len_utf8();
-            } else {
-                break;
-            }
-        }
-        let has_left = run_start > 0;
-        let has_right = i < n;
-        if has_left && has_right {
-            parts.push(&data[start..run_start]);
-            start = i;
-        }
-    }
-    parts.push(&data[start..]);
-    parts
-}
-
-fn run_html(text: &str, length: i64, truncate: Option<&str>, words: bool) -> String {
-    if length <= 0 {
-        return String::new();
-    }
-    // `convert_charrefs=True`, and `feed` WITHOUT `close`: Django's
-    // `TruncateHTMLParser.feed` calls `reset()` before it feeds, so `close()`
-    // can never see a buffered tail.
-    let sink = TruncateSink::new(text, length, truncate, words);
-    let mut tok = Tokenizer::new(text, true, sink);
-    if tok.feed().is_err() {
-        tok.sink.finish_truncated();
-    }
-    tok.sink.output
-}
-
-/// `Truncator.chars(num, truncate, html=True)`.
-/// `Truncator.chars(num, truncate, html=True)`.
-///
-/// NFC and **nothing else** (#2319). `TruncateCharsHTMLParser.process` counts
-/// its budget with a plain `len(data)` and does NOT skip combining marks the
-/// way `_text_chars` does, so adding a skip here would create a fresh
-/// divergence rather than close one. The issue reported the two paths as
-/// having the same defect; they do not, and
-/// `TestHtmlPathNormalizesButDoesNotSkip` pins the difference against live
-/// Django.
-///
-/// The combining class still reaches this path indirectly, via
-/// [`calculate_truncate_chars_length`] applied to the truncation text.
-pub fn html_chars(text: &str, length: i64, truncate: Option<&str>) -> String {
-    run_html(&nfc(text), length, truncate, false)
-}
-
-/// `Truncator.words(num, truncate, html=True)`.
-pub fn html_words(text: &str, length: i64, truncate: Option<&str>) -> String {
-    run_html(text, length, truncate, true)
 }
 
 // ---------------------------------------------------------------------------
@@ -1400,26 +1165,6 @@ pub fn urlencode(value: &str, safe: Option<&str>) -> String {
 mod tests {
     use super::*;
 
-    #[test]
-    fn split_interior_whitespace_keeps_padding() {
-        assert_eq!(split_interior_whitespace("a b"), vec!["a", "b"]);
-        assert_eq!(split_interior_whitespace(" a  b "), vec![" a", "b "]);
-        assert_eq!(split_interior_whitespace("   "), vec!["   "]);
-        assert_eq!(split_interior_whitespace(""), vec![""]);
-    }
-
-    #[test]
-    fn chars_special_case_returns_the_input_whole() {
-        // The reported cell: 8 characters at a limit of 8 is not "over".
-        assert_eq!(html_chars("Infinity", 8, None), "Infinity");
-        assert_eq!(html_chars("Infinity!", 8, None), "Infinit…");
-    }
-
-    #[test]
-    fn words_html_escapes_its_kept_text() {
-        assert_eq!(html_words("{'a': 1}", 2, Some(" …")), "{&#x27;a&#x27;: 1}");
-    }
-
     // -----------------------------------------------------------------------
     // #2319 — NFC, the combining skip, and the NFKD fold
     //
@@ -1491,29 +1236,11 @@ mod tests {
     }
 
     #[test]
-    fn html_chars_normalizes_but_does_not_skip_combining_marks() {
-        // The correction to #2319's premise: `TruncateCharsHTMLParser.process`
-        // counts `len(data)` with no combining check, so a mark NFC cannot
-        // absorb DOES cost a character here — where it would be free in the
-        // plain path. Adding a skip here would create a divergence.
-        let plain = text_chars("q\u{301}bcdefg", 5, None);
-        let html = html_chars("<b>q\u{301}bcdefg</b>", 5, None);
-        assert_eq!(plain, "q\u{301}bcd\u{2026}");
-        assert!(
-            html.contains("q\u{301}bc\u{2026}"),
-            "the HTML path should have counted the mark, got {html:?}"
-        );
-        // But it DOES normalize: a decomposed pair composes before counting.
-        assert!(html_chars("<b>e\u{301}</b>", 50, None).contains('\u{e9}'));
-    }
-
-    #[test]
     fn words_paths_do_not_normalize() {
         // `Truncator.words` reads `self._wrapped`, not the normalized text.
         // A negative control: if NFC were applied at too high a level these
         // would compose.
         assert_eq!(text_words("e\u{301} b c", 2, None), "e\u{301} b\u{2026}");
-        assert!(html_words("<b>e\u{301} b c</b>", 2, None).contains('\u{301}'));
     }
 
     #[test]

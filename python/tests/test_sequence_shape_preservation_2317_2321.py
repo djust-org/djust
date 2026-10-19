@@ -542,10 +542,7 @@ class TestEveryRebuildSiteIsAccountedFor:
             1,
             "dictsort/dictsortreversed — Django is sorted(), which returns a list",
         ),
-        "Ok(Value::List(chars))": (
-            1,
-            "make_list — Django is @stringfilter + list(str(value))",
-        ),
+        # `make_list` left in 2.0: it runs Django's own function.
         "Value::List(": (
             2,
             "safeseq and escapeseq — Django is a list comprehension in both",
@@ -592,8 +589,9 @@ class TestEveryRebuildSiteIsAccountedFor:
     #: line-literal pin would go red on formatting rather than on meaning.
     SHAPE_PRESERVING_CALLS = 1
 
-    #: The prose claim this PR makes, as a number.
-    TOTAL_REBUILD_SITES = 5
+    #: The prose claim this PR makes, as a number. 4 since 2.0 routed
+    #: `make_list` to Django's own function, which removed its list site.
+    TOTAL_REBUILD_SITES = 4
 
     def test_every_bare_list_site_is_one_of_the_documented_list_always_four(self) -> None:
         """The grep that catches BOTH halves of the rule.

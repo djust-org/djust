@@ -670,17 +670,6 @@ fn attribute_single_quote_breakout() {
 // 9. striptags Does Not Provide Security
 // ===========================================================================
 
-#[test]
-fn striptags_is_not_security_measure() {
-    // striptags is a text utility, NOT a security measure.
-    // It uses simple < > matching and can be bypassed.
-    // Auto-escaping is the correct defense against XSS.
-    let ctx = ctx_with("input", "<b>bold</b>");
-    let result = render("{{ input|striptags }}", &ctx);
-    // striptags strips tags, then auto-escaping kicks in (on remaining text)
-    assert_eq!(result, "bold");
-}
-
 // ===========================================================================
 // 10. urlize Filter XSS Prevention
 // ===========================================================================

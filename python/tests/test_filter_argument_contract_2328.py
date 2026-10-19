@@ -700,8 +700,6 @@ class TestChokepointIsTheOnlyParser:
             ("0", "BadArg::Raise"),  # ljust
             ("0", "BadArg::Raise"),  # rjust
             ("0", "BadArg::Raise"),  # center
-            ("20", "BadArg::ReturnInput"),  # truncatechars_html
-            ("10", "BadArg::ReturnInput"),  # truncatewords_html
         ]
     )
 
@@ -763,8 +761,9 @@ class TestChokepointIsTheOnlyParser:
         rather than written down.
         """
         arms = re.findall(self.CALL_SITE_RE, self.source())
-        # 8 since 2.0 routed `wordwrap`, `get_digit` and `urlizetrunc` to Django.
-        assert len(arms) == 8, f"{len(arms)} dispatch arms reach the chokepoint"
+        # 6 since 2.0 routed `wordwrap`, `get_digit`, `urlizetrunc`,
+        # `truncatechars_html` and `truncatewords_html` to Django.
+        assert len(arms) == 6, f"{len(arms)} dispatch arms reach the chokepoint"
         # Plus `floatformat`, which reaches `filter_int_arg` directly from its
         # own module rather than through the macro.
         floatformat_rs = FILTERS_RS.with_name("floatformat.rs").read_text(encoding="utf-8")
