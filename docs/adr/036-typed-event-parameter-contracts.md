@@ -317,6 +317,6 @@ This amendment records direction the project owner settled for 2.0. The text abo
 
 - *Retirement (Step R)*: the condition "only once strict is the default rather than opt-in — which this ADR does not yet approve" (line 268) is now met by direction for 2.0. Step R fires on the `2.0` branch after the replacement and usage inventory and the 1.4 migration gate pass; the targets and exit conditions are unchanged.
 - *Status* and *Compatibility and migration* ("changing the project default requires a separately announced compatibility step", line 238): 1.4's warnings and guide are that announced step.
-- *Completion decision R1* (`dj-auto-recover` stays legacy) needs a 2.0 answer before the legacy path is deleted. That is open.
+- *Completion decision R1* (`dj-auto-recover` stays legacy): direction settled for 2.0. A strict replacement restores all declared user-entered form fields in the currently authorized scope. It never restores arbitrary view state or downgrades to the legacy policy. Submission validation stays authoritative, and sensitive fields are excluded by default. Its API, field classification, storage, expiry and restore semantics need design, and it must land before the legacy path is deleted.
 
 **Still open:** the combined opt-in's name, scope and precedence against per-handler and per-view overrides and reserved fields. A combined setting must not silently grant data exposure or silently fall back to legacy semantics. Other strictness proposals are not approved by this amendment.
