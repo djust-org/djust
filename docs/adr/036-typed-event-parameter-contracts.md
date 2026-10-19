@@ -302,3 +302,21 @@ coordinated client/runtime/tooling changes; changing a doc snippet alone cannot
 deliver the guarantee. Coercion does not replace Forms, authorization, business
 validation, database constraints, or browser testing. No latency or CPU savings
 are claimed without measurement.
+
+## Amendment (2026-10-19)
+
+This amendment records direction the project owner settled for 2.0. The text above stays as written: it is the accurate record of the 1.x decision, in which strict is an opt-in and legacy the default. It approves no setting name or API.
+
+**Direction.**
+
+- **1.4** keeps `event_parameter_policy` defaulting to `legacy` and keeps the existing per-handler `parameter_policy` override. It adds deprecation warnings for legacy parameter handling, a migration guide and checker, and one combined opt-in that turns on strict event parameters together with explicit exposure (ADR-038) and strict-only event security.
+- **2.0** makes strict parameter contracts mandatory. It removes the legacy coercion and collection paths, and the `event_security` `open` and `warn` modes. There is no broad compatibility mode in 2.x.
+- Every transport and handler entry point (WebSocket, SSE, the HTTP fallback, scoped components and deliberately exposed API handlers) resolves one coherent policy.
+
+**What this changes in the text above.**
+
+- *Retirement (Step R)*: the condition "only once strict is the default rather than opt-in — which this ADR does not yet approve" (line 268) is now met by direction for 2.0. Step R fires on the `2.0` branch after the replacement and usage inventory and the 1.4 migration gate pass; the targets and exit conditions are unchanged.
+- *Status* and *Compatibility and migration* ("changing the project default requires a separately announced compatibility step", line 238): 1.4's warnings and guide are that announced step.
+- *Completion decision R1* (`dj-auto-recover` stays legacy): direction settled for 2.0. A strict replacement restores all declared user-entered form fields in the currently authorized scope. It never restores arbitrary view state or downgrades to the legacy policy. Submission validation stays authoritative, and sensitive fields are excluded by default. Its API, field classification, storage, expiry and restore semantics need design, and it must land before the legacy path is deleted.
+
+**Still open:** the combined opt-in's name, scope and precedence against per-handler and per-view overrides and reserved fields. A combined setting must not silently grant data exposure or silently fall back to legacy semantics. Other strictness proposals are not approved by this amendment.

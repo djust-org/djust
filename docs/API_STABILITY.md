@@ -207,6 +207,28 @@ This is the core stability promise:
   **these three symbols were scheduled for removal no earlier than `1.1.0`**,
   and djust `2.0.0` removed them (see [Removed in 2.0.0](#removed-in-200)).
 
+### The 1.4 bridge and 2.x (direction, 2026-10-19)
+
+The project owner settled this direction for the 1.4 → 2.0 transition. The
+SemVer rules above are unchanged by it.
+
+- **1.4 keeps compatibility.** It keeps every existing import, every default,
+  and the current `djust.__all__` and `djust.decorators.__all__`, so the
+  star-import surface (`from djust import *`) is the same as 1.3's. 1.4 adds
+  warnings that name each 2.0 removal and its concrete replacement, a
+  migration guide and checker, and an opt-in for the strict contracts. Every
+  new warning names the release it was deprecated in, its replacement and its
+  removal floor, as [the migration-path rule](#the-migration-path-rule)
+  requires.
+- **Removing a name from `__all__` is a removal.** It changes what
+  `from djust import *` binds, so it counts as removing a public symbol and
+  may only happen in a MAJOR release. Moving a name out of `__all__` in 1.4
+  is not allowed, even if the name stays importable.
+- **2.x has no broad compatibility mode.** 2.0 removes the announced legacy
+  surfaces. It does not ship a `djust.compat` module or setting that keeps
+  the legacy runtime available through 2.x. A narrow, non-behavioural alias
+  needs its own review and must not keep a legacy code path reachable.
+
 ---
 
 ## Currently Deprecated Symbols
