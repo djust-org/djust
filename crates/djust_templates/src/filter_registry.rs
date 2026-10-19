@@ -794,7 +794,15 @@ pub(crate) fn apply_django_builtin_filter(
     input_safety: InputSafety,
 ) -> djust_core::Result<Value> {
     Python::attach(|py| -> PyResult<Value> {
-        let func = py.import("django.template.defaultfilters")?.getattr(name)?;
+        // The REGISTERED filter, not the module attribute: the module also
+        // imports `django.utils.html.linebreaks`, which shadows the
+        // `linebreaks_filter` registered under that name and has no
+        // `needs_autoescape`, so it would never escape.
+        let func = py
+            .import("django.template.defaultfilters")?
+            .getattr("register")?
+            .getattr("filters")?
+            .get_item(name)?;
         let needs_autoescape = func
             .getattr("needs_autoescape")
             .and_then(|flag| flag.is_truthy())

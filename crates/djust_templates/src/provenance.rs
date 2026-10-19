@@ -793,7 +793,7 @@ mod tests {
     }
     #[test]
     fn filters_and_reinjection_drop_authority() {
-        for filter in ["force_escape", "striptags", "lower"] {
+        for filter in ["force_escape", "upper", "lower"] {
             let r = render(&format!(
                 "{{% filter {filter} %}}<div dj-view=\"app.Child\" dj-lazy></div>{{% endfilter %}}"
             ));

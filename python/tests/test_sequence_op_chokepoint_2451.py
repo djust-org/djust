@@ -63,7 +63,8 @@ One error enum plus one message constructor — [`ValueOpError`] /
 ``value_op_error`` — mirroring #2435's ``IntValueError`` / ``int_value_error``,
 because the question is the same one: WHICH exception does Python raise, since
 Django's ``except`` clauses catch different subsets. Three thin probes name the
-three operations (``python_iter`` / ``python_getitem`` / ``python_lower``), and
+three operations (``python_iter`` / ``python_getitem`` / ``python_lower``; the
+last went with ``phone2numeric``'s port in 2.0), and
 they share one ``python_type_name`` — which the ``{% for %}`` refusal arm in
 ``renderer.rs`` now reads too, retiring the four-arm copy it carried (#1646).
 """
@@ -309,11 +310,14 @@ class TestTheReferenceTableIsRunNotTranscribed:
         six filters, refused through the normalizer AND through the raw entry
         point. Before #2467 only the second half held.
         """
+        # `phone2numeric` is Django's own function since 2.0: its
+        # `AttributeError` crosses as Django raised it.
+        refusal = "not iterable|not subscriptable|raises|has no attribute 'lower'"
         for name in ("escapeseq", "safeseq", "unordered_list", "first", "last", "phone2numeric"):
             for key in ("td-zero", "td-plain"):
-                with pytest.raises(Exception, match="not iterable|not subscriptable|raises"):
+                with pytest.raises(Exception, match=refusal):
                     _rust.render_template("{{ p|%s }}" % name, {"p": CORPUS[key]})
-                with pytest.raises(Exception, match="not iterable|not subscriptable|raises"):
+                with pytest.raises(Exception, match=refusal):
                     _rust.render_template(
                         "{{ p|%s }}" % name, normalize_django_value({"p": CORPUS[key]})
                     )
@@ -557,13 +561,14 @@ class TestPhone2numericCallsAStringMethod:
     def test_a_non_string_refuses(self, value) -> None:
         with pytest.raises(AttributeError):
             DjangoTemplate("{{ p|phone2numeric }}").render(DjangoContext({"p": value}))
-        with pytest.raises(Exception, match="AttributeError.*'lower'"):
+        # Django's own function since 2.0, so its `AttributeError` crosses whole.
+        with pytest.raises(AttributeError, match="'lower'"):
             _rust.render_template("{{ p|phone2numeric }}", normalize_django_value({"p": value}))
 
     def test_the_none_case_by_name(self) -> None:
         """`str(None).lower()` is `"none"`, whose keypad spelling is `6663` —
         which is what djust rendered, on a page, for a missing value."""
-        with pytest.raises(Exception, match="AttributeError"):
+        with pytest.raises(AttributeError):
             _rust.render_template("{{ p|phone2numeric }}", normalize_django_value({"p": None}))
 
     @pytest.mark.parametrize("value", ["CALL-NOW", "abc", "", "Ärger"])
@@ -622,7 +627,7 @@ class TestOneChokepointAnswersWhichExceptionPythonRaises:
         subscripts has to join one of them rather than growing an eighth
         bespoke arm."""
         source = production(FILTERS_RS)
-        for probe in ("python_iter", "python_getitem", "python_lower"):
+        for probe in ("python_iter", "python_getitem"):
             assert self.callers(source, probe) == {"apply_builtin_filter"}, probe
 
     def test_the_type_name_readers_cover_filters_loops_and_include_candidates(self) -> None:
@@ -666,14 +671,14 @@ class TestOneChokepointAnswersWhichExceptionPythonRaises:
     def test_the_constructor_is_reached_from_every_arm_that_can_refuse(self) -> None:
         """The COUNT, so an arm that grows a bespoke `Err` is visible.
 
-        Six filters and seven call sites: `first`, `last`, the two native
-        iterators and `phone2numeric` have one each, and `random` has two —
-        one for the subscript and one for the missing `len()`. (The third
-        iterator, `unordered_list`, is Django's own function since 2.0.)
+        Five filters and six call sites: `first`, `last` and the two native
+        iterators have one each, and `random` has two — one for the subscript
+        and one for the missing `len()`. (The third iterator, `unordered_list`,
+        and `phone2numeric` are Django's own functions since 2.0.)
         """
         source = production(FILTERS_RS)
         arm = source.split("fn apply_builtin_filter", 1)[1].split("\n}\n", 1)[0]
-        assert arm.count("value_op_error(") == 7, arm.count("value_op_error(")
+        assert arm.count("value_op_error(") == 6, arm.count("value_op_error(")
 
     def test_the_pin_goes_red_when_an_arm_stops_using_the_constructor(self) -> None:
         """Canary, direction one: a bespoke ``Err`` in every arm."""
