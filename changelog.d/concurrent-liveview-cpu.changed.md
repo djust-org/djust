@@ -11,5 +11,5 @@
   properties, so it stops fingerprinting the whole state four times per mount
   through `changed_fields` / `is_dirty`. 40 pages of 300 rows in one process:
   mount p50 1.85 s → 1.13 s, mount CPU −39 %, one page alone 45 → 26 ms;
-  event CPU −8 %. 9 regression tests in
+  event CPU −8 %. 13 regression tests in
   `python/djust/tests/test_concurrent_liveview_cpu.py`.

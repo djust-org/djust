@@ -243,6 +243,15 @@ def _scan_html_tag(html: str, start: int) -> "tuple[int, list[tuple[int, int, in
     return -1, []
 
 
+def _rust_root_content_range(html: str) -> "Optional[Tuple[int, int]]":
+    """``djust._rust.root_content_range``, or None (the Python path) with an
+    extension built before it existed."""
+    from .. import _rust
+
+    fn = getattr(_rust, "root_content_range", None)
+    return fn(html) if fn is not None else None
+
+
 # One-entry memo per thread for ``_mask_for_root_search``. Finding a
 # root and balancing its close tag both mask the SAME string (the search, then
 # ``_find_closing_tag_pos``), so every extract/strip of a rendered page masked
@@ -1345,6 +1354,15 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         Falls back to [dj-view] if [dj-root] is not present, since dj-root
         is auto-inferred from dj-view (see PR #297).
         """
+        # The Rust twin of the locator below, on every mount and full
+        # render. It returns None for input the two read differently (parse
+        # errors inside a tag, ``{% %}`` text, a ``<body>`` root beside another
+        # view's container), which then takes the Python path.
+        span = _rust_root_content_range(str(html))
+        if span is not None:
+            start, end = span
+            return html if (start, end) == (0, len(html)) else html[start:end]
+
         # Find the opening tag for [dj-root], falling back to [dj-view]
         opening_match = _search_dj_root_open(html, _DJ_ROOT_RE, _DJ_VIEW_RE)
 
