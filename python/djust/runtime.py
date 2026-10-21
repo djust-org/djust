@@ -51,6 +51,7 @@ import time
 import weakref
 from concurrent.futures import ThreadPoolExecutor
 from functools import wraps
+from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -76,9 +77,11 @@ if TYPE_CHECKING:
 
 from ._class_snapshot import attribute_names
 from ._late_save import LateSaveDropped
+from ._turn_ports import RuntimeTurnPort
 from .rate_limit import ConnectionRateLimiter
 from .security import handle_exception, sanitize_for_log
 from .serialization import fast_json_loads
+from .turns import Turn, current_turn, run_turn
 from .validation import (
     validate_handler_params,
     validated_call_arguments,
@@ -1433,6 +1436,9 @@ class WSConsumerTransport:
     JSON-mode behavior is preserved verbatim.
     """
 
+    #: ``Turn.transport`` for turns this transport carries (ADR-044).
+    turn_transport = "ws"
+
     def __init__(self, consumer: Any):
         self._consumer = consumer
 
@@ -2611,8 +2617,17 @@ class SSESessionTransport:
     drains them and writes ``data:`` lines to the client.
     """
 
+    #: ``Turn.transport`` for turns this transport carries (ADR-044).
+    turn_transport = "sse"
+
     def __init__(self, session: Any):
         self._session = session
+
+    @property
+    def turn_request(self) -> Any:
+        """The live request for a turn: the event POST, else the stream GET."""
+        session = self._session
+        return getattr(session, "_event_request", None) or getattr(session, "_request", None)
 
     @property
     def session_id(self) -> str:
@@ -3220,7 +3235,7 @@ def _public_decorator_metadata(view_instance: Any) -> List[Tuple[str, Dict[str, 
     return found
 
 
-class ViewRuntime:
+class ViewRuntime(RuntimeTurnPort):
     """Wire-blind runtime for a single mounted LiveView session.
 
     Responsible for view instantiation, auth check, mount, render, and
@@ -3365,10 +3380,66 @@ class ViewRuntime:
     # Mount dispatch (used by SSE in this PR; WS still uses handle_mount)
     # ------------------------------------------------------------------ #
 
+    async def dispatch_mount(
+        self,
+        data: Dict[str, Any],
+        *,
+        turn_source: Optional[str] = None,
+        reconnect: Optional[bool] = None,
+    ) -> None:
+        """Mount a LiveView from a mount frame, as one ``mount`` turn (ADR-044).
+
+        Every mount entry point (page, slot, ``mount_batch``, live-redirect
+        navigation, the SSE stream) comes through here, so the turn-middleware
+        chain wraps them all; see :meth:`_dispatch_mount_body` for the mount.
+        ``turn_source`` names the caller (``"batch"``, ``"navigation"``); a frame
+        with a ``target_id`` is a ``"slot"`` mount, any other a ``"page"`` one.
+        ``reconnect`` (or the client's ``reconnect`` hint) makes it a
+        ``reconnect`` turn; that is informational and changes nothing else.
+        """
+        # Idempotent — second mount on the same runtime is a no-op (no turn).
+        if self.view_instance is not None:
+            return
+        source = turn_source or ("slot" if data.get("target_id") is not None else "page")
+        if reconnect is None:
+            reconnect = data.get("reconnect") is True
+        view_path = data.get("view")
+        view_class = None
+        if isinstance(view_path, str) and view_path:
+            from .security.mount import resolve_view_class
+
+            view_class = resolve_view_class(view_path).view_class
+        params = data.get("params")
+        turn = Turn(
+            "reconnect" if reconnect else "mount",
+            self.turn_transport,
+            source=source,
+            view_class=view_class,
+            params=MappingProxyType(params) if isinstance(params, dict) else None,
+            request=getattr(self.transport, "turn_request", None),
+            scope=self.scope,
+            session_id=self._turn_session_id(),
+            port=self,
+        )
+
+        async def body(turn: Turn) -> None:
+            try:
+                await self._dispatch_mount_body(data)
+            finally:
+                turn.view = self.view_instance
+
+        await run_turn(turn, body)
+
+    def _turn_session_id(self) -> Optional[str]:
+        try:
+            return self.session_id
+        except Exception:  # noqa: BLE001 - duck-typed transports may lack one
+            return None
+
     @_mount_tenant_scope
     @_unmount_on_failure
-    async def dispatch_mount(self, data: Dict[str, Any]) -> None:
-        """Mount a LiveView from a mount frame.
+    async def _dispatch_mount_body(self, data: Dict[str, Any]) -> None:
+        """Mount a LiveView from a mount frame (the body of the ``mount`` turn).
 
         Idempotent: if ``view_instance`` is already set the call is a no-op.
         This protects against the legacy ``?view=`` GET-mount + new POST
@@ -3457,6 +3528,9 @@ class ViewRuntime:
         from ._exposure_diagnostics import restrict_diagnostics
 
         restrict_diagnostics(view_instance)
+        running = current_turn()
+        if running is not None and running.view is None:
+            running.view = view_instance
 
         # ---- Transport back-references on the freshly-instantiated view ----
         # ADR-022 Iter 3 Phase 3.3a (#1917, Finding B). Wire the
@@ -4448,8 +4522,8 @@ class ViewRuntime:
     # ------------------------------------------------------------------ #
 
     @_runtime_diagnostic_scope
-    async def dispatch_event(self, data: Dict[str, Any]) -> None:
-        """Dispatch a client event to the mounted view.
+    async def dispatch_event(self, data: Dict[str, Any], *, turn_source: str = "client") -> None:
+        """Dispatch a client event to the mounted view, as one ``event`` turn (ADR-044).
 
         Frame schema::
 
@@ -4469,17 +4543,43 @@ class ViewRuntime:
         from ._exposure import uses_legacy_exposure
 
         explicit_request = None
-        if self.view_instance is not None and not uses_legacy_exposure(self.view_instance):
+        view = self.view_instance
+        if view is not None and not uses_legacy_exposure(view):
             try:
                 # Capture the current POST before waiting on another turn's
-                # lock. A later POST may replace the SSE session's request slot.
-                explicit_request = await self.transport.explicit_event_request(self.view_instance)
+                # lock (or a middleware's await). A later POST may replace the
+                # SSE session's request slot.
+                explicit_request = await self.transport.explicit_event_request(view)
             except Exception:
                 # The inner fail-closed gate emits a static denial for None.
                 explicit_request = None
-        tenant = getattr(self.view_instance, "_tenant", None) if self.view_instance else None
-        with _tenant_context(tenant):
-            await self._dispatch_event_inner(data, explicit_request=explicit_request)
+
+        async def body(turn: Turn) -> None:
+            tenant = getattr(self.view_instance, "_tenant", None) if self.view_instance else None
+            with _tenant_context(tenant):
+                await self._dispatch_event_inner(data, explicit_request=explicit_request)
+
+        if view is None:
+            # No view, no view code: the inner path answers "not mounted".
+            await body(None)  # type: ignore[arg-type]
+            return
+        event_name = data.get("event")
+        params = data.get("params")
+        await run_turn(
+            Turn(
+                "event",
+                self.turn_transport,
+                source=turn_source,
+                view=view,
+                event=event_name if isinstance(event_name, str) else None,
+                params=MappingProxyType(params) if isinstance(params, dict) else None,
+                scope=self.scope,
+                session_id=self._turn_session_id(),
+                port=self,
+                ref=data.get("ref"),
+            ),
+            body,
+        )
 
     async def _dispatch_event_inner(
         self, data: Dict[str, Any], *, explicit_request: Any = None
@@ -4514,32 +4614,10 @@ class ViewRuntime:
             await self.transport.send_error("View not mounted. Please reload the page.")
             return
 
-        # Opt-in per-event auth re-check (#1777, T3, ADR-022 Iter 2 Phase 2.3a).
-        # Runs at the SAME point the WS bespoke handler does — after the
-        # view-mounted check, BEFORE the actor branch and the normal handler path
-        # (websocket.py:3193-3222 sits before the actor block at :3282). The hook
-        # is default-True (no re-check) unless ``reauth_on_event`` is set + the view
-        # requires auth; on a False return the transport has ALREADY emitted the
-        # redirect/error + terminated itself.
-        #
-        # #291 multiplexed-path care: the transport-TERMINATING side effect (close)
-        # is owned by the hook and gated there (events are NOT batched today —
-        # mount_batch is mount-only — but if events ever get collected, the hook
-        # gates its own close on "not in batch"). The STATE change that closes the
-        # security gap (clearing ``view_instance`` so no later frame on this session
-        # dispatches against the deauthorized view) is applied HERE,
-        # UNCONDITIONALLY, regardless of whether the close fired — mirroring the WS
-        # bespoke block which sets ``self.view_instance = None`` after the close.
+        # ``reauth_on_event`` (#1777) runs before this, on the turn chain's
+        # ``reauth`` built-in (ADR-044 D7): a failed re-check has already
+        # answered, closed the transport and cleared ``view_instance``.
         from ._exposure import uses_legacy_exposure
-
-        recheck = getattr(self.transport, "recheck_event_auth", None)
-        if (
-            uses_legacy_exposure(self.view_instance)
-            and recheck is not None
-            and not await recheck(self.view_instance)
-        ):
-            self.view_instance = None  # unconditional state-clear (#291)
-            return
 
         uses_actors = getattr(self.transport, "uses_actors", None)
         if (
@@ -5114,8 +5192,42 @@ class ViewRuntime:
             else:
                 logger.error("Protected deferred-event flush failed")
 
-    @_runtime_diagnostic_scope
     async def _dispatch_single_event(
+        self,
+        target_view: Any,
+        event_name: str,
+        params: Dict[str, Any],
+        event_ref: Optional[int] = None,
+    ) -> None:
+        """Replay one deferred ``dj_activity`` event as an ``event``/``deferred`` turn.
+
+        ADR-044: the replay runs a handler, so it runs the turn chain. See
+        :meth:`_dispatch_single_event_body` for the dispatch itself.
+        """
+        if target_view is None:
+            return
+        turn = Turn(
+            "event",
+            self.turn_transport,
+            source="deferred",
+            view=target_view,
+            event=event_name if isinstance(event_name, str) else None,
+            params=MappingProxyType(params) if isinstance(params, dict) else None,
+            scope=self.scope,
+            session_id=self._turn_session_id(),
+            port=self,
+            ref=event_ref,
+        )
+        turn._locked = True  # the flush runs inside the event's event_context
+        await run_turn(
+            turn,
+            lambda _turn: self._dispatch_single_event_body(
+                target_view, event_name, params, event_ref
+            ),
+        )
+
+    @_runtime_diagnostic_scope
+    async def _dispatch_single_event_body(
         self,
         target_view: Any,
         event_name: str,
@@ -6425,11 +6537,11 @@ class ViewRuntime:
     # ------------------------------------------------------------------ #
 
     async def dispatch_url_change(self, data: Dict[str, Any]) -> None:
-        """Handle a URL change frame (popstate or dj-patch click).
+        """Handle a URL change frame (popstate or dj-patch click): a ``params`` turn.
 
-        Calls ``handle_params(params, uri)`` then re-renders + sends patches.
-        Mirrors the legacy ``LiveViewConsumer.handle_url_change`` (now a
-        thin shim over this method).
+        Calls ``handle_params(params, uri)`` then re-renders + sends patches,
+        inside the turn-middleware chain (ADR-044). Mirrors the legacy
+        ``LiveViewConsumer.handle_url_change`` (now a thin shim over this method).
 
         Wrapped in the tenant context (Finding #6) so handle_params + the
         object-permission re-check + render see the correct tenant.
@@ -6438,6 +6550,23 @@ class ViewRuntime:
         if view is None:
             await self.transport.send_error("View not mounted")
             return
+        params = data.get("params")
+        await run_turn(
+            Turn(
+                "params",
+                self.turn_transport,
+                source="url_change",
+                view=view,
+                params=MappingProxyType(params) if isinstance(params, dict) else None,
+                scope=self.scope,
+                session_id=self._turn_session_id(),
+                port=self,
+            ),
+            lambda turn: self._dispatch_url_change_turn(view, data),
+        )
+
+    async def _dispatch_url_change_turn(self, view: Any, data: Dict[str, Any]) -> None:
+        """The body of a ``params`` turn (see :meth:`dispatch_url_change`)."""
         # URL renders participate in the same mutation order as events and
         # background results. Otherwise their HTML and owner contracts can
         # describe different turns. Navigation may replace the owner while
@@ -7398,29 +7527,33 @@ class ViewRuntime:
             if self.view_instance is not view or self._explicit_commits != commits:
                 return
             async with self._explicit_event_lock, self.transport.event_context(view):
-                if self.view_instance is not view or self._explicit_commits != commits:
-                    return
-                self._in_explicit_catch_up = True
-                try:
-                    if pending is not None and not pending.done():
-                        await self._explicit_catch_up_failed(view, "storage is not answering")
+
+                async def complete() -> None:
+                    if self.view_instance is not view or self._explicit_commits != commits:
                         return
+                    self._in_explicit_catch_up = True
                     try:
-                        await self.authorize_explicit_turn(view)
-                    except Exception:  # noqa: BLE001 — no auth provider values on the wire/log
-                        await self._explicit_catch_up_failed(view, "not authorized")
-                        return
-                    if not await self.commit_explicit_turn(view, source="async"):
-                        return  # it sent the terminal error (a catch-up never defers twice)
-                    snapshot_fields = await self._explicit_event_snapshot(view)
-                    await self._render_async_result(
-                        None, snapshot_fields=snapshot_fields, force_html=True
-                    )
-                except Exception:  # noqa: BLE001 — render/provider errors may carry values
-                    await self._explicit_catch_up_failed(view, "render failed")
-                finally:
-                    self._in_explicit_catch_up = False
-                    view.__dict__.pop("_djust_event_request", None)
+                        if pending is not None and not pending.done():
+                            await self._explicit_catch_up_failed(view, "storage is not answering")
+                            return
+                        try:
+                            await self.authorize_explicit_turn(view)
+                        except Exception:  # noqa: BLE001 — no auth provider values on the wire/log
+                            await self._explicit_catch_up_failed(view, "not authorized")
+                            return
+                        if not await self.commit_explicit_turn(view, source="async"):
+                            return  # it sent the terminal error (a catch-up never defers twice)
+                        snapshot_fields = await self._explicit_event_snapshot(view)
+                        await self._render_async_result(
+                            None, snapshot_fields=snapshot_fields, force_html=True
+                        )
+                    except Exception:  # noqa: BLE001 — render/provider errors may carry values
+                        await self._explicit_catch_up_failed(view, "render failed")
+                    finally:
+                        self._in_explicit_catch_up = False
+                        view.__dict__.pop("_djust_event_request", None)
+
+                await self._run_async_result_turn(view, None, complete, source="catch_up")
 
         self._explicit_catch_up = asyncio.ensure_future(catch_up())
 
@@ -8283,6 +8416,85 @@ class ViewRuntime:
         kwargs: Any,
         event_name: Optional[str],
     ) -> None:
+        """Run one background task as an ``async``/``start`` turn (ADR-044).
+
+        The turn chain runs before the callback starts (context a middleware
+        sets reaches the callback); its result is handled in a nested
+        ``async``/``result`` turn. See :meth:`_execute_async_task_body`.
+        """
+        # The task outlives the turn that queued it; on SSE that turn's request
+        # executors die with the POST (#3097, #3200 review B-b). Before the
+        # chain, so middleware runs with the task's own executors.
+        _detach_from_finished_request()
+        view = self.view_instance
+        if not view:
+            return
+        await run_turn(
+            Turn(
+                "async",
+                self.turn_transport,
+                source="start",
+                view=view,
+                event=task_name if isinstance(task_name, str) else None,
+                scope=self.scope,
+                session_id=self._turn_session_id(),
+                port=self,
+            ),
+            lambda _turn: self._execute_async_task_body(
+                task_name, callback, args, kwargs, event_name
+            ),
+        )
+
+    async def _run_async_start_turn(
+        self, view: Any, task_name: Any, start: Callable[[], Awaitable[None]]
+    ) -> None:
+        """Run background work (a child's task) as an ``async``/``start`` turn."""
+        await run_turn(
+            Turn(
+                "async",
+                self.turn_transport,
+                source="start",
+                view=view,
+                event=task_name if isinstance(task_name, str) else None,
+                scope=self.scope,
+                session_id=self._turn_session_id(),
+                port=self,
+            ),
+            lambda _turn: start(),
+        )
+
+    async def _run_async_result_turn(
+        self,
+        view: Any,
+        task_name: Any,
+        complete: Callable[[], Awaitable[None]],
+        source: str = "result",
+    ) -> None:
+        """Handle a background result as an ``async``/``result`` turn (ADR-044).
+
+        Called with the transport's render lock held (inside ``event_context``).
+        """
+        turn = Turn(
+            "async",
+            self.turn_transport,
+            source=source,
+            view=view,
+            event=task_name if isinstance(task_name, str) else None,
+            scope=self.scope,
+            session_id=self._turn_session_id(),
+            port=self,
+        )
+        turn._locked = True
+        await run_turn(turn, lambda _turn: complete())
+
+    async def _execute_async_task_body(
+        self,
+        task_name: str,
+        callback: Callable[..., Any],
+        args: Any,
+        kwargs: Any,
+        event_name: Optional[str],
+    ) -> None:
         """Run one background task and stream the re-rendered result.
 
         Mirrors ``sse.py:_sse_execute_async_task``: run the callback off-thread,
@@ -8297,10 +8509,7 @@ class ViewRuntime:
         ``_render_lock`` across handler + render). SSE uses its session render
         lock to prevent late results from crossing a page-replacement boundary.
         """
-        # The task outlives the turn that queued it; on SSE that turn's request
-        # executors die with the POST (#3097, #3200 review B-b). Legacy and
-        # explicit tasks alike.
-        _detach_from_finished_request()
+        # ``_detach_from_finished_request`` already ran (in the turn wrapper).
         view = self.view_instance
         if not view:
             return
@@ -8370,19 +8579,24 @@ class ViewRuntime:
             # still gets its user callback — only the stale re-render is
             # dropped), then the render.
             async with self.transport.event_context(view):
-                if hasattr(view, "handle_async_result"):
-                    await sync_to_async(view.handle_async_result)(
-                        task_name, result=result, error=None
-                    )
-                # Identity re-check INSIDE the lock (#1940): the handler await
-                # above is an unbounded wait during which the view can be torn
-                # down or replaced. Rendering the stale view would emit a frame
-                # the connection's version/recovery state does not own.
-                if self.view_instance is not view:
-                    return
-                await self._render_async_result(event_name)
+
+                async def complete() -> None:
+                    if hasattr(view, "handle_async_result"):
+                        await sync_to_async(view.handle_async_result)(
+                            task_name, result=result, error=None
+                        )
+                    # Identity re-check INSIDE the lock (#1940): the handler await
+                    # above is an unbounded wait during which the view can be torn
+                    # down or replaced. Rendering the stale view would emit a frame
+                    # the connection's version/recovery state does not own.
+                    if self.view_instance is not view:
+                        return
+                    await self._render_async_result(event_name)
+
+                await self._run_async_result_turn(view, task_name, complete)
 
         except Exception as exc:
+            failure = exc  # bound for the nested result turn below
             if legacy_diagnostics and uses_legacy_exposure(view):
                 logger.exception(
                     "Runtime: error in start_async callback '%s' on %s",
@@ -8400,13 +8614,17 @@ class ViewRuntime:
                 # turn announced ``async_pending`` (#2963), and this frame is
                 # what ends the client's loading state.
                 async with self.transport.event_context(view):
-                    if hasattr(view, "handle_async_result"):
-                        await sync_to_async(view.handle_async_result)(
-                            task_name, result=None, error=exc
-                        )
-                    if self.view_instance is not view:
-                        return
-                    await self._render_async_result(event_name)
+
+                    async def complete_error() -> None:
+                        if hasattr(view, "handle_async_result"):
+                            await sync_to_async(view.handle_async_result)(
+                                task_name, result=None, error=failure
+                            )
+                        if self.view_instance is not view:
+                            return
+                        await self._render_async_result(event_name)
+
+                    await self._run_async_result_turn(view, task_name, complete_error)
             except Exception:
                 if legacy_diagnostics and uses_legacy_exposure(view):
                     logger.exception(
@@ -8508,41 +8726,45 @@ class ViewRuntime:
             return
 
         async with self._explicit_event_lock, self.transport.event_context(view):
-            try:
-                try:
-                    await self.authorize_explicit_turn(view)
-                except Exception:  # noqa: BLE001
-                    if self.view_instance is view:
-                        await self.deny_explicit_turn()
-                    return
-                handler = getattr(view, "handle_async_result", None)
-                if callable(handler):
-                    try:
-                        await sync_to_async(handler)(task_name, result=result, error=error)
-                    except Exception as exc:  # noqa: BLE001
-                        from ._exposure_diagnostics import log_failure_for
 
-                        log_failure_for(
-                            logger,
-                            (view,),
-                            exc,
-                            "Runtime: error in handle_async_result for task '%s'",
-                            task_name,
-                            level="warning",
-                            traceback=True,
-                        )
+            async def complete() -> None:
+                try:
+                    try:
+                        await self.authorize_explicit_turn(view)
+                    except Exception:  # noqa: BLE001
+                        if self.view_instance is view:
+                            await self.deny_explicit_turn()
                         return
-                elif error is not None:
-                    # Legacy parity: an unhandled failure renders nothing.
-                    return
-                if self.view_instance is not view:
-                    return
-                if not await self.commit_explicit_turn(view, source="async"):
-                    return
-                snapshot_fields = await self._explicit_event_snapshot(view)
-                await self._render_async_result(event_name, snapshot_fields=snapshot_fields)
-            finally:
-                view.__dict__.pop("_djust_event_request", None)
+                    handler = getattr(view, "handle_async_result", None)
+                    if callable(handler):
+                        try:
+                            await sync_to_async(handler)(task_name, result=result, error=error)
+                        except Exception as exc:  # noqa: BLE001
+                            from ._exposure_diagnostics import log_failure_for
+
+                            log_failure_for(
+                                logger,
+                                (view,),
+                                exc,
+                                "Runtime: error in handle_async_result for task '%s'",
+                                task_name,
+                                level="warning",
+                                traceback=True,
+                            )
+                            return
+                    elif error is not None:
+                        # Legacy parity: an unhandled failure renders nothing.
+                        return
+                    if self.view_instance is not view:
+                        return
+                    if not await self.commit_explicit_turn(view, source="async"):
+                        return
+                    snapshot_fields = await self._explicit_event_snapshot(view)
+                    await self._render_async_result(event_name, snapshot_fields=snapshot_fields)
+                finally:
+                    view.__dict__.pop("_djust_event_request", None)
+
+            await self._run_async_result_turn(view, task_name, complete)
 
     async def _render_async_result(
         self,

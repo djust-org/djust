@@ -547,7 +547,20 @@ class SSESession:
         A POST takes the lock of the view it is for, so turns of different views
         run at the same time and a view's own turns run one at a time. A
         navigation replaces every view, so it takes them all.
+
+        Every POSTed frame is charged to the session's per-connection rate
+        limiter first, as the WebSocket charges every frame on arrival (ADR-044
+        D7: rate limiting stays at transport ingress). Root-view events,
+        ``url_change`` and page mounts were not charged over SSE before.
         """
+        frame_type = data.get("type")
+        if not self._rate_limiter.check(frame_type if isinstance(frame_type, str) else "unknown"):
+            await self.send_error(
+                "Rate limit exceeded", code="rate_limited", **self._ref_fields(data)
+            )
+            if self._rate_limiter.should_disconnect():
+                self.shutdown()
+            return
         if data.get("target_id") is not None:
             # A view mounted beside the page view (#3252) has its own runtime; a
             # frame that names none that is mounted is refused, never answered by
@@ -568,12 +581,10 @@ class SSESession:
                 self._event_request = None
 
     async def _navigate(self, request: HttpRequest, data: dict[str, Any]) -> None:
-        """A ``live_redirect_mount``: wait for every view's running turn, then replace the page."""
-        if not self._rate_limiter.check("live_redirect_mount"):
-            await self.send_error("Navigation rate limit exceeded", code="rate_limited")
-            if self._rate_limiter.should_disconnect():
-                self.shutdown()
-            return
+        """A ``live_redirect_mount``: wait for every view's running turn, then replace the page.
+
+        Charged to the rate limiter by :meth:`dispatch`, like every frame.
+        """
         # Lock order: structure, the page view, then each view beside it in the
         # order it mounted. Nothing takes them in another order.
         async with contextlib.AsyncExitStack() as stack:
@@ -624,17 +635,7 @@ class SSESession:
             await self.send_error("Invalid view address", **fields)
             return
         frame_type = data.get("type")
-        if frame_type in ("mount", "unmount"):
-            # Each mount runs a view's mount, render and state restore: bound
-            # the rate of them as the WebSocket bounds every frame (and this
-            # session bounds a navigation).
-            if not self._rate_limiter.check(frame_type):
-                await self.send_error(
-                    "Rate limit exceeded", code="rate_limited", **self._ref_fields(data)
-                )
-                if self._rate_limiter.should_disconnect():
-                    self.shutdown()
-                return
+        # Every frame (mount and unmount included) was charged by dispatch().
         if frame_type == "mount":
             await self._mount_slot(request, data)
             return
@@ -868,7 +869,8 @@ class SSESession:
                                 "view": f"{view_class.__module__}.{view_class.__qualname__}",
                                 "url": target_request.path_info,
                                 "has_prerendered": False,
-                            }
+                            },
+                            turn_source="navigation",
                         )
                     finally:
                         self._replacing_view = False
@@ -1410,6 +1412,9 @@ class DjustSSEStreamView(View):
             # A same-owner reconnect: order the new mount's saves after any
             # save the previous session's view still has running (#3212).
             previous = _sse_sessions.get(session_id)
+            # An EventSource auto-reconnect re-requests the stream with the same
+            # id: the mount runs as a ``reconnect`` turn (ADR-044; informational).
+            reconnecting = previous is not None
             if previous is not None and _owner_identity(previous) == _owner_identity(session):
                 _carry_save_ordering(previous.runtime, session.runtime)
             # Stash the REAL HTTP request so the runtime mounts against it (real
@@ -1467,7 +1472,8 @@ class DjustSSEStreamView(View):
                             "url": session._request.path_info,
                             "params": mount_params,
                             "track_static": track_static,
-                        }
+                        },
+                        reconnect=reconnecting,
                     )
                 except Exception as exc:
                     outcome = protected_http_outcome(exc)

@@ -162,6 +162,8 @@ class Turn:
         "_port",
         "_body",
         "_open",
+        "_ref",
+        "_locked",
     )
 
     def __init__(
@@ -178,6 +180,7 @@ class Turn:
         scope: Optional[Mapping[str, Any]] = None,
         session_id: Optional[str] = None,
         port: Any = None,
+        ref: Any = None,
     ) -> None:
         self.kind = kind
         self.source = source
@@ -196,6 +199,9 @@ class Turn:
         self._port = port
         self._body: Optional[Callable[["Turn"], Awaitable[Any]]] = None
         self._open = False
+        self._ref = ref
+        # Set by a transport whose turn body runs under the session render lock.
+        self._locked = False
 
     @property
     def user(self) -> Any:

@@ -2585,6 +2585,10 @@ class LiveViewWebSocket {
         // container it fills: the server adds it to the socket instead of
         // replacing the page view, and addresses its frames with this id.
         if (options.targetId) frame.target_id = options.targetId;
+        // ADR-044: the server runs this mount as a `reconnect` turn. A hint
+        // only (turn middleware sees `turn.kind`); nothing security-relevant
+        // depends on it.
+        if (window.djust && window.djust._isReconnect) frame.reconnect = true;
         // #2966: a reconnecting page view asks whether its tracked assets
         // are stale (dj-track-static). Shared with the SSE mount (#1646).
         const trackStatic = globalThis.djust.djTrackStatic;
