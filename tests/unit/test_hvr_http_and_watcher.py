@@ -93,10 +93,15 @@ def _get(url):
 
 
 def _save(path, version):
+    # A reload must not reuse the cached bytecode. The .pyc is checked against
+    # the source's whole-second mtime and its size, and every version here has
+    # the same size, so each save must land in a later second than the one
+    # before it: two saves stamped `time.time() + 2` in the same second let
+    # the second reload run the first one's bytecode.
+    previous = os.stat(path).st_mtime
     with open(path, "w") as f:
         f.write(textwrap.dedent(VIEW_SOURCE % version))
-    # A reload in the same second must not reuse the cached bytecode.
-    stamp = time.time() + 2
+    stamp = max(time.time(), previous) + 2
     os.utime(path, (stamp, stamp))
 
 
