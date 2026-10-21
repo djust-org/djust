@@ -40,6 +40,61 @@ function _unmarkHandlerBound(element, type) {
 }
 
 // ============================================================================
+// dj-poll teardown
+// ============================================================================
+
+// Every element that currently owns a poll interval. A removal path tears
+// down by CONTAINMENT against this set rather than by `[dj-poll]` query, so a
+// poll whose element lost its attribute is still found.
+const _pollElements = new Set();
+
+/**
+ * Stop one element's poll: clear its interval and visibilitychange handler
+ * and un-mark it, so a later bind pass re-binds it if it comes back (a
+ * sticky subtree re-attached after navigation, say).
+ * @param {Element} element
+ */
+function _teardownPoll(element) {
+    if (element._djustPollIntervalId) clearInterval(element._djustPollIntervalId);
+    if (element._djustPollVisibilityHandler) {
+        document.removeEventListener('visibilitychange', element._djustPollVisibilityHandler);
+    }
+    element._djustPollIntervalId = null;
+    element._djustPollVisibilityHandler = null;
+    element._djustPollBoundKey = null;
+    _unmarkHandlerBound(element, 'poll');
+    _pollElements.delete(element);
+}
+
+/**
+ * Stop the poll of `root` AND of every poll element inside it. Every path
+ * that removes or replaces DOM calls this on what it removes: clearing only
+ * the replaced node left a nested poll's interval running on the detached
+ * element after a live_redirect mount, firing a handler the next view does
+ * not have.
+ * @param {Node} root - an element, fragment, or document
+ * @param {boolean} [childrenOnly=false] - keep `root`'s own poll: for a
+ *   container whose CONTENT is replaced while the container survives.
+ */
+function teardownPollsIn(root, childrenOnly) {
+    if (!root || _pollElements.size === 0) return;
+    for (const element of Array.from(_pollElements)) {
+        if (element === root) {
+            if (!childrenOnly) _teardownPoll(element);
+        } else if (typeof root.contains === 'function' && root.contains(element)) {
+            _teardownPoll(element);
+        }
+    }
+}
+
+/** Stop the polls whose element left the document or dropped `dj-poll`. */
+function _sweepOrphanedPolls() {
+    for (const element of Array.from(_pollElements)) {
+        if (!element.isConnected || !element.getAttribute('dj-poll')) _teardownPoll(element);
+    }
+}
+
+// ============================================================================
 // Scoped Listener Helpers (window/document event binding)
 // ============================================================================
 
@@ -1654,7 +1709,9 @@ function bindLiveViewEvents(scope) {
 
     // === Per-element scanning section (only for non-delegable events) ===
 
-    // dj-poll needs per-element interval setup
+    // dj-poll needs per-element interval setup. Stop the polls a removal
+    // path missed (or whose attribute was dropped) before binding new ones.
+    _sweepOrphanedPolls();
     const pollSelector = '[dj-poll]';
     const pollElements = root.querySelectorAll(pollSelector);
     pollElements.forEach(element => {
@@ -1669,22 +1726,13 @@ function bindLiveViewEvents(scope) {
         // not: an unchanged pair must NOT restart the poll phase — the bind
         // loop runs on every patch, and restarting would reset the interval
         // timer on every morph, so a poll would never fire on schedule. A
-        // changed pair evicts the old phase (clearInterval + visibilitychange
-        // teardown — the same teardown the element-removal paths in
-        // 01-dom-helpers-turbo.js / 12-vdom-patch.js perform) and rebuilds.
+        // changed pair evicts the old phase (_teardownPoll — the same teardown
+        // every element-removal path performs) and rebuilds.
         const interval = parseInt(element.getAttribute('dj-poll-interval'), 10) || 5000;
         const boundKey = pollHandler + '\u0000' + interval;
         if (_isHandlerBound(element, 'poll')) {
             if (element._djustPollBoundKey === boundKey) return;
-            if (element._djustPollIntervalId) {
-                clearInterval(element._djustPollIntervalId);
-                element._djustPollIntervalId = null;
-            }
-            if (element._djustPollVisibilityHandler) {
-                document.removeEventListener('visibilitychange', element._djustPollVisibilityHandler);
-                element._djustPollVisibilityHandler = null;
-            }
-            _unmarkHandlerBound(element, 'poll');
+            _teardownPoll(element);
         }
         _markHandlerBound(element, 'poll');
         element._djustPollBoundKey = boundKey;
@@ -1696,6 +1744,12 @@ function bindLiveViewEvents(scope) {
         // attributes can change under a surviving element too, and a
         // bind-time snapshot would keep dispatching the old ones (#2858).
         const firePoll = () => {
+            // Defensive: a removal path that skipped teardownPollsIn must not
+            // leave a detached element firing a handler the page no longer has.
+            if (!element.isConnected) {
+                _teardownPoll(element);
+                return;
+            }
             if (document.hidden) return;
             // Strict: routing context lets the owner that resolved the contract receive it.
             const strictParams = _strictBinding(element, parsed.name, {}, [], element);
@@ -1716,6 +1770,7 @@ function bindLiveViewEvents(scope) {
         };
         document.addEventListener('visibilitychange', visHandler);
         element._djustPollVisibilityHandler = visHandler;
+        _pollElements.add(element);
     });
 
     // ================================================================

@@ -113,6 +113,7 @@ function markBodyStamped() {
  */
 function replaceContainerHtml(container, html) {
     if (container !== document.body || !pageRootIsBody()) {
+        teardownPollsIn(container, true);
         container.innerHTML = html;
         return;
     }
@@ -120,7 +121,7 @@ function replaceContainerHtml(container, html) {
     const owned = all.filter((n) => !isForeignBodyChild(n));
     const lastOwned = owned.length ? all.indexOf(owned[owned.length - 1]) : -1;
     const anchor = all.slice(lastOwned + 1).find((n) => isForeignBodyChild(n)) || null;
-    owned.forEach((n) => container.removeChild(n));
+    owned.forEach((n) => { teardownPollsIn(n); container.removeChild(n); });
     const tpl = document.createElement('template');
     tpl.innerHTML = html;
     container.insertBefore(tpl.content, anchor);
@@ -1193,6 +1194,7 @@ function _morphChildrenInner(existing, desired) {
                 && globalThis.djust.maybeDeferRemoval(node)) {
                 continue;
             }
+            teardownPollsIn(node);
             existing.removeChild(node);
         }
     }
@@ -1213,13 +1215,8 @@ function morphElement(existing, desired) {
 function _morphElementInner(existing, desired) {
     // Tag mismatch — replace entirely
     if (existing.tagName !== desired.tagName) {
-        // Clean up poll timers before replacing (prevents orphaned intervals)
-        if (existing._djustPollIntervalId) {
-            clearInterval(existing._djustPollIntervalId);
-            if (existing._djustPollVisibilityHandler) {
-                document.removeEventListener('visibilitychange', existing._djustPollVisibilityHandler);
-            }
-        }
+        // Stop the polls of the replaced subtree (prevents orphaned intervals)
+        teardownPollsIn(existing);
         // Clean up scoped (window/document) listeners before replacing
         _cleanupScopedListeners(existing);
         if (globalThis.djust && typeof globalThis.djust.maybeDeferRemoval === 'function'
@@ -1475,6 +1472,7 @@ function _applyDjUpdateElementsInner(existingRoot, newRoot) {
                     && globalThis.djust.maybeDeferRemoval(existing)) {
                     continue;
                 }
+                teardownPollsIn(existing);
                 existing.remove();
             }
         }
@@ -1745,6 +1743,7 @@ function _removeDjIfBracketedRange(openMarker, closeMarker) {
     }
     for (const node of toRemove) {
         if (node.parentNode === parent) {
+            teardownPollsIn(node);
             parent.removeChild(node);
         }
     }
@@ -2322,6 +2321,7 @@ function _removeChildNode(parent, child) {
         && globalThis.djust.maybeDeferRemoval(child)) {
         return;
     }
+    teardownPollsIn(child);
     parent.removeChild(child);
     if (wasTextNode && parent.tagName === 'TEXTAREA' && document.activeElement !== parent) {
         parent.value = '';
@@ -2676,13 +2676,8 @@ function applySinglePatch(patch, rootEl = null) {
     try {
         switch (patch.type) {
             case 'Replace':
-                // Clean up poll timers before replacing (prevents orphaned intervals)
-                if (node._djustPollIntervalId) {
-                    clearInterval(node._djustPollIntervalId);
-                    if (node._djustPollVisibilityHandler) {
-                        document.removeEventListener('visibilitychange', node._djustPollVisibilityHandler);
-                    }
-                }
+                // Stop the polls of the replaced subtree (prevents orphaned intervals)
+                teardownPollsIn(node);
                 const newNode = createNodeFromVNode(patch.node, node.parentNode);
                 if (node.nodeType === Node.ELEMENT_NODE
                     && globalThis.djust
@@ -2864,6 +2859,7 @@ function applySinglePatch(patch, rootEl = null) {
                         && globalThis.djust.maybeDeferRemoval(child)) {
                         break;
                     }
+                    teardownPollsIn(child);
                     node.removeChild(child);
                     // If removing a text node from a textarea, also clear its .value
                     // (removing textContent alone doesn't update what's displayed)

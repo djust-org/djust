@@ -339,11 +339,10 @@ function reinitLiveViewForTurboNav() {
         if (globalThis.djustDebug) console.log('[LiveView:TurboNav] No LiveView containers found, skipping WebSocket');
     }
 
-    // Clean up existing poll intervals before re-binding
-    document.querySelectorAll('[dj-poll]').forEach(el => {
-        if (el._djustPollIntervalId) clearInterval(el._djustPollIntervalId);
-        if (el._djustPollVisibilityHandler) document.removeEventListener('visibilitychange', el._djustPollVisibilityHandler);
-    });
+    // Stop every poll before re-binding — including the ones on elements the
+    // swap already detached, which a document query cannot see.
+    teardownPollsIn(document);
+    _sweepOrphanedPolls();
 
     // Clean up scoped (window/document) listeners before re-binding
     for (const el of _scopedListenerElements) {
@@ -1923,6 +1922,7 @@ class LiveViewWebSocket {
                     }
                     if (typeof entry.html === 'string') {
                         // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
+                        teardownPollsIn(container, true);
                         container.innerHTML = entry.html;
                         // #2058: unlike the single-view mount branches above,
                         // mount_batch does NOT call _runInsertedScripts() —
@@ -5477,6 +5477,61 @@ function _unmarkHandlerBound(element, type) {
 }
 
 // ============================================================================
+// dj-poll teardown
+// ============================================================================
+
+// Every element that currently owns a poll interval. A removal path tears
+// down by CONTAINMENT against this set rather than by `[dj-poll]` query, so a
+// poll whose element lost its attribute is still found.
+const _pollElements = new Set();
+
+/**
+ * Stop one element's poll: clear its interval and visibilitychange handler
+ * and un-mark it, so a later bind pass re-binds it if it comes back (a
+ * sticky subtree re-attached after navigation, say).
+ * @param {Element} element
+ */
+function _teardownPoll(element) {
+    if (element._djustPollIntervalId) clearInterval(element._djustPollIntervalId);
+    if (element._djustPollVisibilityHandler) {
+        document.removeEventListener('visibilitychange', element._djustPollVisibilityHandler);
+    }
+    element._djustPollIntervalId = null;
+    element._djustPollVisibilityHandler = null;
+    element._djustPollBoundKey = null;
+    _unmarkHandlerBound(element, 'poll');
+    _pollElements.delete(element);
+}
+
+/**
+ * Stop the poll of `root` AND of every poll element inside it. Every path
+ * that removes or replaces DOM calls this on what it removes: clearing only
+ * the replaced node left a nested poll's interval running on the detached
+ * element after a live_redirect mount, firing a handler the next view does
+ * not have.
+ * @param {Node} root - an element, fragment, or document
+ * @param {boolean} [childrenOnly=false] - keep `root`'s own poll: for a
+ *   container whose CONTENT is replaced while the container survives.
+ */
+function teardownPollsIn(root, childrenOnly) {
+    if (!root || _pollElements.size === 0) return;
+    for (const element of Array.from(_pollElements)) {
+        if (element === root) {
+            if (!childrenOnly) _teardownPoll(element);
+        } else if (typeof root.contains === 'function' && root.contains(element)) {
+            _teardownPoll(element);
+        }
+    }
+}
+
+/** Stop the polls whose element left the document or dropped `dj-poll`. */
+function _sweepOrphanedPolls() {
+    for (const element of Array.from(_pollElements)) {
+        if (!element.isConnected || !element.getAttribute('dj-poll')) _teardownPoll(element);
+    }
+}
+
+// ============================================================================
 // Scoped Listener Helpers (window/document event binding)
 // ============================================================================
 
@@ -7091,7 +7146,9 @@ function bindLiveViewEvents(scope) {
 
     // === Per-element scanning section (only for non-delegable events) ===
 
-    // dj-poll needs per-element interval setup
+    // dj-poll needs per-element interval setup. Stop the polls a removal
+    // path missed (or whose attribute was dropped) before binding new ones.
+    _sweepOrphanedPolls();
     const pollSelector = '[dj-poll]';
     const pollElements = root.querySelectorAll(pollSelector);
     pollElements.forEach(element => {
@@ -7106,22 +7163,13 @@ function bindLiveViewEvents(scope) {
         // not: an unchanged pair must NOT restart the poll phase — the bind
         // loop runs on every patch, and restarting would reset the interval
         // timer on every morph, so a poll would never fire on schedule. A
-        // changed pair evicts the old phase (clearInterval + visibilitychange
-        // teardown — the same teardown the element-removal paths in
-        // 01-dom-helpers-turbo.js / 12-vdom-patch.js perform) and rebuilds.
+        // changed pair evicts the old phase (_teardownPoll — the same teardown
+        // every element-removal path performs) and rebuilds.
         const interval = parseInt(element.getAttribute('dj-poll-interval'), 10) || 5000;
         const boundKey = pollHandler + '\u0000' + interval;
         if (_isHandlerBound(element, 'poll')) {
             if (element._djustPollBoundKey === boundKey) return;
-            if (element._djustPollIntervalId) {
-                clearInterval(element._djustPollIntervalId);
-                element._djustPollIntervalId = null;
-            }
-            if (element._djustPollVisibilityHandler) {
-                document.removeEventListener('visibilitychange', element._djustPollVisibilityHandler);
-                element._djustPollVisibilityHandler = null;
-            }
-            _unmarkHandlerBound(element, 'poll');
+            _teardownPoll(element);
         }
         _markHandlerBound(element, 'poll');
         element._djustPollBoundKey = boundKey;
@@ -7133,6 +7181,12 @@ function bindLiveViewEvents(scope) {
         // attributes can change under a surviving element too, and a
         // bind-time snapshot would keep dispatching the old ones (#2858).
         const firePoll = () => {
+            // Defensive: a removal path that skipped teardownPollsIn must not
+            // leave a detached element firing a handler the page no longer has.
+            if (!element.isConnected) {
+                _teardownPoll(element);
+                return;
+            }
             if (document.hidden) return;
             // Strict: routing context lets the owner that resolved the contract receive it.
             const strictParams = _strictBinding(element, parsed.name, {}, [], element);
@@ -7153,6 +7207,7 @@ function bindLiveViewEvents(scope) {
         };
         document.addEventListener('visibilitychange', visHandler);
         element._djustPollVisibilityHandler = visHandler;
+        _pollElements.add(element);
     });
 
     // ================================================================
@@ -8958,6 +9013,7 @@ function markBodyStamped() {
  */
 function replaceContainerHtml(container, html) {
     if (container !== document.body || !pageRootIsBody()) {
+        teardownPollsIn(container, true);
         container.innerHTML = html;
         return;
     }
@@ -8965,7 +9021,7 @@ function replaceContainerHtml(container, html) {
     const owned = all.filter((n) => !isForeignBodyChild(n));
     const lastOwned = owned.length ? all.indexOf(owned[owned.length - 1]) : -1;
     const anchor = all.slice(lastOwned + 1).find((n) => isForeignBodyChild(n)) || null;
-    owned.forEach((n) => container.removeChild(n));
+    owned.forEach((n) => { teardownPollsIn(n); container.removeChild(n); });
     const tpl = document.createElement('template');
     tpl.innerHTML = html;
     container.insertBefore(tpl.content, anchor);
@@ -10038,6 +10094,7 @@ function _morphChildrenInner(existing, desired) {
                 && globalThis.djust.maybeDeferRemoval(node)) {
                 continue;
             }
+            teardownPollsIn(node);
             existing.removeChild(node);
         }
     }
@@ -10058,13 +10115,8 @@ function morphElement(existing, desired) {
 function _morphElementInner(existing, desired) {
     // Tag mismatch — replace entirely
     if (existing.tagName !== desired.tagName) {
-        // Clean up poll timers before replacing (prevents orphaned intervals)
-        if (existing._djustPollIntervalId) {
-            clearInterval(existing._djustPollIntervalId);
-            if (existing._djustPollVisibilityHandler) {
-                document.removeEventListener('visibilitychange', existing._djustPollVisibilityHandler);
-            }
-        }
+        // Stop the polls of the replaced subtree (prevents orphaned intervals)
+        teardownPollsIn(existing);
         // Clean up scoped (window/document) listeners before replacing
         _cleanupScopedListeners(existing);
         if (globalThis.djust && typeof globalThis.djust.maybeDeferRemoval === 'function'
@@ -10320,6 +10372,7 @@ function _applyDjUpdateElementsInner(existingRoot, newRoot) {
                     && globalThis.djust.maybeDeferRemoval(existing)) {
                     continue;
                 }
+                teardownPollsIn(existing);
                 existing.remove();
             }
         }
@@ -10590,6 +10643,7 @@ function _removeDjIfBracketedRange(openMarker, closeMarker) {
     }
     for (const node of toRemove) {
         if (node.parentNode === parent) {
+            teardownPollsIn(node);
             parent.removeChild(node);
         }
     }
@@ -11167,6 +11221,7 @@ function _removeChildNode(parent, child) {
         && globalThis.djust.maybeDeferRemoval(child)) {
         return;
     }
+    teardownPollsIn(child);
     parent.removeChild(child);
     if (wasTextNode && parent.tagName === 'TEXTAREA' && document.activeElement !== parent) {
         parent.value = '';
@@ -11521,13 +11576,8 @@ function applySinglePatch(patch, rootEl = null) {
     try {
         switch (patch.type) {
             case 'Replace':
-                // Clean up poll timers before replacing (prevents orphaned intervals)
-                if (node._djustPollIntervalId) {
-                    clearInterval(node._djustPollIntervalId);
-                    if (node._djustPollVisibilityHandler) {
-                        document.removeEventListener('visibilitychange', node._djustPollVisibilityHandler);
-                    }
-                }
+                // Stop the polls of the replaced subtree (prevents orphaned intervals)
+                teardownPollsIn(node);
                 const newNode = createNodeFromVNode(patch.node, node.parentNode);
                 if (node.nodeType === Node.ELEMENT_NODE
                     && globalThis.djust
@@ -11709,6 +11759,7 @@ function applySinglePatch(patch, rootEl = null) {
                         && globalThis.djust.maybeDeferRemoval(child)) {
                         break;
                     }
+                    teardownPollsIn(child);
                     node.removeChild(child);
                     // If removing a text node from a textarea, also clear its .value
                     // (removing textContent alone doesn't update what's displayed)
@@ -12672,6 +12723,7 @@ function applySlotMount(transport, data, options = {}) {
             _morphPrerenderedMount(container, data.html, undefined, !mountedBefore);
         } else {
             // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
+            teardownPollsIn(container, true);
             container.innerHTML = data.html;
             _runInsertedScripts(container);
             _warnDeadScripts(container);
@@ -14318,6 +14370,7 @@ function _applyStreamOp(op, streamName) {
     switch (op.op) {
         case 'replace':
             // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
+            teardownPollsIn(el, true);
             el.innerHTML = op.html || '';
             // #2058: streaming HTML ops (LLM chat / live feeds) go through
             // innerHTML — a classic <script> in the streamed HTML is
@@ -14357,6 +14410,7 @@ function _applyStreamOp(op, streamName) {
 
         case 'delete':
             _dispatchStreamEvent(el, 'stream:remove', { stream: streamName });
+            teardownPollsIn(el);
             el.remove();
             break;
 
@@ -14376,6 +14430,7 @@ function _applyStreamOp(op, streamName) {
                 while (kids.length > limit) {
                     const victim = edge === 'top' ? kids.shift() : kids.pop();
                     if (!victim) break;
+                    teardownPollsIn(victim);
                     victim.remove();
                 }
             }

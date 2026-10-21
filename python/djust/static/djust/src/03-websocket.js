@@ -1004,6 +1004,7 @@ class LiveViewWebSocket {
                     }
                     if (typeof entry.html === 'string') {
                         // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
+                        teardownPollsIn(container, true);
                         container.innerHTML = entry.html;
                         // #2058: unlike the single-view mount branches above,
                         // mount_batch does NOT call _runInsertedScripts() —
