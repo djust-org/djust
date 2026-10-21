@@ -106,6 +106,63 @@ function markBodyStamped() {
     if (window.djust) window.djust._bodyStamped = true;
 }
 
+// ============================================================================
+// dj-poll teardown
+// ============================================================================
+
+// Every element that currently owns a poll interval. A removal path tears
+// down by CONTAINMENT against this set rather than by `[dj-poll]` query, so a
+// poll whose element lost its attribute is still found. Kept in this module
+// (not 09-event-binding.js, which binds polls) because every removal path
+// lives here, and some tests evaluate this file on its own.
+const _pollElements = new Set();
+
+/**
+ * Stop one element's poll: clear its interval and visibilitychange handler
+ * and forget its bound key. The bind pass skips an element only when its
+ * stored key matches, so one that comes back (a sticky subtree re-attached
+ * after navigation, say) is re-bound.
+ * @param {Element} element
+ */
+function _teardownPoll(element) {
+    if (element._djustPollIntervalId) clearInterval(element._djustPollIntervalId);
+    if (element._djustPollVisibilityHandler) {
+        document.removeEventListener('visibilitychange', element._djustPollVisibilityHandler);
+    }
+    element._djustPollIntervalId = null;
+    element._djustPollVisibilityHandler = null;
+    element._djustPollBoundKey = null;
+    _pollElements.delete(element);
+}
+
+/**
+ * Stop the poll of `root` AND of every poll element inside it. Every path
+ * that removes or replaces DOM calls this on what it removes: clearing only
+ * the replaced node left a nested poll's interval running on the detached
+ * element after a live_redirect mount, firing a handler the next view does
+ * not have.
+ * @param {Node} root - an element, fragment, or document
+ * @param {boolean} [childrenOnly=false] - keep `root`'s own poll: for a
+ *   container whose CONTENT is replaced while the container survives.
+ */
+function teardownPollsIn(root, childrenOnly) {
+    if (!root || _pollElements.size === 0) return;
+    for (const element of Array.from(_pollElements)) {
+        if (element === root) {
+            if (!childrenOnly) _teardownPoll(element);
+        } else if (typeof root.contains === 'function' && root.contains(element)) {
+            _teardownPoll(element);
+        }
+    }
+}
+
+/** Stop the polls whose element left the document or dropped `dj-poll`. */
+function _sweepOrphanedPolls() {
+    for (const element of Array.from(_pollElements)) {
+        if (!element.isConnected || !element.getAttribute('dj-poll')) _teardownPoll(element);
+    }
+}
+
 /**
  * Replace a container's content with server HTML (`innerHTML` semantics: the
  * inserted scripts stay inert). For `<body>` the foreign children survive, in
@@ -113,6 +170,7 @@ function markBodyStamped() {
  */
 function replaceContainerHtml(container, html) {
     if (container !== document.body || !pageRootIsBody()) {
+        teardownPollsIn(container, true);
         container.innerHTML = html;
         return;
     }
@@ -120,7 +178,7 @@ function replaceContainerHtml(container, html) {
     const owned = all.filter((n) => !isForeignBodyChild(n));
     const lastOwned = owned.length ? all.indexOf(owned[owned.length - 1]) : -1;
     const anchor = all.slice(lastOwned + 1).find((n) => isForeignBodyChild(n)) || null;
-    owned.forEach((n) => container.removeChild(n));
+    owned.forEach((n) => { teardownPollsIn(n); container.removeChild(n); });
     const tpl = document.createElement('template');
     tpl.innerHTML = html;
     container.insertBefore(tpl.content, anchor);
@@ -1193,6 +1251,7 @@ function _morphChildrenInner(existing, desired) {
                 && globalThis.djust.maybeDeferRemoval(node)) {
                 continue;
             }
+            teardownPollsIn(node);
             existing.removeChild(node);
         }
     }
@@ -1213,13 +1272,8 @@ function morphElement(existing, desired) {
 function _morphElementInner(existing, desired) {
     // Tag mismatch — replace entirely
     if (existing.tagName !== desired.tagName) {
-        // Clean up poll timers before replacing (prevents orphaned intervals)
-        if (existing._djustPollIntervalId) {
-            clearInterval(existing._djustPollIntervalId);
-            if (existing._djustPollVisibilityHandler) {
-                document.removeEventListener('visibilitychange', existing._djustPollVisibilityHandler);
-            }
-        }
+        // Stop the polls of the replaced subtree (prevents orphaned intervals)
+        teardownPollsIn(existing);
         // Clean up scoped (window/document) listeners before replacing
         _cleanupScopedListeners(existing);
         if (globalThis.djust && typeof globalThis.djust.maybeDeferRemoval === 'function'
@@ -1475,6 +1529,7 @@ function _applyDjUpdateElementsInner(existingRoot, newRoot) {
                     && globalThis.djust.maybeDeferRemoval(existing)) {
                     continue;
                 }
+                teardownPollsIn(existing);
                 existing.remove();
             }
         }
@@ -1745,6 +1800,7 @@ function _removeDjIfBracketedRange(openMarker, closeMarker) {
     }
     for (const node of toRemove) {
         if (node.parentNode === parent) {
+            teardownPollsIn(node);
             parent.removeChild(node);
         }
     }
@@ -2322,6 +2378,7 @@ function _removeChildNode(parent, child) {
         && globalThis.djust.maybeDeferRemoval(child)) {
         return;
     }
+    teardownPollsIn(child);
     parent.removeChild(child);
     if (wasTextNode && parent.tagName === 'TEXTAREA' && document.activeElement !== parent) {
         parent.value = '';
@@ -2676,13 +2733,8 @@ function applySinglePatch(patch, rootEl = null) {
     try {
         switch (patch.type) {
             case 'Replace':
-                // Clean up poll timers before replacing (prevents orphaned intervals)
-                if (node._djustPollIntervalId) {
-                    clearInterval(node._djustPollIntervalId);
-                    if (node._djustPollVisibilityHandler) {
-                        document.removeEventListener('visibilitychange', node._djustPollVisibilityHandler);
-                    }
-                }
+                // Stop the polls of the replaced subtree (prevents orphaned intervals)
+                teardownPollsIn(node);
                 const newNode = createNodeFromVNode(patch.node, node.parentNode);
                 if (node.nodeType === Node.ELEMENT_NODE
                     && globalThis.djust
@@ -2864,6 +2916,7 @@ function applySinglePatch(patch, rootEl = null) {
                         && globalThis.djust.maybeDeferRemoval(child)) {
                         break;
                     }
+                    teardownPollsIn(child);
                     node.removeChild(child);
                     // If removing a text node from a textarea, also clear its .value
                     // (removing textContent alone doesn't update what's displayed)

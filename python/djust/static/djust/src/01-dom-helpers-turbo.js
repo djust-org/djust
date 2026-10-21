@@ -127,11 +127,10 @@ function reinitLiveViewForTurboNav() {
         if (globalThis.djustDebug) console.log('[LiveView:TurboNav] No LiveView containers found, skipping WebSocket');
     }
 
-    // Clean up existing poll intervals before re-binding
-    document.querySelectorAll('[dj-poll]').forEach(el => {
-        if (el._djustPollIntervalId) clearInterval(el._djustPollIntervalId);
-        if (el._djustPollVisibilityHandler) document.removeEventListener('visibilitychange', el._djustPollVisibilityHandler);
-    });
+    // Stop every poll before re-binding — including the ones on elements the
+    // swap already detached, which a document query cannot see.
+    teardownPollsIn(document);
+    _sweepOrphanedPolls();
 
     // Clean up scoped (window/document) listeners before re-binding
     for (const el of _scopedListenerElements) {
