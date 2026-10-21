@@ -13,6 +13,7 @@ the new code.
 from __future__ import annotations
 
 import importlib
+import importlib.util
 import os
 import shutil
 import sys
@@ -81,10 +82,13 @@ urlpatterns = [
 
 
 def _write(path, source):
+    # A reload must not reuse the cached bytecode. The .pyc is checked against
+    # the source's whole-second mtime and its size, and "v1" -> "v2" keeps the
+    # size, so each write must land in a later second than the one before it.
+    previous = os.stat(path).st_mtime if os.path.exists(path) else 0
     with open(path, "w") as f:
         f.write(textwrap.dedent(source))
-    # A rewrite within the same second must not reuse the cached bytecode.
-    stamp = time.time() + 2
+    stamp = max(time.time(), previous) + 2
     os.utime(path, (stamp, stamp))
 
 
@@ -222,3 +226,21 @@ async def test_new_socket_mount_serves_the_edit(project):
         await socket.disconnect()
     assert frame["type"] == "mount", frame
     assert "LABEL-v2" in frame["html"], frame["html"]
+
+
+@pytest.mark.django_db
+def test_same_second_same_size_save_is_not_served_from_stale_bytecode(project, monkeypatch):
+    """Two saves in one second that keep the size share a .pyc stamp."""
+    import py_compile
+
+    monkeypatch.setattr(sys, "dont_write_bytecode", False)
+    # The .pyc an import of the current (v1) source would have written.
+    py_compile.compile(
+        project.mixin_path, cfile=importlib.util.cache_from_source(project.mixin_path)
+    )
+    stamp = os.stat(project.mixin_path).st_mtime
+    with open(project.mixin_path, "w") as f:
+        f.write(textwrap.dedent(MIXIN_SOURCE % "v2"))
+    os.utime(project.mixin_path, (stamp, stamp))  # same second, same size
+    assert reload_module_if_liveview(project.mixin_path) is not None
+    assert "LABEL-v2" in _get("/page/")

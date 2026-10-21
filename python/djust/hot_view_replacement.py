@@ -19,6 +19,7 @@ on ``DEBUG=False`` so none of these code paths are reachable in production.
 from __future__ import annotations
 
 import importlib
+import importlib.util
 import inspect
 import logging
 import os
@@ -437,6 +438,28 @@ def _dependent_modules(module: ModuleType) -> List[ModuleType]:
     return [modules[name] for name in order]
 
 
+def _drop_cached_bytecode(module: ModuleType) -> None:
+    """Remove ``module``'s ``.pyc`` so the reload compiles the saved source.
+
+    A ``.pyc`` stays valid while the source's whole-second mtime and size are
+    unchanged, so a second save within the same second that keeps the size
+    (``v1`` -> ``v2``) would otherwise reload the previous save's bytecode.
+    """
+    source = getattr(module, "__file__", None)
+    if not source or not source.endswith(".py"):
+        return
+    try:
+        cached = importlib.util.cache_from_source(source)
+    except (NotImplementedError, ValueError):
+        return
+    try:
+        os.remove(cached)
+    except FileNotFoundError:
+        return
+    except OSError:
+        logger.debug("HVR: could not remove %s; the reload may reuse it", cached)
+
+
 def reload_module_if_liveview(path: str) -> Optional[ReloadResult]:
     """Reload the module for ``path``, and the views built on its classes.
 
@@ -486,6 +509,7 @@ def reload_module_if_liveview(path: str) -> Optional[ReloadResult]:
         modules: Dict[str, List[str]] = {}
         for target in [module, *dependents]:
             old_classes = _local_liveviews(target)
+            _drop_cached_bytecode(target)
             try:
                 importlib.reload(target)
             except Exception:  # noqa: BLE001 — dev-only; log + fall through

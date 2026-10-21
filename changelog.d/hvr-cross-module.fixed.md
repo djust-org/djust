@@ -4,4 +4,5 @@
   built with. The saved module and every module defining a LiveView whose MRO
   holds one of its classes are now reloaded, bases before subclasses, so a
   fresh page load, a new socket mount and a mounted view (`hvr_meta.modules`)
-  run the new code. Cases in `python/djust/tests/test_hvr_cross_module.py`.
+  run the new code. A reload also drops the module's cached bytecode, which two
+  same-size saves within one second would otherwise reuse. Cases in `python/djust/tests/test_hvr_cross_module.py`.
