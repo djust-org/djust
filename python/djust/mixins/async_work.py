@@ -25,11 +25,13 @@ and sends updated patches to the client.
 import asyncio
 import inspect
 import logging
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple, TypeVar
 
 from asgiref.sync import iscoroutinefunction, sync_to_async
 
 logger = logging.getLogger(__name__)
+
+_TaskT = TypeVar("_TaskT", bound="asyncio.Future[Any]")
 
 
 def cancel_on_owner_loop(future: asyncio.Future[Any]) -> None:
@@ -319,7 +321,7 @@ class AsyncWorkMixin:
             ) from None
         return self.track_task(loop.create_task(coro, name=name))
 
-    def track_task(self, task: "asyncio.Future[Any]") -> "asyncio.Future[Any]":
+    def track_task(self, task: _TaskT) -> _TaskT:
         """Register a task the view's code created, so it is cancelled with
         this view's ``start_async`` work (see :meth:`create_task`). Returns
         ``task``. A finished task is forgotten.
@@ -327,9 +329,10 @@ class AsyncWorkMixin:
         if getattr(self, "_djust_child_disposed", False):
             cancel_on_owner_loop(task)
             return task
-        tracked = self.__dict__.get("_tracked_tasks")
+        tracked: Optional[Set["asyncio.Future[Any]"]] = self.__dict__.get("_tracked_tasks")
         if tracked is None:
-            tracked = self._tracked_tasks = set()
+            tracked = set()
+            self._tracked_tasks = tracked
         tracked.add(task)
         task.add_done_callback(tracked.discard)
         return task
