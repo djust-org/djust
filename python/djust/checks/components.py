@@ -1961,7 +1961,6 @@ def check_reserved_view_attributes(app_configs: Any, **kwargs: Any) -> list[Chec
 
         reserved = _reserved_view_attributes()
     except Exception:  # noqa: BLE001 — djust not importable/configured: nothing to check
-        logger.debug("V022 skipped: could not build a bare LiveView", exc_info=True)
         return messages
 
     candidates = set(_routed_liveview_classes()) | set(_walk_subclasses(LiveView))

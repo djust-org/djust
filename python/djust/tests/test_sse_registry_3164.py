@@ -70,7 +70,11 @@ def _clean_registry(monkeypatch):
 
 def _get(sid, user, session_key=None):
     request = RequestFactory().get(
-        f"/djust/sse/{sid}/", {"view": "demo.View"}, HTTP_ORIGIN=ALLOWED_ORIGIN
+        f"/djust/sse/{sid}/",
+        {"view": "demo.View"},
+        HTTP_ORIGIN=ALLOWED_ORIGIN,
+        HTTP_HOST="example.com",
+        secure=True,
     )
     request.user = user
     request.session = SessionStore(session_key=session_key)
