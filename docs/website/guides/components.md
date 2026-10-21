@@ -1282,10 +1282,16 @@ automatically when django-csp sets it, or pass it yourself with
 it from the request too. Without a
 nonce the output is unchanged. The same nonce is handed to `theme.js`, which puts
 it on the `<style>` it creates when a preset is switched without a reload, so
-live switching also works under a policy without `'unsafe-inline'`. The deferred-stylesheet `<link>` still swaps
-itself in with an inline `onload` handler, which a nonce does not authorise, so
-under a strict policy use `{% theme_head link_css=True %}` or set
-`critical_css` to `False`.
+live switching also works under a policy without `'unsafe-inline'`. The deferred
+stylesheet (`critical_css`) is swapped in by a small script carrying the same
+nonce, not by an inline `onload` handler, so it applies under a strict policy too.
+
+The component tags emit no inline event handlers: `{% theme_toggle %}`,
+`{% rich_select %}`, `{% combobox %}` and `{% copy_button %}` get their
+behaviour from delegated listeners in the djust client bundle, and
+`{% theme_toggle %}`'s buttons carry `data-theme-mode`, so `theme.js` (or the
+client bundle when `theme.js` is absent) switches the mode and stores it under
+`djust-theme-mode`. `djust_components/theme-toggle.js` is no longer needed.
 
 ### Layouts under a LiveView base template
 
