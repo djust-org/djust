@@ -403,10 +403,13 @@ attribute, so apps can switch to strict nonce-based CSP.
   fresh `<script>` or `<style>` blocks via VDOM patches — uncommon, since
   most dynamic content is attribute and text updates — those will still
   need `'unsafe-inline'`. This is tracked as a follow-up to #655.
-- **Component tags** (`djust.components`) emit no inline event handlers:
-  behaviour such as opening a `rich_select`, keeping a `combobox` list open
-  or switching `theme_toggle`'s mode runs from delegated listeners in the
-  client bundle. `{% colocated_hook %}` carries the request nonce and the
+- **Component tags** (`djust.components`) emit no inline event handlers or
+  inline scripts: behaviour such as opening a `rich_select` or a `popover`,
+  dropping files on a `file_dropzone`, dragging `kanban_board` cards or
+  switching `theme_toggle`'s mode runs from delegated listeners in the client
+  bundle, and `code_block` highlights through a static script. The `Button`
+  component's `onclick=` argument is the exception: it is an inline handler
+  you write, and needs `'unsafe-inline'`. `{% colocated_hook %}` carries the request nonce and the
   client registers its body through a script element with that nonce, so it
   needs no `'unsafe-eval'`; without a nonce it falls back to `new Function`.
 - **Third-party JS that djust doesn't emit** (Google Analytics, Stripe,

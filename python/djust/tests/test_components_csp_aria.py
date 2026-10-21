@@ -462,3 +462,94 @@ def test_colocated_hook_and_theme_head_under_a_nonce():
     assert 'nonce="n0nce"' in hook
     assert not _INLINE_HANDLER.findall(hook)
     assert_strict_csp_safe(TestCriticalCss()._theme_head(nonce="n0nce"), nonce="n0nce")
+
+
+# ---------------------------------------------------------------------------
+# The remaining components with inline handlers or inline scripts
+# ---------------------------------------------------------------------------
+
+KANBAN_COLUMNS = [
+    {"id": "todo", "title": "To do", "cards": [{"id": "c1", "title": "One"}]},
+    {"id": "done", "title": "Done", "cards": []},
+]
+
+_CSP_CASES_REST = {
+    "popover": ('{% popover trigger="More" title="T" %}<p>x</p>{% endpopover %}', {}),
+    "collapsible": ('{% collapsible trigger="Details" %}<p>x</p>{% endcollapsible %}', {}),
+    "popconfirm": (
+        '{% popconfirm message="Sure?" %}<button>Delete</button>{% endpopconfirm %}',
+        {},
+    ),
+    "context_menu": (
+        '{% context_menu label="Right-click" %}{% context_menu_item label="Edit" event="edit" %}'
+        "{% endcontext_menu %}",
+        {},
+    ),
+    "code_block": ('{% code_block code="x = 1" language="python" %}', {}),
+    "file_dropzone": ('{% file_dropzone name="files" multiple=True %}', {}),
+    "kanban_board": ("{% kanban_board columns=cols %}", {"cols": KANBAN_COLUMNS}),
+    "rich_text_editor": ('{% rich_text_editor name="body" %}', {}),
+    "multi_select": ('{% multi_select name="tags" options=opts %}', {"opts": OPTIONS}),
+}
+
+
+@pytest.mark.parametrize("engine", ["django", "rust"])
+@pytest.mark.parametrize("case", sorted(_CSP_CASES_REST))
+def test_remaining_component_renders_no_inline_handler_or_unnonced_script(engine, case):
+    src, ctx = _CSP_CASES_REST[case]
+    render = _django if engine == "django" else _rust
+    out = render(src, dict(ctx))
+    assert out.strip(), f"{case} rendered nothing under {engine}"
+    assert_strict_csp_safe(out)
+
+
+@pytest.mark.parametrize("engine", ["django", "rust"])
+@pytest.mark.parametrize("case", ["popover", "collapsible", "popconfirm", "context_menu"])
+def test_remaining_component_engines_agree_and_are_stable(engine, case):
+    src, ctx = _CSP_CASES_REST[case]
+    out = _both(src, dict(ctx))
+    assert out["django"] == out["rust"], case
+    render = _django if engine == "django" else _rust
+    assert render(src, dict(ctx)) == render(src, dict(ctx))
+    assert not _RANDOM_ID.search(out[engine]), out[engine]
+
+
+class TestRemainingComponentMarkup:
+    def test_popover_trigger_state(self):
+        for out in _both('{% popover trigger="More" id="p1" %}x{% endpopover %}').values():
+            assert 'id="p1"' in out
+            assert re.search(r'class="popover-trigger[^"]*"[^>]*aria-expanded="false"', out)
+            assert 'aria-controls="p1-content"' in out
+            assert 'id="p1-content"' in out
+
+    def test_collapsible_reflects_open(self):
+        for out in _both('{% collapsible trigger="D" open=True %}x{% endcollapsible %}').values():
+            assert 'class="collapsible collapsible-open"' in out
+            assert 'aria-expanded="true"' in out
+
+    def test_kanban_move_event_on_the_board(self):
+        for out in _both(
+            '{% kanban_board columns=cols move_event="moved" %}', {"cols": KANBAN_COLUMNS}
+        ).values():
+            assert 'data-move-event="moved"' in out
+            assert 'draggable="true"' in out
+
+    def test_code_block_highlighter_is_an_external_deferred_script(self):
+        out = _django('{% code_block code="x = 1" language="python" %}')
+        assert re.search(
+            r'<script src="[^"]*djust_components/code-block-highlight\.js"[^>]* defer>', out
+        ), out
+
+    def test_split_pane_has_no_inline_script(self):
+        src = "{% split_pane %}<p>a</p>{% pane %}<p>b</p>{% endsplit_pane %}"
+        out = _django(src)
+        assert_strict_csp_safe(out)
+        assert "sp-handle" in out
+        assert out == _django(src)
+
+    def test_tutorial_bubble_has_no_inline_handler(self):
+        from djust.templatetags.djust_tutorials import tutorial_bubble
+
+        out = str(tutorial_bubble())
+        assert_strict_csp_safe(out)
+        assert "dj-tutorial-bubble__skip" in out

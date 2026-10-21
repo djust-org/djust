@@ -47,9 +47,10 @@ def tutorial_bubble(
         If placed inside, morphdom recovery (which replaces the entire
         ``dj-root`` content on patch failure) will destroy the bubble
         mid-tour, causing the tour to silently disappear. The bubble's
-        Skip/Close buttons use ``onclick`` → ``tour:hide`` (not
-        ``dj-click``), so they work correctly outside the LiveView
-        container.
+        Skip/Close buttons dispatch ``tour:hide`` through a delegated
+        listener in the client (not ``dj-click``, and not an inline
+        handler a strict CSP would refuse), so they work outside the
+        LiveView container.
 
     The element is a floating ``<div>`` that starts hidden and becomes
     visible when the tutorial dispatches a ``tour:narrate`` (or custom)
@@ -114,10 +115,8 @@ def tutorial_bubble(
         '<span class="dj-tutorial-bubble__step"></span>'
         "</div>"
         '<div class="dj-tutorial-bubble__actions">'
-        '<button type="button" class="dj-tutorial-bubble__skip"'
-        " onclick=\"document.dispatchEvent(new CustomEvent('tour:hide'))\">Skip</button>"
-        '<button type="button" class="dj-tutorial-bubble__cancel"'
-        " onclick=\"document.dispatchEvent(new CustomEvent('tour:hide'))\">Close</button>"
+        '<button type="button" class="dj-tutorial-bubble__skip">Skip</button>'
+        '<button type="button" class="dj-tutorial-bubble__cancel">Close</button>'
         "</div>"
         "</div>",
         css_class,
