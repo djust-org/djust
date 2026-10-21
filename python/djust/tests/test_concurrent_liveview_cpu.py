@@ -154,13 +154,6 @@ def _view():
     return LiveView()
 
 
-def _python_extract(html, monkeypatch):
-    """The Python locator alone, as before the Rust path existed."""
-    with monkeypatch.context() as m:
-        m.setattr(template_mod, "_rust_root_content_range", lambda html: None)
-        return _view()._extract_liveview_content(html)
-
-
 def _count_masks(monkeypatch):
     calls = [0]
     original = template_mod._mask_for_root_search_uncached
@@ -177,75 +170,30 @@ def test_extract_takes_the_rust_locator_without_masking(monkeypatch):
     """A rendered page's root content comes from the Rust scanner; Python
     never masks the page (about half of a mount's CPU before)."""
     html = _page()
-    expected = _python_extract(html, monkeypatch)
     calls = _count_masks(monkeypatch)
     inner = _view()._extract_liveview_content(html)
     assert calls[0] == 0
-    assert inner == expected
     assert inner.startswith("<!-- <div> --><ul>")
     assert inner.endswith("</textarea>")
+    assert html.index(inner) == html.index("<!-- <div> -->")
 
 
-def test_python_fallback_masks_the_page_once(monkeypatch):
-    """When the Rust scanner defers, root search and close-tag balance share
-    one mask of the same string."""
-    html = _page().replace("<ul>", "<ul>{% if x %}", 1)
-    assert template_mod._rust_root_content_range(html) is None
+def test_template_source_extract_masks_once(monkeypatch):
+    """Template SOURCE keeps the Python locator ({% if %} balancing): root
+    search and close-tag balance share one mask of the same string."""
+    template = _page().replace("<ul>", "<ul>{% if x %}", 1)
     calls = _count_masks(monkeypatch)
-    inner = _view()._extract_liveview_content(html)
+    inner = _view()._extract_liveview_template_content(template)
     assert calls[0] == 1
     assert inner.startswith("<!-- <div> --><ul>{% if x %}")
 
 
-def _root_corpus():
-    import json
-    import pathlib
-
-    path = pathlib.Path(__file__).resolve().parents[2] / "tests/fixtures/root_selection_3031.json"
-    return json.loads(path.read_text())["cases"]
-
-
-def test_rust_and_python_locators_agree_on_the_root_corpus(monkeypatch):
-    """Every case of the shared #3031 root-selection corpus extracts the same
-    content through the Rust path as through the Python one."""
-    view = _view()
-    for case in _root_corpus():
-        html = case["html"]
-        assert view._extract_liveview_content(html) == _python_extract(html, monkeypatch), case[
-            "name"
-        ]
-
-
-@pytest.mark.parametrize(
-    "html",
-    [
-        # Template syntax as page text: the Python balancer reads it as branches.
-        "<div dj-root>{% if x %}<div>{% else %}</div>",
-        # A '<', a stray quote or a NUL inside a tag, and a tag open at EOF.
-        '<div dj-view="a"><div<html dj-root>x</div>',
-        '<div dj-view="a"><p x=<y dj-root></p></div>',
-        '<div dj-view="a"><p a"b dj-root></p></div>',
-        "<div\x00 dj-root>x</div>",
-        "<div dj-root>x</div><p class=",
-        # The <body> fallback beside another view's container (#3302).
-        '<div dj-view="c" data-djust-embedded="1"><body dj-view>x</body></div>',
-        '<div dj-view="c" dj-lazy></div><body dj-view>x</body>',
-    ],
-)
-def test_rust_locator_defers_where_the_twins_differ(html, monkeypatch):
-    """Input the two locators read differently goes to Python unchanged."""
-    assert template_mod._rust_root_content_range(html) is None
-    assert _view()._extract_liveview_content(html) == _python_extract(html, monkeypatch)
-
-
 def test_rust_locator_character_offsets_and_no_root():
     """Offsets are Python string indices (non-ASCII before the root), and a
-    page without a closed root comes back whole, as the Python path does."""
+    page without a closed root comes back whole."""
     html = "<p>é ü 漢</p><div dj-root data-x='ü'>ä<b>ö</b></div>"
-    start, end = template_mod._rust_root_content_range(html)
-    assert html[start:end] == "ä<b>ö</b>"
+    assert _view()._extract_liveview_content(html) == "ä<b>ö</b>"
     for no_root in ("<p>plain</p>", "<div dj-root>never closed"):
-        assert template_mod._rust_root_content_range(no_root) == (0, len(no_root))
         assert _view()._extract_liveview_content(no_root) is no_root
 
 
@@ -254,13 +202,13 @@ def test_mask_memo_is_per_string_object_and_per_thread():
     memo never hands one thread another thread's entry."""
     view = _view()
     html = _page(5)
-    first = view._extract_liveview_content(html)
+    first = view._extract_liveview_template_content(html)
     same_text = "".join(list(html))  # equal, but a different object
     assert same_text is not html
-    assert view._extract_liveview_content(same_text) == first
+    assert view._extract_liveview_template_content(same_text) == first
 
     other = _page(7)
-    assert view._extract_liveview_content(other) != first
+    assert view._extract_liveview_template_content(other) != first
 
     seen = {}
 

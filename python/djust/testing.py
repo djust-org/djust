@@ -607,12 +607,12 @@ class LiveViewTestClient:
     @staticmethod
     def _djroot_djids(html: str) -> list:
         """Extract the ordered ``dj-id`` sequence from the ``dj-root`` subtree."""
-        # The renderer's own root detection (#2892): any element, attribute
-        # names only, dj-view as the fallback for an auto-inferred root.
-        from djust.mixins.template import _DJ_ROOT_RE, _DJ_VIEW_RE, _search_dj_root_open
+        # The renderer's own root detection (#2892, #3031): any element,
+        # attribute names only, dj-view as the fallback for an auto-inferred root.
+        from djust._rust import root_element_span
 
-        m = _search_dj_root_open(html, _DJ_ROOT_RE, _DJ_VIEW_RE)
-        subtree = html[m.start() :] if m else html
+        span = root_element_span(html)
+        subtree = html[span[0] :] if span is not None else html
         return re.findall(r'dj-id="([^"]+)"', subtree)
 
     def assert_http_ws_djid_parity(self, **mount_kwargs: Any) -> list:

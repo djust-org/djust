@@ -192,8 +192,11 @@ class TestGuardCoversTheRenderSurface:
             "patch_component_subtree",
             "template_hash",
             "dj_model_fields",
-            # Scans a whole rendered page for the LiveView root on every mount.
+            # Scan a whole rendered page for the LiveView root: every mount and
+            # full render, the initial GET's shell splice and dj-view stamp.
             "root_content_range",
+            "root_element_span",
+            "dj_root_stamp_offsets",
         }
     )
 

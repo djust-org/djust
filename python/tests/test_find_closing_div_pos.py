@@ -254,10 +254,20 @@ class TestEveryRootLocatorUsesTheMaskedSearch:
     def test_the_helper_is_called_at_every_sink(self):
         src = self._source()
         calls = src.count("_search_dj_root_open(") - src.count("def _search_dj_root_open(")
-        # get_template's source pick, arender_chunks, the streaming splitter,
-        # render_full_template step 3, the four extraction helpers, and
-        # `_stamp_dj_view`, which asks it whether `<body>` is the root (#3302).
-        assert calls == 9, calls
+        # Template SOURCE only: get_template's source pick and the two
+        # template extraction helpers. Rendered HTML is located by Rust (#3031).
+        assert calls == 3, calls
+        rust = {
+            name: src.count("%s(" % name)
+            for name in ("root_content_range", "root_element_span", "dj_root_stamp_offsets")
+        }
+        # _extract_liveview_content; arender_chunks, the streaming splitter,
+        # _strip_liveview_root_in_html and render_full_template step 3; _stamp_dj_view.
+        assert rust == {
+            "root_content_range": 1,
+            "root_element_span": 4,
+            "dj_root_stamp_offsets": 1,
+        }, rust
 
     def test_the_depth_walk_ignores_markup_owned_by_values_and_comments(self):
         for tag in ("div", "main"):

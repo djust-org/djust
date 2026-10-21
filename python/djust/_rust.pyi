@@ -307,7 +307,23 @@ def lazy_authority_spans(html: str, spans: List[Tuple[int, int]]) -> List[Tuple[
 
 def root_content_range(html: str) -> Optional[Tuple[int, int]]:
     """``(start, end)`` character offsets of the LiveView root's content in
-    ``html`` (the #3031 root rule), or ``None`` without a closed root."""
+    rendered ``html`` (the #3031 root rule), or ``None`` with no root or no
+    complete close tag."""
+    ...
+
+def root_element_span(
+    html: str, with_view: bool = True
+) -> Optional[Tuple[int, int, Optional[int], Optional[int]]]:
+    """``(open_start, open_end, close_start, close_end)`` character offsets of
+    the LiveView root element in rendered ``html``; the close offsets are
+    ``None`` without a complete close tag. ``None`` with no root.
+    ``with_view=False`` looks for ``dj-root`` only."""
+    ...
+
+def dj_root_stamp_offsets(html: str) -> List[int]:
+    """Character offsets in rendered ``html`` where ``dj-view="…"`` is
+    inserted: after the first ``dj-root`` attribute of every ``dj-root`` tag
+    without ``dj-view``, outside other views' containers (#2981, #3155)."""
     ...
 
 def diff_html(old_html: str, new_html: str) -> str:
@@ -1491,6 +1507,8 @@ __all__ = [
     "collapse_provenance_whitespace",
     "lazy_authority_spans",
     "root_content_range",
+    "root_element_span",
+    "dj_root_stamp_offsets",
     "template_needs_provenance",
     "resolve_template_inheritance",
     # Serialization
