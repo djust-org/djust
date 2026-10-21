@@ -1200,7 +1200,7 @@ class RequestMixin:
             if isinstance(data, dict):
                 event_name = data.get("event") or request.headers.get("X-Djust-Event")
                 params = data.get("params") if "event" in data else data
-        except (ValueError, TypeError):
+        except Exception:  # noqa: BLE001 - a best-effort label; the body re-parses and answers
             event_name = request.headers.get("X-Djust-Event")
         if not isinstance(event_name, str):
             event_name = None

@@ -535,7 +535,7 @@ def test_every_client_checked_send_path_uses_next_version():
     # handle_request_html must send the consumer-owned recovery version, NOT a fresh
     # Rust version (the client sets clientVdomVersion = data.version directly on
     # html_recovery — 03-websocket.js:727).
-    req_html_src = without_prose(inspect.getsource(ws_mod.LiveViewConsumer.handle_request_html))
+    req_html_src = without_prose(inspect.getsource(ws_mod.LiveViewConsumer._request_html_turn))
     assert "_handle_request_html_locked" in req_html_src
     req_html_src = without_prose(
         inspect.getsource(ws_mod.LiveViewConsumer._handle_request_html_locked)
