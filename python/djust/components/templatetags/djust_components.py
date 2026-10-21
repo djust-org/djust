@@ -108,6 +108,9 @@ def _parse_kv_args(bits: Any, parser: Any) -> Any:
 def render_modal(kw: Any, content: Any) -> SafeString:
     """Markup for an open ``{% modal %}``, shared by the Django tag and the Rust handler.
 
+    ``native=True`` renders a ``<dialog>`` opened with ``showModal()`` instead
+    of the positioned ``<div>``: top layer, inert page, native Escape.
+
     ``kw`` holds the resolved tag arguments. The size class sits on the dialog,
     not on the full-screen backdrop, and the dialog carries ``role="dialog"``,
     ``aria-modal`` and an ``aria-labelledby`` derived from ``id`` (no
@@ -132,6 +135,24 @@ def render_modal(kw: Any, content: Any) -> SafeString:
     modal_id = conditional_escape(kw.get("id", "modal"))
     title_id = f"{modal_id}-title"
     labelledby = f' aria-labelledby="{title_id}"' if title else ""
+
+    if _truthy_flag(kw.get("native", False)):
+        # A native <dialog>: the client opens it with showModal()
+        # (35-dj-dialog.js), which gives it the top layer, makes the rest of
+        # the page inert and closes it on Escape. A close from the browser
+        # (Escape) sends close_event back to the server through
+        # dj-dialog-close-event. The focus trap and return focus come from
+        # the keyboard-nav module, as for the <div> modal.
+        return mark_safe(
+            f'<dialog class="dj-modal {size_class} dj-modal--native" dj-dialog="open" '
+            f'dj-dialog-close-event="{e_close_event}"{labelledby}{cid_attr}>'
+            f'<div class="dj-modal__header">'
+            f'<h3 class="dj-modal__title" id="{title_id}">{e_title}</h3>'
+            f'<button class="dj-modal__close" aria-label="Close" dj-click="{e_close_event}"{cid_attr}>&times;</button>'
+            f"</div>"
+            f'<div class="dj-modal__body">{content}</div>'
+            f"</dialog>"
+        )
 
     return mark_safe(f"""<div class="dj-modal-backdrop">
   <div class="dj-scrim" dj-click="{e_close_event}"{cid_attr}></div>
@@ -2043,6 +2064,55 @@ def code_block(
 # ---------------------------------------------------------------------------
 
 
+def _truthy_flag(value: Any) -> bool:
+    if isinstance(value, str):
+        return value.lower() not in ("", "false", "0", "none")
+    return bool(value)
+
+
+def _from_bound_field(field: Any, values: dict) -> dict:
+    """Fill unset ``name``/``label``/``value``/``error``/``helper``/``required``
+    from a Django BoundField (anything else is ignored)."""
+    if not hasattr(field, "html_name") or not hasattr(field, "field"):
+        return values
+    out = dict(values)
+    if not out.get("name"):
+        out["name"] = field.html_name
+    if not out.get("label"):
+        out["label"] = field.label or ""
+    if not out.get("value"):
+        current = field.value()
+        out["value"] = "" if current is None else str(current)
+    if not out.get("error") and field.errors:
+        out["error"] = str(list(field.errors)[0])
+    if not out.get("helper") and field.help_text:
+        out["helper"] = str(field.help_text)
+    if not out.get("required"):
+        out["required"] = bool(getattr(field.field, "required", False))
+    return out
+
+
+def field_aria_attrs(
+    id_prefix: str, error: Any = "", helper: Any = "", describedby: Any = "", invalid: Any = False
+) -> str:
+    """``aria-describedby`` / ``aria-invalid`` for a form control.
+
+    The help text (``<id_prefix>-helper``) and the error (``<id_prefix>-error``)
+    are described when present, followed by any ids in ``describedby``; an
+    error, or ``invalid=True``, sets ``aria-invalid="true"``.
+    """
+    ids = []
+    if helper:
+        ids.append(f"{id_prefix}-helper")
+    if error:
+        ids.append(f"{id_prefix}-error")
+    ids.extend(str(describedby or "").split())
+    attrs = f' aria-describedby="{conditional_escape(" ".join(ids))}"' if ids else ""
+    if error or _truthy_flag(invalid):
+        attrs += ' aria-invalid="true"'
+    return attrs
+
+
 @register.simple_tag
 def combobox(
     name: Any = "",
@@ -2057,6 +2127,9 @@ def combobox(
     helper: Any = "",
     multiple: Any = False,
     selected: Any = None,
+    describedby: Any = "",
+    invalid: Any = False,
+    field: Any = None,
 ) -> SafeString:
     """Render a combobox (searchable select).
 
@@ -2066,7 +2139,25 @@ def combobox(
         search_event: dj-input event for search input (server filters options)
         multiple: when True, enables multi-select with tags
         selected: list of selected values for multi-select mode
+        describedby: extra element ids for the input's ``aria-describedby``
+        invalid: marks the input ``aria-invalid`` (an ``error`` does too)
+        field: a Django BoundField; fills name, label, value, error, help text
+            and required from it
     """
+    if field is not None:
+        filled = _from_bound_field(
+            field,
+            {
+                "name": name,
+                "label": label,
+                "value": value,
+                "error": error,
+                "helper": helper,
+                "required": required,
+            },
+        )
+        name, label, value = filled["name"], filled["label"], filled["value"]
+        error, helper, required = filled["error"], filled["helper"], filled["required"]
     if options is None:
         options = []
     if selected is None:
@@ -2159,8 +2250,13 @@ def combobox(
     label_html = (
         f'<label class="form-label" for="{e_name}-input">{e_label}</label>' if label else ""
     )
-    error_html = f'<span class="form-error-message">{e_error}</span>' if error else ""
-    helper_html = f'<span class="form-helper">{e_helper}</span>' if helper else ""
+    error_html = (
+        f'<span class="form-error-message" id="{e_name}-error">{e_error}</span>' if error else ""
+    )
+    helper_html = (
+        f'<span class="form-helper" id="{e_name}-helper">{e_helper}</span>' if helper else ""
+    )
+    aria = field_aria_attrs(str(e_name), error, helper, describedby, invalid)
     req = " required" if required else ""
 
     if not multiple:
@@ -2182,7 +2278,7 @@ def combobox(
         f'<input class="combobox-input form-input" type="text" id="{e_name}-input" '
         f'name="{e_name}" placeholder="{e_placeholder}" value="{input_value}" '
         f'role="combobox" aria-autocomplete="list" aria-expanded="false" '
-        f'aria-controls="{e_name}-listbox" '
+        f'aria-controls="{e_name}-listbox"{aria} '
         f'dj-input="{e_search}" autocomplete="off"{req}>'
         # Keeping focus in the input while an option is pressed, and closing
         # the list after the pick, is the client bundle's delegated
@@ -4822,6 +4918,11 @@ def rich_select(
     label: Any = "",
     variant_map: Any = None,
     id: Any = "",
+    error: Any = "",
+    helper: Any = "",
+    describedby: Any = "",
+    invalid: Any = False,
+    field: Any = None,
 ) -> SafeString:
     """Render a rich select dropdown where each option can include icons, images,
     descriptions, badges, or variant coloring alongside the label.
@@ -4841,11 +4942,24 @@ def rich_select(
                      own ``variant`` key. Variants: info, success, warning,
                      danger, muted (plus implicit default).
         id: element id; defaults to ``rs-<name>`` so renders are stable.
+        error / helper: an error message / help text under the control, both
+            described by the trigger (``<id>-error`` / ``<id>-helper``)
+        describedby: extra element ids for the trigger's ``aria-describedby``
+        invalid: marks the trigger ``aria-invalid`` (an ``error`` does too)
+        field: a Django BoundField; fills name, label, value, error and help
+            text from it
 
     Opening, closing, keyboard toggling and search filtering are the client
     bundle's delegated ``.rich-select`` behaviour: the markup carries no inline
     handler, so it works under a strict CSP.
     """
+    if field is not None:
+        filled = _from_bound_field(
+            field,
+            {"name": name, "label": label, "value": value, "error": error, "helper": helper},
+        )
+        name, label, value = filled["name"], filled["label"], filled["value"]
+        error, helper = filled["error"], filled["helper"]
     if isinstance(disabled, str):
         disabled = disabled.lower() not in ("false", "0", "")
     if isinstance(searchable, str):
@@ -4922,6 +5036,17 @@ def rich_select(
     # triggers inside ``.rich-select--disabled``.
     tabindex = "-1" if disabled else "0"
     aria_disabled = ' aria-disabled="true"' if disabled else ""
+    aria_field = field_aria_attrs(str(uid), error, helper, describedby, invalid)
+    helper_html = (
+        f'<span class="form-helper" id="{uid}-helper">{conditional_escape(helper)}</span>'
+        if helper
+        else ""
+    )
+    error_html = (
+        f'<span class="form-error-message" id="{uid}-error">{conditional_escape(error)}</span>'
+        if error
+        else ""
+    )
 
     return mark_safe(
         f'<div class="rich-select{disabled_cls}" id="{uid}">'
@@ -4929,7 +5054,7 @@ def rich_select(
         f'<input type="hidden" name="{e_name}" value="{conditional_escape(value)}">'
         f'<div class="rich-select-trigger{trigger_variant_cls}" '
         f'tabindex="{tabindex}" role="combobox" aria-controls="{listbox_id}" '
-        f'aria-expanded="false" aria-haspopup="listbox"{aria_disabled}{disabled_attr}>'
+        f'aria-expanded="false" aria-haspopup="listbox"{aria_field}{aria_disabled}{disabled_attr}>'
         f"{selected_html}"
         f'<span class="rich-select-chevron" aria-hidden="true">&#9662;</span>'
         f"</div>"
@@ -4937,6 +5062,7 @@ def rich_select(
         f"{search_html}"
         f"{''.join(opt_parts)}"
         f"</div>"
+        f"{error_html}{helper_html}"
         f"</div>"
     )
 

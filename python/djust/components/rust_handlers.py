@@ -2146,6 +2146,12 @@ class ComboboxHandler:
                 search_event=kwargs.get("search_event", ""),
                 multiple=kwargs.get("multiple", False),
                 selected=selected_val,
+                required=kwargs.get("required", False),
+                error=kwargs.get("error", ""),
+                helper=kwargs.get("helper", ""),
+                describedby=kwargs.get("describedby", ""),
+                invalid=kwargs.get("invalid", False),
+                field=kwargs.get("field"),
             )
         )
 
@@ -3308,6 +3314,11 @@ class RichSelectHandler:
                 label=kwargs.get("label", ""),
                 variant_map=kwargs.get("variant_map"),
                 id=kwargs.get("id", ""),
+                error=kwargs.get("error", ""),
+                helper=kwargs.get("helper", ""),
+                describedby=kwargs.get("describedby", ""),
+                invalid=kwargs.get("invalid", False),
+                field=kwargs.get("field"),
             )
         )
 
