@@ -23360,7 +23360,7 @@ globalThis.djust.djTransitionGroup = {
             const input = zone.querySelector('input[type=file]');
             try {
                 const transfer = new DataTransfer();
-                for (let i = 0; i < files.length; i++) transfer.items.add(files[i]);
+                Array.prototype.forEach.call(files, function (file) { transfer.items.add(file); });
                 input.files = transfer.files;
             } catch (_err) { /* no DataTransfer constructor: the count still shows */ }
             _showFileCount(zone, files);
