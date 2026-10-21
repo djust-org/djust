@@ -4058,14 +4058,11 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         hvr_meta = event.get("hvr_meta")
         if hvr_meta and self.view_instance:
             from djust.hot_view_replacement import (
-                _resolve_class_pairs,
                 apply_class_swap,
+                resolve_reload_pairs,
             )
 
-            class_pairs = _resolve_class_pairs(
-                hvr_meta.get("module", ""),
-                hvr_meta.get("class_names", []) or [],
-            )
+            class_pairs = resolve_reload_pairs(hvr_meta)
             if class_pairs is not None:
                 ok, reason = apply_class_swap(self.view_instance, class_pairs)
                 if not ok:
