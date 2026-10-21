@@ -3158,6 +3158,40 @@ def _explicit_descendant(root: Any, view_id: Any) -> Any:
     return matches[0] if len(matches) == 1 else None
 
 
+def _public_decorator_metadata(view_instance: Any) -> List[Tuple[str, Dict[str, Any]]]:
+    """``(name, _djust_decorators)`` for every public decorated method.
+
+    The mount frame's ``cache_config`` and ``handler_config`` are read from
+    here. A class attribute that is a descriptor other than a function,
+    ``staticmethod`` or ``classmethod`` is not read: that would run a
+    ``@property`` or bind a class-level component on the event loop. The
+    framework's own ``changed_fields`` / ``is_dirty`` properties fingerprint
+    the whole view state, so two scans per mount cost four full state walks,
+    and an app property that raised (an ORM read on the loop) made the
+    caller's ``except`` drop the whole config.
+    """
+    from ._parameter_metadata import _ABSENT, _METHOD_TYPES, _mro_lookup
+
+    cls = type(view_instance)
+    found: List[Tuple[str, Dict[str, Any]]] = []
+    # dir() races a first-use class cache on a free-threaded build, and the
+    # callers' ``except`` would silently drop the config (#3151).
+    for attr_name in attribute_names(cls):
+        if attr_name.startswith("_"):
+            continue
+        declared = _mro_lookup(cls, attr_name)
+        if (
+            declared is not _ABSENT
+            and type(declared) not in _METHOD_TYPES
+            and _mro_lookup(type(declared), "__get__") is not _ABSENT
+        ):
+            continue
+        decorators = getattr(getattr(view_instance, attr_name, None), "_djust_decorators", None)
+        if decorators:
+            found.append((attr_name, decorators))
+    return found
+
+
 class ViewRuntime:
     """Wire-blind runtime for a single mounted LiveView session.
 
@@ -6901,16 +6935,10 @@ class ViewRuntime:
         """
         try:
             cache_config: Dict[str, Any] = {}
-            # dir() races a first-use class cache on a free-threaded build, and
-            # the ``except`` below would silently drop the config (#3151).
-            for attr_name in attribute_names(type(view_instance)):
-                if attr_name.startswith("_"):
-                    continue
-                method = getattr(view_instance, attr_name, None)
-                if method and hasattr(method, "_djust_decorators"):
-                    cache_info = method._djust_decorators.get("cache")
-                    if cache_info:
-                        cache_config[attr_name] = cache_info
+            for attr_name, decorators in _public_decorator_metadata(view_instance):
+                cache_info = decorators.get("cache")
+                if cache_info:
+                    cache_config[attr_name] = cache_info
             return cache_config or None
         except Exception:
             return None
@@ -6930,15 +6958,7 @@ class ViewRuntime:
         """
         try:
             handler_config: Dict[str, Any] = {}
-            # dir() races a first-use class cache on a free-threaded build, and
-            # the ``except`` below would silently drop the config (#3151).
-            for attr_name in attribute_names(type(view_instance)):
-                if attr_name.startswith("_"):
-                    continue
-                method = getattr(view_instance, attr_name, None)
-                decorators = getattr(method, "_djust_decorators", None)
-                if not decorators:
-                    continue
+            for attr_name, decorators in _public_decorator_metadata(view_instance):
                 entry = {
                     key: decorators[key]
                     for key in self._CLIENT_RATE_LIMIT_KEYS

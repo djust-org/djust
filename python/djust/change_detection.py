@@ -135,7 +135,72 @@ def deep_fingerprint(value: Any, budget: int = DEFAULT_BUDGET) -> Tuple[Hashable
     return fp, counter[0] < 0
 
 
+#: Exact builtin scalar types: no subclass, so no ``STATE_MARKER`` either. The
+#: fast path in :func:`_walk` handles them inline; a subclass of one (Django's
+#: ``SafeString``, an ``IntEnum``) takes the general path, which fingerprints
+#: it the same way.
+_EXACT_SCALARS = frozenset(_IMMUTABLE_LEAVES)
+
+
 def _walk(value: Any, counter: List[int], depth: int, path_ids: Tuple[int, ...]) -> Hashable:
+    """Fingerprint *value*; same result as :func:`_walk_general`, faster.
+
+    Every snapshot walks the whole view state several times per event (the
+    pre/post assigns snapshot, the Rust sync, dirty tracking, the context
+    fingerprints), so this walk is most of an event's CPU when the state
+    holds a few hundred plain rows, and it is serialised on the process's
+    one sync thread. Exact ``dict`` / ``list`` / ``tuple`` nodes and
+    exact scalar leaves are handled here without a call per leaf; anything
+    else goes to :func:`_walk_general`. The output is identical, node for
+    node and budget unit for budget unit, in the same order.
+    """
+    t = type(value)
+    if t in _EXACT_SCALARS:
+        counter[0] -= 1
+        if counter[0] < 0:
+            return (_TAG_TRUNCATED, id(value))
+        return (_TAG_VALUE, t, value)
+    if t is not dict and t is not list and t is not tuple:
+        return _walk_general(value, counter, depth, path_ids)
+    counter[0] -= 1
+    if counter[0] < 0:
+        return (_TAG_TRUNCATED, id(value))
+    vid = id(value)
+    if depth >= _MAX_DEPTH or vid in path_ids:
+        return (_TAG_ID, vid)
+    inner = path_ids + (vid,)
+    child_depth = depth + 1
+    out: List[Hashable] = []
+    append = out.append
+    if t is dict:
+        for k, v in value.items():
+            tk = type(k)
+            if tk in _EXACT_SCALARS:
+                counter[0] -= 1
+                kf: Hashable = (_TAG_VALUE, tk, k) if counter[0] >= 0 else (_TAG_TRUNCATED, id(k))
+            else:
+                kf = _walk(k, counter, child_depth, inner)
+            tv = type(v)
+            if tv in _EXACT_SCALARS:
+                counter[0] -= 1
+                vf: Hashable = (_TAG_VALUE, tv, v) if counter[0] >= 0 else (_TAG_TRUNCATED, id(v))
+            else:
+                vf = _walk(v, counter, child_depth, inner)
+            append((kf, vf))
+        return (_TAG_DICT, tuple(out))
+    for v in value:
+        tv = type(v)
+        if tv in _EXACT_SCALARS:
+            counter[0] -= 1
+            append((_TAG_VALUE, tv, v) if counter[0] >= 0 else (_TAG_TRUNCATED, id(v)))
+        else:
+            append(_walk(v, counter, child_depth, inner))
+    return (_TAG_LIST if t is list else _TAG_TUPLE, tuple(out))
+
+
+def _walk_general(
+    value: Any, counter: List[int], depth: int, path_ids: Tuple[int, ...]
+) -> Hashable:
     fields: Any = None
     if getattr(type(value), STATE_MARKER, False):
         fields = getattr(type(value), FINGERPRINT_FIELDS, None)
