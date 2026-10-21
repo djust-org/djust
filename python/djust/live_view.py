@@ -1289,6 +1289,27 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
                 continue
         return result
 
+    def _unsaved_private_keys(self, saved: Dict[str, Any]) -> List[str]:
+        """Tracked private attributes that ``saved`` (``_get_private_state()``) lacks.
+
+        Those the session could not hold: a non-JSON value or a stored callable.
+        The slots ``_get_private_state`` leaves to the public state on purpose
+        are not lost, so they are not listed.
+        """
+        user_keys: Set[str] = getattr(self, "_user_private_keys", set())
+        not_private = self._framework_storage_slots()
+        return sorted(
+            key
+            for key in user_keys
+            if key in self.__dict__
+            and key not in saved
+            and key not in _FRAMEWORK_INTERNAL_ATTRS
+            and not (
+                key in not_private
+                and not (key != "_reactive_state" and _holds_model(self.__dict__[key]))
+            )
+        )
+
     def _restore_private_state(self, private_state: Dict[str, Any]) -> None:
         """Restore legacy private attributes; explicit views require a bound adapter."""
         from ._exposure import require_legacy_state_api
@@ -1601,7 +1622,6 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
         (:func:`restore_components_snapshot`, shared with time-travel).
         """
         from ._exposure import require_legacy_state_api
-        from .security import safe_setattr
 
         require_legacy_state_api(self)
         from ._interactive_snapshots import SNAPSHOT_KEY, restore_bindings
@@ -1612,12 +1632,12 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
         # (``_capture_snapshot_state``); the flat loop below would drop it,
         # since ``safe_setattr`` refuses dunder names (#2896).
         components_state = state.get("__components__")
-        for key, value in state.items():
-            if key == SNAPSHOT_KEY:
-                continue
-            if key == "__components__":
-                continue
-            safe_setattr(self, key, value, allow_private=False)
+        from ._state_restore import restore_public_state
+
+        # Never over a method of the class (a context key named like one).
+        restore_public_state(
+            self, {k: v for k, v in state.items() if k not in (SNAPSHOT_KEY, "__components__")}
+        )
         if components_state:
             restore_components_snapshot(self, components_state, source="state_snapshot")
 

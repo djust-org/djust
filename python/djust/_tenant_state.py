@@ -80,8 +80,12 @@ def session_view_key(view: Any, path: str) -> Optional[str]:
     return None if scoped is None else f"liveview_{scoped}"
 
 
+#: Beside the state key: the private attributes the session could not hold
+#: (not JSON), which the HTTP fallback rebuilds with ``mount()``.
+UNSAVED_PRIVATE_SUFFIX = "__private_unsaved"
+
 #: What a view stores beside its state key: its private state and its components.
-_OWN_KEY_SUFFIXES = ("", "__private", "_components")
+_OWN_KEY_SUFFIXES = ("", "__private", UNSAVED_PRIVATE_SUFFIX, "_components")
 
 
 def _is_own(key: str, own_key: str) -> bool:
