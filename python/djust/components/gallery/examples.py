@@ -1563,6 +1563,19 @@ EXAMPLES: Dict[str, Any] = {
             },
         ],
     },
+    "confirm_dialog_block": {
+        "purpose": "Confirm or cancel an action in a titled dialog with your own body content",
+        "keywords": ("confirm", "dialog", "body", "note"),
+        "related": ("confirm_dialog", "modal"),
+        "label": "Confirm Dialog (with body)",
+        "category": "overlay",
+        "variants": [
+            {
+                "name": "With a note field",
+                "template": '{% confirm_dialog_block open=True title="Send request" message="Approvers are notified." confirm_event="send" confirm_label="Send" %}<label>Note <textarea name="note"></textarea></label>{% endconfirm_dialog_block %}',
+            },
+        ],
+    },
     "dropdown_menu": {
         "purpose": "Display action items and dividers under a menu trigger",
         "keywords": (),
@@ -1577,6 +1590,19 @@ EXAMPLES: Dict[str, Any] = {
                     '{% menu_item label="Edit" event="edit" icon="pencil" %}'
                     "{% menu_divider %}"
                     '{% menu_item label="Delete" event="delete" danger=True %}'
+                    "{% enddropdown_menu %}"
+                ),
+            },
+            {
+                "name": "Checkable items and links",
+                "template": (
+                    '{% dropdown_menu label="View" open=True %}'
+                    '{% menu_item heading="Theme" %}'
+                    '{% menu_item label="Light" event="set_mode" value="light" type="radio" checked=True %}'
+                    '{% menu_item label="Dark" event="set_mode" value="dark" type="radio" checked=False %}'
+                    "{% menu_divider %}"
+                    '{% menu_item label="Show details" event="toggle_details" checked=True %}'
+                    '{% menu_item label="Help" href="/help/" %}'
                     "{% enddropdown_menu %}"
                 ),
             },

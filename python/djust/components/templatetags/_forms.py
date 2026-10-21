@@ -461,64 +461,81 @@ def autocomplete(
 # ---------------------------------------------------------------------------
 
 
+def render_confirm_dialog(kw: Any, body: Any = "") -> SafeString:
+    """Markup for an open confirmation dialog.
+
+    Shared by ``{% confirm_dialog %}``, ``{% confirm_dialog_block %}`` and
+    their Rust handlers. ``kw`` holds the resolved tag arguments; ``body`` is
+    the already-rendered block content (a note field, a pending line, an
+    error), placed in the dialog body after the message. The title and
+    message ids derive from ``id`` (default ``dj-confirm``), so renders are
+    stable and diff cleanly over the socket.
+    """
+    message = kw.get("message", "" if body else "Are you sure?")
+    confirm_event = kw.get("confirm_event", "confirm")
+    cancel_event = kw.get("cancel_event", "cancel")
+    title = kw.get("title", "Confirm")
+    variant = kw.get("variant", "default")  # default or danger
+    confirm_label = kw.get("confirm_label", "Confirm")
+    cancel_label = kw.get("cancel_label", "Cancel")
+    custom_class = kw.get("custom_class", "")
+
+    dialog_id = conditional_escape(kw.get("id", "") or "dj-confirm")
+    title_id = f"{dialog_id}-title"
+    msg_id = f"{dialog_id}-msg"
+
+    e_confirm_event = conditional_escape(confirm_event)
+    e_cancel_event = conditional_escape(cancel_event)
+    e_title = conditional_escape(title)
+    e_variant = conditional_escape(variant)
+    e_confirm_label = conditional_escape(confirm_label)
+    e_cancel_label = conditional_escape(cancel_label)
+    e_custom_class = conditional_escape(custom_class)
+
+    variant_cls = f" dj-confirm-dialog--{e_variant}" if variant != "default" else ""
+    extra_cls = f" {e_custom_class}" if custom_class else ""
+    message_html = (
+        f'<p class="dj-confirm-dialog__message">{conditional_escape(message)}</p>'
+        if message
+        else ""
+    )
+
+    return mark_safe(
+        f'<div class="dj-confirm-dialog-backdrop">'
+        f'<div class="dj-scrim" dj-click="{e_cancel_event}"></div>'
+        f'<div class="dj-confirm-dialog{variant_cls}{extra_cls}" id="{dialog_id}" '
+        f'role="alertdialog" aria-modal="true" aria-labelledby="{title_id}" '
+        f'aria-describedby="{msg_id}">'
+        f'<div class="dj-confirm-dialog__header">'
+        f'<h3 class="dj-confirm-dialog__title" id="{title_id}">{e_title}</h3>'
+        f'<button type="button" class="dj-confirm-dialog__close" dj-click="{e_cancel_event}" '
+        f'aria-label="Close">&times;</button>'
+        f"</div>"
+        f'<div class="dj-confirm-dialog__body" id="{msg_id}">'
+        f"{message_html}{body}"
+        f"</div>"
+        f'<div class="dj-confirm-dialog__footer">'
+        f'<button type="button" class="dj-confirm-dialog__btn dj-confirm-dialog__btn--cancel" '
+        f'dj-click="{e_cancel_event}">{e_cancel_label}</button>'
+        f'<button type="button" class="dj-confirm-dialog__btn dj-confirm-dialog__btn--confirm" '
+        f'dj-click="{e_confirm_event}">{e_confirm_label}</button>'
+        f"</div>"
+        f"</div>"
+        f"</div>"
+    )
+
+
 class ConfirmDialogNode(template.Node):
-    def __init__(self, kwargs: Any) -> None:
+    def __init__(self, kwargs: Any, nodelist: Any = None) -> None:
         self.kwargs = kwargs
+        self.nodelist = nodelist
 
     def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
-        message = kw.get("message", "Are you sure?")
-        confirm_event = kw.get("confirm_event", "confirm")
-        cancel_event = kw.get("cancel_event", "cancel")
-        title = kw.get("title", "Confirm")
-        is_open = kw.get("is_open", kw.get("open", False))
-        variant = kw.get("variant", "default")  # default or danger
-        confirm_label = kw.get("confirm_label", "Confirm")
-        cancel_label = kw.get("cancel_label", "Cancel")
-        custom_class = kw.get("custom_class", "")
-
-        if not is_open:
+        if not kw.get("is_open", kw.get("open", False)):
             return ""
-
-        uid = uuid.uuid4().hex[:8]
-        title_id = f"dj-confirm-title-{uid}"
-        msg_id = f"dj-confirm-msg-{uid}"
-
-        e_confirm_event = conditional_escape(confirm_event)
-        e_cancel_event = conditional_escape(cancel_event)
-        e_title = conditional_escape(title)
-        e_message = conditional_escape(message)
-        e_variant = conditional_escape(variant)
-        e_confirm_label = conditional_escape(confirm_label)
-        e_cancel_label = conditional_escape(cancel_label)
-        e_custom_class = conditional_escape(custom_class)
-
-        variant_cls = f" dj-confirm-dialog--{e_variant}" if variant != "default" else ""
-        extra_cls = f" {e_custom_class}" if custom_class else ""
-
-        return mark_safe(
-            f'<div class="dj-confirm-dialog-backdrop">'
-            f'<div class="dj-scrim" dj-click="{e_cancel_event}"></div>'
-            f'<div class="dj-confirm-dialog{variant_cls}{extra_cls}" '
-            f'role="alertdialog" aria-modal="true" aria-labelledby="{title_id}" '
-            f'aria-describedby="{msg_id}">'
-            f'<div class="dj-confirm-dialog__header">'
-            f'<h3 class="dj-confirm-dialog__title" id="{title_id}">{e_title}</h3>'
-            f'<button class="dj-confirm-dialog__close" dj-click="{e_cancel_event}" '
-            f'aria-label="Close">&times;</button>'
-            f"</div>"
-            f'<div class="dj-confirm-dialog__body" id="{msg_id}">'
-            f'<p class="dj-confirm-dialog__message">{e_message}</p>'
-            f"</div>"
-            f'<div class="dj-confirm-dialog__footer">'
-            f'<button class="dj-confirm-dialog__btn dj-confirm-dialog__btn--cancel" '
-            f'dj-click="{e_cancel_event}">{e_cancel_label}</button>'
-            f'<button class="dj-confirm-dialog__btn dj-confirm-dialog__btn--confirm" '
-            f'dj-click="{e_confirm_event}">{e_confirm_label}</button>'
-            f"</div>"
-            f"</div>"
-            f"</div>"
-        )
+        body = self.nodelist.render(context) if self.nodelist is not None else ""
+        return render_confirm_dialog(kw, body)
 
 
 @register.tag("confirm_dialog")
@@ -526,6 +543,20 @@ def do_confirm_dialog(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
     return ConfirmDialogNode(kwargs)
+
+
+@register.tag("confirm_dialog_block")
+def do_confirm_dialog_block(parser: Any, token: Any) -> template.Node:
+    """``{% confirm_dialog_block ... %}body{% endconfirm_dialog_block %}``.
+
+    The block form of ``{% confirm_dialog %}``: same arguments, plus a body
+    slot rendered under the message (``message`` is optional here).
+    """
+    bits = token.split_contents()[1:]
+    kwargs = _parse_kv_args(bits, parser)
+    nodelist = parser.parse(("endconfirm_dialog_block",))
+    parser.delete_first_token()
+    return ConfirmDialogNode(kwargs, nodelist)
 
 
 # ---------------------------------------------------------------------------

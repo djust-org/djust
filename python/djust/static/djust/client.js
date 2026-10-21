@@ -18672,13 +18672,15 @@ window.djust.bindModelElements = bindModelElements;
 //
 // SECURITY BOUNDARY
 // -----------------
-// The script body is evaluated via `new Function(...)`. This is safe at the
-// same trust level as any other JS inside a Django template: the body is
-// template-author-controlled, not user-supplied. The {% colocated_hook %} tag
-// escapes `</script>` in the body to prevent premature tag close. Users on
-// strict CSP without 'unsafe-eval' should not use this feature — register
-// hooks via a nonce-bearing <script>window.djust.hooks.X = {...}</script>
-// instead.
+// The script body is template-author-controlled, not user-supplied, so
+// running it is at the same trust level as any other JS inside a Django
+// template. The {% colocated_hook %} tag escapes `</script>` in the body to
+// prevent premature tag close.
+//
+// When the request has a CSP nonce the tag carries it, and the body runs in a
+// script element created with that nonce: a strict nonce CSP allows it with
+// neither 'unsafe-eval' nor 'unsafe-inline'. Without a nonce the body is
+// evaluated with `new Function(...)`.
 // ============================================================================
 
 (function initColocatedHooks() {
@@ -18700,6 +18702,11 @@ window.djust.bindModelElements = bindModelElements;
             if (!hookName) {
                 // Mark as processed so we don't keep scanning it.
                 scriptEl.dataset.djustHookRegistered = '1';
+                continue;
+            }
+            const nonce = scriptEl.nonce || scriptEl.getAttribute('nonce');
+            if (nonce) {
+                _registerWithNonce(scriptEl, hookName, nonce);
                 continue;
             }
             try {
@@ -18739,6 +18746,30 @@ window.djust.bindModelElements = bindModelElements;
                 }
                 scriptEl.dataset.djustHookRegistered = 'error';
             }
+        }
+    }
+
+    /**
+     * Run a hook body under a strict CSP: a script element carrying the
+     * page's nonce is allowed where `new Function` ('unsafe-eval') is not.
+     * The inserted script runs synchronously and assigns the hook itself.
+     */
+    function _registerWithNonce(scriptEl, hookName, nonce) {
+        const runner = document.createElement('script');
+        runner.setAttribute('nonce', nonce);
+        runner.nonce = nonce;
+        runner.textContent =
+            '(function(){const hook={};' + scriptEl.textContent +
+            '\n;(globalThis.djust.hooks=globalThis.djust.hooks||{})[' +
+            JSON.stringify(hookName) + ']=hook;})();';
+        (document.head || document.documentElement).appendChild(runner);
+        runner.remove();
+        // eslint-disable-next-line security/detect-object-injection
+        const registered = !!(globalThis.djust.hooks && globalThis.djust.hooks[hookName]);
+        scriptEl.dataset.djustHookRegistered = registered ? '1' : 'error';
+        if (globalThis.djustDebug) {
+            console.debug('[colocated-hook] %s %s with the page nonce',
+                registered ? 'Registered' : 'Could not register', hookName);
         }
     }
 
@@ -22944,6 +22975,151 @@ globalThis.djust.djTransitionGroup = {
         _apply();
     } else {
         document.addEventListener('DOMContentLoaded', _apply, { once: true });
+    }
+})();
+// ============================================================================
+// Component behaviours: delegated, CSP-safe
+// ============================================================================
+//
+// The djust.components tags render markup only. The interactive parts that
+// used to be inline event handlers (onclick=, onkeydown=, oninput=, ...) live
+// here as listeners on `document`, so they work under a Content-Security-
+// Policy without 'unsafe-inline' and keep working across VDOM morphs without
+// re-binding:
+//
+//   .rich-select      open/close on click, Enter/Space and Escape; close on an
+//                     option pick or a click elsewhere; search-box filtering.
+//   .combobox         keep focus in the input while an option is pressed,
+//                     close the list after the pick, reflect aria-expanded.
+//   .dj-theme-toggle  switch the colour mode (`data-theme-mode`) when
+//                     djust.theming's theme.js is not on the page, and keep
+//                     every toggle's aria-checked in step with the mode.
+// ============================================================================
+
+(function initComponentBehaviors() {
+    if (typeof document === 'undefined' || document._djustComponentBehaviors) return;
+    document._djustComponentBehaviors = true;
+
+    const THEME_MODE_KEY = 'djust-theme-mode';
+    const THEME_MODES = ['light', 'dark', 'system'];
+
+    function _closest(target, selector) {
+        return target && target.closest ? target.closest(selector) : null;
+    }
+
+    function _setRichSelectOpen(root, open) {
+        root.classList.toggle('rich-select--open', open);
+        const trigger = root.querySelector('.rich-select-trigger');
+        if (trigger) trigger.setAttribute('aria-expanded', open ? 'true' : 'false');
+    }
+
+    function _closeRichSelects(except) {
+        document.querySelectorAll('.rich-select--open').forEach(function (el) {
+            if (el !== except) _setRichSelectOpen(el, false);
+        });
+    }
+
+    function _syncThemeToggles(mode) {
+        document.querySelectorAll('.dj-theme-toggle').forEach(function (toggle) {
+            toggle.setAttribute('data-current', mode);
+            toggle.querySelectorAll('[data-theme-mode]').forEach(function (btn) {
+                const on = btn.getAttribute('data-theme-mode') === mode;
+                btn.setAttribute('aria-checked', on ? 'true' : 'false');
+                btn.classList.toggle('dj-theme-toggle__btn--active', on);
+            });
+        });
+    }
+
+    function _setThemeMode(mode) {
+        if (THEME_MODES.indexOf(mode) < 0) return;
+        // djust.theming's theme.js switches the mode itself on any
+        // [data-theme-mode] click; only stand in for it when it is absent.
+        if (!globalThis.djustTheme) {
+            try { localStorage.setItem(THEME_MODE_KEY, mode); } catch (_err) { /* storage blocked */ }
+            const prefersDark = globalThis.matchMedia &&
+                globalThis.matchMedia('(prefers-color-scheme: dark)').matches;
+            const dark = mode === 'dark' || (mode === 'system' && prefersDark);
+            document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+            document.documentElement.setAttribute('data-theme-mode', mode);
+        }
+        _syncThemeToggles(mode);
+    }
+
+    document.addEventListener('click', function (e) {
+        const target = e.target;
+        const richSelect = _closest(target, '.rich-select');
+        _closeRichSelects(richSelect);
+        if (richSelect) {
+            if (_closest(target, '.rich-select-option')) {
+                _setRichSelectOpen(richSelect, false);
+            } else if (_closest(target, '.rich-select-trigger') &&
+                       !richSelect.classList.contains('rich-select--disabled')) {
+                _setRichSelectOpen(richSelect, !richSelect.classList.contains('rich-select--open'));
+            }
+        }
+
+        const comboList = _closest(target, '.combobox-dropdown');
+        if (comboList) {
+            const input = _closest(comboList, '.combobox').querySelector('.combobox-input');
+            if (input) input.blur();
+        }
+
+        const modeButton = _closest(target, '.dj-theme-toggle [data-theme-mode]');
+        if (modeButton) _setThemeMode(modeButton.getAttribute('data-theme-mode'));
+    });
+
+    document.addEventListener('keydown', function (e) {
+        const richSelect = _closest(e.target, '.rich-select');
+        if (!richSelect) return;
+        const open = richSelect.classList.contains('rich-select--open');
+        if (e.key === 'Escape' && open) {
+            _setRichSelectOpen(richSelect, false);
+            const trigger = richSelect.querySelector('.rich-select-trigger');
+            if (trigger) trigger.focus();
+            return;
+        }
+        if ((e.key === 'Enter' || e.key === ' ') && _closest(e.target, '.rich-select-trigger') &&
+            !richSelect.classList.contains('rich-select--disabled')) {
+            e.preventDefault();
+            _setRichSelectOpen(richSelect, !open);
+        }
+    });
+
+    document.addEventListener('input', function (e) {
+        const box = e.target;
+        if (!box || !box.classList || !box.classList.contains('rich-select-search-input')) return;
+        const list = _closest(box, '.rich-select-dropdown');
+        if (!list) return;
+        const query = box.value.toLowerCase();
+        list.querySelectorAll('.rich-select-option').forEach(function (item) {
+            item.style.display = item.textContent.toLowerCase().indexOf(query) >= 0 ? '' : 'none';
+        });
+    });
+
+    // An option press must not move focus out of the input: the list is
+    // shown by `.combobox-input:focus ~ .combobox-dropdown`.
+    document.addEventListener('mousedown', function (e) {
+        if (_closest(e.target, '.combobox-dropdown')) e.preventDefault();
+    });
+
+    function _comboExpanded(e, expanded) {
+        const input = e.target;
+        if (input && input.classList && input.classList.contains('combobox-input')) {
+            input.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+        }
+    }
+    document.addEventListener('focusin', function (e) { _comboExpanded(e, true); });
+    document.addEventListener('focusout', function (e) { _comboExpanded(e, false); });
+
+    function _syncStoredThemeMode() {
+        let stored = null;
+        try { stored = localStorage.getItem(THEME_MODE_KEY); } catch (_err) { /* storage blocked */ }
+        if (stored && THEME_MODES.indexOf(stored) >= 0) _syncThemeToggles(stored);
+    }
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', _syncStoredThemeMode);
+    } else {
+        _syncStoredThemeMode();
     }
 })();
 

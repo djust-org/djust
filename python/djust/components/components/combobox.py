@@ -75,14 +75,18 @@ class Combobox(Component):
             else:
                 ov = opt
                 ol = html.escape(str(opt))
+            is_sel = "true" if str(ov) == str(self.value) else "false"
             options_html += (
-                f'<div class="combobox-option" {self.event_attrs(event, value=ov)}>{ol}</div>'
+                f'<div class="combobox-option" role="option" aria-selected="{is_sel}" '
+                f"{self.event_attrs(event, value=ov)}>{ol}</div>"
             )
         return (
             f'<div class="form-group">{label_html}'
             f'<div class="{cls}">'
             f'<input class="combobox-input form-input" type="text" name="{e_name}" '
-            f'placeholder="{e_placeholder}" value="{e_value}" {self.event_attrs(search_event, trigger="input")}>'
-            f'<div class="combobox-dropdown">{options_html}</div>'
+            f'placeholder="{e_placeholder}" value="{e_value}" role="combobox" '
+            f'aria-autocomplete="list" aria-expanded="false" aria-controls="{e_name}-listbox" '
+            f"{self.event_attrs(search_event, trigger='input')}>"
+            f'<div class="combobox-dropdown" id="{e_name}-listbox" role="listbox">{options_html}</div>'
             f"</div></div>"
         )
