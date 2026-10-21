@@ -259,11 +259,24 @@ def render_markdown(
     """
     ...
 
+def fold_html_whitespace(html: str) -> str:
+    """Fold whitespace runs in markup and whitespace-only text to one space.
+
+    Text that has content keeps its whitespace. ``pre``/``code``/``textarea``/
+    ``script``/``style`` blocks are expected as ``__PRESERVED_BLOCK_<i>__``
+    placeholders already.
+    """
+    ...
+
+def fold_html_whitespace_edits(html: str) -> List[Tuple[int, int]]:
+    """UTF-8 byte ranges ``fold_html_whitespace`` replaces with one space."""
+    ...
+
 def collapse_inter_tag_whitespace(html: str, block_tags: List[str]) -> str:
     """
     The egress normalizer's inter-tag whitespace pass (#2999).
 
-    ``html`` has every whitespace run collapsed to one space and its
+    ``html`` has been through ``fold_html_whitespace`` and has its
     pre/code/textarea/script/style blocks replaced by
     ``__PRESERVED_BLOCK_<i>__`` placeholders (tag ``block_tags[i]``). Drops a
     space between two tags unless its nearest sibling on each side is text or
@@ -285,7 +298,7 @@ def authored_lazy_elements(
 def normalize_provenance_whitespace(
     html: str, spans: List[Tuple[int, int]], origins: List[Tuple[int, int, int, str]]
 ) -> Tuple[str, List[Tuple[int, int]], List[Tuple[int, int, int, str]]]:
-    """Collapse whitespace runs to one space, remapping authored intervals."""
+    """``fold_html_whitespace``, remapping authored intervals."""
     ...
 
 def collapse_provenance_whitespace(
@@ -1504,6 +1517,8 @@ __all__ = [
     "inter_tag_whitespace_edits",
     "authored_lazy_elements",
     "normalize_provenance_whitespace",
+    "fold_html_whitespace",
+    "fold_html_whitespace_edits",
     "collapse_provenance_whitespace",
     "lazy_authority_spans",
     "root_content_range",
