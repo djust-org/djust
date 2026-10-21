@@ -288,8 +288,41 @@ coroutine catches cancellation and returns a value.
 
 Cancellation is cooperative: already-running synchronous code in a worker thread
 cannot be forcibly interrupted. Its side effects may still finish; cancellation
-does not roll them back. Independently created application tasks are not tracked
-by this API. Reset any application loading flags in your cancelling event handler.
+does not roll them back. Reset any application loading flags in your cancelling
+event handler.
+
+### Tasks the view starts itself: `create_task()`
+
+Async code in a view sometimes starts a task of its own: a follower launched
+from an `async def mount`, a loop started by an async push handler. Start it with
+`self.create_task(coro)` (or register a task made elsewhere with
+`self.track_task(task)`) and it lives as long as the view's `start_async` work:
+`cancel_async_all()` cancels it, an explicit-exposure view's disposal on
+disconnect or navigation cancels it, and so does a legacy view's close when the
+view sets `cancel_async_on_disconnect = True`. A task created with plain
+`asyncio.create_task()` is not tracked and keeps running.
+
+```python
+from djust import LiveView, apush_to_view
+
+
+class RunView(LiveView):
+    cancel_async_on_disconnect = True
+
+    async def mount(self, request, run_id=None, **kwargs):
+        self.events = []
+        self.create_task(self._follow(run_id))
+
+    async def _follow(self, run_id):
+        async for event in run_events(run_id):
+            self.events.append(event)
+            await apush_to_view("runs.views.RunView", handler="handle_tick", scope=run_id)
+```
+
+`create_task()` needs the event loop, so call it from an `async def` hook; a sync
+handler runs on a worker thread and raises `RuntimeError` there (use
+`start_async()`). The task's result does not re-render the view: assign state
+and push, as above.
 
 ### Handling Completion or Errors
 
