@@ -4298,14 +4298,18 @@ window.djust.applyHandlerRateLimit = applyHandlerRateLimit;
 /**
  * Immediately send every pending debounced / throttled event.
  *
- * Called from the `dj-submit` path in 09-event-binding.js for the same
- * reason `_flushPendingDebouncesInForm` is (#1278): a user who edits a
- * debounced field and immediately submits must not lose the last change.
- * `_flushPendingDebouncesInForm` flushes the ELEMENT-level `dj-debounce`
+ * Called from `_flushPendingEdits` in 09-event-binding.js (dj-click and
+ * dj-submit, #1278): a user who edits a debounced field and immediately
+ * clicks or submits must not lose the last change. That helper first
+ * flushes the ELEMENT-level `dj-debounce`
  * wrappers; this flushes the HANDLER-level `@debounce` / `@throttle` gate,
  * which is a separate timer set and would otherwise still be pending.
+ *
+ * `debounceOnly` (a click) leaves the throttle gate alone: a throttled
+ * handler's trailing call is a rate-limited stream, not an edit, and its
+ * window must survive the click.
  */
-function flushHandlerRateLimit() {
+function flushHandlerRateLimit(debounceOnly = false) {
     // Validate BEFORE destroying anything (#2700 review). The clears below are
     // irreversible: bailing out after them would drop every pending event
     // instead of flushing it. Unreachable in the shipped bundle —
@@ -4323,11 +4327,13 @@ function flushHandlerRateLimit() {
     debounceTimers.clear();
 
     const throttlePending = [];
-    throttleState.forEach((state, eventName) => {
-        if (state.timeoutId) clearTimeout(state.timeoutId);
-        if (state.pendingData) throttlePending.push([eventName, state.pendingData]);
-    });
-    throttleState.clear();
+    if (!debounceOnly) {
+        throttleState.forEach((state, eventName) => {
+            if (state.timeoutId) clearTimeout(state.timeoutId);
+            if (state.pendingData) throttlePending.push([eventName, state.pendingData]);
+        });
+        throttleState.clear();
+    }
 
     debouncePending.concat(throttlePending).forEach(([eventName, pending]) => {
         window.djust.handleEvent(eventName, pending, true);
@@ -6295,6 +6301,12 @@ async function _handleDjClick(element, e) {
         return; // User cancelled
     }
 
+    // An edit made before this click reaches the server before it: a
+    // debounced dj-input still pending would otherwise arrive after the
+    // click, carrying text typed before it (and undoing what the click's
+    // handler did with the current value).
+    _flushPendingEdits(true);
+
     // JS Commands: synchronously check whether the attribute is a
     // JSON command chain. If so, fire-and-forget the chain (push
     // ops still round-trip, but we don't block the rest of this
@@ -6420,20 +6432,16 @@ async function _handleDjSubmit(element, e) {
         return; // User cancelled
     }
 
-    // Closes #1278 — flush pending debounced dj-input handlers in this form
-    // BEFORE dispatching submit. Without this, a user who types a field then
-    // immediately clicks submit (within the 300 ms debounce window) hits a
-    // race: submit fires while per-field dj-input events are still pending,
-    // so the server-side state populated by those handlers is empty when the
-    // submit handler reads it. FormData on the form element captures the
-    // typed values, but views that depend on dj-input updating server state
-    // per-keystroke (e.g., WizardMixin's wizard_step_data) see stale data.
-    _flushPendingDebouncesInForm(element);
-    // #2656 — same race, other timer set: `_flushPendingDebouncesInForm`
-    // only flushes the element-level `dj-debounce` wrappers. A handler
-    // carrying `@debounce` / `@throttle` has its pending send parked in the
-    // handler-level gate, which this drains.
-    flushHandlerRateLimit();
+    // Closes #1278 — send pending debounced edits BEFORE dispatching submit.
+    // Without this, a user who types a field then immediately clicks submit
+    // (within the 300 ms debounce window) hits a race: submit fires while
+    // per-field dj-input events are still pending, so the server-side state
+    // populated by those handlers is empty when the submit handler reads it.
+    // FormData on the form element captures the typed values, but views that
+    // depend on dj-input updating server state per-keystroke (e.g.,
+    // WizardMixin's wizard_step_data) see stale data. The field need not be
+    // in this form (a dialog's note beside its confirm form).
+    _flushPendingEdits();
 
     // Read attribute at fire time so morphElement attribute updates take effect
     const submitHandler = element.getAttribute('dj-submit');
@@ -7668,34 +7676,27 @@ function _applyRateLimitAttrs(element, handler) {
 }
 
 /**
- * Flush all pending debounced dj-input handlers on inputs inside a form.
+ * Send every pending debounced edit now, before another event is sent.
  *
- * Iterates the form's [dj-input] descendants; for each, looks up the
- * cached rate-limit state in `_inputRateLimitState` and calls
- * `wrapped.flush()` if the wrapped handler exposes one (only the
- * `debounce` rate-limit type does; throttle / passthrough / blur don't
- * need flushing here).
- *
- * Closes #1278 — see `_handleDjSubmit` for context.
- *
- * @param {HTMLFormElement} form
+ * Element-level `dj-debounce` wrappers first (each `.flush()` fires its
+ * pending call, which reaches `handleEvent`), then the handler-level gate
+ * (#2656), which may now hold the call just flushed. A submit (#1278) also
+ * drains the throttle gate, as it always has; a click (`debounceOnly`) keeps
+ * throttle windows: element throttles are leading-only and a throttled
+ * handler's trailing call is a stream, not an edit.
  */
-function _flushPendingDebouncesInForm(form) {
-    const inputs = form.querySelectorAll('[dj-input]');
-    for (let i = 0; i < inputs.length; i++) {
-        // eslint-disable-next-line security/detect-object-injection
-        const state = _inputRateLimitState.get(inputs[i]);
-        if (state && state.wrapped && typeof state.wrapped.flush === 'function') {
-            state.wrapped.flush();
-        }
-    }
+function _flushPendingEdits(debounceOnly = false) {
+    Array.from(pendingElementRateLimits).forEach((wrapper) => {
+        if (!debounceOnly || wrapper._djustDebounced) wrapper.flush();
+    });
+    flushHandlerRateLimit(debounceOnly);
 }
 
 // Helper: Debounce function with .flush() method.
 //
 // flush() fires the pending invocation immediately and clears the timer.
-// No-op if no invocation is pending. Used by _handleDjSubmit to ensure
-// debounced dj-input events fire before form submission, otherwise
+// No-op if no invocation is pending. Used by _flushPendingEdits to ensure
+// debounced dj-input events fire before a click or form submission, otherwise
 // per-field server-state updates (set by dj-input handlers) would race
 // the submit handler that reads them. Closes #1278.
 function debounce(func, wait) {
@@ -7731,6 +7732,8 @@ function debounce(func, wait) {
         pendingThis = null;
         func.apply(t, a);
     };
+
+    debounced._djustDebounced = true;
 
     debounced.cancel = function () {
         clearTimeout(timeout);
