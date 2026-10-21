@@ -330,11 +330,23 @@ async function handleServerResponse(data, eventName, triggerElement, transport =
         // A deferred save's catch-up (or a later committed turn) has reached
         // this owner's DOM. Do not clear saving status for rejected, malformed
         // or broadcast frames, which do not confirm this owner's state.
-        if (!data.broadcast && data.source !== 'broadcast' &&
-            ((Array.isArray(data.patches)) || data.html)) {
+        const appliedFrame = Array.isArray(data.patches) || !!data.html;
+        const renderedView = typeof data.view === 'string' ? data.view : (transport?.primaryViewPath || null);
+        const renderedTarget = typeof data.target_id === 'string' ? data.target_id : null;
+        if (!data.broadcast && data.source !== 'broadcast' && appliedFrame) {
             window.dispatchEvent(new CustomEvent('djust:rendered', {detail: {
-                view: typeof data.view === 'string' ? data.view : (transport?.primaryViewPath || null),
-                target_id: typeof data.target_id === 'string' ? data.target_id : null,
+                view: renderedView,
+                target_id: renderedTarget,
+            }}));
+        }
+        // Every applied frame, whoever caused it (a server push, a tick, an
+        // async result, this page's own event), after the DOM is updated: for
+        // client code that re-syncs after any patch. ``source`` says which.
+        if (appliedFrame) {
+            window.dispatchEvent(new CustomEvent('djust:patched', {detail: {
+                view: renderedView,
+                target_id: renderedTarget,
+                source: typeof data.source === 'string' && data.source ? data.source : 'event',
             }}));
         }
 
