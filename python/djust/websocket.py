@@ -3175,7 +3175,6 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         data: Dict[str, Any],
         sticky_preserved: Optional[Dict[str, Any]] = None,
         state_snapshot: Optional[Dict[str, Any]] = None,
-        turn_source: Optional[str] = None,
     ) -> None:
         """Handle view mounting by routing through :class:`ViewRuntime`.
 
@@ -3247,7 +3246,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         if state_snapshot is not None and data.get("state_snapshot") is None:
             data = {**data, "state_snapshot": state_snapshot}
 
-        await runtime.dispatch_mount(data, turn_source=turn_source)
+        await runtime.dispatch_mount(data)
 
         # (B) Mount creates the view on the runtime — read it back onto the consumer
         # so disconnect cleanup, request_html recovery, upload/presence handlers,
@@ -4960,7 +4959,6 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                     data,
                     sticky_preserved=sticky_preserved,
                     state_snapshot=state_snapshot,
-                    turn_source="navigation",
                 )
             finally:
                 self._live_redirect_mounting = False

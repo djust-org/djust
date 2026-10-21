@@ -467,6 +467,9 @@ class SSESession:
         self._closed_sentinel_queued = False
         # True while a live_redirect_mount mounts its destination (#3036).
         self._replacing_view = False
+        # True when this session's stream GET re-opened a known id (an
+        # EventSource reconnect): its mount runs as a ``reconnect`` turn.
+        self._mount_reconnect = False
         # Presence untracks scheduled by shutdown() (#3254): held so a task is
         # not garbage-collected before it finishes, dropped when it does.
         self._presence_untrack_tasks: set[asyncio.Task] = set()
@@ -491,7 +494,19 @@ class SSESession:
         # another owner may take the id; ``active`` stays True through the
         # linger so in-flight POSTs still dispatch.
         self._stream_closed = False
-        self._rate_limiter: ConnectionRateLimiter = ConnectionRateLimiter()
+        # Built from ``LIVEVIEW_CONFIG["rate_limit"]`` like the WebSocket's,
+        # now that every POSTed frame is charged to it (ADR-044 D7).
+        from .config import config as _djust_config
+
+        _rl = _djust_config.get("rate_limit", {})
+        _rl = _rl if isinstance(_rl, dict) else {}
+        self._rate_limiter: ConnectionRateLimiter = ConnectionRateLimiter(
+            rate=_rl.get("rate", 100),
+            burst=_rl.get("burst", 20),
+            max_warnings=_rl.get("max_warnings", 3),
+            upload_rate=_rl.get("upload_rate", 200),
+            upload_burst=_rl.get("upload_burst", 400),
+        )
         self._client_ip: Optional[str] = None
         # Serialize POST turns separately from render/result application.
         #: The page view's: one of its turns at a time. Each view mounted
@@ -869,8 +884,7 @@ class SSESession:
                                 "view": f"{view_class.__module__}.{view_class.__qualname__}",
                                 "url": target_request.path_info,
                                 "has_prerendered": False,
-                            },
-                            turn_source="navigation",
+                            }
                         )
                     finally:
                         self._replacing_view = False
@@ -1414,7 +1428,7 @@ class DjustSSEStreamView(View):
             previous = _sse_sessions.get(session_id)
             # An EventSource auto-reconnect re-requests the stream with the same
             # id: the mount runs as a ``reconnect`` turn (ADR-044; informational).
-            reconnecting = previous is not None
+            session._mount_reconnect = previous is not None
             if previous is not None and _owner_identity(previous) == _owner_identity(session):
                 _carry_save_ordering(previous.runtime, session.runtime)
             # Stash the REAL HTTP request so the runtime mounts against it (real
@@ -1472,8 +1486,7 @@ class DjustSSEStreamView(View):
                             "url": session._request.path_info,
                             "params": mount_params,
                             "track_static": track_static,
-                        },
-                        reconnect=reconnecting,
+                        }
                     )
                 except Exception as exc:
                     outcome = protected_http_outcome(exc)

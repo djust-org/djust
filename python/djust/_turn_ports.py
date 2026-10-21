@@ -250,9 +250,11 @@ class RuntimeTurnPort:
         from ._exposure_diagnostics import diagnostics_allowed
         from .security.error_handling import handle_exception
 
-        if turn.kind in _SERVER_KINDS or turn.source == "deferred":
-            # Server turns (and deferred replays) keep their own handlers: an
-            # async callback's failure still reaches its error arm.
+        if turn.kind in _SERVER_KINDS or turn.kind in _MOUNT_KINDS or turn.source == "deferred":
+            # These keep their callers' established handling: an async
+            # callback's failure still reaches its error arm; a mount failure
+            # reaches the SSE stream's protected 500, mount_batch's failed[],
+            # or dispatch_message's envelope.
             return False
         if diagnostics_allowed():
             return False

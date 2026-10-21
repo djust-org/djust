@@ -97,15 +97,32 @@ hook, render) or delivers view data to a client. The chain wraps:
 |---|---|---|---|---|
 | `mount` | `page`, `slot`, `batch`, `navigation`, `lazy` | `ViewRuntime.dispatch_mount` (all callers: page, slot, `mount_batch`, `live_redirect_mount`) | stream GET, slot mount, `_navigate` | `RequestMixin.get` (page), POST `djust_lazy_mount` (lazy) |
 | `reconnect` | same as mount | mount frame with the client's reconnect hint | stream GET reusing an existing session id | — |
-| `event` | `client`, `deferred` (`dj_activity` replay) | `ViewRuntime.dispatch_event` (root, component, sticky child, actor) and the deferred-activity drain | same | `RequestMixin.post`, `api.dispatch_api`, `dispatch_server_function` |
+| `event` | `client`, `deferred` (`dj_activity` replay), `api`, `server_function` | `ViewRuntime.dispatch_event` (root, component, sticky child, actor) and the deferred-activity drain | same | `RequestMixin.post` (`client`), `api.dispatch_api` (`api`), `dispatch_server_function` (`server_function`) |
 | `params` | `url_change` | `ViewRuntime.dispatch_url_change` | same | — |
 | `push` | `server_push`, `db_notify`, `tick`, `presence`, `client_push` | consumer turn functions | — (SSE joins no groups) | — |
-| `async` | `start`, `result` | before the callback runs, and around `handle_async_result` + render | same (runtime path) | — |
+| `async` | `start`, `result`, `catch_up` | the whole background task (callback included), and nested inside it, `handle_async_result` + render under the render lock; the explicit-exposure catch-up render | same (runtime path; child views too) | — |
 | `render` | `recovery` | `request_html` | — | — |
 
 `reconnect` comes from a client hint (WS) or an existing session id (SSE). It is
 informational: mount and reconnect run the same chain, so no security decision
 may depend on telling them apart.
+
+Where the chain sits on each path:
+
+- Runtime client turns: at the top of `dispatch_mount` / `dispatch_event` /
+  `dispatch_url_change` (every caller, including the `mount_batch`,
+  `live_redirect_mount` and SSE stream paths that bypass `dispatch_message`).
+- WebSocket server turns: around the part of each turn that holds the render
+  lock (`_run_server_push_turn`, the locked part of `db_notify` and the tick).
+  Presence and `push_event` delivery, the async start and the recovery render
+  run the chain without the lock.
+- HTTP: around `RequestMixin.get` / `aget` / `post`; the API after its own
+  authentication and CSRF, so middleware sees the API-authenticated user.
+
+A view refused on reauth in a turn that does not hold the render lock stops
+being served at once (socket closed, references dropped); its release
+(disconnect hooks, background work) waits for the render lock, as it always ran
+under it.
 
 **Not turns** (no view code runs and no view data is sent): ping, cursor and
 presence heartbeats, upload register/chunk/resume frames (their completion
@@ -166,14 +183,18 @@ thread pin (`worker_pool.bind_session`) is itself a context variable.
 ### D7. Built-in middleware
 
 - **`error_boundary`** (always, outermost). `PermissionDenied` from anywhere in
-  the chain or turn becomes `Refuse.deny()`. Any other exception escaping a
-  socket client turn becomes the value-free `handle_exception` envelope (with the
-  event `ref`), replacing `ViewRuntime.dispatch_message`'s catch, so `mount_batch`,
-  `live_redirect_mount` and the SSE stream mount get it too. When diagnostics are
+  the chain or turn becomes `Refuse.deny()`. Any other exception escaping an
+  `event` or `params` turn becomes the value-free `handle_exception` envelope
+  (with the event `ref`), as `ViewRuntime.dispatch_message`'s catch did, now
+  also for direct callers (`handle_event`, the view lanes). Mount turns re-raise
+  to their entry point's established handling (the SSE stream's protected 500,
+  `mount_batch`'s `failed[]`, `dispatch_message`'s envelope). When diagnostics are
   allowed for a legacy view it re-raises to the transport's own handler, as
-  before. Escaping exceptions from server turns are logged value-free. HTTP
-  re-raises to Django. The finer, existing handlers inside the turn (a handler
-  exception answers with an error frame and keeps the socket) are unchanged.
+  before. Exceptions escaping server turns (and deferred replays) propagate to
+  each turn's existing handler, so a failing `handle_async_result` still reaches
+  its error arm. HTTP re-raises to Django. The finer, existing handlers inside
+  the turn (a handler exception answers with an error frame and keeps the
+  socket) are unchanged.
 - **`reauth`** (when `LIVEVIEW_CONFIG["reauth_on_event"]` is on). Replaces the
   three copies. For a legacy view with `login_required` / `permission_required`:
   client turns (`event`, `params`, `render`) re-check every turn; server turns
@@ -192,14 +213,17 @@ be charged too. SSE gains the ingress check it lacks today (root events,
 `url_change` and page mounts over SSE were not charged). The per-handler
 `@rate_limit` stays in `_validate_event_security`, because it needs the resolved
 handler. `Refuse.rate_limited()` lets app middleware add per-caller limits that
-answer on the same wire form.
+answer on the same wire form. SSE's frame check moves to the top of
+`SSESession.dispatch`, so every POSTed frame is charged once (slot
+mount/unmount and navigation were charged in their own branches before; root
+events, `url_change` and page mounts were not).
 
 ### D8. Cost (hot path)
 
-- No app middleware and `reauth_on_event` off: each socket turn builds one
-  `Turn` and calls the error boundary — a few microseconds (measured by a
-  benchmark test). HTTP and API skip the chain entirely in this case (the
-  built-ins do nothing there).
+- No app middleware: each socket turn builds one `Turn`, runs the two
+  built-ins and records its timing — about 2 µs per turn; each pass-through
+  middleware adds about 0.5 µs (Apple-silicon laptop, Python 3.12). HTTP and
+  API skip the chain entirely in this case (the built-ins do nothing there).
 - With app middleware, HTTP runs the chain through `async_to_sync` (one loop hop
   per request); the inner turn returns to the request thread.
 - Middleware runs on every tick and push. Anything slow (a backend session
@@ -208,9 +232,10 @@ answer on the same wire form.
 ### D9. Timing
 
 `run_turn` records `kind`, `source`, `transport`, view class and duration via
-`djust.observability.timings.record_turn_timing` (same rolling window as handler
-timings), only when observability or the debug panel is enabled. A middleware can
-read `turn.started` for its own spans.
+`djust.observability.timings.record_turn_timing`, in the same rolling window as
+handler timings and, like them, always (an uncontended lock and a bounded deque
+append). The DEBUG-gated `/_djust/observability/turn_timings/` endpoint serves
+percentiles. A middleware can read `turn.started` for its own spans.
 
 ## Consequences
 
@@ -220,6 +245,19 @@ read `turn.started` for its own spans.
   that bypassed `dispatch_message`; SSE frames are rate-limited at ingress.
 - New public API: `djust.turns` (`Turn`, `Refusal`, `Refuse`, `current_turn`),
   `LIVEVIEW_MIDDLEWARE`, one system check.
+
+## Open follow-ups
+
+- **Uploads.** Upload register / chunk / resume frames are not turns, but an
+  app-supplied `UploadWriter` runs on chunk frames, outside any turn, and
+  `upload_register` has never been re-checked by `reauth_on_event`. Covering
+  them needs a decision on the kind set (a new `upload` kind, or
+  `event`/`upload`) and on reauth cost per chunk (a 10 MB file is ~157 frames;
+  the server-turn throttle would fit).
+- **Sticky children on `live_redirect`.** `_preserve_sticky_children`
+  re-authorizes preserved sticky children (`check_view_auth_lightweight`,
+  which can run an app's `check_permissions`) before the navigation's `mount`
+  turn starts, so that check runs outside the chain.
 
 ## Alternatives considered
 

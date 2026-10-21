@@ -34,6 +34,7 @@ from __future__ import annotations
 import contextvars
 import logging
 import time
+import weakref
 from typing import Any, Awaitable, Callable, Dict, Mapping, Optional, Tuple
 
 from .observability.timings import record_turn_timing
@@ -164,6 +165,7 @@ class Turn:
         "_open",
         "_ref",
         "_locked",
+        "__weakref__",
     )
 
     def __init__(
@@ -234,7 +236,10 @@ class Turn:
 
 TurnMiddleware = Callable[[Turn, Callable[[Turn], Awaitable[Optional[Refusal]]]], Awaitable[Any]]
 
-_current_turn: contextvars.ContextVar[Optional[Turn]] = contextvars.ContextVar(
+#: A weak reference: a task or thread a turn starts keeps a copy of the
+#: context, and the turn (with its view and connection) must not live on in it
+#: after the turn ends (#3116).
+_current_turn: contextvars.ContextVar[Optional["weakref.ref[Turn]"]] = contextvars.ContextVar(
     "djust_current_turn", default=None
 )
 
@@ -245,7 +250,8 @@ def current_turn() -> Optional[Turn]:
     A task started by a turn inherits the turn's context; once that turn has
     ended this returns ``None`` there until the task's own turn starts.
     """
-    turn = _current_turn.get()
+    ref = _current_turn.get()
+    turn = ref() if ref is not None else None
     if turn is not None and turn._open:
         return turn
     return None
@@ -417,7 +423,7 @@ async def run_turn(turn: Turn, body: Callable[[Turn], Awaitable[Any]]) -> Option
     """
     turn._body = body
     turn._open = True
-    token = _current_turn.set(turn)
+    token = _current_turn.set(weakref.ref(turn))
     try:
         result = await _get_chain().entry(turn)
     finally:

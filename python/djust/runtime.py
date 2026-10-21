@@ -1443,6 +1443,11 @@ class WSConsumerTransport:
         self._consumer = consumer
 
     @property
+    def mount_turn_source(self) -> Optional[str]:
+        """``"navigation"`` while a ``live_redirect_mount`` mounts its destination."""
+        return "navigation" if getattr(self._consumer, "_live_redirect_mounting", False) else None
+
+    @property
     def session_id(self) -> str:
         return getattr(self._consumer, "session_id", None) or ""
 
@@ -2630,6 +2635,16 @@ class SSESessionTransport:
         return getattr(session, "_event_request", None) or getattr(session, "_request", None)
 
     @property
+    def mount_turn_source(self) -> Optional[str]:
+        """``"navigation"`` while a ``live_redirect_mount`` replaces the page view."""
+        return "navigation" if getattr(self._session, "_replacing_view", False) else None
+
+    @property
+    def mount_is_reconnect(self) -> bool:
+        """An EventSource reconnect re-opened the stream with a known session id."""
+        return bool(getattr(self._session, "_mount_reconnect", False))
+
+    @property
     def session_id(self) -> str:
         return str(self._session.session_id)
 
@@ -3400,9 +3415,15 @@ class ViewRuntime(RuntimeTurnPort):
         # Idempotent — second mount on the same runtime is a no-op (no turn).
         if self.view_instance is not None:
             return
-        source = turn_source or ("slot" if data.get("target_id") is not None else "page")
+        source = (
+            turn_source
+            or getattr(self.transport, "mount_turn_source", None)
+            or ("slot" if data.get("target_id") is not None else "page")
+        )
         if reconnect is None:
-            reconnect = data.get("reconnect") is True
+            reconnect = data.get("reconnect") is True or bool(
+                getattr(self.transport, "mount_is_reconnect", False)
+            )
         view_path = data.get("view")
         view_class = None
         if isinstance(view_path, str) and view_path:

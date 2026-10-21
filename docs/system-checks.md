@@ -229,6 +229,13 @@ console.log("debug info"); // noqa: Q003
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C025"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C025"]`
 - **False positives**: None
 
+### C026 — Invalid `LIVEVIEW_MIDDLEWARE`
+- **Severity**: Error
+- **Method**: Settings inspection (imports each entry)
+- **What it detects**: `LIVEVIEW_MIDDLEWARE` is not a list of dotted-path strings, an entry cannot be imported, or an entry is not an `async def mw(turn, next)` callable (sync middleware is not supported). The turn-middleware chain (ADR-044) is built on the first turn, so without this check every turn would fail at runtime with `ImproperlyConfigured`.
+- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C026"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C026"]` (turns still fail at runtime)
+- **False positives**: None
+
 ---
 
 ## LiveView Checks (V)

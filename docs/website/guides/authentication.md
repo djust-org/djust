@@ -394,7 +394,7 @@ This is a conscious trade-off shared by all LiveView-style frameworks (Phoenix, 
 **Mitigations:**
 - Use handler-level `@permission_required` for sensitive operations (checked per event)
 - WebSocket heartbeats will eventually detect stale sessions
-- Set `LIVEVIEW_CONFIG = {"reauth_on_event": True}` to re-run view-level auth (`login_required` / `permission_required`) on every event, at the cost of one session read per event. On failure the client is sent to the login URL and the socket closes with 4403.
+- Set `LIVEVIEW_CONFIG = {"reauth_on_event": True}` to re-run view-level auth (`login_required` / `permission_required`) on every event, at the cost of one session read per event. On failure the client is sent to the login URL and the socket closes with 4403. It runs on the [turn middleware](turn-middleware.md) chain, so it also covers URL changes, server pushes, ticks and background results (those re-check at most every `reauth_server_turn_interval` seconds). For your own per-turn checks, add `LIVEVIEW_MIDDLEWARE`.
 
 WebSocket close codes **4401** and **4403** stop automatic reconnects and transport
 fallback. Pending debounced/throttled edits are cancelled instead of replayed over

@@ -305,3 +305,27 @@ def test_turn_user_and_session_fall_back_to_view_request_then_scope():
     assert Turn("event", "ws", view=V(), request=None).session == "req-session"
     assert Turn("event", "ws").user is None
     assert Turn("event", "ws", view=V()).view_class is V
+
+
+def _c026(errors):
+    return [e for e in errors if e.id == "djust.C026"]
+
+
+@pytest.mark.parametrize(
+    "value,bad",
+    [
+        (None, False),
+        ([], False),
+        ([f"{MOD}.mw_a"], False),
+        ([f"{MOD}.mw_sync"], True),
+        ([f"{MOD}.does_not_exist"], True),
+        ("x.y", True),
+    ],
+)
+def test_system_check_c026(value, bad):
+    from djust.checks.configuration import _check_liveview_middleware
+
+    errors: list = []
+    with override_settings(LIVEVIEW_MIDDLEWARE=value):
+        _check_liveview_middleware(errors)
+    assert bool(_c026(errors)) is bad
