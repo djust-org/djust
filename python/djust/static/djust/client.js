@@ -8964,8 +8964,9 @@ const _pollElements = new Set();
 
 /**
  * Stop one element's poll: clear its interval and visibilitychange handler
- * and un-mark it, so a later bind pass re-binds it if it comes back (a
- * sticky subtree re-attached after navigation, say).
+ * and forget its bound key. The bind pass skips an element only when its
+ * stored key matches, so one that comes back (a sticky subtree re-attached
+ * after navigation, say) is re-bound.
  * @param {Element} element
  */
 function _teardownPoll(element) {
@@ -8976,7 +8977,6 @@ function _teardownPoll(element) {
     element._djustPollIntervalId = null;
     element._djustPollVisibilityHandler = null;
     element._djustPollBoundKey = null;
-    if (typeof _unmarkHandlerBound === 'function') _unmarkHandlerBound(element, 'poll');
     _pollElements.delete(element);
 }
 
