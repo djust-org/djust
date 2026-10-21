@@ -2318,58 +2318,18 @@ class PopoverHandler:
     """Block handler for {% popover trigger="..." %}...{% endpopover %}"""
 
     def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
-        kwargs = _parse_args(args, context)
-        trigger = kwargs.get("trigger", "Click me")
-        placement = kwargs.get("placement", "bottom")
-        title = kwargs.get("title", "")
-        from django.utils.html import conditional_escape
+        from djust.components.templatetags.djust_components import render_popover
 
-        e_trigger = conditional_escape(trigger)
-        e_placement = conditional_escape(placement)
-        title_html = (
-            f'<div class="popover-title">{conditional_escape(title)}</div>' if title else ""
-        )
-        return _safe(
-            f'<div class="popover-wrapper">'
-            f'<button class="popover-trigger btn btn-outline btn-sm" '
-            f"onclick=\"(function(el){{var p=el.parentElement;p.classList.toggle('popover-open');"
-            f"document.addEventListener('click',function h(e){{if(!p.contains(e.target)){{p.classList.remove('popover-open');document.removeEventListener('click',h);}}}},true);"
-            f'}})(this)" aria-expanded="false">'
-            f"{e_trigger}</button>"
-            f'<div class="popover popover-{e_placement}" role="tooltip">'
-            f"{title_html}"
-            f'<div class="popover-content">{content}</div>'
-            f"</div>"
-            f"</div>"
-        )
+        return str(render_popover(_parse_args(args, context), content))
 
 
 class CollapsibleHandler:
     """Block handler for {% collapsible trigger="..." %}...{% endcollapsible %}"""
 
     def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
-        kwargs = _parse_args(args, context)
-        trigger = kwargs.get("trigger", "Toggle")
-        event = kwargs.get("event", "toggle_collapsible")
-        open_ = kwargs.get("open", False)
-        if isinstance(open_, str):
-            open_ = open_.lower() not in ("false", "0", "")
-        from django.utils.html import conditional_escape
+        from djust.components.templatetags.djust_components import render_collapsible
 
-        e_trigger = conditional_escape(trigger)
-        e_event = conditional_escape(event)
-        open_cls = " collapsible-open" if open_ else ""
-        return _safe(
-            f'<div class="collapsible{open_cls}">'
-            f'<button class="collapsible-trigger" '
-            f"onclick=\"(function(el){{el.closest('.collapsible').classList.toggle('collapsible-open');}})(this)\""
-            f' dj-click="{e_event}">'
-            f'<span class="collapsible-label">{e_trigger}</span>'
-            f'<span class="collapsible-icon">▾</span>'
-            f"</button>"
-            f'<div class="collapsible-content">{content}</div>'
-            f"</div>"
-        )
+        return str(render_collapsible(_parse_args(args, context), content))
 
 
 class SheetHandler:
@@ -2443,24 +2403,9 @@ class ContextMenuHandler:
     """Block handler for {% context_menu label="..." %}...{% endcontext_menu %}"""
 
     def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
-        kwargs = _parse_args(args, context)
-        label = kwargs.get("label", "Right-click here")
-        from django.utils.html import conditional_escape
+        from djust.components.templatetags.djust_components import render_context_menu
 
-        e_label = conditional_escape(label)
-        return _safe(
-            f'<div class="ctx-wrapper" '
-            f'oncontextmenu="(function(e,el){{e.preventDefault();'
-            f"document.querySelectorAll('.ctx-menu[data-open]').forEach(function(m){{delete m.dataset.open;}});"
-            f"var m=el.querySelector('.ctx-menu');"
-            f"m.style.left=e.offsetX+'px';m.style.top=e.offsetY+'px';"
-            f"m.dataset.open='1';"
-            f"document.addEventListener('click',function h(){{delete m.dataset.open;document.removeEventListener('click',h);}},{{once:true}});"
-            f'}})(event,this)">'
-            f'<div class="ctx-trigger">{e_label}</div>'
-            f'<div class="ctx-menu" role="menu">{content}</div>'
-            f"</div>"
-        )
+        return str(render_context_menu(_parse_args(args, context), content))
 
 
 # Extend lists with Tier 2/3 handlers (defined above, after the original lists)
@@ -4152,54 +4097,9 @@ class PopconfirmHandler:
     """Block handler for {% popconfirm message="Delete?" %}...{% endpopconfirm %}"""
 
     def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
-        kw = _parse_args(args, context)
-        message = conditional_escape(kw.get("message", "Are you sure?"))
-        confirm_event = conditional_escape(kw.get("confirm_event", "confirm"))
-        cancel_event = conditional_escape(kw.get("cancel_event", "cancel"))
-        confirm_label = conditional_escape(kw.get("confirm_label", "Yes"))
-        cancel_label = conditional_escape(kw.get("cancel_label", "No"))
-        placement = conditional_escape(kw.get("placement", "top"))
-        variant = conditional_escape(kw.get("variant", "default"))
-        custom_class = conditional_escape(kw.get("custom_class", ""))
+        from djust.components.templatetags._forms import render_popconfirm
 
-        variant_cls = f" dj-popconfirm--{variant}" if variant != "default" else ""
-        extra_cls = f" {custom_class}" if custom_class else ""
-
-        js_toggle = (
-            "(function(el){"
-            "var w=el.closest('.dj-popconfirm-wrapper');"
-            "w.classList.toggle('dj-popconfirm-open');"
-            "document.addEventListener('click',function h(e){"
-            "if(!w.contains(e.target)){"
-            "w.classList.remove('dj-popconfirm-open');"
-            "document.removeEventListener('click',h);"
-            "}},true);"
-            "})(this)"
-        )
-
-        js_close = (
-            "(function(el){"
-            "el.closest('.dj-popconfirm-wrapper').classList.remove('dj-popconfirm-open');"
-            "})(this)"
-        )
-
-        return _safe(
-            f'<div class="dj-popconfirm-wrapper{variant_cls}{extra_cls}">'
-            f'<div class="dj-popconfirm-trigger" onclick="{js_toggle}" '
-            f'aria-expanded="false" aria-haspopup="true">'
-            f"{content}"
-            f"</div>"
-            f'<div class="dj-popconfirm dj-popconfirm-{placement}" role="tooltip">'
-            f'<p class="dj-popconfirm__message">{message}</p>'
-            f'<div class="dj-popconfirm__actions">'
-            f'<button class="dj-popconfirm__btn dj-popconfirm__btn--cancel" '
-            f'onclick="{js_close}" dj-click="{cancel_event}">{cancel_label}</button>'
-            f'<button class="dj-popconfirm__btn dj-popconfirm__btn--confirm" '
-            f'onclick="{js_close}" dj-click="{confirm_event}">{confirm_label}</button>'
-            f"</div>"
-            f"</div>"
-            f"</div>"
-        )
+        return str(render_popconfirm(_parse_args(args, context), content))
 
 
 INLINE_HANDLERS.extend(

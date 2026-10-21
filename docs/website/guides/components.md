@@ -1286,9 +1286,17 @@ live switching also works under a policy without `'unsafe-inline'`. The deferred
 stylesheet (`critical_css`) is swapped in by a small script carrying the same
 nonce, not by an inline `onload` handler, so it applies under a strict policy too.
 
-The component tags emit no inline event handlers: `{% theme_toggle %}`,
-`{% rich_select %}`, `{% combobox %}` and `{% copy_button %}` get their
-behaviour from delegated listeners in the djust client bundle, and
+The component tags emit no inline event handlers and no inline scripts:
+`{% theme_toggle %}`, `{% rich_select %}`, `{% combobox %}`, `{% copy_button %}`,
+`{% popover %}`, `{% popconfirm %}`, `{% collapsible %}`, `{% context_menu %}`,
+`{% file_dropzone %}`, `{% kanban_board %}`, `{% rich_text_editor %}`,
+`{% multi_select %}`, `{% split_pane %}` and `{% code_block %}`'s copy button get
+their behaviour from delegated listeners in the djust client bundle.
+`{% code_block %}` highlights through the static
+`djust_components/code-block-highlight.js` (a `<script src>`, allowed by
+`script-src 'self'`), and `{% tutorial_bubble %}`'s Skip/Close buttons are
+handled by the client as well. The one exception is the `Button` component's
+`onclick=` argument, an inline handler you pass yourself. Also,
 `{% theme_toggle %}`'s buttons carry `data-theme-mode`, so `theme.js` (or the
 client bundle when `theme.js` is absent) switches the mode and stores it under
 `djust-theme-mode`. `djust_components/theme-toggle.js` is no longer needed.
