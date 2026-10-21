@@ -172,7 +172,9 @@ def mount_http_lazy(parent: Any, request: Any, view_id: str) -> Any:
     child.request = request
     if run_pre_mount_auth(child, request) is not None or run_on_mount_hooks(child, request):
         raise PermissionDenied("Lazy view refused")
-    child.mount(request)
+    from ._view_hooks import call_hook_sync
+
+    call_hook_sync(child.mount, request)
     child._snapshot_user_private_attrs()
     child._djust_slot_target = view_id
     enforce_object_permission(child, request)
