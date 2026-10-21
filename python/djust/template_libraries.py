@@ -1824,11 +1824,21 @@ class LibraryRawBlockTagHandler:
 
     RETURNS_BINDINGS = True
 
-    def __init__(self, label: str, name: str, compile_func: Callable[..., Any]) -> None:
+    def __init__(
+        self,
+        label: str,
+        name: str,
+        compile_func: Callable[..., Any],
+        libraries: Tuple[Any, ...] = (),
+    ) -> None:
         self.label = label
         self.name = name
         self.compile_func = compile_func
         self.end_name = "end" + name
+        # Libraries the BODY needs whether or not the template loaded them:
+        # a tag whose body holds its own child tags (`{% tabs %}` / `{% tab %}`)
+        # is registered with the Rust engine process-wide, without a load.
+        self.libraries = libraries
         self._nodes: Dict[Tuple[Tuple[str, ...], str], Any] = {}
 
     def _compile(self, args: List[str], body: str) -> Any:
@@ -1839,7 +1849,10 @@ class LibraryRawBlockTagHandler:
         if node is None:
             tokens = Lexer(body).tokenize()
             tokens.append(Token(TokenType.BLOCK, self.end_name))
-            node = self.compile_func(_parser(tokens), _token(self.name, args))
+            parser = _parser(tokens)
+            for library in self.libraries:
+                parser.add_library(library)
+            node = self.compile_func(parser, _token(self.name, args))
             self._nodes[key] = node
         return node
 

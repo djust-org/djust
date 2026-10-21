@@ -3101,7 +3101,20 @@ fn needs_lazy_tree_uncached(
         if potential && !literal {
             return Ok(true);
         }
-        let value = djust_templates::renderer::resolve_template_reference(token, context)?;
+        // Planning walks EVERY include in the source, outside the `{% if %}`
+        // and `{% for %}` that decide whether -- and with which loop variables
+        // -- it renders. Django resolves an include's operand and its `with`
+        // bindings only when the include itself renders, so an expression
+        // that cannot resolve HERE (a loop variable, a name an unrendered
+        // branch guards) is not an error in the page. Planning must not
+        // invent one: an operand or binding the planner cannot resolve makes
+        // the plan unknowable, and an unknowable plan tracks provenance --
+        // the conservative answer, whose render is a superset of the
+        // untracked one. A real failure still surfaces from the render.
+        let Ok(value) = djust_templates::renderer::resolve_template_reference(token, context)
+        else {
+            return Ok(true);
+        };
         let candidates = match value {
             Value::String(name) | Value::SafeString(name) => vec![name],
             Value::List(values) => values.iter().map(|v| v.to_string()).collect(),
@@ -3113,29 +3126,36 @@ fn needs_lazy_tree_uncached(
             context.clone()
         };
         for (name, expression) in dependency.bindings.iter().filter(|_| !potential) {
-            child_context.bind(
-                name.clone(),
-                djust_templates::renderer::resolve_template_reference(expression, context)?,
-                false,
-            );
+            let Ok(bound) =
+                djust_templates::renderer::resolve_template_reference(expression, context)
+            else {
+                return Ok(true);
+            };
+            child_context.bind(name.clone(), bound, false);
         }
         for name in candidates {
             if name.is_empty() {
                 continue;
             }
-            let name = djust_templates::inheritance::construct_relative_path_allow_recursion(
+            let Ok(name) = djust_templates::inheritance::construct_relative_path_allow_recursion(
                 dependency.origin.as_deref().or(current_name),
                 &name,
                 true,
-            )?;
+            ) else {
+                return Ok(true);
+            };
             let mut selected = false;
             for dir in dirs {
                 let path = dir.join(&name);
                 walk.files.insert(path.clone(), lazy_file_stamp(&path));
                 if path.is_file() {
-                    let child = lazy_source_file(&path)?;
+                    // A child that cannot be read or parsed is only an error
+                    // if the include renders -- the same rule as above.
+                    let Ok(child) = lazy_source_file(&path) else {
+                        return Ok(true);
+                    };
                     let mut child_selectors = std::collections::HashSet::new();
-                    let found = needs_lazy_tree_walk(
+                    let Ok(found) = needs_lazy_tree_walk(
                         &child,
                         dirs,
                         &child_context,
@@ -3146,7 +3166,9 @@ fn needs_lazy_tree_uncached(
                             walk,
                             selectors: &mut child_selectors,
                         },
-                    )?;
+                    ) else {
+                        return Ok(true);
+                    };
                     // Only bindings consumed by an include selector affect the
                     // plan. Rebase those dependencies into the caller's scope;
                     // unrelated rows/user state never enters a memo/cache key.
