@@ -4075,6 +4075,10 @@ class ViewRuntime:
         # branch to be reachable (SSE returns False and was refused above).
         rust_version = 1
         actor_mounted = False
+        # The page root's own dj-poll attributes, for the mount frame.
+        root_poll: Optional[Dict[str, str]] = None
+        from .mixins.template import _root_poll_attrs
+
         if getattr(view_instance, "use_actors", False):
             uses_actors_for_mount = getattr(self.transport, "uses_actors_for_mount", None)
             if uses_actors_for_mount and uses_actors_for_mount(view_instance):
@@ -4094,6 +4098,7 @@ class ViewRuntime:
                             html
                         )
                     if hasattr(view_instance, "_extract_liveview_content"):
+                        root_poll = _root_poll_attrs(html)
                         html = await sync_to_async(view_instance._extract_liveview_content)(html)
                     actor_mounted = True
                 except Exception as exc:
@@ -4133,6 +4138,7 @@ class ViewRuntime:
                 if hasattr(view_instance, "_strip_comments_and_whitespace"):
                     html = await sync_to_async(view_instance._strip_comments_and_whitespace)(html)
                 if hasattr(view_instance, "_extract_liveview_content"):
+                    root_poll = _root_poll_attrs(html)
                     html = await sync_to_async(view_instance._extract_liveview_content)(html)
             except Exception as exc:
                 response = handle_exception(
@@ -4203,6 +4209,10 @@ class ViewRuntime:
         }
         if page_shell_fingerprint:
             mount_msg["page_shell"] = page_shell_fingerprint
+        if root_poll is not None and html:
+            # The root's own dj-poll: the client applies it to the root element,
+            # which a mount (content only) leaves as the previous view had it.
+            mount_msg["root_poll"] = root_poll
 
         # has_prerendered / skip_html_for_resume (ADR-022 Iter 3 Phase 3.0 grow,
         # WS websocket.py:2804-2816). When the client carries pre-rendered HTML

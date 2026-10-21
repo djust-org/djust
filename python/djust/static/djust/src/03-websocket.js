@@ -786,6 +786,10 @@ class LiveViewWebSocket {
                     if (pageContainer && pageContainer.getAttribute('dj-view') !== data.view) {
                         pageContainer.setAttribute('dj-view', data.view);
                     }
+                    // ...and so must its own dj-poll: the content swap below
+                    // leaves the root's attributes as they were.
+                    applyRootPoll(pageContainer || document.querySelector('[dj-root]:not(html):not(head)'),
+                        data.root_poll);
                 }
 
                 // Initialize upload configurations from mount response

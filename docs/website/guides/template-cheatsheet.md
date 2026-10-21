@@ -231,6 +231,11 @@ dedupe semantics.
 <div dj-poll="refresh" dj-poll-interval="10000"></div>
 ```
 
+The poll can sit on the view's root element itself (`<div dj-root dj-poll="refresh">`); a
+live navigation gives the root the destination view's poll, or none. A poll inside a
+`{% live_render %}` child calls the child's handler; a poll inside a component calls the
+host view's. A poll stops when its element leaves the page.
+
 ### Submit Protection
 
 | Attribute | Description |
