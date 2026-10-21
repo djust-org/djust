@@ -1293,6 +1293,40 @@ behaviour from delegated listeners in the djust client bundle, and
 client bundle when `theme.js` is absent) switches the mode and stores it under
 `djust-theme-mode`. `djust_components/theme-toggle.js` is no longer needed.
 
+### Keyboard, dialogs and form-field ARIA
+
+**Menus.** `{% dropdown_menu %}` follows the WAI-ARIA menu pattern, like
+`{% dropdown %}`. ArrowDown / ArrowUp on the trigger focus the first / last
+item, and arrows move between `menuitem`, `menuitemradio` and `menuitemcheckbox`
+items, wrapping and skipping disabled ones. Home / End jump to the ends, a
+letter moves to the next item starting with it, and Escape sends the trigger's
+`toggle_event` and returns focus to the trigger.
+
+**Native dialog.** `{% modal native=True %}` renders a `<dialog>` that the client
+opens with `showModal()`, instead of the positioned `<div>`. That gives it the
+browser's top layer, an inert page behind it, and native Escape. When the
+browser closes it (Escape, or a click on the backdrop), `close_event` is sent to
+the server, so `open` stays in step. The focus trap and return focus to the
+opener work as for the default modal. The default (`native=False`) markup is
+unchanged.
+
+```django
+{% modal open=show_request native=True title="Request access" close_event="close_request" %}
+  ...
+{% endmodal %}
+```
+
+**Form fields.** `{% combobox %}` and `{% rich_select %}` take `error=`,
+`helper=`, `describedby=` and `invalid=`. The help text and error get stable ids
+that the control's `aria-describedby` names, and an error (or `invalid=True`) sets
+`aria-invalid="true"`. Pass `field=form.city` (a Django bound field) to take
+the name, label, value, first error and help text from the form field instead:
+
+```django
+{% combobox field=form.city options=cities %}
+{% rich_select field=form.status options=statuses describedby="status-note" %}
+```
+
 ### Layouts under a LiveView base template
 
 The layouts in `djust_theming/layouts/` expose blocks a LiveView page needs, and
