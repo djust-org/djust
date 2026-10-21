@@ -18,6 +18,29 @@ from django.utils.safestring import mark_safe
 # ``live_session`` and ``build_route_map_from_urlconf`` so both engines emit the
 # identical client-side route shape.
 _PARAM_RE = re.compile(r"<(?:\w+:)?(\w+)>")
+# A named group that matches within one path segment: a character class with
+# no ``/`` (or ``[^/]``), or ``\d`` / ``\w``, repeated: ``(?P<slug>[-\w]+)``.
+_SEGMENT_GROUP_RE = re.compile(r"\(\?P<(\w+)>(?:\[\^/\]|\[[^\]/^]*\]|\\[dw])[+*]\)")
+_REGEX_META = re.compile(r"[.*+?\[\](){}|\\^$]")
+
+
+def _regex_route_path(regex: str) -> Optional[str]:
+    """The client route of a ``re_path()`` leaf, or ``None`` when it has none.
+
+    Named groups that match within one segment become ``:name``. A pattern
+    with any other regex syntax (``.*``, which crosses ``/``, alternation, a
+    bare ``^``) matches paths a client route cannot express; such a route is
+    left out of the map instead of entering it as garbage or, for ``^``, as
+    ``"/"`` (a catch-all 404 route there displaced the real home page).
+    """
+    body = regex.lstrip("^").rstrip("$")
+    converted = _SEGMENT_GROUP_RE.sub(lambda m: "<%s>" % m.group(1), body)
+    if _REGEX_META.search(converted.replace("<", "").replace(">", "")):
+        return None
+    if not body and regex.strip() not in ("^$", ""):
+        return None  # ``^`` alone matches every path
+    return converted
+
 
 # Module-level cache for the URLconf-derived route map. The URLconf is static at
 # runtime, so we derive once and reuse. ``_reset_route_map_cache()`` clears it
@@ -324,6 +347,11 @@ def _walk_liveview_routes(
         if isinstance(pattern, URLResolver):
             _walk_liveview_routes(pattern.url_patterns, full, route_map, gating)
             continue
+        if isinstance(pattern.pattern, RegexPattern):
+            regex_path = _regex_route_path(str(pattern.pattern._regex))
+            if regex_path is None:
+                continue
+            full = (prefix + regex_path).replace("//", "/")
         view_cls = _resolve_view_class(pattern)
         if view_cls is None:
             continue
@@ -337,6 +365,8 @@ def _walk_liveview_routes(
         js_path = full if full.startswith("/") else "/" + full
         js_path = _PARAM_RE.sub(r":\1", js_path)
         view_path = f"{view_cls.__module__}.{view_cls.__qualname__}"
+        if js_path in route_map:
+            continue  # Django resolves the first matching pattern; so does the map
         route_map[js_path] = view_path
         if gating is not None:
             requirement = _view_auth_requirement(pattern, view_cls)

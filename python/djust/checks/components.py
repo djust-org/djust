@@ -298,7 +298,9 @@ def _v013_warnings(cls: type, cls_label: str) -> list[CheckMessage]:
                     % (cls_label, ancestor_label, methods_str, decorated_note),
                     hint=(
                         "Move this setup into mount(self, request, "
-                        "**kwargs) so it runs on every transport. For "
+                        "**kwargs) so it runs on every transport. To set "
+                        "the HTTP status of the first render (404, 403), "
+                        "override get_http_status() instead of get(). For "
                         "auth/tenant-family logic specifically, see "
                         "djust.auth.core.run_pre_mount_auth -- the "
                         "canonical pre-mount hook every live mount path "

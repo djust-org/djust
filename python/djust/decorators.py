@@ -68,6 +68,30 @@ def _add_decorator_metadata(func: Callable, key: str, value: Any) -> None:
     func._djust_decorators[key] = value  # type: ignore
 
 
+def _passthrough(func: Callable[..., Any]) -> Callable[..., Any]:
+    """A wrapper that only calls ``func``, of the same kind as ``func``.
+
+    A metadata decorator must not change how djust calls the handler. A plain
+    ``def`` wrapper around an ``async def`` handler hid the coroutine function:
+    djust then ran the wrapper as sync code, got an un-awaited coroutine back,
+    and the handler body never ran, with no error (``@permission_required`` on
+    an async handler silently did nothing).
+    """
+    if iscoroutinefunction(func):
+
+        @functools.wraps(func)
+        async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
+            return await func(*args, **kwargs)
+
+        return async_wrapper
+
+    @functools.wraps(func)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        return func(*args, **kwargs)
+
+    return wrapper
+
+
 def _make_metadata_decorator(key: str, value: Any) -> Callable[[F], F]:
     """
     Create a decorator that adds metadata without modifying execution.
@@ -84,10 +108,7 @@ def _make_metadata_decorator(key: str, value: Any) -> Callable[[F], F]:
     """
 
     def decorator(func: F) -> F:
-        @functools.wraps(func)
-        def wrapper(*args: Any, **kwargs: Any) -> Any:
-            return func(*args, **kwargs)
-
+        wrapper = _passthrough(func)
         _add_decorator_metadata(wrapper, key, value)
         return cast(F, wrapper)
 
@@ -1120,9 +1141,7 @@ def optimistic(func: F) -> F:
         Decorated function with optimistic metadata (no runtime effect)
     """
 
-    @functools.wraps(func)
-    def wrapper(*args: Any, **kwargs: Any) -> Any:
-        return func(*args, **kwargs)
+    wrapper = _passthrough(func)
 
     # Add standardized metadata using helper
     _add_decorator_metadata(wrapper, "optimistic", True)

@@ -411,6 +411,17 @@ class PostProcessingMixin:
 
         loading_classes_js = json.dumps(loading_grouping_classes)
 
+        # The two inline scripts below carry the request's CSP nonce, as the
+        # handler-metadata script does (mixins/template.py): under a policy
+        # without 'unsafe-inline' they were blocked on every page, so the
+        # client fell back to its defaults and the DEBUG panel had no info.
+        from ..utils import get_csp_nonce
+
+        from django.utils.html import escape
+
+        nonce = get_csp_nonce(getattr(self, "request", None))
+        nonce_attr = f' nonce="{escape(nonce)}"' if nonce else ""
+
         debug_info_script = ""
         debug_css_link = ""
         if settings.DEBUG:
@@ -424,14 +435,14 @@ class PostProcessingMixin:
             # <, >, & (and U+2028/2029).
             debug_info_json = escape_json_for_script(json.dumps(debug_info))
             debug_info_script = f"""
-            <script data-turbo-track="reload">
+            <script data-turbo-track="reload"{nonce_attr}>
                 window.DJUST_DEBUG_INFO = {debug_info_json};
             </script>
             """
             debug_css_link = '<link rel="stylesheet" href="/static/djust/debug-panel.css" data-turbo-track="reload">'
 
         config_script = f"""
-        <script data-turbo-track="reload">
+        <script data-turbo-track="reload"{nonce_attr}>
             // djust configuration
             window.DJUST_USE_WEBSOCKET = {str(use_websocket).lower()};
             window.DJUST_DEBUG_VDOM = {str(debug_vdom).lower()};

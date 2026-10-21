@@ -246,6 +246,25 @@ describe('dj-trigger-action', () => {
         expect(submitted).toBe(false);
     });
 
+    it('warns outside debug when the form lacks dj-trigger-action', () => {
+        dom = createDom(`
+            <form id="sign-out" action="/sign-out" method="post"></form>
+        `);
+        const form = dom.window.document.getElementById('sign-out');
+        form.submit = () => {
+            throw new Error('must not submit');
+        };
+        const warnings = [];
+        dom.window.console.warn = (...args) => warnings.push(args.join(' '));
+        dom.window.djustDebug = false;
+
+        dom.window.dispatchEvent(new dom.window.CustomEvent('djust:push_event', {
+            detail: { event: 'djust:trigger-submit', payload: { selector: '#sign-out' } },
+        }));
+
+        expect(warnings.some(w => w.includes('dj-trigger-action') && w.includes('#sign-out'))).toBe(true);
+    });
+
     it('ignores the push event when the selector matches no form', () => {
         dom = createDom('<div id="not-a-form" dj-trigger-action></div>');
         const { window } = { window: dom.window };

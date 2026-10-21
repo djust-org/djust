@@ -653,6 +653,9 @@ class RequestMixin:
             response = self._make_streaming_response(html)
         else:
             response = HttpResponse(html)
+        status = self.get_http_status()
+        if status is not None:
+            response.status_code = int(status)
         # ADR-038 D-b: the service worker must not persist an explicit page's
         # HTML in its shell cache. Legacy responses are unchanged.
         from .._exposure import service_worker_cache_eligible
@@ -661,6 +664,23 @@ class RequestMixin:
         if not service_worker_cache_eligible(self):
             response[SW_CACHE_HEADER] = SW_CACHE_NO_STORE
         return response
+
+    def get_http_status(self) -> Optional[int]:
+        """The HTTP status of the page's first render; ``None`` means 200.
+
+        The HTTP render and the WebSocket mount come from the same state, but a
+        socket frame has no status and an override of ``get()`` never runs on
+        the socket (``djust.V013``), so a page that renders a "not found" or
+        "forbidden" state had no clean way to answer 404 or 403. Override this:
+        it is read after the render, so it can depend on what ``mount()`` and
+        ``get_context_data()`` found::
+
+            def get_http_status(self):
+                return 404 if self.document is None else None
+
+        Only the HTTP response uses it.
+        """
+        return None
 
     def _fill_lazy_slots(self, html: str) -> str:
         """Run this page's lazily-deferred slots into ``html`` (#3252).
@@ -952,6 +972,8 @@ class RequestMixin:
         response["X-Djust-Streaming"] = "1"
         # PR-A marker so callers can tell the async path was used.
         response["X-Djust-Streaming-Phase"] = "2"
+        # A 2xx status the page chose (get_http_status) survives the re-wrap.
+        response.status_code = sync_response.status_code
         # Copy any cookies/headers the sync_response set (CSRF cookie etc.)
         # so we don't drop them by re-wrapping.
         for header, value in sync_response.items():

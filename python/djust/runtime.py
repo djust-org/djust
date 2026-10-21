@@ -1399,6 +1399,31 @@ def _joins_presence_group(view: Any) -> bool:
     return True
 
 
+async def _stored_scope_user(scope: Any) -> Any:
+    """The socket's user as the session store holds it NOW.
+
+    ``channels.auth.get_user(scope)`` reads ``scope["session"]``, the session
+    object loaded when the socket connected: its data stays cached for the
+    life of the connection. A sign-out in another tab (or over HTTP) deletes
+    the stored session, yet the cached copy still names the user, so a
+    per-event re-check against it never sees the sign-out. Re-read the
+    session by its key from the configured engine; a deleted or expired
+    session loads empty and resolves to ``AnonymousUser``. Without a session
+    key there is nothing stored to re-read, so the scope's own answer stands.
+    """
+    from channels.auth import get_user
+    from django.conf import settings
+
+    session = scope.get("session")
+    key = getattr(session, "session_key", None)
+    if not key:
+        return await get_user(scope)
+    from importlib import import_module
+
+    store = import_module(settings.SESSION_ENGINE).SessionStore(key)
+    return await get_user({**scope, "session": store})
+
+
 class WSConsumerTransport:
     """Transport adapter wrapping ``LiveViewConsumer``.
 
@@ -2186,11 +2211,9 @@ class WSConsumerTransport:
 
         consumer = self._consumer
         try:
-            from channels.auth import get_user
-
             from .auth.core import check_view_auth_lightweight
 
-            fresh_user = await get_user(consumer.scope)
+            fresh_user = await _stored_scope_user(consumer.scope)
             # The mount request is stored on the view (handle_mount:
             # ``view.request = request``), not on the consumer.
             request = getattr(view, "request", None)
