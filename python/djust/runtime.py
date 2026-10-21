@@ -1910,9 +1910,12 @@ class WSConsumerTransport:
         from djust import push as _djust_push
 
         _origin = getattr(consumer, "_origin_token", None)
-        _origin_token = _djust_push.origin_channel.set(
+        # Scoped to this turn: work the handler starts does not keep the tag
+        # once the turn is over (the pushes it sends later are news here).
+        _origin_turn = _djust_push.originating_turn(
             _origin() if callable(_origin) else getattr(consumer, "channel_name", None)
         )
+        _origin_turn.__enter__()
 
         # Observability: comprehensive performance tracking (websocket.py:3150-3154)
         # + per-handler SQL-query capture (websocket.py:3469-3475). Both are
@@ -1950,7 +1953,7 @@ class WSConsumerTransport:
         finally:
             sql_scope.__exit__(None, None, None)
             PerformanceTracker.reset_current(_tracker_token)
-            _djust_push.origin_channel.reset(_origin_token)
+            _origin_turn.__exit__(None, None, None)
             consumer._processing_user_event = False
             consumer._render_lock.release()
 
