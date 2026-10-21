@@ -35,7 +35,7 @@ That's it. Unauthenticated users are automatically redirected to `settings.LOGIN
 | Attribute | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `login_required` | `bool` | `None` | `True` = must be authenticated |
-| `permission_required` | `str \| list[str]` | `None` | Django permission string(s) |
+| `permission_required` | `str \| list \| AnyOf` | `None` | Django permission string(s): a list needs all of them, `AnyOf(...)` any one |
 | `login_url` | `str` | `None` | Override `settings.LOGIN_URL` |
 
 ```python
@@ -56,6 +56,30 @@ class BillingView(LiveView):
     login_required = True
     permission_required = ["billing.view_invoices", "billing.manage_payments"]
 ```
+
+Any one of several permissions:
+
+```python
+from djust.auth import AnyOf
+
+class ActivityView(LiveView):
+    login_required = True
+    permission_required = AnyOf("runs.agent_run", "chat.chat_general")
+```
+
+A list may mix strings and `AnyOf` groups: every string, and at least one
+permission from every group.
+
+```python
+class RunRequestView(LiveView):
+    permission_required = ["runs.view_run", AnyOf("runs.review", "runs.approve")]
+```
+
+`AnyOf` works everywhere `permission_required` does: the HTTP GET, the
+WebSocket and SSE mounts, `reauth_on_event`, the `@permission_required` handler
+decorator, the client route map, and `djust_audit` (inventory,
+`--dump-permissions` and `--permissions`, where it is `permissions_any`; see
+[Permissions document](permissions-document.md)).
 
 ### Mixins (Django-Familiar Convenience)
 
@@ -87,6 +111,10 @@ class ProjectView(LiveView):
 ```
 
 The method is only called if the subclass defines it — the base `LiveView` class does not invoke it by default.
+
+A refusal is handled the way Django's `AccessMixin` handles one: a signed-in
+user gets a 403 (`PermissionDenied`, so your `handler403` page on the HTTP
+GET), and only an anonymous user is sent to `login_url`.
 
 ### Django Auth Mixins, Custom Access Mixins and Method Decorators
 
@@ -213,6 +241,12 @@ class ProjectView(LiveView):
     def delete_project(self, project_id: int, **kwargs):
         # Only users with delete permission
         Project.objects.get(pk=project_id).delete()
+
+    @permission_required(AnyOf("projects.archive_project", "projects.delete_project"))
+    @event_handler()
+    def archive_project(self, project_id: int, **kwargs):
+        # Users with either permission
+        ...
 ```
 
 When permission is denied, the client receives a `"Permission denied"` error message. The handler never executes.
@@ -226,14 +260,15 @@ Client sends "mount" message
     → WebSocket consumer creates view instance
     → check_view_auth() runs:
         1. login_required? → check request.user.is_authenticated
-        2. permission_required? → check request.user.has_perms()
+        2. permission_required? → all of its strings, one of each AnyOf group
         3. check_permissions()? → call custom hook (if overridden)
     → If unauthenticated: send {"type": "navigate", "to": "/login/"}
       (a view mounted beside the page view, such as a `dj-lazy` view, gets a
       `view_refused` frame for its own container instead: nothing navigates)
     → If authenticated but lacking permission_required perms: close with 4403 (PermissionDenied)
     → If check_permissions() returns False or raises PermissionDenied:
-      navigate to login_url (not a 403), even for a logged-in user
+      the same: 4403 (PermissionDenied) for a signed-in user, navigate to
+      login_url for an anonymous one
     → If passed: call view.mount(request, **kwargs)
 ```
 

@@ -2387,7 +2387,7 @@ server_tokens off;
 
 **Severity**: Error
 
-**What causes it**: A `GET /.git/config` request returns 2xx. The entire git history of your repository is exposed, including potentially-leaked credentials in commits.
+**What causes it**: A `GET /.git/config` request returns 2xx itself (the probe does not follow redirects, so a path that redirects to a sign-in page is not reported). The entire git history of your repository is exposed, including potentially-leaked credentials in commits.
 
 **Fix**: Configure your reverse proxy to deny access to `/.git/`:
 
@@ -2402,7 +2402,7 @@ location ~ /\.git { deny all; return 404; }
 
 **Severity**: Error
 
-**What causes it**: A `GET /.env` request returns 2xx. Environment variable files typically contain secrets (database passwords, API keys).
+**What causes it**: A `GET /.env` request returns 2xx itself (the probe does not follow redirects, so a path that redirects to a sign-in page is not reported). Environment variable files typically contain secrets (database passwords, API keys).
 
 **Fix**: Never serve `.env` files from your web root. Store them outside the static root, and configure your reverse proxy to 404 the path.
 
@@ -2412,7 +2412,7 @@ location ~ /\.git { deny all; return 404; }
 
 **Severity**: Error
 
-**What causes it**: A `GET /__debug__/` request returns 2xx in production. The Django Debug Toolbar is installed and accessible.
+**What causes it**: A `GET /__debug__/` request returns 2xx itself (the probe does not follow redirects, so a path that redirects to a sign-in page is not reported) in production. The Django Debug Toolbar is installed and accessible.
 
 **Fix**: Guard the debug toolbar with `DEBUG=True` and `INTERNAL_IPS`:
 
