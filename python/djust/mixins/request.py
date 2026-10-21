@@ -46,6 +46,7 @@ from ..decorators import is_event_handler, is_push_only
 from ..hooks import run_on_mount_hooks
 from .._exposure import uses_legacy_exposure
 from .._tenant_state import UNSAVED_PRIVATE_SUFFIX
+from .._view_hooks import call_hook_sync
 
 if TYPE_CHECKING:
     from django.http import HttpRequest
@@ -423,7 +424,7 @@ class RequestMixin:
 
         # IMPORTANT: mount() must be called first to initialize clean state
         t0 = time.perf_counter()
-        self.mount(request, **kwargs)
+        call_hook_sync(self.mount, request, **kwargs)
         t_mount = (time.perf_counter() - t0) * 1000
 
         # Snapshot user-defined _private attrs (set in mount) before render
@@ -439,7 +440,7 @@ class RequestMixin:
         }
         uri = request.get_full_path()
         if hasattr(self, "handle_params"):
-            self.handle_params(params, uri)
+            call_hook_sync(self.handle_params, params, uri)
 
         # Object-permission check (ADR-017) on the initial HTTP render. mount()
         # + handle_params() have populated the access-determining state (e.g.
@@ -1270,13 +1271,13 @@ class RequestMixin:
                 # Reconstruct transient server services for this HTTP request.
                 # The persisted projection is validated separately and overlays
                 # only declared server fields, never render/context attributes.
-                self.mount(request, **kwargs)
+                call_hook_sync(self.mount, request, **kwargs)
                 restored = load_server_state(self, request)
                 if restored is not None:
                     for key, value in restored.items():
                         safe_setattr(self, key, value, allow_private=False, raise_on_blocked=True)
             elif not saved_state:
-                self.mount(request, **kwargs)
+                call_hook_sync(self.mount, request, **kwargs)
                 self._snapshot_user_private_attrs()
             elif unsaved_private:
                 # The socket's instance kept every private attribute; this one
@@ -1284,7 +1285,7 @@ class RequestMixin:
                 # them. mount() rebuilds them, then the saved state goes back on
                 # top, so the handler sees the state the page had (the
                 # explicit-exposure branch above does the same).
-                self.mount(request, **kwargs)
+                call_hook_sync(self.mount, request, **kwargs)
                 self._snapshot_user_private_attrs()
                 # The page already has mount()'s background results; this
                 # request has no channel to deliver new ones.

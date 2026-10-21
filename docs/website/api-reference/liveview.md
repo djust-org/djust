@@ -75,6 +75,14 @@ def mount(self, request, **kwargs):
         self.item = Item.objects.get(pk=pk)
 ```
 
+**`async def mount`.** `mount()` may also be a coroutine. A sync `mount()` runs on asgiref's one shared sync thread, which every session's sync work uses: when many pages open at once, each mount queues behind the others' database reads. An `async def mount` is awaited on the event loop instead, so its awaits (the async ORM, an async service) overlap with other sessions' work. Use the async ORM (`aget`, `afirst`, `async for`) inside it; a sync ORM call on the loop raises `SynchronousOnlyOperation`, so wrap any sync helper in `sync_to_async`. On the HTTP render djust runs the coroutine to completion before rendering. `handle_params()` may be `async def` too.
+
+```python
+async def mount(self, request, pk=None, **kwargs):
+    self.item = await Item.objects.aget(pk=pk)
+    self.related = [r async for r in self.item.related.all()]
+```
+
 ---
 
 #### `get_context_data(**kwargs) -> dict`
@@ -97,7 +105,7 @@ def get_context_data(self, **kwargs):
 
 #### `handle_params(params, uri)`
 
-Called after `mount()` on the initial WebSocket connect, on every `live_patch()` (soft navigation without a full page reload), and on browser back/forward navigation.
+Called after `mount()` on the initial WebSocket connect, on every `live_patch()` (soft navigation without a full page reload), and on browser back/forward navigation. It may be `async def`, like `mount()`.
 
 **Parameters:**
 
@@ -183,7 +191,7 @@ Existing views are unaffected unless they already define a regular no-argument m
 
 #### Disconnect cleanup
 
-The framework cleans up on disconnect by itself: `start_async` tasks are cancelled, presence is untracked, child views are released, and uploads are aborted (an incomplete `ResumableUploadWriter` upload is suspended so the client can resume it after reconnecting). `disconnect()` and `unmount()` methods you define on the view are not called; use `disconnected()` above, and release what it cannot reach (a process that dies runs nothing) with a timeout or a periodic sweep.
+The framework cleans up on disconnect by itself: an explicit-exposure view's `start_async` tasks are cancelled (a legacy view's run to completion and their result is discarded; set `cancel_async_on_disconnect = True` on a view whose work only serves the open page, such as a follower or a live feed, to have it cancelled), presence is untracked, child views are released, and uploads are aborted (an incomplete `ResumableUploadWriter` upload is suspended so the client can resume it after reconnecting). `disconnect()` and `unmount()` methods you define on the view are not called; use `disconnected()` above, and release what it cannot reach (a process that dies runs nothing) with a timeout or a periodic sweep.
 
 **Telling the live mount from the HTTP render.** `mount()` runs twice for a page: once for the HTTP response and again when the WebSocket (or SSE) connection mounts the view. On the live mount the framework sets `self._websocket_session_id` before `mount()` runs; on the HTTP render it is absent. This is the check djust's own presence tracking uses:
 

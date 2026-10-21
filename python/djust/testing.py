@@ -206,7 +206,9 @@ class LiveViewTestClient:
             self.view_instance._initialize_temporary_assigns()
 
         # Call mount
-        self.view_instance.mount(request, **params)
+        from ._view_hooks import call_hook_sync
+
+        call_hook_sync(self.view_instance.mount, request, **params)
 
         self._mounted = True
         self.events.append(
@@ -601,7 +603,9 @@ class LiveViewTestClient:
         instance._websocket_query_string = request.META.get("QUERY_STRING", "")
         if hasattr(instance, "_initialize_temporary_assigns"):
             instance._initialize_temporary_assigns()
-        instance.mount(request, **mount_kwargs)
+        from ._view_hooks import call_hook_sync
+
+        call_hook_sync(instance.mount, request, **mount_kwargs)
         return instance
 
     @staticmethod

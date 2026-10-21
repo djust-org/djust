@@ -17,7 +17,7 @@ The other way past one core is more processes, with Redis for everything shared;
 
 Three things cap a stock process:
 
-1. **All WebSocket sessions share one sync thread.** Every `mount`, event handler, hook and render goes through asgiref's `sync_to_async` with `thread_sensitive=True`, which runs them all, for all sessions, on a single thread.
+1. **All WebSocket sessions share one sync thread.** Every sync `mount`, event handler, hook and render goes through asgiref's `sync_to_async` with `thread_sensitive=True`, which runs them all, for all sessions, on a single thread. An `async def` `mount`, `handle_params`, event handler or push handler runs on the event loop instead, so the time it spends awaiting (an async ORM query, an HTTP call) does not hold that thread.
 2. **The GIL.** On standard CPython only one thread runs Python at a time, so extra threads help only while they wait on I/O or run code that releases the GIL.
 3. **The asyncio event loop.** Every frame for every session is decoded, dispatched and encoded on one loop thread. Once the sync work moves elsewhere, the loop becomes the next ceiling; see [More than one event loop per process](#more-than-one-event-loop-per-process).
 

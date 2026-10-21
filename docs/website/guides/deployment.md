@@ -298,6 +298,37 @@ Concrete numbers from a 1 vCPU / 2 GB Fargate task running the a representative 
 
 **Disclaimer.** Numbers are from a 1 vCPU / 2 GB Fargate task with the a representative downstream-consumer app. Per-app variance is expected; absolute numbers will differ for your workload, but the relative improvement (~6× rps headroom on health-check endpoints) has been consistent across multiple deployments. The home-page row is a useful indicator that DB-touching pages also gain headroom — just not as dramatically, because the bottleneck shifts from ASGI server overhead to ORM/DB latency.
 
+### Startup and shutdown: the ASGI `lifespan`
+
+Services bound to the server's event loop, such as an async database engine, a `LISTEN` connection or a background pump, start when the server starts and stop when it stops. ASGI servers announce both through the `lifespan` protocol, but Django's ASGI handler and channels' `ProtocolTypeRouter` do not answer it (the router raises for a scope type it has no entry for). Wrap the application with `djust.lifespan.with_lifespan`:
+
+```python
+# myproject/asgi.py
+from djust.lifespan import with_lifespan
+
+application = with_lifespan(
+    ProtocolTypeRouter({"http": ..., "websocket": ...}),
+    startup=[backend.start],   # async def or def
+    shutdown=[backend.stop],
+)
+```
+
+Or register hooks where the service is defined; they run after the ones passed to `with_lifespan`:
+
+```python
+from djust.lifespan import on_shutdown, on_startup
+
+@on_startup
+async def start_backend():
+    await backend.start()
+
+@on_shutdown
+async def stop_backend():
+    await backend.stop()
+```
+
+The wrapper answers `lifespan` and passes every other scope to the application. Startup hooks run in order, shutdown hooks in reverse. An `async def` hook runs on the server's event loop (each worker process, and each `djust serve --loops` loop, runs its own); a sync hook runs through `sync_to_async`, so it may use the ORM. A startup hook that raises reports `lifespan.startup.failed` and the server does not start. Every shutdown hook runs even if one raises, and the failure is reported as `lifespan.shutdown.failed`. Run the server with lifespan enabled: uvicorn's default `--lifespan auto` uses it once the application answers it, and gunicorn's `UvicornWorker` and `djust serve` do the same.
+
 ### Gunicorn + Uvicorn Workers
 
 For containerized production deployments (Fargate, GKE, Cloud Run, Fly.io machines, etc.), Gunicorn supervising Uvicorn workers gives you process-based supervision (worker recycling, graceful reloads, memory-based restarts) on top of Uvicorn's async event loop:
