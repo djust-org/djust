@@ -51,6 +51,17 @@ if TYPE_CHECKING:
 register = template.Library()
 
 
+# Swap the deferred-theme preload (the element just before this script) to a
+# stylesheet once it has loaded. A preload that finished before the script ran
+# has a Resource Timing entry, so it is swapped at once.
+_DEFERRED_CSS_ACTIVATOR = (
+    "(function(l){if(!l)return;function s(){l.rel='stylesheet';}"
+    "var p=window.performance,e=p&&p.getEntriesByName?p.getEntriesByName(l.href)[0]:null;"
+    "if(e&&e.responseEnd>0){s();}else{l.addEventListener('load',s,{once:true});}})"
+    "(document.querySelector('link[data-djust-theme-deferred]'));"
+)
+
+
 def _resolve_nonce(request: Any, nonce: str | None = None) -> str:
     """The CSP nonce to use: ``nonce`` when given (``""`` means none), else ``request.csp_nonce``."""
     if nonce is None:
@@ -157,9 +168,14 @@ def build_theme_head_context(
             if state.pack:
                 query_params["pk"] = state.pack
             deferred_href = f"{deferred_url}?{urlencode(query_params)}"
+            # The preload becomes a stylesheet once it has loaded. That used to
+            # be an inline ``onload=`` attribute, which a CSP without
+            # 'unsafe-inline' refuses even when the page has a nonce, so the
+            # deferred CSS never applied. A script carrying the same nonce as
+            # the anti-FOUC script does it instead.
             deferred_css_block = (
-                f'<link rel="preload" href="{deferred_href}" as="style" '
-                f"onload=\"this.onload=null;this.rel='stylesheet'\" data-djust-theme-deferred>"
+                f'<link rel="preload" href="{deferred_href}" as="style" data-djust-theme-deferred>'
+                f"<script{nonce_attr}>{_DEFERRED_CSS_ACTIVATOR}</script>"
                 f'\n<noscript><link rel="stylesheet" href="{deferred_href}"></noscript>'
             )
         except NoReverseMatch:

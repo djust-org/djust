@@ -135,6 +135,7 @@ _FRAMEWORK_INTERNAL_ATTRS: frozenset = frozenset(
         "_djust_child_disposed",
         "_djust_waiters_closed",
         "_async_task_handles",
+        "_tracked_tasks",
         "_async_tasks",
         "_async_pending",
         "_async_task_counter",

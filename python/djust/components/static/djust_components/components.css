@@ -63,6 +63,10 @@
 .modal-md .modal-content, .dj-modal--md { max-width: 32rem; }
 .modal-lg .modal-content, .dj-modal--lg { max-width: 48rem; }
 .modal-xl .modal-content, .dj-modal--xl { max-width: 64rem; }
+/* {% modal native=True %}: a <dialog> in the top layer; ::backdrop replaces the backdrop div. */
+dialog.dj-modal--native { padding: 0; margin: auto; color: inherit; }
+dialog.dj-modal--native > * { margin: 0; }
+dialog.dj-modal--native::backdrop { background: rgba(0, 0, 0, 0.5); backdrop-filter: blur(var(--glass-blur, 8px)); -webkit-backdrop-filter: blur(var(--glass-blur, 8px)); }
 
 /* Tabs (rendered: dj-tabs, dj-tabs__nav, dj-tab, dj-tab--active, dj-tabs__pane) */
 .tabs-container, .dj-tabs { width: 100%; }
@@ -1313,6 +1317,7 @@ button.rating-star:hover ~ .rating-star { color: hsl(var(--muted-foreground)); }
 .dj-theme-toggle__btn { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 28px; padding: 0; border: none; border-radius: var(--radius-sm, 0.25rem); background: transparent; color: hsl(var(--muted-foreground, 215 16% 47%)); cursor: pointer; transition: all var(--duration-fast, 0.1s) var(--ease-in-out, ease); }
 .dj-theme-toggle__btn:hover { color: hsl(var(--foreground, 222 47% 11%)); background: hsl(var(--accent, 210 40% 96%)); }
 .dj-theme-toggle__btn[aria-pressed="true"],
+.dj-theme-toggle__btn[aria-checked="true"],
 .dj-theme-toggle__btn.dj-theme-toggle__btn--active { background: hsl(var(--background, 0 0% 100%)); color: hsl(var(--foreground, 222 47% 11%)); box-shadow: var(--shadow-sm, 0 1px 2px 0 rgb(0 0 0 / 0.05)); }
 
 /* Page Header */
@@ -1883,15 +1888,17 @@ button.rating-star:hover ~ .rating-star { color: hsl(var(--muted-foreground)); }
 /* --- Dropdown Menu --- */
 .dj-dropdown-menu { position: relative; display: inline-block; }
 .dj-dropdown-menu__trigger { padding: 0.375rem 0.75rem; border: 1px solid hsl(var(--border, 214 32% 91%)); border-radius: 0.25rem; background: hsl(var(--background, 0 0% 100%)); font-size: 0.875rem; cursor: pointer; }
-.dj-dropdown-menu__content { position: absolute; top: 100%; margin-top: 0.25rem; min-width: 10rem; background: hsl(var(--popover, 0 0% 100%)); border: var(--border-width, 1px) solid hsl(var(--border, 214 32% 91%)); border-radius: 0.375rem; box-shadow: var(--shadow-lg, 0 4px 6px -1px rgba(0,0,0,0.1)); z-index: 50; padding: 0.25rem; animation: dj-slide-in-up var(--duration-fast, 0.15s) var(--ease-in-out, ease); }
+.dj-dropdown-menu__content { position: absolute; top: 100%; margin-top: 0.25rem; min-width: 10rem; background: hsl(var(--popover, 0 0% 100%)); border: var(--border-width, 1px) solid hsl(var(--border, 214 32% 91%)); border-radius: 0.375rem; color: hsl(var(--popover-foreground, var(--foreground, 222 47% 11%))); box-shadow: var(--shadow-lg, 0 4px 6px -1px rgba(0,0,0,0.1)); z-index: 50; padding: 0.25rem; animation: dj-slide-in-up var(--duration-fast, 0.15s) var(--ease-in-out, ease); }
 .dj-dropdown-menu--left { left: 0; }
 .dj-dropdown-menu--right { right: 0; }
-.dj-dropdown-menu__item { display: flex; align-items: center; gap: 0.5rem; width: 100%; padding: 0.375rem 0.5rem; border: none; background: none; font-size: 0.875rem; cursor: pointer; border-radius: 0.25rem; text-align: left; }
+.dj-dropdown-menu__item { display: flex; align-items: center; gap: 0.5rem; width: 100%; padding: 0.375rem 0.5rem; border: none; background: none; color: inherit; font: inherit; font-size: 0.875rem; text-decoration: none; box-sizing: border-box; cursor: pointer; border-radius: 0.25rem; text-align: left; }
 .dj-dropdown-menu__item:hover { background: hsl(var(--accent, 210 40% 96%)); }
 .dj-dropdown-menu__item--danger { color: hsl(var(--destructive-text, var(--destructive, 0 84% 60%))); }
 .dj-dropdown-menu__item--disabled { opacity: 0.5; cursor: not-allowed; }
 .dj-dropdown-menu__divider { border: none; border-top: 1px solid hsl(var(--border, 214 32% 91%)); margin: 0.25rem 0; }
 .dj-dropdown-menu__icon { width: 1rem; text-align: center; }
+.dj-dropdown-menu__check { width: 1rem; text-align: center; }
+.dj-dropdown-menu__heading { padding: 0.375rem 0.5rem 0.25rem; font-size: 0.75rem; font-weight: 600; color: hsl(var(--muted-foreground, 215 16% 47%)); }
 
 /* --- Meter / Stacked Progress --- */
 .dj-meter { display: flex; flex-direction: column; gap: 0.375rem; }

@@ -17509,6 +17509,14 @@ window.djust.bindModelElements = bindModelElements;
         if (bubble) hideBubble(bubble);
     });
 
+    // The bubble's Skip / Close buttons end the tour. A delegated listener
+    // rather than an inline onclick, so a strict CSP does not block them.
+    document.addEventListener('click', function(e) {
+        const btn = e.target && e.target.closest &&
+            e.target.closest('.dj-tutorial-bubble__skip, .dj-tutorial-bubble__cancel');
+        if (btn) document.dispatchEvent(new CustomEvent('tour:hide'));
+    });
+
     // Expose for tests
     if (!window.djust) window.djust = {};
     window.djust._tutorialBubble = {
@@ -18785,13 +18793,15 @@ window.djust.bindModelElements = bindModelElements;
 //
 // SECURITY BOUNDARY
 // -----------------
-// The script body is evaluated via `new Function(...)`. This is safe at the
-// same trust level as any other JS inside a Django template: the body is
-// template-author-controlled, not user-supplied. The {% colocated_hook %} tag
-// escapes `</script>` in the body to prevent premature tag close. Users on
-// strict CSP without 'unsafe-eval' should not use this feature — register
-// hooks via a nonce-bearing <script>window.djust.hooks.X = {...}</script>
-// instead.
+// The script body is template-author-controlled, not user-supplied, so
+// running it is at the same trust level as any other JS inside a Django
+// template. The {% colocated_hook %} tag escapes `</script>` in the body to
+// prevent premature tag close.
+//
+// When the request has a CSP nonce the tag carries it, and the body runs in a
+// script element created with that nonce: a strict nonce CSP allows it with
+// neither 'unsafe-eval' nor 'unsafe-inline'. Without a nonce the body is
+// evaluated with `new Function(...)`.
 // ============================================================================
 
 (function initColocatedHooks() {
@@ -18813,6 +18823,11 @@ window.djust.bindModelElements = bindModelElements;
             if (!hookName) {
                 // Mark as processed so we don't keep scanning it.
                 scriptEl.dataset.djustHookRegistered = '1';
+                continue;
+            }
+            const nonce = scriptEl.nonce || scriptEl.getAttribute('nonce');
+            if (nonce) {
+                _registerWithNonce(scriptEl, hookName, nonce);
                 continue;
             }
             try {
@@ -18852,6 +18867,30 @@ window.djust.bindModelElements = bindModelElements;
                 }
                 scriptEl.dataset.djustHookRegistered = 'error';
             }
+        }
+    }
+
+    /**
+     * Run a hook body under a strict CSP: a script element carrying the
+     * page's nonce is allowed where `new Function` ('unsafe-eval') is not.
+     * The inserted script runs synchronously and assigns the hook itself.
+     */
+    function _registerWithNonce(scriptEl, hookName, nonce) {
+        const runner = document.createElement('script');
+        runner.setAttribute('nonce', nonce);
+        runner.nonce = nonce;
+        runner.textContent =
+            '(function(){const hook={};' + scriptEl.textContent +
+            '\n;(globalThis.djust.hooks=globalThis.djust.hooks||{})[' +
+            JSON.stringify(hookName) + ']=hook;})();';
+        (document.head || document.documentElement).appendChild(runner);
+        runner.remove();
+        // eslint-disable-next-line security/detect-object-injection
+        const registered = !!(globalThis.djust.hooks && globalThis.djust.hooks[hookName]);
+        scriptEl.dataset.djustHookRegistered = registered ? '1' : 'error';
+        if (globalThis.djustDebug) {
+            console.debug('[colocated-hook] %s %s with the page nonce',
+                registered ? 'Registered' : 'Could not register', hookName);
         }
     }
 
@@ -19661,6 +19700,19 @@ if (typeof document !== 'undefined') {
     } else {
         _installDjDialogObserver();
     }
+}
+
+// {% modal native=True %} has no scrim element: a click on the backdrop lands
+// on the <dialog> itself (its content fills it), and closes it like the
+// <div> modal's scrim. close() fires `close`, which reports to the server.
+if (typeof document !== 'undefined') {
+    document.addEventListener('click', function (e) {
+        const el = e.target;
+        if (el instanceof HTMLDialogElement && el.open &&
+            el.classList.contains('dj-modal--native')) {
+            el.close();
+        }
+    });
 }
 
 globalThis.djust = globalThis.djust || {};
@@ -22523,7 +22575,15 @@ globalThis.djust.djTransitionGroup = {
 //   - Modal / dialog  — focus trap (Tab / Shift+Tab wrap) + Esc-to-close.
 //   - Tablist         — ArrowLeft/Right roving tabindex + Home/End.
 //   - Accordion       — ArrowUp/Down focus movement + Home/End.
-//   - Dropdown menu   — ArrowUp/Down roving + Home/End + Esc-to-close.
+//   - Dropdown menu   — ArrowUp/Down roving + Home/End + type-ahead +
+//                       Esc-to-close, for both `{% dropdown %}` (.dj-dropdown)
+//                       and `{% dropdown_menu %}` (.dj-dropdown-menu), over
+//                       menuitem / menuitemradio / menuitemcheckbox items.
+//
+// A native `<dialog>` modal (`{% modal native=True %}`) opened with
+// showModal() keeps the browser's own Escape (cancel → close, which
+// 35-dj-dialog.js reports to the server); the focus trap and return focus
+// apply to it as to the <div> modal.
 //
 // CSP-strict (Action #183): one delegated `keydown` listener on `document`
 // — no inline <script>, no inline handlers. Delegation survives morphdom
@@ -22550,9 +22610,19 @@ globalThis.djust.djTransitionGroup = {
     // Each entry: { el: <dialog element>, returnFocus: <element|null> }.
     const _dialogStack = [];
 
+    // The last element focused outside any dialog. A native <dialog> may
+    // already hold focus when the presence observer sees it (showModal()
+    // moves focus in), so this, not activeElement, is where focus returns.
+    let _lastOutsideFocus = null;
+
     // -----------------------------------------------------------------------
     // Helpers
     // -----------------------------------------------------------------------
+
+    // An open native <dialog> shown with showModal(): the browser owns Escape.
+    function _isNativeModal(el) {
+        return !!el && el.tagName === 'DIALOG' && el.open === true;
+    }
 
     function _isDialog(el) {
         if (!el || el.nodeType !== 1) return false;
@@ -22753,12 +22823,29 @@ globalThis.djust.djTransitionGroup = {
         return !!dropdown && dropdown.hasAttribute('data-open');
     }
 
+    const _DROPDOWN_SELECTOR = '.dj-dropdown, .dj-dropdown-menu';
     const _MENUITEM_SELECTOR =
-        '[role="menuitem"], a[href], button:not([disabled])';
+        '[role="menuitem"], [role="menuitemradio"], [role="menuitemcheckbox"], ' +
+        'a[href], button:not([disabled])';
+    const _CURRENT_ITEM_SELECTOR =
+        '[role="menuitem"], [role="menuitemradio"], [role="menuitemcheckbox"], a[href], button';
+
+    // Type-ahead: a printable key moves to the next item whose label starts
+    // with it, wrapping, starting after the current item.
+    function _typeAhead(menuitems, current, key) {
+        if (key.length !== 1 || !/\S/.test(key)) return null;
+        const ch = key.toLowerCase();
+        const start = menuitems.indexOf(current);
+        for (let step = 1; step <= menuitems.length; step++) {
+            const item = _at(menuitems, start + step);
+            if ((item.textContent || '').trim().toLowerCase().indexOf(ch) === 0) return item;
+        }
+        return null;
+    }
 
     function _handleDropdown(dropdown, target, e) {
         const menu = dropdown.querySelector('[role="menu"]');
-        const trigger = dropdown.querySelector('.dj-dropdown__trigger');
+        const trigger = dropdown.querySelector('.dj-dropdown__trigger, .dj-dropdown-menu__trigger');
         if (e.key === 'Escape') {
             e.preventDefault();
             _dispatchFrom(trigger);
@@ -22768,10 +22855,12 @@ globalThis.djust.djTransitionGroup = {
         if (!menu) return false;
         const menuitems = Array.prototype.slice.call(
             menu.querySelectorAll(_MENUITEM_SELECTOR)
-        );
+        ).filter(function (item) {
+            return item.getAttribute('aria-disabled') !== 'true';
+        });
         if (menuitems.length === 0) return false;
         // First Arrow/Home/End from the trigger focuses an item.
-        const current = target.closest('[role="menuitem"], a[href], button');
+        const current = target.closest(_CURRENT_ITEM_SELECTOR);
         if (!current || menuitems.indexOf(current) === -1) {
             if (e.key === 'ArrowDown' || e.key === 'ArrowUp' ||
                 e.key === 'Home' || e.key === 'End') {
@@ -22787,6 +22876,14 @@ globalThis.djust.djTransitionGroup = {
             ['ArrowDown'], ['ArrowUp'], false)) {
             e.preventDefault();
             return true;
+        }
+        if (!e.ctrlKey && !e.metaKey && !e.altKey) {
+            const match = _typeAhead(menuitems, current, e.key);
+            if (match) {
+                e.preventDefault();
+                match.focus();
+                return true;
+            }
         }
         return false;
     }
@@ -22808,7 +22905,7 @@ globalThis.djust.djTransitionGroup = {
             // and Esc-to-close (#1533). `closest` matches a dropdown that is
             // a descendant of the dialog; `dialog.contains` makes the intent
             // explicit (and guards a dropdown outside the dialog subtree).
-            const innerDropdown = target.closest('.dj-dropdown');
+            const innerDropdown = target.closest(_DROPDOWN_SELECTOR);
             const dropdownInDialog =
                 innerDropdown && dialog.contains(innerDropdown);
             // A handler closer to the target already took Tab or Escape (a
@@ -22832,6 +22929,9 @@ globalThis.djust.djTransitionGroup = {
                     _handleDropdown(innerDropdown, target, e);
                     return;
                 }
+                // A native modal closes itself (cancel → close); its close
+                // event reaches the server through dj-dialog-close-event.
+                if (_isNativeModal(top)) return;
                 e.preventDefault();
                 _closeModal(top);
                 return;
@@ -22846,7 +22946,7 @@ globalThis.djust.djTransitionGroup = {
         }
 
         // 2. Dropdown — Arrow roving + Esc.
-        const dropdown = target.closest('.dj-dropdown');
+        const dropdown = target.closest(_DROPDOWN_SELECTOR);
         if (dropdown && _handleDropdown(dropdown, target, e)) return;
 
         // 3. Tablist — Arrow roving.
@@ -22868,7 +22968,8 @@ globalThis.djust.djTransitionGroup = {
         });
         if (tracked) return;
         const doc = dialog.ownerDocument;
-        const returnFocus = doc.activeElement;
+        let returnFocus = doc.activeElement;
+        if (returnFocus && dialog.contains(returnFocus)) returnFocus = _lastOutsideFocus;
         _dialogStack.push({ el: dialog, returnFocus: returnFocus });
         const focusables = _focusable(dialog);
         if (focusables.length > 0) {
@@ -22945,6 +23046,12 @@ globalThis.djust.djTransitionGroup = {
 
     function _init() {
         document.addEventListener('keydown', _handleKeydown, false);
+        document.addEventListener('focusin', function (e) {
+            const el = e.target;
+            if (el && el.closest && !el.closest('[role="dialog"], .dj-modal')) {
+                _lastOutsideFocus = el;
+            }
+        }, true);
         _installObserver();
     }
 
@@ -23057,6 +23164,356 @@ globalThis.djust.djTransitionGroup = {
         _apply();
     } else {
         document.addEventListener('DOMContentLoaded', _apply, { once: true });
+    }
+})();
+// ============================================================================
+// Component behaviours: delegated, CSP-safe
+// ============================================================================
+//
+// The djust.components tags render markup only. The interactive parts that
+// used to be inline event handlers (onclick=, onkeydown=, oninput=, ...) live
+// here as listeners on `document`, so they work under a Content-Security-
+// Policy without 'unsafe-inline' and keep working across VDOM morphs without
+// re-binding:
+//
+//   .rich-select      open/close on click, Enter/Space and Escape; close on an
+//                     option pick or a click elsewhere; search-box filtering.
+//   .combobox         keep focus in the input while an option is pressed,
+//                     close the list after the pick, reflect aria-expanded.
+//   .dj-theme-toggle  switch the colour mode (`data-theme-mode`) when
+//                     djust.theming's theme.js is not on the page, and keep
+//                     every toggle's aria-checked in step with the mode.
+//   .popover-wrapper, .dj-popconfirm-wrapper
+//                     open on the trigger (`data-open`, aria-expanded); close
+//                     on a click elsewhere, Escape, or a popconfirm button.
+//   .collapsible      toggle `collapsible-open` and aria-expanded.
+//   .ctx-wrapper      open the menu at the pointer on right-click; close on
+//                     the next click or Escape.
+//   .code-block-copy  copy the block's code.
+//   .dropzone         drag-over styling, put dropped files in the input, show
+//                     the file count.
+//   .kanban           drag cards between columns; a drop sends the board's
+//                     `data-move-event` with {card_id, from_col, to_col}.
+//   .rte              toolbar commands (`data-command`) keep the selection;
+//                     the editor's HTML is mirrored into its hidden input.
+//   .multi-select     search-box filtering.
+//   .split-pane       drag the handle to resize (10%-90%).
+// ============================================================================
+
+(function initComponentBehaviors() {
+    if (typeof document === 'undefined' || document._djustComponentBehaviors) return;
+    document._djustComponentBehaviors = true;
+
+    const THEME_MODE_KEY = 'djust-theme-mode';
+    const THEME_MODES = ['light', 'dark', 'system'];
+
+    function _closest(target, selector) {
+        return target && target.closest ? target.closest(selector) : null;
+    }
+
+    function _setRichSelectOpen(root, open) {
+        root.classList.toggle('rich-select--open', open);
+        const trigger = root.querySelector('.rich-select-trigger');
+        if (trigger) trigger.setAttribute('aria-expanded', open ? 'true' : 'false');
+    }
+
+    function _closeRichSelects(except) {
+        document.querySelectorAll('.rich-select--open').forEach(function (el) {
+            if (el !== except) _setRichSelectOpen(el, false);
+        });
+    }
+
+    function _syncThemeToggles(mode) {
+        document.querySelectorAll('.dj-theme-toggle').forEach(function (toggle) {
+            toggle.setAttribute('data-current', mode);
+            toggle.querySelectorAll('[data-theme-mode]').forEach(function (btn) {
+                const on = btn.getAttribute('data-theme-mode') === mode;
+                btn.setAttribute('aria-checked', on ? 'true' : 'false');
+                btn.classList.toggle('dj-theme-toggle__btn--active', on);
+            });
+        });
+    }
+
+    function _setThemeMode(mode) {
+        if (THEME_MODES.indexOf(mode) < 0) return;
+        // djust.theming's theme.js switches the mode itself on any
+        // [data-theme-mode] click; only stand in for it when it is absent.
+        if (!globalThis.djustTheme) {
+            try { localStorage.setItem(THEME_MODE_KEY, mode); } catch (_err) { /* storage blocked */ }
+            const prefersDark = globalThis.matchMedia &&
+                globalThis.matchMedia('(prefers-color-scheme: dark)').matches;
+            const dark = mode === 'dark' || (mode === 'system' && prefersDark);
+            document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+            document.documentElement.setAttribute('data-theme-mode', mode);
+        }
+        _syncThemeToggles(mode);
+    }
+
+    document.addEventListener('click', function (e) {
+        const target = e.target;
+        const richSelect = _closest(target, '.rich-select');
+        _closeRichSelects(richSelect);
+        if (richSelect) {
+            if (_closest(target, '.rich-select-option')) {
+                _setRichSelectOpen(richSelect, false);
+            } else if (_closest(target, '.rich-select-trigger') &&
+                       !richSelect.classList.contains('rich-select--disabled')) {
+                _setRichSelectOpen(richSelect, !richSelect.classList.contains('rich-select--open'));
+            }
+        }
+
+        const comboList = _closest(target, '.combobox-dropdown');
+        if (comboList) {
+            const input = _closest(comboList, '.combobox').querySelector('.combobox-input');
+            if (input) input.blur();
+        }
+
+        const modeButton = _closest(target, '.dj-theme-toggle [data-theme-mode]');
+        if (modeButton) _setThemeMode(modeButton.getAttribute('data-theme-mode'));
+    });
+
+    document.addEventListener('keydown', function (e) {
+        const richSelect = _closest(e.target, '.rich-select');
+        if (!richSelect) return;
+        const open = richSelect.classList.contains('rich-select--open');
+        if (e.key === 'Escape' && open) {
+            _setRichSelectOpen(richSelect, false);
+            const trigger = richSelect.querySelector('.rich-select-trigger');
+            if (trigger) trigger.focus();
+            return;
+        }
+        if ((e.key === 'Enter' || e.key === ' ') && _closest(e.target, '.rich-select-trigger') &&
+            !richSelect.classList.contains('rich-select--disabled')) {
+            e.preventDefault();
+            _setRichSelectOpen(richSelect, !open);
+        }
+    });
+
+    document.addEventListener('input', function (e) {
+        const box = e.target;
+        if (!box || !box.classList || !box.classList.contains('rich-select-search-input')) return;
+        const list = _closest(box, '.rich-select-dropdown');
+        if (!list) return;
+        const query = box.value.toLowerCase();
+        list.querySelectorAll('.rich-select-option').forEach(function (item) {
+            item.style.display = item.textContent.toLowerCase().indexOf(query) >= 0 ? '' : 'none';
+        });
+    });
+
+    // An option press must not move focus out of the input: the list is
+    // shown by `.combobox-input:focus ~ .combobox-dropdown`.
+    document.addEventListener('mousedown', function (e) {
+        if (_closest(e.target, '.combobox-dropdown')) e.preventDefault();
+    });
+
+    function _comboExpanded(e, expanded) {
+        const input = e.target;
+        if (input && input.classList && input.classList.contains('combobox-input')) {
+            input.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+        }
+    }
+    document.addEventListener('focusin', function (e) { _comboExpanded(e, true); });
+    document.addEventListener('focusout', function (e) { _comboExpanded(e, false); });
+
+    // ---- popover / popconfirm -------------------------------------------
+    const POPUPS = '.popover-wrapper, .dj-popconfirm-wrapper';
+
+    function _setPopupOpen(wrapper, open) {
+        if (open) wrapper.setAttribute('data-open', '');
+        else wrapper.removeAttribute('data-open');
+        const trigger = wrapper.querySelector('.popover-trigger, .dj-popconfirm-trigger');
+        if (trigger) trigger.setAttribute('aria-expanded', open ? 'true' : 'false');
+    }
+
+    function _closePopups(except) {
+        document.querySelectorAll('.popover-wrapper[data-open], .dj-popconfirm-wrapper[data-open]')
+            .forEach(function (w) { if (w !== except) _setPopupOpen(w, false); });
+        document.querySelectorAll('.ctx-menu[data-open]').forEach(function (m) {
+            m.removeAttribute('data-open');
+        });
+    }
+
+    function _countText(n) {
+        return n ? n + ' file' + (n > 1 ? 's' : '') + ' selected' : '';
+    }
+
+    function _showFileCount(zone, files) {
+        const count = zone.querySelector('.dz-file-count');
+        if (count) count.textContent = _countText(files.length);
+        zone.classList.toggle('dropzone-has-file', files.length > 0);
+    }
+
+    document.addEventListener('click', function (e) {
+        const target = e.target;
+        const popup = _closest(target, POPUPS);
+        _closePopups(popup);
+        if (popup) {
+            if (_closest(target, '.popover-trigger, .dj-popconfirm-trigger')) {
+                _setPopupOpen(popup, !popup.hasAttribute('data-open'));
+            } else if (_closest(target, '.dj-popconfirm__btn')) {
+                _setPopupOpen(popup, false);
+            }
+        }
+
+        const collapsibleTrigger = _closest(target, '.collapsible-trigger');
+        if (collapsibleTrigger) {
+            const box = _closest(collapsibleTrigger, '.collapsible');
+            if (box) {
+                const open = box.classList.toggle('collapsible-open');
+                collapsibleTrigger.setAttribute('aria-expanded', open ? 'true' : 'false');
+            }
+        }
+
+        const copyButton = _closest(target, '.code-block-copy');
+        if (copyButton) {
+            const code = _closest(copyButton, '.code-block').querySelector('code');
+            if (code && navigator.clipboard) {
+                navigator.clipboard.writeText(code.textContent).then(function () {
+                    copyButton.textContent = 'Copied!';
+                    setTimeout(function () { copyButton.textContent = 'Copy'; }, 2000);
+                });
+            }
+        }
+    });
+
+    document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape') _closePopups(null);
+    });
+
+    // ---- context menu -----------------------------------------------------
+    document.addEventListener('contextmenu', function (e) {
+        const wrapper = _closest(e.target, '.ctx-wrapper');
+        if (!wrapper) return;
+        const menu = wrapper.querySelector('.ctx-menu');
+        if (!menu) return;
+        e.preventDefault();
+        _closePopups(null);
+        const box = wrapper.getBoundingClientRect();
+        menu.style.left = (e.clientX - box.left) + 'px';
+        menu.style.top = (e.clientY - box.top) + 'px';
+        menu.setAttribute('data-open', '1');
+    });
+
+    // ---- drag and drop: dropzone, kanban --------------------------------
+    document.addEventListener('dragstart', function (e) {
+        const card = _closest(e.target, '.kanban-card');
+        if (!card || !e.dataTransfer) return;
+        e.dataTransfer.setData('card', card.dataset.cardId || '');
+        e.dataTransfer.setData('from', card.dataset.colId || '');
+        card.classList.add('dragging');
+    });
+
+    document.addEventListener('dragend', function (e) {
+        const card = _closest(e.target, '.kanban-card');
+        if (card) card.classList.remove('dragging');
+    });
+
+    document.addEventListener('dragover', function (e) {
+        const zone = _closest(e.target, '.dropzone, .kanban-col');
+        if (!zone) return;
+        e.preventDefault();
+        zone.classList.add(zone.classList.contains('dropzone') ? 'dropzone-over' : 'kanban-col-over');
+    });
+
+    document.addEventListener('dragleave', function (e) {
+        const zone = _closest(e.target, '.dropzone, .kanban-col');
+        if (zone) zone.classList.remove('dropzone-over', 'kanban-col-over');
+    });
+
+    document.addEventListener('drop', function (e) {
+        const zone = _closest(e.target, '.dropzone, .kanban-col');
+        if (!zone) return;
+        e.preventDefault();
+        zone.classList.remove('dropzone-over', 'kanban-col-over');
+        const data = e.dataTransfer;
+        if (zone.classList.contains('dropzone')) {
+            const files = data ? data.files : [];
+            if (!files || !files.length) return;
+            const input = zone.querySelector('input[type=file]');
+            try {
+                const transfer = new DataTransfer();
+                Array.prototype.forEach.call(files, function (file) { transfer.items.add(file); });
+                input.files = transfer.files;
+            } catch (_err) { /* no DataTransfer constructor: the count still shows */ }
+            _showFileCount(zone, files);
+            return;
+        }
+        const board = _closest(zone, '.kanban');
+        const moveEvent = board && board.getAttribute('data-move-event');
+        const from = data ? data.getData('from') : '';
+        const to = zone.dataset.colId;
+        if (moveEvent && from !== to && globalThis.djust && globalThis.djust.handleEvent) {
+            globalThis.djust.handleEvent(moveEvent,
+                { card_id: data.getData('card'), from_col: from, to_col: to });
+        }
+    });
+
+    document.addEventListener('change', function (e) {
+        const input = e.target;
+        if (input && input.classList && input.classList.contains('dropzone-input')) {
+            const zone = _closest(input, '.dropzone');
+            if (zone) _showFileCount(zone, input.files || []);
+        }
+    });
+
+    // ---- rich text editor, multi-select search ----------------------------
+    document.addEventListener('mousedown', function (e) {
+        const button = _closest(e.target, '.rte-btn[data-command]');
+        if (!button) return;
+        e.preventDefault();  // keep the editor's selection
+        document.execCommand(button.getAttribute('data-command'), false,
+            button.getAttribute('data-command-arg'));
+    });
+
+    document.addEventListener('input', function (e) {
+        const field = e.target;
+        if (!field || !field.classList) return;
+        if (field.classList.contains('rte-editor')) {
+            const hidden = _closest(field, '.rte').querySelector('input[type=hidden]');
+            if (hidden) hidden.value = field.innerHTML;
+        } else if (field.classList.contains('multi-select-search')) {
+            const query = field.value.toLowerCase();
+            _closest(field, '.multi-select').querySelectorAll('.multi-select-option')
+                .forEach(function (item) {
+                    item.style.display = item.textContent.toLowerCase().indexOf(query) >= 0 ? '' : 'none';
+                });
+        }
+    });
+
+    // ---- split pane ---------------------------------------------------------
+    let _splitDrag = null;
+    document.addEventListener('mousedown', function (e) {
+        const handle = _closest(e.target, '.sp-handle');
+        const pane = handle && _closest(handle, '.split-pane');
+        if (!pane) return;
+        e.preventDefault();
+        _splitDrag = pane;
+    });
+    document.addEventListener('mousemove', function (e) {
+        if (!_splitDrag) return;
+        const box = _splitDrag.getBoundingClientRect();
+        const horizontal = _splitDrag.classList.contains('split-pane-horizontal');
+        const span = horizontal ? box.width : box.height;
+        if (!span) return;
+        const offset = horizontal ? e.clientX - box.left : e.clientY - box.top;
+        const pct = Math.max(10, Math.min(90, offset / span * 100));
+        const first = _splitDrag.querySelector('.sp-pane-1');
+        if (first) {
+            if (horizontal) first.style.width = pct + '%';
+            else first.style.height = pct + '%';
+        }
+    });
+    document.addEventListener('mouseup', function () { _splitDrag = null; });
+
+    function _syncStoredThemeMode() {
+        let stored = null;
+        try { stored = localStorage.getItem(THEME_MODE_KEY); } catch (_err) { /* storage blocked */ }
+        if (stored && THEME_MODES.indexOf(stored) >= 0) _syncThemeToggles(stored);
+    }
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', _syncStoredThemeMode);
+    } else {
+        _syncStoredThemeMode();
     }
 })();
 

@@ -32,6 +32,8 @@ class Combobox(Component):
         search_event: str = "",
         placeholder: str = "Search...",
         custom_class: str = "",
+        describedby: str = "",
+        invalid: bool = False,
         **kwargs: Any,
     ) -> None:
         super().__init__(
@@ -43,6 +45,8 @@ class Combobox(Component):
             search_event=search_event,
             placeholder=placeholder,
             custom_class=custom_class,
+            describedby=describedby,
+            invalid=invalid,
             **kwargs,
         )
         self.name = name
@@ -53,9 +57,13 @@ class Combobox(Component):
         self.search_event = search_event
         self.placeholder = placeholder
         self.custom_class = custom_class
+        self.describedby = describedby
+        self.invalid = invalid
 
     def _render_custom(self) -> str:
         """Render the combobox HTML."""
+        from djust.components.templatetags.djust_components import field_aria_attrs
+
         options = self.options or []
         cls = "combobox"
         if self.custom_class:
@@ -67,6 +75,7 @@ class Combobox(Component):
         search_event = self.search_event or (self.name + "_search")
         e_placeholder = html.escape(self.placeholder)
         label_html = f'<label class="form-label">{e_label}</label>' if self.label else ""
+        aria = field_aria_attrs(e_name, describedby=self.describedby, invalid=self.invalid)
         options_html = ""
         for opt in options:
             if isinstance(opt, dict):
@@ -75,14 +84,19 @@ class Combobox(Component):
             else:
                 ov = opt
                 ol = html.escape(str(opt))
+            is_sel = "true" if str(ov) == str(self.value) else "false"
             options_html += (
-                f'<div class="combobox-option" {self.event_attrs(event, value=ov)}>{ol}</div>'
+                f'<div class="combobox-option" role="option" aria-selected="{is_sel}" '
+                f"{self.event_attrs(event, value=ov)}>{ol}</div>"
             )
         return (
             f'<div class="form-group">{label_html}'
             f'<div class="{cls}">'
             f'<input class="combobox-input form-input" type="text" name="{e_name}" '
-            f'placeholder="{e_placeholder}" value="{e_value}" {self.event_attrs(search_event, trigger="input")}>'
-            f'<div class="combobox-dropdown">{options_html}</div>'
+            f'placeholder="{e_placeholder}" value="{e_value}" role="combobox" '
+            f'aria-autocomplete="list" aria-expanded="false" aria-controls="{e_name}-listbox"'
+            f"{aria} "
+            f"{self.event_attrs(search_event, trigger='input')}>"
+            f'<div class="combobox-dropdown" id="{e_name}-listbox" role="listbox">{options_html}</div>'
             f"</div></div>"
         )

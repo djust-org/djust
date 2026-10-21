@@ -171,16 +171,14 @@ reloads in your own dev overlay.
   memory but doesn't run `migrate`. Restart if you changed models.
 - **No mixin slot growth.** Adding a new `__slots__` entry to a mixin
   always triggers a full reload.
-- **Mixin edits trigger a full reload.** HVR only reloads the module
-  whose file was saved. Editing a mixin's source file does not
-  propagate to views that inherit from it until you also save those
-  views' files — and if the mixin's MRO contribution changes, HVR will
-  reject the swap (`mro_changed`) and fall back to a full page reload.
+- **A mixin or base class in another module reloads its views too.**
+  Saving a module whose classes a LiveView elsewhere inherits from (a mixin,
+  a base view, or a view that other modules subclass) reloads that module and
+  then every module defining such a LiveView, bases before subclasses. Those
+  modules' top-level code runs again (see the caveats below). If the edit
+  changes the MRO (the mixin gains or loses a base), mounted views fall back
+  to a full page reload (`mro_changed`); new page loads use the new classes.
 
-- **Only the saved module's classes are replaced.** A view whose base
-  class lives in another module keeps the old base until its own module is
-  saved too, and a view subclassing the saved view from another module keeps
-  inheriting from the old class.
 - **A per-request URLconf is not updated.** Routes resolved through
   `request.urlconf` (set by middleware) keep serving the pre-reload class
   over HTTP until a restart; `settings.ROOT_URLCONF` is updated.

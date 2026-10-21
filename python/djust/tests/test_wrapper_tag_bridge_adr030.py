@@ -68,10 +68,12 @@ def test_the_component_census_matches_adr_030():
     reasons = {
         name: tl._wrapper_refusal(name, library.tags[name]) for name in _raw_body_tags(library)
     }
-    assert len(reasons) == 57
+    assert len(reasons) == 58
     assert all(reasons[name] is None for name in FIVE)
     assert "more than one body segment" in reasons["split_pane"]
-    for parent in ("tabs", "accordion", "modal", "sidebar", "nav_menu"):
+    # confirm_dialog_block renders its body only when open; it has its own
+    # Rust block handler, so the bridge refusing it costs nothing.
+    for parent in ("tabs", "accordion", "modal", "sidebar", "nav_menu", "confirm_dialog_block"):
         assert "does not render its body" in reasons[parent], parent
     # Renders its body under a pushed variable: the one shape that would
     # diverge from Django silently on the bridge, so it must be refused.
@@ -80,7 +82,7 @@ def test_the_component_census_matches_adr_030():
     refused = sorted(name for name, reason in reasons.items() if reason is not None)
     # A deliberate pin: a new body-consuming component tag moves one of these
     # counts, and the change should say which side it landed on.
-    assert len(wrappers) == 40 and len(refused) == 17, (wrappers, refused)
+    assert len(wrappers) == 40 and len(refused) == 18, (wrappers, refused)
 
 
 def test_a_bridged_wrapper_renders_through_the_rust_engine(bridged_components):

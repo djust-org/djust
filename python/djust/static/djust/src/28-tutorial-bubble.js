@@ -275,6 +275,14 @@
         if (bubble) hideBubble(bubble);
     });
 
+    // The bubble's Skip / Close buttons end the tour. A delegated listener
+    // rather than an inline onclick, so a strict CSP does not block them.
+    document.addEventListener('click', function(e) {
+        const btn = e.target && e.target.closest &&
+            e.target.closest('.dj-tutorial-bubble__skip, .dj-tutorial-bubble__cancel');
+        if (btn) document.dispatchEvent(new CustomEvent('tour:hide'));
+    });
+
     // Expose for tests
     if (!window.djust) window.djust = {};
     window.djust._tutorialBubble = {

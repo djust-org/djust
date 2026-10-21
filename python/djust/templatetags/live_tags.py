@@ -990,9 +990,10 @@ class ColocatedHookNode(Node):
     ``</script>`` to prevent premature tag close.  mark_safe is used on the
     final string because every interpolation is either a template-author hook
     name or the body (which has been ``</script>``-escaped) — no
-    request/POST data is interpolated.  The client uses ``new Function(...)``
-    to evaluate the body; strict-CSP apps without ``'unsafe-eval'`` should
-    avoid this tag and register hooks via a nonce-bearing script instead.
+    request/POST data is interpolated.  When the request has a CSP nonce the
+    tag carries it, and the client registers the body by inserting a script
+    element with that nonce, so a strict nonce CSP needs no ``'unsafe-eval'``.
+    Without a nonce the client evaluates the body with ``new Function(...)``.
     """
 
     def __init__(
@@ -1043,10 +1044,20 @@ class ColocatedHookNode(Node):
         # Build the tag via concatenation (no f-string interpolation with
         # mark_safe per CLAUDE.md rules). `safe_hook_name` is HTML-escaped
         # above; `safe_body` has been </script>-escaped above.
+        # The request's CSP nonce, when there is one: the client registers a
+        # nonce-bearing hook through a script element carrying that nonce, so
+        # a strict CSP needs neither 'unsafe-eval' nor 'unsafe-inline'.
+        request = context.get("request")
+        if request is None:
+            request = getattr(_context_view(context), "request", None)
+        nonce = get_csp_nonce(request)
+        nonce_attr = ' nonce="' + escape(nonce) + '"' if nonce else ""
         html = (
             '<script type="djust/hook" data-hook="'
             + safe_hook_name
-            + '">'
+            + '"'
+            + nonce_attr
+            + ">"
             + banner
             + "\n"
             + safe_body

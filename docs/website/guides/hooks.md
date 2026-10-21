@@ -609,7 +609,7 @@ The `global` keyword emits the bare `data-hook="Tooltip"` regardless of the `hoo
 
 - The hook body is **template-author JS**, not user input. Never interpolate request data into the body.
 - The `{% colocated_hook %}` tag escapes `</script>` / `</SCRIPT>` in the body to prevent premature tag close.
-- The client evaluates bodies via `new Function(...)`. Apps on strict CSP without `'unsafe-eval'` should skip this feature and register hooks via a nonce-bearing `<script>window.djust.hooks.X = {...}</script>`.
+- When the request has a CSP nonce (`request.csp_nonce`, set by django-csp), the tag carries it and the client runs the body in a script element with the same nonce, so a strict nonce CSP needs neither `'unsafe-eval'` nor `'unsafe-inline'`. Without a nonce the client evaluates the body with `new Function(...)`, which needs `'unsafe-eval'`. A hook first rendered by a socket update is registered with the nonce of the page that loaded it; render the tag on the initial page if the policy rotates nonces.
 - Every emitted script carries a `/* COLOCATED HOOK: <name> */` banner so security auditors can grep for them.
 
 ## Ignored Attributes (`dj-ignore-attrs`) — v0.5.0

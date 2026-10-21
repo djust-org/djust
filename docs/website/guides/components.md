@@ -1282,10 +1282,58 @@ automatically when django-csp sets it, or pass it yourself with
 it from the request too. Without a
 nonce the output is unchanged. The same nonce is handed to `theme.js`, which puts
 it on the `<style>` it creates when a preset is switched without a reload, so
-live switching also works under a policy without `'unsafe-inline'`. The deferred-stylesheet `<link>` still swaps
-itself in with an inline `onload` handler, which a nonce does not authorise, so
-under a strict policy use `{% theme_head link_css=True %}` or set
-`critical_css` to `False`.
+live switching also works under a policy without `'unsafe-inline'`. The deferred
+stylesheet (`critical_css`) is swapped in by a small script carrying the same
+nonce, not by an inline `onload` handler, so it applies under a strict policy too.
+
+The component tags emit no inline event handlers and no inline scripts:
+`{% theme_toggle %}`, `{% rich_select %}`, `{% combobox %}`, `{% copy_button %}`,
+`{% popover %}`, `{% popconfirm %}`, `{% collapsible %}`, `{% context_menu %}`,
+`{% file_dropzone %}`, `{% kanban_board %}`, `{% rich_text_editor %}`,
+`{% multi_select %}`, `{% split_pane %}` and `{% code_block %}`'s copy button get
+their behaviour from delegated listeners in the djust client bundle.
+`{% code_block %}` highlights through the static
+`djust_components/code-block-highlight.js` (a `<script src>`, allowed by
+`script-src 'self'`), and `{% tutorial_bubble %}`'s Skip/Close buttons are
+handled by the client as well. The one exception is the `Button` component's
+`onclick=` argument, an inline handler you pass yourself. Also,
+`{% theme_toggle %}`'s buttons carry `data-theme-mode`, so `theme.js` (or the
+client bundle when `theme.js` is absent) switches the mode and stores it under
+`djust-theme-mode`. `djust_components/theme-toggle.js` is no longer needed.
+
+### Keyboard, dialogs and form-field ARIA
+
+**Menus.** `{% dropdown_menu %}` follows the WAI-ARIA menu pattern, like
+`{% dropdown %}`. ArrowDown / ArrowUp on the trigger focus the first / last
+item, and arrows move between `menuitem`, `menuitemradio` and `menuitemcheckbox`
+items, wrapping and skipping disabled ones. Home / End jump to the ends, a
+letter moves to the next item starting with it, and Escape sends the trigger's
+`toggle_event` and returns focus to the trigger.
+
+**Native dialog.** `{% modal native=True %}` renders a `<dialog>` that the client
+opens with `showModal()`, instead of the positioned `<div>`. That gives it the
+browser's top layer, an inert page behind it, and native Escape. When the
+browser closes it (Escape, or a click on the backdrop), `close_event` is sent to
+the server, so `open` stays in step. The focus trap and return focus to the
+opener work as for the default modal. The default (`native=False`) markup is
+unchanged.
+
+```django
+{% modal open=show_request native=True title="Request access" close_event="close_request" %}
+  ...
+{% endmodal %}
+```
+
+**Form fields.** `{% combobox %}` and `{% rich_select %}` take `error=`,
+`helper=`, `describedby=` and `invalid=`. The help text and error get stable ids
+that the control's `aria-describedby` names, and an error (or `invalid=True`) sets
+`aria-invalid="true"`. Pass `field=form.city` (a Django bound field) to take
+the name, label, value, first error and help text from the form field instead:
+
+```django
+{% combobox field=form.city options=cities %}
+{% rich_select field=form.status options=statuses describedby="status-note" %}
+```
 
 ### Layouts under a LiveView base template
 

@@ -144,6 +144,10 @@ def _generate(self):
     return Report.objects.for_caller().build()   # owner-scoped, no caller argument
 ```
 
+A task a view starts with `self.create_task()` inherits the context the same
+way; it renders nothing, so it is not a turn of its own (a push it sends runs
+the chain on the receiving socket).
+
 Background work also runs the chain itself: once before the callback starts
 (`async`/`start`) and again before its result is handled and rendered
 (`async`/`result`), so a caller who signed out in between is refused.
