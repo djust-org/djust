@@ -561,6 +561,25 @@ class RustBridgeMixin:
                 backend = get_backend()
                 backend.set(self._cache_key, self._rust_view)
 
+    def _refresh_cached_rust_view(self) -> None:
+        """Re-store the cached snapshot of this view's Rust view after a render.
+
+        The state backend keeps a snapshot of the view stored under
+        ``_cache_key``, never the object itself (which this view goes on
+        rendering and tearing down, possibly on a pool thread while another
+        socket of the session reads the key). A no-op for a view with no
+        cache key and for a backend that keeps the state :meth:`set` wrote.
+        """
+        cache_key = getattr(self, "_cache_key", None)
+        rust_view = getattr(self, "_rust_view", None)
+        if not cache_key or rust_view is None:
+            return
+        from ..state_backend import get_backend
+
+        refresh = getattr(get_backend(), "refresh", None)
+        if callable(refresh):
+            refresh(cache_key, rust_view)
+
     def _saved_state_key(
         self, session_key: str, view_key: str, template_hash_slot: str
     ) -> Optional[str]:

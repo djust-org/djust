@@ -73,7 +73,11 @@ class InMemoryStateBackend(StateBackend):
             default_ttl: Default session TTL in seconds (default: 1 hour)
             state_size_warning_kb: Emit warning when state exceeds this size in KB
         """
-        self._cache: Dict[str, Tuple[RustLiveView, float]] = {}
+        # A serialized snapshot per key, never a live ``RustLiveView``: the
+        # object a caller saves stays in use by that caller (it renders and
+        # tears it down), so reading it from another thread raced it under
+        # ``worker_threads``. Bytes are immutable, so readers may share them.
+        self._cache: Dict[str, Tuple[bytes, float]] = {}
         self._state_sizes: Dict[str, int] = {}  # Track state sizes for monitoring
         self._default_ttl = _coerce_ttl(default_ttl)
         self._state_size_warning_kb = state_size_warning_kb
@@ -141,6 +145,14 @@ class InMemoryStateBackend(StateBackend):
         active mutable borrow via the ``Context::resolve_dotted_via_getattr``
         sidecar fallback path.
 
+        The cache holds the ``serialize_msgpack`` bytes taken at ``set()``,
+        not the saved object itself, which its caller goes on rendering and
+        tearing down. Reading that object from another thread (a second
+        socket of the same session mounting the same page, with
+        ``worker_threads`` on) collided with the owner's render or teardown
+        as ``Already (mutably) borrowed``. Like Redis, a reader now only
+        deserializes bytes; no Rust object is shared.
+
         We use ``serialize_msgpack`` / ``deserialize_msgpack`` for
         cloning because (a) ``RustLiveView`` is a Rust extension type
         that doesn't expose a Python ``__copy__`` / ``__deepcopy__``,
@@ -165,7 +177,7 @@ class InMemoryStateBackend(StateBackend):
                 cached = self._cache.get(key)
                 if cached is None:
                     return None
-                view, timestamp = cached
+                snapshot, timestamp = cached
                 if self._default_ttl > 0 and timestamp < time.time() - self._default_ttl:
                     # Expired (#3080): a miss, and the entry goes now rather
                     # than waiting for the next sweep.
@@ -173,12 +185,11 @@ class InMemoryStateBackend(StateBackend):
                     self._state_sizes.pop(key, None)
                     return None
 
-            # Round-trip outside the lock: serialize/deserialize is
-            # purely CPU work on independent bytes; holding the cache
-            # lock across it would serialize all gets unnecessarily.
+            # Deserialize outside the lock: purely CPU work on immutable
+            # bytes; holding the cache lock across it would serialize all
+            # gets unnecessarily.
             try:
-                serialized = view.serialize_msgpack()
-                clone = RustLiveView.deserialize_msgpack(serialized)
+                clone = RustLiveView.deserialize_msgpack(snapshot)
             except Exception:
                 # Round-trip failed (msgpack schema drift after a hot-swap,
                 # corrupt payload, etc). Returning the shared ref is
@@ -195,11 +206,11 @@ class InMemoryStateBackend(StateBackend):
                 # re-lock here, a concurrent `set(key, new_view)` could
                 # have landed a fresh, valid entry — we must not delete
                 # the *new* one in place of the corrupt one we held.
-                # `cached`'s reference to `view` keeps the original
+                # `cached`'s reference to `snapshot` keeps the original
                 # alive, so `is` is sound.
                 with self._lock:
                     current = self._cache.get(key)
-                    if current is not None and current[0] is view:
+                    if current is not None and current[0] is snapshot:
                         self._cache.pop(key, None)
                         self._state_sizes.pop(key, None)
                 logger.exception(
@@ -218,9 +229,14 @@ class InMemoryStateBackend(StateBackend):
         warn_on_large_state: bool = True,
     ) -> None:
         """
-        Store in in-memory cache with timestamp (thread-safe).
+        Store a snapshot of ``view`` with a timestamp (thread-safe).
 
-        Optionally tracks state size and emits warnings for large states.
+        The view is serialized now, on the caller's thread, which owns it;
+        the backend keeps the bytes and no reference to the object, so the
+        caller may go on rendering and tearing it down while other callers
+        read the key. Later changes to ``view`` are not stored, as with the
+        Redis backend. Optionally tracks state size and emits warnings for
+        large states.
 
         Args:
             key: Session key
@@ -230,14 +246,28 @@ class InMemoryStateBackend(StateBackend):
         """
         timestamp = time.time()
 
+        try:
+            snapshot = view.serialize_msgpack()
+        except Exception as exc:  # noqa: BLE001 - a lost cache entry costs a fresh mount
+            from djust._exposure_diagnostics import log_failure_for
+
+            # Nothing valid to store: drop what the key held, so a stale
+            # snapshot is not served in its place.
+            with self._lock:
+                self._cache.pop(key, None)
+                self._state_sizes.pop(key, None)
+            log_failure_for(
+                logger, (), exc, "InMemoryStateBackend.set: could not snapshot key '%s'", key
+            )
+            return
+
         # Estimate state size if the view supports it
         state_size = 0
         try:
             if hasattr(view, "get_state_size"):
                 state_size = view.get_state_size()
-            elif hasattr(view, "serialize_msgpack"):
-                # Fallback: serialize to get size (more expensive)
-                state_size = len(view.serialize_msgpack())
+            else:
+                state_size = len(snapshot)
         except Exception:
             logger.debug("Failed to estimate state size for key '%s'", key)
 
@@ -254,10 +284,35 @@ class InMemoryStateBackend(StateBackend):
 
         with profiler.profile(profiler.OP_STATE_SAVE):
             with self._lock:
-                self._cache[key] = (view, timestamp)
+                self._cache[key] = (snapshot, timestamp)
                 if state_size > 0:
                     self._state_sizes[key] = state_size
         self._maybe_sweep()
+
+    def refresh(self, key: str, view: RustLiveView) -> None:
+        """Re-store ``view``'s snapshot after its owner rendered it.
+
+        The backend keeps bytes, not the owner's object, so this is how the
+        cached state follows the owner's renders (the diff baseline the next
+        request of the page starts from). Only an existing entry is updated,
+        and its timestamp is kept: a refresh is not a new save.
+        """
+        try:
+            snapshot = view.serialize_msgpack()
+        except Exception as exc:  # noqa: BLE001 - a lost cache entry costs a fresh mount
+            from djust._exposure_diagnostics import log_failure_for
+
+            with self._lock:
+                self._cache.pop(key, None)
+                self._state_sizes.pop(key, None)
+            log_failure_for(
+                logger, (), exc, "InMemoryStateBackend.refresh: could not snapshot key '%s'", key
+            )
+            return
+        with self._lock:
+            cached = self._cache.get(key)
+            if cached is not None:
+                self._cache[key] = (snapshot, cached[1])
 
     def _maybe_sweep(self) -> None:
         """Drop expired entries, at most once per sweep interval (#3080)."""
