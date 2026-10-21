@@ -90,6 +90,17 @@ class StateBackend(ABC):
         """
         pass
 
+    def refresh(self, key: str, view: RustLiveView) -> None:
+        """Record ``view``'s state after its owner rendered it.
+
+        Called on the owner's thread after every render of a view whose state
+        is cached. A backend that holds the latest state in process (the
+        in-memory backend) re-stores its snapshot, so the next reader of the
+        key (an HTTP page-POST request, a reconnect, another tab) starts from
+        the last render. The default does nothing: a remote backend keeps the
+        state written by :meth:`set`, as it always has.
+        """
+
     @abstractmethod
     def delete(self, key: str) -> bool:
         """
