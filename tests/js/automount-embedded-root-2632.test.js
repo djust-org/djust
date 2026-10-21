@@ -132,7 +132,7 @@ describe('structural pin: ONE page-container helper across src/ (#2632, #1646)',
     // and attribute-qualified lookups ([dj-view][data-djust-embedded=…]) are
     // different questions and are not counted.
     const EXPECTED_CALL_SITES = {
-        '03-websocket.js': 3,   // prerender morph, html_update replace, autoMount
+        '03-websocket.js': 4,   // mount dj-view follow, prerender morph, html_update replace, autoMount
         '03b-sse.js': 1,        // SSE mount html target
         '09-event-binding.js': 6, // recovery capture + restore use the same page-root selector // delegated-listener root, getLiveViewRoot, form recovery, native-observation readiness
         '11-event-handler.js': 2, // ADR-036 page contract scope + binder contract resolution

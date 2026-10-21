@@ -1696,6 +1696,17 @@ class LiveViewWebSocket {
                 if (data.view === this.primaryViewPath) installMountEventConfig(data);
                 else installAdditionalMountEventConfig(data);
 
+                // A live_redirect to another view class mounts that class here;
+                // the page container's dj-view must follow it, as the SSE branch
+                // does (03b-sse.js), or a reconnect (autoMount reads dj-view)
+                // mounts the old view at the new URL.
+                if (typeof data.view === 'string' && data.view === this.primaryViewPath) {
+                    const pageContainer = findPageViewContainer();
+                    if (pageContainer && pageContainer.getAttribute('dj-view') !== data.view) {
+                        pageContainer.setAttribute('dj-view', data.view);
+                    }
+                }
+
                 // Initialize upload configurations from mount response
                 if (data.upload_configs && window.djust.uploads) {
                     window.djust.uploads.setConfigs(data.upload_configs);
@@ -19319,9 +19330,10 @@ function _installFormPolishListeners() {
         // ``dj-trigger-action`` attribute is the explicit author opt-in that
         // limits the blast radius. Do NOT simplify this check away.
         if (!form.hasAttribute('dj-trigger-action')) {
-            if (globalThis.djustDebug) {
-                djLog('[form-polish] refusing to submit form without dj-trigger-action:', form);
-            }
+            // Said outside debug too: the server asked for this submit, so a
+            // missing opt-in is an author error that otherwise fails silently
+            // (a sign-out menu item that does nothing).
+            console.warn('[djust] trigger_submit(%s): the form lacks dj-trigger-action, so it was not submitted.', selector);
             return;
         }
         // Native submit — triggers the browser's normal POST flow, bypassing

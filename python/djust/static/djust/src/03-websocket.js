@@ -777,6 +777,17 @@ class LiveViewWebSocket {
                 if (data.view === this.primaryViewPath) installMountEventConfig(data);
                 else installAdditionalMountEventConfig(data);
 
+                // A live_redirect to another view class mounts that class here;
+                // the page container's dj-view must follow it, as the SSE branch
+                // does (03b-sse.js), or a reconnect (autoMount reads dj-view)
+                // mounts the old view at the new URL.
+                if (typeof data.view === 'string' && data.view === this.primaryViewPath) {
+                    const pageContainer = findPageViewContainer();
+                    if (pageContainer && pageContainer.getAttribute('dj-view') !== data.view) {
+                        pageContainer.setAttribute('dj-view', data.view);
+                    }
+                }
+
                 // Initialize upload configurations from mount response
                 if (data.upload_configs && window.djust.uploads) {
                     window.djust.uploads.setConfigs(data.upload_configs);
