@@ -40,61 +40,6 @@ function _unmarkHandlerBound(element, type) {
 }
 
 // ============================================================================
-// dj-poll teardown
-// ============================================================================
-
-// Every element that currently owns a poll interval. A removal path tears
-// down by CONTAINMENT against this set rather than by `[dj-poll]` query, so a
-// poll whose element lost its attribute is still found.
-const _pollElements = new Set();
-
-/**
- * Stop one element's poll: clear its interval and visibilitychange handler
- * and un-mark it, so a later bind pass re-binds it if it comes back (a
- * sticky subtree re-attached after navigation, say).
- * @param {Element} element
- */
-function _teardownPoll(element) {
-    if (element._djustPollIntervalId) clearInterval(element._djustPollIntervalId);
-    if (element._djustPollVisibilityHandler) {
-        document.removeEventListener('visibilitychange', element._djustPollVisibilityHandler);
-    }
-    element._djustPollIntervalId = null;
-    element._djustPollVisibilityHandler = null;
-    element._djustPollBoundKey = null;
-    _unmarkHandlerBound(element, 'poll');
-    _pollElements.delete(element);
-}
-
-/**
- * Stop the poll of `root` AND of every poll element inside it. Every path
- * that removes or replaces DOM calls this on what it removes: clearing only
- * the replaced node left a nested poll's interval running on the detached
- * element after a live_redirect mount, firing a handler the next view does
- * not have.
- * @param {Node} root - an element, fragment, or document
- * @param {boolean} [childrenOnly=false] - keep `root`'s own poll: for a
- *   container whose CONTENT is replaced while the container survives.
- */
-function teardownPollsIn(root, childrenOnly) {
-    if (!root || _pollElements.size === 0) return;
-    for (const element of Array.from(_pollElements)) {
-        if (element === root) {
-            if (!childrenOnly) _teardownPoll(element);
-        } else if (typeof root.contains === 'function' && root.contains(element)) {
-            _teardownPoll(element);
-        }
-    }
-}
-
-/** Stop the polls whose element left the document or dropped `dj-poll`. */
-function _sweepOrphanedPolls() {
-    for (const element of Array.from(_pollElements)) {
-        if (!element.isConnected || !element.getAttribute('dj-poll')) _teardownPoll(element);
-    }
-}
-
-// ============================================================================
 // Scoped Listener Helpers (window/document event binding)
 // ============================================================================
 
