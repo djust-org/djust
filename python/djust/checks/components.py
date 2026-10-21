@@ -8,6 +8,7 @@ import inspect
 import logging
 import os
 import re
+import textwrap
 from collections.abc import Iterator
 from typing import Any, Optional
 
@@ -1891,4 +1892,117 @@ def check_push_handler_overrides(app_configs: Any, **kwargs: Any) -> list[CheckM
                         line_number=line_number,
                     )
                 )
+    return messages
+
+
+#: Attributes ``LiveView.__init__`` sets that a view may still assign:
+#: ``request`` (Django's ``View`` convention) and ``_object`` (the
+#: ``get_object()`` cache, ADR-017).
+_V022_ASSIGNABLE = frozenset({"request", "_object"})
+
+
+def _reserved_view_attributes() -> frozenset[str]:
+    """The attributes a bare ``LiveView`` keeps its own state under."""
+    from djust.live_view import LiveView
+
+    return frozenset(vars(LiveView())) - _V022_ASSIGNABLE
+
+
+def _self_assignments(function: Any) -> Iterator[tuple[str, int]]:
+    """``(attribute, line)`` for each ``self.<attribute> = ...`` in ``function``."""
+    try:
+        lines, start = inspect.getsourcelines(function)
+    except (OSError, TypeError):
+        return
+    try:
+        tree = ast.parse(textwrap.dedent("".join(lines)))
+    except SyntaxError:
+        return
+    if not tree.body or not isinstance(tree.body[0], (ast.FunctionDef, ast.AsyncFunctionDef)):
+        return
+    args = tree.body[0].args
+    positional = args.posonlyargs + args.args
+    if not positional:
+        return
+    receiver = positional[0].arg
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            targets = node.targets
+        elif isinstance(node, (ast.AnnAssign, ast.AugAssign)):
+            targets = [node.target]
+        else:
+            continue
+        for target in targets:
+            for leaf in ast.walk(target):
+                if (
+                    isinstance(leaf, ast.Attribute)
+                    and isinstance(leaf.value, ast.Name)
+                    and leaf.value.id == receiver
+                    and isinstance(leaf.ctx, ast.Store)
+                ):
+                    yield leaf.attr, start + node.lineno - 1
+
+
+@register("djust")
+def check_reserved_view_attributes(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
+    """V022 (Warning): view code assigns an attribute djust keeps its state under.
+
+    ``LiveView.__init__`` sets ``_streams``, ``_components``,
+    ``_pending_navigation`` and others. A view (or a mixin it uses) that
+    assigns one of them replaces djust's state, and the error surfaces far
+    from the assignment — ``self._streams = {...}`` failed every render with
+    ``'builtin_function_or_method' object is not iterable``.
+    """
+    messages: list[CheckMessage] = []
+    if _is_check_suppressed("djust.V022"):
+        return messages
+    try:
+        from djust.live_view import LiveView
+
+        reserved = _reserved_view_attributes()
+    except Exception:  # noqa: BLE001 — djust not importable/configured: nothing to check
+        logger.debug("V022 skipped: could not build a bare LiveView", exc_info=True)
+        return messages
+
+    candidates = set(_routed_liveview_classes()) | set(_walk_subclasses(LiveView))
+    seen: set[tuple[type, str, str]] = set()
+    for cls in sorted(candidates, key=lambda c: (c.__module__, c.__qualname__)):
+        if _is_framework_internal_class(cls):
+            continue
+        label = "%s.%s" % (cls.__module__, cls.__qualname__)
+        for klass in cls.__mro__:
+            module = getattr(klass, "__module__", "") or ""
+            if klass is object or module == "builtins" or _is_framework_internal_class(klass):
+                continue
+            # A LiveView base that is itself checked reports its own code.
+            if klass is not cls and klass in candidates:
+                continue
+            for name, member in klass.__dict__.copy().items():
+                function = getattr(member, "__func__", member)
+                if not inspect.isfunction(function):
+                    continue
+                for attr, line in _self_assignments(function):
+                    if attr not in reserved or (klass, name, attr) in seen:
+                        continue
+                    seen.add((klass, name, attr))
+                    where = "" if klass is cls else " (in %s)" % klass.__qualname__
+                    hint = (
+                        "djust's LiveView keeps its own state in self.%s, so this "
+                        "assignment replaces it. Rename the attribute, for example "
+                        "self.%s_data." % (attr, attr)
+                    )
+                    if attr == "_streams":
+                        hint += " To keep a list in a stream, call self.stream(name, items)."
+                    messages.append(
+                        DjustWarning(
+                            "%s %s()%s assigns self.%s, an attribute djust's LiveView "
+                            "uses for its own state." % (label, name, where, attr),
+                            hint=hint,
+                            id="djust.V022",
+                            fix_hint="Rename `self.%s` in `%s.%s()`."
+                            % (attr, klass.__qualname__, name),
+                            file_path=inspect.getsourcefile(function) or "",
+                            line_number=line,
+                        )
+                    )
     return messages
