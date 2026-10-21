@@ -426,12 +426,139 @@ def reload_module_if_liveview(path: str) -> Optional[ReloadResult]:
                 return None
 
         class_pairs = [(old_classes[name], new_classes[name]) for name in old_classes]
+        _repoint_http_entries(class_pairs)
 
     return ReloadResult(
         module_name=module.__name__,
         class_pairs=class_pairs,
         reload_id=uuid.uuid4().hex,
     )
+
+
+#: How deep :func:`_repoint_callable` follows closures and ``__wrapped__``
+#: from a URLconf callback (decorators around ``as_view()`` nest a few deep).
+_REPOINT_MAX_DEPTH = 16
+
+
+def _repoint_callable(func: Any, replacements: Dict[int, type], seen: set, depth: int = 0) -> int:
+    """Point ``func`` (and what it closes over) at the reloaded classes.
+
+    ``as_view()`` returns a function closing over ``cls``; decorators applied
+    to it close over that function. Each closure cell or ``view_class``
+    holding a replaced class is rewritten in place, so the callable already in
+    the URLconf builds the new class. Returns how many references changed.
+    """
+    if depth > _REPOINT_MAX_DEPTH or id(func) in seen or not callable(func):
+        return 0
+    seen.add(id(func))
+    changed = 0
+    view_class = getattr(func, "view_class", None)
+    if isinstance(view_class, type) and id(view_class) in replacements:
+        try:
+            func.view_class = replacements[id(view_class)]
+            changed += 1
+        except (AttributeError, TypeError):
+            # A read-only attribute (a builtin or C callable): the closure
+            # walk below still repoints what the callable builds.
+            logger.debug("HVR: view_class on %r is read-only", func)
+    for cell in getattr(func, "__closure__", None) or ():
+        try:
+            value = cell.cell_contents
+        except ValueError:  # an empty cell
+            continue
+        if isinstance(value, type) and id(value) in replacements:
+            cell.cell_contents = replacements[id(value)]
+            changed += 1
+        elif callable(value) and not isinstance(value, type):
+            changed += _repoint_callable(value, replacements, seen, depth + 1)
+    wrapped = getattr(func, "__wrapped__", None)
+    if wrapped is not None:
+        changed += _repoint_callable(wrapped, replacements, seen, depth + 1)
+    return changed
+
+
+def _iter_url_callbacks(patterns: Any, depth: int = 0) -> Any:
+    if depth > _REPOINT_MAX_DEPTH:
+        return
+    for pattern in patterns:
+        nested = getattr(pattern, "url_patterns", None)
+        if nested is not None:
+            yield from _iter_url_callbacks(nested, depth + 1)
+            continue
+        callback = getattr(pattern, "callback", None)
+        if callback is not None:
+            yield callback
+
+
+def _repoint_http_entries(class_pairs: List[Tuple[type, type]]) -> int:
+    """Make the URLconf's ``as_view()`` callables build the reloaded classes.
+
+    The live instances are swapped by :func:`apply_class_swap`; a new page
+    load goes through the callable Django resolved at import, which kept the
+    pre-reload class. A class whose ``exposure_policy`` changed is left as it
+    is (its HTTP entry was wrapped for the old policy): a restart picks it up.
+    Covers ``settings.ROOT_URLCONF``; a per-request ``request.urlconf`` is not
+    walked. Returns how many references changed.
+    """
+    replacements: Dict[int, type] = {}
+    for old_cls, new_cls in class_pairs:
+        if old_cls is new_cls:
+            continue
+        if getattr(old_cls, "exposure_policy", None) != getattr(new_cls, "exposure_policy", None):
+            logger.warning(
+                "HVR: %s changed exposure_policy; restart the server to serve it over HTTP",
+                new_cls.__qualname__,
+            )
+            continue
+        replacements[id(old_cls)] = new_cls
+    if not replacements:
+        return 0
+    try:
+        from django.urls import get_resolver
+
+        patterns = get_resolver().url_patterns
+    except Exception:  # noqa: BLE001 — dev-only; a broken URLconf has its own error
+        logger.warning("HVR: could not read the URLconf; new page loads keep the old class")
+        return 0
+    seen: set = set()
+    changed = 0
+    for callback in _iter_url_callbacks(patterns):
+        changed += _repoint_callable(callback, replacements, seen)
+    return changed
+
+
+def note_template_change(path: str) -> int:
+    """Forget the template hash every LiveView class cached, after a file change.
+
+    The state backend keys a view's saved Rust renderer by the hash of its
+    template (``_initialize_rust_view``), and that hash is cached on the class
+    for its lifetime (``_get_cached_template_hash_slot``). A ``.py`` reload
+    makes a new class; a template-only edit does not, so the same session kept
+    getting the renderer compiled from the old template. Dropping the cached
+    hash makes the next render hash the edited source and miss that entry.
+    Dev-only (the file watcher); returns how many classes were reset.
+    """
+    from djust.live_view import LiveView
+
+    reset = 0
+    stack = [LiveView]
+    seen: set = set()
+    while stack:
+        cls = stack.pop()
+        if id(cls) in seen:
+            continue
+        seen.add(id(cls))
+        if "_djust_template_hash_slot" in cls.__dict__:
+            try:
+                delattr(cls, "_djust_template_hash_slot")
+                reset += 1
+            except (AttributeError, TypeError):
+                # An immutable class keeps its hash; its next page load may
+                # still use the renderer of the old template until a restart.
+                logger.debug("HVR: could not reset the template hash of %s", cls.__qualname__)
+        stack.extend(cls.__subclasses__())
+    logger.debug("HVR: %s changed; reset the template hash of %d view classes", path, reset)
+    return reset
 
 
 def _resolve_class_pairs(
@@ -504,5 +631,6 @@ __all__ = [
     "ReloadResult",
     "apply_class_swap",
     "broadcast_hvr_event",
+    "note_template_change",
     "reload_module_if_liveview",
 ]

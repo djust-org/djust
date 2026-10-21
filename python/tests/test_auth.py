@@ -219,7 +219,7 @@ class TestCheckViewAuthCustomHook:
         assert check_view_auth(view, request) is None
 
     def test_custom_check_returns_false(self):
-        """Custom check_permissions returning False redirects."""
+        """check_permissions() returning False is a 403 for a signed-in user."""
         from djust.live_view import LiveView
 
         class CustomView(LiveView):
@@ -230,11 +230,11 @@ class TestCheckViewAuthCustomHook:
 
         view = CustomView()
         request = _make_request(authenticated=True)
-        result = check_view_auth(view, request)
-        assert result is not None
+        with pytest.raises(PermissionDenied):
+            check_view_auth(view, request)
 
     def test_custom_check_raises_permission_denied(self):
-        """Custom check_permissions raising PermissionDenied redirects."""
+        """check_permissions() raising PermissionDenied stays a 403 when signed in."""
         from djust.live_view import LiveView
 
         class CustomView(LiveView):
@@ -245,8 +245,18 @@ class TestCheckViewAuthCustomHook:
 
         view = CustomView()
         request = _make_request(authenticated=True)
-        result = check_view_auth(view, request)
-        assert result is not None
+        with pytest.raises(PermissionDenied):
+            check_view_auth(view, request)
+
+    def test_custom_check_refusal_anonymous_redirects(self):
+        """An anonymous refusal from check_permissions() redirects to login."""
+        from djust.live_view import LiveView
+
+        class CustomView(LiveView):
+            def check_permissions(self, request):
+                return False
+
+        assert check_view_auth(CustomView(), _make_anon_request()) is not None
 
     def test_base_check_permissions_not_called(self):
         """LiveView base check_permissions is not invoked (only subclass overrides)."""

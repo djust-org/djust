@@ -858,8 +858,11 @@ CLASS_ATTRIBUTES: List[Dict[str, Any]] = [
     },
     {
         "name": "permission_required",
-        "type": "Optional[Union[str, List[str]]]",
-        "description": "Django permission string(s) required to access this view",
+        "type": "Optional[Union[str, List[Union[str, AnyOf]], AnyOf]]",
+        "description": (
+            "Django permission string(s) required to access this view: a list "
+            "needs all of them, djust.auth.AnyOf(...) any one of them"
+        ),
     },
     {
         "name": "login_url",
@@ -1764,6 +1767,17 @@ def _extract_view_schema(cls: type, base_classes: list) -> Dict[str, Any]:
         ):
             if key in meta:
                 handler_info["decorators"][key] = meta[key]
+        if "permission_required" in meta:
+            # An AnyOf group is a tuple, which JSON would flatten into what
+            # reads as "all of"; spell the groups out instead.
+            from .auth.any_of import permission_spec_to_document
+
+            all_of, any_of = permission_spec_to_document(meta["permission_required"])
+            if any_of:
+                handler_info["decorators"]["permission_required"] = {
+                    "all_of": all_of,
+                    "any_of": any_of,
+                }
         handlers.append(handler_info)
 
     # Exposed state

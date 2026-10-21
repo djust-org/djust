@@ -9,6 +9,8 @@ from django.http.response import HttpResponseBase
 from django.shortcuts import redirect
 from django.utils.http import url_has_allowed_host_and_scheme
 
+from .any_of import user_has_permission_spec
+
 logger = logging.getLogger(__name__)
 
 
@@ -57,10 +59,14 @@ class PermissionRequiredLiveViewMixin:
     AuthenticationMiddleware.
     """
 
-    permission_required: Optional[str] = None  # Set to a permission string like "app.change_model"
+    # A permission string like "app.change_model", a list (all of them), or
+    # AnyOf(...) (any one of them); see djust.auth.any_of.
+    permission_required: Optional[Any] = None
 
     def dispatch(self, request: HttpRequest, *args: Any, **kwargs: Any) -> HttpResponseBase:
-        if self.permission_required and not request.user.has_perm(self.permission_required):
+        if self.permission_required and not user_has_permission_spec(
+            getattr(request, "user", None), self.permission_required
+        ):
             raise PermissionDenied
         # Mixin: ``dispatch`` is provided by the View/LiveView it's combined
         # with, not by this mixin's MRO in isolation.

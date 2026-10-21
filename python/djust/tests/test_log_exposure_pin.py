@@ -643,6 +643,10 @@ MIXIN_TABLES = {
                 "on_file_change",
                 "[HotReload] template-library cache invalidation ",
             ): "dev hot-reload server",
+            (
+                "on_file_change",
+                "[HotReload] template hash reset failed",
+            ): "dev hot-reload server",
         },
     ),
     "admin_ext/forms.py": (

@@ -165,7 +165,7 @@ def mount_http_lazy(parent: Any, request: Any, view_id: str) -> Any:
         return None
     from .hooks import run_on_mount_hooks
     from .serialization import decode_state_roundtrip
-    from .security import safe_setattr
+    from ._state_restore import restore_public_state
 
     child = entry.child_class()
     mark_embedded(child)
@@ -184,8 +184,7 @@ def mount_http_lazy(parent: Any, request: Any, view_id: str) -> Any:
     ):
         raise PermissionDenied("Lazy view has no resolved tenant")
     saved = request.session.get(entry.state_key, {})
-    for key, value in decode_state_roundtrip(saved.get("public", {})).items():
-        safe_setattr(child, key, value, allow_private=False)
+    restore_public_state(child, decode_state_roundtrip(saved.get("public", {})))
     child._restore_private_state(decode_state_roundtrip(saved.get("private", {})))
     if snapshot_tenant_scope(child) != entry.child_tenant:
         raise PermissionDenied("Lazy view changed tenant")
