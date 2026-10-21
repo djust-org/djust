@@ -5359,12 +5359,22 @@ impl RootAttrs {
     fn is_embedded_wrapper(self) -> bool {
         self.view && (self.embedded || self.lazy)
     }
+
+    /// The attributes of both tags (presence only).
+    fn merge(self, other: Self) -> Self {
+        Self {
+            root: self.root || other.root,
+            view: self.view || other.view,
+            embedded: self.embedded || other.embedded,
+            lazy: self.lazy || other.lazy,
+        }
+    }
 }
 
 fn root_attrs(tag_body: &[u8]) -> RootAttrs {
     let mut found = RootAttrs::default();
     if let Some((_, attrs)) = scan_tag_body(tag_body, 0) {
-        for &(start, end) in &attrs {
+        for &(start, end, _) in &attrs {
             let name = &tag_body[start..end];
             found.root |= name.eq_ignore_ascii_case(b"dj-root");
             found.view |= name.eq_ignore_ascii_case(b"dj-view");
@@ -5375,11 +5385,16 @@ fn root_attrs(tag_body: &[u8]) -> RootAttrs {
     found
 }
 
+/// One attribute of a tag body: `(name start, name end, attribute end)`.
+type AttrSpan = (usize, usize, usize);
+
 /// HTML attribute states shared by the opening and balancing walks (#3054).
 /// A quote is special only at the start of a value after '='. In unquoted
 /// values and names both quotes and '<' are literal parse errors.
-/// Returns the '>' offset (or EOF) and attribute-name spans.
-fn scan_tag_body(bytes: &[u8], start: usize) -> Option<(usize, Vec<(usize, usize)>)> {
+/// Returns the '>' offset (or EOF) and, per attribute, `(name start, name
+/// end, attribute end)`: the attribute ends after its value, or with its name
+/// when it has none.
+fn scan_tag_body(bytes: &[u8], start: usize) -> Option<(usize, Vec<AttrSpan>)> {
     let mut i = start;
     if bytes.get(i) == Some(&b'/') {
         i += 1;
@@ -5400,7 +5415,8 @@ fn scan_tag_body(bytes: &[u8], start: usize) -> Option<(usize, Vec<(usize, usize
         while i < bytes.len() && !html_space(bytes[i]) && !matches!(bytes[i], b'/' | b'>' | b'=') {
             i += 1;
         }
-        attrs.push((begin, i));
+        let name_end = i;
+        let mut attr_end = i;
         while i < bytes.len() && html_space(bytes[i]) {
             i += 1;
         }
@@ -5418,7 +5434,9 @@ fn scan_tag_body(bytes: &[u8], start: usize) -> Option<(usize, Vec<(usize, usize
                     i += 1;
                 }
             }
+            attr_end = i;
         }
+        attrs.push((begin, name_end, attr_end));
     }
     Some((i, attrs))
 }
@@ -5435,21 +5453,63 @@ fn find_open_tag_end(bytes: &[u8], i: usize) -> Result<usize, usize> {
     }
 }
 
-/// Locate the byte offset in `html` immediately after the opening tag
-/// of the LiveView root element, and the offset of its closing tag. Returns
-/// None if no such element is found.
+/// The LiveView root element's open tag: `start` is its `<`, `end` is just
+/// past its `>`, `name` its lowercased element name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RootOpen {
+    start: usize,
+    end: usize,
+    name: Vec<u8>,
+}
+
+/// Byte offsets of the root element: its open tag, and its close tag (`<` to
+/// just past `>`) when a complete one balances it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RootSpan {
+    open_start: usize,
+    open_end: usize,
+    close: Option<(usize, usize)>,
+}
+
+/// The LiveView root element of RENDERED html, the one locator for it: the
+/// WebSocket frame (`root_content_range`), the initial-GET shell splice, the
+/// streaming split and the `dj-view` stamp (`root_element_span`,
+/// `dj_root_stamp_offsets`) and the text fast path all read it from here.
 ///
-/// WHICH element is the root is one rule shared with the VDOM parser
-/// (`djust_vdom::parser::find_liveview_root`) and the Python twin
-/// (`mixins/template.py::_search_dj_root_open`) (#3031): an element inside an
-/// embedded child's wrapper is never the root, and the first `dj-root` wins
-/// over the first `dj-view`. See [`find_root_open`].
+/// WHICH element is the root is the rule of the VDOM parser
+/// (`djust_vdom::parser::find_liveview_root`), and where the two could read
+/// the bytes differently the tokenizer html5ever runs decides (#3031): an
+/// element inside another view's container is never the root, and the first
+/// `dj-root` wins over the first `dj-view`. See [`find_root_open`].
+/// `with_view: false` looks for `dj-root` only (the streaming split).
 ///
-/// `<script>` / `<style>` bodies, `<textarea>` RCDATA and HTML comments are skipped
-/// in BOTH the locating scan and the balancing walk (#2663) — a tag-like
-/// string inside them is raw text. This mirrors the Python twin
-/// (`mixins/template.py::_mask_for_root_search`), which owns the
-/// initial-GET shell; the two must agree on what counts as markup (#1646).
+/// The close is the end tag balancing the root's own element name, with
+/// `<script>` / `<style>` bodies, `<textarea>` RCDATA and HTML comments read
+/// as text (#2663) and `{% ... %}` read as text too: rendered output has no
+/// template branches. A `<body>` root closes at the LAST `</body>`, as
+/// html5ever never closes `<body>` early (see [`find_body_close`]). With no
+/// complete close tag `close` is `None`.
+fn find_root_span(bytes: &[u8], with_view: bool) -> Option<RootSpan> {
+    let open = find_root_open(bytes, with_view)?;
+    let close = if open.name == b"body" {
+        find_body_close(bytes, open.end)
+    } else {
+        find_root_close(bytes, open.end, &open.name)
+    };
+    let close = close.and_then(|start| {
+        find_open_tag_end(bytes, start)
+            .ok()
+            .map(|end| (start, end + 1))
+    });
+    Some(RootSpan {
+        open_start: open.start,
+        open_end: open.end,
+        close,
+    })
+}
+
+/// The root's content: from just past its open tag to the `<` of its close
+/// tag, or `None` with no root or no complete close tag.
 ///
 /// Used to align the scanner's starting point with `find_root` in the
 /// VDOM parser, which begins the VDOM tree at that same element. Without
@@ -5457,177 +5517,189 @@ fn find_open_tag_end(bytes: &[u8], i: usize) -> Result<usize, usize> {
 /// a base template would be counted by the scanner but not appear in
 /// the VDOM, breaking the 1:1 text-node mapping.
 fn find_dj_root_content_range(html: &str) -> Option<(usize, usize)> {
-    let bytes = html.as_bytes();
-    let (open_end, tag_name) = find_root_open(bytes)?;
-    find_root_close(bytes, open_end, &tag_name).map(|close| (open_end, close))
+    let span = find_root_span(html.as_bytes(), true)?;
+    span.close.map(|(close, _)| (span.open_end, close))
 }
 
-/// `find_dj_root_content_range` for Python's `_extract_liveview_content`:
-/// `(start, end)` CHARACTER offsets (Python string indices) of the
-/// root's content, `(0, len)` when there is no root or its close tag is
-/// missing (Python then keeps the whole string), or `None` when the input
-/// holds markup the two locators read differently, so the caller must use
-/// the Python path.
+/// Rewrite ascending byte offsets into `html` as CHARACTER offsets (Python
+/// string indices).
+fn to_char_offsets(html: &str, offsets: &mut [usize]) {
+    if html.is_ascii() {
+        return;
+    }
+    let bytes = html.as_bytes();
+    let (mut byte, mut chars) = (0, 0);
+    for offset in offsets.iter_mut() {
+        chars += bytes[byte..*offset]
+            .iter()
+            .filter(|&&b| b & 0xC0 != 0x80)
+            .count();
+        byte = *offset;
+        *offset = chars;
+    }
+}
+
+/// `(start, end)` CHARACTER offsets (Python string indices) of the content of
+/// the LiveView root in rendered `html`, or `None` when there is no root or
+/// its close tag is missing (the caller then keeps the whole string). See
+/// [`find_root_span`].
 ///
-/// The Python twin masks the whole page in Python; on a 300-row page that was
-/// about half of a mount's CPU, all of it on the process's one sync thread.
-/// Both follow the one root rule pinned by the shared corpus
-/// (`python/tests/fixtures/root_selection_3031.json`, #3031). They part ways
-/// only on parse errors inside a tag (a `<`, a stray quote or NUL), on a tag
-/// left open at EOF, and on `{% ... %}` text, which the Python balancer reads
-/// as template branches; see [`root_scan_is_ambiguous`]. The VDOM serializer
-/// never emits the first three, so a rendered page takes this path. The
-/// `<body>` fallback beside another view's container is left to Python too.
+/// `_extract_liveview_content` runs this on every mount and full render. The
+/// Python locator it replaced masked the whole page first; on a 300-row page
+/// that was about half of a mount's CPU, all of it on the process's one sync
+/// thread.
 #[pyfunction]
 fn root_content_range(py: Python<'_>, html: &str) -> PyResult<Option<(usize, usize)>> {
     guard_panic("root_content_range", move || {
         Ok(py.detach(|| {
-            if root_scan_is_ambiguous(html) {
-                return None;
-            }
-            let bytes = html.as_bytes();
-            // The Python twin's `<body>` fallback (#3302) also looks inside other
-            // views' containers, which this scanner skips; with one on the page,
-            // "no root" and a `<body>` root are left to Python.
-            let foreign_views = contains_ascii_ci(bytes, b"data-djust-embedded")
-                || contains_ascii_ci(bytes, b"dj-lazy");
-            let whole = || Some((0, html.chars().count()));
-            let Some((open_end, tag_name)) = find_root_open(bytes) else {
-                return if foreign_views { None } else { whole() };
-            };
-            if foreign_views && tag_name == b"body" {
-                return None;
-            }
-            let Some(close) = find_root_close(bytes, open_end, &tag_name) else {
-                return whole();
-            };
-            let (start, end) = (open_end, close);
-            if html.is_ascii() {
-                return Some((start, end));
-            }
-            let char_start = html[..start].chars().count();
-            Some((char_start, char_start + html[start..end].chars().count()))
+            let (start, end) = find_dj_root_content_range(html)?;
+            let mut offsets = [start, end];
+            to_char_offsets(html, &mut offsets);
+            Some((offsets[0], offsets[1]))
         }))
     })
 }
 
-fn contains_ascii_ci(haystack: &[u8], needle: &[u8]) -> bool {
-    haystack
-        .windows(needle.len())
-        .any(|w| w.eq_ignore_ascii_case(needle))
+/// `(open_start, open_end, close_start, close_end)`, the close offsets
+/// `None` without a complete close tag.
+type ElementSpan = (usize, usize, Option<usize>, Option<usize>);
+
+/// `(open_start, open_end, close_start, close_end)` CHARACTER offsets of the
+/// LiveView root element in rendered `html`: its open tag `[open_start,
+/// open_end)` and its close tag `[close_start, close_end)`, the last two
+/// `None` when no complete close tag balances it. `None` when there is no
+/// root. `with_view=False` looks for `dj-root` only. See [`find_root_span`].
+#[pyfunction]
+#[pyo3(signature = (html, with_view = true))]
+fn root_element_span(py: Python<'_>, html: &str, with_view: bool) -> PyResult<Option<ElementSpan>> {
+    guard_panic("root_element_span", move || {
+        Ok(py.detach(|| {
+            let span = find_root_span(html.as_bytes(), with_view)?;
+            let mut offsets = vec![span.open_start, span.open_end];
+            offsets.extend(span.close.map(|(s, e)| [s, e]).into_iter().flatten());
+            to_char_offsets(html, &mut offsets);
+            let (close_start, close_end) = span.close.map(|_| (offsets[2], offsets[3])).unzip();
+            Some((offsets[0], offsets[1], close_start, close_end))
+        }))
+    })
 }
 
-/// Whether `html` holds markup the Rust and Python root locators may read
-/// differently: a NUL byte, `{%`, or a tag with a parse error the Python
-/// mask rewrites (a `<` or a quote in a name or an unquoted value, a quoted
-/// value or a tag left open at EOF). Raw-text bodies and comments are
-/// skipped exactly as the locators skip them.
-fn root_scan_is_ambiguous(html: &str) -> bool {
-    let bytes = html.as_bytes();
-    if bytes.contains(&0) || html.contains("{%") {
-        return true;
-    }
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] != b'<' {
-            i += 1;
-            continue;
-        }
-        let starts_tag = bytes
-            .get(i + 1)
-            .is_some_and(|&c| c.is_ascii_alphabetic() || c == b'/');
-        if starts_tag
-            && !(bytes[i + 1] == b'/' && !bytes.get(i + 2).is_some_and(|c| c.is_ascii_alphabetic()))
-        {
-            let Some(end) = tag_body_end_if_clean(bytes, i + 1) else {
-                return true;
-            };
-            // A raw-text body (and its end tag) is skipped as both locators skip it.
-            i = skip_raw_text_region(bytes, i).unwrap_or(end + 1);
-            continue;
-        }
-        match skip_raw_text_region(bytes, i) {
-            Some(next) => i = next,
-            None => i += 1,
-        }
-    }
-    false
+/// CHARACTER offsets in rendered `html` at which a ` dj-view="…"` attribute
+/// belongs (#2981): just past the first `dj-root` attribute (and its value)
+/// of every `dj-root` open tag that carries no `dj-view`, outside other
+/// views' containers (#3155). `<body dj-root>` gets one only when `<body>`
+/// is the page's root (#3302): the client mounts on the first `[dj-view]`,
+/// so a stamp on a body that is not the root would misdirect it.
+#[pyfunction]
+fn dj_root_stamp_offsets(py: Python<'_>, html: &str) -> PyResult<Vec<usize>> {
+    guard_panic("dj_root_stamp_offsets", move || {
+        Ok(py.detach(|| {
+            let mut offsets = find_dj_root_stamp_offsets(html.as_bytes());
+            to_char_offsets(html, &mut offsets);
+            offsets
+        }))
+    })
 }
 
-/// The `>` ending the tag whose body starts at `start` (just past `<`), or
-/// `None` when the body has a parse error the locators treat differently
-/// (see [`root_scan_is_ambiguous`]). Tokenizes as [`scan_tag_body`] does.
-fn tag_body_end_if_clean(bytes: &[u8], start: usize) -> Option<usize> {
-    let stray = |c: u8| matches!(c, b'<' | b'"' | b'\'');
-    let mut i = start;
-    if bytes.get(i) == Some(&b'/') {
-        i += 1;
-    }
-    while i < bytes.len() && !html_space(bytes[i]) && !matches!(bytes[i], b'/' | b'>') {
-        if stray(bytes[i]) {
+fn find_dj_root_stamp_offsets(bytes: &[u8]) -> Vec<usize> {
+    // Just past the first `dj-root` attribute, when the tag has no `dj-view`.
+    let stamp_at = |start: usize, end: usize| -> Option<usize> {
+        let tag_body = &bytes[start + 1..end - 1];
+        let (_, attrs) = scan_tag_body(tag_body, 0)?;
+        let named = |&&(s, e, _): &&(usize, usize, usize), name: &[u8]| {
+            tag_body[s..e].eq_ignore_ascii_case(name)
+        };
+        if attrs.iter().any(|a| named(&a, b"dj-view")) {
             return None;
         }
-        i += 1;
+        let &(_, _, attr_end) = attrs.iter().find(|a| named(a, b"dj-root"))?;
+        Some(start + 1 + attr_end)
+    };
+    let mut offsets = Vec::new();
+    visit_root_candidates(bytes, |start, end, _, marks| {
+        if marks.root {
+            offsets.extend(stamp_at(start, end));
+        }
+        false
+    });
+    if offsets.is_empty() && find_root_open(bytes, true).is_some_and(|r| r.name == b"body") {
+        // The body element carries the attributes of every `<body>` tag, the
+        // first of each name winning ([`find_body_root`]): stamp the first
+        // one carrying `dj-root`, unless a `<body>` tag up to it already has a
+        // `dj-view`, which the body keeps.
+        let mut seen_view = false;
+        let mut stamp = None;
+        for_each_tag(bytes, 0, |start, end| {
+            let tag_body = &bytes[start + 1..end];
+            if stamp.is_some()
+                || tag_body.first() == Some(&b'/')
+                || start_tag_name(tag_body) != b"body"
+            {
+                return;
+            }
+            let marks = root_attrs(tag_body);
+            seen_view |= marks.view;
+            if marks.root {
+                stamp = Some(if seen_view {
+                    None
+                } else {
+                    stamp_at(start, end + 1)
+                });
+            }
+        });
+        offsets.extend(stamp.flatten());
     }
-    loop {
-        while i < bytes.len() && (html_space(bytes[i]) || bytes[i] == b'/') {
-            i += 1;
-        }
-        match bytes.get(i) {
-            None => return None,
-            Some(b'>') => return Some(i),
-            Some(&c) if stray(c) => return None,
-            Some(_) => {}
-        }
-        i += 1; // an initial '=' is part of the attribute NAME
-        while i < bytes.len() && !html_space(bytes[i]) && !matches!(bytes[i], b'/' | b'>' | b'=') {
-            if stray(bytes[i]) {
-                return None;
-            }
-            i += 1;
-        }
-        while i < bytes.len() && html_space(bytes[i]) {
-            i += 1;
-        }
-        if bytes.get(i) == Some(&b'=') {
-            i += 1;
-            while i < bytes.len() && html_space(bytes[i]) {
-                i += 1;
-            }
-            if let Some(&q @ (b'"' | b'\'')) = bytes.get(i) {
-                i += 1 + bytes[i + 1..].iter().position(|&c| c == q)? + 1;
-            } else {
-                while i < bytes.len() && !html_space(bytes[i]) && bytes[i] != b'>' {
-                    if stray(bytes[i]) {
-                        return None;
-                    }
-                    i += 1;
-                }
-            }
-        }
-    }
+    offsets
 }
 
-/// `(offset just past its `>`, lowercased tag name)` of the root's open tag,
-/// walking `bytes` tag by tag: the first `dj-root`, else the first `dj-view`,
-/// outside every other view's container (an embedded child's wrapper or a lazy
-/// view, #3031), else `<body>` when it carries either attribute (#3302).
+/// The root's open tag, walking `bytes` tag by tag: the first `dj-root`, else
+/// (with `with_view`) the first `dj-view`, outside every other view's
+/// container (an embedded child's wrapper or a lazy view, #3031), else
+/// `<body>` when it carries either attribute (#3302, [`find_body_root`]).
+fn find_root_open(bytes: &[u8], with_view: bool) -> Option<RootOpen> {
+    let mut root = None;
+    let mut first_view = None;
+    visit_root_candidates(bytes, |start, end, name, marks| {
+        let open = || RootOpen {
+            start,
+            end,
+            name: name.to_vec(),
+        };
+        if marks.root {
+            root = Some(open());
+            return true;
+        }
+        if with_view && first_view.is_none() {
+            first_view = Some(open());
+        }
+        false
+    });
+    root.or(first_view)
+        .or_else(|| find_body_root(bytes, with_view))
+}
+
+/// Call `visit(start, end, name, marks)` for every open tag carrying
+/// `dj-root` or `dj-view`, in document order, that is not another view's
+/// container or inside one; stop when `visit` returns true. `start` is the
+/// tag's `<`, `end` just past its `>`, `name` its lowercased element name.
 ///
 /// A tag starts at `<` followed by an ASCII letter, `/` or `!`, as in the
-/// HTML tokenizer; any other `<` is text (#3030 — the Python walker applies
-/// the same rule). Quoted attribute values are skipped whole, so a
-/// `<section dj-root>` inside `data-h="…"` is never a candidate. An embedded
-/// wrapper is skipped through its balancing close tag (to the end of the
-/// document when it has none, as the Python twin does).
-fn find_root_open(bytes: &[u8]) -> Option<(usize, Vec<u8>)> {
-    let mut first_view: Option<(usize, Vec<u8>)> = None;
-    // `<body>` carrying a root attribute: the root of last resort (#3302).
-    let mut body_root: Option<(usize, Vec<u8>)> = None;
+/// HTML tokenizer; any other `<` is text (#3030). Attributes are tokenized as
+/// html5ever does ([`scan_tag_body`]): a quoted value is skipped whole, so a
+/// `<section dj-root>` inside `data-h="…"` is never a candidate, and a `<` or
+/// a quote inside a tag name, attribute name or unquoted value is part of it,
+/// so `<p x=<y dj-root>` is a `<p>` carrying `dj-root`. A tag left open at
+/// EOF is discarded and ends the walk. `<html>`, `<head>` and `<body>` are
+/// never visited: the VDOM's `find_root` starts inside `<body>` (#2892), and
+/// `<body>` itself is the root of last resort ([`find_body_root`]). Another
+/// view's container is skipped through its balancing close tag (to the end
+/// of the document when it has none).
+fn visit_root_candidates(
+    bytes: &[u8],
+    mut visit: impl FnMut(usize, usize, &[u8], RootAttrs) -> bool,
+) {
     let mut i = 0;
-    loop {
-        if i >= bytes.len() {
-            return first_view.or(body_root);
-        }
+    while i < bytes.len() {
         if bytes[i] != b'<' {
             i += 1;
             continue;
@@ -5637,15 +5709,12 @@ fn find_root_open(bytes: &[u8]) -> Option<(usize, Vec<u8>)> {
             // Its contents still cannot declare another root.
             if starts_with_ci(&bytes[i..], b"<textarea") {
                 if let Ok(end) = find_open_tag_end(bytes, i) {
-                    let tag_body = &bytes[i + 1..end];
-                    let marks = root_attrs(tag_body);
-                    if !marks.is_embedded_wrapper() {
-                        if marks.root {
-                            return Some((end + 1, b"textarea".to_vec()));
-                        }
-                        if marks.view && first_view.is_none() {
-                            first_view = Some((end + 1, b"textarea".to_vec()));
-                        }
+                    let marks = root_attrs(&bytes[i + 1..end]);
+                    if (marks.root || marks.view)
+                        && !marks.is_embedded_wrapper()
+                        && visit(i, end + 1, b"textarea", marks)
+                    {
+                        return;
                     }
                 }
             }
@@ -5659,13 +5728,8 @@ fn find_root_open(bytes: &[u8]) -> Option<(usize, Vec<u8>)> {
             i += 1;
             continue;
         }
-        let j = match find_open_tag_end(bytes, i) {
-            Ok(j) => j,
-            Err(k) if k < bytes.len() => {
-                i = k;
-                continue;
-            }
-            Err(_) => return first_view.or(body_root),
+        let Ok(j) = find_open_tag_end(bytes, i) else {
+            return;
         };
         let tag_body = &bytes[i + 1..j];
         if tag_body.is_empty() || tag_body[0] == b'/' || tag_body[0] == b'!' {
@@ -5677,48 +5741,122 @@ fn find_root_open(bytes: &[u8]) -> Option<(usize, Vec<u8>)> {
             i = j + 1;
             continue;
         }
-        let name_end = tag_body
-            .iter()
-            .position(|&c| html_space(c) || c == b'/' || c == b'>')
-            .unwrap_or(tag_body.len());
-        let name = tag_body[..name_end].to_ascii_lowercase();
-        // A root on <html> or <head> is not a root the VDOM's `find_root`
-        // (which starts at <body>) can agree on; the Python twin
-        // (`mixins/template.py::_DJ_ROOT_RE`) skips them too (#2892).
-        if matches!(name.as_slice(), b"html" | b"head") {
-            i = j + 1;
-            continue;
-        }
-        // `<body>` is the root only when nothing inside it declares one, so a
-        // page that already has a root keeps it (#3302).
-        if name == b"body" {
-            if body_root.is_none() {
-                body_root = Some((j + 1, name));
-            }
+        let name = start_tag_name(tag_body);
+        if matches!(name.as_slice(), b"html" | b"head" | b"body") {
             i = j + 1;
             continue;
         }
         if marks.is_embedded_wrapper() {
             // The other view's container and its whole subtree are not ours.
-            match find_root_close(bytes, j + 1, &name) {
-                Some(close) => match find_open_tag_end(bytes, close) {
-                    Ok(end) => {
-                        i = end + 1;
-                        continue;
-                    }
-                    Err(_) => return first_view.or(body_root),
-                },
-                None => return first_view.or(body_root),
+            match find_root_close(bytes, j + 1, &name).map(|c| find_open_tag_end(bytes, c)) {
+                Some(Ok(end)) => {
+                    i = end + 1;
+                    continue;
+                }
+                _ => return,
             }
         }
-        if marks.root {
-            return Some((j + 1, name));
-        }
-        if first_view.is_none() {
-            first_view = Some((j + 1, name));
+        if visit(i, j + 1, &name, marks) {
+            return;
         }
         i = j + 1;
     }
+}
+
+/// The lowercased element name of a start tag's body (the bytes after `<`).
+fn start_tag_name(tag_body: &[u8]) -> Vec<u8> {
+    let name_end = tag_body
+        .iter()
+        .position(|&c| html_space(c) || c == b'/' || c == b'>')
+        .unwrap_or(tag_body.len());
+    tag_body[..name_end].to_ascii_lowercase()
+}
+
+/// Walk every complete tag token of `bytes` from `from` (raw text, RCDATA and
+/// comments skipped as the root walk skips them), calling `visit(start, end)`
+/// with the tag's `<` and `>` offsets. Stops at a tag left open at EOF, which
+/// the tokenizer discards.
+fn for_each_tag(bytes: &[u8], from: usize, mut visit: impl FnMut(usize, usize)) {
+    let mut i = from;
+    while i < bytes.len() {
+        if bytes[i] != b'<' {
+            i += 1;
+            continue;
+        }
+        if let Some(next) = skip_raw_text_region(bytes, i) {
+            if starts_with_ci(&bytes[i..], b"<textarea") {
+                if let Ok(end) = find_open_tag_end(bytes, i) {
+                    visit(i, end);
+                }
+            }
+            i = next;
+            continue;
+        }
+        if !bytes
+            .get(i + 1)
+            .is_some_and(|&c| c.is_ascii_alphabetic() || c == b'/')
+        {
+            i += 1;
+            continue;
+        }
+        let Ok(j) = find_open_tag_end(bytes, i) else {
+            return;
+        };
+        visit(i, j);
+        i = j + 1;
+    }
+}
+
+/// `<body>` as the root of last resort (#3302): when nothing inside the page
+/// declares a root and the body element carries `dj-root` (or, with
+/// `with_view`, `dj-view`) and is not itself another view's container.
+///
+/// The body element's attributes are those of EVERY `<body>` start tag in the
+/// document: html5ever (and a browser) adds a later `<body>` tag's attributes
+/// to the one body element instead of opening another, wherever the tag
+/// appears, including inside an embedded child's wrapper. Its open tag is the
+/// first `<body>` start tag.
+fn find_body_root(bytes: &[u8], with_view: bool) -> Option<RootOpen> {
+    if !contains_ascii_ci(bytes, b"<body") {
+        return None;
+    }
+    let mut first: Option<(usize, usize)> = None;
+    let mut marks = RootAttrs::default();
+    for_each_tag(bytes, 0, |start, end| {
+        let tag_body = &bytes[start + 1..end];
+        if tag_body.first() != Some(&b'/') && start_tag_name(tag_body) == b"body" {
+            first.get_or_insert((start, end + 1));
+            marks = marks.merge(root_attrs(tag_body));
+        }
+    });
+    let (start, end) = first?;
+    let declares = marks.root || (with_view && marks.view);
+    (declares && !marks.is_embedded_wrapper()).then(|| RootOpen {
+        start,
+        end,
+        name: b"body".to_vec(),
+    })
+}
+
+/// The `<` of the LAST complete `</body>` end tag after `from`. html5ever
+/// never closes the body element early: after `</body>`, any further content
+/// (another document's `</body></html>` inside an embedded child, say) is put
+/// back into it, so the body's content runs to the last `</body>`.
+fn find_body_close(bytes: &[u8], from: usize) -> Option<usize> {
+    let mut last = None;
+    for_each_tag(bytes, from, |start, end| {
+        let tag_body = &bytes[start + 1..end];
+        if tag_body.first() == Some(&b'/') && start_tag_name(&tag_body[1..]) == b"body" {
+            last = Some(start);
+        }
+    });
+    last
+}
+
+fn contains_ascii_ci(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack
+        .windows(needle.len())
+        .any(|w| w.eq_ignore_ascii_case(needle))
 }
 
 /// The offset of the `<` of the closing tag that balances the root element
@@ -6349,6 +6487,8 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
     m.add_function(wrap_pyfunction!(provenance_edits::lazy_authority_spans, m)?)?;
     m.add_function(wrap_pyfunction!(root_content_range, m)?)?;
+    m.add_function(wrap_pyfunction!(root_element_span, m)?)?;
+    m.add_function(wrap_pyfunction!(dj_root_stamp_offsets, m)?)?;
     m.add_function(wrap_pyfunction!(collapse_inter_tag_whitespace, m)?)?;
     m.add_function(wrap_pyfunction!(fast_json_dumps, m)?)?;
     m.add_function(wrap_pyfunction!(resolve_template_inheritance, m)?)?;
@@ -6555,6 +6695,112 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
 }
 
 #[cfg(test)]
+mod rendered_root_span_tests {
+    //! The rendered-HTML root API Python calls: the element span (with and
+    //! without `dj-view` candidates) and the `dj-view` stamp offsets.
+    use super::{find_dj_root_stamp_offsets, find_root_span, to_char_offsets};
+
+    fn stamped(html: &str) -> String {
+        let mut out = html.to_string();
+        for at in find_dj_root_stamp_offsets(html.as_bytes())
+            .into_iter()
+            .rev()
+        {
+            out.insert_str(at, " dj-view=\"V\"");
+        }
+        out
+    }
+
+    #[test]
+    fn the_stamp_follows_the_first_dj_root_attribute() {
+        assert_eq!(
+            stamped("<div dj-root>x</div>"),
+            "<div dj-root dj-view=\"V\">x</div>"
+        );
+        assert_eq!(
+            stamped("<main class=a dj-root='r' dj-root id=m>x</main>"),
+            "<main class=a dj-root='r' dj-view=\"V\" dj-root id=m>x</main>"
+        );
+        // Every dj-root of this view, not only the root; none that has a dj-view.
+        assert_eq!(
+            stamped("<div dj-root>a</div><p dj-root>b</p><i dj-root dj-view=\"W\">c</i>"),
+            "<div dj-root dj-view=\"V\">a</div><p dj-root dj-view=\"V\">b</p><i dj-root dj-view=\"W\">c</i>"
+        );
+        // A '<' in the tag name or an unquoted value is part of it (html5ever).
+        assert_eq!(
+            stamped("<div<x dj-root>m</div<x>"),
+            "<div<x dj-root dj-view=\"V\">m</div<x>"
+        );
+        // Text, values and other views' containers are not this view's roots (#2663, #2981, #3155).
+        for html in [
+            "<script>'<div dj-root>'</script><!-- <div dj-root> -->",
+            "<p title=\"<div dj-root>\">x</p>",
+            "<div dj-view data-djust-embedded=\"c\"><div dj-root>c</div></div>",
+            "<p>x</p><div dj-root title=\"open>",
+        ] {
+            assert_eq!(stamped(html), html);
+        }
+    }
+
+    #[test]
+    fn the_body_is_stamped_only_as_the_root() {
+        // #3302: a body that is not the root is left alone.
+        let html = "<body dj-root><main dj-view=\"x.V\">m</main></body>";
+        assert_eq!(stamped(html), html);
+        assert_eq!(
+            stamped("<body dj-root><p>x</p></body>"),
+            "<body dj-root dj-view=\"V\"><p>x</p></body>"
+        );
+        // The body takes the attributes of every <body> tag: the one carrying
+        // dj-root gets the stamp, and none when any of them has a dj-view.
+        // The body takes the attributes of every <body> tag, the first of each
+        // name winning: the first tag carrying dj-root gets the stamp, unless
+        // a dj-view comes first.
+        assert_eq!(
+            stamped("<body><div dj-view data-djust-embedded=\"c\"><body dj-root>c</body></div></body>"),
+            "<body><div dj-view data-djust-embedded=\"c\"><body dj-root dj-view=\"V\">c</body></div></body>"
+        );
+        assert_eq!(
+            stamped("<body dj-root><div dj-view data-djust-embedded=\"c\"><body dj-view=\"c.V\">c</body></div></body>"),
+            "<body dj-root dj-view=\"V\"><div dj-view data-djust-embedded=\"c\"><body dj-view=\"c.V\">c</body></div></body>"
+        );
+        let html = "<body dj-view=\"x.V\"><p>x</p><body dj-root></body>";
+        assert_eq!(stamped(html), html);
+    }
+
+    #[test]
+    fn dj_root_only_ignores_dj_view_candidates() {
+        let span = |html: &str, with_view| {
+            find_root_span(html.as_bytes(), with_view).map(|s| (s.open_start, s.open_end, s.close))
+        };
+        assert_eq!(span("<div dj-view>x</div>", false), None);
+        assert_eq!(span("<body dj-view><p>x</p></body>", false), None);
+        let html = "<nav dj-view>n</nav><main dj-root>m</main>";
+        assert_eq!(span(html, false), Some((20, 34, Some((35, 42)))));
+        assert_eq!(span(html, true), span(html, false));
+        assert_eq!(
+            span("<div dj-view>x</div>", true),
+            Some((0, 13, Some((14, 20))))
+        );
+        assert_eq!(span("<div dj-root>never closed", true), Some((0, 13, None)));
+    }
+
+    #[test]
+    fn offsets_are_python_string_indices() {
+        let html = "<p>\u{e9} \u{6f22}</p><div dj-root>\u{e4}</div>";
+        let span = find_root_span(html.as_bytes(), true).unwrap();
+        let (close_start, close_end) = span.close.unwrap();
+        let mut offsets = [span.open_start, span.open_end, close_start, close_end];
+        to_char_offsets(html, &mut offsets);
+        let chars: Vec<char> = html.chars().collect();
+        let text = |a: usize, b: usize| chars[a..b].iter().collect::<String>();
+        assert_eq!(text(offsets[0], offsets[1]), "<div dj-root>");
+        assert_eq!(text(offsets[1], offsets[2]), "\u{e4}");
+        assert_eq!(text(offsets[2], offsets[3]), "</div>");
+    }
+}
+
+#[cfg(test)]
 mod dj_root_selection_3031 {
     //! One root-selection rule on every Rust locator (#3031), pinned against
     //! the corpus the Python locator and VDOM tests read too
@@ -6567,9 +6813,44 @@ mod dj_root_selection_3031 {
     //! first `dj-view`. `<body>` carrying either attribute is the root of last
     //! resort (#3302): used only when nothing inside it declares a root.
     //! `<html>` and `<head>` never are.
-    use super::{find_dj_root_content_range, find_root_open};
-    use djust_vdom::parse_html;
+    //!
+    //! Where bytes could be read two ways, html5ever decides: a corpus
+    //! `content` is checked against the children html5ever gives the root.
+    use super::{find_dj_root_content_range, find_root_open, find_root_span};
+    use djust_vdom::{parse_html, parser::parse_html_fragment, VNode};
     use serde_json::Value;
+
+    /// A node as html5ever built it, without the dj-ids the parse assigns.
+    fn shape(node: &VNode, out: &mut String) {
+        if node.tag == "#text" {
+            out.push_str(&format!("{:?}", node.text.as_deref().unwrap_or("")));
+            return;
+        }
+        let mut attrs: Vec<_> = node.attrs.iter().filter(|(k, _)| *k != "dj-id").collect();
+        attrs.sort();
+        out.push_str(&format!("<{} {attrs:?}>", node.tag));
+        for child in &node.children {
+            shape(child, out);
+        }
+        out.push_str(&format!("</{}>", node.tag));
+    }
+
+    fn shapes(nodes: &[VNode]) -> String {
+        let mut out = String::new();
+        for node in nodes {
+            shape(node, &mut out);
+        }
+        out
+    }
+
+    /// The root's children as html5ever builds the page, and as it builds
+    /// `content` inside an element named like the root: the same when the
+    /// scanner's range is the root's content.
+    fn html5ever_children(html: &str, content: &str) -> (String, String) {
+        let root = parse_html(html).expect("page parses");
+        let inner = parse_html_fragment(content, &root.tag).expect("content parses");
+        (shapes(&root.children), shapes(&inner))
+    }
 
     const MARK: &str = "data-expect-root";
 
@@ -6586,18 +6867,12 @@ mod dj_root_selection_3031 {
             .is_some_and(|l| l.iter().any(|v| v == locator))
     }
 
-    /// The open tag that ends just before byte `open_end`.
-    fn open_tag_before(html: &str, open_end: usize) -> &str {
-        let start = html[..open_end].rfind('<').expect("an open tag");
-        &html[start..open_end]
-    }
-
     #[test]
     fn the_text_scanner_picks_the_corpus_root() {
         for case in corpus() {
             let name = case["name"].as_str().unwrap();
             let html = case["html"].as_str().unwrap();
-            let picked = find_root_open(html.as_bytes()).map(|(end, _)| open_tag_before(html, end));
+            let picked = find_root_open(html.as_bytes(), true).map(|r| &html[r.start..r.end]);
             let expects_root = case["root"].as_bool().unwrap_or(false);
             let got_expected = if expects_root {
                 picked.is_some_and(|tag| tag.contains(MARK))
@@ -6619,7 +6894,129 @@ mod dj_root_selection_3031 {
                     );
                 } else {
                     let (start, end) = range.expect("complete end token");
-                    assert_eq!(&html[start..end], content.as_str().unwrap(), "{name}");
+                    let content = content.as_str().unwrap();
+                    assert_eq!(&html[start..end], content, "{name}");
+                    let (page, inner) = html5ever_children(html, content);
+                    assert_eq!(
+                        page, inner,
+                        "{name}: html5ever reads the root's content differently"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Tag soup around candidate roots, judged against html5ever: parse
+    /// errors inside a tag (a `<`, a quote or a NUL in a name or an unquoted
+    /// value, a tag or quoted value open at EOF), `{% %}` text, raw text and
+    /// comments, stray end tags and `<body>` tags. The scanner must pick the
+    /// element html5ever roots the VDOM at. Left out, as the corpus pins
+    /// them: other views' containers (tree construction decides where a
+    /// misnested one ends), elements the tree builder closes or moves (`<p>`,
+    /// tables, lists) and the script double-escaped state.
+    #[test]
+    fn the_scanner_picks_html5evers_root_on_tag_soup() {
+        const PIECES: &[&str] = &[
+            "<",
+            ">",
+            "/",
+            "<div",
+            "<div ",
+            "</div>",
+            "<DIV",
+            "=",
+            "\"",
+            "'",
+            " ",
+            "\n",
+            "<!--",
+            "-->",
+            "--!>",
+            "<!-->",
+            "<!doctype html>",
+            "<?x?>",
+            "<style>",
+            "</style>",
+            "<textarea>",
+            "</textarea>",
+            "a",
+            "b=c",
+            "x='<div>'",
+            "y=\"</div>\"",
+            "<span>",
+            "</span>",
+            "</ div>",
+            "</>",
+            "</body>",
+            "</section>",
+            "{% if x %}",
+            "{% else %}",
+            "{% endif %}",
+            "</div >",
+            "<div/>",
+            "\u{e9}",
+            "&lt;",
+            "<body>",
+            "<html>",
+            "<head>",
+            "</head>",
+            "</script x<y>",
+            "<body dj-view #>",
+            "<body dj-root #>",
+            "<section dj-root #>",
+            "<div dj-root #>",
+            "<div dj-view #>",
+            "<span dj-view #>",
+            "<div a<b dj-root #>",
+            "<i x=<y dj-view #>",
+            "<div a\"b dj-root #>",
+            "<div dj-root # t=\"",
+            "<div\0 dj-root #>",
+        ];
+        let mut seed: u64 = 3031;
+        let mut below = |n: usize| {
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            ((seed >> 33) % n as u64) as usize
+        };
+        // The id of the candidate tag an element came from: html5ever keeps
+        // the first of duplicate attributes, so read the first one too.
+        let id_in = |tag: &str| {
+            tag.find("data-k=")
+                .map(|at| tag[at + 7..].split(['>', ' ']).next().unwrap().to_string())
+        };
+        for _ in 0..20_000 {
+            let mut html = String::new();
+            for k in 0..below(20) {
+                html.push_str(&PIECES[below(PIECES.len())].replace('#', &format!("data-k={k}")));
+            }
+            let Ok(root) = parse_html(&html) else {
+                continue;
+            };
+            let has = |a: &str| root.attrs.contains_key(a);
+            let html5ever = if !(has("dj-root") || has("dj-view")) {
+                None
+            } else if root.tag == "body" {
+                Some("body".to_string())
+            } else {
+                Some(root.attrs.get("data-k").cloned().unwrap_or_default())
+            };
+            let scanner = find_root_open(html.as_bytes(), true).map(|open| {
+                if open.name == b"body" {
+                    "body".to_string()
+                } else {
+                    id_in(&html[open.start..open.end]).unwrap_or_default()
+                }
+            });
+            assert_eq!(scanner, html5ever, "{html:?}");
+            if let Some(span) = find_root_span(html.as_bytes(), true) {
+                assert!(span.open_start < span.open_end, "{html:?}");
+                if let Some((close_start, close_end)) = span.close {
+                    assert!(
+                        span.open_end <= close_start && close_start < close_end,
+                        "{html:?}"
+                    );
                 }
             }
         }
@@ -6646,7 +7043,9 @@ mod dj_root_selection_3031 {
         assert_eq!(&html[start..end], "literal <textarea> text");
         let html = "<body dj-root><textarea><section dj-root>fake</section>";
         assert_eq!(
-            find_root_open(html.as_bytes()).expect("body fallback").1,
+            find_root_open(html.as_bytes(), true)
+                .expect("body fallback")
+                .name,
             b"body"
         );
     }
@@ -6702,7 +7101,7 @@ mod dj_root_selection_3031 {
     #[test]
     fn a_page_that_is_only_embedded_children_has_no_root() {
         let html = "<p>x</p><div dj-view data-djust-embedded=\"c\"><div dj-root>C</div></div>";
-        assert_eq!(find_root_open(html.as_bytes()), None);
+        assert_eq!(find_root_open(html.as_bytes(), true), None);
         assert_eq!(find_dj_root_content_range(html), None);
     }
 
@@ -6716,8 +7115,8 @@ mod dj_root_selection_3031 {
         }
         html.push_str("</div>");
         let started = std::time::Instant::now();
-        let (open_end, _) = find_root_open(html.as_bytes()).unwrap();
-        assert_eq!(open_end, "<div dj-view=\"p.P\">".len());
+        let open = find_root_open(html.as_bytes(), true).unwrap();
+        assert_eq!(open.end, "<div dj-view=\"p.P\">".len());
         assert!(started.elapsed().as_secs() < 2);
     }
 }
@@ -8039,38 +8438,5 @@ mod lazy_selector_keys_3428 {
         drop(plan);
         LAZY_TREE_PLANS.remove(&key);
         std::fs::remove_dir_all(dir).unwrap();
-    }
-}
-
-#[cfg(test)]
-mod root_scan_ambiguity_tests {
-    //! `root_content_range` hands these to the Python locator.
-    use super::root_scan_is_ambiguous;
-
-    #[test]
-    fn rendered_markup_is_not_ambiguous() {
-        for html in [
-            r#"<div dj-id="0" dj-view="a.B"><ul dj-id="1"><li class="row" data-id="1" dj-id="2">x</li></ul></div>"#,
-            r#"<div dj-root title="a<b>c" data-x='it"s'><script>if (a<b) {}</script><!-- <div> --></div>"#,
-            r#"<div dj-root><textarea>&lt;/div&gt; <div></textarea><br/><input value=x></div >"#,
-            "<p>é ü</p><div dj-root>a &lt; b</div>",
-        ] {
-            assert!(!root_scan_is_ambiguous(html), "{html}");
-        }
-    }
-
-    #[test]
-    fn parse_errors_and_template_text_are_ambiguous() {
-        for html in [
-            "<div dj-root>{% if x %}</div>",
-            "<div dj-view><div<html dj-root></div>",
-            "<div dj-view><p x=<y dj-root></p></div>",
-            r#"<div dj-view><p a"b dj-root></p></div>"#,
-            "<div\0 dj-root></div>",
-            "<div dj-root></div><p class=",
-            r#"<div dj-root title="unterminated></div>"#,
-        ] {
-            assert!(root_scan_is_ambiguous(html), "{html}");
-        }
     }
 }

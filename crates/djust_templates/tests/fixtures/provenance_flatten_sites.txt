@@ -712,8 +712,18 @@ let old_raw = &old_html[entry.html_start..old_html_end];
 text_node_index[entry_idx].html_end = new_html_end;
 e.html_start = (e.html_start as isize + delta_add) as usize;
 e.html_end = (e.html_end as isize + delta_add) as usize;
+offsets.extend(span.close.map(|(s, e)| [s, e]).into_iter().flatten());
+offsets.extend(stamp.flatten());
 PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Template parsing error: {e}"))
 Ok(py_dict.into())
+let mut out = html.to_string();
+out.push_str(&format!("{:?}", node.text.as_deref().unwrap_or("")));
+out.push_str(&format!("<{} {attrs:?}>", node.tag));
+out.push_str(&format!("</{}>", node.tag));
+.map(|at| tag[at + 7..].split(['>', ' ']).next().unwrap().to_string())
+html.push_str(&PIECES[below(PIECES.len())].replace('#', &format!("data-k={k}")));
+Some("body".to_string())
+"body".to_string()
 let html = format!(
 &html["<body dj-root>".len()..html.len() - "</body>".len()]
 let mut html = String::from("<div dj-view=\"p.P\">");

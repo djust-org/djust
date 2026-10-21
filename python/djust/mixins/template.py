@@ -57,9 +57,16 @@ logger = logging.getLogger(__name__)
 #   at the next one instead of running to the next ``>`` (linear, not
 #   quadratic, on tag soup with no ``>``).
 #
-# The Rust twins that must agree on what a root is (#1646, #3031):
-# ``crates/djust_live/src/lib.rs::find_dj_root_content_range`` (the text scan)
-# and ``crates/djust_vdom/src/parser.rs::find_liveview_root`` (the VDOM root).
+# These patterns locate the root in template SOURCE only
+# (``_extract_liveview_root_with_wrapper``, ``_extract_liveview_template_content``,
+# ``_search_template_root_open``), where ``{% if %}`` branches are balanced
+# (``_find_closing_tag_pos``) and Django comments are masked. In RENDERED HTML
+# (the WS frame, the initial-GET shell splice, the streaming split, the
+# ``dj-view`` stamp) the root is located by Rust alone
+# (``djust._rust.root_content_range`` / ``root_element_span`` /
+# ``dj_root_stamp_offsets``, ``crates/djust_live/src/lib.rs::find_root_span``),
+# which tokenizes as html5ever does and so agrees with the VDOM's
+# ``crates/djust_vdom/src/parser.rs::find_liveview_root`` (#1646, #3031).
 # ONE rule picks it, here and there: an embedded ``{% live_render %}`` child's
 # wrapper and everything inside it belong to the child (``_embedded_child_spans``)
 # and are never the root; of the rest, the first ``dj-root`` in document order
@@ -243,20 +250,11 @@ def _scan_html_tag(html: str, start: int) -> "tuple[int, list[tuple[int, int, in
     return -1, []
 
 
-def _rust_root_content_range(html: str) -> "Optional[Tuple[int, int]]":
-    """``djust._rust.root_content_range``, or None (the Python path) with an
-    extension built before it existed."""
-    from .. import _rust
-
-    fn = getattr(_rust, "root_content_range", None)
-    return fn(html) if fn is not None else None
-
-
 # One-entry memo per thread for ``_mask_for_root_search``. Finding a
 # root and balancing its close tag both mask the SAME string (the search, then
-# ``_find_closing_tag_pos``), so every extract/strip of a rendered page masked
-# it twice. The entry holds a reference to its input, so an ``is`` hit can
-# never be a different string at a reused address; str is immutable, so the
+# ``_find_closing_tag_pos``), so every template-source extract masked it
+# twice. The entry holds a reference to its input, so an ``is`` hit can never
+# be a different string at a reused address; str is immutable, so the
 # mask of the same object cannot change.
 _mask_memo = threading.local()
 
@@ -1061,11 +1059,15 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         :returns: ``None``. This is a coroutine, not an async generator —
             chunks are delivered exclusively via ``emitter.emit()``.
         """
+        from .._rust import root_element_span
         from ..http_streaming import ChunkEmitterCancelled
 
-        # Find <div dj-root> opening tag start.
-        dj_root_match = _search_dj_root_open(full_html, _DJ_ROOT_RE)
-        if not dj_root_match:
+        # The dj-root element (dj-root only: a dj-view-only page streams as one
+        # chunk) and its balancing close tag, from the one rendered-HTML root
+        # locator (#3031). Script/style/comment raw text is skipped (#2663),
+        # so the chunk boundary is the root's close tag, not the </body>.
+        span = root_element_span(full_html, with_view=False)
+        if span is None:
             # No dj-root wrapper: fragment template. Single-chunk fallback.
             try:
                 await emitter.emit(full_html.encode("utf-8"))
@@ -1073,17 +1075,8 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                 logger.debug("arender_chunks: cancelled during fragment emit")
             return
 
-        dj_root_open_start = dj_root_match.start()
-        dj_root_open_end = dj_root_match.end()
-
-        # Find the matching close tag for the dj-root element using shared
-        # logic. _find_closing_tag_pos balances nesting of the root's own
-        # element name (#2892) AND (since #2663) masks script/style/comment
-        # raw text, so the script-mask + </body> search the Phase-1 splitter
-        # does is redundant here — the chunk boundary is the root's close
-        # tag, not the </body>.
-        result = _find_root_close(full_html, dj_root_match)
-        if result[1] is None:
+        dj_root_open_start, dj_root_open_end, close_start, _close_end = span
+        if close_start is None:
             # Malformed HTML (no closing </div> for dj-root). Fall back to
             # a single chunk so we never produce broken output.
             try:
@@ -1092,13 +1085,12 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                 logger.debug("arender_chunks: cancelled during fallback emit")
             return
 
-        # result is (close_start, close_end); close_end is the index just
-        # AFTER </div>. Slice the four pieces.
+        # Slice the four pieces.
         shell_open = full_html[:dj_root_open_start]
         body_open = full_html[dj_root_open_start:dj_root_open_end]
-        body_content = full_html[dj_root_open_end : result[0]]
+        body_content = full_html[dj_root_open_end:close_start]
         # body_close: from the closing </div> through end-of-document.
-        body_close_chunk = full_html[result[0] :]
+        body_close_chunk = full_html[close_start:]
 
         try:
             # 1. Shell: <!DOCTYPE>, <head>, <body>, top chrome.
@@ -1318,11 +1310,13 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         :returns: Three-tuple of string chunks that, when concatenated,
             equal ``full_html``.
         """
-        m = _search_dj_root_open(full_html, _DJ_ROOT_RE)
-        if not m:
+        from .._rust import root_element_span
+
+        span = root_element_span(full_html, with_view=False)
+        if span is None:
             return full_html, "", ""
 
-        dj_root_start = m.start()
+        dj_root_start = span[0]
 
         # Mask the raw-text regions (script/style bodies, comments), preserving
         # string length via NUL fill, so a literal "</body>" inside a JS string
@@ -1352,29 +1346,19 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         just the content to insert into the existing [dj-root] container.
 
         Falls back to [dj-view] if [dj-root] is not present, since dj-root
-        is auto-inferred from dj-view (see PR #297).
+        is auto-inferred from dj-view (see PR #297). The whole ``html`` when
+        there is no root or its close tag is missing.
+
+        The rendered-HTML root locator is Rust (``djust._rust``, #3031): it
+        runs on every mount and full render, and the Python mask it replaced
+        was about half of a mount's CPU on a 300-row page.
         """
-        # The Rust twin of the locator below, on every mount and full
-        # render. It returns None for input the two read differently (parse
-        # errors inside a tag, ``{% %}`` text, a ``<body>`` root beside another
-        # view's container), which then takes the Python path.
-        span = _rust_root_content_range(str(html))
-        if span is not None:
-            start, end = span
-            return html if (start, end) == (0, len(html)) else html[start:end]
+        from .._rust import root_content_range
 
-        # Find the opening tag for [dj-root], falling back to [dj-view]
-        opening_match = _search_dj_root_open(html, _DJ_ROOT_RE, _DJ_VIEW_RE)
-
-        if not opening_match:
+        span = root_content_range(html)
+        if span is None:
             return html
-
-        start_pos = opening_match.end()
-
-        result = _find_root_close(html, opening_match)
-        if result[0] is not None:
-            return html[start_pos : result[0]]
-        return html
+        return html[span[0] : span[1]]
 
     def _extract_liveview_root_with_wrapper(self, template: str) -> str:
         """
@@ -1517,19 +1501,15 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
 
         Falls back to [dj-view] if [dj-root] is not present.
         """
-        opening_match = _search_dj_root_open(html, _DJ_ROOT_RE, _DJ_VIEW_RE)
+        from .._rust import root_element_span
 
-        if not opening_match:
+        span = root_element_span(html)
+        if span is None or span[3] is None:
             return html
-
-        start_pos = opening_match.start()
-
-        result = _find_root_close(html, opening_match)
-        if result[1] is not None:
-            liveview_div = html[start_pos : result[1]]
-            stripped_div = self._strip_comments_and_whitespace(liveview_div)
-            return html[:start_pos] + stripped_div + html[result[1] :]
-        return html
+        start_pos, close_end = span[0], span[3]
+        liveview_div = html[start_pos:close_end]
+        stripped_div = self._strip_comments_and_whitespace(liveview_div)
+        return html[:start_pos] + stripped_div + html[close_end:]
 
     @reconcile_child_render(whole_page=True)
     def render_full_template(
@@ -1722,21 +1702,16 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
             # normalized ``self._rust_view`` the WS path uses, so the
             # replaced dj-root is structurally identical to the first WS
             # frame (modulo the dj-id attrs the client stamps on, per #1610).
-            dj_root_match = _search_dj_root_open(shell_html, _DJ_ROOT_RE, _DJ_VIEW_RE)
-            if dj_root_match:
-                # Start of the root element's opening tag (any element, #2892)
-                tag_start = dj_root_match.start()
-                # Find the matching close tag via the shared scanner instead of
-                # a duplicate hand-rolled depth loop. _find_closing_tag_pos is
-                # multi-line-safe on the open side (#1750) and
-                # whitespace-tolerant on the close side (#1751), and balances
-                # the root's own element name (#2892). The rendered shell
-                # carries no ``{% %}`` tags, so the helper's if/else branch
-                # handling is inert here; this is purely the balanced scan.
-                # Removing the second scanner closes the parallel-path-drift
-                # gap (#1646) that let the open-side bug exist in one copy and
-                # not the other.
-                _close_start, close_end = _find_root_close(shell_html, dj_root_match)
+            from .._rust import root_element_span
+
+            # The root element (any element, #2892) and its balancing close tag
+            # (multi-line open tags #1750, ``</div >`` #1751) from the one
+            # rendered-HTML root locator, so the shell, the WS frame and the
+            # VDOM cannot pick different roots (#1646, #3031). ``{% %}`` left in
+            # the rendered shell is text.
+            span = root_element_span(shell_html)
+            if span is not None:
+                tag_start, close_end = span[0], span[3]
                 if close_end is not None:
                     result = shell_html[:tag_start] + liveview_html + shell_html[close_end:]
                     from .._lazy_containers import register_lazy_containers
@@ -1749,7 +1724,7 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
             # no root at all; for a page that DECLARES one it means the
             # normalisation was skipped and every patch will miss (#2892) —
             # say so instead of degrading silently.
-            self._warn_unmatched_root(shell_html, found=dj_root_match is not None)
+            self._warn_unmatched_root(shell_html, found=span is not None)
             from .._lazy_containers import register_lazy_containers
 
             shell_html = register_lazy_containers(self, request, shell_html)
@@ -1770,43 +1745,17 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         and are left alone (#2663). A ``<body dj-root>`` is stamped when it is the
         page's root (#3302).
         """
+        from .._rust import dj_root_stamp_offsets
+
         attr = ' dj-view="%s"' % _html_escape(view_path, quote=True)
-        masked = _mask_for_root_search(html)
-        # #3155: a dj-root inside an embedded {% live_render %} child is the
-        # child's, not this view's — stamping this view's path there would
-        # tell the client to mount the page a second time inside the child.
-        embedded = (
-            _embedded_child_spans(html, masked)
-            if _EMBEDDED_MARKER_RE.search(html) is not None
-            else []
-        )
-        starts = [
-            m.start()
-            for m in _DJ_ROOT_RE.finditer(masked)
-            if not (embedded and _span_containing(embedded, m.start()) is not None)
-        ]
-        # #3302: `<body dj-root>` is stamped only when it IS the page's root,
-        # i.e. nothing inside the page declares one (the client mounts on the
-        # first `[dj-view]`, so a stamp on an unused body would misdirect it).
-        if not starts:
-            chosen = _search_dj_root_open(html, _DJ_ROOT_RE, _DJ_VIEW_RE)
-            if chosen is not None and _root_tag_name(html, chosen) == "body":
-                starts = [chosen.start()]
+        # Where each stamp goes, from the one rendered-HTML root locator
+        # (#3031): a dj-root inside an embedded {% live_render %} child is the
+        # child's, not this view's (#3155) — stamping this view's path there
+        # would tell the client to mount the page a second time inside the
+        # child — and `<body dj-root>` only when it IS the page's root (#3302).
         parts: list[str] = []
         last = 0
-        for start in starts:
-            root_attr_end: Optional[int] = None
-            has_view = False
-            _, attrs = _scan_html_tag(html, start)
-            for begin, name_end, _value_start, end in attrs:
-                kind = str.__getitem__(html, slice(begin, name_end)).lower()
-                if kind == "dj-view":
-                    has_view = True
-                elif kind == "dj-root" and root_attr_end is None:
-                    root_attr_end = end
-            if has_view or root_attr_end is None:
-                continue
-            insert_at = root_attr_end
+        for insert_at in dj_root_stamp_offsets(html):
             parts.append(html[last:insert_at])
             parts.append(attr)
             last = insert_at
