@@ -458,7 +458,9 @@ def _repoint_callable(func: Any, replacements: Dict[int, type], seen: set, depth
             func.view_class = replacements[id(view_class)]
             changed += 1
         except (AttributeError, TypeError):
-            pass
+            # A read-only attribute (a builtin or C callable): the closure
+            # walk below still repoints what the callable builds.
+            logger.debug("HVR: view_class on %r is read-only", func)
     for cell in getattr(func, "__closure__", None) or ():
         try:
             value = cell.cell_contents
@@ -551,7 +553,9 @@ def note_template_change(path: str) -> int:
                 delattr(cls, "_djust_template_hash_slot")
                 reset += 1
             except (AttributeError, TypeError):
-                pass
+                # An immutable class keeps its hash; its next page load may
+                # still use the renderer of the old template until a restart.
+                logger.debug("HVR: could not reset the template hash of %s", cls.__qualname__)
         stack.extend(cls.__subclasses__())
     logger.debug("HVR: %s changed; reset the template hash of %d view classes", path, reset)
     return reset
