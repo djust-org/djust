@@ -6161,6 +6161,10 @@ function _setFormPending(form, pending) {
 const _inputRateLimitState = new WeakMap();
 const _changeRateLimitState = new WeakMap();
 const _clickRateLimitState = new WeakMap();
+// The rate-limit wrappers of field edits (dj-input, dj-change): what a click
+// or submit sends ahead of itself (_flushPendingEdits). A debounced CLICK is
+// not an edit and keeps its own timer.
+const _editRateLimitWrappers = new WeakSet();
 const _keydownRateLimitState = new WeakMap();
 const _keyupRateLimitState = new WeakMap();
 // dj-mouseenter / dj-mouseleave (#2869) — same (element, matched-attribute)
@@ -6866,6 +6870,7 @@ function installDelegatedListeners(root) {
             // Rate-limit per element using WeakMap
             const rawHandler = function(ev) { return _handleDjChange(changeEl, ev); };
             const wrapped = _getOrCreateRateLimitedHandler(_changeRateLimitState, changeEl, 'change', rawHandler);
+            _editRateLimitWrappers.add(wrapped);
             wrapped(e);
         }
     });
@@ -6930,6 +6935,7 @@ function installDelegatedListeners(root) {
 
                 state = { wrapped: wrapped };
                 _inputRateLimitState.set(inputEl, state);
+                _editRateLimitWrappers.add(wrapped);
             }
             state.wrapped(e);
         }
@@ -7676,18 +7682,19 @@ function _applyRateLimitAttrs(element, handler) {
 }
 
 /**
- * Send every pending debounced edit now, before another event is sent.
+ * Send every pending debounced field edit now, before another event is sent.
  *
- * Element-level `dj-debounce` wrappers first (each `.flush()` fires its
- * pending call, which reaches `handleEvent`), then the handler-level gate
- * (#2656), which may now hold the call just flushed. A submit (#1278) also
- * drains the throttle gate, as it always has; a click (`debounceOnly`) keeps
- * throttle windows: element throttles are leading-only and a throttled
- * handler's trailing call is a stream, not an edit.
+ * The element-level `dj-debounce` wrappers of `dj-input` / `dj-change` first
+ * (each `.flush()` fires its pending call, which reaches `handleEvent`; other
+ * debounced bindings, such as a debounced click, keep their timers), then the
+ * handler-level gate (#2656), which may now hold the call just flushed. A
+ * submit (#1278) also drains the throttle gate, as it always has; a click
+ * (`debounceOnly`) keeps throttle windows: a throttled handler's trailing
+ * call is a stream, not an edit.
  */
 function _flushPendingEdits(debounceOnly = false) {
     Array.from(pendingElementRateLimits).forEach((wrapper) => {
-        if (!debounceOnly || wrapper._djustDebounced) wrapper.flush();
+        if (wrapper._djustDebounced && _editRateLimitWrappers.has(wrapper)) wrapper.flush();
     });
     flushHandlerRateLimit(debounceOnly);
 }
