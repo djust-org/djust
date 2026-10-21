@@ -45,6 +45,7 @@ from ..security.event_guard import is_safe_event_name
 from ..decorators import is_event_handler, is_push_only
 from ..hooks import run_on_mount_hooks
 from .._exposure import uses_legacy_exposure
+from .._tenant_state import UNSAVED_PRIVATE_SUFFIX
 
 if TYPE_CHECKING:
     from django.http import HttpRequest
@@ -78,6 +79,24 @@ def _warn_http_background_work_dropped(owner: Any, event_name: str) -> None:
         cls.__qualname__,
         sanitize_for_log(event_name),
     )
+
+
+def _save_unsaved_private_keys(
+    view: Any, session: Any, view_key: Optional[str], private_state: Dict[str, Any]
+) -> None:
+    """Record which private attributes the session could not hold.
+
+    The HTTP fallback rebuilds the view from the session; when this list is not
+    empty it runs ``mount()`` so those attributes exist (see ``post()``).
+    """
+    if view_key is None:
+        return
+    unsaved = view._unsaved_private_keys(private_state)
+    key = f"{view_key}{UNSAVED_PRIVATE_SUFFIX}"
+    if unsaved:
+        session[key] = unsaved
+    else:
+        session.pop(key, None)
 
 
 def _drain_http_side_channels(view: Any, resp_data: Dict[str, Any]) -> None:
@@ -293,6 +312,8 @@ class RequestMixin:
         def _get_private_state(self) -> Dict[str, Any]: ...
 
         def _restore_private_state(self, private_state: Dict[str, Any]) -> None: ...
+
+        def _unsaved_private_keys(self, saved: Dict[str, Any]) -> List[str]: ...
 
         def _snapshot_user_private_attrs(self) -> None: ...
 
@@ -517,6 +538,7 @@ class RequestMixin:
                     request.session[f"{view_key}__private"] = normalize_django_value(
                         private_state, state_roundtrip=True
                     )
+                _save_unsaved_private_keys(self, request.session, view_key, private_state)
                 t0_sc = time.perf_counter()
                 self._save_components_to_session(request, _cached)
         else:
@@ -1212,14 +1234,23 @@ class RequestMixin:
             # reaches the template as a dict.
             saved_state = decode_state_roundtrip(saved_state)
 
-            for key, value in saved_state.items():
-                if not key.startswith("_") and not callable(value):
-                    safe_setattr(self, key, value, allow_private=False)
+            from .._state_restore import restore_public_state
+
+            # Never over a method or property of the view class (a context key
+            # named like one would replace it on the instance).
+            restore_public_state(self, saved_state)
 
             # Restore user-defined _private attributes
             private_state = request.session.get(f"{view_key}__private", {}) if session_state else {}
             if private_state:
                 self._restore_private_state(private_state)
+            # Private attributes the session could not hold (not JSON: a service
+            # client, a stored callable) are rebuilt by mount() below.
+            unsaved_private = (
+                request.session.get(f"{view_key}{UNSAVED_PRIVATE_SUFFIX}")
+                if session_state
+                else None
+            )
 
             # ADR-035: bound after the restore so saved state cannot supply it.
             bind_route = getattr(self, "_djust_bind_route_kwargs", None)
@@ -1247,8 +1278,23 @@ class RequestMixin:
             elif not saved_state:
                 self.mount(request, **kwargs)
                 self._snapshot_user_private_attrs()
-            else:
-                pass
+            elif unsaved_private:
+                # The socket's instance kept every private attribute; this one
+                # is rebuilt from the session, which could not hold some of
+                # them. mount() rebuilds them, then the saved state goes back on
+                # top, so the handler sees the state the page had (the
+                # explicit-exposure branch above does the same).
+                self.mount(request, **kwargs)
+                self._snapshot_user_private_attrs()
+                # The page already has mount()'s background results; this
+                # request has no channel to deliver new ones.
+                self.__dict__.pop("_async_tasks", None)
+                self.__dict__.pop("_async_pending", None)
+                restore_public_state(self, saved_state)
+                if private_state:
+                    self._restore_private_state(private_state)
+                if callable(bind_route):
+                    bind_route(kwargs)
 
             self._assign_component_ids()
 
@@ -1499,6 +1545,7 @@ class RequestMixin:
                         )
                     else:
                         request.session.pop(f"{view_key}__private", None)
+                    _save_unsaved_private_keys(self, request.session, view_key, private_state)
 
                 updated_context = self.get_context_data()
                 from .context import legacy_render_only_keys
