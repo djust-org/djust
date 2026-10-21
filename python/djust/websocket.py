@@ -15,6 +15,8 @@ import weakref
 from typing import Any, Awaitable, Callable, ContextManager, Deque, Dict, List, Optional, Tuple
 from asgiref.sync import sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
+
+from ._view_hooks import call_hook, is_async_hook
 from ._background_render import (
     BackgroundRender,
     _discard_baseline,
@@ -491,6 +493,16 @@ def _compute_changed_keys(pre: Dict[str, Any], post: Dict[str, Any]) -> set[str]
         elif pre[k] != post[k]:
             changed.add(k)
     return changed
+
+
+def _has_async_push_hook(view: Any, event: Dict[str, Any]) -> bool:
+    """Whether the hook a server push names is an ``async def``.
+
+    Only a peek, for choosing where the turn runs: whether the hook may be
+    called at all is still decided by ``_prepare_server_push``.
+    """
+    name = event.get("handler")
+    return isinstance(name, str) and is_async_hook(getattr(view, name, None))
 
 
 def _resolve_skip_render(view_instance: Any) -> bool:
@@ -5901,7 +5913,13 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         if offload_enabled():
             from ._exposure import uses_legacy_exposure
 
-            if view is not None and uses_legacy_exposure(view):
+            # An ``async def`` hook must run on the loop, so a turn with one
+            # keeps the stock path, which awaits it there.
+            if (
+                view is not None
+                and uses_legacy_exposure(view)
+                and not any(_has_async_push_hook(view, event) for event in events)
+            ):
                 await self._run_server_push_turn_offloaded(view, events)
                 return
         try:
@@ -6177,7 +6195,9 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         hook = self._prepare_server_push(view, event)
         if hook is not None:
             handler_fn, payload = hook
-            await sync_to_async(handler_fn)(**payload)
+            # An ``async def`` hook is awaited on the loop; a sync one runs
+            # off it, as it always has.
+            await call_hook(handler_fn, **payload)
 
     @staticmethod
     def _prepare_server_push(
@@ -6187,7 +6207,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
         Synchronous so the offloaded push turn (#3074) can run it on the
         session's worker thread; :meth:`_apply_server_push` runs it on the
-        loop and calls the handler through ``sync_to_async``.
+        loop and calls the handler through ``call_hook`` (an ``async def``
+        hook on the loop, a sync one through ``sync_to_async``).
         """
         # Apply state updates before handler call so the handler can read
         # the new values. _sync_state_to_rust runs after both to push the
@@ -6421,7 +6442,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 handler = getattr(self.view_instance, "handle_info", None)
                 if handler and callable(handler):
                     try:
-                        await sync_to_async(handler)(message)
+                        await call_hook(handler, message)
                         # start_async work handle_info queued runs once the
                         # lock is released (#2955).
                         dispatch_work = True
