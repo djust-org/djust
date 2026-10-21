@@ -3425,6 +3425,19 @@ fn authored_lazy_elements(
         .collect()
 }
 
+/// The egress normalizer's white-space fold:
+/// `djust_core::html_whitespace::fold_whitespace`.
+#[pyfunction]
+fn fold_html_whitespace(html: &str) -> String {
+    djust_core::html_whitespace::fold_whitespace(html)
+}
+
+/// Byte ranges [`fold_html_whitespace`] replaces with one space.
+#[pyfunction]
+fn fold_html_whitespace_edits(html: &str) -> Vec<(usize, usize)> {
+    djust_core::html_whitespace::fold_whitespace_edits(html)
+}
+
 #[pyfunction]
 fn inter_tag_whitespace_edits(html: &str, block_tags: Vec<String>) -> Vec<(usize, usize)> {
     djust_core::html_whitespace::inter_tag_whitespace_edits(html, &block_tags)
@@ -6497,6 +6510,8 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(render_markdown_py, m)?)?;
     m.add_function(wrap_pyfunction!(diff_html, m)?)?;
     m.add_function(wrap_pyfunction!(inter_tag_whitespace_edits, m)?)?;
+    m.add_function(wrap_pyfunction!(fold_html_whitespace, m)?)?;
+    m.add_function(wrap_pyfunction!(fold_html_whitespace_edits, m)?)?;
     m.add_function(wrap_pyfunction!(authored_lazy_elements, m)?)?;
     m.add_function(wrap_pyfunction!(template_needs_provenance, m)?)?;
     m.add_function(wrap_pyfunction!(
