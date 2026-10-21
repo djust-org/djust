@@ -191,7 +191,7 @@ Existing views are unaffected unless they already define a regular no-argument m
 
 #### Disconnect cleanup
 
-The framework cleans up on disconnect by itself: `start_async` tasks are cancelled, presence is untracked, child views are released, and uploads are aborted (an incomplete `ResumableUploadWriter` upload is suspended so the client can resume it after reconnecting). `disconnect()` and `unmount()` methods you define on the view are not called; use `disconnected()` above, and release what it cannot reach (a process that dies runs nothing) with a timeout or a periodic sweep.
+The framework cleans up on disconnect by itself: an explicit-exposure view's `start_async` tasks are cancelled (a legacy view's run to completion and their result is discarded; set `cancel_async_on_disconnect = True` on a view whose work only serves the open page, such as a follower or a live feed, to have it cancelled), presence is untracked, child views are released, and uploads are aborted (an incomplete `ResumableUploadWriter` upload is suspended so the client can resume it after reconnecting). `disconnect()` and `unmount()` methods you define on the view are not called; use `disconnected()` above, and release what it cannot reach (a process that dies runs nothing) with a timeout or a periodic sweep.
 
 **Telling the live mount from the HTTP render.** `mount()` runs twice for a page: once for the HTTP response and again when the WebSocket (or SSE) connection mounts the view. On the live mount the framework sets `self._websocket_session_id` before `mount()` runs; on the HTTP render it is absent. This is the check djust's own presence tracking uses:
 
