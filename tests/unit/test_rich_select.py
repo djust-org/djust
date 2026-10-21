@@ -17,7 +17,7 @@ def test_renders_with_empty_options():
     # Placeholder shown when nothing selected
     assert '<span class="rich-select-placeholder">Select...</span>' in html
     # Dropdown list is present but empty
-    assert '<div class="rich-select-dropdown" role="listbox">' in html
+    assert '<div class="rich-select-dropdown" role="listbox" id="rs-status-listbox">' in html
 
 
 def test_renders_options_with_selected_value():
@@ -212,28 +212,28 @@ def test_per_option_variant_wins_over_variant_map():
 # --------------------------------------------------------------------------
 
 
-def test_trigger_carries_open_close_onclick_and_keyboard_handlers():
-    """Regression — the programmatic class used to omit these, forcing
-    consumers to monkey-patch the rendered HTML. They should now match the
-    ``{% rich_select %}`` template-tag variant by default."""
+def test_trigger_has_no_inline_handlers_and_names_its_listbox():
+    """Opening, closing and Enter/Space toggling are the client bundle's
+    delegated ``.rich-select`` behaviour (src/53-component-behaviors.js,
+    tests/js/component_behaviors.test.js). The inline ``onclick``/``onkeydown``
+    the trigger used to carry are refused by a CSP without 'unsafe-inline'."""
     picker = RichSelect(name="s", options=[{"value": "a", "label": "A"}], value="", event="pick")
     html = picker.render()
 
-    trigger_block = html.split('class="rich-select-trigger')[1].split("</div>")[0]
-    assert "classList.toggle('rich-select--open')" in trigger_block
-    assert "event.key==='Enter'" in trigger_block
-    assert "event.key===' '" in trigger_block
+    trigger_block = html.split('class="rich-select-trigger')[1].split(">")[0]
+    assert "onclick" not in trigger_block and "onkeydown" not in trigger_block
+    assert 'aria-controls="rs-s-listbox"' in trigger_block
+    assert 'tabindex="0"' in trigger_block
 
 
-def test_option_click_closes_the_dropdown():
-    """Picking an option should close the panel; the subsequent dj-click
-    round-trip re-renders with the new selected state."""
+def test_options_have_no_inline_handler():
+    """Picking an option closes the panel through the client bundle; the
+    dj-click round-trip re-renders with the new selected state."""
     picker = RichSelect(name="s", options=[{"value": "a", "label": "A"}], value="", event="pick")
     html = picker.render()
 
-    # The option row should carry an onclick that removes the open class from
-    # the nearest .rich-select ancestor.
-    assert "this.closest('.rich-select').classList.remove('rich-select--open')" in html
+    assert "onclick" not in html
+    assert 'role="option"' in html
 
 
 # --------------------------------------------------------------------------

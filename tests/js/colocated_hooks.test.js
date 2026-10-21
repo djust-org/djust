@@ -144,3 +144,51 @@ describe('colocated hooks', () => {
         expect(dom.window.djust.hooks.LateHook.mounted()).toBe('late');
     });
 });
+
+describe('colocated hooks under a strict nonce CSP', () => {
+    // A CSP without 'unsafe-eval' makes `new Function` throw. A hook whose
+    // <script> carries the request nonce must register without it, through a
+    // script element created with that nonce.
+    function createStrictDom(bodyHtml) {
+        const dom = new JSDOM(
+            `<!DOCTYPE html><html><head></head><body><div dj-view="test.views.TestView" dj-root>${bodyHtml}</div></body></html>`,
+            { runScripts: 'dangerously', url: 'http://localhost/' }
+        );
+        dom.window.WebSocket = class { constructor() { this.readyState = 1; } send() {} close() {} };
+        dom.window.DJUST_USE_WEBSOCKET = false;
+        dom.window.eval(clientCode);
+        const evalBlocked = function () { throw new dom.window.EvalError('blocked by CSP'); };
+        dom.window.Function = evalBlocked;
+        return dom;
+    }
+
+    it('registers a nonce-bearing hook without new Function', () => {
+        const dom = createStrictDom(
+            '<script type="djust/hook" data-hook="Chart" nonce="abc123">' +
+            'hook.mounted = function() { return 7; };' +
+            '</script>'
+        );
+        const appended = [];
+        const realAppend = dom.window.HTMLHeadElement.prototype.appendChild;
+        dom.window.HTMLHeadElement.prototype.appendChild = function (node) {
+            appended.push(node.getAttribute && node.getAttribute('nonce'));
+            return realAppend.call(this, node);
+        };
+        dom.window.djust.extractColocatedHooks(dom.window.document);
+        expect(appended).toEqual(['abc123']);
+        expect(dom.window.djust.hooks.Chart.mounted()).toBe(7);
+        const scriptEl = dom.window.document.querySelector('script[type="djust/hook"]');
+        expect(scriptEl.dataset.djustHookRegistered).toBe('1');
+        // The runner script is removed once it has run.
+        expect(dom.window.document.head.querySelectorAll('script').length).toBe(0);
+    });
+
+    it('without a nonce the eval path is used (and fails under the CSP)', () => {
+        const dom = createStrictDom(
+            '<script type="djust/hook" data-hook="Plain">hook.mounted = function() {};</script>'
+        );
+        dom.window.djust.extractColocatedHooks(dom.window.document);
+        const scriptEl = dom.window.document.querySelector('script[type="djust/hook"]');
+        expect(scriptEl.dataset.djustHookRegistered).toBe('error');
+    });
+});

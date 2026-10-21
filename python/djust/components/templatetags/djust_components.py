@@ -105,42 +105,35 @@ def _parse_kv_args(bits: Any, parser: Any) -> Any:
 # ---------------------------------------------------------------------------
 
 
-class ModalNode(template.Node):
-    def __init__(self, nodelist: Any, kwargs: Any) -> None:
-        self.nodelist = nodelist
-        self.kwargs = kwargs
+def render_modal(kw: Any, content: Any) -> SafeString:
+    """Markup for an open ``{% modal %}``, shared by the Django tag and the Rust handler.
 
-    def render(self, context: Any) -> SafeString:
-        kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
-        title = kw.get("title", "")
-        is_open = kw.get("open", False)
-        size = kw.get("size", "md")  # sm, md, lg, xl
-        close_event = kw.get("close_event", "close_modal")
+    ``kw`` holds the resolved tag arguments. The size class sits on the dialog,
+    not on the full-screen backdrop, and the dialog carries ``role="dialog"``,
+    ``aria-modal`` and an ``aria-labelledby`` derived from ``id`` (no
+    randomness, so socket renders diff cleanly).
+    """
+    title = kw.get("title", "")
+    size = kw.get("size", "md")  # sm, md, lg, xl
+    close_event = kw.get("close_event", "close_modal")
+    size_class = {
+        "sm": "dj-modal--sm",
+        "md": "dj-modal--md",
+        "lg": "dj-modal--lg",
+        "xl": "dj-modal--xl",
+    }.get(str(size), "dj-modal--md")
+    e_close_event = conditional_escape(close_event)
+    e_title = conditional_escape(title)
+    component_id = kw.get("component_id", "")
+    cid_attr = f' data-component-id="{conditional_escape(component_id)}"' if component_id else ""
+    # ARIA: derive a stable id for the title so aria-labelledby can
+    # point at it. Derived deterministically from the existing `id`
+    # kwarg (or "modal" default) → VDOM dj-id stable, no randomness.
+    modal_id = conditional_escape(kw.get("id", "modal"))
+    title_id = f"{modal_id}-title"
+    labelledby = f' aria-labelledby="{title_id}"' if title else ""
 
-        if not is_open:
-            return ""
-
-        content = self.nodelist.render(context)
-        size_class = {
-            "sm": "dj-modal--sm",
-            "md": "dj-modal--md",
-            "lg": "dj-modal--lg",
-            "xl": "dj-modal--xl",
-        }.get(size, "dj-modal--md")
-        e_close_event = conditional_escape(close_event)
-        e_title = conditional_escape(title)
-        component_id = kw.get("component_id", "")
-        cid_attr = (
-            f' data-component-id="{conditional_escape(component_id)}"' if component_id else ""
-        )
-        # ARIA: derive a stable id for the title so aria-labelledby can
-        # point at it. Derived deterministically from the existing `id`
-        # kwarg (or "modal" default) → VDOM dj-id stable, no randomness.
-        modal_id = conditional_escape(kw.get("id", "modal"))
-        title_id = f"{modal_id}-title"
-        labelledby = f' aria-labelledby="{title_id}"' if title else ""
-
-        return mark_safe(f"""<div class="dj-modal-backdrop">
+    return mark_safe(f"""<div class="dj-modal-backdrop">
   <div class="dj-scrim" dj-click="{e_close_event}"{cid_attr}></div>
   <div class="dj-modal {size_class}" role="dialog" aria-modal="true"{labelledby}>
     <div class="dj-modal__header">
@@ -150,6 +143,18 @@ class ModalNode(template.Node):
     <div class="dj-modal__body">{content}</div>
   </div>
 </div>""")
+
+
+class ModalNode(template.Node):
+    def __init__(self, nodelist: Any, kwargs: Any) -> None:
+        self.nodelist = nodelist
+        self.kwargs = kwargs
+
+    def render(self, context: Any) -> SafeString:
+        kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
+        if not kw.get("open", False):
+            return ""
+        return render_modal(kw, self.nodelist.render(context))
 
 
 @register.tag("modal")
@@ -2119,8 +2124,9 @@ def combobox(
             else:
                 ov = ol = conditional_escape(str(opt))
             sel_cls = " combobox-option-selected" if str(ov) in selected_set else ""
+            aria_sel = "true" if sel_cls else "false"
             options_html += (
-                f'<div class="combobox-option{sel_cls}" '
+                f'<div class="combobox-option{sel_cls}" role="option" aria-selected="{aria_sel}" '
                 f'dj-click="{e_event}" data-value="{ov}">{ol}</div>'
             )
     else:
@@ -2142,9 +2148,11 @@ def combobox(
                 ol = conditional_escape(str(opt.get("label", "")))
             else:
                 ov = ol = conditional_escape(str(opt))
-            sel = ' class="combobox-option-selected"' if str(ov) == str(value) else ""
+            is_sel = str(ov) == str(value)
+            sel = " combobox-option-selected" if is_sel else ""
             options_html += (
-                f'<div class="combobox-option"{sel} '
+                f'<div class="combobox-option{sel}" role="option" '
+                f'aria-selected="{"true" if is_sel else "false"}" '
                 f'dj-click="{e_event}" data-value="{ov}">{ol}</div>'
             )
 
@@ -2173,8 +2181,13 @@ def combobox(
         f"{hidden_inputs_html}"
         f'<input class="combobox-input form-input" type="text" id="{e_name}-input" '
         f'name="{e_name}" placeholder="{e_placeholder}" value="{input_value}" '
+        f'role="combobox" aria-autocomplete="list" aria-expanded="false" '
+        f'aria-controls="{e_name}-listbox" '
         f'dj-input="{e_search}" autocomplete="off"{req}>'
-        f'<div class="combobox-dropdown" onmousedown="event.preventDefault()" onclick="this.previousElementSibling.blur()">{options_html}</div>'
+        # Keeping focus in the input while an option is pressed, and closing
+        # the list after the pick, is the client bundle's delegated
+        # ``.combobox-dropdown`` behaviour (no inline handler).
+        f'<div class="combobox-dropdown" id="{e_name}-listbox" role="listbox">{options_html}</div>'
         f"</div>"
         f"{error_html}{helper_html}"
         f"</div>"
@@ -2302,14 +2315,11 @@ def copy_button(
     e_variant = conditional_escape(variant)
     e_size = conditional_escape(size)
 
+    # dj-copy is the client bundle's delegated clipboard directive: no inline
+    # handler, so a strict CSP does not block it.
     return mark_safe(
-        f'<button class="btn btn-{e_variant} btn-{e_size} copy-btn" '
-        f'data-copy-text="{e_text}" '
-        f'data-copied-label="{e_copied}" '
-        f"onclick=\"(function(btn){{var t=btn.getAttribute('data-copy-text');"
-        f"navigator.clipboard&&navigator.clipboard.writeText(t).then(function(){{"
-        f"var orig=btn.textContent;btn.textContent=btn.getAttribute('data-copied-label');"
-        f'setTimeout(function(){{btn.textContent=orig;}},2000);}});}})(this)">'
+        f'<button type="button" class="btn btn-{e_variant} btn-{e_size} copy-btn" '
+        f'dj-copy="{e_text}" dj-copy-feedback="{e_copied}">'
         f"{e_label}</button>"
     )
 
@@ -4811,6 +4821,7 @@ def rich_select(
     searchable: Any = False,
     label: Any = "",
     variant_map: Any = None,
+    id: Any = "",
 ) -> SafeString:
     """Render a rich select dropdown where each option can include icons, images,
     descriptions, badges, or variant coloring alongside the label.
@@ -4829,6 +4840,11 @@ def rich_select(
                      applied to any option that doesn't already declare its
                      own ``variant`` key. Variants: info, success, warning,
                      danger, muted (plus implicit default).
+        id: element id; defaults to ``rs-<name>`` so renders are stable.
+
+    Opening, closing, keyboard toggling and search filtering are the client
+    bundle's delegated ``.rich-select`` behaviour: the markup carries no inline
+    handler, so it works under a strict CSP.
     """
     if isinstance(disabled, str):
         disabled = disabled.lower() not in ("false", "0", "")
@@ -4848,7 +4864,8 @@ def rich_select(
     disabled_attr = " disabled" if disabled else ""
     disabled_cls = " rich-select--disabled" if disabled else ""
 
-    uid = f"rs-{uuid.uuid4().hex[:6]}"
+    uid = conditional_escape(id or f"rs-{name}")
+    listbox_id = f"{uid}-listbox"
 
     # Build selected display
     selected_opt = None
@@ -4885,8 +4902,7 @@ def rich_select(
             f'<div class="rich-select-option{active_cls}{variant_cls}" '
             f'data-value="{conditional_escape(ov)}" '
             f'dj-click="{dj_event}" '
-            f'role="option" aria-selected="{"true" if ov == value else "false"}" '
-            f"onclick=\"this.closest('.rich-select').classList.remove('rich-select--open')\">"
+            f'role="option" aria-selected="{"true" if ov == value else "false"}">'
             f"{opt_html}"
             f"</div>"
         )
@@ -4896,38 +4912,28 @@ def rich_select(
         search_html = (
             '<div class="rich-select-search">'
             '<input type="text" class="rich-select-search-input" '
-            'placeholder="Search..." '
-            "oninput=\"(function(el){var items=el.closest('.rich-select-dropdown')."
-            "querySelectorAll('.rich-select-option');"
-            "var q=el.value.toLowerCase();items.forEach(function(item){item.style.display="
-            "item.textContent.toLowerCase().indexOf(q)>=0?'':'none';});})(this)\">"
+            'placeholder="Search..." aria-label="Search options">'
             "</div>"
         )
 
     label_html = f'<label class="form-label">{e_label}</label>' if label else ""
 
-    # Disabled pickers drop the toggle handlers entirely so the trigger
-    # doesn't open a dropdown against the user's disabled intent.
-    trigger_behaviour = (
-        ""
-        if disabled
-        else " onclick=\"this.parentElement.classList.toggle('rich-select--open')\""
-        " onkeydown=\"if(event.key==='Enter'||event.key===' '){event.preventDefault();"
-        "this.parentElement.classList.toggle('rich-select--open');}\""
-    )
+    # Disabled pickers are not focusable; the client behaviour ignores
+    # triggers inside ``.rich-select--disabled``.
+    tabindex = "-1" if disabled else "0"
+    aria_disabled = ' aria-disabled="true"' if disabled else ""
 
     return mark_safe(
         f'<div class="rich-select{disabled_cls}" id="{uid}">'
         f"{label_html}"
         f'<input type="hidden" name="{e_name}" value="{conditional_escape(value)}">'
         f'<div class="rich-select-trigger{trigger_variant_cls}" '
-        f'tabindex="0" role="combobox" '
-        f'aria-expanded="false" aria-haspopup="listbox"{disabled_attr}'
-        f"{trigger_behaviour}>"
+        f'tabindex="{tabindex}" role="combobox" aria-controls="{listbox_id}" '
+        f'aria-expanded="false" aria-haspopup="listbox"{aria_disabled}{disabled_attr}>'
         f"{selected_html}"
-        f'<span class="rich-select-chevron">&#9662;</span>'
+        f'<span class="rich-select-chevron" aria-hidden="true">&#9662;</span>'
         f"</div>"
-        f'<div class="rich-select-dropdown" role="listbox">'
+        f'<div class="rich-select-dropdown" role="listbox" id="{listbox_id}">'
         f"{search_html}"
         f"{''.join(opt_parts)}"
         f"</div>"
@@ -5618,52 +5624,64 @@ def icon(name: Any = "", size: Any = "md", set: Any = "heroicons", **kwargs: Any
 # ---------------------------------------------------------------------------
 
 
+_THEME_TOGGLE_MODES = (
+    ("light", "sun", "Light"),
+    ("dark", "moon", "Dark"),
+    ("system", "computer-desktop", "System"),
+)
+
+
+def render_theme_toggle(
+    current: Any = "system",
+    event: Any = "",
+    custom_class: Any = "",
+    toggle_id: Any = "",
+) -> SafeString:
+    """Markup for ``{% theme_toggle %}``, shared by the Django tag and the Rust handler.
+
+    Each button is a ``role="radio"`` carrying ``data-theme-mode``: djust.theming's
+    ``theme.js`` (loaded by ``{% theme_head %}``) switches the mode on a click of
+    any ``[data-theme-mode]`` element, and the client bundle does the same when
+    ``theme.js`` is absent, so the toggle needs no extra script and no inline
+    handler. No id is generated, so two renders produce the same markup.
+    """
+    from djust.components.icons import render_icon
+
+    current = str(current or "system")
+    e_current = conditional_escape(current)
+    e_event = conditional_escape(event) if event else ""
+    cls = "dj-theme-toggle"
+    if custom_class:
+        cls += f" {conditional_escape(custom_class)}"
+    id_attr = f' id="{conditional_escape(toggle_id)}"' if toggle_id else ""
+
+    buttons = []
+    for mode, icon, label in _THEME_TOGGLE_MODES:
+        checked = mode == current
+        active = " dj-theme-toggle__btn--active" if checked else ""
+        click = f' dj-click="{e_event}" data-value="{mode}"' if e_event else ""
+        buttons.append(
+            f'<button type="button" class="dj-theme-toggle__btn{active}" role="radio" '
+            f'data-theme-mode="{mode}" aria-checked="{"true" if checked else "false"}"{click} '
+            f'aria-label="{label} theme" title="{label}">{render_icon(icon, size="sm")}</button>'
+        )
+    return mark_safe(
+        f'<div class="{cls}"{id_attr} data-current="{e_current}" '
+        f'role="radiogroup" aria-label="Color theme">{"".join(buttons)}</div>'
+    )
+
+
 class ThemeToggleNode(template.Node):
     def __init__(self, kwargs: Any) -> None:
         self.kwargs = kwargs
 
     def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
-        current = kw.get("current", "system")
-        event = kw.get("event", "")
-        custom_class = kw.get("custom_class", "")
-
-        e_event = conditional_escape(event) if event else ""
-        e_cls = conditional_escape(custom_class)
-        e_current = conditional_escape(current)
-
-        # CSS classes
-        cls = "dj-theme-toggle"
-        if e_cls:
-            cls += f" {e_cls}"
-
-        # Build dj-click attribute if server-side persistence is desired
-        click_attr = f' dj-click="{e_event}"' if e_event else ""
-
-        # Icon SVGs for light/dark/system (rendered inline via render_icon)
-        from djust.components.icons import render_icon
-
-        sun_svg = render_icon("sun", size="sm")
-        moon_svg = render_icon("moon", size="sm")
-        monitor_svg = render_icon("computer-desktop", size="sm")
-
-        # Generate a unique ID for this toggle instance
-        toggle_id = f"dj-theme-toggle-{uuid.uuid4().hex[:8]}"
-
-        return mark_safe(
-            f'<div class="{cls}" id="{toggle_id}" '
-            f'data-current="{e_current}"{click_attr} '
-            f'role="radiogroup" aria-label="Color theme">'
-            f'<button type="button" class="dj-theme-toggle__btn" '
-            f'data-theme="light" aria-label="Light theme" '
-            f'title="Light">{sun_svg}</button>'
-            f'<button type="button" class="dj-theme-toggle__btn" '
-            f'data-theme="dark" aria-label="Dark theme" '
-            f'title="Dark">{moon_svg}</button>'
-            f'<button type="button" class="dj-theme-toggle__btn" '
-            f'data-theme="system" aria-label="System theme" '
-            f'title="System">{monitor_svg}</button>'
-            f"</div>"
+        return render_theme_toggle(
+            current=kw.get("current", "system"),
+            event=kw.get("event", ""),
+            custom_class=kw.get("custom_class", ""),
+            toggle_id=kw.get("id", ""),
         )
 
 
@@ -8741,6 +8759,142 @@ def do_page_alert(parser: Any, token: Any) -> template.Node:
 # ---------------------------------------------------------------------------
 
 
+_MENU_DIVIDER = '<hr class="dj-dropdown-menu__divider" role="separator">'
+
+
+def _truthy(value: Any) -> bool:
+    if isinstance(value, str):
+        return value.lower() not in ("", "false", "0", "none")
+    return bool(value)
+
+
+def render_menu_item(item: Any, event_attrs: Any = None) -> str:
+    """Markup for one dropdown-menu entry, shared by every dropdown renderer.
+
+    ``item`` is a dict (an ``items=`` entry or a ``{% menu_item %}``'s
+    arguments). Keys:
+
+    * ``label``, ``icon`` (decorative: ``aria-hidden``), ``danger``, ``disabled``;
+    * ``event`` (+ optional ``value``) sends ``dj-click``;
+    * ``href`` renders a link (``role="menuitem"``; unsafe schemes become ``#``);
+    * ``type="checkbox"`` / ``type="radio"`` with ``checked`` renders a
+      ``menuitemcheckbox`` / ``menuitemradio`` with ``aria-checked``
+      (``checked`` alone implies a checkbox);
+    * ``divider`` renders a separator; ``heading`` a group label.
+
+    ``event_attrs(event, value)`` overrides how the event attributes are
+    written (the component class routes them to its component).
+    """
+    if not isinstance(item, dict):
+        return ""
+    if _truthy(item.get("divider")):
+        return _MENU_DIVIDER
+    if item.get("heading"):
+        return (
+            f'<div class="dj-dropdown-menu__heading" role="presentation">'
+            f"{conditional_escape(str(item['heading']))}</div>"
+        )
+
+    disabled = _truthy(item.get("disabled"))
+    item_cls = "dj-dropdown-menu__item"
+    if _truthy(item.get("danger")):
+        item_cls += " dj-dropdown-menu__item--danger"
+    if disabled:
+        item_cls += " dj-dropdown-menu__item--disabled"
+
+    kind = str(item.get("type", "") or "").lower()
+    if kind not in ("checkbox", "radio") and "checked" in item:
+        kind = "checkbox"
+    checked_attr = ""
+    check_html = ""
+    if kind in ("checkbox", "radio"):
+        role = "menuitemradio" if kind == "radio" else "menuitemcheckbox"
+        checked = _truthy(item.get("checked"))
+        checked_attr = f' aria-checked="{"true" if checked else "false"}"'
+        check_html = (
+            f'<span class="dj-dropdown-menu__check" aria-hidden="true">'
+            f"{'&#10003;' if checked else ''}</span>"
+        )
+    else:
+        role = "menuitem"
+
+    icon_html = ""
+    if item.get("icon"):
+        icon_html = (
+            f'<span class="dj-dropdown-menu__icon" aria-hidden="true">'
+            f"{conditional_escape(str(item['icon']))}</span>"
+        )
+    e_label = conditional_escape(str(item.get("label", "")))
+    inner = f"{check_html}{icon_html}{e_label}"
+
+    if item.get("href") and not disabled:
+        return (
+            f'<a class="{item_cls}" role="{role}" href="{url_attr(item["href"])}"'
+            f"{checked_attr}>{inner}</a>"
+        )
+
+    event = str(item.get("event", "") or "")
+    value = item.get("value")
+    if event_attrs is not None:
+        ea = event_attrs(event, value) if event else ""
+        event_attr = f" {ea}" if ea else ""
+    else:
+        event_attr = f' dj-click="{conditional_escape(event)}"' if event else ""
+        if event and value is not None and value != "":
+            event_attr += f' data-value="{conditional_escape(str(value))}"'
+    disabled_attr = ' aria-disabled="true" disabled' if disabled else ""
+    return (
+        f'<button type="button" class="{item_cls}" role="{role}"{checked_attr}'
+        f"{event_attr}{disabled_attr}>{inner}</button>"
+    )
+
+
+def render_dropdown_menu(kw: Any, content: Any = "") -> SafeString:
+    """Markup for ``{% dropdown_menu %}``, shared by the Django tag and the Rust handler.
+
+    ``content`` is the rendered block body: ``{% menu_item %}`` /
+    ``{% menu_divider %}`` children and any other markup (a status line, a
+    form), kept as written. When the body is empty, ``items=`` is used.
+    """
+    label = kw.get("label", "Menu")
+    items = kw.get("items", [])
+    is_open = _truthy(kw.get("open", False))
+    toggle_event = kw.get("toggle_event", "toggle_menu")
+    align = kw.get("align", "left")
+    custom_class = kw.get("class", "")
+
+    e_label = conditional_escape(str(label))
+    e_toggle = conditional_escape(str(toggle_event))
+
+    classes = ["dj-dropdown-menu"]
+    if is_open:
+        classes.append("dj-dropdown-menu--open")
+    if custom_class:
+        classes.append(conditional_escape(str(custom_class)))
+    class_str = " ".join(classes)
+    open_attr = " data-open" if is_open else ""
+
+    trigger = (
+        f'<button type="button" class="dj-dropdown-menu__trigger" '
+        f'dj-click="{e_toggle}" '
+        f'aria-expanded="{"true" if is_open else "false"}" '
+        f'aria-haspopup="menu">{e_label}</button>'
+    )
+    if not is_open:
+        return mark_safe(f'<div class="{class_str}">{trigger}</div>')
+
+    body = str(content or "")
+    if not body.strip():
+        body = "".join(
+            render_menu_item(item) for item in (items if isinstance(items, list) else [])
+        )
+    menu = (
+        f'<div class="dj-dropdown-menu__content dj-dropdown-menu--{conditional_escape(str(align))}" '
+        f'role="menu">{body}</div>'
+    )
+    return mark_safe(f'<div class="{class_str}"{open_attr}>{trigger}{menu}</div>')
+
+
 class DropdownMenuNode(template.Node):
     def __init__(self, nodelist: Any, kwargs: Any) -> None:
         self.nodelist = nodelist
@@ -8748,81 +8902,8 @@ class DropdownMenuNode(template.Node):
 
     def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
-        label = kw.get("label", "Menu")
-        items = kw.get("items", [])
-        is_open = kw.get("open", False)
-        toggle_event = kw.get("toggle_event", "toggle_menu")
-        align = kw.get("align", "left")
-        custom_class = kw.get("class", "")
-
-        e_label = conditional_escape(str(label))
-        e_toggle = conditional_escape(str(toggle_event))
-        e_class = conditional_escape(str(custom_class))
-
-        classes = ["dj-dropdown-menu"]
-        if e_class:
-            classes.append(e_class)
-        class_str = " ".join(classes)
-        dm_open_attr = " data-open" if is_open else ""
-
-        trigger = (
-            f'<button class="dj-dropdown-menu__trigger" '
-            f'dj-click="{e_toggle}" '
-            f'aria-expanded="{"true" if is_open else "false"}" '
-            f'aria-haspopup="true">{e_label}</button>'
-        )
-
-        if not is_open:
-            return mark_safe(f'<div class="{class_str}">{trigger}</div>')
-        # When open, dm_open_attr is set above
-
-        if not isinstance(items, list):
-            items = []
-
-        # Render nodelist children (menu_item / menu_divider tags)
-        menu_child_nodes = [
-            n for n in self.nodelist if isinstance(n, (MenuItemNode, MenuDividerNode))
-        ]
-
-        menu_items = []
-        if menu_child_nodes:
-            for node in menu_child_nodes:
-                menu_items.append(node.render(context))
-        else:
-            for item in items:
-                if not isinstance(item, dict):
-                    continue
-                if item.get("divider"):
-                    menu_items.append('<hr class="dj-dropdown-menu__divider" role="separator">')
-                    continue
-
-                item_cls = "dj-dropdown-menu__item"
-                if item.get("danger"):
-                    item_cls += " dj-dropdown-menu__item--danger"
-                if item.get("disabled"):
-                    item_cls += " dj-dropdown-menu__item--disabled"
-
-                e_item_label = conditional_escape(str(item.get("label", "")))
-                e_event = conditional_escape(str(item.get("event", "")))
-                disabled_attr = " disabled" if item.get("disabled") else ""
-                event_attr = f' dj-click="{e_event}"' if e_event else ""
-
-                icon_html = ""
-                if item.get("icon"):
-                    icon_html = f'<span class="dj-dropdown-menu__icon">{conditional_escape(str(item["icon"]))}</span>'
-
-                menu_items.append(
-                    f'<button class="{item_cls}" role="menuitem"'
-                    f"{event_attr}{disabled_attr}>"
-                    f"{icon_html}{e_item_label}</button>"
-                )
-
-        menu = (
-            f'<div class="dj-dropdown-menu__content dj-dropdown-menu--{conditional_escape(str(align))}" '
-            f'role="menu">{"".join(menu_items)}</div>'
-        )
-
-        return mark_safe(f'<div class="{class_str}"{dm_open_attr}>{trigger}{menu}</div>')
+        content = self.nodelist.render(context) if _truthy(kw.get("open", False)) else ""
+        return render_dropdown_menu(kw, content)
 
 
 class MenuItemNode(template.Node):
@@ -8831,39 +8912,12 @@ class MenuItemNode(template.Node):
 
     def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
-        label = kw.get("label", "")
-        event = kw.get("event", "")
-        danger = kw.get("danger", False)
-        disabled = kw.get("disabled", False)
-        icon = kw.get("icon", "")
-
-        item_cls = "dj-dropdown-menu__item"
-        if danger:
-            item_cls += " dj-dropdown-menu__item--danger"
-        if disabled:
-            item_cls += " dj-dropdown-menu__item--disabled"
-
-        e_label = conditional_escape(str(label))
-        e_event = conditional_escape(str(event))
-        disabled_attr = " disabled" if disabled else ""
-        event_attr = f' dj-click="{e_event}"' if event else ""
-
-        icon_html = ""
-        if icon:
-            icon_html = (
-                f'<span class="dj-dropdown-menu__icon">{conditional_escape(str(icon))}</span>'
-            )
-
-        return (
-            f'<button class="{item_cls}" role="menuitem"'
-            f"{event_attr}{disabled_attr}>"
-            f"{icon_html}{e_label}</button>"
-        )
+        return mark_safe(render_menu_item(kw))
 
 
 class MenuDividerNode(template.Node):
     def render(self, context: Any) -> SafeString:
-        return '<hr class="dj-dropdown-menu__divider" role="separator">'
+        return mark_safe(_MENU_DIVIDER)
 
 
 @register.tag("dropdown_menu")
