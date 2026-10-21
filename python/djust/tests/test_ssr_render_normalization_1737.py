@@ -316,11 +316,12 @@ class TestStripCommentsAndWhitespacePreservedBoundary:
         assert "a\nb" in result
 
     def test_text_adjacent_to_pre_keeps_single_space(self, mixin):
-        """A <pre> adjacent to actual TEXT (not a tag) keeps a single space —
-        matching Rust. Only TAG-adjacent whitespace is stripped."""
+        """A <pre> adjacent to actual TEXT (not a tag) keeps that text's
+        whitespace verbatim — matching Rust, which keeps a text node with
+        content as it is. Only TAG-adjacent whitespace-only runs are dropped."""
         result = mixin._strip_comments_and_whitespace("<div>before   <pre>x</pre>   after</div>")
-        assert "before <pre>" in result
-        assert "</pre> after" in result
+        assert "before   <pre>" in result
+        assert "</pre>   after" in result
 
     def test_whitespace_between_two_preserved_blocks_collapsed(self, mixin):
         """Whitespace BETWEEN two adjacent preserved blocks is collapsed (#1737,
@@ -357,9 +358,9 @@ class TestStripCommentsAndWhitespacePreservedBoundary:
 
     def test_text_between_two_preserved_blocks_keeps_single_space(self, mixin):
         """Actual TEXT between two preserved blocks is NOT a whitespace-only
-        node — Rust keeps it, so we keep a single space too (no over-collapse)."""
+        node — Rust keeps it verbatim, so we keep it verbatim too."""
         result = mixin._strip_comments_and_whitespace("<pre>p</pre>  mid  <textarea>t</textarea>")
-        assert "</pre> mid <textarea>" in result
+        assert "</pre>  mid  <textarea>" in result
 
     def test_dj_if_marker_survives_with_adjacent_pre(self, mixin):
         html = '<div> <!--dj-if id="if-0"--> <pre>x\ny</pre> <!--/dj-if--> </div>'

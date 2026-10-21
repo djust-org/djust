@@ -596,10 +596,6 @@ def _search_template_root_open(template: str) -> "Optional[re.Match[str]]":
 # #2999: whitespace between inline-level siblings
 # ---------------------------------------------------------------------------
 
-# HTML whitespace (space, tab, LF, FF, CR). NOT ``\s``: Python's ``\s`` also
-# matches NBSP and the other Unicode spaces, which the Rust parser (and the
-# browser) treat as content.
-_HTML_WS_RUN_RE = re.compile(r"[ \t\n\r\f]+")
 _BLOCK_TAG_RE = re.compile(r"<([A-Za-z][^\s/>]*)")
 
 
@@ -938,7 +934,7 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         a marker-less DOM) and every subsequent event fell back to
         ``html_recovery``.
         """
-        from .._render_provenance import sub, collapse, RenderedHTML
+        from .._render_provenance import sub, collapse, fold, RenderedHTML
 
         if isinstance(html, RenderedHTML):
             from .._rust import lazy_authority_spans
@@ -1010,10 +1006,14 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
             flags=re.DOTALL | re.IGNORECASE,
         )
 
-        # Normalize whitespace: collapse every run of HTML whitespace to one
-        # space (#2999: HTML whitespace only — NBSP and other Unicode spaces
-        # are content to the Rust parser and the browser, so ``\s`` was wrong).
-        html = sub(_HTML_WS_RUN_RE, " ", html)
+        # Normalize whitespace: fold every run of HTML whitespace inside markup,
+        # and every whitespace-only text run, to one space (#2999: HTML
+        # whitespace only — NBSP and other Unicode spaces are content). Text
+        # that has content keeps its whitespace: Django renders it verbatim and
+        # the Rust VDOM parser keeps it verbatim, so folding it made a
+        # `white-space: pre-wrap` text lose its line feeds on an HTTP load
+        # while the same text patched in over the socket kept them.
+        html = fold(html)
 
         # Then drop the space between two tags — and around/between preserved
         # blocks (#1737), whose placeholders hide their ``<`` — unless it sits

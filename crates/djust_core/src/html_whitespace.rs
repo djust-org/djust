@@ -252,11 +252,119 @@ fn find_fwd(hay: &[u8], needle: &[u8]) -> Option<usize> {
     hay.windows(needle.len()).position(|w| w == needle)
 }
 
+/// End of the markup token starting at `html[start] == b'<'` (exclusive), or
+/// `None` when `<` does not open one (`a < b` is text).
+///
+/// A comment runs to its `-->`; any other token to the first `>` outside a
+/// quoted attribute value. A quote opens a value only right after `=`, so an
+/// apostrophe in an unquoted value (`title=it's`) cannot swallow the page.
+fn markup_token_end(html: &[u8], start: usize) -> Option<usize> {
+    let next = *html.get(start + 1)?;
+    if !(next.is_ascii_alphabetic() || matches!(next, b'/' | b'!' | b'?')) {
+        return None;
+    }
+    if html[start..].starts_with(b"<!--") {
+        return Some(
+            find_fwd(&html[start + 4..], b"-->").map_or(html.len(), |i| start + 4 + i + 3),
+        );
+    }
+    let mut quote: Option<u8> = None;
+    let mut last = b'<';
+    for (offset, &c) in html[start + 1..].iter().enumerate() {
+        match quote {
+            Some(q) if c == q => quote = None,
+            Some(_) => {}
+            None if (c == b'"' || c == b'\'') && last == b'=' => quote = Some(c),
+            None if c == b'>' => return Some(start + 1 + offset + 1),
+            None => {}
+        }
+        if !c.is_ascii_whitespace() {
+            last = c;
+        }
+    }
+    Some(html.len())
+}
+
+/// The whitespace runs the egress normalizer folds to one `" "`: every run
+/// inside markup (tags, the comments that survive), and every text run made
+/// only of whitespace (which [`collapse_inter_tag_whitespace`] then keeps or
+/// drops). The whitespace of a text run that has content is never touched.
+///
+/// That last part is the parser's rule: `build_children` keeps a text node
+/// with content verbatim, and Django renders it verbatim, so
+/// `<p class="whitespace-pre-wrap">a\n\nb</p>` must reach the browser with its
+/// line feeds. Folding it made a page loaded over HTTP read "a b" while the
+/// same text patched in over the socket kept its lines.
+///
+/// Expects `pre`/`code`/`textarea`/`script`/`style` already replaced by
+/// `__PRESERVED_BLOCK_<n>__` placeholders, which count as markup here.
+pub fn fold_whitespace_edits(html: &str) -> Vec<(usize, usize)> {
+    let bytes = html.as_bytes();
+    let mut edits = Vec::new();
+    let fold_runs = |from: usize, to: usize, edits: &mut Vec<(usize, usize)>| {
+        let mut i = from;
+        while i < to {
+            if bytes[i].is_ascii_whitespace() {
+                let start = i;
+                while i < to && bytes[i].is_ascii_whitespace() {
+                    i += 1;
+                }
+                if &bytes[start..i] != b" " {
+                    edits.push((start, i));
+                }
+            } else {
+                i += 1;
+            }
+        }
+    };
+    let mut text_start = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        let token_end = if bytes[i] == b'<' {
+            markup_token_end(bytes, i)
+        } else if bytes[i] == b'_' {
+            placeholder_starting_at(bytes, i)
+                .map(|n| i + PLACEHOLDER_PREFIX.len() + n.to_string().len() + 2)
+        } else {
+            None
+        };
+        let Some(end) = token_end else {
+            i += 1;
+            continue;
+        };
+        if is_html_whitespace_only(&html[text_start..i]) {
+            fold_runs(text_start, i, &mut edits);
+        }
+        if bytes[i] == b'<' {
+            fold_runs(i, end, &mut edits);
+        }
+        i = end;
+        text_start = end;
+    }
+    if is_html_whitespace_only(&html[text_start..]) {
+        fold_runs(text_start, bytes.len(), &mut edits);
+    }
+    edits
+}
+
+/// Apply [`fold_whitespace_edits`].
+pub fn fold_whitespace(html: &str) -> String {
+    let mut out = String::with_capacity(html.len());
+    let mut cursor = 0;
+    for (start, end) in fold_whitespace_edits(html) {
+        out.push_str(&html[cursor..start]);
+        out.push(' ');
+        cursor = end;
+    }
+    out.push_str(&html[cursor..]);
+    out
+}
+
 /// Drop the whitespace between two tags unless both neighbours are inline —
 /// the egress normalizer's half of the rule `build_children` applies in the
 /// VDOM parser (#2999).
 ///
-/// `html` has already had every whitespace run collapsed to one space and its
+/// `html` has already been through [`fold_whitespace`] and had its
 /// `pre`/`code`/`textarea`/`script`/`style` blocks replaced by
 /// `__PRESERVED_BLOCK_<i>__` placeholders whose tag names are
 /// `block_tags[i]` (see `TemplateMixin._strip_comments_and_whitespace`). A
@@ -311,6 +419,48 @@ fn collapse_with_edits<F: FnMut(usize, usize)>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fold_keeps_text_with_content_verbatim() {
+        assert_eq!(
+            fold_whitespace("<p class=\"x\">a\n\nb  c</p>"),
+            "<p class=\"x\">a\n\nb  c</p>"
+        );
+        assert_eq!(fold_whitespace("<p>\n   lead\n</p>"), "<p>\n   lead\n</p>");
+    }
+
+    #[test]
+    fn fold_folds_markup_and_whitespace_only_text() {
+        assert_eq!(
+            fold_whitespace("<div\n   class=\"a\n b\">\n\n  <span>x</span>\t\n</div>"),
+            "<div class=\"a b\"> <span>x</span> </div>"
+        );
+        assert_eq!(fold_whitespace("  \n"), " ");
+        assert_eq!(
+            fold_whitespace("<!--dj-if\n id=\"if-1\"-->\n\n<!--/dj-if-->"),
+            "<!--dj-if id=\"if-1\"--> <!--/dj-if-->"
+        );
+    }
+
+    #[test]
+    fn fold_treats_placeholders_and_stray_lt_correctly() {
+        assert_eq!(
+            fold_whitespace("<p>a\n __PRESERVED_BLOCK_0__\n\n__PRESERVED_BLOCK_1__  b</p>"),
+            "<p>a\n __PRESERVED_BLOCK_0__ __PRESERVED_BLOCK_1__  b</p>"
+        );
+        // `<` that opens no tag is text; an apostrophe in an unquoted value
+        // does not open a quote.
+        assert_eq!(fold_whitespace("<p>1 <  2</p>"), "<p>1 <  2</p>");
+        assert_eq!(
+            fold_whitespace("<a title=it's\n  href=\"/\">x  y</a>"),
+            "<a title=it's href=\"/\">x  y</a>"
+        );
+        // NBSP is content, never folded.
+        assert_eq!(
+            fold_whitespace("<p>\u{a0}\u{a0}</p>"),
+            "<p>\u{a0}\u{a0}</p>"
+        );
+    }
 
     #[test]
     fn inline_list_is_sorted_and_unique() {
