@@ -176,7 +176,19 @@ class AsyncWorkMixin:
 
     Supports multiple concurrent async tasks with optional naming for
     tracking and cancellation.
+
+    When the socket closes, an explicit-exposure root's ``start_async`` work
+    is cancelled with the view. A legacy (default-exposure) root's work runs
+    to completion and its late result is discarded (#3234); a view whose work
+    only serves the open page (a follower, a live feed) sets
+    ``cancel_async_on_disconnect = True`` to have it cancelled
+    (:meth:`cancel_async_all`) instead.
     """
+
+    #: Cancel this legacy root's ``start_async`` work when its socket or SSE
+    #: stream closes, instead of letting it run to completion. An
+    #: explicit-exposure root is always disposed with its work.
+    cancel_async_on_disconnect: bool = False
 
     def start_async(
         self,

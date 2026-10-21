@@ -5,13 +5,14 @@ Allows background tasks (Celery, management commands, cron jobs) to push
 state updates to connected LiveView clients.
 """
 
+import contextlib
 import contextvars
 import hashlib
 import json
 import logging
 import re
 import sys
-from typing import Any, FrozenSet, Optional, Union
+from typing import Any, FrozenSet, Iterator, Optional, Union
 
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
@@ -43,6 +44,59 @@ _VIEW_PATH_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)+$
 origin_channel: "contextvars.ContextVar[str | None]" = contextvars.ContextVar(
     "djust_push_origin_channel", default=None
 )
+
+
+class _OriginTurn:
+    """The handler turn that set ``origin_channel``; closed when it ends."""
+
+    __slots__ = ("channel", "open")
+
+    def __init__(self, channel: Optional[str]) -> None:
+        self.channel = channel
+        self.open = True
+
+
+# An asyncio task copies the context it was created in, so a task started
+# during a turn (a pump a service launched, ``start_async`` work) would keep
+# ``origin_channel`` after the turn ends, and its later pushes would be skipped
+# on the socket that started it although they are news there. The turn is a
+# shared object the copy also holds: closing it at the end of the turn retires
+# the tag in every copy at once.
+_origin_turn: "contextvars.ContextVar[_OriginTurn | None]" = contextvars.ContextVar(
+    "djust_push_origin_turn", default=None
+)
+
+
+@contextlib.contextmanager
+def originating_turn(channel: Optional[str]) -> Iterator[None]:
+    """Tag the pushes sent while the block runs with ``channel`` (#1677).
+
+    The tag ends with the block, also for tasks started inside it.
+    """
+    turn = _OriginTurn(channel)
+    channel_token = origin_channel.set(channel)
+    turn_token = _origin_turn.set(turn)
+    try:
+        yield
+    finally:
+        turn.open = False
+        _origin_turn.reset(turn_token)
+        origin_channel.reset(channel_token)
+
+
+def current_origin_channel() -> Optional[str]:
+    """The originator tag for a push sent now, or ``None``.
+
+    ``origin_channel`` as set, except a value that a handler turn set and that
+    outlived the turn (it was copied into a task the turn started).
+    """
+    channel = origin_channel.get()
+    if channel is None:
+        return None
+    turn = _origin_turn.get()
+    if turn is not None and not turn.open and turn.channel == channel:
+        return None
+    return channel
 
 
 def view_group_name(view_path: str) -> str:
@@ -490,7 +544,7 @@ def _server_push_message(
         "group": group,
         # Originating session's channel (#1677), if pushed from within an event
         # handler — lets that session skip its redundant self-broadcast.
-        "sender_channel": origin_channel.get(),
+        "sender_channel": current_origin_channel(),
     }
     # The tenant this push is for (``"tenant:<id>"``). A tenant view applies
     # only a push stamped for its own tenant or not stamped (a broadcast, or a

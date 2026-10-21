@@ -337,7 +337,9 @@ def release_root_view(view: Any, *, navigation: bool, reason: str) -> None:
       refused, #3236), and every embedded child still registered is
       unregistered (``_unregister_child``: a legacy child's waiters are closed
       and its ``_cleanup_on_unregister`` runs; an explicit child is disposed).
-      Its other background work runs to completion, as it always has; the
+      Its other background work runs to completion, as it always has
+      (#3234), unless the view sets ``cancel_async_on_disconnect = True``:
+      then a close (``reason="view_disconnect"``) cancels it. Either way the
       transport drops the view, so a late result is discarded.
     * Either way its Rust live handles are dropped (``_clear_live_handles``,
       #2539): the handles hold application objects, which the GC cannot see.
@@ -358,6 +360,17 @@ def release_root_view(view: Any, *, navigation: bool, reason: str) -> None:
             except Exception:  # noqa: BLE001
                 logger.warning("Cleaning up a released legacy view's uploads failed")
         _close_view_waiters(view, reason)
+        if (
+            reason == "view_disconnect"
+            and getattr(view, "cancel_async_on_disconnect", False) is True
+        ):
+            from .mixins.async_work import AsyncWorkMixin
+
+            if isinstance(view, AsyncWorkMixin):
+                try:
+                    view.cancel_async_all()
+                except Exception:  # noqa: BLE001
+                    logger.warning("Cancelling a released legacy view's background work failed")
         registry = getattr(view, "_child_views", None)
         unregister = getattr(view, "_unregister_child", None)
         if type(registry) is dict and callable(unregister):

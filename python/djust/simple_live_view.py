@@ -172,7 +172,9 @@ class SimpleLiveView(View):
 
     def get(self, request: HttpRequest, *args: Any, **kwargs: Any) -> HttpResponse:
         """Handle GET requests."""
-        self.mount(request, **kwargs)
+        from ._view_hooks import call_hook_sync
+
+        call_hook_sync(self.mount, request, **kwargs)
         return HttpResponse(self.render_template())
 
 
