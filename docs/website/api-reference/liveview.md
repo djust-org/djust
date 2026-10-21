@@ -75,6 +75,14 @@ def mount(self, request, **kwargs):
         self.item = Item.objects.get(pk=pk)
 ```
 
+**`async def mount`.** `mount()` may also be a coroutine. A sync `mount()` runs on asgiref's one shared sync thread, which every session's sync work uses: when many pages open at once, each mount queues behind the others' database reads. An `async def mount` is awaited on the event loop instead, so its awaits (the async ORM, an async service) overlap with other sessions' work. Use the async ORM (`aget`, `afirst`, `async for`) inside it; a sync ORM call on the loop raises `SynchronousOnlyOperation`, so wrap any sync helper in `sync_to_async`. On the HTTP render djust runs the coroutine to completion before rendering. `handle_params()` may be `async def` too.
+
+```python
+async def mount(self, request, pk=None, **kwargs):
+    self.item = await Item.objects.aget(pk=pk)
+    self.related = [r async for r in self.item.related.all()]
+```
+
 ---
 
 #### `get_context_data(**kwargs) -> dict`
@@ -97,7 +105,7 @@ def get_context_data(self, **kwargs):
 
 #### `handle_params(params, uri)`
 
-Called after `mount()` on the initial WebSocket connect, on every `live_patch()` (soft navigation without a full page reload), and on browser back/forward navigation.
+Called after `mount()` on the initial WebSocket connect, on every `live_patch()` (soft navigation without a full page reload), and on browser back/forward navigation. It may be `async def`, like `mount()`.
 
 **Parameters:**
 
