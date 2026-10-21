@@ -23175,7 +23175,11 @@ globalThis.djust.djTransitionGroup = {
 //   .rich-select      open/close on click, Enter/Space and Escape; close on an
 //                     option pick or a click elsewhere; search-box filtering.
 //   .combobox         keep focus in the input while an option is pressed,
-//                     close the list after the pick, reflect aria-expanded.
+//                     close the list after the pick, reflect aria-expanded;
+//                     the picked option's value goes to the hidden
+//                     `.combobox-value` input the form submits, and typed text
+//                     that matches no option is discarded on change unless the
+//                     combobox has `data-allow-free-text`.
 //   .dj-theme-toggle  switch the colour mode (`data-theme-mode`) when
 //                     djust.theming's theme.js is not on the page, and keep
 //                     every toggle's aria-checked in step with the mode.
@@ -23245,12 +23249,53 @@ globalThis.djust.djTransitionGroup = {
         _syncThemeToggles(mode);
     }
 
+    // Mark `chosen` as the selected option among `options`.
+    function _markSelected(options, chosen, activeClass) {
+        options.forEach(function (opt) {
+            const on = opt === chosen;
+            opt.setAttribute('aria-selected', on ? 'true' : 'false');
+            opt.classList.toggle(activeClass, on);
+        });
+    }
+
+    function _comboboxOptions(box) {
+        return Array.prototype.slice.call(box.querySelectorAll('.combobox-option'));
+    }
+
+    function _pickComboboxOption(box, option) {
+        const hidden = box.querySelector('.combobox-value');
+        const input = box.querySelector('.combobox-input');
+        if (!hidden || !input) return;  // multiple mode: the server renders the tags
+        hidden.value = option.getAttribute('data-value') || '';
+        input.value = option.textContent.trim();
+        _markSelected(_comboboxOptions(box), option, 'combobox-option-selected');
+    }
+
+    function _pickRichSelectOption(root, option) {
+        const hidden = root.querySelector('input[type=hidden]');
+        if (hidden) hidden.value = option.getAttribute('data-value') || '';
+        const trigger = root.querySelector('.rich-select-trigger');
+        const chevron = trigger && trigger.querySelector('.rich-select-chevron');
+        if (trigger && chevron) {
+            Array.prototype.slice.call(trigger.childNodes).forEach(function (node) {
+                if (node !== chevron) trigger.removeChild(node);
+            });
+            Array.prototype.slice.call(option.childNodes).forEach(function (node) {
+                trigger.insertBefore(node.cloneNode(true), chevron);
+            });
+        }
+        _markSelected(Array.prototype.slice.call(root.querySelectorAll('.rich-select-option')),
+            option, 'rich-select-option--active');
+    }
+
     document.addEventListener('click', function (e) {
         const target = e.target;
         const richSelect = _closest(target, '.rich-select');
         _closeRichSelects(richSelect);
         if (richSelect) {
-            if (_closest(target, '.rich-select-option')) {
+            const richOption = _closest(target, '.rich-select-option');
+            if (richOption) {
+                _pickRichSelectOption(richSelect, richOption);
                 _setRichSelectOpen(richSelect, false);
             } else if (_closest(target, '.rich-select-trigger') &&
                        !richSelect.classList.contains('rich-select--disabled')) {
@@ -23260,7 +23305,10 @@ globalThis.djust.djTransitionGroup = {
 
         const comboList = _closest(target, '.combobox-dropdown');
         if (comboList) {
-            const input = _closest(comboList, '.combobox').querySelector('.combobox-input');
+            const box = _closest(comboList, '.combobox');
+            const comboOption = _closest(target, '.combobox-option');
+            if (comboOption) _pickComboboxOption(box, comboOption);
+            const input = box.querySelector('.combobox-input');
             if (input) input.blur();
         }
 
@@ -23444,11 +23492,42 @@ globalThis.djust.djTransitionGroup = {
         }
     });
 
+    // Typed combobox text, once committed: an exact (case-insensitive) label
+    // match picks that option; empty text clears the value; other text is the
+    // value only with data-allow-free-text, else the previous choice returns.
+    function _commitComboboxText(box, input) {
+        const hidden = box.querySelector('.combobox-value');
+        if (!hidden) return;
+        const text = input.value.trim();
+        const options = _comboboxOptions(box);
+        const match = options.filter(function (opt) {
+            return opt.textContent.trim().toLowerCase() === text.toLowerCase();
+        })[0];
+        if (match) {
+            _pickComboboxOption(box, match);
+        } else if (!text) {
+            hidden.value = '';
+            _markSelected(options, null, 'combobox-option-selected');
+        } else if (box.hasAttribute('data-allow-free-text')) {
+            hidden.value = text;
+            _markSelected(options, null, 'combobox-option-selected');
+        } else {
+            const current = options.filter(function (opt) {
+                return opt.getAttribute('data-value') === hidden.value;
+            })[0];
+            input.value = current ? current.textContent.trim() : '';
+        }
+    }
+
     document.addEventListener('change', function (e) {
         const input = e.target;
-        if (input && input.classList && input.classList.contains('dropzone-input')) {
+        if (!input || !input.classList) return;
+        if (input.classList.contains('dropzone-input')) {
             const zone = _closest(input, '.dropzone');
             if (zone) _showFileCount(zone, input.files || []);
+        } else if (input.classList.contains('combobox-input')) {
+            const box = _closest(input, '.combobox');
+            if (box) _commitComboboxText(box, input);
         }
     });
 

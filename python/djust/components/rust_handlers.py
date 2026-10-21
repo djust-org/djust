@@ -2152,6 +2152,8 @@ class ComboboxHandler:
                 describedby=kwargs.get("describedby", ""),
                 invalid=kwargs.get("invalid", False),
                 field=kwargs.get("field"),
+                id=kwargs.get("id", ""),
+                allow_free_text=kwargs.get("allow_free_text", False),
             )
         )
 

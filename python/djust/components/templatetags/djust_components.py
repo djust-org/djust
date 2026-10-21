@@ -111,6 +111,12 @@ def render_modal(kw: Any, content: Any) -> SafeString:
     ``native=True`` renders a ``<dialog>`` opened with ``showModal()`` instead
     of the positioned ``<div>``: top layer, inert page, native Escape.
 
+    ``role="alertdialog"`` (default ``dialog``) for a dialog that needs an
+    answer; ``description=`` renders a description paragraph that
+    ``aria-describedby`` names, and ``describedby=`` adds ids of your own;
+    ``close_button=False`` omits the × button (mark your own closing control
+    ``data-dj-close`` to keep Escape-to-close on the ``<div>`` modal).
+
     ``kw`` holds the resolved tag arguments. The size class sits on the dialog,
     not on the full-screen backdrop, and the dialog carries ``role="dialog"``,
     ``aria-modal`` and an ``aria-labelledby`` derived from ``id`` (no
@@ -135,6 +141,27 @@ def render_modal(kw: Any, content: Any) -> SafeString:
     modal_id = conditional_escape(kw.get("id", "modal"))
     title_id = f"{modal_id}-title"
     labelledby = f' aria-labelledby="{title_id}"' if title else ""
+    role = "alertdialog" if str(kw.get("role", "")) == "alertdialog" else "dialog"
+    description = kw.get("description", "")
+    desc_id = f"{modal_id}-desc"
+    described_ids = ([desc_id] if description else []) + str(
+        kw.get("describedby", "") or ""
+    ).split()
+    describedby = (
+        f' aria-describedby="{conditional_escape(" ".join(described_ids))}"'
+        if described_ids
+        else ""
+    )
+    description_html = (
+        f'<p class="dj-modal__description" id="{desc_id}">{conditional_escape(description)}</p>'
+        if description
+        else ""
+    )
+    close_html = (
+        f'<button class="dj-modal__close" aria-label="Close" dj-click="{e_close_event}"{cid_attr}>&times;</button>'
+        if _truthy_flag(kw.get("close_button", True))
+        else ""
+    )
 
     if _truthy_flag(kw.get("native", False)):
         # A native <dialog>: the client opens it with showModal()
@@ -143,25 +170,27 @@ def render_modal(kw: Any, content: Any) -> SafeString:
         # (Escape) sends close_event back to the server through
         # dj-dialog-close-event. The focus trap and return focus come from
         # the keyboard-nav module, as for the <div> modal.
+        # <dialog> is a dialog already; only an alertdialog needs the role.
+        role_attr = ' role="alertdialog"' if role == "alertdialog" else ""
         return mark_safe(
             f'<dialog class="dj-modal {size_class} dj-modal--native" dj-dialog="open" '
-            f'dj-dialog-close-event="{e_close_event}"{labelledby}{cid_attr}>'
+            f'dj-dialog-close-event="{e_close_event}"{role_attr}{labelledby}{describedby}{cid_attr}>'
             f'<div class="dj-modal__header">'
             f'<h3 class="dj-modal__title" id="{title_id}">{e_title}</h3>'
-            f'<button class="dj-modal__close" aria-label="Close" dj-click="{e_close_event}"{cid_attr}>&times;</button>'
+            f"{close_html}"
             f"</div>"
-            f'<div class="dj-modal__body">{content}</div>'
+            f'<div class="dj-modal__body">{description_html}{content}</div>'
             f"</dialog>"
         )
 
     return mark_safe(f"""<div class="dj-modal-backdrop">
   <div class="dj-scrim" dj-click="{e_close_event}"{cid_attr}></div>
-  <div class="dj-modal {size_class}" role="dialog" aria-modal="true"{labelledby}>
+  <div class="dj-modal {size_class}" role="{role}" aria-modal="true"{labelledby}{describedby}>
     <div class="dj-modal__header">
       <h3 class="dj-modal__title" id="{title_id}">{e_title}</h3>
-      <button class="dj-modal__close" aria-label="Close" dj-click="{e_close_event}"{cid_attr}>&times;</button>
+      {close_html}
     </div>
-    <div class="dj-modal__body">{content}</div>
+    <div class="dj-modal__body">{description_html}{content}</div>
   </div>
 </div>""")
 
@@ -2060,6 +2089,8 @@ def combobox(
     describedby: Any = "",
     invalid: Any = False,
     field: Any = None,
+    id: Any = "",
+    allow_free_text: Any = False,
 ) -> SafeString:
     """Render a combobox (searchable select).
 
@@ -2072,7 +2103,16 @@ def combobox(
         describedby: extra element ids for the input's ``aria-describedby``
         invalid: marks the input ``aria-invalid`` (an ``error`` does too)
         field: a Django BoundField; fills name, label, value, error, help text
-            and required from it
+            and required from it, and its ``auto_id`` (form prefix included)
+            becomes the input's id
+        id: the visible input's id; the listbox, error and help ids derive
+            from it (default: ``<name>-input`` / ``<name>-listbox`` ...)
+        allow_free_text: in single mode, typed text that matches no option
+            is submitted as the value; otherwise it is discarded
+
+    In single mode the selected option's value is submitted from a hidden
+    input named ``name``; the visible text input is not submitted. The client
+    bundle updates the hidden value when an option is picked.
     """
     if field is not None:
         filled = _from_bound_field(
@@ -2088,6 +2128,9 @@ def combobox(
         )
         name, label, value = filled["name"], filled["label"], filled["value"]
         error, helper, required = filled["error"], filled["helper"], filled["required"]
+        auto_id = getattr(field, "auto_id", None)
+        if not id and auto_id:
+            id = auto_id
     if options is None:
         options = []
     if selected is None:
@@ -2177,17 +2220,29 @@ def combobox(
                 f'dj-click="{e_event}" data-value="{ov}">{ol}</div>'
             )
 
-    label_html = (
-        f'<label class="form-label" for="{e_name}-input">{e_label}</label>' if label else ""
-    )
+    # Ids: from ``id`` / the bound field's auto_id, else the legacy
+    # name-derived ones.
+    if id:
+        input_id = conditional_escape(id)
+        id_prefix = input_id
+    else:
+        input_id = f"{e_name}-input"
+        id_prefix = e_name
+    label_html = f'<label class="form-label" for="{input_id}">{e_label}</label>' if label else ""
     error_html = (
-        f'<span class="form-error-message" id="{e_name}-error">{e_error}</span>' if error else ""
+        f'<span class="form-error-message" id="{id_prefix}-error">{e_error}</span>' if error else ""
     )
     helper_html = (
-        f'<span class="form-helper" id="{e_name}-helper">{e_helper}</span>' if helper else ""
+        f'<span class="form-helper" id="{id_prefix}-helper">{e_helper}</span>' if helper else ""
     )
-    aria = field_aria_attrs(str(e_name), error, helper, describedby, invalid)
+    aria = field_aria_attrs(str(id_prefix), error, helper, describedby, invalid)
     req = " required" if required else ""
+    free_text_attr = " data-allow-free-text" if _truthy_flag(allow_free_text) else ""
+    if not multiple:
+        hidden_inputs_html = (
+            f'<input type="hidden" class="combobox-value" id="{id_prefix}-value" '
+            f'name="{e_name}" value="{e_value}">'
+        )
 
     if not multiple:
         current_label = e_value
@@ -2202,18 +2257,19 @@ def combobox(
     return mark_safe(
         f'<div class="form-group">'
         f"{label_html}"
-        f'<div class="combobox" id="{e_name}-combobox">'
+        f'<div class="combobox" id="{id_prefix}-combobox"{free_text_attr}>'
         f"{tags_container}"
         f"{hidden_inputs_html}"
-        f'<input class="combobox-input form-input" type="text" id="{e_name}-input" '
-        f'name="{e_name}" placeholder="{e_placeholder}" value="{input_value}" '
+        # The visible input has no name: the form submits the hidden value.
+        f'<input class="combobox-input form-input" type="text" id="{input_id}" '
+        f'placeholder="{e_placeholder}" value="{input_value}" '
         f'role="combobox" aria-autocomplete="list" aria-expanded="false" '
-        f'aria-controls="{e_name}-listbox"{aria} '
+        f'aria-controls="{id_prefix}-listbox"{aria} '
         f'dj-input="{e_search}" autocomplete="off"{req}>'
-        # Keeping focus in the input while an option is pressed, and closing
-        # the list after the pick, is the client bundle's delegated
-        # ``.combobox-dropdown`` behaviour (no inline handler).
-        f'<div class="combobox-dropdown" id="{e_name}-listbox" role="listbox">{options_html}</div>'
+        # Keeping focus in the input while an option is pressed, closing the
+        # list after the pick and recording the picked value are the client
+        # bundle's delegated ``.combobox`` behaviour (no inline handler).
+        f'<div class="combobox-dropdown" id="{id_prefix}-listbox" role="listbox">{options_html}</div>'
         f"</div>"
         f"{error_html}{helper_html}"
         f"</div>"
@@ -4857,6 +4913,9 @@ def rich_select(
         )
         name, label, value = filled["name"], filled["label"], filled["value"]
         error, helper = filled["error"], filled["helper"]
+        auto_id = getattr(field, "auto_id", None)
+        if not id and auto_id:
+            id = auto_id
     if isinstance(disabled, str):
         disabled = disabled.lower() not in ("false", "0", "")
     if isinstance(searchable, str):
