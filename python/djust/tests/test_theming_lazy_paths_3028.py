@@ -272,7 +272,9 @@ async def _drive(view_name):
         session_key = key
 
     communicator = WebsocketCommunicator(
-        LiveViewConsumer.as_asgi(), "/ws/", headers=[(b"origin", b"http://testserver")]
+        LiveViewConsumer.as_asgi(),
+        "/ws/",
+        headers=[(b"host", b"testserver"), (b"origin", b"http://testserver")],
     )
     communicator.scope["session"] = Session()
     connected, _ = await communicator.connect()
