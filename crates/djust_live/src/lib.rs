@@ -5462,6 +5462,152 @@ fn find_dj_root_content_range(html: &str) -> Option<(usize, usize)> {
     find_root_close(bytes, open_end, &tag_name).map(|close| (open_end, close))
 }
 
+/// `find_dj_root_content_range` for Python's `_extract_liveview_content`:
+/// `(start, end)` CHARACTER offsets (Python string indices) of the
+/// root's content, `(0, len)` when there is no root or its close tag is
+/// missing (Python then keeps the whole string), or `None` when the input
+/// holds markup the two locators read differently, so the caller must use
+/// the Python path.
+///
+/// The Python twin masks the whole page in Python; on a 300-row page that was
+/// about half of a mount's CPU, all of it on the process's one sync thread.
+/// Both follow the one root rule pinned by the shared corpus
+/// (`python/tests/fixtures/root_selection_3031.json`, #3031). They part ways
+/// only on parse errors inside a tag (a `<`, a stray quote or NUL), on a tag
+/// left open at EOF, and on `{% ... %}` text, which the Python balancer reads
+/// as template branches; see [`root_scan_is_ambiguous`]. The VDOM serializer
+/// never emits the first three, so a rendered page takes this path. The
+/// `<body>` fallback beside another view's container is left to Python too.
+#[pyfunction]
+fn root_content_range(py: Python<'_>, html: &str) -> PyResult<Option<(usize, usize)>> {
+    guard_panic("root_content_range", move || {
+        Ok(py.detach(|| {
+            if root_scan_is_ambiguous(html) {
+                return None;
+            }
+            let bytes = html.as_bytes();
+            // The Python twin's `<body>` fallback (#3302) also looks inside other
+            // views' containers, which this scanner skips; with one on the page,
+            // "no root" and a `<body>` root are left to Python.
+            let foreign_views = contains_ascii_ci(bytes, b"data-djust-embedded")
+                || contains_ascii_ci(bytes, b"dj-lazy");
+            let whole = || Some((0, html.chars().count()));
+            let Some((open_end, tag_name)) = find_root_open(bytes) else {
+                return if foreign_views { None } else { whole() };
+            };
+            if foreign_views && tag_name == b"body" {
+                return None;
+            }
+            let Some(close) = find_root_close(bytes, open_end, &tag_name) else {
+                return whole();
+            };
+            let (start, end) = (open_end, close);
+            if html.is_ascii() {
+                return Some((start, end));
+            }
+            let char_start = html[..start].chars().count();
+            Some((char_start, char_start + html[start..end].chars().count()))
+        }))
+    })
+}
+
+fn contains_ascii_ci(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack
+        .windows(needle.len())
+        .any(|w| w.eq_ignore_ascii_case(needle))
+}
+
+/// Whether `html` holds markup the Rust and Python root locators may read
+/// differently: a NUL byte, `{%`, or a tag with a parse error the Python
+/// mask rewrites (a `<` or a quote in a name or an unquoted value, a quoted
+/// value or a tag left open at EOF). Raw-text bodies and comments are
+/// skipped exactly as the locators skip them.
+fn root_scan_is_ambiguous(html: &str) -> bool {
+    let bytes = html.as_bytes();
+    if bytes.contains(&0) || html.contains("{%") {
+        return true;
+    }
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] != b'<' {
+            i += 1;
+            continue;
+        }
+        let starts_tag = bytes
+            .get(i + 1)
+            .is_some_and(|&c| c.is_ascii_alphabetic() || c == b'/');
+        if starts_tag
+            && !(bytes[i + 1] == b'/' && !bytes.get(i + 2).is_some_and(|c| c.is_ascii_alphabetic()))
+        {
+            let Some(end) = tag_body_end_if_clean(bytes, i + 1) else {
+                return true;
+            };
+            // A raw-text body (and its end tag) is skipped as both locators skip it.
+            i = skip_raw_text_region(bytes, i).unwrap_or(end + 1);
+            continue;
+        }
+        match skip_raw_text_region(bytes, i) {
+            Some(next) => i = next,
+            None => i += 1,
+        }
+    }
+    false
+}
+
+/// The `>` ending the tag whose body starts at `start` (just past `<`), or
+/// `None` when the body has a parse error the locators treat differently
+/// (see [`root_scan_is_ambiguous`]). Tokenizes as [`scan_tag_body`] does.
+fn tag_body_end_if_clean(bytes: &[u8], start: usize) -> Option<usize> {
+    let stray = |c: u8| matches!(c, b'<' | b'"' | b'\'');
+    let mut i = start;
+    if bytes.get(i) == Some(&b'/') {
+        i += 1;
+    }
+    while i < bytes.len() && !html_space(bytes[i]) && !matches!(bytes[i], b'/' | b'>') {
+        if stray(bytes[i]) {
+            return None;
+        }
+        i += 1;
+    }
+    loop {
+        while i < bytes.len() && (html_space(bytes[i]) || bytes[i] == b'/') {
+            i += 1;
+        }
+        match bytes.get(i) {
+            None => return None,
+            Some(b'>') => return Some(i),
+            Some(&c) if stray(c) => return None,
+            Some(_) => {}
+        }
+        i += 1; // an initial '=' is part of the attribute NAME
+        while i < bytes.len() && !html_space(bytes[i]) && !matches!(bytes[i], b'/' | b'>' | b'=') {
+            if stray(bytes[i]) {
+                return None;
+            }
+            i += 1;
+        }
+        while i < bytes.len() && html_space(bytes[i]) {
+            i += 1;
+        }
+        if bytes.get(i) == Some(&b'=') {
+            i += 1;
+            while i < bytes.len() && html_space(bytes[i]) {
+                i += 1;
+            }
+            if let Some(&q @ (b'"' | b'\'')) = bytes.get(i) {
+                i += 1 + bytes[i + 1..].iter().position(|&c| c == q)? + 1;
+            } else {
+                while i < bytes.len() && !html_space(bytes[i]) && bytes[i] != b'>' {
+                    if stray(bytes[i]) {
+                        return None;
+                    }
+                    i += 1;
+                }
+            }
+        }
+    }
+}
+
 /// `(offset just past its `>`, lowercased tag name)` of the root's open tag,
 /// walking `bytes` tag by tag: the first `dj-root`, else the first `dj-view`,
 /// outside every other view's container (an embedded child's wrapper or a lazy
@@ -6202,6 +6348,7 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m
     )?)?;
     m.add_function(wrap_pyfunction!(provenance_edits::lazy_authority_spans, m)?)?;
+    m.add_function(wrap_pyfunction!(root_content_range, m)?)?;
     m.add_function(wrap_pyfunction!(collapse_inter_tag_whitespace, m)?)?;
     m.add_function(wrap_pyfunction!(fast_json_dumps, m)?)?;
     m.add_function(wrap_pyfunction!(resolve_template_inheritance, m)?)?;
@@ -7892,5 +8039,38 @@ mod lazy_selector_keys_3428 {
         drop(plan);
         LAZY_TREE_PLANS.remove(&key);
         std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod root_scan_ambiguity_tests {
+    //! `root_content_range` hands these to the Python locator.
+    use super::root_scan_is_ambiguous;
+
+    #[test]
+    fn rendered_markup_is_not_ambiguous() {
+        for html in [
+            r#"<div dj-id="0" dj-view="a.B"><ul dj-id="1"><li class="row" data-id="1" dj-id="2">x</li></ul></div>"#,
+            r#"<div dj-root title="a<b>c" data-x='it"s'><script>if (a<b) {}</script><!-- <div> --></div>"#,
+            r#"<div dj-root><textarea>&lt;/div&gt; <div></textarea><br/><input value=x></div >"#,
+            "<p>é ü</p><div dj-root>a &lt; b</div>",
+        ] {
+            assert!(!root_scan_is_ambiguous(html), "{html}");
+        }
+    }
+
+    #[test]
+    fn parse_errors_and_template_text_are_ambiguous() {
+        for html in [
+            "<div dj-root>{% if x %}</div>",
+            "<div dj-view><div<html dj-root></div>",
+            "<div dj-view><p x=<y dj-root></p></div>",
+            r#"<div dj-view><p a"b dj-root></p></div>"#,
+            "<div\0 dj-root></div>",
+            "<div dj-root></div><p class=",
+            r#"<div dj-root title="unterminated></div>"#,
+        ] {
+            assert!(root_scan_is_ambiguous(html), "{html}");
+        }
     }
 }

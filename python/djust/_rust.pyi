@@ -305,6 +305,11 @@ def lazy_authority_spans(html: str, spans: List[Tuple[int, int]]) -> List[Tuple[
     """Authored intervals that carry a live lazy container's authority bytes."""
     ...
 
+def root_content_range(html: str) -> Optional[Tuple[int, int]]:
+    """``(start, end)`` character offsets of the LiveView root's content in
+    ``html`` (the #3031 root rule), or ``None`` without a closed root."""
+    ...
+
 def diff_html(old_html: str, new_html: str) -> str:
     """
     Compute diff between two HTML strings.
@@ -1485,6 +1490,7 @@ __all__ = [
     "normalize_provenance_whitespace",
     "collapse_provenance_whitespace",
     "lazy_authority_spans",
+    "root_content_range",
     "template_needs_provenance",
     "resolve_template_inheritance",
     # Serialization
