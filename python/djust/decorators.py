@@ -9,7 +9,21 @@ import functools
 import logging
 import threading
 import types
-from typing import Callable, Any, TypeVar, Union, cast, List, Optional, Literal, overload
+from typing import (
+    TYPE_CHECKING,
+    Callable,
+    Any,
+    TypeVar,
+    Union,
+    cast,
+    List,
+    Optional,
+    Literal,
+    overload,
+)
+
+if TYPE_CHECKING:
+    from .auth.any_of import PermissionRequired
 
 from asgiref.sync import iscoroutinefunction
 
@@ -1297,7 +1311,7 @@ def rate_limit(
     return _make_metadata_decorator("rate_limit", settings)
 
 
-def permission_required(perm: Union[str, List[str]]) -> Callable[[F], F]:
+def permission_required(perm: "PermissionRequired") -> Callable[[F], F]:
     """
     Require Django permission(s) to call this event handler.
 
@@ -1305,13 +1319,20 @@ def permission_required(perm: Union[str, List[str]]) -> Callable[[F], F]:
     the permission, the event is rejected with "Permission denied".
 
     Args:
-        perm: Django permission string or list of strings.
+        perm: Django permission string, list of strings (all of them), or
+            ``djust.auth.AnyOf(...)`` (any one of them). A list may mix
+            strings and AnyOf groups.
 
     Usage:
         class MyView(LiveView):
             @permission_required("myapp.delete_item")
             @event_handler()
             def delete_item(self, item_id: int, **kwargs):
+                ...
+
+            @permission_required(AnyOf("myapp.review_item", "myapp.approve_item"))
+            @event_handler()
+            def decide(self, item_id: int, **kwargs):
                 ...
     """
     return _make_metadata_decorator("permission_required", perm)

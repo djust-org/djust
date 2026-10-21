@@ -140,16 +140,6 @@ class CardHandler:
         )
 
 
-class TabsHandler:
-    def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
-        # Tabs need active state from args to render nav — content already rendered
-        kw = _parse_args(args, context)
-        tabs_id = conditional_escape(kw.get("id", "tabs"))
-        # For block-handler mode, the nav is built from child content rendered as panes.
-        # We wrap in the tabs container; view logic controls active tab.
-        return _safe(f'<div class="tabs-container" id="{tabs_id}">{content}</div>')
-
-
 class AccordionHandler:
     def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
@@ -2001,7 +1991,6 @@ INLINE_HANDLERS = [
 BLOCK_HANDLERS = [
     ("modal", "endmodal", ModalHandler()),
     ("card", "endcard", CardHandler()),
-    ("tabs", "endtabs", TabsHandler()),
     ("accordion", "endaccordion", AccordionHandler()),
     ("accordion_item", "endaccordion_item", AccordionItemHandler()),
     ("dropdown", "enddropdown", DropdownHandler()),
@@ -2088,6 +2077,26 @@ def register_with_rust_engine() -> None:
         "split_pane",
         "endsplit_pane",
         LibraryRawBlockTagHandler("djust_components", "split_pane", _components_lib.do_split_pane),
+    )
+
+    # {% tabs %}…{% tab %}…{% endtab %}…{% endtabs %} — the same reason. The
+    # tab list and the choice of the ONE pane to render come from the `{% tab %}`
+    # children's own arguments (id, label, icon), which a block handler that is
+    # handed the already-rendered body cannot see. The handler that used to be
+    # registered here wrapped that body in a div: no tab list, and every pane
+    # rendered. Django's `do_tabs` reads the children, so the raw path renders
+    # the nav and only the active pane, byte for byte as Django does.
+    register_raw_block_tag_handler(
+        "tabs",
+        "endtabs",
+        LibraryRawBlockTagHandler(
+            "djust_components",
+            "tabs",
+            _components_lib.do_tabs,
+            # The body holds `{% tab %}` blocks, and a Rust template uses these
+            # tags without `{% load djust_components %}`.
+            libraries=(_components_lib.register,),
+        ),
     )
 
 

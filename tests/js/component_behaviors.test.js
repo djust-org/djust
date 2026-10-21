@@ -212,8 +212,13 @@ describe('theme_toggle', () => {
         const light = win.document.querySelector('.dj-theme-toggle [data-theme-mode="light"]');
         expect(light.getAttribute('aria-checked')).toBe('false');
         win.djustTheme.setMode('light');
-        await new Promise((r) => setTimeout(r, 60));
-        expect(win.document.querySelector('.dj-theme-toggle [data-theme-mode="light"]').getAttribute('aria-checked')).toBe('true');
+        // theme.js updates its UI after a 16 ms debounce and a frame; wait
+        // for the state rather than a fixed delay, which a loaded machine
+        // can outrun.
+        for (let i = 0; i < 100 && light.getAttribute('aria-checked') !== 'true'; i++) {
+            await new Promise((r) => setTimeout(r, 20));
+        }
+        expect(light.getAttribute('aria-checked')).toBe('true');
         expect(win.document.querySelector('.dj-theme-toggle [data-theme-mode="system"]').getAttribute('aria-checked')).toBe('false');
     });
 });

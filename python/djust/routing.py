@@ -14,6 +14,8 @@ from django.urls.resolvers import RegexPattern, RoutePattern, URLResolver
 from django.utils.html import format_html
 from django.utils.safestring import mark_safe
 
+from .auth.any_of import AnyOf, user_has_permission_spec
+
 # Django ``<int:id>`` / ``<slug:x>`` → JS-friendly ``:id`` / ``:x``. Shared by
 # ``live_session`` and ``build_route_map_from_urlconf`` so both engines emit the
 # identical client-side route shape.
@@ -257,7 +259,8 @@ def _view_auth_requirement(pattern: URLPattern, view_cls: type) -> Optional[dict
     """
     login = getattr(view_cls, "login_required", None) is True
     perms_attr = getattr(view_cls, "permission_required", None)
-    if isinstance(perms_attr, str):
+    if isinstance(perms_attr, (str, AnyOf)):
+        # A whole AnyOf is one group; tuple() of it would read as all of.
         perms: tuple = (perms_attr,)
     elif perms_attr:
         perms = tuple(perms_attr)
@@ -297,14 +300,14 @@ def _user_satisfies(request: Any, requirement: dict) -> bool:
 
     Fails closed (#1758): a missing request, missing user, or unauthenticated
     user never satisfies a gated route, so gated routes are omitted from the
-    client map for anonymous/unknown callers. Permission checks use
-    ``user.has_perms`` (all required perms).
+    client map for anonymous/unknown callers. Permission checks follow the
+    view's ``permission_required`` (all of, with AnyOf groups).
     """
     user = getattr(request, "user", None) if request is not None else None
     if user is None or not getattr(user, "is_authenticated", False):
         return False
     perms = requirement.get("perms") or ()
-    if perms and not user.has_perms(perms):
+    if perms and not user_has_permission_spec(user, perms):
         return False
     return True
 

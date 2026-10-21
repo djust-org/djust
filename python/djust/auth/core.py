@@ -10,6 +10,10 @@ Usage:
         login_required = True
         permission_required = "analytics.view_dashboard"
 
+    # Any one of several permissions (auth/any_of.py)
+    class ActivityView(LiveView):
+        permission_required = AnyOf("runs.agent_run", "chat.chat_general")
+
     # Mixins (Django-familiar convenience)
     from djust.auth import LoginRequiredMixin, PermissionRequiredMixin
 
@@ -23,6 +27,10 @@ Usage:
         def check_permissions(self, request):
             project = Project.objects.get(pk=self.kwargs.get("pk"))
             return project.team.members.filter(user=request.user).exists()
+
+A refusal (``permission_required`` unmet, ``check_permissions()`` returning
+False or raising PermissionDenied) is a 403 for a signed-in user and a
+redirect to ``login_url`` for an anonymous one, as Django's AccessMixin does.
 """
 
 import dis
@@ -31,11 +39,13 @@ import inspect
 import logging
 import weakref
 from collections.abc import Iterator
-from typing import Any, Callable, List, NamedTuple, Optional, Union, cast
+from typing import Any, Callable, NamedTuple, Optional, Union, cast
 
 from django.conf import settings
 from django.core.exceptions import ObjectDoesNotExist, PermissionDenied
 from django.http import Http404
+
+from .any_of import PermissionRequired, describe_permission_spec, user_has_permission_spec
 
 logger = logging.getLogger(__name__)
 
@@ -81,7 +91,8 @@ def check_view_auth(
 
     Raises:
         PermissionDenied: If user is authenticated but lacks required
-            permissions. Matches Django's PermissionRequiredMixin behavior.
+            permissions or ``check_permissions()`` refuses them. Matches
+            Django's PermissionRequiredMixin behavior.
     """
     login_required = getattr(view_instance, "login_required", None) or any(
         _is_djust_auth_login_mixin(k) for k in type(view_instance).__mro__
@@ -112,43 +123,46 @@ def check_view_auth(
             )
             return middleware_redirect or login_url
 
-    # 2. Permission check
+    # 2. Permission check (all of, with optional AnyOf groups: auth/any_of.py)
     if permission_required:
         user = getattr(request, "user", None)
         if user is None:
             return login_url
-        perms: tuple = (
-            (permission_required,)
-            if isinstance(permission_required, str)
-            else tuple(permission_required)
-        )
-        if not user.has_perms(perms):
+        if not user_has_permission_spec(user, permission_required):
+            required = describe_permission_spec(permission_required)
             logger.info(
                 "Auth denied for %s: user lacks permission(s) %s",
                 view_instance.__class__.__name__,
-                perms,
+                required,
             )
             # Authenticated but lacking perms → 403 (matches Django's
             # PermissionRequiredMixin). Unauthenticated → redirect to login.
             if getattr(user, "is_authenticated", False):
-                raise PermissionDenied(f"User lacks required permission(s): {', '.join(perms)}")
+                raise PermissionDenied(f"User lacks required permission(s): {required}")
             return login_url
 
-    # 3. Custom hook (only if subclass overrides it)
+    # 3. Custom hook (only if subclass overrides it). A refusal follows the
+    #    same rule as step 2 and Django's AccessMixin.handle_no_permission():
+    #    a signed-in person is refused with a 403 (PermissionDenied), only an
+    #    anonymous one is sent to sign in.
     if _has_custom_check_permissions(view_instance):
         try:
             result = view_instance.check_permissions(request)
-            if result is False:
-                logger.info(
-                    "Auth denied for %s: check_permissions() returned False",
-                    view_instance.__class__.__name__,
-                )
-                return login_url
         except PermissionDenied:
             logger.info(
                 "Auth denied for %s: check_permissions() raised PermissionDenied",
                 view_instance.__class__.__name__,
             )
+            if _is_authenticated(request):
+                raise
+            return login_url
+        if result is False:
+            logger.info(
+                "Auth denied for %s: check_permissions() returned False",
+                view_instance.__class__.__name__,
+            )
+            if _is_authenticated(request):
+                raise PermissionDenied("check_permissions() refused the request")
             return login_url
 
     # 4. Honor Django's standard auth mixins (the AccessMixin family).
@@ -2051,11 +2065,12 @@ def check_handler_permission(handler: Any, request: Any) -> bool:
     perm = meta.get("permission_required")
     if perm is None:
         return True
+    return user_has_permission_spec(getattr(request, "user", None), perm)
+
+
+def _is_authenticated(request: Any) -> bool:
     user = getattr(request, "user", None)
-    if user is None:
-        return False
-    perms: tuple = (perm,) if isinstance(perm, str) else tuple(perm)
-    return bool(user.has_perms(perms))
+    return bool(user is not None and getattr(user, "is_authenticated", False))
 
 
 class LoginRequiredMixin:
@@ -2081,4 +2096,4 @@ class PermissionRequiredMixin:
     """
 
     login_required: bool = True
-    permission_required: Optional[Union[str, List[str]]] = None
+    permission_required: Optional[PermissionRequired] = None
