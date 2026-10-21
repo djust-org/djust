@@ -186,10 +186,11 @@ class TestConnectOriginValidation:
         )
 
     @pytest.mark.django_db
-    @override_settings(ALLOWED_HOSTS=["example.com"])
-    async def test_connect_accepts_missing_origin_with_opt_out(self, settings):
+    # Not pytest-django's ``settings`` fixture: mixed with ``override_settings``
+    # its teardown restores the decorator's settings, leaking ALLOWED_HOSTS.
+    @override_settings(ALLOWED_HOSTS=["example.com"], DJUST_ALLOW_MISSING_ORIGIN=True)
+    async def test_connect_accepts_missing_origin_with_opt_out(self):
         """Non-browser clients (no Origin header) work with the opt-out."""
-        settings.DJUST_ALLOW_MISSING_ORIGIN = True
         communicator = await self._communicator(None)
         connected, _ = await communicator.connect()
         assert connected is True

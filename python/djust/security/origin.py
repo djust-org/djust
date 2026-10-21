@@ -29,7 +29,7 @@ from urllib.parse import urlsplit
 _DEFAULT_PORTS = {"http": 80, "https": 443}
 
 
-def _normalize(origin: str) -> Optional[Tuple[str, str, int]]:
+def _parse_origin(origin: str) -> Optional[Tuple[str, str, int]]:
     """``(scheme, host, port)`` for a serialized origin, or None if it isn't one.
 
     An origin has no userinfo, path, query or fragment, and its scheme is
@@ -83,7 +83,7 @@ def _is_trusted(parsed: Tuple[str, str, int], entries: Iterable[str]) -> bool:
         if not isinstance(entry, str):
             continue
         wildcard = "://*." in entry
-        candidate = _normalize(entry.replace("://*.", "://", 1) if wildcard else entry)
+        candidate = _parse_origin(entry.replace("://*.", "://", 1) if wildcard else entry)
         if candidate is None or candidate[0] != scheme or candidate[2] != port:
             continue
         if wildcard:
@@ -109,10 +109,10 @@ def origin_rejection(
             "no Origin header (set DJUST_ALLOW_MISSING_ORIGIN = True to accept "
             "non-browser clients that send none)"
         )
-    parsed = _normalize(origin)
+    parsed = _parse_origin(origin)
     if parsed is None:
         return "Origin %r is not a serialized http(s) origin" % origin
-    if own_origin is not None and _normalize(own_origin) == parsed:
+    if own_origin is not None and _parse_origin(own_origin) == parsed:
         return None
     if _is_trusted(parsed, trusted_origins()):
         return None
