@@ -31,6 +31,7 @@ from typing import TYPE_CHECKING, Any
 
 # Core auth functions (originally djust/auth.py) — safe to import eagerly
 # since they only depend on django.conf and django.core.exceptions
+from .any_of import AnyOf
 from .core import (
     LoginRequiredMixin,
     PermissionRequiredMixin,
@@ -47,6 +48,8 @@ __all__ = [
     "check_view_auth_lightweight",
     "check_object_permission",
     "check_handler_permission",
+    # "Any of" for permission_required (views and @permission_required)
+    "AnyOf",
     # Shared pre-mount security sequence (auth + tenant resolve/bind)
     "run_pre_mount_auth",
     "LoginRequiredMixin",

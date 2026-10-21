@@ -25,6 +25,7 @@ from django.core.management.base import CommandParser, BaseCommand
 
 # Shared class-introspection helpers live in djust.management._introspect so
 # djust_audit and djust_typecheck stay in sync.
+from djust.auth.any_of import permission_spec_to_document
 from djust.management._introspect import app_label_for_class as _app_label_for_class
 from djust.management._introspect import is_user_class as _is_user_class
 from djust.management._introspect import walk_subclasses as _walk_subclasses
@@ -201,6 +202,7 @@ def _extract_auth_info(cls: type) -> dict[str, Any]:
 
     Returns:
         dict with keys like 'login_required', 'permission_required',
+        'permission_required_any' (one list per AnyOf group),
         'custom_check', 'dispatch_mixin'.
     """
     info: dict[str, Any] = {}
@@ -208,7 +210,13 @@ def _extract_auth_info(cls: type) -> dict[str, Any]:
         info["login_required"] = True
     perm = getattr(cls, "permission_required", None)
     if perm:
-        info["permission_required"] = perm if isinstance(perm, list) else [perm]
+        # ``permission_required`` is the all-of list; each AnyOf group is a
+        # list in ``permission_required_any`` (djust.auth.any_of).
+        all_of, any_of = permission_spec_to_document(perm)
+        if all_of:
+            info["permission_required"] = all_of
+        if any_of:
+            info["permission_required_any"] = any_of
     # Check if check_permissions is overridden by a user class
     for klass in cls.__mro__:
         if klass.__name__ in ("LiveView", "LiveComponent", "object"):
@@ -1003,6 +1011,8 @@ class Command(BaseCommand):
                     if auth.get("permission_required"):
                         perms = auth["permission_required"]
                         parts.append("permission: %s" % ", ".join(perms))
+                    for group in auth.get("permission_required_any") or ():
+                        parts.append("permission: any of %s" % " | ".join(group))
                     if auth.get("custom_check"):
                         parts.append("custom check_permissions()")
                     if auth.get("dispatch_mixin"):

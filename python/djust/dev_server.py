@@ -9,7 +9,7 @@ import os
 import threading
 import time
 from pathlib import Path
-from typing import Any, Set, Callable, Optional
+from typing import Any, Callable, Dict, Optional, Set
 
 try:
     from watchdog.observers import Observer
@@ -67,6 +67,9 @@ class DjustFileChangeHandler(FileSystemEventHandler):
         self.on_change_callback = on_change_callback
         self._last_change_time: float = 0
         self._pending_reload = False
+        # Every distinct path saved in the current debounce window, in order.
+        self._pending_paths: Dict[str, None] = {}
+        self._debouncing = False
         self._reload_lock = threading.Lock()
         self._debounce_thread: Optional[threading.Thread] = None
 
@@ -75,19 +78,34 @@ class DjustFileChangeHandler(FileSystemEventHandler):
         # Ignore hidden files, __pycache__, .pyc files
         if "/__pycache__/" in path or path.endswith(".pyc") or "/.git/" in path:
             return False
+        # Editor temp files: an atomic save writes ``.!123!views.py`` (BSD
+        # sed), ``.#views.py`` (emacs lock), ``views.py~`` and renames over the
+        # original; the rename is what reaches on_moved with the real name.
+        name = os.path.basename(path)
+        if name.startswith(".") or name.endswith("~"):
+            return False
 
         # Check if file has a watched extension
         return Path(path).suffix in self.WATCHED_EXTENSIONS
 
     def schedule_reload(self, path: str) -> None:
-        """Schedule a reload after debounce period."""
+        """Schedule a reload after debounce period.
+
+        Every distinct path saved in the window is reported once the window
+        closes (``.py`` files first, so a template refresh renders with the
+        reloaded view), not only the first one.
+        """
         with self._reload_lock:
             self._last_change_time = time.time()
             self._pending_reload = True
+            self._pending_paths[path] = None
 
-            # Cancel existing debounce thread if any
-            if self._debounce_thread and self._debounce_thread.is_alive():
-                return  # Already waiting
+            # A window is already open: it will report this path too. Not
+            # ``is_alive()``: the thread outlives its window while it runs the
+            # callbacks, and a save made then must open a new window.
+            if self._debouncing:
+                return
+            self._debouncing = True
 
             # Start new debounce thread
             self._debounce_thread = threading.Thread(
@@ -96,18 +114,23 @@ class DjustFileChangeHandler(FileSystemEventHandler):
             self._debounce_thread.start()
 
     def _debounced_reload(self, path: str) -> None:
-        """Wait for debounce period then trigger reload."""
+        """Wait for debounce period then trigger reload for every saved path."""
         while True:
             time.sleep(self.DEBOUNCE_SECONDS)
 
             with self._reload_lock:
                 # Check if enough time has passed since last change
-                if time.time() - self._last_change_time >= self.DEBOUNCE_SECONDS:
-                    if self._pending_reload:
-                        self._pending_reload = False
-                        logger.info("[HotReload] File changed: %s", path)
-                        self.on_change_callback(path)
-                    break
+                if time.time() - self._last_change_time < self.DEBOUNCE_SECONDS:
+                    continue
+                paths = list(self._pending_paths) if self._pending_reload else []
+                self._pending_reload = False
+                self._pending_paths = {}
+                self._debouncing = False
+                break
+        paths.sort(key=lambda p: not p.lower().endswith(".py"))
+        for changed in paths:
+            logger.info("[HotReload] File changed: %s", changed)
+            self.on_change_callback(changed)
 
     def on_modified(self, event: FileSystemEvent) -> None:
         """Handle file modification events."""
@@ -115,6 +138,13 @@ class DjustFileChangeHandler(FileSystemEventHandler):
         src_path = os.fsdecode(event.src_path)
         if not event.is_directory and self.should_reload_for_path(src_path):
             self.schedule_reload(src_path)
+
+    def on_moved(self, event: FileSystemEvent) -> None:
+        """Handle a rename: an editor's atomic save lands here, under the real name."""
+        # watchdog types ``dest_path`` as ``bytes | str``; normalise to ``str``.
+        dest_path = os.fsdecode(getattr(event, "dest_path", "") or "")
+        if dest_path and not event.is_directory and self.should_reload_for_path(dest_path):
+            self.schedule_reload(dest_path)
 
     def on_created(self, event: FileSystemEvent) -> None:
         """Handle file creation events."""

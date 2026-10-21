@@ -84,6 +84,17 @@ When you edit a LiveView's Python file:
 5. The client dispatches a `djust:hvr-applied` CustomEvent and (in
    debug mode) paints a small green toast in the bottom-right.
 
+A new page load sees the change too: the `as_view()` callables in your
+URLconf (`settings.ROOT_URLCONF`, including decorators wrapped around them)
+are pointed at the reloaded class, so the next HTTP request builds it.
+Saving a template alone works the same way: the next page load renders the
+edited template, also for a session that has already rendered the page.
+
+Saving several files at once (a view and its template) is handled file by
+file, `.py` first. An editor that saves atomically (writes a temp file such as
+`.!123!views.py` and renames it over the original) counts as a save of the
+original; the temp file itself is ignored.
+
 The user keeps:
 
 - form field values
@@ -165,6 +176,16 @@ reloads in your own dev overlay.
   propagate to views that inherit from it until you also save those
   views' files — and if the mixin's MRO contribution changes, HVR will
   reject the swap (`mro_changed`) and fall back to a full page reload.
+
+- **Only the saved module's classes are replaced.** A view whose base
+  class lives in another module keeps the old base until its own module is
+  saved too, and a view subclassing the saved view from another module keeps
+  inheriting from the old class.
+- **A per-request URLconf is not updated.** Routes resolved through
+  `request.urlconf` (set by middleware) keep serving the pre-reload class
+  over HTTP until a restart; `settings.ROOT_URLCONF` is updated.
+- **A changed `exposure_policy` needs a restart** to reach the HTTP entry
+  (open sockets fall back to a full reload, as above).
 
 ## What HVR doesn't do (caveats)
 

@@ -8,7 +8,10 @@ import logging
 import socket
 import threading
 from functools import wraps
-from typing import Any, Callable, Dict, List, Optional, Set, Union, cast
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Set, cast
+
+if TYPE_CHECKING:
+    from .auth.any_of import PermissionRequired
 
 from django.utils.decorators import classonlymethod
 from django.views import View
@@ -683,7 +686,7 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
 
     # Authentication & authorization
     login_required: Optional[bool] = None  # True = must be authenticated
-    permission_required: Optional[Union[str, List[str]]] = None  # Django permission string(s)
+    permission_required: Optional["PermissionRequired"] = None  # str, list (all of) or AnyOf
     login_url: Optional[str] = None  # Override settings.LOGIN_URL
 
     # on_mount hooks — cross-cutting mount logic (Phoenix on_mount parity)
