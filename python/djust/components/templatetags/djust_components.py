@@ -19,7 +19,7 @@ import uuid
 from typing import Any
 
 from django import template
-from django.utils.html import conditional_escape, escapejs
+from django.utils.html import conditional_escape
 from django.utils.safestring import SafeString
 
 from ._registry import safe_url
@@ -1917,115 +1917,45 @@ def code_block(
 
     filename_html = f'<span class="code-block-filename">{e_filename}</span>' if filename else ""
     lang_html = f'<span class="code-block-lang">{e_language}</span>'
-    copy_html = (
-        '<button class="code-block-copy" '
-        "onclick=\"(function(btn){var pre=btn.closest('.code-block').querySelector('code');"
-        "navigator.clipboard&&navigator.clipboard.writeText(pre.textContent).then(function(){"
-        "btn.textContent='Copied!';setTimeout(function(){btn.textContent='Copy';},2000);});})(this)\">"
-        "Copy</button>"
-    )
+    # Copying is the client bundle's delegated ``.code-block-copy`` behaviour
+    # (no inline handler, so a strict CSP does not block it).
+    copy_html = '<button type="button" class="code-block-copy">Copy</button>'
 
     highlight_html = ""
     loader = ""
     if highlight:
         import json
 
+        from django.templatetags.static import static
+
         from djust.assets.tags import asset_source, asset_tags
 
         # Only the theme stylesheet is a tag: raises ImproperlyConfigured
         # naming the vendored themes for an unknown one.
         loader = str(asset_tags("highlight.js", str(theme), file_type="style"))
-        # The library itself is injected ONCE per page by the inline script
-        # below (guarded by __djcHljsLoading) instead of a <script src> per
-        # block, which made 30 blocks parse and execute it 30 times. Its URL,
-        # integrity and crossorigin come from djust.assets (settings and the
-        # vendored file, never user input) and are JSON-encoded, with <, >
-        # and & escaped so nothing can close the <script> element.
+        # The library is injected ONCE per page by code-block-highlight.js
+        # (guarded by __djcHljsLoading) instead of a <script src> per block,
+        # which made 30 blocks parse and execute it 30 times. That small
+        # static script (not an inline one, which a strict CSP refuses) runs
+        # after each block and reads the library's URL, integrity and
+        # crossorigin from its data-hljs attribute. They come from
+        # djust.assets (settings and the vendored file, never user input).
         src, integrity, cross_origin = asset_source("highlight.js", file_type="script")
-        hljs_json = (
-            json.dumps(
-                {
-                    "src": src,
-                    "integrity": integrity,
-                    "crossOrigin": "anonymous" if cross_origin else None,
-                }
-            )
-            .replace("<", "\\u003c")
-            .replace(">", "\\u003e")
-            .replace("&", "\\u0026")
+        hljs_json = json.dumps(
+            {
+                "src": src,
+                "integrity": integrity,
+                "crossOrigin": "anonymous" if cross_origin else None,
+            }
         )
-
-        # The per-instance inline <script> runs on initial HTTP page load and
-        # highlights this code block. After hljs is loaded, we ALSO install a
-        # MutationObserver ONCE per page (gated by __djcHljsObserverInstalled)
-        # so any <code class="language-*"> element that arrives via a djust
-        # WS patch — which doesn't execute its own inline <script> in modern
-        # browsers — still gets highlighted (#1625).
         highlight_html = (
-            "<script>"
-            "(function(){"
-            'var el=document.currentScript.previousElementSibling.querySelector("code");'
-            "if(el.dataset.highlighted)return;"
-            'function doHL(){if(window.hljs&&!el.dataset.highlighted){hljs.highlightElement(el);el.dataset.highlighted="true";}}'
-            # Warns only from the injected script's onerror, once per page.
-            "function warn(){if(!window.__djcHljsWarned){window.__djcHljsWarned=true;"
-            "console.warn('[djust] highlight.js did not load; code blocks stay "
-            "unhighlighted. Check the browser console for an integrity (SRI) or "
-            "CSP error.');}}"
-            # Highlights every unmarked block on the page. The injecting
-            # block's onload runs it, so blocks whose poll gave up before a
-            # slow load finished are still highlighted.
-            "function hlAll(){if(!window.hljs)return;"
-            'Array.prototype.forEach.call(document.querySelectorAll("pre code[class^=language-]"),function(n)'
-            '{if(!n.dataset.highlighted){hljs.highlightElement(n);n.dataset.highlighted="true";}});}'
-            # #1625: MutationObserver installer — idempotent via the
-            # __djcHljsObserverInstalled flag. Watches the whole document
-            # for added <pre><code class="language-*"> elements (typical
-            # WS-patch insertion point) and highlights any unmarked ones.
-            "function installObserver(){"
-            "if(window.__djcHljsObserverInstalled)return;"
-            "if(typeof MutationObserver==='undefined')return;"
-            "window.__djcHljsObserverInstalled=true;"
-            "var hl=function(root){if(!window.hljs)return;"
-            'var sel="pre code[class^=language-]";'
-            "var nodes=root.matches&&root.matches(sel)?[root]:"
-            "(root.querySelectorAll?root.querySelectorAll(sel):[]);"
-            "Array.prototype.forEach.call(nodes,function(n)"
-            '{if(!n.dataset.highlighted){hljs.highlightElement(n);n.dataset.highlighted="true";}});};'
-            "new MutationObserver(function(records){"
-            "records.forEach(function(r){r.addedNodes&&Array.prototype.forEach.call(r.addedNodes,function(n)"
-            "{if(n.nodeType===1)hl(n);});});"
-            "}).observe(document.body,{childList:true,subtree:true});"
-            "}"
-            "if(window.hljs){doHL();installObserver();return;}"
-            # First block on the page: inject the vendored library once.
-            "if(!window.hljs&&!window.__djcHljsLoading){"
-            "window.__djcHljsLoading=true;"
-            f"var cfg={hljs_json};"
-            'var s=document.createElement("script");'
-            "s.src=cfg.src;s.integrity=cfg.integrity;"
-            "if(cfg.crossOrigin)s.crossOrigin=cfg.crossOrigin;"
-            "s.onload=function(){doHL();hlAll();installObserver();};"
-            "s.onerror=warn;"
-            "document.head.appendChild(s);"
-            "return;}"
-            # Other blocks find the load in progress and wait for it.
-            # Bounded to 200 ticks (~10s, R14) so an SRI mismatch, CSP block,
-            # or 404 cannot poll forever. Giving up is silent: a load slower
-            # than the cap is still handled by the onload sweep above, and a
-            # real failure is reported by onerror.
-            "var tries=0;"
-            "var iv=setInterval(function(){"
-            "if(window.hljs){clearInterval(iv);doHL();installObserver();return;}"
-            "if(++tries>=200)clearInterval(iv);"
-            "},50);"
-            "})();"
-            "</script>"
+            f'<script src="{conditional_escape(static("djust_components/code-block-highlight.js"))}" '
+            f'data-hljs="{conditional_escape(hljs_json)}" defer></script>'
         )
 
     # `loader` is format_html output from asset_tags (djust.assets.tags), so
     # it is already-escaped, safe markup: embedding it verbatim is fine. It
-    # sits before <pre> so the inline script's previousElementSibling is
+    # sits before <pre> so the highlighter script's previousElementSibling is
     # still the <pre>.
     return mark_safe(
         f'<div class="code-block" data-highlight="{e_theme if highlight else ""}">'
@@ -2208,6 +2138,40 @@ def do_popover(parser: Any, token: Any) -> template.Node:
     return PopoverNode(nodelist, kwargs)
 
 
+def render_popover(kw: Any, content: Any) -> SafeString:
+    """Markup for ``{% popover %}``, shared by the Django tag and the Rust handler.
+
+    Opening, closing on an outside click and on Escape are the client
+    bundle's delegated ``.popover-wrapper`` behaviour (no inline handler, so a
+    strict CSP does not block it). Ids come only from ``id=``.
+    """
+    trigger = kw.get("trigger", "Click me")
+    placement = kw.get("placement", "bottom")
+    title = kw.get("title", "")
+    uid = kw.get("id", "")
+
+    e_trigger = conditional_escape(trigger)
+    e_placement = conditional_escape(placement)
+    id_attr = controls = content_id = ""
+    if uid:
+        e_uid = conditional_escape(uid)
+        id_attr = f' id="{e_uid}"'
+        controls = f' aria-controls="{e_uid}-content"'
+        content_id = f' id="{e_uid}-content"'
+    title_html = f'<div class="popover-title">{conditional_escape(title)}</div>' if title else ""
+    return mark_safe(
+        f'<div class="popover-wrapper"{id_attr}>'
+        f'<button type="button" class="popover-trigger btn btn-outline btn-sm" '
+        f'aria-expanded="false" aria-haspopup="dialog"{controls}>'
+        f"{e_trigger}</button>"
+        f'<div class="popover popover-{e_placement}" role="dialog"{content_id}>'
+        f"{title_html}"
+        f'<div class="popover-content">{content}</div>'
+        f"</div>"
+        f"</div>"
+    )
+
+
 class PopoverNode(template.Node):
     def __init__(self, nodelist: Any, kwargs: Any) -> None:
         self.nodelist = nodelist
@@ -2215,38 +2179,7 @@ class PopoverNode(template.Node):
 
     def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
-        trigger = kw.get("trigger", "Click me")
-        placement = kw.get("placement", "bottom")
-        title = kw.get("title", "")
-        uid = kw.get("id", f"pop-{uuid.uuid4().hex[:6]}")
-
-        e_uid = conditional_escape(uid)
-        e_trigger = conditional_escape(trigger)
-        e_placement = conditional_escape(placement)
-
-        content = self.nodelist.render(context)
-        title_html = (
-            f'<div class="popover-title">{conditional_escape(title)}</div>' if title else ""
-        )
-
-        js = (
-            "(function(el){var p=el.parentElement;"
-            "if(p.hasAttribute('data-open')){p.removeAttribute('data-open');}else{p.setAttribute('data-open','');"
-            "document.addEventListener('click',function h(e){"
-            "if(!p.contains(e.target)){p.removeAttribute('data-open');"
-            "document.removeEventListener('click',h);}},true);};})(this)"
-        )
-        return mark_safe(
-            f'<div class="popover-wrapper" id="{e_uid}">'
-            f'<button class="popover-trigger btn btn-outline btn-sm" '
-            f'onclick="{js}" aria-expanded="false">'
-            f"{e_trigger}</button>"
-            f'<div class="popover popover-{e_placement}" role="tooltip">'
-            f"{title_html}"
-            f'<div class="popover-content">{content}</div>'
-            f"</div>"
-            f"</div>"
-        )
+        return render_popover(kw, self.nodelist.render(context))
 
 
 # ---------------------------------------------------------------------------
@@ -2357,6 +2290,35 @@ def do_collapsible(parser: Any, token: Any) -> template.Node:
     return CollapsibleNode(nodelist, kwargs)
 
 
+def render_collapsible(kw: Any, content: Any) -> SafeString:
+    """Markup for ``{% collapsible %}``, shared by the Django tag and the Rust handler.
+
+    The client bundle toggles ``collapsible-open`` and ``aria-expanded`` on a
+    trigger click (no inline handler); ``event=`` still reaches the server.
+    """
+    trigger = kw.get("trigger", "Toggle")
+    open_ = kw.get("open", False)
+    if isinstance(open_, str):
+        open_ = open_.lower() not in ("false", "0", "")
+    event = kw.get("event", "toggle_collapsible")
+    uid = kw.get("id", "")
+    id_attr = f' id="{conditional_escape(uid)}"' if uid else ""
+    component_id = kw.get("component_id", "")
+    cid_attr = f' data-component-id="{conditional_escape(component_id)}"' if component_id else ""
+    open_cls = " collapsible-open" if open_ else ""
+    return mark_safe(
+        f'<div class="collapsible{open_cls}"{id_attr}>'
+        f'<button type="button" class="collapsible-trigger" '
+        f'aria-expanded="{"true" if open_ else "false"}" '
+        f'dj-click="{conditional_escape(event)}"{cid_attr}>'
+        f'<span class="collapsible-label">{conditional_escape(trigger)}</span>'
+        f'<span class="collapsible-icon" aria-hidden="true">▾</span>'
+        f"</button>"
+        f'<div class="collapsible-content">{content}</div>'
+        f"</div>"
+    )
+
+
 class CollapsibleNode(template.Node):
     def __init__(self, nodelist: Any, kwargs: Any) -> None:
         self.nodelist = nodelist
@@ -2364,34 +2326,7 @@ class CollapsibleNode(template.Node):
 
     def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
-        trigger = kw.get("trigger", "Toggle")
-        open_ = kw.get("open", False)
-        if isinstance(open_, str):
-            open_ = open_.lower() not in ("false", "0", "")
-        event = kw.get("event", "toggle_collapsible")
-        uid = f"coll-{uuid.uuid4().hex[:6]}"
-
-        e_uid = conditional_escape(uid)
-        e_trigger = conditional_escape(trigger)
-        e_event = conditional_escape(event)
-        open_cls = " collapsible-open" if open_ else ""
-        content = self.nodelist.render(context)
-        component_id = kw.get("component_id", "")
-        cid_attr = (
-            f' data-component-id="{conditional_escape(component_id)}"' if component_id else ""
-        )
-
-        return mark_safe(
-            f'<div class="collapsible{open_cls}" id="{e_uid}">'
-            f'<button class="collapsible-trigger" '
-            f"onclick=\"(function(el){{el.closest('.collapsible').classList.toggle('collapsible-open');}})(this)\""
-            f' dj-click="{e_event}"{cid_attr}>'
-            f'<span class="collapsible-label">{e_trigger}</span>'
-            f'<span class="collapsible-icon">▾</span>'
-            f"</button>"
-            f'<div class="collapsible-content">{content}</div>'
-            f"</div>"
-        )
+        return render_collapsible(kw, self.nodelist.render(context))
 
 
 # ---------------------------------------------------------------------------
@@ -2876,6 +2811,23 @@ def do_context_menu(parser: Any, token: Any) -> template.Node:
     return ContextMenuNode(nodelist, kwargs)
 
 
+def render_context_menu(kw: Any, content: Any) -> SafeString:
+    """Markup for ``{% context_menu %}``, shared by the Django tag and the Rust handler.
+
+    The client bundle opens the menu at the pointer on ``contextmenu`` and
+    closes it on the next click or Escape (no inline handler).
+    """
+    label = kw.get("label", "Right-click area")
+    uid = kw.get("id", "")
+    id_attr = f' id="{conditional_escape(uid)}"' if uid else ""
+    return mark_safe(
+        f'<div class="ctx-wrapper"{id_attr}>'
+        f'<div class="ctx-trigger">{conditional_escape(label)}</div>'
+        f'<div class="ctx-menu" role="menu">{content}</div>'
+        f"</div>"
+    )
+
+
 class ContextMenuNode(template.Node):
     def __init__(self, nodelist: Any, kwargs: Any) -> None:
         self.nodelist = nodelist
@@ -2883,26 +2835,7 @@ class ContextMenuNode(template.Node):
 
     def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
-        label = kw.get("label", "Right-click area")
-        uid = f"ctx-{uuid.uuid4().hex[:6]}"
-
-        e_uid = conditional_escape(uid)
-        e_label = conditional_escape(label)
-        content = self.nodelist.render(context)
-
-        return mark_safe(
-            f'<div class="ctx-wrapper" id="{e_uid}" '
-            f'oncontextmenu="(function(e,el){{e.preventDefault();'
-            f"document.querySelectorAll('.ctx-menu[data-open]').forEach(function(m){{delete m.dataset.open;}});"
-            f"var m=el.querySelector('.ctx-menu');"
-            f"m.style.left=e.offsetX+'px';m.style.top=e.offsetY+'px';"
-            f"m.dataset.open='1';"
-            f"document.addEventListener('click',function h(){{delete m.dataset.open;document.removeEventListener('click',h);}},{{once:true}});"
-            f'}})(event,this)">'
-            f'<div class="ctx-trigger">{e_label}</div>'
-            f'<div class="ctx-menu" role="menu">{content}</div>'
-            f"</div>"
-        )
+        return render_context_menu(kw, self.nodelist.render(context))
 
 
 @register.simple_tag
@@ -3106,24 +3039,14 @@ def file_dropzone(
 
     return mark_safe(
         f"{label_html}"
-        f'<div class="dropzone" id="{js_id}" '
-        f"ondragover=\"event.preventDefault();this.classList.add('dropzone-over')\" "
-        f"ondragleave=\"this.classList.remove('dropzone-over')\" "
-        f"ondrop=\"(function(e,el){{e.preventDefault();el.classList.remove('dropzone-over');"
-        f"var f=e.dataTransfer.files;if(f.length){{var inp=el.querySelector('input[type=file]');"
-        f"try{{var dt=new DataTransfer();for(var i=0;i<f.length;i++)dt.items.add(f[i]);"
-        f"inp.files=dt.files;}}catch(ex){{}}el.querySelector('.dz-file-count').textContent="
-        f"f.length+' file'+(f.length>1?'s':'')+' selected';"
-        f"el.classList.add('dropzone-has-file');}}}})( event,this)\">"
-        f'<input type="file" name="{e_name}" class="dropzone-input" '
-        f"{accept_attr}{multiple_attr} "
-        f"onchange=\"(function(el){{var f=el.files;var c=el.closest('.dropzone');"
-        f"c.querySelector('.dz-file-count').textContent=f.length+' file'+(f.length>1?'s':'')+' selected';"
-        f"c.classList.add('dropzone-has-file');}})( this)\">"
+        # Drag-over styling, dropping files into the input and the file count
+        # are the client bundle's delegated ``.dropzone`` behaviour.
+        f'<div class="dropzone" id="{js_id}">'
+        f'<input type="file" name="{e_name}" class="dropzone-input"{accept_attr}{multiple_attr}>'
         f'<div class="dz-icon">&#128196;</div>'
         f'<div class="dz-text">Drag files here or <span class="dz-browse">browse</span></div>'
         f'<div class="dz-hint">Max {e_max} MB{(", accepts " + e_accept) if accept else ""}</div>'
-        f'<div class="dz-file-count"></div>'
+        f'<div class="dz-file-count" aria-live="polite"></div>'
         f"</div>"
         f"{helper_html}"
     )
@@ -3156,9 +3079,9 @@ class SplitPaneNode(template.Node):
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
         direction = kw.get("direction", "horizontal")
         initial = kw.get("initial", "50")
-        uid = f"sp-{uuid.uuid4().hex[:6]}"
+        uid = kw.get("id", "")
+        id_attr = f' id="{conditional_escape(uid)}"' if uid else ""
 
-        e_uid = conditional_escape(uid)
         e_dir = conditional_escape(direction)
         e_init = conditional_escape(safe_css_number(initial, "50"))
 
@@ -3166,31 +3089,17 @@ class SplitPaneNode(template.Node):
         content2 = self.pane2.render(context)
 
         size_prop = "width" if direction == "horizontal" else "height"
+        orientation = "vertical" if direction == "horizontal" else "horizontal"
 
-        js = (
-            f"(function(){{var sp=document.getElementById('{uid}');"
-            f"if(!sp)return;"
-            f"var h=sp.querySelector('.sp-handle');"
-            f"var p1=sp.querySelector('.sp-pane-1');"
-            f"var dragging=false;"
-            f"h.addEventListener('mousedown',function(e){{dragging=true;e.preventDefault();}});"
-            f"document.addEventListener('mousemove',function(e){{"
-            f"if(!dragging)return;"
-            f"var r=sp.getBoundingClientRect();"
-            f"var pct={'((e.clientX-r.left)/r.width*100)' if direction == 'horizontal' else '((e.clientY-r.top)/r.height*100)'};"
-            f"pct=Math.max(10,Math.min(90,pct));"
-            f"p1.style.{size_prop}=pct+'%';}});"
-            f"document.addEventListener('mouseup',function(){{dragging=false;}});"
-            f"}})();"
-        )
-
+        # Dragging the handle is the client bundle's delegated ``.sp-handle``
+        # behaviour (pane 1 between 10% and 90%); no inline script.
         return mark_safe(
-            f'<div class="split-pane split-pane-{e_dir}" id="{e_uid}">'
+            f'<div class="split-pane split-pane-{e_dir}"{id_attr}>'
             f'<div class="sp-pane sp-pane-1" style="{size_prop}:{e_init}%">{content1}</div>'
-            f'<div class="sp-handle sp-handle-{e_dir}"></div>'
+            f'<div class="sp-handle sp-handle-{e_dir}" role="separator" '
+            f'aria-orientation="{orientation}"></div>'
             f'<div class="sp-pane sp-pane-2" style="flex:1">{content2}</div>'
             f"</div>"
-            f"<script>{js}</script>"
         )
 
 
@@ -3334,12 +3243,13 @@ def kanban_board(
         move_event: event fired on drag-drop with JSON payload {card_id, from_col, to_col}
         add_card_event: event fired when adding a card, passes column id
     """
+    # Dragging and dropping is the client bundle's delegated ``.kanban``
+    # behaviour (no inline handler): a drop sends ``data-move-event`` with
+    # {card_id, from_col, to_col}.
+    e_move = conditional_escape(move_event)
     if not columns:
-        return mark_safe('<div class="kanban"></div>')
+        return mark_safe(f'<div class="kanban" data-move-event="{e_move}"></div>')
 
-    # e_move sits inside a single-quoted JS string in the ondrop attribute:
-    # escapejs \u-escapes quotes, backslashes and HTML special characters.
-    e_move = escapejs(move_event)
     e_add_card = conditional_escape(add_card_event)
 
     cols_html = ""
@@ -3378,10 +3288,7 @@ def kanban_board(
                 # a storm of failed patches + full html_recovery on every drag
                 # (#1678). `data-card-id` is for the drag JS, not the differ.
                 f'<div class="kanban-card" dj-key="{card_id}" draggable="true" '
-                f'data-card-id="{card_id}" data-col-id="{col_id}" '
-                f"ondragstart=\"(function(e,el){{e.dataTransfer.setData('card',el.dataset.cardId);"
-                f"e.dataTransfer.setData('from',el.dataset.colId);el.classList.add('dragging');}})( event,this)\" "
-                f"ondragend=\"this.classList.remove('dragging')\">"
+                f'data-card-id="{card_id}" data-col-id="{col_id}">'
                 f'<div class="kanban-card-title">{card_title}</div>'
                 f"{sub_html}"
                 f"{label_html}"
@@ -3400,15 +3307,7 @@ def kanban_board(
             # their stable positions rather than mis-patching positionally
             # (#1678).
             f'<div class="kanban-col" dj-key="{col_id}" '
-            f'data-col-id="{col_id}" '
-            f"ondragover=\"event.preventDefault();this.classList.add('kanban-col-over')\" "
-            f"ondragleave=\"this.classList.remove('kanban-col-over')\" "
-            f"ondrop=\"(function(e,el){{e.preventDefault();el.classList.remove('kanban-col-over');"
-            f"var cid=e.dataTransfer.getData('card');"
-            f"var from=e.dataTransfer.getData('from');"
-            f"var to=el.dataset.colId;"
-            f"if(from!==to){{window.djust&&window.djust.handleEvent('{e_move}',{{card_id:cid,from_col:from,to_col:to}});}}"
-            f'}})( event,this)">'
+            f'data-col-id="{col_id}">'
             f'<div class="kanban-col-header" style="border-top-color:{col_color}">'
             f'<span class="kanban-col-title">{col_title}</span>'
             f'<span class="kanban-col-count">{len(cards)}</span>'
@@ -3418,7 +3317,7 @@ def kanban_board(
             f"</div>"
         )
 
-    return mark_safe(f'<div class="kanban">{cols_html}</div>')
+    return mark_safe(f'<div class="kanban" data-move-event="{e_move}">{cols_html}</div>')
 
 
 # ---------------------------------------------------------------------------
@@ -3453,8 +3352,7 @@ def rich_text_editor(
     e_height = conditional_escape(safe_css_length(height, "200px"))
     e_label = conditional_escape(label)
 
-    uid = f"rte-{uuid.uuid4().hex[:6]}"
-    e_uid = conditional_escape(uid)
+    e_uid = conditional_escape(f"rte-{name}")
 
     label_html = f'<label class="form-label">{e_label}</label>' if label else ""
     req_html = ' <span class="form-required">*</span>' if required else ""
@@ -3482,10 +3380,12 @@ def rich_text_editor(
         else:
             e_cmd = conditional_escape(cmd)
             e_lbl = conditional_escape(lbl)
+            # The client bundle runs the command on mousedown (keeping the
+            # editor's selection); no inline handler.
             toolbar_html += (
                 f'<button class="rte-btn" type="button" title="{e_cmd}" '
-                f'onmousedown="event.preventDefault();'
-                f"document.execCommand('{e_cmd}',false,{repr(arg)});\">"
+                f'aria-label="{e_cmd}" data-command="{e_cmd}" '
+                f'data-command-arg="{conditional_escape(arg)}">'
                 f"{e_lbl}</button>"
             )
 
@@ -3498,9 +3398,8 @@ def rich_text_editor(
         f'contenteditable="true" '
         f'style="min-height:{e_height}" '
         f'data-placeholder="{e_placeholder}" '
-        f'dj-input="{e_event}" '
-        f"oninput=\"(function(el){{var h=document.getElementById('{e_uid}-hidden');"
-        f'if(h)h.value=el.innerHTML;}})(this)">'
+        f'role="textbox" aria-multiline="true" '
+        f'dj-input="{e_event}">'
         f"{e_value}"
         f"</div>"
         f'<input type="hidden" id="{e_uid}-hidden" name="{e_name}" value="">'
@@ -3550,7 +3449,7 @@ def multi_select(
     dj_event = conditional_escape(event or name)
     disabled_attr = " disabled" if disabled else ""
 
-    uid = f"ms-{uuid.uuid4().hex[:6]}"
+    uid = conditional_escape(f"ms-{name}")
 
     def _opt_pair(opt: Any) -> Any:
         if isinstance(opt, dict):
@@ -3599,10 +3498,8 @@ def multi_select(
         f"{label_html}"
         f"{tags_html}"
         f'<input type="text" class="multi-select-search" '
-        f'placeholder="{e_placeholder}"{disabled_attr} '
-        f"oninput=\"(function(el){{var items=el.parentElement.querySelectorAll('.multi-select-option');"
-        f"var q=el.value.toLowerCase();items.forEach(function(item){{item.style.display="
-        f"item.textContent.toLowerCase().indexOf(q)>=0?'':'none';}});}})(this)\">"
+        # Filtering the options is the client bundle's delegated behaviour.
+        f'placeholder="{e_placeholder}" aria-label="{e_placeholder}"{disabled_attr}>'
         f'<div class="multi-select-options">{"".join(cb_parts)}</div>'
         f"</div>"
     )
