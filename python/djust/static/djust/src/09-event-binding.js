@@ -1658,7 +1658,10 @@ function bindLiveViewEvents(scope) {
     // path missed (or whose attribute was dropped) before binding new ones.
     _sweepOrphanedPolls();
     const pollSelector = '[dj-poll]';
-    const pollElements = root.querySelectorAll(pollSelector);
+    // The scan root itself can carry the poll (`<div dj-root dj-poll="...">`):
+    // querySelectorAll sees only its descendants.
+    const pollElements = Array.from(root.querySelectorAll(pollSelector));
+    if (typeof root.matches === 'function' && root.matches(pollSelector)) pollElements.unshift(root);
     pollElements.forEach(element => {
         const pollHandler = element.getAttribute('dj-poll');
         if (!pollHandler) return;
@@ -1703,7 +1706,13 @@ function bindLiveViewEvents(scope) {
                 handleEvent(parsed.name, markSlotOf(Object.assign(strictParams, { _skipLoading: true }), element));
                 return;
             }
-            handleEvent(parsed.name, markSlotOf(Object.assign(extractTypedParams(element), { _skipLoading: true }), element));
+            // A poll inside an embedded child view (`{% live_render %}`) is
+            // that child's: it carries the child's view_id, as the strict
+            // path above does. A component's poll still reaches its host.
+            const params = Object.assign(extractTypedParams(element), { _skipLoading: true });
+            const embeddedViewId = getEmbeddedViewId(element);
+            if (embeddedViewId) params.view_id = embeddedViewId;
+            handleEvent(parsed.name, markSlotOf(params, element));
         };
 
         const intervalId = setInterval(firePoll, interval);

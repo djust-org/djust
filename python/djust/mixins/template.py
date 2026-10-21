@@ -80,6 +80,39 @@ _TAG_BODY_UNIT = r"""(?:%s|[^'"<>])""" % _QUOTED
 _ROOT_TAG_NAME = r"<(?!(?:html|head|body)(?=[ \t\n\r\f/>]))([A-Za-z][A-Za-z0-9-]*)(?=[ \t\n\r\f/>])"
 
 
+_ROOT_POLL_ATTRS = ("dj-poll", "dj-poll-interval")
+
+
+def _root_poll_attrs(html: str) -> Dict[str, str]:
+    """The ``dj-poll`` / ``dj-poll-interval`` of the rendered page root's open tag.
+
+    A mount sends the root's content only, so the browser's root element
+    keeps its attributes across a live_redirect; the mount frame carries these
+    two so the client can give the root the destination view's poll (``{}``:
+    the root has none). Attributes are parsed as the browser does (entities
+    decoded); the root is found by the same Rust locator as the content.
+    """
+    from html.parser import HTMLParser
+
+    from .._rust import root_element_span
+
+    span = root_element_span(html) if html else None
+    if span is None:
+        return {}
+    found: Dict[str, str] = {}
+
+    class _OpenTag(HTMLParser):
+        def handle_starttag(self, tag: str, attrs: "list[tuple[str, Optional[str]]]") -> None:
+            for name, value in attrs:
+                if name in _ROOT_POLL_ATTRS and name not in found:
+                    found[name] = value or ""
+
+    parser = _OpenTag(convert_charrefs=True)
+    parser.feed(html[span[0] : span[1]])
+    parser.close()
+    return found
+
+
 def _root_open_re(tag_name: str, attr: str) -> "re.Pattern[str]":
     # The leading lookahead asserts the tag CLOSES before any attribute is
     # tried. Without it, an unclosed tag carrying many ``dj-root`` names

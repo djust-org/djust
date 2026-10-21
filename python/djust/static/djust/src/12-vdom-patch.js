@@ -156,6 +156,31 @@ function teardownPollsIn(root, childrenOnly) {
     }
 }
 
+/**
+ * Give the page root the destination view's own `dj-poll` attributes.
+ *
+ * A mount replaces only the root's content, so after a live_redirect the root
+ * element still carries the departing view's attributes, and a root poll
+ * would keep calling a handler the new view does not have. The mount frame
+ * names the root's poll attributes (`root_poll`, `{}` for none); a frame
+ * without it (an older server) leaves the root alone. The next bind pass
+ * stops a dropped poll and rebuilds a changed one; an unchanged one keeps its
+ * phase (#2858).
+ */
+function applyRootPoll(container, rootPoll) {
+    if (!container || !rootPoll || typeof rootPoll !== 'object') return;
+    for (const name of ['dj-poll', 'dj-poll-interval']) {
+        // eslint-disable-next-line security/detect-object-injection
+        const value = rootPoll[name];
+        if (typeof value === 'string') {
+            if (container.getAttribute(name) !== value) container.setAttribute(name, value);
+        } else if (container.hasAttribute(name)) {
+            container.removeAttribute(name);
+        }
+    }
+    if (!container.getAttribute('dj-poll')) teardownPollsIn(container, false);
+}
+
 /** Stop the polls whose element left the document or dropped `dj-poll`. */
 function _sweepOrphanedPolls() {
     for (const element of Array.from(_pollElements)) {

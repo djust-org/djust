@@ -1731,6 +1731,10 @@ class LiveViewWebSocket {
                     if (pageContainer && pageContainer.getAttribute('dj-view') !== data.view) {
                         pageContainer.setAttribute('dj-view', data.view);
                     }
+                    // ...and so must its own dj-poll: the content swap below
+                    // leaves the root's attributes as they were.
+                    applyRootPoll(pageContainer || document.querySelector('[dj-root]:not(html):not(head)'),
+                        data.root_poll);
                 }
 
                 // Initialize upload configurations from mount response
@@ -3189,6 +3193,7 @@ class LiveViewSSE {
                     if (!container) container = document.querySelector('[dj-root]:not(html):not(head)');
                     if (container) {
                         if (typeof data.view === 'string') container.setAttribute('dj-view', data.view);
+                        applyRootPoll(container, data.root_poll);
                         const hasDataDjAttrs = data.has_ids === true;
                         if (hasDataDjAttrs && !this._replacingView) {
                             // The page was prerendered over HTTP: morph it
@@ -7122,7 +7127,10 @@ function bindLiveViewEvents(scope) {
     // path missed (or whose attribute was dropped) before binding new ones.
     _sweepOrphanedPolls();
     const pollSelector = '[dj-poll]';
-    const pollElements = root.querySelectorAll(pollSelector);
+    // The scan root itself can carry the poll (`<div dj-root dj-poll="...">`):
+    // querySelectorAll sees only its descendants.
+    const pollElements = Array.from(root.querySelectorAll(pollSelector));
+    if (typeof root.matches === 'function' && root.matches(pollSelector)) pollElements.unshift(root);
     pollElements.forEach(element => {
         const pollHandler = element.getAttribute('dj-poll');
         if (!pollHandler) return;
@@ -7167,7 +7175,13 @@ function bindLiveViewEvents(scope) {
                 handleEvent(parsed.name, markSlotOf(Object.assign(strictParams, { _skipLoading: true }), element));
                 return;
             }
-            handleEvent(parsed.name, markSlotOf(Object.assign(extractTypedParams(element), { _skipLoading: true }), element));
+            // A poll inside an embedded child view (`{% live_render %}`) is
+            // that child's: it carries the child's view_id, as the strict
+            // path above does. A component's poll still reaches its host.
+            const params = Object.assign(extractTypedParams(element), { _skipLoading: true });
+            const embeddedViewId = getEmbeddedViewId(element);
+            if (embeddedViewId) params.view_id = embeddedViewId;
+            handleEvent(parsed.name, markSlotOf(params, element));
         };
 
         const intervalId = setInterval(firePoll, interval);
@@ -9026,6 +9040,31 @@ function teardownPollsIn(root, childrenOnly) {
             _teardownPoll(element);
         }
     }
+}
+
+/**
+ * Give the page root the destination view's own `dj-poll` attributes.
+ *
+ * A mount replaces only the root's content, so after a live_redirect the root
+ * element still carries the departing view's attributes, and a root poll
+ * would keep calling a handler the new view does not have. The mount frame
+ * names the root's poll attributes (`root_poll`, `{}` for none); a frame
+ * without it (an older server) leaves the root alone. The next bind pass
+ * stops a dropped poll and rebuilds a changed one; an unchanged one keeps its
+ * phase (#2858).
+ */
+function applyRootPoll(container, rootPoll) {
+    if (!container || !rootPoll || typeof rootPoll !== 'object') return;
+    for (const name of ['dj-poll', 'dj-poll-interval']) {
+        // eslint-disable-next-line security/detect-object-injection
+        const value = rootPoll[name];
+        if (typeof value === 'string') {
+            if (container.getAttribute(name) !== value) container.setAttribute(name, value);
+        } else if (container.hasAttribute(name)) {
+            container.removeAttribute(name);
+        }
+    }
+    if (!container.getAttribute('dj-poll')) teardownPollsIn(container, false);
 }
 
 /** Stop the polls whose element left the document or dropped `dj-poll`. */
