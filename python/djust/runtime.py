@@ -3702,13 +3702,13 @@ class ViewRuntime:
             except Exception:  # noqa: BLE001 — session backend may be absent
                 saved_state = {}
             if saved_state:
-                from .security import safe_setattr
+                from ._state_restore import restore_public_state
                 from .serialization import decode_state_roundtrip
 
                 # #2252: the per-event session save tagged every Decimal
                 # (``normalize_django_value(..., state_roundtrip=True)``).
-                for key, value in decode_state_roundtrip(saved_state).items():
-                    safe_setattr(view_instance, key, value, allow_private=False)
+                # Never over a method of the view class (same rule as HTTP).
+                restore_public_state(view_instance, decode_state_roundtrip(saved_state))
 
                 # Restore user-defined _private attributes (mirrors WS + HTTP).
                 private_state = await session.aget(f"{view_key}__private", {})
@@ -6558,6 +6558,10 @@ class ViewRuntime:
             # / layout / a11y queued during handle_params() were being
             # silently dropped before this. Drain every queue in canonical order.
             await self._flush_all_pending()
+            # start_async()/assign_async() work handle_params() queued runs
+            # after the frame, as it does on the mount and event paths;
+            # without this a Back/Forward read never happened.
+            self._dispatch_async_work(None)
         except Exception as exc:
             response = handle_exception(
                 exc,

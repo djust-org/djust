@@ -920,10 +920,20 @@ class TestTheDecodeSiteInventory:
             if "tests" in path.parts:
                 continue
             src = path.read_text()
+            rel = path.relative_to(_PKG).as_posix()
+            # ``_state_restore.restore_public_state`` is the shared sink: it
+            # applies what its caller passes, so the CALLER must decode.
+            if rel != "_state_restore.py" and "restore_public_state(" in src:
+                restoring.add(rel)
+                continue
             if "safe_setattr(" not in src:
                 continue
-            rel = path.relative_to(_PKG).as_posix()
-            if rel in ("security/attribute_guard.py", "security/__init__.py", "websocket.py"):
+            if rel in (
+                "security/attribute_guard.py",
+                "security/__init__.py",
+                "websocket.py",
+                "_state_restore.py",
+            ):
                 continue
             if rel == "templatetags/live_tags.py":
                 # ADR-038's explicit codec accepts JSON primitives only. Running

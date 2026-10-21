@@ -509,6 +509,33 @@ function applyHttpSideChannels(data) {
  * @param {Object|null} transport - Connection/local operation owning this response
  * @returns {boolean} - True if handled successfully, false otherwise
  */
+/**
+ * The `<form>` a server `reset_form` applies to.
+ *
+ * The form the event came from: the triggering form itself (a `dj-submit`) or
+ * the form that contains the triggering element (a reset button, a field).
+ * With no such form (a button outside any form, a URL change), the root's form
+ * only when it has exactly one: on a page with several forms there is no way
+ * to tell which one the server reset, and resetting the first one cleared an
+ * unrelated draft (a chat composer above the form that was opened).
+ *
+ * @param {Element|null} triggerElement element that sent the event
+ * @param {Element|null} root the view's root (a view slot), else `[dj-root]`
+ * @returns {HTMLFormElement|null}
+ */
+function formToReset(triggerElement, root) {
+    if (triggerElement && triggerElement.isConnected && triggerElement.closest) {
+        const own = triggerElement.closest('form');
+        if (own) return own;
+    }
+    const scope = root || document.querySelector('[dj-root]');
+    if (!scope) return null;
+    const forms = scope.querySelectorAll('form');
+    return forms.length === 1 ? forms[0] : null;
+}
+
+window.djust.formToReset = formToReset;
+
 async function handleServerResponse(data, eventName, triggerElement, transport = null) {
     try {
         // Handle cache storage (from @cache decorator)
@@ -711,8 +738,8 @@ async function handleServerResponse(data, eventName, triggerElement, transport =
 
         // Handle form reset
         if (data.reset_form) {
-            if (globalThis.djustDebug) console.log('[LiveView] Resetting form');
-            const form = _activeSlot ? _activeSlot.root.querySelector('form') : document.querySelector('[dj-root] form');
+            const form = formToReset(triggerElement, _activeSlot ? _activeSlot.root : null);
+            if (globalThis.djustDebug) console.log('[LiveView] Resetting form', form);
             if (form) form.reset();
         }
 
