@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import re
+import threading
 from html import escape as _html_escape
 from typing import Any, Dict, Optional, Tuple, TYPE_CHECKING
 
@@ -175,6 +176,26 @@ _RAW_CLOSE_RES = {
 }
 
 
+# Character runs ``_scan_html_tag`` skips. Matching them with a compiled
+# pattern instead of a per-character Python loop keeps the mask linear in C:
+# it runs over the whole page on every mount and full render.
+_TAG_NAME_TAIL_RE = re.compile(r"[^ \t\n\r\f/>]*")
+_SPACE_OR_SLASH_RUN_RE = re.compile(r"[ \t\n\r\f/]*")
+_ATTR_NAME_TAIL_RE = re.compile(r"[^ \t\n\r\f/>=]*")
+_SPACE_RUN_RE = re.compile(r"[ \t\n\r\f]*")
+_UNQUOTED_VALUE_RE = re.compile(r"[^ \t\n\r\f>]*")
+# Inside a tag, '<' and stray quotes are literal parse errors and are masked.
+_IN_TAG_MASKED_CHAR_RE = re.compile(r"[<\"']")
+_TAG_NAME_RE = re.compile(r"</?([^ \t\n\r\f/>]+)")
+
+
+def _run_end(pattern: "re.Pattern[str]", text: str, pos: int) -> int:
+    """End of the character run ``pattern`` matches at ``pos`` (the run
+    patterns above match the empty string, so there is always a match)."""
+    match = pattern.match(text, pos)
+    return pos if match is None else match.end()
+
+
 def _scan_html_tag(html: str, start: int) -> "tuple[int, list[tuple[int, int, int, int]]]":
     """End offset and attribute name/value spans for one tag (#3054).
 
@@ -191,12 +212,10 @@ def _scan_html_tag(html: str, start: int) -> "tuple[int, list[tuple[int, int, in
     i = start + 1
     if i < n and html[i] == "/":
         i += 1
-    while i < n and html[i] not in _HTML_SPACE + "/>":
-        i += 1
+    i = _run_end(_TAG_NAME_TAIL_RE, html, i)
     attrs: list[tuple[int, int, int, int]] = []
     while i < n:
-        while i < n and html[i] in _HTML_SPACE + "/":
-            i += 1
+        i = _run_end(_SPACE_OR_SLASH_RUN_RE, html, i)
         if i >= n:
             break
         if html[i] == ">":
@@ -204,18 +223,12 @@ def _scan_html_tag(html: str, start: int) -> "tuple[int, list[tuple[int, int, in
         begin = i
         # '=' at the start of a name is an unexpected-equals parse error,
         # but belongs to that name rather than starting an empty value.
-        i += 1
-        while i < n and html[i] not in _HTML_SPACE + "/>=":
-            i += 1
-        name_end = i
-        while i < n and html[i] in _HTML_SPACE:
-            i += 1
+        name_end = _run_end(_ATTR_NAME_TAIL_RE, html, i + 1)
+        i = _run_end(_SPACE_RUN_RE, html, name_end)
         value_start = i
         end = name_end
         if i < n and html[i] == "=":
-            i += 1
-            while i < n and html[i] in _HTML_SPACE:
-                i += 1
+            i = _run_end(_SPACE_RUN_RE, html, i + 1)
             value_start = i
             if i < n and html[i] in "\"'":
                 quote = html[i]
@@ -224,11 +237,19 @@ def _scan_html_tag(html: str, start: int) -> "tuple[int, list[tuple[int, int, in
                     return -1, []
                 i = close + 1
             else:
-                while i < n and html[i] not in _HTML_SPACE + ">":
-                    i += 1
+                i = _run_end(_UNQUOTED_VALUE_RE, html, i)
             end = i
         attrs.append((begin, name_end, value_start, end))
     return -1, []
+
+
+# One-entry memo per thread for ``_mask_for_root_search``. Finding a
+# root and balancing its close tag both mask the SAME string (the search, then
+# ``_find_closing_tag_pos``), so every extract/strip of a rendered page masked
+# it twice. The entry holds a reference to its input, so an ``is`` hit can
+# never be a different string at a reused address; str is immutable, so the
+# mask of the same object cannot change.
+_mask_memo = threading.local()
 
 
 def _mask_for_root_search(html: str) -> str:
@@ -238,6 +259,17 @@ def _mask_for_root_search(html: str) -> str:
     candidates. The original offsets remain suitable for template splicing.
     Root precedence and embedded ownership are decided by the caller.
     """
+    if getattr(_mask_memo, "source", None) is html:
+        cached: str = _mask_memo.masked
+        return cached
+    source = html
+    masked = _mask_for_root_search_uncached(html)
+    _mask_memo.source = source
+    _mask_memo.masked = masked
+    return masked
+
+
+def _mask_for_root_search_uncached(html: str) -> str:
     html = str(html)  # Read-only scanner; returned coordinates address the original result.
     out = list(html)
     n = len(html)
@@ -267,9 +299,8 @@ def _mask_for_root_search(html: str) -> str:
                 out[i:] = "\x00" * (n - i)
                 break
             # Mask nested '<' and literal quote parse errors throughout tags.
-            for k in range(i + 1, end):
-                if html[k] in "<\"'":
-                    out[k] = "\x00"
+            for m in _IN_TAG_MASKED_CHAR_RE.finditer(html, i + 1, end):
+                out[m.start()] = "\x00"
             for begin, _name_end, value_start, attr_end in attrs:
                 # A stray '/' before an attribute is a tokenizer parse
                 # error, but still separates it from the preceding name.
@@ -279,7 +310,7 @@ def _mask_for_root_search(html: str) -> str:
                     out[value_start:attr_end] = "\x00" * (attr_end - value_start)
                     if html[value_start] in "\"'":
                         out[attr_end - 1] = " "
-            name = re.match(r"</?([^ \t\n\r\f/>]+)", html[i:end])
+            name = _TAG_NAME_RE.match(html, i, end)
             if name and name.group(1).lower() in _RAW_CLOSE_RES and nxt != "/":
                 content_start = end
                 raw_close = _RAW_CLOSE_RES[name.group(1).lower()].search(html, end)
