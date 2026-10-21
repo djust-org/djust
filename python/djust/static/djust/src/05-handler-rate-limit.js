@@ -299,14 +299,18 @@ window.djust.applyHandlerRateLimit = applyHandlerRateLimit;
 /**
  * Immediately send every pending debounced / throttled event.
  *
- * Called from the `dj-submit` path in 09-event-binding.js for the same
- * reason `_flushPendingDebouncesInForm` is (#1278): a user who edits a
- * debounced field and immediately submits must not lose the last change.
- * `_flushPendingDebouncesInForm` flushes the ELEMENT-level `dj-debounce`
+ * Called from `_flushPendingEdits` in 09-event-binding.js (dj-click and
+ * dj-submit, #1278): a user who edits a debounced field and immediately
+ * clicks or submits must not lose the last change. That helper first
+ * flushes the ELEMENT-level `dj-debounce`
  * wrappers; this flushes the HANDLER-level `@debounce` / `@throttle` gate,
  * which is a separate timer set and would otherwise still be pending.
+ *
+ * `debounceOnly` (a click) leaves the throttle gate alone: a throttled
+ * handler's trailing call is a rate-limited stream, not an edit, and its
+ * window must survive the click.
  */
-function flushHandlerRateLimit() {
+function flushHandlerRateLimit(debounceOnly = false) {
     // Validate BEFORE destroying anything (#2700 review). The clears below are
     // irreversible: bailing out after them would drop every pending event
     // instead of flushing it. Unreachable in the shipped bundle —
@@ -324,11 +328,13 @@ function flushHandlerRateLimit() {
     debounceTimers.clear();
 
     const throttlePending = [];
-    throttleState.forEach((state, eventName) => {
-        if (state.timeoutId) clearTimeout(state.timeoutId);
-        if (state.pendingData) throttlePending.push([eventName, state.pendingData]);
-    });
-    throttleState.clear();
+    if (!debounceOnly) {
+        throttleState.forEach((state, eventName) => {
+            if (state.timeoutId) clearTimeout(state.timeoutId);
+            if (state.pendingData) throttlePending.push([eventName, state.pendingData]);
+        });
+        throttleState.clear();
+    }
 
     debouncePending.concat(throttlePending).forEach(([eventName, pending]) => {
         window.djust.handleEvent(eventName, pending, true);
