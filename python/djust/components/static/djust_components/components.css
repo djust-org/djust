@@ -63,6 +63,10 @@
 .modal-md .modal-content, .dj-modal--md { max-width: 32rem; }
 .modal-lg .modal-content, .dj-modal--lg { max-width: 48rem; }
 .modal-xl .modal-content, .dj-modal--xl { max-width: 64rem; }
+/* {% modal native=True %}: a <dialog> in the top layer; ::backdrop replaces the backdrop div. */
+dialog.dj-modal--native { padding: 0; margin: auto; color: inherit; }
+dialog.dj-modal--native > * { margin: 0; }
+dialog.dj-modal--native::backdrop { background: rgba(0, 0, 0, 0.5); backdrop-filter: blur(var(--glass-blur, 8px)); -webkit-backdrop-filter: blur(var(--glass-blur, 8px)); }
 
 /* Tabs (rendered: dj-tabs, dj-tabs__nav, dj-tab, dj-tab--active, dj-tabs__pane) */
 .tabs-container, .dj-tabs { width: 100%; }

@@ -118,6 +118,8 @@ class RichSelect(Component):
         searchable: bool = False,
         label: str = "",
         variant_map: Optional[Dict[str, str]] = None,
+        describedby: str = "",
+        invalid: bool = False,
         **kwargs: Any,
     ) -> None:
         super().__init__(
@@ -130,6 +132,8 @@ class RichSelect(Component):
             searchable=searchable,
             label=label,
             variant_map=variant_map,
+            describedby=describedby,
+            invalid=invalid,
             **kwargs,
         )
         self.name = name
@@ -141,6 +145,8 @@ class RichSelect(Component):
         self.searchable = searchable
         self.label = label
         self.variant_map = variant_map or {}
+        self.describedby = describedby
+        self.invalid = invalid
 
     def _resolve_variant(self, opt: Dict) -> str:
         """Return the variant to render for a given option.
@@ -221,6 +227,11 @@ class RichSelect(Component):
         tabindex = "-1" if self.disabled else "0"
         aria_disabled = ' aria-disabled="true"' if self.disabled else ""
         listbox_id = f"rs-{e_name}-listbox"
+        from djust.components.templatetags.djust_components import field_aria_attrs
+
+        aria_field = field_aria_attrs(
+            f"rs-{e_name}", describedby=self.describedby, invalid=self.invalid
+        )
 
         return (
             f'<div class="rich-select{disabled_cls}">'
@@ -228,7 +239,7 @@ class RichSelect(Component):
             f'<input type="hidden" name="{e_name}" value="{html.escape(self.value)}">'
             f'<div class="rich-select-trigger{trigger_variant_cls}" '
             f'tabindex="{tabindex}" role="combobox" aria-controls="{listbox_id}" '
-            f'aria-expanded="false" aria-haspopup="listbox"{aria_disabled}{disabled_attr}>'
+            f'aria-expanded="false" aria-haspopup="listbox"{aria_field}{aria_disabled}{disabled_attr}>'
             f"{selected_html}"
             f'<span class="rich-select-chevron" aria-hidden="true">&#9662;</span>'
             f"</div>"
