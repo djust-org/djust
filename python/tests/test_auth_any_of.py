@@ -226,14 +226,14 @@ class TestAuditAnyOf:
 
         info = _extract_auth_info(_MixedView)
         assert info["permission_required"] == ["runs.view_run"]
-        assert info["permission_required_any"] == [["runs.approve", "runs.review"]]
+        assert info["permission_required_any"] == [["runs.review", "runs.approve"]]
 
     def test_extract_auth_info_any_only(self):
         from djust.management.commands.djust_audit import _extract_auth_info
 
         info = _extract_auth_info(_AnyView)
         assert "permission_required" not in info
-        assert info["permission_required_any"] == [["chat.chat_general", "runs.agent_run"]]
+        assert info["permission_required_any"] == [["runs.agent_run", "chat.chat_general"]]
 
     def test_extract_auth_info_tuple_is_all_of(self):
         from djust.management.commands.djust_audit import _extract_auth_info
@@ -348,6 +348,6 @@ class TestHandlerInventoryAnyOf:
         (handler,) = [h for h in schema["handlers"] if h["name"] == "decide"]
         assert handler["decorators"]["permission_required"] == {
             "all_of": [],
-            "any_of": [["runs.approve", "runs.review"]],
+            "any_of": [["runs.review", "runs.approve"]],
         }
         json.dumps(schema)

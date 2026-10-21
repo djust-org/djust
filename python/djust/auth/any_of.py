@@ -117,10 +117,10 @@ def permission_spec_to_document(
     """The spec as ``(permissions, permissions_any)`` for ``permissions.yaml``.
 
     ``permissions`` is the all-of list; ``permissions_any`` is one list per
-    any-of group. Both are sorted so the comparison ignores order.
+    any-of group. Both keep the order the code declares; comparisons ignore it.
     """
     all_of, groups = normalize_permission_spec(spec)
-    return sorted(all_of), sorted(sorted(group) for group in groups)
+    return list(all_of), [list(group) for group in groups]
 
 
 def describe_permission_spec(spec: Union[str, Iterable[Any], None]) -> str:
