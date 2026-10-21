@@ -2695,7 +2695,9 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
     if not restored:
         mount = getattr(child, "mount", None)
         if callable(mount):
-            mount(request, **kwargs)
+            from .._view_hooks import call_hook_sync
+
+            call_hook_sync(mount, request, **kwargs)
     if sticky_kwarg:
         _record_sticky_mount_kwargs(child, kwargs)
 

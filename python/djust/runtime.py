@@ -68,6 +68,8 @@ from typing import (
 
 from asgiref.sync import async_to_sync, sync_to_async
 
+from ._view_hooks import call_hook
+
 if TYPE_CHECKING:
     from ._async_batch import AsyncBatch
     from ._exposure_children import ChildStateSession
@@ -1908,9 +1910,12 @@ class WSConsumerTransport:
         from djust import push as _djust_push
 
         _origin = getattr(consumer, "_origin_token", None)
-        _origin_token = _djust_push.origin_channel.set(
+        # Scoped to this turn: work the handler starts does not keep the tag
+        # once the turn is over (the pushes it sends later are news here).
+        _origin_turn = _djust_push.originating_turn(
             _origin() if callable(_origin) else getattr(consumer, "channel_name", None)
         )
+        _origin_turn.__enter__()
 
         # Observability: comprehensive performance tracking (websocket.py:3150-3154)
         # + per-handler SQL-query capture (websocket.py:3469-3475). Both are
@@ -1948,7 +1953,7 @@ class WSConsumerTransport:
         finally:
             sql_scope.__exit__(None, None, None)
             PerformanceTracker.reset_current(_tracker_token)
-            _djust_push.origin_channel.reset(_origin_token)
+            _origin_turn.__exit__(None, None, None)
             consumer._processing_user_event = False
             consumer._render_lock.release()
 
@@ -3885,7 +3890,7 @@ class ViewRuntime:
 
         if not mounted_from_restore:
             try:
-                await sync_to_async(view_instance.mount)(request, **mount_kwargs)
+                await call_hook(view_instance.mount, request, **mount_kwargs)
                 if not legacy_exposure:
                     from ._exposure_sessions import load_server_state
                     from .security import safe_setattr
@@ -3979,7 +3984,7 @@ class ViewRuntime:
             query_string = urlencode(params) if params else ""
             uri = f"{page_url}?{query_string}" if query_string else page_url
             if hasattr(view_instance, "handle_params"):
-                await sync_to_async(view_instance.handle_params)(params, uri)
+                await call_hook(view_instance.handle_params, params, uri)
         except Exception as exc:
             response = handle_exception(
                 exc,
@@ -6472,7 +6477,7 @@ class ViewRuntime:
             return
 
         try:
-            await sync_to_async(self.view_instance.handle_params)(params, uri)
+            await call_hook(self.view_instance.handle_params, params, uri)
 
             # Object-permission re-check (ADR-017) after the client-supplied URL
             # params may have changed the access-determining state. Without this,

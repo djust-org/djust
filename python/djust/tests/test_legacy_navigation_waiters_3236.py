@@ -88,7 +88,11 @@ class TourPage(LiveView):
     async def _wait_later(self):
         """Some work first (the navigation happens meanwhile), then a wait."""
         EVENTS.append(("working", self.tag))
-        await GATES[self.tag].wait()
+        try:
+            await GATES[self.tag].wait()
+        except asyncio.CancelledError:
+            EVENTS.append(("work-cancelled", self.tag))
+            raise
         try:
             await self.wait_for_event("next_step")
         except asyncio.CancelledError:
@@ -100,6 +104,12 @@ class TourPage(LiveView):
         pass
 
 
+class CancelsOnClosePage(TourPage):
+    """A tour whose work only serves the open page (#3234 opt-in)."""
+
+    cancel_async_on_disconnect = True
+
+
 class OtherPage(LiveView):
     exposure_policy = "legacy"
     template = "<div dj-root><span>other</span></div>"
@@ -108,6 +118,7 @@ class OtherPage(LiveView):
 urlpatterns = [path("tour/", TourPage.as_view()), path("other/", OtherPage.as_view())]
 
 TOUR = __name__ + ".TourPage"
+CANCELS = __name__ + ".CancelsOnClosePage"
 OTHER = __name__ + ".OtherPage"
 
 
@@ -180,7 +191,7 @@ async def _ws_mounted(communicator):
     await receive_settled(communicator, has_type("mount", "error"), what="the mount")
 
 
-async def _ws_mounted_tour(event):
+async def _ws_mounted_tour(event, view=TOUR):
     pytest.importorskip("channels")
     from channels.testing import WebsocketCommunicator
 
@@ -190,7 +201,7 @@ async def _ws_mounted_tour(event):
     connected, _ = await communicator.connect()
     assert connected
     await communicator.receive_json_from(timeout=2)  # connect ack
-    await communicator.send_json_to({"type": "mount", "view": TOUR, "url": "/tour/"})
+    await communicator.send_json_to({"type": "mount", "view": view, "url": "/tour/"})
     await _ws_mounted(communicator)
     assert len(VIEWS) == 1
     view_ref = VIEWS[0]
@@ -235,6 +246,25 @@ async def test_websocket_a_waiter_started_after_disconnect_is_refused():
     await _assert_late_wait_refused(view_ref, tag)
 
 
+async def test_websocket_disconnect_cancels_the_work_of_a_view_that_opts_in():
+    communicator, view_ref, tag = await _ws_mounted_tour("start_late_tour", CANCELS)
+    await _until(lambda: ("working", tag) in EVENTS, "the late task to start")
+    await communicator.disconnect()
+    await _until(lambda: ("work-cancelled", tag) in EVENTS, "the work to be cancelled")
+
+
+async def test_websocket_live_redirect_does_not_cancel_the_work_of_a_view_that_opts_in():
+    """The opt-in is for a closed socket; navigation keeps #3234's behaviour."""
+    communicator, view_ref, tag = await _ws_mounted_tour("start_late_tour", CANCELS)
+    try:
+        await _until(lambda: ("working", tag) in EVENTS, "the late task to start")
+        await _ws_redirect_away(communicator)
+        await _assert_late_wait_refused(view_ref, tag)
+        assert ("work-cancelled", tag) not in EVENTS
+    finally:
+        await communicator.disconnect()
+
+
 # --------------------------------------------------------------------------- #
 # SSE
 # --------------------------------------------------------------------------- #
@@ -267,11 +297,11 @@ async def _post(session, key, body):
     return response
 
 
-async def _sse_mounted_tour(event):
+async def _sse_mounted_tour(event, view=TOUR):
     key = await sync_to_async(_fresh_key)()
     sid = str(uuid.uuid4())
     request = await sync_to_async(_request)(
-        "GET", f"/djust/sse/{sid}/", {"view": TOUR, "_djust_url": "/tour/"}, key
+        "GET", f"/djust/sse/{sid}/", {"view": view, "_djust_url": "/tour/"}, key
     )
     response = await DjustSSEStreamView().get(request, session_id=sid)
     assert response.status_code == 200
@@ -319,3 +349,10 @@ async def test_sse_a_waiter_started_after_close_is_refused():
     await stream.aclose()  # the client went away
     await _until(lambda: session.view_instance is None, "the session to drop its view")
     await _assert_late_wait_refused(view_ref, tag)
+
+
+async def test_sse_close_cancels_the_work_of_a_view_that_opts_in():
+    session, key, stream, view_ref, tag = await _sse_mounted_tour("start_late_tour", CANCELS)
+    await _until(lambda: ("working", tag) in EVENTS, "the late task to start")
+    await stream.aclose()  # the client went away
+    await _until(lambda: ("work-cancelled", tag) in EVENTS, "the work to be cancelled")
