@@ -2514,7 +2514,7 @@ class TestDjustMiddlewareStack:
     def test_wraps_with_session_middleware(self):
         """DjustMiddlewareStack still wraps inner app with SessionMiddlewareStack.
 
-        Since #653 the outer type is AllowedHostsOriginValidator by default, so
+        Since #653 the outer type is an Origin validator by default, so
         we walk inward through common wrapper attribute names to find the
         session middleware layer.
         """
@@ -2542,13 +2542,9 @@ class TestDjustMiddlewareStack:
         )
 
     def test_wraps_with_origin_validator_by_default(self):
-        """DjustMiddlewareStack wraps in OriginValidator by default (#653)."""
-        # ``AllowedHostsOriginValidator`` is a factory function that reads
-        # ``settings.ALLOWED_HOSTS`` at call time and returns an
-        # ``OriginValidator`` instance. Check the instance type.
-        from channels.security.websocket import OriginValidator
-
+        """DjustMiddlewareStack wraps in DjustOriginValidator by default (#653)."""
         from djust.routing import DjustMiddlewareStack
+        from djust.routing import DjustOriginValidator as OriginValidator
 
         class MockInnerApp:
             pass
@@ -2562,9 +2558,8 @@ class TestDjustMiddlewareStack:
 
     def test_validate_origin_opt_out(self):
         """validate_origin=False skips the OriginValidator wrap (#653)."""
-        from channels.security.websocket import OriginValidator
-
         from djust.routing import DjustMiddlewareStack
+        from djust.routing import DjustOriginValidator as OriginValidator
 
         class MockInnerApp:
             pass

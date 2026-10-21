@@ -129,6 +129,8 @@ def _event_post(factory, session_id, *, user=None, session_key=None):
         data=json.dumps({"event": "delete_account", "params": {}}),
         content_type="application/json",
         HTTP_ORIGIN=ALLOWED_ORIGIN,
+        HTTP_HOST="example.com",
+        secure=True,
     )
     _bind_identity(request, user=user, session_key=session_key)
     return request
@@ -140,6 +142,8 @@ def _message_post(factory, session_id, *, user=None, session_key=None):
         data=json.dumps({"type": "event", "event": "delete_account", "params": {}}),
         content_type="application/json",
         HTTP_ORIGIN=ALLOWED_ORIGIN,
+        HTTP_HOST="example.com",
+        secure=True,
     )
     _bind_identity(request, user=user, session_key=session_key)
     return request
@@ -300,7 +304,11 @@ class TestF24OwnerCapture:
         """A stream GET as an authenticated user binds the session to that pk."""
         sid = str(uuid.uuid4())
         request = self.factory.get(
-            f"/djust/sse/{sid}/", {"view": "demo.View"}, HTTP_ORIGIN=ALLOWED_ORIGIN
+            f"/djust/sse/{sid}/",
+            {"view": "demo.View"},
+            HTTP_ORIGIN=ALLOWED_ORIGIN,
+            HTTP_HOST="example.com",
+            secure=True,
         )
         request.user = _auth_user(55)
         request.session = SessionStore()
@@ -321,7 +329,11 @@ class TestF24OwnerCapture:
         cookie becomes the capability)."""
         sid = str(uuid.uuid4())
         request = self.factory.get(
-            f"/djust/sse/{sid}/", {"view": "demo.View"}, HTTP_ORIGIN=ALLOWED_ORIGIN
+            f"/djust/sse/{sid}/",
+            {"view": "demo.View"},
+            HTTP_ORIGIN=ALLOWED_ORIGIN,
+            HTTP_HOST="example.com",
+            secure=True,
         )
         request.user = _anon_user()
         request.session = SessionStore()
@@ -349,7 +361,11 @@ class TestF25Caps:
 
     def _get_request(self, sid, *, user):
         request = self.factory.get(
-            f"/djust/sse/{sid}/", {"view": "demo.View"}, HTTP_ORIGIN=ALLOWED_ORIGIN
+            f"/djust/sse/{sid}/",
+            {"view": "demo.View"},
+            HTTP_ORIGIN=ALLOWED_ORIGIN,
+            HTTP_HOST="example.com",
+            secure=True,
         )
         request.user = user
         request.session = SessionStore()

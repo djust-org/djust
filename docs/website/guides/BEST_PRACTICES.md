@@ -1180,10 +1180,10 @@ os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'myproject.settings')
 
 application = ProtocolTypeRouter({
     "http": get_asgi_application(),
-    # DjustMiddlewareStack wraps in channels.security.websocket.AllowedHostsOriginValidator
-    # by default (CSWSH defense, #653). Make sure settings.ALLOWED_HOSTS does NOT contain
+    # DjustMiddlewareStack wraps in djust.routing.DjustOriginValidator by default
+    # (CSWSH defense, #653). Make sure settings.ALLOWED_HOSTS does NOT contain
     # '*' in production. If you use channels.auth, substitute AuthMiddlewareStack wrapped
-    # in AllowedHostsOriginValidator(...).
+    # in DjustOriginValidator(...).
     "websocket": DjustMiddlewareStack(
         URLRouter(websocket_urlpatterns)
     ),
@@ -1191,9 +1191,12 @@ application = ProtocolTypeRouter({
 ```
 
 **Security note:** As of #653, `DjustMiddlewareStack` wraps its inner application in
-`channels.security.websocket.AllowedHostsOriginValidator` by default, preventing
-Cross-Site WebSocket Hijacking (CSWSH). `LiveViewConsumer.connect()` also enforces
-the same check at the consumer level (defense in depth). Make sure
+`djust.routing.DjustOriginValidator` by default, preventing Cross-Site WebSocket
+Hijacking (CSWSH): the `Origin` must be the site's own origin (scheme, host and
+port) or listed in `DJUST_ALLOWED_ORIGINS` (default: `CSRF_TRUSTED_ORIGINS`), and a
+missing `Origin` is refused unless `DJUST_ALLOW_MISSING_ORIGIN = True`.
+`LiveViewConsumer.connect()` also enforces the same check at the consumer level
+(defense in depth). Make sure
 `settings.ALLOWED_HOSTS` does NOT contain `*` in production.
 
 **Related:**

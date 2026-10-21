@@ -286,7 +286,9 @@ async def _connect(n: int) -> List[Any]:
     comms = []
     for _ in range(n):
         key = await sync_to_async(_create_session)()
-        comm = WebsocketCommunicator(app, "/ws/live/", headers=[(b"host", b"localhost")])
+        comm = WebsocketCommunicator(
+            app, "/ws/live/", headers=[(b"host", b"localhost"), (b"origin", b"http://localhost")]
+        )
         comm.scope["session"] = _ScopeSession(key)
         connected, _ = await comm.connect()
         assert connected, "WebSocket did not connect"

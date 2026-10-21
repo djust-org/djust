@@ -136,7 +136,9 @@ async def _mount_stream(view_path, *, query=""):
     _sse_sessions.pop(sid, None)
     rf = RequestFactory()
     q = f"?view={view_path}" + (f"&{query}" if query else "")
-    request = rf.get(f"/djust/sse/{sid}/{q}", HTTP_ORIGIN=ALLOWED_ORIGIN)
+    request = rf.get(
+        f"/djust/sse/{sid}/{q}", HTTP_ORIGIN=ALLOWED_ORIGIN, HTTP_HOST="example.com", secure=True
+    )
     request.user = AnonymousUser()
     view = DjustSSEStreamView()
     response = await view.get(request, session_id=sid)
@@ -168,6 +170,8 @@ async def _post_event(session, sid, event, params=None, ref=None):
         data=json.dumps(body),
         content_type="application/json",
         HTTP_ORIGIN=ALLOWED_ORIGIN,
+        HTTP_HOST="example.com",
+        secure=True,
     )
     request.user = MagicMock(is_authenticated=True, pk=7)
     view = DjustSSEEventView()
@@ -196,6 +200,8 @@ async def _post_message(session, sid, body):
         data=json.dumps(body),
         content_type="application/json",
         HTTP_ORIGIN=ALLOWED_ORIGIN,
+        HTTP_HOST="example.com",
+        secure=True,
     )
     request.user = MagicMock(is_authenticated=True, pk=7)
     view = DjustSSEMessageView()

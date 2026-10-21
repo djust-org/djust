@@ -64,8 +64,24 @@ from djust.sse import (  # noqa: E402
 
 # A host that is NOT in the overridden ALLOWED_HOSTS — simulates an attacker page.
 FOREIGN_ORIGIN = "https://attacker.example"
-# A host that IS in the overridden ALLOWED_HOSTS — simulates the legitimate page.
+# The page's own origin: the requests below are made to https://example.com
+# (Host in ALLOWED_HOSTS), and the Origin must match scheme, host and port.
 ALLOWED_ORIGIN = "https://example.com"
+# The same host on another port is another origin.
+OTHER_PORT_ORIGIN = "https://example.com:8443"
+
+
+class _SameHostFactory(RequestFactory):
+    """Requests made to https://example.com, the page ``ALLOWED_ORIGIN`` names."""
+
+    def __init__(self):
+        super().__init__(HTTP_HOST="example.com")
+
+    def get(self, *args, **kwargs):
+        return super().get(*args, secure=True, **kwargs)
+
+    def post(self, *args, **kwargs):
+        return super().post(*args, secure=True, **kwargs)
 
 
 # Owner pk the mock sessions are bound to (Finding #24 owner-binding). The
@@ -116,7 +132,7 @@ class TestSSEStreamOrigin:
     """``DjustSSEStreamView.get`` must reject cross-origin GET handshakes."""
 
     def setup_method(self):
-        self.factory = RequestFactory()
+        self.factory = _SameHostFactory()
 
     @override_settings(ALLOWED_HOSTS=["example.com"])
     @pytest.mark.asyncio
@@ -172,7 +188,7 @@ class TestSSEMessageOrigin:
     """``DjustSSEMessageView.post`` must reject cross-origin POSTs."""
 
     def setup_method(self):
-        self.factory = RequestFactory()
+        self.factory = _SameHostFactory()
 
     @override_settings(ALLOWED_HOSTS=["example.com"])
     @pytest.mark.asyncio
@@ -192,6 +208,26 @@ class TestSSEMessageOrigin:
             content_type="application/json",
             HTTP_ORIGIN=FOREIGN_ORIGIN,
         )
+        view = DjustSSEMessageView()
+        response = await view.post(request, session_id=session.session_id)
+
+        assert response.status_code == 403
+        session.runtime.dispatch_message.assert_not_called()
+
+    @override_settings(ALLOWED_HOSTS=["example.com"], CSRF_TRUSTED_ORIGINS=[])
+    @pytest.mark.asyncio
+    async def test_same_host_other_port_post_rejected_with_403(self):
+        """A page on another port of the same host is another origin: 403."""
+        session = _make_mounted_session()
+        session.runtime.dispatch_message = AsyncMock(return_value=None)
+
+        request = self.factory.post(
+            f"/djust/sse/{session.session_id}/message/",
+            data=json.dumps({"type": "event", "event": "delete_account", "params": {}}),
+            content_type="application/json",
+            HTTP_ORIGIN=OTHER_PORT_ORIGIN,
+        )
+        _attach_owner(request)
         view = DjustSSEMessageView()
         response = await view.post(request, session_id=session.session_id)
 
@@ -307,7 +343,7 @@ class TestSSEEventOrigin:
     """``DjustSSEEventView.post`` (legacy alias) must reject cross-origin POSTs."""
 
     def setup_method(self):
-        self.factory = RequestFactory()
+        self.factory = _SameHostFactory()
 
     @override_settings(ALLOWED_HOSTS=["example.com"])
     @pytest.mark.asyncio

@@ -725,17 +725,19 @@ _FOREIGN_HOST = "evil.example.com"
 
 
 def _ws_origin_rejected(origin: str, host: str) -> bool:
-    """WS CSWSH gate: ``_is_allowed_origin`` on the Origin header (bytes)."""
+    """WS CSWSH gate: ``_is_allowed_origin`` on the Origin header (bytes), for a
+    socket opened to ``host`` over TLS."""
     from djust.websocket import _is_allowed_origin
 
-    return not _is_allowed_origin(origin.encode("ascii"))
+    scope = {"headers": [(b"host", host.encode("ascii"))], "scheme": "wss"}
+    return not _is_allowed_origin(origin.encode("ascii"), scope)
 
 
 def _sse_origin_rejected(origin: str, host: str) -> bool:
     """SSE CSRF gate: ``_sse_origin_allowed`` on the request Origin header (str)."""
     from djust.sse import _sse_origin_allowed
 
-    request = RequestFactory().get("/", HTTP_ORIGIN=origin)
+    request = RequestFactory().get("/", HTTP_ORIGIN=origin, HTTP_HOST=host, secure=True)
     return not _sse_origin_allowed(request)
 
 

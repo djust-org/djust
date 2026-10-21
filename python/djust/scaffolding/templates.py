@@ -267,15 +267,16 @@ from django.contrib.staticfiles.handlers import ASGIStaticFilesHandler  # noqa: 
 from django.urls import path  # noqa: E402
 from channels.routing import ProtocolTypeRouter, URLRouter  # noqa: E402
 from channels.auth import AuthMiddlewareStack  # noqa: E402
-from channels.security.websocket import AllowedHostsOriginValidator  # noqa: E402
+from djust.routing import DjustOriginValidator  # noqa: E402
 from djust.websocket import LiveViewConsumer  # noqa: E402
 
-# CSWSH defense: ``AllowedHostsOriginValidator`` rejects WebSocket
-# handshakes whose Origin header is not in ``settings.ALLOWED_HOSTS``.
+# CSWSH defense: ``DjustOriginValidator`` denies a WebSocket handshake unless
+# its Origin is this site's own origin (scheme, host and port) or listed in
+# DJUST_ALLOWED_ORIGINS (default: CSRF_TRUSTED_ORIGINS).
 application = ProtocolTypeRouter(
     {
         "http": ASGIStaticFilesHandler(django_asgi_app),
-        "websocket": AllowedHostsOriginValidator(
+        "websocket": DjustOriginValidator(
             AuthMiddlewareStack(
                 URLRouter(
                     [
