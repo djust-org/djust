@@ -316,6 +316,12 @@ Every djust field control (the rules above, the number stepper's outer box `.num
 
 Field controls render in the page font. Browsers do not inherit `font-family` into `<input>`, `<select>`, `<textarea>` or `<button>`, so every text-bearing djust field control (the `.form-*` rules, the combobox, and djust.theming's `.input`, `.select` and `.textarea`) sets `font-family: inherit` and keeps its own size and line-height. The code-style controls stay monospace: the prompt editor, the cron input, the colour hex input and the markdown editor.
 
+Floating surfaces (the modal panel, sheet, popover, popconfirm, dropdown and context menus, combobox and rich-select dropdowns, notification dropdown, split-button menu, command palette, toast and tooltip) are opaque `--card`, so a dialog matches the card-coloured fields inside it. They keep their backdrop blur; for a translucent glass panel, set `--overlay-surface-opacity`:
+
+```css
+:root { --overlay-surface-opacity: 0.95; }
+```
+
 For the full component library and design system, install the extras:
 
 ```bash
