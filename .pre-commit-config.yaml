@@ -2,6 +2,11 @@
 # Install: pip install pre-commit && pre-commit install
 # Run manually: pre-commit run --all-files
 
+# Hooks without their own `stages:` run at commit time only. Without this,
+# pre-commit runs them at EVERY installed stage — so all 31 commit-time hooks
+# (incl. build-js, which `git add`s the rebuilt bundle) ran again on each push.
+default_stages: [pre-commit]
+
 repos:
   # Python - Ruff for linting and formatting
   - repo: https://github.com/astral-sh/ruff-pre-commit
