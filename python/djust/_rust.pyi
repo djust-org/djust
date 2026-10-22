@@ -268,6 +268,14 @@ def fold_html_whitespace(html: str) -> str:
     """
     ...
 
+def strip_html_comments_and_whitespace(html: str) -> Optional[str]:
+    """The egress normalizer for a plain render, run without the GIL.
+
+    Byte-identical to ``TemplateMixin._strip_comments_and_whitespace_py``;
+    ``None`` for an input it does not model (the caller then runs Python).
+    """
+    ...
+
 def fold_html_whitespace_edits(html: str) -> List[Tuple[int, int]]:
     """UTF-8 byte ranges ``fold_html_whitespace`` replaces with one space."""
     ...
@@ -1519,6 +1527,7 @@ __all__ = [
     "normalize_provenance_whitespace",
     "fold_html_whitespace",
     "fold_html_whitespace_edits",
+    "strip_html_comments_and_whitespace",
     "collapse_provenance_whitespace",
     "lazy_authority_spans",
     "root_content_range",

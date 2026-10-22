@@ -3455,6 +3455,17 @@ fn collapse_inter_tag_whitespace(html: &str, block_tags: Vec<String>) -> String 
     djust_core::html_whitespace::collapse_inter_tag_whitespace(html, &block_tags)
 }
 
+/// The whole egress normalizer (`TemplateMixin._strip_comments_and_whitespace`)
+/// for a plain render, run DETACHED from the interpreter so other Python
+/// threads run meanwhile: `djust_core::html_whitespace::strip_comments_and_whitespace`.
+/// `None` means "an input this port does not model; use the Python normalizer".
+#[pyfunction]
+fn strip_html_comments_and_whitespace(py: Python<'_>, html: &str) -> PyResult<Option<String>> {
+    guard_panic("strip_html_comments_and_whitespace", move || {
+        Ok(py.detach(|| djust_core::html_whitespace::strip_comments_and_whitespace(html)))
+    })
+}
+
 /// Compute diff between two HTML strings
 #[pyfunction]
 fn diff_html(old_html: String, new_html: String) -> PyResult<String> {
@@ -6511,6 +6522,7 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(diff_html, m)?)?;
     m.add_function(wrap_pyfunction!(inter_tag_whitespace_edits, m)?)?;
     m.add_function(wrap_pyfunction!(fold_html_whitespace, m)?)?;
+    m.add_function(wrap_pyfunction!(strip_html_comments_and_whitespace, m)?)?;
     m.add_function(wrap_pyfunction!(fold_html_whitespace_edits, m)?)?;
     m.add_function(wrap_pyfunction!(authored_lazy_elements, m)?)?;
     m.add_function(wrap_pyfunction!(template_needs_provenance, m)?)?;

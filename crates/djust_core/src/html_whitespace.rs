@@ -15,6 +15,8 @@
 //! client's significant-child predicate stays context-free. See
 //! `isSignificantChild` in `python/djust/static/djust/src/12-vdom-patch.js`.
 
+use std::borrow::Cow;
+
 /// Elements whose default rendering is inline (phrasing content plus the
 /// inline replaced elements). Whitespace between two of these — or between one
 /// of these and a text run — is significant. Custom elements are inline too
@@ -416,6 +418,334 @@ fn collapse_with_edits<F: FnMut(usize, usize)>(
     out
 }
 
+// ---------------------------------------------------------------------------
+// The whole egress normalizer, in one GIL-free pass
+// ---------------------------------------------------------------------------
+
+/// Characters that make the Python regex engine's case-insensitive match of an
+/// ASCII tag letter succeed on a non-ASCII character (`ſ` matches `s`, `İ` and
+/// `ı` match `i`). Inputs holding one go to the Python normalizer instead, so
+/// the two never disagree on which `<script>` is a script.
+const PY_IGNORECASE_SPECIALS: [char; 3] = ['\u{130}', '\u{131}', '\u{17f}'];
+
+/// Python's `\s` on a `str` (`str.isspace()`), checked against every code
+/// point by `tests/unit/test_egress_normalizer_rust_parity.py`.
+fn is_py_whitespace(c: char) -> bool {
+    matches!(
+        c,
+        '\t' | '\n'
+            | '\x0b'
+            | '\x0c'
+            | '\r'
+            | '\x1c'..='\x1f'
+            | ' '
+            | '\u{85}'
+            | '\u{a0}'
+            | '\u{1680}'
+            | '\u{2000}'..='\u{200a}'
+            | '\u{2028}'
+            | '\u{2029}'
+            | '\u{202f}'
+            | '\u{205f}'
+            | '\u{3000}'
+    )
+}
+
+/// `html[at..]` starts with `<` + `tag` (ASCII, case-insensitive) — or, when
+/// `closing`, with `</` + `tag`. No boundary after the name: the normalizer's
+/// regex `<pre[^>]*>` matches `<preview>` too, and this keeps that.
+fn starts_tag(html: &[u8], at: usize, tag: &[u8], closing: bool) -> bool {
+    let lead: &[u8] = if closing { b"</" } else { b"<" };
+    let end = at + lead.len() + tag.len();
+    end <= html.len()
+        && &html[at..at + lead.len()] == lead
+        && html[at + lead.len()..end].eq_ignore_ascii_case(tag)
+}
+
+/// Preserved before the comment strip (their bodies are raw text, #1927) …
+const RAW_TEXT_TAGS: [&[u8]; 2] = [b"script", b"style"];
+/// … and after it.
+const WHITESPACE_TAGS: [&[u8]; 3] = [b"pre", b"code", b"textarea"];
+
+/// Which of `RAW_TEXT_TAGS ++ WHITESPACE_TAGS` has an open tag in `html`, in
+/// one scan, so a pass that cannot match is skipped instead of copying the
+/// page. A false "present" only costs a pass that finds nothing.
+fn open_tags_present(html: &str) -> [bool; 5] {
+    let bytes = html.as_bytes();
+    let mut present = [false; 5];
+    let tags = RAW_TEXT_TAGS.iter().chain(WHITESPACE_TAGS.iter());
+    let tags: Vec<&[u8]> = tags.copied().collect();
+    for (i, &b) in bytes.iter().enumerate() {
+        if b != b'<' {
+            continue;
+        }
+        for (k, tag) in tags.iter().enumerate() {
+            if !present[k] && starts_tag(bytes, i, tag, false) {
+                present[k] = true;
+            }
+        }
+        if present.iter().all(|&p| p) {
+            break;
+        }
+    }
+    present
+}
+
+/// `<tag[^>]*>.*?</tag[^>]*>` (DOTALL, IGNORECASE): every match replaced by a
+/// `__PRESERVED_BLOCK_<n>__` placeholder, its text pushed to `blocks`.
+fn preserve_raw_blocks(html: &str, tag: &[u8], blocks: &mut Vec<String>) -> String {
+    let bytes = html.as_bytes();
+    let mut out = String::with_capacity(html.len());
+    let mut copied = 0;
+    let mut i = 0;
+    while let Some(off) = html[i..].find('<') {
+        let start = i + off;
+        if !starts_tag(bytes, start, tag, false) {
+            i = start + 1;
+            continue;
+        }
+        // `[^>]*>`: the open tag ends at the first `>`. With none left, no
+        // later start can match either.
+        let Some(open_gt) = find_byte(html, start + 1 + tag.len(), '>') else {
+            break;
+        };
+        // `.*?</tag[^>]*>`: the first `</tag` that has a `>` after it — and
+        // if the first has none, no later one does.
+        let mut j = open_gt + 1;
+        let close_end = loop {
+            let Some(off) = html[j..].find("</") else {
+                break None;
+            };
+            let at = j + off;
+            if starts_tag(bytes, at, tag, true) {
+                break find_byte(html, at + 2 + tag.len(), '>').map(|gt| gt + 1);
+            }
+            j = at + 1;
+        };
+        let Some(end) = close_end else {
+            break;
+        };
+        out.push_str(&html[copied..start]);
+        out.push_str(PLACEHOLDER_PREFIX);
+        out.push_str(&blocks.len().to_string());
+        out.push_str("__");
+        blocks.push(html[start..end].to_string());
+        copied = end;
+        i = end;
+    }
+    out.push_str(&html[copied..]);
+    out
+}
+
+fn find_byte(html: &str, from: usize, needle: char) -> Option<usize> {
+    html.get(from..)?.find(needle).map(|i| from + i)
+}
+
+/// `<!--(?!\s*/?dj-if\b).*?-->` (DOTALL) removed: every comment except the
+/// dj-if boundary markers (#1678). `None` when the `\b` after `dj-if` meets a
+/// non-ASCII character, whose word-ness is Python's `str.isalnum()`.
+fn strip_comments(html: &str) -> Option<(String, Vec<usize>)> {
+    let mut out = String::with_capacity(html.len());
+    let mut joins = Vec::new();
+    let mut copied = 0;
+    let mut i = 0;
+    while let Some(off) = html[i..].find("<!--") {
+        let start = i + off;
+        let body = start + 4;
+        // The negative lookahead: `\s*` `/?` `dj-if` then a word boundary.
+        let rest = &html[body..];
+        let trimmed = rest.trim_start_matches(is_py_whitespace);
+        let trimmed = trimmed.strip_prefix('/').unwrap_or(trimmed);
+        if let Some(after) = trimmed.strip_prefix("dj-if") {
+            let is_marker = match after.chars().next() {
+                None => true,
+                Some(c) if c.is_ascii() => !(c.is_ascii_alphanumeric() || c == '_'),
+                Some(_) => return None,
+            };
+            if is_marker {
+                i = start + 1;
+                continue;
+            }
+        }
+        let Some(close) = html[body..].find("-->") else {
+            break;
+        };
+        out.push_str(&html[copied..start]);
+        joins.push(out.len());
+        copied = body + close + 3;
+        i = copied;
+    }
+    out.push_str(&html[copied..]);
+    Some((out, joins))
+}
+
+/// The placeholder's core. Page text spelling it is escaped to
+/// `PRESERVED_BLOCK_~` for the pass ([`MARKER_CORE_ESCAPED`]), so only the
+/// normalizer's own placeholders are treated as one; the escape is undone at
+/// the end. The core cannot overlap itself, so escaping and unescaping are
+/// exact inverses.
+const MARKER_CORE: &str = "PRESERVED_BLOCK_";
+const MARKER_CORE_ESCAPED: &str = "PRESERVED_BLOCK_~";
+
+/// `(start, end)` of every placeholder token, left to right, non-overlapping.
+fn placeholder_tokens(html: &str) -> Vec<(usize, usize)> {
+    let bytes = html.as_bytes();
+    let mut tokens = Vec::new();
+    let mut i = 0;
+    while let Some(off) = html[i..].find(PLACEHOLDER_PREFIX) {
+        let at = i + off;
+        match placeholder_starting_at(bytes, at) {
+            Some(n) => {
+                let end = at + PLACEHOLDER_PREFIX.len() + n.to_string().len() + 2;
+                tokens.push((at, end));
+                i = end;
+            }
+            None => i = at + 1,
+        }
+    }
+    tokens
+}
+
+/// Escape a placeholder core that removing a comment spelled out
+/// (`PRESERVED_<!-- x -->BLOCK_0__`): an occurrence straddling a join is page
+/// text — unless it borrows an underscore of one of the normalizer's own
+/// placeholders, whose real text starts with `<`.
+fn escape_joined_markers(html: String, joins: &[usize]) -> String {
+    let bytes = html.as_bytes();
+    let core = MARKER_CORE.len();
+    let mut straddling: Vec<usize> = Vec::new();
+    for &j in joins {
+        let lo = j.saturating_sub(core - 1);
+        let hi = (j + core - 1).min(bytes.len());
+        let mut k = lo;
+        while k + core <= hi {
+            if &bytes[k..k + core] == MARKER_CORE.as_bytes() && k < j && j < k + core {
+                straddling.push(k);
+            }
+            k += 1;
+        }
+    }
+    if straddling.is_empty() {
+        return html;
+    }
+    straddling.sort_unstable();
+    straddling.dedup();
+    let ours: Vec<(usize, usize)> = placeholder_tokens(&html)
+        .into_iter()
+        .filter(|&(a, _)| straddling.binary_search(&(a + 2)).is_err())
+        .collect();
+    let mut out = String::with_capacity(html.len() + straddling.len());
+    let mut cursor = 0;
+    for &k in &straddling {
+        if ours.iter().any(|&(a, b)| a < k + core && k < b) {
+            continue;
+        }
+        out.push_str(&html[cursor..k + core]);
+        out.push('~');
+        cursor = k + core;
+    }
+    out.push_str(&html[cursor..]);
+    out
+}
+
+/// `<([A-Za-z][^\s/>]*)` on a preserved block, lowercased: the tag name the
+/// inter-tag pass asks "inline?" about.
+fn block_tag(block: &str) -> String {
+    let name = block
+        .get(1..)
+        .unwrap_or("")
+        .split(|c: char| is_py_whitespace(c) || c == '/' || c == '>')
+        .next()
+        .unwrap_or("");
+    name.to_lowercase()
+}
+
+/// Put every block back verbatim, expanding the placeholders a block holds
+/// (a `<script>` hidden before the `<pre>` that contains it). After the
+/// escape, every placeholder left is one of the normalizer's own.
+fn restore_blocks(html: &str, blocks: &[String]) -> String {
+    let mut out = String::with_capacity(html.len() + blocks.iter().map(String::len).sum::<usize>());
+    expand_into(html, blocks, &mut out);
+    out
+}
+
+fn expand_into(html: &str, blocks: &[String], out: &mut String) {
+    let bytes = html.as_bytes();
+    let mut copied = 0;
+    let mut i = 0;
+    while let Some(off) = html[i..].find(PLACEHOLDER_PREFIX) {
+        let at = i + off;
+        match placeholder_starting_at(bytes, at) {
+            Some(n) if n < blocks.len() => {
+                out.push_str(&html[copied..at]);
+                expand_into(&blocks[n], blocks, out);
+                copied = at + PLACEHOLDER_PREFIX.len() + n.to_string().len() + 2;
+                i = copied;
+            }
+            _ => i = at + 1,
+        }
+    }
+    out.push_str(&html[copied..]);
+}
+
+/// The egress normalizer `TemplateMixin._strip_comments_and_whitespace`,
+/// byte for byte with its Python reference, for a plain (non-provenance) render.
+///
+/// 0. page text spelling the placeholder core is escaped ([`MARKER_CORE`]);
+/// 1. `<script>` and `<style>` blocks are hidden behind placeholders (#1927),
+///    BEFORE comments are stripped, so comment-like text in JS/CSS survives;
+/// 2. comments are removed, except the dj-if boundary markers (#1678), and a
+///    core the removal spelled out is escaped ([`escape_joined_markers`]);
+/// 3. `<pre>`, `<code>` and `<textarea>` blocks are hidden;
+/// 4. [`fold_whitespace`] (#3570: text with content keeps its white space);
+/// 5. [`collapse_inter_tag_whitespace`] (#2999), told each placeholder's tag;
+/// 6. the blocks are put back verbatim, nested ones included, and the escape
+///    is undone.
+///
+/// Returns `None` for the inputs whose Python semantics this does not model
+/// (see [`PY_IGNORECASE_SPECIALS`] and [`strip_comments`]); the caller then
+/// runs the Python normalizer. `tests/unit/test_egress_normalizer_rust_parity.py`
+/// holds the two to identical bytes over a fixture and fuzzed corpus.
+pub fn strip_comments_and_whitespace(html: &str) -> Option<String> {
+    if html.contains(PY_IGNORECASE_SPECIALS) {
+        return None;
+    }
+    let mut s = if html.contains(MARKER_CORE) {
+        Cow::Owned(html.replace(MARKER_CORE, MARKER_CORE_ESCAPED))
+    } else {
+        Cow::Borrowed(html)
+    };
+    let mut blocks = Vec::new();
+    let mut present = open_tags_present(&s);
+    for (k, tag) in RAW_TEXT_TAGS.iter().enumerate() {
+        if present[k] {
+            s = Cow::Owned(preserve_raw_blocks(&s, tag, &mut blocks));
+        }
+    }
+    if s.contains("<!--") {
+        let (stripped, joins) = strip_comments(&s)?;
+        if !joins.is_empty() {
+            // Removing a comment can join `<` and `pre>` into a new tag.
+            present = open_tags_present(&stripped);
+            s = Cow::Owned(escape_joined_markers(stripped, &joins));
+        }
+    }
+    for (k, tag) in WHITESPACE_TAGS.iter().enumerate() {
+        if present[RAW_TEXT_TAGS.len() + k] {
+            s = Cow::Owned(preserve_raw_blocks(&s, tag, &mut blocks));
+        }
+    }
+    let s = fold_whitespace(&s);
+    let tags: Vec<String> = blocks.iter().map(|b| block_tag(b)).collect();
+    let s = collapse_inter_tag_whitespace(&s, &tags);
+    let s = restore_blocks(&s, &blocks);
+    Some(if s.contains(MARKER_CORE_ESCAPED) {
+        s.replace(MARKER_CORE_ESCAPED, MARKER_CORE)
+    } else {
+        s
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -544,6 +874,77 @@ mod tests {
             ),
             "<p><b>x</b> __PRESERVED_BLOCK_0____PRESERVED_BLOCK_1__</p>"
         );
+    }
+
+    fn strip(html: &str) -> String {
+        strip_comments_and_whitespace(html).expect("modelled input")
+    }
+
+    #[test]
+    fn strip_keeps_raw_text_and_markers() {
+        assert_eq!(
+            strip("<div>\n  <script>\n// c\nvar s = '<!-- x -->';\n</script >\n</div>"),
+            "<div><script>\n// c\nvar s = '<!-- x -->';\n</script ></div>"
+        );
+        assert_eq!(
+            strip("<p>a<!-- gone -->b</p> <!--dj-if id=\"1\"--> <!--/dj-if-->"),
+            "<p>ab</p><!--dj-if id=\"1\"--><!--/dj-if-->"
+        );
+        assert_eq!(strip("<p>x<!--dj-ifx-->y</p>"), "<p>xy</p>");
+        assert_eq!(
+            strip("<div>\n <pre> a\n  b </pre>\n <p>t  u</p>\n</div>"),
+            "<div><pre> a\n  b </pre><p>t  u</p></div>"
+        );
+    }
+
+    #[test]
+    fn strip_finds_a_tag_a_removed_comment_joins() {
+        assert_eq!(
+            strip("<div> <<!-- c -->pre>a  b</pre> </div>"),
+            "<div><pre>a  b</pre></div>"
+        );
+    }
+
+    #[test]
+    fn strip_restores_a_block_nested_in_a_later_block() {
+        assert_eq!(
+            strip("<div>\n <pre> a\n <script>\n x  y\n</script>\n</pre>\n</div>"),
+            "<div><pre> a\n <script>\n x  y\n</script>\n</pre></div>"
+        );
+        assert_eq!(
+            strip("<textarea> <code> <style>p {}</style> </code> </textarea>"),
+            "<textarea> <code> <style>p {}</style> </code> </textarea>"
+        );
+    }
+
+    #[test]
+    fn strip_treats_placeholder_text_as_text() {
+        assert_eq!(
+            strip("<p title=\"__PRESERVED_BLOCK_0__\">a</p>\n<script>s</script>"),
+            "<p title=\"__PRESERVED_BLOCK_0__\">a</p><script>s</script>"
+        );
+        assert_eq!(
+            strip("<p>__PRESERVED_<!-- c -->BLOCK_0__</p>\n<script>s</script>"),
+            "<p>__PRESERVED_BLOCK_0__</p><script>s</script>"
+        );
+        assert_eq!(
+            strip("<p>PRESERVED_<!---->BLOCK_~x</p>"),
+            "<p>PRESERVED_BLOCK_~x</p>"
+        );
+        // Borrowing the underscore of a real placeholder is not page text.
+        assert_eq!(
+            strip("<p>PRESERVED_BLOCK<!----><script>x</script></p>"),
+            "<p>PRESERVED_BLOCK<script>x</script></p>"
+        );
+    }
+
+    #[test]
+    fn strip_declines_what_python_folds_differently() {
+        assert_eq!(
+            strip_comments_and_whitespace("<\u{17f}cript>a</script>"),
+            None
+        );
+        assert_eq!(strip_comments_and_whitespace("<!--dj-if\u{e9}-->"), None);
     }
 
     #[test]
