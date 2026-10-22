@@ -436,7 +436,8 @@ async def test_ws_middleware_error_gets_the_protected_envelope():
 # SSE
 # --------------------------------------------------------------------------- #
 
-ORIGIN = "https://example.com"
+# The request's own origin: SSE checks the full origin (scheme, host, port).
+ORIGIN = "http://testserver"
 SID = "31111111-1111-1111-1111-111111111111"
 
 
