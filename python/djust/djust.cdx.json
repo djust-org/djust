@@ -1631,6 +1631,18 @@
       "version": "6.0.0"
     },
     {
+      "bom-ref": "rust:pkg:cargo/rand_core@0.10.1",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "rand_core",
+      "purl": "pkg:cargo/rand_core@0.10.1",
+      "type": "library",
+      "version": "0.10.1"
+    },
+    {
       "bom-ref": "rust:pkg:cargo/redox_syscall@0.5.18",
       "licenses": [
         {
@@ -1763,16 +1775,16 @@
       "version": "1.0.229"
     },
     {
-      "bom-ref": "rust:pkg:cargo/serde_json@1.0.151",
+      "bom-ref": "rust:pkg:cargo/serde_json@1.0.154",
       "licenses": [
         {
           "expression": "MIT OR Apache-2.0"
         }
       ],
       "name": "serde_json",
-      "purl": "pkg:cargo/serde_json@1.0.151",
+      "purl": "pkg:cargo/serde_json@1.0.154",
       "type": "library",
-      "version": "1.0.151"
+      "version": "1.0.154"
     },
     {
       "bom-ref": "rust:pkg:cargo/signal-hook-registry@1.4.8",
@@ -1811,16 +1823,16 @@
       "version": "0.4.12"
     },
     {
-      "bom-ref": "rust:pkg:cargo/smallvec@1.16.2",
+      "bom-ref": "rust:pkg:cargo/smallvec@1.16.3",
       "licenses": [
         {
           "expression": "MIT OR Apache-2.0"
         }
       ],
       "name": "smallvec",
-      "purl": "pkg:cargo/smallvec@1.16.2",
+      "purl": "pkg:cargo/smallvec@1.16.3",
       "type": "library",
-      "version": "1.16.2"
+      "version": "1.16.3"
     },
     {
       "bom-ref": "rust:pkg:cargo/socket2@0.6.3",
@@ -2051,16 +2063,16 @@
       "version": "0.0.4"
     },
     {
-      "bom-ref": "rust:pkg:cargo/uuid@1.27.0",
+      "bom-ref": "rust:pkg:cargo/uuid@1.28.0",
       "licenses": [
         {
           "expression": "Apache-2.0 OR MIT"
         }
       ],
       "name": "uuid",
-      "purl": "pkg:cargo/uuid@1.27.0",
+      "purl": "pkg:cargo/uuid@1.28.0",
       "type": "library",
-      "version": "1.27.0"
+      "version": "1.28.0"
     },
     {
       "bom-ref": "rust:pkg:cargo/valuable@0.1.1",
