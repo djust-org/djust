@@ -1356,20 +1356,20 @@ def check_configuration(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
                 if not has_origin_validator:
                     errors.append(
                         DjustError(
-                            "WebSocket routes are not wrapped in AllowedHostsOriginValidator; "
+                            "WebSocket routes are not wrapped in an Origin validator; "
                             "the app is vulnerable to Cross-Site WebSocket Hijacking (CSWSH).",
                             hint=(
                                 "Any cross-origin page on the internet can open a WebSocket "
                                 "connection to your app, mount any LiveView, and dispatch events "
                                 "from a victim browser. Wrap the WebSocket router in "
-                                "channels.security.websocket.AllowedHostsOriginValidator "
-                                "(DjustMiddlewareStack does this by default since #653). "
+                                "djust.routing.DjustOriginValidator, which compares the full "
+                                "origin (DjustMiddlewareStack does this by default). "
                                 "Prerequisite: settings.ALLOWED_HOSTS must not contain '*'."
                             ),
                             id="djust.A001",
                             fix_hint=(
                                 "Wrap your WebSocket router: "
-                                '"websocket": AllowedHostsOriginValidator(DjustMiddlewareStack(URLRouter(...))). '
+                                '"websocket": DjustOriginValidator(AuthMiddlewareStack(URLRouter(...))). '
                                 "Or update DjustMiddlewareStack — since djust 0.4.1 it wraps "
                                 "the origin validator by default."
                             ),

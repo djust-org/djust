@@ -730,6 +730,9 @@ class LiveViewWebSocket {
         switch (data.type) {
             case 'connect':
                 this.sessionId = data.session_id;
+                // The server refuses a frame over this size; 0 = no limit.
+                this.maxMessageSize = typeof data.max_message_size === 'number'
+                    ? data.max_message_size : 0;
                 if (globalThis.djustDebug) console.log('[LiveView] Session ID:', this.sessionId);
                 this.autoMount();
                 // The views hydrated beside the page view lived on the socket
@@ -1661,6 +1664,27 @@ class LiveViewWebSocket {
     sendMessage(data) {
         const message = JSON.stringify(data);
         const messageBytes = message.length;
+
+        // A frame over the server's max_message_size would be refused; report
+        // it here, through the same path as the server's refusal.
+        const limit = this.maxMessageSize || 0;
+        if (limit && messageBytes * 3 > limit) {
+            const size = new TextEncoder().encode(message).length;
+            if (size > limit) {
+                this.handleMessage({
+                    type: 'error',
+                    code: 'message_too_large',
+                    // Same text as the server's refusal, whose "Message too
+                    // large (N bytes)" prefix clients parse (signature-pad.js).
+                    error: `Message too large (${size} bytes); the server's max_message_size is ${limit}. ` +
+                        'Not sent. Send files with UploadMixin, or raise ' +
+                        "LIVEVIEW_CONFIG['max_message_size'].",
+                    event: data.event || null,
+                    ref: data.ref ?? null,
+                });
+                return;
+            }
+        }
 
         // Track sent message
         this.stats.sent++;

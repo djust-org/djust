@@ -591,8 +591,8 @@ def probe_websocket_origin(
                 "Expected: HTTP 403 at handshake or close code 4403 from the consumer. "
                 "Actual: connection opened with Origin: https://evil.example. "
                 "Wrap the WebSocket router in "
-                "channels.security.websocket.AllowedHostsOriginValidator "
-                "(DjustMiddlewareStack does this by default since djust 0.4.1). "
+                "djust.routing.DjustOriginValidator "
+                "(DjustMiddlewareStack does this by default). "
                 "See djust-org/djust#653."
             ),
         )

@@ -238,69 +238,29 @@ def _is_send_after_close_error(exc: RuntimeError) -> bool:
     return "websocket.close" in str(exc)
 
 
-def _is_allowed_origin(origin: Optional[bytes]) -> bool:
+def _is_allowed_origin(origin: Optional[bytes], scope: Optional[Dict[str, Any]] = None) -> bool:
+    """Whether a request's ``Origin`` header passes djust's Origin policy.
+
+    ``scope`` is the request's ASGI scope; it supplies the origin the request
+    was made to (scheme, ``Host``). Without it only the trusted origins
+    (``DJUST_ALLOWED_ORIGINS`` / ``CSRF_TRUSTED_ORIGINS``) can match. The full
+    policy, including the ``DJUST_ALLOW_MISSING_ORIGIN`` opt-out for a missing
+    header, is in :mod:`djust.security.origin` (#653 CSWSH; the scheme and
+    port were not compared before).
     """
-    Check whether a WebSocket Origin header is allowed under settings.ALLOWED_HOSTS.
+    from .security.origin import missing_origin_allowed, origin_rejection, scope_origin
 
-    Policy:
-      * Missing/empty Origin header -> ALLOW. Non-browser clients (curl, Python
-        WebsocketCommunicator, native mobile) do not send an Origin header, and
-        blocking them would break legitimate integrations and every existing
-        test that uses WebsocketCommunicator without explicit headers.
-        Browsers always send Origin on cross-origin WS handshakes, so a CSWSH
-        attacker cannot forge a missing header from a victim's browser.
-      * Non-ASCII / malformed Origin -> REJECT. Malformed headers are never
-        legitimate.
-      * Otherwise extract the host (stripping scheme, port, brackets, path) and
-        compare against settings.ALLOWED_HOSTS using Django's own
-        django.http.request.validate_host() so wildcard (".example.com", "*")
-        semantics match Django's HTTP layer exactly.
-
-    This helper is defense-in-depth: DjustMiddlewareStack also wraps routers
-    in channels.security.websocket.AllowedHostsOriginValidator by default, but
-    the consumer-level check still protects apps that route directly to
-    LiveViewConsumer without going through DjustMiddlewareStack.
-
-    Note on userinfo smuggling: a hostile string like
-    ``https://evil.example@target.com/`` parses via ``urlparse`` to
-    ``hostname="target.com"`` (RFC 3986 — "evil.example" is the userinfo).
-    This is safe because RFC 6454 §7 explicitly forbids browsers from
-    serializing userinfo in the ``Origin`` header, so a real victim browser
-    will never actually send such a string. Even if an attacker constructed
-    one by hand outside a browser, the extracted host is "target.com" — the
-    attacker's claim is effectively "I'm on target.com", and that's what we
-    check against ALLOWED_HOSTS. There's no cross-host authority gain.
-
-    Similarly, a hostile string like ``https://target.com.evil.com/`` parses
-    to ``hostname="target.com.evil.com"``, which Django's ``validate_host``
-    correctly rejects when ``target.com`` is listed as an exact entry in
-    ALLOWED_HOSTS.
-
-    See #653 (CSWSH pentest finding, 2026-04-10).
-    """
-    if not origin:
-        return True  # non-browser client
-    try:
-        origin_str = origin.decode("ascii")
-    except (UnicodeDecodeError, AttributeError):
-        return False
-
-    # Parse the origin into a host (no scheme, no port, no path).
-    from urllib.parse import urlparse
-
-    try:
-        parsed = urlparse(origin_str)
-    except ValueError:
-        return False
-
-    host = parsed.hostname  # urlparse strips scheme, port, brackets, and path
-    if host is None:
-        # "null" origin (sandboxed iframes, file://) or an unparseable value.
-        # Reject conservatively: a browser that sends "null" is not on an
-        # allowed host by any definition.
-        return False
-
-    return _host_in_allowed_hosts(host)
+    if origin:
+        try:
+            origin_str: Optional[str] = origin.decode("ascii")
+        except (UnicodeDecodeError, AttributeError):
+            return False
+    else:
+        origin_str = None
+    return (
+        origin_rejection(origin_str, scope_origin(scope), allow_missing=missing_origin_allowed())
+        is None
+    )
 
 
 def _host_in_allowed_hosts(host: str) -> bool:
@@ -2549,6 +2509,35 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         peer = client[0] if client else None
         return resolve_client_ip(fwd, peer)
 
+    def _log_per_ip_refusal(self, client_ip: str, max_per_ip: int) -> None:
+        """Log why the per-IP limit refused this socket (close code 4429)."""
+        from ._client_ip import _trusted_proxy_count
+
+        if ip_tracker.in_cooldown(client_ip):
+            reason = (
+                "the address is in its reconnect cooldown after a rate-limit "
+                "disconnect (LIVEVIEW_CONFIG['rate_limit']['reconnect_cooldown'])"
+            )
+        else:
+            reason = (
+                "the address already has %d open WebSockets on this process "
+                "(LIVEVIEW_CONFIG['rate_limit']['max_connections_per_ip'])" % max_per_ip
+            )
+        headers = dict(self.scope.get("headers", []))
+        proxy_note = ""
+        if headers.get(b"x-forwarded-for") and _trusted_proxy_count() == 0:
+            proxy_note = (
+                ". The request carries X-Forwarded-For but DJUST_TRUSTED_PROXY_COUNT "
+                "is 0, so every client behind the proxy counts as this one address; "
+                "set DJUST_TRUSTED_PROXY_COUNT to the number of proxies in front of the app"
+            )
+        logger.warning(
+            "WebSocket from %s refused with close code 4429: %s%s",
+            client_ip,
+            reason,
+            proxy_note,
+        )
+
     async def connect(self) -> None:
         """Handle WebSocket connection"""
         # Per-connection default: the socket is open until a close()/disconnect()
@@ -2557,20 +2546,18 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         # before connect() runs.
         self._ws_close_sent = False
 
-        # CSWSH defense (#653): reject the handshake if the Origin header is
-        # not in settings.ALLOWED_HOSTS *before* calling self.accept(). This
-        # is defense in depth on top of DjustMiddlewareStack's
-        # AllowedHostsOriginValidator wrap — the consumer-level check still
+        # CSWSH defense (#653): reject the handshake *before* self.accept()
+        # unless its Origin is this server's own origin (scheme, host, port)
+        # or a trusted one (djust.security.origin). Defense in depth on top of
+        # DjustMiddlewareStack's validator — the consumer-level check still
         # protects apps that route directly to LiveViewConsumer.
-        headers = dict(self.scope.get("headers", []))
-        origin = headers.get(b"origin")
-        if not _is_allowed_origin(origin):
-            # decode(errors="replace") never raises on bytes, so no try/except
-            # is needed — the "if origin else ''" guard covers the None case.
-            origin_repr = origin.decode("ascii", errors="replace") if origin else ""
+        from .security.origin import websocket_origin_rejection
+
+        rejection = websocket_origin_rejection(self.scope)
+        if rejection is not None:
             logger.warning(
-                "WebSocket connection rejected: disallowed Origin %s",
-                sanitize_for_log(origin_repr),
+                "WebSocket connection rejected: %s",
+                sanitize_for_log(rejection),
             )
             await self.close(code=4403)
             return
@@ -2594,7 +2581,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         if self._client_ip:
             max_per_ip = rl_cfg.get("max_connections_per_ip", 10)
             if not ip_tracker.connect(self._client_ip, max_per_ip):
-                logger.warning("Connection rejected for IP %s (limit or cooldown)", self._client_ip)
+                self._log_per_ip_refusal(self._client_ip, max_per_ip)
                 await self.close(code=4429)
                 return
 
@@ -2615,6 +2602,8 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             {
                 "type": "connect",
                 "session_id": self.session_id,
+                # The client refuses to send a frame over this (0 = no limit).
+                "max_message_size": djust_config.get("max_message_size", 65536),
             }
         )
 
@@ -2774,7 +2763,15 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                 raw_size = 0
             if max_msg_size and raw_size > max_msg_size:
                 logger.warning("Message too large (%d bytes, max %d)", raw_size, max_msg_size)
-                await self.send_error(f"Message too large ({raw_size} bytes)")
+                await self.send_error(
+                    # The "Message too large (N bytes)" prefix is parsed by
+                    # clients (signature-pad.js); keep it.
+                    f"Message too large ({raw_size} bytes); the server's max_message_size "
+                    f"is {max_msg_size}. Send files with UploadMixin, or raise "
+                    "LIVEVIEW_CONFIG['max_message_size'].",
+                    code="message_too_large",
+                    limit=max_msg_size,
+                )
                 return
 
             # Check for binary upload frames

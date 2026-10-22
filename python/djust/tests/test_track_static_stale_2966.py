@@ -213,7 +213,10 @@ async def _sse_stream_mount(query):
     _sse_sessions.pop(sid, None)
     params = [("view", f"{_MOD}.Page2966"), ("_djust_url", "/p2966/")] + query
     request = RequestFactory().get(
-        f"/djust/sse/{sid}/?{urlencode(params)}", HTTP_ORIGIN="https://example.com"
+        f"/djust/sse/{sid}/?{urlencode(params)}",
+        HTTP_ORIGIN="https://example.com",
+        HTTP_HOST="example.com",
+        secure=True,
     )
     request.user = AnonymousUser()
     from django.contrib.sessions.backends.db import SessionStore

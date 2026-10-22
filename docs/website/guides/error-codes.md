@@ -765,6 +765,16 @@ V008 is broader than V006 and will flag any custom class instantiation, not just
 
 ---
 
+### V022: View assigns an attribute djust keeps its own state under
+
+**Severity**: Warning
+
+**What causes it**: A method of a LiveView, or of a mixin it uses, assigns `self.<name>` where `<name>` is one of the attributes `LiveView.__init__` sets for djust's own state (`_streams`, `_components`, `_pending_navigation`, `_child_views`, ...). The assignment replaces that state, and the failure appears somewhere else: a view that kept its own lists in `self._streams = {"runs": {...}}` failed every render with `TypeError: 'builtin_function_or_method' object is not iterable`. `request` and `_object` (the `get_object()` cache) are not reported. Message: "<view> <method>() assigns self.<name>, an attribute djust's LiveView uses for its own state."
+
+**Fix**: Rename the attribute, for example `self._lists`. To keep items in a stream, call `self.stream(name, items)`. Assigning a reserved stream attribute also fails at render time with a `TypeError` that names `_streams`.
+
+---
+
 ## Security Errors (S0xx)
 
 ### S001: mark_safe() with f-string
@@ -1419,11 +1429,11 @@ if (globalThis.djustDebug) {
 
 These checks were added as follow-ups to the 2026-04-10 a downstream consumer penetration test. They extend `djust_audit` / `djust_check` with configuration-level security checks that catch misconfigurations Django's own `check --deploy` cannot see. All A0xx checks fire during `manage.py check --tag djust` and appear alongside the C0xx/S0xx findings.
 
-### A001: WebSocket router missing AllowedHostsOriginValidator
+### A001: WebSocket router missing an Origin validator
 
 **Severity**: Error
 
-**What causes it**: The `"websocket"` entry in your `ProtocolTypeRouter` is not wrapped in `channels.security.websocket.AllowedHostsOriginValidator`. Any cross-origin page on the internet can open a WebSocket to your app, mount any LiveView, and dispatch events from a victim's browser (CSWSH — see [#653](https://github.com/djust-org/djust/issues/653)).
+**What causes it**: The `"websocket"` entry in your `ProtocolTypeRouter` is not wrapped in an Origin validator such as `djust.routing.DjustOriginValidator`. Any cross-origin page on the internet can open a WebSocket to your app, mount any LiveView, and dispatch events from a victim's browser (CSWSH — see [#653](https://github.com/djust-org/djust/issues/653)).
 
 **What you see**: No runtime symptom until a pentester or attacker finds it. An `A001` warning from `manage.py check` at startup.
 
@@ -1432,7 +1442,7 @@ These checks were added as follow-ups to the 2026-04-10 a downstream consumer pe
 ```python
 # asgi.py
 from channels.routing import ProtocolTypeRouter, URLRouter
-from djust.routing import DjustMiddlewareStack   # Wraps in AllowedHostsOriginValidator by default since 0.4.1
+from djust.routing import DjustMiddlewareStack   # Wraps in DjustOriginValidator by default
 
 application = ProtocolTypeRouter({
     "http": get_asgi_application(),
@@ -1447,10 +1457,10 @@ Or wrap manually if you're using `channels.auth.AuthMiddlewareStack`:
 ```python
 from channels.auth import AuthMiddlewareStack
 from channels.routing import ProtocolTypeRouter, URLRouter
-from channels.security.websocket import AllowedHostsOriginValidator
+from djust.routing import DjustOriginValidator
 
 application = ProtocolTypeRouter({
-    "websocket": AllowedHostsOriginValidator(
+    "websocket": DjustOriginValidator(
         AuthMiddlewareStack(URLRouter(websocket_urlpatterns))
     ),
 })
@@ -1464,7 +1474,7 @@ application = ProtocolTypeRouter({
 
 **Severity**: Error
 
-**What causes it**: `settings.ALLOWED_HOSTS == ["*"]` with `DEBUG=False`. The wildcard disables Django's Host header defense entirely, and re-opens CSWSH because `AllowedHostsOriginValidator` reads the same setting.
+**What causes it**: `settings.ALLOWED_HOSTS == ["*"]` with `DEBUG=False`. The wildcard disables Django's Host header defense entirely, and lets any `Host` header through, which the Origin check's same-origin rule relies on.
 
 Not raised when `DEBUG=True`, or when both `SECURE_PROXY_SSL_HEADER` and `DJUST_TRUSTED_PROXIES` are set (you are asserting a trusted L7 proxy).
 
