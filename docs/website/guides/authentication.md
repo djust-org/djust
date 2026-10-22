@@ -116,6 +116,51 @@ A refusal is handled the way Django's `AccessMixin` handles one: a signed-in
 user gets a 403 (`PermissionDenied`, so your `handler403` page on the HTTP
 GET), and only an anonymous user is sent to `login_url`.
 
+#### Async checks
+
+When the check does I/O, declare it `async def`:
+
+```python
+class ProjectView(LiveView):
+    login_required = True
+
+    async def check_permissions(self, request):
+        session = await backend_sessions.aget(request.session.session_key)
+        return session is not None and session.is_valid
+```
+
+Over WebSocket and SSE djust awaits it on the event loop. On a mount it runs
+inside the turn, so context variables your [turn middleware](turn-middleware.md)
+sets are visible; the `reauth_on_event` re-check runs in the `reauth` built-in,
+which is outside app middleware (it refuses before your middleware runs), so
+read what the check needs from `request`, not from middleware context. A sync check runs in asgiref's shared sync thread, the one thread
+that runs every sync handler and render for every connection, so a sync check
+that waits on I/O (for instance one that wraps an async call in
+`async_to_sync`) holds up every other user's events for as long as it waits.
+An async check waits on the loop and holds up no one. Do not wrap async code
+in `async_to_sync` inside a sync `check_permissions`; make the method
+`async def` instead.
+
+The contract is the same as the sync form: return `False` or raise
+`PermissionDenied` to refuse; any other return value allows. A refusal
+behaves exactly as above (403 / `permission_denied` / close 4403 for a
+signed-in user, the login redirect for an anonymous one), and any other
+exception refuses the mount or event (fails closed). The check runs at the
+same points as a sync one: before `mount()` on every transport, and, when
+`reauth_on_event` is on and the view sets `login_required` or
+`permission_required`, before every event and URL change (server turns at
+most every `reauth_server_turn_interval` seconds). The steps around it (`login_required`, `permission_required`, Django's access
+mixins) still run first and in the same order.
+
+The synchronous paths (the HTTP GET, the page-POST fallback, the API,
+embedded `{% live_render %}` children) await the same method from the
+request thread. Inside an explicit-exposure child view (ADR-038) the per-event
+check is awaited from a worker thread. Async code that calls djust's auth
+helpers itself should use `acheck_view_auth()` / `arun_pre_mount_auth()`
+from `djust.auth`: calling the sync `check_view_auth()` on the event loop's
+own thread with an async check refuses with an error instead of blocking the
+loop.
+
 ### Django Auth Mixins, Custom Access Mixins and Method Decorators
 
 The live transports (the WebSocket and SSE mount, events, the HTTP POST event
@@ -261,7 +306,8 @@ Client sends "mount" message
     → check_view_auth() runs:
         1. login_required? → check request.user.is_authenticated
         2. permission_required? → all of its strings, one of each AnyOf group
-        3. check_permissions()? → call custom hook (if overridden)
+        3. check_permissions()? → call custom hook (if overridden; an
+           async def check is awaited on the event loop)
     → If unauthenticated: send {"type": "navigate", "to": "/login/"}
       (a view mounted beside the page view, such as a `dj-lazy` view, gets a
       `view_refused` frame for its own container instead: nothing navigates)

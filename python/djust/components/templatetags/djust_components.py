@@ -105,6 +105,19 @@ def _parse_kv_args(bits: Any, parser: Any) -> Any:
 # ---------------------------------------------------------------------------
 
 
+# Placed by {% modal_description %}; render_modal swaps it for the id.
+_MODAL_DESCRIPTION_MARKER = " data-dj-modal-description"
+
+
+def render_modal_description(content: Any) -> SafeString:
+    """Markup for ``{% modal_description %}``: the body of a modal's
+    description, which the enclosing ``{% modal %}`` names in
+    ``aria-describedby``."""
+    return mark_safe(
+        f'<div class="dj-modal__description"{_MODAL_DESCRIPTION_MARKER}>{content}</div>'
+    )
+
+
 def render_modal(kw: Any, content: Any) -> SafeString:
     """Markup for an open ``{% modal %}``, shared by the Django tag and the Rust handler.
 
@@ -116,6 +129,9 @@ def render_modal(kw: Any, content: Any) -> SafeString:
     ``aria-describedby`` names, and ``describedby=`` adds ids of your own;
     ``close_button=False`` omits the × button (mark your own closing control
     ``data-dj-close`` to keep Escape-to-close on the ``<div>`` modal).
+    ``heading_level`` (2-6, default 3) sets the title's heading element. A
+    ``{% modal_description %}`` block in the body is a description with
+    template markup: it gets the description id and ``aria-describedby``.
 
     ``kw`` holds the resolved tag arguments. The size class sits on the dialog,
     not on the full-screen backdrop, and the dialog carries ``role="dialog"``,
@@ -142,9 +158,19 @@ def render_modal(kw: Any, content: Any) -> SafeString:
     title_id = f"{modal_id}-title"
     labelledby = f' aria-labelledby="{title_id}"' if title else ""
     role = "alertdialog" if str(kw.get("role", "")) == "alertdialog" else "dialog"
+    try:
+        level = int(kw.get("heading_level", 3))
+    except (TypeError, ValueError):
+        level = 3
+    if not 2 <= level <= 6:
+        level = 3
     description = kw.get("description", "")
     desc_id = f"{modal_id}-desc"
-    described_ids = ([desc_id] if description else []) + str(
+    has_slot = not description and _MODAL_DESCRIPTION_MARKER in str(content)
+    if has_slot:
+        # The {% modal_description %} block marked itself; give it the id.
+        content = str(content).replace(_MODAL_DESCRIPTION_MARKER, f' id="{desc_id}"', 1)
+    described_ids = ([desc_id] if description or has_slot else []) + str(
         kw.get("describedby", "") or ""
     ).split()
     describedby = (
@@ -176,7 +202,7 @@ def render_modal(kw: Any, content: Any) -> SafeString:
             f'<dialog class="dj-modal {size_class} dj-modal--native" dj-dialog="open" '
             f'dj-dialog-close-event="{e_close_event}"{role_attr}{labelledby}{describedby}{cid_attr}>'
             f'<div class="dj-modal__header">'
-            f'<h3 class="dj-modal__title" id="{title_id}">{e_title}</h3>'
+            f'<h{level} class="dj-modal__title" id="{title_id}">{e_title}</h{level}>'
             f"{close_html}"
             f"</div>"
             f'<div class="dj-modal__body">{description_html}{content}</div>'
@@ -187,7 +213,7 @@ def render_modal(kw: Any, content: Any) -> SafeString:
   <div class="dj-scrim" dj-click="{e_close_event}"{cid_attr}></div>
   <div class="dj-modal {size_class}" role="{role}" aria-modal="true"{labelledby}{describedby}>
     <div class="dj-modal__header">
-      <h3 class="dj-modal__title" id="{title_id}">{e_title}</h3>
+      <h{level} class="dj-modal__title" id="{title_id}">{e_title}</h{level}>
       {close_html}
     </div>
     <div class="dj-modal__body">{description_html}{content}</div>
@@ -205,6 +231,22 @@ class ModalNode(template.Node):
         if not kw.get("open", False):
             return ""
         return render_modal(kw, self.nodelist.render(context))
+
+
+class ModalDescriptionNode(template.Node):
+    def __init__(self, nodelist: Any) -> None:
+        self.nodelist = nodelist
+
+    def render(self, context: Any) -> SafeString:
+        return render_modal_description(self.nodelist.render(context))
+
+
+@register.tag("modal_description")
+def do_modal_description(parser: Any, token: Any) -> template.Node:
+    """``{% modal_description %}...{% endmodal_description %}`` inside ``{% modal %}``."""
+    nodelist = parser.parse(("endmodal_description",))
+    parser.delete_first_token()
+    return ModalDescriptionNode(nodelist)
 
 
 @register.tag("modal")
@@ -2097,7 +2139,8 @@ def combobox(
     Args:
         options: list of dicts {"value":..., "label":...}
         event: dj-change event when option selected
-        search_event: dj-input event for search input (server filters options)
+        search_event: dj-input event for the search text (the server filters
+            the options); without one the client filters the given options
         multiple: when True, enables multi-select with tags
         selected: list of selected values for multi-select mode
         describedby: extra element ids for the input's ``aria-describedby``
@@ -2145,7 +2188,12 @@ def combobox(
     e_value = conditional_escape(value)
     e_placeholder = conditional_escape(placeholder)
     e_event = conditional_escape(event or name)
-    e_search = conditional_escape(search_event or (name + "_search"))
+    # Picking an option sends the field name as ``field`` (what
+    # ``validate_field`` and other inputs' events carry) when this is a form
+    # field or validates through ``validate_field``.
+    field_attr = (
+        f' data-field="{e_name}"' if field is not None or str(event) == "validate_field" else ""
+    )
     e_error = conditional_escape(error)
     e_helper = conditional_escape(helper)
 
@@ -2191,7 +2239,7 @@ def combobox(
             aria_sel = "true" if sel_cls else "false"
             options_html += (
                 f'<div class="combobox-option{sel_cls}" role="option" aria-selected="{aria_sel}" '
-                f'dj-click="{e_event}" data-value="{ov}">{ol}</div>'
+                f'dj-click="{e_event}" data-value="{ov}"{field_attr}>{ol}</div>'
             )
     else:
         # Single-select mode (existing behavior)
@@ -2217,7 +2265,7 @@ def combobox(
             options_html += (
                 f'<div class="combobox-option{sel}" role="option" '
                 f'aria-selected="{"true" if is_sel else "false"}" '
-                f'dj-click="{e_event}" data-value="{ov}">{ol}</div>'
+                f'dj-click="{e_event}" data-value="{ov}"{field_attr}>{ol}</div>'
             )
 
     # Ids: from ``id`` / the bound field's auto_id, else the legacy
@@ -2238,6 +2286,12 @@ def combobox(
     aria = field_aria_attrs(str(id_prefix), error, helper, describedby, invalid)
     req = " required" if required else ""
     free_text_attr = " data-allow-free-text" if _truthy_flag(allow_free_text) else ""
+    if search_event:
+        search_attr = f' dj-input="{conditional_escape(search_event)}"'
+        filter_attr = ""
+    else:
+        search_attr = ""
+        filter_attr = ' data-filter="client"'
     if not multiple:
         hidden_inputs_html = (
             f'<input type="hidden" class="combobox-value" id="{id_prefix}-value" '
@@ -2257,15 +2311,15 @@ def combobox(
     return mark_safe(
         f'<div class="form-group">'
         f"{label_html}"
-        f'<div class="combobox" id="{id_prefix}-combobox"{free_text_attr}>'
+        f'<div class="combobox" id="{id_prefix}-combobox"{free_text_attr}{filter_attr}>'
         f"{tags_container}"
         f"{hidden_inputs_html}"
         # The visible input has no name: the form submits the hidden value.
         f'<input class="combobox-input form-input" type="text" id="{input_id}" '
         f'placeholder="{e_placeholder}" value="{input_value}" '
         f'role="combobox" aria-autocomplete="list" aria-expanded="false" '
-        f'aria-controls="{id_prefix}-listbox"{aria} '
-        f'dj-input="{e_search}" autocomplete="off"{req}>'
+        f'aria-controls="{id_prefix}-listbox"{aria}{search_attr} '
+        f'autocomplete="off"{req}>'
         # Keeping focus in the input while an option is pressed, closing the
         # list after the pick and recording the picked value are the client
         # bundle's delegated ``.combobox`` behaviour (no inline handler).
@@ -4935,6 +4989,9 @@ def rich_select(
     disabled_cls = " rich-select--disabled" if disabled else ""
 
     uid = conditional_escape(id or f"rs-{name}")
+    field_attr = (
+        f' data-field="{e_name}"' if field is not None or str(event) == "validate_field" else ""
+    )
     listbox_id = f"{uid}-listbox"
 
     # Build selected display
@@ -4971,7 +5028,7 @@ def rich_select(
         opt_parts.append(
             f'<div class="rich-select-option{active_cls}{variant_cls}" '
             f'data-value="{conditional_escape(ov)}" '
-            f'dj-click="{dj_event}" '
+            f'dj-click="{dj_event}"{field_attr} '
             f'role="option" aria-selected="{"true" if ov == value else "false"}">'
             f"{opt_html}"
             f"</div>"

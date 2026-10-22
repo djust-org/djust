@@ -3418,6 +3418,7 @@ CHILD_TAGS: Dict[str, str] = {
     "filter_select": "filter_bar",
     "input_addon": "input_group",
     "menu_divider": "dropdown_menu",
+    "modal_description": "modal",
     "menu_item": "dropdown_menu",
     "nav_item": "nav_menu",
     "page_header_actions": "page_header",
