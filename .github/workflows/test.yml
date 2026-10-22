@@ -332,10 +332,21 @@ jobs:
       # .test_collected_floor says exits TESTS_FAILED — and this step has no
       # continue-on-error, so that fails the job and the test-summary gate.
       - name: Run Python tests (parallel with pytest-xdist, shard ${{ matrix.group }}/4)
+        # PR fast tier: pull requests skip the duration-derived `slow` tier
+        # (tests/slow_tier.py — > 1s in .test_durations: ~1.6% of tests,
+        # ~82% of recorded time). Pushes to main (never cancelled, see the
+        # concurrency block) and the nightly run cover it; a PR labelled
+        # `full-tests` runs it too. Because PR shards record only fast-tier
+        # durations, refresh .test_durations from a MAIN run (the
+        # `make test-durations-from-ci` default), never from a PR run.
+        # --dist loadfile: one file per worker, so module/class setup runs once
+        # per file (local fast tier 205-222s -> 132s on 12 cores).
+        # Pinned by tests/test_ci_pr_fast_tier.py.
         env:
           DJUST_COLLECTED_FLOOR: "1"
+          PYTEST_MARK: ${{ (github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'full-tests')) && 'not nightly and not slow' || 'not nightly' }}
         run: |
-          PYTHONPATH=. .venv/bin/python -m pytest tests/ python/tests/ python/djust/tests/ -v -n auto -m "not nightly" --splits 4 --group ${{ matrix.group }} --splitting-algorithm least_duration --durations-path .test_durations --store-durations --clean-durations
+          PYTHONPATH=. .venv/bin/python -m pytest tests/ python/tests/ python/djust/tests/ -v -n auto --dist loadfile -m "$PYTEST_MARK" --splits 4 --group ${{ matrix.group }} --splitting-algorithm least_duration --durations-path .test_durations --store-durations --clean-durations
 
       # Ancillary to the gate, so it may never fail the job: the merge gate is
       # the pytest step above, and a flaky artifact upload must not block a
