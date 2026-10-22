@@ -842,7 +842,29 @@ class TemplateMixin:
 
         # Grant authority only to original literals. Normalize tracked OUTPUT
         # later, where replacements can invalidate their exact byte intervals.
-        return source if _needs_provenance(source) else self._strip_comments_and_whitespace(source)
+        if _needs_provenance(source):
+            return source
+        # One HTTP GET calls ``get_template()`` several times (the GET body,
+        # the template-hash slot, the Rust view's initialization), and each
+        # call normalized the same source again — ~100 KB three times per
+        # page. The result is a pure function of the source and of the
+        # normalizer, so it is cached on the class, keyed by both: an edited
+        # template (hot reload) is a new key, and so is an overridden or
+        # patched normalizer.
+        strip = self._strip_comments_and_whitespace
+        key = (source, getattr(strip, "__func__", strip))
+        cls = type(self)
+        cache = cls.__dict__.get("_djust_normalized_sources")
+        if cache is None:
+            cache = {}
+            setattr(cls, "_djust_normalized_sources", cache)
+        normalized = cache.get(key)
+        if normalized is None:
+            normalized = strip(source)
+            if len(cache) >= 8:
+                cache.clear()
+            cache[key] = normalized
+        return normalized
 
     def render(self, request: Optional["HttpRequest"] = None) -> str:
         """
