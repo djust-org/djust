@@ -111,6 +111,48 @@ def authorize_event(view: Any, request: Any, binding: StateBinding) -> Any:
     """
     from .auth.core import check_view_auth
 
+    request = _event_request(view, request, binding)
+    # Django AccessMixin hooks consult self.request, not only their argument.
+    previous = view.request
+    view.request = request
+    try:
+        if check_view_auth(view, request, event=True) is not None:
+            raise ExposureError("Explicit event authorization denied")
+    except Exception:
+        view.request = previous
+        raise
+    return request
+
+
+async def aauthorize_event(view: Any, request: Any, binding: StateBinding) -> Any:
+    """:func:`authorize_event` for async callers.
+
+    With a sync ``check_permissions`` (or none) this is one
+    ``sync_to_async(authorize_event)`` call, exactly as before. With
+    ``async def check_permissions`` the request is prepared in a worker thread
+    (session and user reads) and the view check is awaited on the event loop
+    (:func:`~djust.auth.core.acheck_view_auth`).
+    """
+    from asgiref.sync import sync_to_async
+
+    from .auth.core import acheck_view_auth, has_async_check_permissions
+
+    if not has_async_check_permissions(view):
+        return await sync_to_async(authorize_event)(view, request, binding)
+    request = await sync_to_async(_event_request)(view, request, binding)
+    previous = view.request
+    view.request = request
+    try:
+        if await acheck_view_auth(view, request, event=True) is not None:
+            raise ExposureError("Explicit event authorization denied")
+    except Exception:
+        view.request = previous
+        raise
+    return request
+
+
+def _event_request(view: Any, request: Any, binding: StateBinding) -> Any:
+    """The fresh, identity-checked request :func:`authorize_event` authorizes."""
     if request is None or binding is None:
         raise ExposureError("Explicit events require a fresh trusted request")
     request = copy(request)
@@ -132,13 +174,4 @@ def authorize_event(view: Any, request: Any, binding: StateBinding) -> Any:
         request.tenant = resolver(request)
     if request_binding(request) != binding:
         raise ExposureError("Explicit event identity changed; remount required")
-    # Django AccessMixin hooks consult self.request, not only their argument.
-    previous = view.request
-    view.request = request
-    try:
-        if check_view_auth(view, request, event=True) is not None:
-            raise ExposureError("Explicit event authorization denied")
-    except Exception:
-        view.request = previous
-        raise
     return request

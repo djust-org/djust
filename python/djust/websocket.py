@@ -2057,10 +2057,10 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         try:
             if runtime is None or binding is None or target_view is not runtime.view_instance:
                 raise PermissionError("no mount binding for this target")
-            from ._exposure_auth import authorize_event
+            from ._exposure_auth import aauthorize_event
 
             request = await runtime.transport.explicit_event_request(target_view)
-            authorized = await sync_to_async(authorize_event)(target_view, request, binding)
+            authorized = await aauthorize_event(target_view, request, binding)
         except Exception:
             # No exception text or traceback: auth providers may include
             # credentials or other internal state in their exceptions.

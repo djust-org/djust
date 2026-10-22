@@ -237,6 +237,47 @@ handler timings and, like them, always (an uncontended lock and a bounded deque
 append). The DEBUG-gated `/_djust/observability/turn_timings/` endpoint serves
 percentiles. A middleware can read `turn.started` for its own spans.
 
+### D10. Async `check_permissions` (addendum, 2026-10-21)
+
+A view may declare `async def check_permissions(self, request)`. It is **not**
+turn middleware and adds nothing to the chain: it stays where the sync check
+runs, so the D4 order is unchanged.
+
+```
+[ingress] → error_boundary → reauth (awaits the check, when on) → app middleware
+    → the turn: login_required → permission_required → check_permissions
+      (awaited on the loop) → Django access mixins → on_mount → mount()/handler
+```
+
+- **Mount** (WebSocket, SSE): `dispatch_mount` awaits it through
+  `djust.auth.arun_pre_mount_auth`, inside the turn (app middleware context is
+  set), before `mount()`.
+- **Reauth** (`reauth_on_event`, WebSocket and SSE): the `reauth` built-in
+  awaits it through `acheck_view_auth_lightweight`. The built-in is outside app
+  middleware, so app middleware context is not set there.
+- **Explicit exposure** (ADR-038) event and server-turn authorization: awaited
+  through `aauthorize_event`.
+- **Synchronous paths** (HTTP GET, page-POST fallback, API, `{% live_render %}`
+  children, sticky re-authorization, explicit child events): `check_view_auth`
+  awaits the coroutine from the request or worker thread (`async_to_sync`); on
+  the event loop's own thread it raises instead of blocking the loop.
+
+The steps around the check (login, `permission_required`, Django's access
+mixins, HTTP-only access control) still run in a worker thread, since they may
+use the ORM. A sync check runs exactly as before: one `sync_to_async` call of
+the whole sequence.
+
+A refusal is today's: `False` or `PermissionDenied` is a 403 / `permission_denied`
+/ close 4403 for a signed-in user and the login redirect for an anonymous one;
+any other exception fails closed. Before this, an `async def check_permissions`
+was called and never awaited, and since a coroutine is truthy it allowed every
+request (fail open).
+
+Why it matters: asgiref runs every thread-sensitive `sync_to_async` call on one
+shared thread. A sync check that waits on I/O (a backend session read bridged
+with `async_to_sync`) holds that thread for every connection's handlers and
+renders while it waits.
+
 ## Consequences
 
 - One mechanism for per-turn cross-cutting code; reauth has one implementation.
