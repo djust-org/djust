@@ -346,6 +346,16 @@ In development, pages render without Tailwind utilities until you compile the CS
 
 ---
 
+### C026: Invalid LIVEVIEW_MIDDLEWARE
+
+**Severity**: Error
+
+**What causes it**: `LIVEVIEW_MIDDLEWARE` is not a list of dotted paths, an entry cannot be imported, or an entry is a sync function. Turn middleware must be `async def mw(turn, next)`.
+
+**Fix**: Point each entry at an importable `async def mw(turn, next)` that returns `await next(turn)` or a `djust.turns.Refuse` refusal. See [Turn middleware](turn-middleware.md). Suppress with `DJUST_CONFIG = {"suppress_checks": ["C026"]}`.
+
+---
+
 ### C301: Invalid VDOM cache TTL
 
 **Severity**: Error

@@ -30,6 +30,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | C023 | Config | Warning | A `channels_redis` core `RedisChannelLayer` host keeps redis-py 8's 5 s `socket_timeout`, which drops idle WebSockets (#3199) |
 | C024 | Config | Error | `DJUST_EXPLICIT_STATE_SAVE_TIMEOUT` is not a number of seconds greater than 0 and at most 10 |
 | C025 | Config | Error | `DJUST_WS_PATH` is not a path starting with a single `/` (#3186) |
+| C026 | Config | Error | `LIVEVIEW_MIDDLEWARE` has an entry that is not an importable `async def mw(turn, next)` (ADR-044) |
 | V001 | LiveView | Warning | LiveView missing template_name attribute |
 | V002 | LiveView | Info | LiveView missing mount() method |
 | V003 | LiveView | Error | mount() has wrong signature |
@@ -227,6 +228,13 @@ console.log("debug info"); // noqa: Q003
 - **Method**: Settings inspection
 - **What it detects**: `DJUST_WS_PATH` is set to something other than a path starting with a single `/` (for example `"ws/live/"`, `"//host/ws/"` or `"wss://host/ws/"`). `{% djust_client_config %}` emits the setting as the WebSocket path; the client honors only a root-relative path, so it ignores any other value with a `console.warn` and connects to `/ws/live/` instead (#3186).
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C025"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C025"]`
+- **False positives**: None
+
+### C026 — Invalid `LIVEVIEW_MIDDLEWARE`
+- **Severity**: Error
+- **Method**: Settings inspection (imports each entry)
+- **What it detects**: `LIVEVIEW_MIDDLEWARE` is not a list of dotted-path strings, an entry cannot be imported, or an entry is not an `async def mw(turn, next)` callable (sync middleware is not supported). The turn-middleware chain (ADR-044) is built on the first turn, so without this check every turn would fail at runtime with `ImproperlyConfigured`.
+- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C026"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C026"]` (turns still fail at runtime)
 - **False positives**: None
 
 ---

@@ -1191,7 +1191,7 @@ class TestMountAsyncAndPushDrain:
 
         from djust.runtime import ViewRuntime
 
-        src = _inspect.getsource(ViewRuntime.dispatch_mount)
+        src = _inspect.getsource(ViewRuntime._dispatch_mount_body)
         assert "_flush_push_events()" in src, "mount must drain push events"
         assert "_dispatch_async_work(" in src, "mount must dispatch async work"
         # Assert the CALL form (``_flush_all_pending(``) is absent — a bare
@@ -1363,7 +1363,7 @@ class TestMountFrameWireVersion:
 
         from djust.runtime import ViewRuntime
 
-        src = _inspect.getsource(ViewRuntime.dispatch_mount)
+        src = _inspect.getsource(ViewRuntime._dispatch_mount_body)
         assert "next_client_version" not in src, (
             "dispatch_mount must not arm recovery via next_client_version on the "
             "mount baseline (ADR-022 Finding C). A distinct next_mount_version() "

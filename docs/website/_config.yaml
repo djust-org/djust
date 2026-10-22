@@ -302,6 +302,11 @@ navigation:
         file: guides/authorization.md
         order: 12.9
         level: intermediate
+      - title: Turn Middleware (`LIVEVIEW_MIDDLEWARE`)
+        slug: turn-middleware
+        file: guides/turn-middleware.md
+        order: 12.95
+        level: advanced
       - title: Deployment
         slug: deployment
         file: guides/deployment.md

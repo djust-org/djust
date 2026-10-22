@@ -834,9 +834,9 @@ EXPECTED_DECODE_SITES = {
     ("_lazy_containers.py", "mount_http_lazy"),
     ("live_view.py", "_restore_private_state"),
     ("mixins/components.py", "_restore_component_state"),
-    ("mixins/request.py", "post"),
+    ("mixins/request.py", "_post_turn_body"),  # ADR-044: inside the POST turn
     ("mixins/sticky.py", "restore_sticky_child_state"),
-    ("runtime.py", "dispatch_mount"),
+    ("runtime.py", "_dispatch_mount_body"),  # ADR-044: inside the mount turn
     ("time_travel.py", "restore_snapshot"),
     ("time_travel.py", "restore_component_snapshot"),
     ("time_travel.py", "to_dict"),

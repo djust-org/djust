@@ -4,7 +4,8 @@ binary-framing confirm (#1905). The last 2.3a fold before the 2.3b flip.
 Three sub-folds:
 
 (1) ``Transport.recheck_event_auth(view) -> bool`` — the runtime port of the WS
-    per-event auth re-check (#1777, T3). Wired into ``_dispatch_event_inner`` at
+    per-event auth re-check (#1777, T3). Now the turn chain's ``reauth`` built-in
+    (ADR-044 D7); originally wired into ``_dispatch_event_inner`` at
     the SAME point the WS bespoke handler does (after the view-mounted check,
     BEFORE the actor branch / handler). GOES LIVE for SSE (events route through
     the runtime since Iter 1, #1887); WS keeps its own inline copy until the
@@ -354,8 +355,13 @@ class TestReauthHookShape291:
         runtime = ViewRuntime(_FakeTransport())
         runtime.view_instance = view
 
-        with patch.object(ViewRuntime, "_dispatch_event_render", AsyncMock()):
-            await runtime._dispatch_event_inner({"type": "event", "event": "bump", "params": {}})
+        # reauth runs on the turn chain's built-in (ADR-044 D7), so the event
+        # enters at the turn entry point, dispatch_event.
+        with (
+            override_settings(LIVEVIEW_CONFIG={"reauth_on_event": True}),
+            patch.object(ViewRuntime, "_dispatch_event_render", AsyncMock()),
+        ):
+            await runtime.dispatch_event({"type": "event", "event": "bump", "params": {}})
 
         assert runtime.view_instance is None, (
             "runtime must clear view_instance on failed reauth even if close is gated (#291)"
@@ -396,8 +402,11 @@ class TestReauthHookShape291:
         async def _fake_render(self, data):
             reached["render"] = True
 
-        with patch.object(ViewRuntime, "_dispatch_event_render", _fake_render):
-            await runtime._dispatch_event_inner({"type": "event", "event": "bump", "params": {}})
+        with (
+            override_settings(LIVEVIEW_CONFIG={"reauth_on_event": True}),
+            patch.object(ViewRuntime, "_dispatch_event_render", _fake_render),
+        ):
+            await runtime.dispatch_event({"type": "event", "event": "bump", "params": {}})
 
         assert runtime.view_instance is not None, "an authorized reauth must NOT clear state"
         assert reached["render"] is True, "an authorized reauth must reach the render path"
