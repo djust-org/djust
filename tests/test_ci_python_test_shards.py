@@ -157,13 +157,46 @@ def test_per_checkout_merge_gates_run_on_exactly_one_shard() -> None:
         assert steps[name].get("if"), f"{name!r} would run on every shard"
 
 
-def test_rust_cache_is_shared_across_shards_and_saved_by_one() -> None:
-    steps = [s for s in _python_tests()["steps"] if "rust-cache" in str(s.get("uses"))]
+def test_shards_install_the_shared_build_instead_of_compiling() -> None:
+    """The extension is built once per interpreter, not once per shard.
+
+    Each shard used to `maturin develop --release` the identical extension —
+    4x per interpreter, 16x on push, 71-157s each. python-build compiles it
+    once and the shards install that wheel; a Rust toolchain or rust-cache
+    step creeping back into the shard job is that duplicated build returning.
+    """
+    job = _python_tests()
+    assert "python-build" in str(job.get("needs")), job.get("needs")
+    steps = job["steps"]
+    rust = [s for s in steps if re.search(r"rust-toolchain|rust-cache", str(s.get("uses")))]
+    assert not rust, rust
+    runs = "\n".join(str(s.get("run", "")) for s in steps)
+    assert "maturin develop" not in runs and "maturin build" not in runs
+    download = next(s for s in steps if "download-artifact" in str(s.get("uses")))
+    assert "matrix.python-version" in str(download["with"]["name"]), download
+
+
+def test_the_build_matrix_is_the_shard_matrix_minus_the_group() -> None:
+    """Every shard cell's wheel exists, and 3.15 can fail the build too."""
+    build = _jobs()["python-build"]
+    assert (
+        build["strategy"]["matrix"]["python-version"]
+        == (_python_tests()["strategy"]["matrix"]["python-version"])
+    )
+    assert "group" not in build["strategy"]["matrix"]
+    assert build.get("continue-on-error") == _python_tests().get("continue-on-error")
+    upload = next(s for s in build["steps"] if "upload-artifact" in str(s.get("uses")))
+    download = next(
+        s for s in _python_tests()["steps"] if "download-artifact" in str(s.get("uses"))
+    )
+    assert upload["with"]["name"] == download["with"]["name"]
+
+
+def test_rust_cache_is_keyed_per_interpreter_in_the_build_job() -> None:
+    steps = [s for s in _jobs()["python-build"]["steps"] if "rust-cache" in str(s.get("uses"))]
     assert len(steps) == 1, steps
     with_ = steps[0].get("with") or {}
     assert "matrix.python-version" in str(with_.get("shared-key")), with_
-    m = re.search(r"matrix\.group\s*==\s*(\d+)", str(with_.get("save-if")))
-    assert m and int(m.group(1)) in set(_matrix_groups()), with_
 
 
 def _splitting_algorithm() -> str:

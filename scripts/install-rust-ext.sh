@@ -45,10 +45,16 @@ target="$dest_dir/$name"
 staged="$dest_dir/.$name.installing.$$"
 
 cp "$src" "$staged"
-# A fresh ad-hoc signature on the COPY, before it is ever mapped.
-codesign -s - -f "$staged" 2>/dev/null
+# A fresh ad-hoc signature on the COPY, before it is ever mapped. macOS only:
+# Linux has no code-signature cache to fight, and no `codesign` (CI installs
+# the shared wheel through this script, .github/workflows/test.yml).
+if [ "$(uname -s)" = Darwin ]; then
+  codesign -s - -f "$staged" 2>/dev/null
+fi
 # New inode into place: processes mapping the old file keep the old inode.
 mv -f "$staged" "$target"
 rm -f "$dest_dir"/.__rust*.installing.* 2>/dev/null || true
 
-echo "installed $name -> $target (inode $(stat -f %i "$target"))"
+# BSD `stat -f %i` is the inode; GNU `stat -f` means filesystem status.
+if [ "$(uname -s)" = Darwin ]; then inode=$(stat -f %i "$target"); else inode=$(stat -c %i "$target"); fi
+echo "installed $name -> $target (inode $inode)"

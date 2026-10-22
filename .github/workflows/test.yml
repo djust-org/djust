@@ -136,6 +136,73 @@ jobs:
       - name: Check Rust formatting
         run: cargo fmt --check
 
+  # Build the Rust extension ONCE per interpreter and hand the wheel to every
+  # job that needs it. Each python-tests shard used to run `maturin develop
+  # --release` itself — the same extension, built 4x per interpreter (16x on
+  # push), 71-157s each (p50 per shard over the last 12 green runs). The four
+  # Playwright-harness jobs built it TWICE each with no Rust cache at all:
+  # `uv sync --extra dev` compiled the project (~2m) and then `maturin develop
+  # --release` compiled it again (~1.5m).
+  #
+  # Same matrix expression and the same 3.15 allowance as python-tests, so a
+  # 3.15-only build failure cannot block the gate through `needs`.
+  #
+  # Same profile as before: `maturin build --release` is `maturin develop
+  # --release`'s build, with LTO — NOT rust-tests' CARGO_PROFILE_* override,
+  # for the measured reason given on python-tests below.
+  python-build:
+    runs-on: ubuntu-latest
+    continue-on-error: ${{ matrix.python-version == '3.15' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ${{ github.event_name != 'pull_request' && fromJSON('["3.12","3.13","3.14","3.15"]') || fromJSON('["3.12"]') }}
+    name: python-build (py${{ matrix.python-version }})
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      # One cache per python-version. The interpreter version is in the key
+      # because pyo3's build-script output in target/ is interpreter-specific.
+      # The key is the one the shards used when they built the extension
+      # themselves, so the existing cache entries stay warm.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: python-tests-py${{ matrix.python-version }}
+
+      - name: Set up Python ${{ matrix.python-version }}
+        id: python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '${{ matrix.python-version }}'
+          allow-prereleases: true
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      # `--compatibility linux`: the wheel never leaves this run, so skip the
+      # manylinux audit. It is the wheel shard 1's package-contents check reads.
+      - name: Install Python dependencies and build extension
+        env:
+          UV_PYTHON: ${{ steps.python.outputs.python-path }}
+          EXPECTED_PYTHON: ${{ matrix.python-version }}
+        run: |
+          uv sync --frozen --extra dev --no-install-project --python "$UV_PYTHON"
+          .venv/bin/python scripts/check-ci-python.py "$EXPECTED_PYTHON"
+          # maturin also invokes uv pip: target the verified venv, not the base.
+          export UV_PYTHON="$PWD/.venv/bin/python"
+          uv run --no-sync maturin build --release --compatibility linux -i .venv/bin/python --out "$RUNNER_TEMP/djust-wheel"
+
+      - name: Upload the wheel for this interpreter
+        uses: actions/upload-artifact@v7
+        with:
+          name: djust-wheel-py${{ matrix.python-version }}
+          path: ${{ runner.temp }}/djust-wheel/*.whl
+          if-no-files-found: error
+          retention-days: 3
+
   # Python tests - runs in parallel with pytest-xdist
   #
   # Matrix-on-PR is the project's #1 minute sink (3 cells × ~10 min each).
@@ -184,8 +251,13 @@ jobs:
         python-version: ${{ github.event_name != 'pull_request' && fromJSON('["3.12","3.13","3.14","3.15"]') || fromJSON('["3.12"]') }}
         group: [1, 2, 3, 4]
     name: python-tests (py${{ matrix.python-version }}, shard ${{ matrix.group }}/4)
-    # NOT given rust-tests' CARGO_PROFILE_* override — measured, and it is a
-    # LOSS here. Tried on this job and reverted: the build step did drop
+    # Installs the extension python-build compiled for this interpreter rather
+    # than building it per shard. `needs` waits for every python-build cell;
+    # a failed build skips the shards, and a skipped python-tests is not
+    # "success", so the test-summary gate still fails.
+    needs: python-build
+    # The extension (built in python-build) is NOT given rust-tests'
+    # CARGO_PROFILE_* override — measured, and it is a LOSS here. Tried on this job and reverted: the build step did drop
     # 118s -> 89s, but the test steps rose 104 -> 112s and 72 -> 91s, so the
     # job went 347s -> 355s.
     #
@@ -201,21 +273,6 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      # One cache per python-version, SHARED across the four shards: the
-      # extension they build is identical, so `shared-key` (which replaces
-      # the automatic job-id key) keeps them on one entry instead of four
-      # copies. The interpreter version is in the key because pyo3's
-      # build-script output in target/ is interpreter-specific. Only shard 1
-      # saves; the others restore-only, so four post-steps don't race to
-      # write the same key.
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: python-tests-py${{ matrix.python-version }}
-          save-if: ${{ matrix.group == 1 }}
-
       - name: Set up Python ${{ matrix.python-version }}
         id: python
         uses: actions/setup-python@v7
@@ -226,19 +283,27 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v7
 
+      - name: Download the extension built for this interpreter
+        uses: actions/download-artifact@v8
+        with:
+          name: djust-wheel-py${{ matrix.python-version }}
+          path: ${{ runner.temp }}/djust-wheel
+
       # Cache downloads only: virtualenvs contain interpreter-specific binaries.
       # setup-uv caches the active UV_CACHE_DIR, unlike the old ~/.cache/uv path.
-      - name: Install Python dependencies and build extension
+      # ci-install-prebuilt-djust.sh lays the wheel out as `maturin develop`
+      # would (djust.pth -> python/, `_rust*.so` in python/djust/) and fails
+      # if djust._rust does not import from the checkout.
+      - name: Install Python dependencies and prebuilt extension
         env:
           UV_PYTHON: ${{ steps.python.outputs.python-path }}
           EXPECTED_PYTHON: ${{ matrix.python-version }}
         run: |
           uv sync --frozen --extra dev --no-install-project --python "$UV_PYTHON"
           .venv/bin/python scripts/check-ci-python.py "$EXPECTED_PYTHON"
-          # maturin also invokes uv pip: target the verified venv, not the base.
           export UV_PYTHON="$PWD/.venv/bin/python"
           echo "UV_PYTHON=$UV_PYTHON" >> "$GITHUB_ENV"
-          uv run --no-sync maturin develop --release
+          scripts/ci-install-prebuilt-djust.sh "$RUNNER_TEMP/djust-wheel"
 
       # pytest-split is also in the [dev] extra; installing it here as well
       # mirrors the existing pytest-xdist belt-and-braces so a stale uv.lock
@@ -419,14 +484,14 @@ jobs:
 
       # The wheel and sdist leave out djust's tests and the client source
       # modules (pyproject [tool.maturin] exclude). A glob that matches
-      # nothing fails silently, so build both and list them. The build reuses
-      # the release artifacts `maturin develop --release` left in target/.
+      # nothing fails silently, so check both and list them. The wheel is the
+      # one python-build made and every shard just tested; the sdist compiles
+      # nothing.
       - name: Wheel and sdist ship no tests or client sources
         if: matrix.group == 1
         run: |
-          uv run --no-sync maturin build --release --compatibility linux -i .venv/bin/python --out "$RUNNER_TEMP/dist"
           uv run --no-sync maturin sdist --out "$RUNNER_TEMP/dist"
-          .venv/bin/python scripts/check-package-contents.py "$RUNNER_TEMP"/dist/*
+          .venv/bin/python scripts/check-package-contents.py "$RUNNER_TEMP"/djust-wheel/*.whl "$RUNNER_TEMP"/dist/*
 
   # Free-threaded (no-GIL) leg - #1534 / #1432, extended for #3074.
   # Targeted, NOT a full suite run: a 3.14t runner can hit unrelated
@@ -554,6 +619,7 @@ jobs:
   # Playwright browser tests - runs in parallel (optional, doesn't block CI)
   playwright-tests:
     runs-on: ubuntu-latest
+    needs: python-build  # the harness installs its py3.12 wheel
     continue-on-error: true  # Don't fail CI on Playwright test failures
     steps:
       - uses: actions/checkout@v7
@@ -614,6 +680,9 @@ jobs:
   # only this stable canary gates).
   browser-smoke:
     runs-on: ubuntu-latest
+    # The harness installs python-build's py3.12 wheel. If that build fails
+    # this job is skipped, and skipped != success in test-summary: still blocking.
+    needs: python-build
     steps:
       - uses: actions/checkout@v7
 
@@ -652,6 +721,7 @@ jobs:
 
   nav-hooks-guard:
     runs-on: ubuntu-latest
+    needs: python-build  # the harness installs its py3.12 wheel (see browser-smoke)
     steps:
       - uses: actions/checkout@v7
       # Shared harness (setup + build + playwright + migrate + start demo on
@@ -681,6 +751,7 @@ jobs:
   # the same promotion path browser-smoke took (#1534); not in test-summary.
   exposure-matrix:
     runs-on: ubuntu-latest
+    needs: python-build  # the harness installs its py3.12 wheel
     continue-on-error: true
     env:
       # Route djust's logs to the server log so the matrix can check it.
@@ -810,10 +881,15 @@ jobs:
   # Security tests with coverage - runs in parallel
   security-tests:
     runs-on: ubuntu-latest
+    # Installs python-build's py3.12 wheel. `uv sync --extra dev` used to
+    # compile djust from source here with no Rust cache (~2m of a 2.7m job).
+    # A failed build skips this job; skipped != success in test-summary.
+    needs: python-build
     steps:
       - uses: actions/checkout@v7
 
       - name: Set up Python
+        id: python
         uses: actions/setup-python@v7
         with:
           python-version: '3.12'
@@ -821,19 +897,17 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v7
 
-      - name: Cache Python dependencies
-        uses: actions/cache@v6
+      - name: Download the prebuilt extension
+        uses: actions/download-artifact@v8
         with:
-          path: |
-            ~/.cache/uv
-            .venv
-          key: ${{ runner.os }}-python-security-tests-${{ hashFiles('**/pyproject.toml', '**/uv.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-python-security-tests-
-            ${{ runner.os }}-python-
+          name: djust-wheel-py3.12
+          path: ${{ runner.temp }}/djust-wheel
 
-      - name: Install Python dependencies
-        run: uv sync --extra dev
+      # No .venv cache (setup-uv caches downloads): see python-tests.
+      - name: Install Python dependencies and prebuilt extension
+        run: |
+          uv sync --frozen --extra dev --no-install-project --python "${{ steps.python.outputs.python-path }}"
+          scripts/ci-install-prebuilt-djust.sh "$RUNNER_TEMP/djust-wheel"
 
       - name: Install coverage tools
         run: uv pip install pytest-cov
@@ -881,10 +955,15 @@ jobs:
   # auth notices, partial-fragment templates).
   demo-checks:
     runs-on: ubuntu-latest
+    # Installs python-build's py3.12 wheel instead of compiling djust in
+    # `uv sync` (see security-tests). Every `uv run` is --no-sync: a bare one
+    # re-syncs the env, which builds the project again.
+    needs: python-build
     steps:
       - uses: actions/checkout@v7
 
       - name: Set up Python
+        id: python
         uses: actions/setup-python@v7
         with:
           python-version: '3.12'
@@ -892,29 +971,27 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v7
 
-      - name: Cache Python dependencies
-        uses: actions/cache@v6
+      - name: Download the prebuilt extension
+        uses: actions/download-artifact@v8
         with:
-          path: |
-            ~/.cache/uv
-            .venv
-          key: ${{ runner.os }}-python-${{ hashFiles('**/pyproject.toml', '**/uv.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-python-
+          name: djust-wheel-py3.12
+          path: ${{ runner.temp }}/djust-wheel
 
-      - name: Install Python dependencies
-        run: uv sync --extra dev
+      - name: Install Python dependencies and prebuilt extension
+        run: |
+          uv sync --frozen --extra dev --no-install-project --python "${{ steps.python.outputs.python-path }}"
+          scripts/ci-install-prebuilt-djust.sh "$RUNNER_TEMP/djust-wheel"
 
       - name: Run Django migrations (demo)
         run: |
           cd examples/demo_project
-          uv run python manage.py migrate --noinput
+          uv run --no-sync python manage.py migrate --noinput
           cd ../..
 
       - name: Dogfood djust_check against the demo (BLOCKING)
         run: |
           cd examples/demo_project
-          PYTHONPATH=../.. uv run python ../../scripts/ci_djust_check_demo.py
+          PYTHONPATH=../.. uv run --no-sync python ../../scripts/ci_djust_check_demo.py
           cd ../..
         env:
           PYTHONPATH: .
