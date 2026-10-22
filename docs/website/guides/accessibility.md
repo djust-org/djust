@@ -54,7 +54,7 @@ component emits as of 1.0 — these are *guarantees*, each backed by a test in
 | Component | Roles / ARIA emitted |
 |-----------|----------------------|
 | **`{% modal %}`** | Dialog gets `role="dialog"` + `aria-modal="true"`; when a title is set, `aria-labelledby` points at the `<h3>` title's derived `id`; the close button carries `aria-label="Close"`. |
-| **`{% tabs %}`** | Nav is `role="tablist"`; each tab button is `role="tab"` with `aria-selected="true"`/`"false"` and `aria-controls` pointing at its panel; the active pane is `role="tabpanel"` with `aria-labelledby` pointing back at its tab; decorative tab icons are `aria-hidden="true"`. Tab and panel `id`s are derived deterministically from the `id` kwarg so they stay VDOM-stable. |
+| **`{% tabs %}`** | Nav is `role="tablist"`; each tab button is `role="tab"` with `aria-selected="true"`/`"false"` and `aria-controls` pointing at its panel; the active pane is `role="tabpanel"` with `aria-labelledby` pointing back at its tab; decorative tab icons are `aria-hidden="true"`. Only the selected tab has `tabindex="0"`. `label="…"` names the tab list (`aria-label`); `labelledby="heading-id"` names it from an element on the page (`aria-labelledby`). Tab and panel `id`s are derived deterministically from the `id` kwarg so they stay VDOM-stable. |
 | **`{% accordion %}`** | Each trigger button carries `aria-expanded` (reflecting open/closed) and `aria-controls` pointing at its panel; the open panel is `role="region"` with an `id` and `aria-labelledby` pointing back at its trigger; the chevron glyph is `aria-hidden="true"`. |
 | **`{% dropdown %}`** | Trigger button carries `aria-haspopup="menu"`, `aria-expanded` (reflecting open state), and `aria-controls` pointing at the menu; the open menu `<div>` is `role="menu"`. |
 | **`{% alert %}`** | Container gets `role="alert"` for `error`/`danger`/`warning` types (assertive) or `role="status"` for `info`/`success` (polite); the type icon is `aria-hidden="true"`; the dismiss button carries `aria-label="Dismiss"`. |
@@ -287,14 +287,17 @@ While a `role="dialog"` modal is on the page:
 
 ### `{% tabs %}` — arrow-key roving navigation
 
-Once you use the arrow keys, a `role="tablist"` behaves as a **roving
-`tabindex`** widget: the focused tab is `tabindex="0"` and the others are
-`-1`. On first render (and after a server re-render replaces the buttons),
-every tab button is in the natural Tab order.
+The tab list is a **roving `tabindex`** widget, as the WAI-ARIA tabs pattern
+describes. The server renders the selected tab with `tabindex="0"` and the
+others with `tabindex="-1"`, so the tab list is one Tab stop and Tab lands on
+the selected tab. When no tab is selected, the first tab is the Tab stop.
 
 - **ArrowRight / ArrowLeft** move focus to the next / previous tab and wrap
-  around at the ends.
+  around at the ends. The focused tab becomes the Tab stop while focus stays
+  in the list.
 - **Home / End** jump to the first / last tab.
+- When focus **leaves** the tab list, the Tab stop goes back to the selected
+  tab.
 - Activation is **manual** — arrows move focus only; Enter or Space activates
   the focused tab. (Manual activation is the safer choice because activating a
   tab triggers a server round-trip.)

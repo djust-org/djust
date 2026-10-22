@@ -807,13 +807,20 @@ INSTALLED_APPS = [
   <button dj-click="close_modal">Cancel</button>
 {% endmodal %}
 
-{% tabs id="settings" active=active_tab event="set_tab" %}
+{% tabs id="settings" active=active_tab event="set_tab" label="Settings" %}
   {% tab id="general" label="General" %}
     General settings content
   {% endtab %}
   {% tab id="security" label="Security" icon="🔒" %}
     Security settings content
   {% endtab %}
+{% endtabs %}
+
+{# The selected tab in the URL: each tab is a dj-patch to ?section=<id>, #}
+{# and handle_params sets active_tab from request.GET["section"]. #}
+{% tabs id="settings" active=active_tab param="section" label="Settings" %}
+  {% tab id="general" label="General" %}...{% endtab %}
+  {% tab id="security" label="Security" %}...{% endtab %}
 {% endtabs %}
 
 {% card title="Dashboard" variant="elevated" %}

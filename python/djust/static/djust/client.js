@@ -22823,6 +22823,30 @@ globalThis.djust.djTransitionGroup = {
         return false;
     }
 
+    // WAI-ARIA tabs: focus entering a tab list lands on the SELECTED tab.
+    // The arrow keys move the Tab stop to the tab they focus; once focus
+    // leaves the list, give the stop back to the selected tab, so Tab and
+    // Shift+Tab into the list find it again. A list with no selected tab keeps
+    // whatever stop it has.
+    function _onTablistFocusOut(e) {
+        const tab = e.target && e.target.closest && e.target.closest('[role="tab"]');
+        if (!tab) return;
+        const tablist = tab.closest('[role="tablist"]');
+        if (!tablist) return;
+        const next = e.relatedTarget;
+        if (next && tablist.contains(next)) return;
+        const tabs = Array.prototype.slice.call(
+            tablist.querySelectorAll('[role="tab"]')
+        );
+        const selected = tabs.filter(function (el) {
+            return el.getAttribute('aria-selected') === 'true';
+        })[0];
+        if (!selected) return;
+        tabs.forEach(function (el) {
+            el.setAttribute('tabindex', el === selected ? '0' : '-1');
+        });
+    }
+
     function _handleAccordion(accordion, target, e) {
         const triggers = Array.prototype.slice.call(
             accordion.querySelectorAll('.dj-accordion__trigger')
@@ -23070,6 +23094,7 @@ globalThis.djust.djTransitionGroup = {
 
     function _init() {
         document.addEventListener('keydown', _handleKeydown, false);
+        document.addEventListener('focusout', _onTablistFocusOut, false);
         document.addEventListener('focusin', function (e) {
             const el = e.target;
             if (el && el.closest && !el.closest('[role="dialog"], .dj-modal')) {
@@ -23091,6 +23116,7 @@ globalThis.djust.djTransitionGroup = {
     globalThis.djust = globalThis.djust || {};
     globalThis.djust.keyboardNav = {
         _handleKeydown: _handleKeydown,
+        _onTablistFocusOut: _onTablistFocusOut,
         _focusable: _focusable,
         _wrapIndex: _wrapIndex,
         _dialogStack: _dialogStack,

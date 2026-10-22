@@ -16,6 +16,7 @@ import itertools
 import json as _json
 import re as _re
 import uuid
+from urllib.parse import urlencode
 from typing import Any
 
 from django import template
@@ -244,6 +245,12 @@ class TabsNode(template.Node):
         tabs_id = kw.get("id", "tabs")
         active = kw.get("active", "")
         event = kw.get("event", "set_tab")
+        # A URL query parameter: each tab is a `dj-patch` to `?<param>=<id>`,
+        # and the view passes the parameter back as `active` from
+        # `handle_params`, so Back/Forward and bookmarks select the tab.
+        param = kw.get("param", "")
+        label = kw.get("label", "")
+        labelledby = kw.get("labelledby", "")
 
         # Collect tab nodes
         tabs = [n for n in self.nodelist if isinstance(n, TabNode)]
@@ -260,11 +267,16 @@ class TabsNode(template.Node):
         # from the existing `id` kwarg + the tab id → VDOM dj-id stable.
         e_tabs_id = conditional_escape(tabs_id)
 
+        tab_ids = [_resolve(tab.tab_id, context) for tab in tabs]
+        # WAI-ARIA tabs: one Tab stop, the selected tab (roving tabindex; the
+        # arrow keys move between tabs in 51-keyboard-nav.js). When `active`
+        # names no tab, the first tab is the stop, so the list stays reachable.
+        stop = tab_ids.index(active) if active in tab_ids else 0
+
         # Build tab nav
         nav_items = []
-        for tab in tabs:
-            tid = _resolve(tab.tab_id, context)
-            label = _resolve(tab.label, context)
+        for index, (tab, tid) in enumerate(zip(tabs, tab_ids)):
+            label_text = _resolve(tab.label, context)
             icon = _resolve(tab.icon, context) if tab.icon else ""
             is_active = tid == active
             active_cls = "dj-tab--active" if is_active else ""
@@ -276,20 +288,30 @@ class TabsNode(template.Node):
             e_tid = conditional_escape(tid)
             tab_el_id = f"{e_tabs_id}-tab-{e_tid}"
             panel_el_id = f"{e_tabs_id}-panel-{e_tid}"
+            if param:
+                query = urlencode({str(param): str(tid)})
+                action = f'dj-patch="?{conditional_escape(query)}"'
+            else:
+                action = f'dj-click="{conditional_escape(event)}" data-value="{e_tid}"'
             nav_items.append(
                 f'<button class="dj-tab {active_cls}" role="tab" '
                 f'id="{tab_el_id}" aria-controls="{panel_el_id}" '
                 f'aria-selected="{"true" if is_active else "false"}" '
-                f'dj-click="{conditional_escape(event)}" data-value="{e_tid}"{cid_attr}>'
-                f"{icon_html}{conditional_escape(label)}</button>"
+                f'tabindex="{"0" if index == stop else "-1"}" '
+                f"{action}{cid_attr}>"
+                f"{icon_html}{conditional_escape(label_text)}</button>"
             )
 
-        nav = f'<nav class="dj-tabs__nav" role="tablist">{"".join(nav_items)}</nav>'
+        name_attrs = ""
+        if label:
+            name_attrs += f' aria-label="{conditional_escape(label)}"'
+        if labelledby:
+            name_attrs += f' aria-labelledby="{conditional_escape(labelledby)}"'
+        nav = f'<nav class="dj-tabs__nav" role="tablist"{name_attrs}>{"".join(nav_items)}</nav>'
 
         # Build active pane
         pane = ""
-        for tab in tabs:
-            tid = _resolve(tab.tab_id, context)
+        for tab, tid in zip(tabs, tab_ids):
             if tid == active:
                 e_tid = conditional_escape(tid)
                 tab_el_id = f"{e_tabs_id}-tab-{e_tid}"
