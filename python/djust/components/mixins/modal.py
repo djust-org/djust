@@ -40,6 +40,8 @@ class ModalMixin(ComponentMixin):
     .. deprecated:: Use ``djust_components.descriptors.Modal`` instead.
     """
 
+    _deprecated_replacement = "the Modal component from djust.components.descriptors"
+
     component_name = "modal"
     modal_instances: Optional[Dict[str, "ModalState"]] = None
 

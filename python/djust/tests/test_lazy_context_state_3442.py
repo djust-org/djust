@@ -213,7 +213,7 @@ def test_http_review_corpus_authored_liveness(tmp_path, settings, label):
     (tmp_path / "candidate.html").write_text(REVIVAL_CASES[label].replace(TAG, HIDDEN))
     settings.TEMPLATES = [
         {
-            "BACKEND": "djust.template_backend.DjustTemplateBackend",
+            "BACKEND": "djust.template.backend.DjustTemplateBackend",
             "DIRS": [str(tmp_path)],
             "APP_DIRS": True,
         }
@@ -343,7 +343,7 @@ def test_exact_rev3429_http_cases_never_mount_hidden(opener, q):
 def test_http_changed_mixed_super_never_mounts_hidden(tmp_path, settings, parent, flt, q):
     settings.TEMPLATES = [
         {
-            "BACKEND": "djust.template_backend.DjustTemplateBackend",
+            "BACKEND": "djust.template.backend.DjustTemplateBackend",
             "DIRS": [str(tmp_path)],
             "APP_DIRS": True,
         }
@@ -428,7 +428,7 @@ def test_http_any_flattened_mixed_super_fails_closed(tmp_path, settings, q, flt)
         register_django_filter(flt, identity)
     settings.TEMPLATES = [
         {
-            "BACKEND": "djust.template_backend.DjustTemplateBackend",
+            "BACKEND": "djust.template.backend.DjustTemplateBackend",
             "DIRS": [str(tmp_path)],
             "APP_DIRS": True,
         }
@@ -471,7 +471,7 @@ MIXED_WRAPPERS = [
 def test_http_mixed_capture_wrappers_fail_closed(tmp_path, settings, q, wrapper):
     settings.TEMPLATES = [
         {
-            "BACKEND": "djust.template_backend.DjustTemplateBackend",
+            "BACKEND": "djust.template.backend.DjustTemplateBackend",
             "DIRS": [str(tmp_path)],
             "APP_DIRS": True,
         }
@@ -599,7 +599,7 @@ def test_round5_http_flatten_context_and_cache_hits(tmp_path, settings, body, ex
     caches["default"].clear()
     settings.TEMPLATES = [
         {
-            "BACKEND": "djust.template_backend.DjustTemplateBackend",
+            "BACKEND": "djust.template.backend.DjustTemplateBackend",
             "DIRS": [str(tmp_path)],
             "APP_DIRS": True,
         }
@@ -730,7 +730,7 @@ def test_round6_http_literal_parser(tmp_path, settings, label, closer):
     q = q if closer else "x"
     settings.TEMPLATES = [
         {
-            "BACKEND": "djust.template_backend.DjustTemplateBackend",
+            "BACKEND": "djust.template.backend.DjustTemplateBackend",
             "DIRS": [str(tmp_path)],
             "APP_DIRS": True,
         }
@@ -842,7 +842,7 @@ def test_latest_svg_title_blocker(tmp_path, settings, wrapper):
     cache.clear()
     settings.TEMPLATES = [
         {
-            "BACKEND": "djust.template_backend.DjustTemplateBackend",
+            "BACKEND": "djust.template.backend.DjustTemplateBackend",
             "DIRS": [str(tmp_path)],
             "APP_DIRS": True,
         }
@@ -879,7 +879,7 @@ def test_svg_icon_navigation_registers_after_each_capture(tmp_path, settings, wr
     cache.clear()
     settings.TEMPLATES = [
         {
-            "BACKEND": "djust.template_backend.DjustTemplateBackend",
+            "BACKEND": "djust.template.backend.DjustTemplateBackend",
             "DIRS": [str(tmp_path)],
             "APP_DIRS": True,
         }
@@ -1036,7 +1036,7 @@ def test_transformed_literal_closer_cannot_be_replaced_by_value(
 ):
     settings.TEMPLATES = [
         {
-            "BACKEND": "djust.template_backend.DjustTemplateBackend",
+            "BACKEND": "djust.template.backend.DjustTemplateBackend",
             "DIRS": [str(tmp_path)],
             "APP_DIRS": True,
         }
@@ -1138,7 +1138,7 @@ def test_replay_review_n1_n2_n3_http(tmp_path, settings, parent, body, kind, q):
     """Value arguments, branchy filters and escaped closers cannot revive children."""
     settings.TEMPLATES = [
         {
-            "BACKEND": "djust.template_backend.DjustTemplateBackend",
+            "BACKEND": "djust.template.backend.DjustTemplateBackend",
             "DIRS": [str(tmp_path)],
             "APP_DIRS": True,
         }
@@ -1177,7 +1177,7 @@ def test_uncertain_transform_permanently_refuses_following_containers(
     cache.clear()
     settings.TEMPLATES = [
         {
-            "BACKEND": "djust.template_backend.DjustTemplateBackend",
+            "BACKEND": "djust.template.backend.DjustTemplateBackend",
             "DIRS": [str(tmp_path)],
             "APP_DIRS": True,
         }

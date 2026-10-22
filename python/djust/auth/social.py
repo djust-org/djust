@@ -4,10 +4,11 @@ Provides a context processor that detects available OAuth backends
 and injects provider metadata (name, label, icon) into template context.
 """
 
-import warnings
 from typing import Any
 
 from django.utils.safestring import mark_safe
+
+from .._deprecation import warn_deprecated
 
 # Provider display metadata: allauth provider ID -> (label, SVG icon)
 from .accounts.providers import _PROVIDER_META  # noqa: E402  (moved; kept importable)
@@ -23,13 +24,17 @@ def social_auth_providers(request: Any) -> dict[str, Any]:
     If ``django-allauth`` is not installed the list will be empty.
 
     .. deprecated:: 1.3
-        Use ``{% auth_providers auth %}`` from ``{% load djust_auth %}`` (ADR-039).
+        Removed no earlier than djust 2.0.0. Use ``{% auth_providers auth %}``
+        from ``{% load djust_auth %}`` (ADR-039).
     """
-    warnings.warn(
-        "djust.auth.social.social_auth_providers is deprecated; use {% auth_providers auth %} "
-        "from {% load djust_auth %} (ADR-039).",
-        DeprecationWarning,
-        stacklevel=2,
+    # stacklevel=3: warnings.warn -> warn_deprecated -> this function -> the
+    # caller (Django's context-processor loop, or the test calling it).
+    warn_deprecated(
+        "djust.auth.social.social_auth_providers",
+        since="1.3",
+        removed_in="2.0.0",
+        instead="{% auth_providers auth %} from {% load djust_auth %} (ADR-039)",
+        stacklevel=3,
     )
     try:
         from allauth.socialaccount.providers import registry

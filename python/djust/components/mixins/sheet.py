@@ -41,6 +41,8 @@ class SheetMixin(ComponentMixin):
     .. deprecated:: Use ``djust_components.descriptors.Sheet`` instead.
     """
 
+    _deprecated_replacement = "the Sheet component from djust.components.descriptors"
+
     component_name = "sheet"
     sheet_instances: Optional[Dict[str, "SheetState"]] = None
 

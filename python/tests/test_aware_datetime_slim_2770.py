@@ -79,7 +79,7 @@ from django.utils import timezone as django_timezone  # noqa: E402
 
 from djust import _rust  # noqa: E402
 from djust._rust import RustLiveView  # noqa: E402
-from djust.template_backend import DjustTemplateBackend  # noqa: E402
+from djust.template import DjustTemplateBackend  # noqa: E402
 
 FIXTURE = pathlib.Path(__file__).parent / "fixtures" / "aware_datetime_state_pre_2770.msgpack"
 

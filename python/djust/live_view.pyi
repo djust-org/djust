@@ -146,6 +146,14 @@ class LiveView(
         stream_name: str,
         selector: str,
     ) -> None: ...
+    async def astream_insert(
+        self,
+        stream_name: str,
+        html: str,
+        at: str = "append",
+        target: Optional[str] = None,
+    ) -> None: ...
+    async def astream_delete(self, stream_name: str, selector: str) -> None: ...
     async def push_state(self) -> None: ...
 
 class PersistentLiveView(LiveView):
