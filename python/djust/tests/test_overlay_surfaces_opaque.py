@@ -1,4 +1,4 @@
-"""Floating surfaces are opaque ``--card`` by default.
+"""Floating surfaces are opaque ``--card`` (menus and option lists ``--popover``) by default.
 
 The modal panel (and the sheet, popover, menus, dropdowns, palette, toast and
 tooltip) painted ``hsl(var(--card) / 0.95)`` behind a backdrop blur. In light
@@ -37,9 +37,11 @@ OVERLAY_SURFACES = (
     ".tooltip, .dj-tooltip__text",
 )
 
-# ``background: hsl(var(--card[, fallback]) / <alpha>)``
+# ``background: hsl(var(--card[, fallback]) / <alpha>)``, or a menu or option list's
+# ``hsl(var(--popover, var(--card[, fallback])) / <alpha>)``.
 _CARD_FILL = re.compile(
-    r"(?<![\w-])background\s*:\s*hsl\(var\(--card(?:, [^)]*)?\)(?:\s*/\s*([^;]+))?\)"
+    r"(?<![\w-])background\s*:\s*hsl\(var\(--"
+    r"(?:popover, var\(--card(?:, [^)]*)?\)|card(?:, [^)]*)?)\)(?:\s*/\s*([^;]+))?\)"
 )
 
 
@@ -55,6 +57,8 @@ def test_the_fill_matcher_reads_the_alpha():
     assert _CARD_FILL.search(" background: hsl(var(--card) / 0.95);").group(1) == "0.95"
     assert _CARD_FILL.search(" background: hsl(var(--card, 0 0% 100%) / 0.98);").group(1) == "0.98"
     assert _CARD_FILL.search(" background: hsl(var(--card));").group(1) is None
+    popover = " background: hsl(var(--popover, var(--card)) / var(--overlay-surface-opacity, 1));"
+    assert _CARD_FILL.search(popover).group(1) == "var(--overlay-surface-opacity, 1)"
 
 
 @pytest.mark.parametrize("selector", OVERLAY_SURFACES)

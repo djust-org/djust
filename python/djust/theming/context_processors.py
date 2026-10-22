@@ -353,6 +353,7 @@ def _render_theme_switcher(state: ThemeState, presets: list[dict]) -> str:
     color: hsl(var(--muted-foreground));
     border-radius: calc(var(--radius) - 0.125rem);
     cursor: pointer;
+    font-family: inherit;
     transition: all 0.15s ease;
 }}
 .theme-mode-btn:hover {{
@@ -371,6 +372,7 @@ def _render_theme_switcher(state: ThemeState, presets: list[dict]) -> str:
     background-color: hsl(var(--background));
     color: hsl(var(--foreground));
     color-scheme: light;
+    font-family: inherit;
     font-size: 0.875rem;
     cursor: pointer;
     appearance: none;

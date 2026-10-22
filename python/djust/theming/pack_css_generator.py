@@ -720,6 +720,7 @@ a:hover {{
 
 button, a, .clickable {{
   cursor: pointer;
+  font-family: inherit;
 }}
 """
 

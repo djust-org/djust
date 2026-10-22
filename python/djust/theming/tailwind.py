@@ -238,16 +238,19 @@ def generate_tailwind_apply_examples() -> str:
 
 /* Button styles */
 .btn-primary {
+  font-family: inherit;
   @apply bg-primary text-primary-foreground px-4 py-2 rounded-md;
   @apply hover:opacity-90 transition-opacity;
 }
 
 .btn-secondary {
+  font-family: inherit;
   @apply bg-secondary text-secondary-foreground px-4 py-2 rounded-md;
   @apply hover:bg-secondary/80;
 }
 
 .btn-destructive {
+  font-family: inherit;
   @apply bg-destructive text-destructive-foreground px-4 py-2 rounded-md;
   @apply hover:bg-destructive/90;
 }

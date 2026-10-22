@@ -391,6 +391,7 @@ html.theme-ready *::after {
   background-color: hsl(var(--primary));
   color: hsl(var(--primary-foreground));
   border-radius: var(--radius);
+  font-family: inherit;
 }
 
 .btn-primary:hover {
@@ -401,6 +402,7 @@ html.theme-ready *::after {
   background-color: hsl(var(--secondary));
   color: hsl(var(--secondary-foreground));
   border-radius: var(--radius);
+  font-family: inherit;
 }
 
 .btn-secondary:hover {
@@ -411,6 +413,7 @@ html.theme-ready *::after {
   background-color: hsl(var(--destructive));
   color: hsl(var(--destructive-foreground));
   border-radius: var(--radius);
+  font-family: inherit;
 }
 
 .btn-destructive:hover {
