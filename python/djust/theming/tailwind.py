@@ -260,7 +260,7 @@ def generate_tailwind_apply_examples() -> str:
 
 /* Input styles */
 .input {
-  @apply bg-background border border-input rounded-md px-3 py-2;
+  @apply bg-input-background border border-input rounded-md px-3 py-2;
   @apply text-foreground placeholder:text-muted-foreground;
   @apply focus:outline-none focus:ring-2 focus:ring-ring;
 }

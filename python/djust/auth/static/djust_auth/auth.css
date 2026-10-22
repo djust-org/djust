@@ -16,7 +16,7 @@
 .dj-auth-field { display: flex; flex-direction: column; gap: 6px; }
 .dj-auth-label { font-size: .875rem; font-weight: 600; }
 .dj-auth-control { position: relative; display: flex; align-items: center; }
-.dj-auth-control input:not([type=checkbox]):not([type=radio]), .dj-auth-control select { width: 100%; box-sizing: border-box; min-height: 44px; padding: 10px 12px; border-radius: var(--radius, 0.5rem); border: 1px solid hsl(var(--input)); background: hsl(var(--background)); color: hsl(var(--foreground)); font: inherit; }
+.dj-auth-control input:not([type=checkbox]):not([type=radio]), .dj-auth-control select { width: 100%; box-sizing: border-box; min-height: 44px; padding: 10px 12px; border-radius: var(--radius, 0.5rem); border: 1px solid hsl(var(--input, var(--border))); background: hsl(var(--input-background, var(--background))); color: hsl(var(--foreground)); font: inherit; }
 .dj-auth-control input:focus-visible { outline: 2px solid hsl(var(--ring)); outline-offset: 1px; border-color: hsl(var(--ring)); }
 .dj-auth-control input[data-dj-auth-has-toggle] { padding-right: 64px; }
 .dj-auth-field--error input { border-color: hsl(var(--destructive)); }
