@@ -98,28 +98,38 @@ def test_generated_theme_css_never_fills_with_the_border_token(preset: str):
     assert _offending_backgrounds(ThemeCSSGenerator(preset).generate_css()) == []
 
 
-def test_the_field_rules_read_the_field_token():
+FIELD_FILL_RULES = (
+    ".form-input",
+    ".form-select",
+    ".form-textarea",
+    ".form-checkbox",
+    ".form-radio",
+    ".table-search",
+    ".data-table-search input",
+    ".data-table-filter",
+    ".data-table-cell-editing input",
+    ".data-table-row-editing td input",
+    ".multi-select-search",
+    ".otp-digit",
+    ".number-stepper-input",
+    ".tag-input-field",
+    ".dj-search-input__input",
+    ".rich-select-trigger",
+    ".dj-dependent-select__control select",
+    ".dj-currency-input__control",
+    ".dj-filter-bar__select",
+    ".dj-mminput",
+    ".dj-mentions__input",
+    ".dj-cron-input__input",
+)
+
+
+@pytest.mark.parametrize("selector", FIELD_FILL_RULES)
+def test_the_field_rules_read_the_field_token(selector: str):
     css = (ROOT / "components/static/djust_components/components.css").read_text(encoding="utf-8")
-    for selector in (
-        ".form-input",
-        ".form-select",
-        ".form-textarea",
-        ".form-checkbox",
-        ".form-radio",
-        ".table-search",
-        ".data-table-search input",
-        ".data-table-filter",
-        ".data-table-cell-editing input",
-        ".data-table-row-editing td input",
-        ".multi-select-search",
-        ".otp-digit",
-        ".number-stepper-input",
-        ".tag-input-field",
-        ".dj-search-input__input",
-    ):
-        rule = re.search(re.escape(selector) + r"\s*\{([^}]*)\}", css)
-        assert rule, selector
-        assert "var(--input-background" in rule.group(1), selector
+    rule = re.search(r"(?m)^" + re.escape(selector) + r"\s*\{([^}]*)\}", css)
+    assert rule, selector
+    assert "var(--input-background" in rule.group(1), selector
 
 
 # The rules whose border IS the field outline. ``.data-table-cell-editing input`` is
@@ -141,6 +151,20 @@ FIELD_OUTLINE_RULES = (
     ".number-stepper-controls",
     ".tag-input-field",
     ".dj-search-input__input",
+    ".input-group",
+    ".rich-select-trigger",
+    ".rich-select-search-input",
+    ".dj-dependent-select__control select",
+    ".dj-currency-input__control",
+    ".dj-filter-bar__select",
+    ".dj-mminput",
+    ".dj-mentions__input",
+    ".dj-md-textarea",
+    ".dj-form-array__input",
+    ".dj-import-wizard__field-select",
+    ".dj-signature-pad__typed-input",
+    ".dj-prompt-editor__textarea",
+    ".dj-cron-input__input",
 )
 
 # The colour part of every ``border``/``border-color``/``border-<side>`` declaration.
@@ -149,12 +173,17 @@ _BORDER_DECL = re.compile(
 )
 
 
+# ``hsl(var(--a))``, ``hsl(var(--a, fallback))`` or ``hsl(var(--a, var(--b[, fallback])))``, also inside a
+# per-component override such as ``var(--dj-mminput-border, hsl(...))``.
+_HSL_TOKEN = re.compile(r"hsl\(var\(--[\w-]+(?:, (?:var\(--[\w-]+(?:, [^()]*)?\)|[^()]*))?\)\)")
+
+
 def _border_colours(rule: str) -> list[str]:
     colours = []
     for value in _BORDER_DECL.findall(rule):
         if value.strip() == "none":
             continue
-        match = re.search(r"hsl\(.*\)\s*$", value.strip())
+        match = _HSL_TOKEN.search(value)
         assert match, value
         colours.append(match.group(0))
     return colours
@@ -171,6 +200,9 @@ def test_the_border_matcher_reads_the_colour():
     assert _border_colours(" border-color: hsl(var(--input, var(--border)));") == [
         "hsl(var(--input, var(--border)))"
     ]
+    assert _border_colours(
+        " border: 1px solid var(--dj-x-border, hsl(var(--border, 1 2% 3%)));"
+    ) == ["hsl(var(--border, 1 2% 3%))"]
 
 
 @pytest.mark.parametrize("selector", FIELD_OUTLINE_RULES)
