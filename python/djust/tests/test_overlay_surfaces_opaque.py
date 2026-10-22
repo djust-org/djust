@@ -1,4 +1,4 @@
-"""Floating surfaces are opaque ``--card`` (option lists ``--popover``) by default.
+"""Floating surfaces are opaque ``--card`` (menus and option lists ``--popover``) by default.
 
 The modal panel (and the sheet, popover, menus, dropdowns, palette, toast and
 tooltip) painted ``hsl(var(--card) / 0.95)`` behind a backdrop blur. In light
@@ -37,7 +37,7 @@ OVERLAY_SURFACES = (
     ".tooltip, .dj-tooltip__text",
 )
 
-# ``background: hsl(var(--card[, fallback]) / <alpha>)``, or an option list's
+# ``background: hsl(var(--card[, fallback]) / <alpha>)``, or a menu or option list's
 # ``hsl(var(--popover, var(--card[, fallback])) / <alpha>)``.
 _CARD_FILL = re.compile(
     r"(?<![\w-])background\s*:\s*hsl\(var\(--"

@@ -9,6 +9,11 @@ surface now fills with ``hsl(var(--popover, var(--card)) / var(--overlay-surface
 and sets ``--popover-foreground`` text, falling back to ``--card`` /
 ``--card-foreground`` for a theme without the popover tokens. #3591's opacity
 variable stays.
+
+The action menus (dropdown and context menus, the split-button menu, the
+popover and the notification dropdown, and djust.theming's ``.dropdown-menu``)
+moved to the same surface, and their items take the menu's text colour instead
+of ``--muted-foreground``.
 """
 
 from __future__ import annotations
@@ -23,6 +28,7 @@ pytestmark = pytest.mark.theming
 ROOT = Path(__file__).resolve().parents[1]
 COMPONENTS_CSS = ROOT / "components/static/djust_components/components.css"
 COMPONENT_CLASSES_CSS = ROOT / "components/static/djust_components/components-classes.css"
+THEME_CSS = ROOT / "theming/static/djust_theming/css/components.css"
 
 OPTION_LISTS = (
     (COMPONENTS_CSS, ".combobox-dropdown"),
@@ -30,6 +36,25 @@ OPTION_LISTS = (
     (COMPONENTS_CSS, ".dj-autocomplete__dropdown"),
     (COMPONENTS_CSS, ".dj-mentions__dropdown"),
     (COMPONENT_CLASSES_CSS, ".dj-model-sel__dropdown"),
+)
+
+ACTION_MENUS = (
+    (COMPONENTS_CSS, ".dropdown-menu"),
+    (COMPONENTS_CSS, ".ctx-menu"),
+    (COMPONENTS_CSS, ".split-btn-menu"),
+    (COMPONENTS_CSS, ".popover"),
+    (COMPONENTS_CSS, ".notif-dropdown"),
+    (THEME_CSS, ".dropdown-menu"),
+)
+
+SURFACES = OPTION_LISTS + ACTION_MENUS
+
+# Menu items that used to set ``--muted-foreground`` / ``--foreground`` themselves.
+MENU_ITEMS = (
+    (COMPONENTS_CSS, ".dropdown-item"),
+    (COMPONENTS_CSS, ".ctx-item"),
+    (COMPONENTS_CSS, ".split-btn-option"),
+    (THEME_CSS, ".dropdown-item"),
 )
 
 # ``hsl(var(--popover, var(--card[, fallback])) / var(--overlay-surface-opacity, 1))``
@@ -64,18 +89,14 @@ def test_the_matchers_tell_popover_from_card():
     assert not _POPOVER_TEXT.search(" color: hsl(var(--foreground));")
 
 
-@pytest.mark.parametrize(
-    ("css_path", "selector"), OPTION_LISTS, ids=lambda v: getattr(v, "name", v)
-)
+@pytest.mark.parametrize(("css_path", "selector"), SURFACES, ids=lambda v: getattr(v, "name", v))
 def test_option_list_fills_with_popover(css_path: Path, selector: str):
     body = _rule(css_path, selector)
     fill = _background(body)
     assert fill and _POPOVER_FILL.search(fill), (selector, fill)
 
 
-@pytest.mark.parametrize(
-    ("css_path", "selector"), OPTION_LISTS, ids=lambda v: getattr(v, "name", v)
-)
+@pytest.mark.parametrize(("css_path", "selector"), SURFACES, ids=lambda v: getattr(v, "name", v))
 def test_option_list_text_is_popover_foreground(css_path: Path, selector: str):
     assert _POPOVER_TEXT.search(_rule(css_path, selector)), selector
 
@@ -90,6 +111,12 @@ def test_combobox_options_take_the_list_text_colour():
     """An option with its own muted colour would not show the popover foreground."""
     body = _rule(COMPONENTS_CSS, ".combobox-option")
     assert re.search(r"(?<![\w-])color\s*:\s*inherit\s*;", body), body
+
+
+@pytest.mark.parametrize(("css_path", "selector"), MENU_ITEMS, ids=lambda v: getattr(v, "name", v))
+def test_menu_items_take_the_menu_text_colour(css_path: Path, selector: str):
+    body = _rule(css_path, selector)
+    assert re.search(r"(?<![\w-])color\s*:\s*inherit\s*;", body), (selector, body)
 
 
 def test_dropdown_menu_is_the_convention_this_follows():
