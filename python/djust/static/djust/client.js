@@ -23235,7 +23235,14 @@ globalThis.djust.djTransitionGroup = {
 //                     that matches no option is discarded on change unless the
 //                     combobox has `data-allow-free-text`. Without a server
 //                     search event (`data-filter="client"`) typing filters
-//                     the options here.
+//                     the options here. Keyboard (WAI-ARIA combobox):
+//                     ArrowDown/Up move aria-activedescendant through the
+//                     visible options; Enter commits the active option (or a
+//                     typed exact label) by pressing it, so the pick reaches
+//                     the server like a mouse pick; Escape closes the list and
+//                     restores the chosen label. Focus stays on the input
+//                     after a pick; `combobox--closed` hides the list until
+//                     the next keystroke.
 //   .dj-theme-toggle  switch the colour mode (`data-theme-mode`) when
 //                     djust.theming's theme.js is not on the page, and keep
 //                     every toggle's aria-checked in step with the mode.
@@ -23318,6 +23325,78 @@ globalThis.djust.djTransitionGroup = {
         return Array.prototype.slice.call(box.querySelectorAll('.combobox-option'));
     }
 
+    function _comboboxInput(box) {
+        return box.querySelector('.combobox-input');
+    }
+
+    function _comboboxVisibleOptions(box) {
+        return _comboboxOptions(box).filter(function (opt) {
+            return opt.style.display !== 'none' && !opt.hidden;
+        });
+    }
+
+    function _comboboxActive(box) {
+        const input = _comboboxInput(box);
+        const id = input && input.getAttribute('aria-activedescendant');
+        return id ? box.querySelector('[id="' + id.replace(/"/g, '') + '"]') : null;
+    }
+
+    function _setComboboxActive(box, option) {
+        const input = _comboboxInput(box);
+        _comboboxOptions(box).forEach(function (opt) {
+            opt.classList.toggle('combobox-option-active', opt === option);
+        });
+        if (!input) return;
+        if (option && option.id) {
+            input.setAttribute('aria-activedescendant', option.id);
+            if (typeof option.scrollIntoView === 'function') option.scrollIntoView({ block: 'nearest' });
+        } else {
+            input.removeAttribute('aria-activedescendant');
+        }
+    }
+
+    function _setComboboxOpen(box, open) {
+        box.classList.toggle('combobox--closed', !open);
+        const input = _comboboxInput(box);
+        if (input) {
+            input.setAttribute('aria-expanded',
+                open && document.activeElement === input ? 'true' : 'false');
+        }
+        if (!open) _setComboboxActive(box, null);
+    }
+
+    function _comboboxSelectedLabel(box) {
+        const hidden = box.querySelector('.combobox-value');
+        if (!hidden) return null;
+        const current = _comboboxOptions(box).filter(function (opt) {
+            return opt.getAttribute('data-value') === hidden.value;
+        })[0];
+        return current ? current.textContent.trim() : '';
+    }
+
+    // Commit an option the way a mouse pick does: press it, so its dj-click
+    // event (value, field) reaches the server and the click handler records
+    // the pick. An option already chosen is not sent again.
+    function _commitComboboxOption(box, option) {
+        const hidden = box.querySelector('.combobox-value');
+        const input = _comboboxInput(box);
+        const label = option.textContent.trim();
+        if (hidden && input && hidden.value === option.getAttribute('data-value')) {
+            input.value = label;
+            _setComboboxOpen(box, false);
+            return;
+        }
+        option.click();
+    }
+
+    function _exactComboboxMatch(box, text) {
+        const wanted = text.trim().toLowerCase();
+        if (!wanted) return null;
+        return _comboboxOptions(box).filter(function (opt) {
+            return opt.textContent.trim().toLowerCase() === wanted;
+        })[0] || null;
+    }
+
     function _pickComboboxOption(box, option) {
         const hidden = box.querySelector('.combobox-value');
         const input = box.querySelector('.combobox-input');
@@ -23363,13 +23442,61 @@ globalThis.djust.djTransitionGroup = {
         if (comboList) {
             const box = _closest(comboList, '.combobox');
             const comboOption = _closest(target, '.combobox-option');
-            if (comboOption) _pickComboboxOption(box, comboOption);
-            const input = box.querySelector('.combobox-input');
-            if (input) input.blur();
+            if (comboOption) {
+                _pickComboboxOption(box, comboOption);
+                // Focus stays on the input (the mousedown kept it there); the
+                // list closes until the next keystroke.
+                _setComboboxOpen(box, false);
+                const input = _comboboxInput(box);
+                if (input && document.activeElement !== input) input.focus();
+            }
         }
 
         const modeButton = _closest(target, '.dj-theme-toggle [data-theme-mode]');
         if (modeButton) _setThemeMode(modeButton.getAttribute('data-theme-mode'));
+    });
+
+    document.addEventListener('keydown', function (e) {
+        const input = e.target;
+        if (!input || !input.classList || !input.classList.contains('combobox-input')) return;
+        const box = _closest(input, '.combobox');
+        if (!box) return;
+        const open = !box.classList.contains('combobox--closed');
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+            e.preventDefault();
+            _setComboboxOpen(box, true);
+            const visible = _comboboxVisibleOptions(box);
+            if (!visible.length) return;
+            const idx = visible.indexOf(_comboboxActive(box));
+            let next;
+            if (idx < 0) {
+                next = e.key === 'ArrowDown' ? 0 : visible.length - 1;
+            } else {
+                next = (idx + (e.key === 'ArrowDown' ? 1 : -1) + visible.length) % visible.length;
+            }
+            // eslint-disable-next-line security/detect-object-injection -- integer index
+            _setComboboxActive(box, visible[next]);
+        } else if (e.key === 'Enter') {
+            const activeOption = open ? _comboboxActive(box) : null;
+            const target = activeOption || _exactComboboxMatch(box, input.value);
+            const hidden = box.querySelector('.combobox-value');
+            if (target && (activeOption || !hidden ||
+                           hidden.value !== target.getAttribute('data-value'))) {
+                e.preventDefault();
+                _commitComboboxOption(box, target);
+            } else if (hidden) {
+                // Nothing to pick: settle the typed text (free text, or back
+                // to the chosen label) before the form submits.
+                _commitComboboxText(box, input);
+            }
+        } else if (e.key === 'Escape') {
+            if (!open && !_comboboxActive(box)) return;
+            e.preventDefault();
+            const label = _comboboxSelectedLabel(box);
+            if (label !== null) input.value = label;
+            _comboboxOptions(box).forEach(function (opt) { opt.style.display = ''; });
+            _setComboboxOpen(box, false);
+        }
     });
 
     document.addEventListener('keydown', function (e) {
@@ -23409,7 +23536,14 @@ globalThis.djust.djTransitionGroup = {
     function _comboExpanded(e, expanded) {
         const input = e.target;
         if (input && input.classList && input.classList.contains('combobox-input')) {
-            input.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+            const box = _closest(input, '.combobox');
+            if (!expanded && box) {
+                // Leaving the input: the next focus opens the list again.
+                box.classList.remove('combobox--closed');
+                _setComboboxActive(box, null);
+            }
+            const closed = box && box.classList.contains('combobox--closed');
+            input.setAttribute('aria-expanded', expanded && !closed ? 'true' : 'false');
         }
     }
     document.addEventListener('focusin', function (e) { _comboExpanded(e, true); });
@@ -23560,7 +23694,8 @@ globalThis.djust.djTransitionGroup = {
             return opt.textContent.trim().toLowerCase() === text.toLowerCase();
         })[0];
         if (match) {
-            _pickComboboxOption(box, match);
+            // An exact label commits like a pick, telling the server.
+            _commitComboboxOption(box, match);
         } else if (!text) {
             hidden.value = '';
             _markSelected(options, null, 'combobox-option-selected');
@@ -23603,8 +23738,11 @@ globalThis.djust.djTransitionGroup = {
             const hidden = _closest(field, '.rte').querySelector('input[type=hidden]');
             if (hidden) hidden.value = field.innerHTML;
         } else if (field.classList.contains('combobox-input')) {
-            const box = _closest(field, '.combobox[data-filter="client"]');
+            const box = _closest(field, '.combobox');
             if (!box) return;
+            // Typing reopens a list a pick or Escape closed.
+            _setComboboxOpen(box, true);
+            if (box.getAttribute('data-filter') !== 'client') return;
             const query = field.value.trim().toLowerCase();
             _comboboxOptions(box).forEach(function (opt) {
                 opt.style.display = opt.textContent.toLowerCase().indexOf(query) >= 0 ? '' : 'none';

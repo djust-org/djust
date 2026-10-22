@@ -160,8 +160,11 @@ describe('combobox', () => {
         expect(doc.activeElement).toBe(input);
         expect(input.getAttribute('aria-expanded')).toBe('true');
         click(dom, doc.querySelector('.combobox-option'));
-        expect(doc.activeElement).not.toBe(input);
+        // Focus stays on the input after a pick; the list closes
+        // (combobox_keyboard.test.js covers the keyboard pattern).
+        expect(doc.activeElement).toBe(input);
         expect(input.getAttribute('aria-expanded')).toBe('false');
+        expect(doc.querySelector('.combobox').classList.contains('combobox--closed')).toBe(true);
     });
 });
 

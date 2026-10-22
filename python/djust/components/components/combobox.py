@@ -86,7 +86,7 @@ class Combobox(Component):
         label_html = f'<label class="form-label">{e_label}</label>' if self.label else ""
         aria = field_aria_attrs(e_name, describedby=self.describedby, invalid=self.invalid)
         options_html = ""
-        for opt in options:
+        for n, opt in enumerate(options):
             if isinstance(opt, dict):
                 ov = opt.get("value", "")
                 ol = html.escape(str(opt.get("label", "")))
@@ -95,7 +95,8 @@ class Combobox(Component):
                 ol = html.escape(str(opt))
             is_sel = "true" if str(ov) == str(self.value) else "false"
             options_html += (
-                f'<div class="combobox-option" role="option" aria-selected="{is_sel}" '
+                f'<div class="combobox-option" id="{e_name}-option-{n}" role="option" '
+                f'aria-selected="{is_sel}" '
                 f"{self.event_attrs(event, value=ov)}>{ol}</div>"
             )
         return (

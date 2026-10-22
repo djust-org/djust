@@ -2229,6 +2229,15 @@ def combobox(
 
     selected_set = set(str(s) for s in selected) if multiple else set()
 
+    # Ids: from ``id`` / the bound field's auto_id, else the legacy
+    # name-derived ones.
+    if id:
+        input_id = conditional_escape(id)
+        id_prefix = input_id
+    else:
+        input_id = f"{e_name}-input"
+        id_prefix = e_name
+
     if multiple:
         # Multi-select mode
         # Tags for selected values
@@ -2251,7 +2260,7 @@ def combobox(
 
         # Options with selected state
         options_html = ""
-        for opt in options:
+        for n, opt in enumerate(options):
             if isinstance(opt, dict):
                 ov = conditional_escape(str(opt.get("value", "")))
                 ol = conditional_escape(str(opt.get("label", "")))
@@ -2260,7 +2269,8 @@ def combobox(
             sel_cls = " combobox-option-selected" if str(ov) in selected_set else ""
             aria_sel = "true" if sel_cls else "false"
             options_html += (
-                f'<div class="combobox-option{sel_cls}" role="option" aria-selected="{aria_sel}" '
+                f'<div class="combobox-option{sel_cls}" id="{id_prefix}-option-{n}" role="option" '
+                f'aria-selected="{aria_sel}" '
                 f'dj-click="{e_event}" data-value="{ov}"{field_attr}>{ol}</div>'
             )
     else:
@@ -2276,7 +2286,9 @@ def combobox(
                 break
 
         options_html = ""
-        for opt in options:
+        # Each option has a stable id for the input's aria-activedescendant
+        # (the client moves it with the arrow keys).
+        for n, opt in enumerate(options):
             if isinstance(opt, dict):
                 ov = conditional_escape(str(opt.get("value", "")))
                 ol = conditional_escape(str(opt.get("label", "")))
@@ -2285,19 +2297,11 @@ def combobox(
             is_sel = str(ov) == str(value)
             sel = " combobox-option-selected" if is_sel else ""
             options_html += (
-                f'<div class="combobox-option{sel}" role="option" '
+                f'<div class="combobox-option{sel}" id="{id_prefix}-option-{n}" role="option" '
                 f'aria-selected="{"true" if is_sel else "false"}" '
                 f'dj-click="{e_event}" data-value="{ov}"{field_attr}>{ol}</div>'
             )
 
-    # Ids: from ``id`` / the bound field's auto_id, else the legacy
-    # name-derived ones.
-    if id:
-        input_id = conditional_escape(id)
-        id_prefix = input_id
-    else:
-        input_id = f"{e_name}-input"
-        id_prefix = e_name
     label_html = f'<label class="form-label" for="{input_id}">{e_label}</label>' if label else ""
     error_html = (
         f'<span class="form-error-message" id="{id_prefix}-error">{e_error}</span>' if error else ""
