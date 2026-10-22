@@ -230,3 +230,102 @@ def test_login_required_mixin_rejects_offsite_login_url(db, settings):
     # Off-site login_url must be replaced with safe fallback
     assert response.status_code == 302
     assert response["Location"].startswith("/accounts/login/")
+
+
+# Code-scanning alerts #3085/#3086 (py/path-injection in catalogue.py): the
+# template path now comes from a name -> path map built from the directory
+# listing, so a caller's string never becomes part of a path.
+
+_TRAVERSAL_NAMES = [
+    # Real .html files one and two levels up: a path built from the name
+    # (``components/<name>.html``) would read these.
+    "../theme_head",
+    "../gallery/editor",
+    "../../djust_theming/theme_switcher",
+    "../../../etc/passwd",
+    "..",
+    "/etc/passwd",
+    "/etc/passwd\x00",
+    "button/../../../../etc/passwd",
+    "..%2f..%2fetc%2fpasswd",
+    "%2e%2e/%2e%2e/etc/passwd",
+    "..\\..\\etc\\passwd",
+    "button.html",
+    "components/button",
+    " button",
+]
+
+
+@pytest.mark.parametrize("name", _TRAVERSAL_NAMES)
+def test_component_template_source_refuses_paths(name):
+    from djust.theming.gallery.catalogue import get_component_template_source
+
+    assert get_component_template_source(name) == ""
+
+
+def test_component_template_source_reads_only_listed_files(monkeypatch):
+    """The read goes through the map built from disk, not through the name."""
+    from djust.theming.gallery import catalogue
+
+    assert "button" in catalogue._COMPONENT_TEMPLATES
+    assert set(catalogue._COMPONENT_TEMPLATES) == {
+        p.stem for p in catalogue._COMPONENTS_DIR.glob("*.html")
+    }
+    assert "<button" in catalogue.get_component_template_source("button")
+
+    # A name that is not a key reads nothing, even if a file by that name
+    # appeared on disk after import.
+    monkeypatch.setattr(catalogue, "_COMPONENT_TEMPLATES", {})
+    assert catalogue.get_component_template_source("button") == ""
+
+
+def test_component_template_source_refuses_symlink_escape(tmp_path, monkeypatch, caplog):
+    """A listed template that resolves outside the components dir is not read."""
+    from djust.theming.gallery import catalogue
+
+    components = tmp_path / "components"
+    components.mkdir()
+    secret = tmp_path / "secret.txt"
+    secret.write_text("TOP SECRET")
+    link = components / "evil.html"
+    link.symlink_to(secret)
+    inside = components / "fine.html"
+    inside.write_text("<div>fine</div>")
+
+    monkeypatch.setattr(catalogue, "_COMPONENTS_DIR", components)
+    monkeypatch.setattr(catalogue, "_COMPONENT_TEMPLATES", {"evil": link, "fine": inside})
+
+    with caplog.at_level("WARNING", logger="djust.theming.gallery.catalogue"):
+        assert catalogue.get_component_template_source("evil") == ""
+    assert "resolves outside" in caplog.text
+    assert catalogue.get_component_template_source("fine") == "<div>fine</div>"
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "/theme/components/..%2f..%2fetc%2fpasswd/",
+        "/theme/components/%2e%2e/",
+        "/theme/components/etc%2fpasswd/",
+        "/theme/components/..%5c..%5cetc%5cpasswd/",
+        "/theme/components/button.html/",
+        "/theme/components/not_a_component/",
+    ],
+)
+def test_component_detail_page_404s_on_unknown_names(db, client, settings, url):
+    """The catalogue detail page refuses an unknown name with a 404."""
+    settings.LIVEVIEW_ALLOWED_MODULES = None
+    settings.ROOT_URLCONF = "djust.tests.urls_theming"
+    settings.DJUST_THEMING_GALLERY_PUBLIC = True
+
+    response = client.get(url)
+    assert response.status_code == 404
+    assert b"root:" not in response.content
+
+
+def test_component_detail_page_serves_a_known_component(db, client, settings):
+    settings.LIVEVIEW_ALLOWED_MODULES = None
+    settings.ROOT_URLCONF = "djust.tests.urls_theming"
+    settings.DJUST_THEMING_GALLERY_PUBLIC = True
+
+    assert client.get("/theme/components/button/").status_code == 200

@@ -381,10 +381,6 @@ def validated_host_from_scope(
 # existing tests and call sites reference it by this name.
 from .security.mount import validate_mount_url as _validate_mount_url  # noqa: E402
 
-#: Fallback for ``LIVEVIEW_CONFIG["reauth_server_turn_interval"]``: seconds a
-#: passed ``reauth_on_event`` check covers server-originated turns on one socket.
-_SERVER_TURN_REAUTH_INTERVAL_S = 5.0
-
 
 def _should_expose_timing() -> bool:
     """
