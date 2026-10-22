@@ -39,6 +39,18 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/test.yml"
 DURATIONS = ROOT / ".test_durations"
 
+# Read ONCE, at import (i.e. collection), and validate this copy — never the
+# live file during a test. The CI step runs `--store-durations
+# --clean-durations` under xdist, and pytest-split's cache plugin is registered
+# in every worker: each worker rewrites `.test_durations` with only ITS OWN
+# tests at its sessionfinish, and xdist shuts idle workers down while others
+# are still running. A read from inside a test can therefore see a ~1/N subset
+# — which is how py3.14/3.15 shard 2 reported "88% of collected tests have no
+# recorded duration" on every main run while the committed file covered 96%.
+# Every worker finishes collecting before any test runs, so this snapshot is
+# always the committed content.
+DURATIONS_TEXT = DURATIONS.read_text() if DURATIONS.is_file() else None
+
 
 def _jobs() -> dict:
     return yaml.safe_load(WORKFLOW.read_text())["jobs"]
@@ -225,12 +237,12 @@ def test_durations_file_is_committed_and_the_invocation_points_at_it() -> None:
     m = re.search(r"--durations-path\s+(\S+)", cmd)
     assert m, f"no --durations-path in {cmd}"
     assert (ROOT / m.group(1)) == DURATIONS, m.group(1)
-    assert DURATIONS.is_file(), (
+    assert DURATIONS_TEXT is not None, (
         ".test_durations is missing — CI would still pass (pytest-split "
         "balances by count without it) but every shard would be unbalanced. "
         "Run `make test-durations` and commit the file."
     )
-    data = json.loads(DURATIONS.read_text())
+    data = json.loads(DURATIONS_TEXT)
     assert isinstance(data, dict) and data, "expected a non-empty {nodeid: seconds} map"
     bad = [(k, v) for k, v in data.items() if not isinstance(v, (int, float)) or v < 0]
     assert not bad, bad[:5]
@@ -335,6 +347,9 @@ def test_shards_cover_current_collection_with_balanced_durations(tmp_path: Path)
     against normal --splits/--group CLI invocations.
     """
     output = tmp_path / "shards.json"
+    assert DURATIONS_TEXT is not None, ".test_durations is missing"
+    durations = tmp_path / "test_durations.json"
+    durations.write_text(DURATIONS_TEXT)
     n = len(_matrix_groups())
     proc = subprocess.run(
         [
@@ -347,7 +362,7 @@ def test_shards_cover_current_collection_with_balanced_durations(tmp_path: Path)
             "--splitting-algorithm",
             _splitting_algorithm(),
             "--durations-path",
-            str(DURATIONS),
+            str(durations),
             "tests/",
             "python/tests/",
             "python/djust/tests/",
@@ -375,4 +390,4 @@ def test_shards_cover_current_collection_with_balanced_durations(tmp_path: Path)
     )
     snapshot = json.loads(output.read_text())
     assert snapshot.get("shared_corpus"), "full sweep fixture was not recognized during collection"
-    _validate_snapshot(snapshot, json.loads(DURATIONS.read_text()), n)
+    _validate_snapshot(snapshot, json.loads(DURATIONS_TEXT), n)

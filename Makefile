@@ -320,6 +320,10 @@ test-sequential: test-python test-js test-rust ## Run all tests sequentially (fa
 test-selected: ## Run affected Python tests (FROM/TO optional; unknown/shared changes run full)
 	@PRE_COMMIT_FROM_REF='$(FROM)' PRE_COMMIT_TO_REF='$(TO)' bash scripts/pre-push-pytest.sh
 
+.PHONY: test-fast
+test-fast: ## Python fast tier: everything except `slow` (>1s in .test_durations, tests/slow_tier.py) and `nightly`
+	@PYTHONPATH=. $(PYTHON) -m pytest tests/ python/tests/ python/djust/tests/ -n auto --dist loadfile -q -m "not slow and not nightly" --benchmark-disable
+
 .PHONY: test-integration
 test-integration: test ## Run the unchanged full integration gate before declaring a milestone ready
 

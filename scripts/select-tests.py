@@ -39,8 +39,10 @@ Usage::
     scripts/select-tests.py [--from REF] [--to REF] [--branch NAME]
     scripts/select-tests.py --cargo [...]
 
-stdout is the selection, one path per line, or the single word ``FULL``
-(``--workspace`` in cargo mode); the reason goes to stderr. Exit 0 always —
+stdout is the selection, one path per line, the single word ``FULL``, or the
+single word ``NONE`` when every changed path has no pytest consumer by design
+(``NO_PYTEST_CONSUMER_PREFIXES``) (``--workspace`` in cargo mode); the reason
+goes to stderr. Exit 0 always —
 the caller falls back to the full suite when this script cannot run.
 """
 
@@ -68,6 +70,15 @@ TEST_ROOTS = ("tests/", "python/tests/", "python/djust/tests/")
 # never be selected as a "changed test file" — they belong to their own CI
 # jobs, not the pytest pre-push/CI run.
 MANUAL_ONLY_TEST_DIRS = ("tests/playwright/", "tests/js/")
+
+# Paths no pytest test consumes BY DESIGN: the manual-only test dirs above
+# (their own CI jobs / the `npm test` hook) and changelog fragments (validated
+# by their own pre-commit hooks). A change here is classified without forcing
+# FULL — before this, every push that touched a Playwright test ran all ~49k
+# pytest tests via the "shared package/test support" rule. Rule (c) still runs
+# for them, so a pytest test that names one is still selected. A range made of
+# nothing but these selects no pytest tests at all (CLI prints NONE).
+NO_PYTEST_CONSUMER_PREFIXES = MANUAL_ONLY_TEST_DIRS + ("changelog.d/",)
 
 # Any change here means the harness itself changed: nothing narrower is safe.
 FULL_SUITE_FILES = frozenset(
@@ -160,6 +171,8 @@ def full_suite_trigger(changed: Iterable[str], branch: str | None) -> str | None
     if branch and FULL_SUITE_BRANCH_RE.search(branch):
         return "branch name %r matches /flip|routing|convergence/" % branch
     for path in changed:
+        if path.startswith(NO_PYTEST_CONSUMER_PREFIXES):
+            continue
         if path in FULL_SUITE_FILES:
             return "%s changed" % path
         if PurePosixPath(path).name == "conftest.py":
@@ -293,7 +306,15 @@ def select_tests(
                 chosen[t] = "imports %s" % dotted
                 classified.add(path)
 
+    no_consumer = {p for p in changed if p.startswith(NO_PYTEST_CONSUMER_PREFIXES)}
+    classified |= no_consumer
     if not chosen:
+        if no_consumer == set(changed):
+            return Selection(
+                False,
+                "no pytest consumer for %d changed file(s) "
+                "(manual-only tests / changelog fragments)" % len(changed),
+            )
         return Selection(True, "selection is empty for %d changed file(s)" % len(changed))
     unclassified = sorted(set(changed) - classified)
     if unclassified:
@@ -449,6 +470,9 @@ def main(argv: list[str] | None = None) -> int:
     if sel.full:
         print("select-tests: FULL suite — %s" % sel.reason, file=sys.stderr)
         print("FULL")
+    elif not sel.tests:
+        print("select-tests: NONE — %s" % sel.reason, file=sys.stderr)
+        print("NONE")
     else:
         print("select-tests: %s" % sel.reason, file=sys.stderr)
         for t in sel.tests:

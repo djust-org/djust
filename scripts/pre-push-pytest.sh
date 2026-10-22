@@ -50,6 +50,14 @@ export PYTHONPATH="${WT:+$WT:}."
 if [ -f scripts/select-tests.py ] && [ "${DJUST_PREPUSH_FULL:-}" != "1" ]; then
     SEL_OUT="$(mktemp)"
     if bash scripts/run-with-venv-python.sh scripts/select-tests.py >"$SEL_OUT"; then
+        # NONE: every pushed path has no pytest consumer by design (Playwright /
+        # JS tests, changelog fragments — select-tests.py
+        # NO_PYTEST_CONSUMER_PREFIXES). Their own hooks and CI jobs cover them.
+        if [ "$(head -n 1 "$SEL_OUT")" = "NONE" ]; then
+            rm -f "$SEL_OUT"
+            echo "select-tests: no pytest consumer in the pushed range — skipping pytest."
+            exit 0
+        fi
         if [ "$(head -n 1 "$SEL_OUT")" != "FULL" ]; then
             SELECTED=()
             while IFS= read -r _sel; do
@@ -63,6 +71,18 @@ if [ -f scripts/select-tests.py ] && [ "${DJUST_PREPUSH_FULL:-}" != "1" ]; then
         echo "select-tests.py could not run — running the full suite."
     fi
     rm -f "$SEL_OUT"
+fi
+
+# Fast tier for the full-suite fallback: with no targeted selection, skip the
+# duration-derived `slow` tier (tests/slow_tier.py — > 1s in .test_durations,
+# ~1.6% of tests carrying ~82% of the time). A targeted selection keeps its
+# slow tests (they are about the change); DJUST_PREPUSH_FULL=1 runs everything;
+# CI runs the slow tier. Combined with the nightly filter below into ONE -m:
+# pytest honours only the last -m it is given.
+SKIP_SLOW=0
+if [ "${DJUST_PREPUSH_FULL:-}" != "1" ] && [ "${PATHS[*]}" = "tests/ python/tests/ python/djust/tests/" ]; then
+    SKIP_SLOW=1
+    echo "pre-push: full-suite fallback runs the fast tier (not slow); DJUST_PREPUSH_FULL=1 runs everything."
 fi
 
 # Checking more than this many ids serially costs more than it is worth: each
@@ -132,15 +152,24 @@ trap 'rm -f "$REPORT"' EXIT
 # This is not hypothetical: tests/test_red_main_attribution_behaviour_2139.py
 # drives this script against a synthetic repo under a minimal interpreter, and
 # all 22 of its cases failed this way when the flag was added unconditionally.
+#
+# --dist loadfile: one test file per worker instead of spreading each file's
+# tests across all workers, so module/class-scoped setup runs once per file.
+# Fast tier, -n auto, 12-core Mac: 205-222s with the default `load` -> 132s.
 PARALLEL=()
 if bash scripts/run-with-venv-python.sh -c 'import xdist' >/dev/null 2>&1; then
-    PARALLEL=(-n auto)
+    PARALLEL=(-n auto --dist loadfile)
 fi
-NIGHTLY_FILTER=()
+MARK_EXPR=""
 if [ "${DJUST_PREPUSH_NIGHTLY:-}" != "1" ]; then
-    NIGHTLY_FILTER=(-m "not nightly")
+    MARK_EXPR="not nightly"
 fi
-bash scripts/run-with-venv-python.sh -m pytest "${PATHS[@]}" -q "${PARALLEL[@]+"${PARALLEL[@]}"}" ${NIGHTLY_FILTER[@]+"${NIGHTLY_FILTER[@]}"} --benchmark-disable 2>&1 | tee "$REPORT"
+if [ "$SKIP_SLOW" = "1" ]; then
+    MARK_EXPR="${MARK_EXPR:+$MARK_EXPR and }not slow"
+fi
+MARK_FILTER=()
+[ -n "$MARK_EXPR" ] && MARK_FILTER=(-m "$MARK_EXPR")
+bash scripts/run-with-venv-python.sh -m pytest "${PATHS[@]}" -q "${PARALLEL[@]+"${PARALLEL[@]}"}" ${MARK_FILTER[@]+"${MARK_FILTER[@]}"} --benchmark-disable 2>&1 | tee "$REPORT"
 STATUS=${PIPESTATUS[0]}
 [ "$STATUS" -eq 0 ] && exit 0
 
