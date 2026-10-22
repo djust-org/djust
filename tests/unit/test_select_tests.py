@@ -122,12 +122,59 @@ def test_a_manual_only_test_dirs_are_never_selected():
     # `tests/playwright/` file in the "existing tests" set — the realistic
     # shape (unlike a test that force-injects the path into `tests=`, which
     # would make rule (b) select it via its own basename trivially matching
-    # its own stem). Changing ONLY such a file, with no other test file
-    # depending on it, safely falls back to the full suite (the existing
-    # "empty selection" invariant) rather than ever naming the manual file.
+    # its own stem). Changing ONLY such a file, with no pytest test naming it,
+    # selects NO pytest tests (NONE) — never the manual file itself, and no
+    # longer the whole suite: its own CI job is what runs it.
     path = "tests/playwright/test_table_select.py"
     sel = _select([path])
     assert path not in sel.tests
+    assert not sel.full and sel.tests == [], sel.reason
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "tests/playwright/test_combobox_escape_blur.py",
+        "tests/playwright/conftest_helpers.py",
+        "tests/js/dj_flip.test.js",
+        "changelog.d/3590.fixed.md",
+    ],
+)
+def test_no_pytest_consumer_paths_do_not_force_full(path):
+    # A Playwright/JS test or a changelog fragment changed alongside a module
+    # must not escalate the push to all ~49k tests ("shared package/test
+    # support" fired for tests/playwright/*.py because is_test_file excludes
+    # that dir). The module's own tests are still selected.
+    sel = _select(["python/djust/forms.py", path])
+    assert not sel.full, sel.reason
+    assert sel.tests == ["tests/unit/test_forms.py"]
+
+
+def test_only_no_pytest_consumer_paths_select_none():
+    sel = _select(["tests/playwright/test_transient_save_recovery.py", "changelog.d/3590.fixed.md"])
+    assert not sel.full, sel.reason
+    assert sel.tests == []
+    assert "no pytest consumer" in sel.reason
+
+
+def test_a_pytest_test_naming_a_no_consumer_path_is_still_selected():
+    # Rule (c) still applies: a pytest pin that reads a Playwright file by name
+    # must run when that file changes.
+    pin = "tests/unit/test_playwright_inventory.py"
+    sel = _select(
+        ["tests/playwright/test_table_select.py"],
+        tests=[*TESTS, pin],
+        texts={**TEXTS, pin: 'PATHS = ["tests/playwright/test_table_select.py"]\n'},
+    )
+    assert not sel.full, sel.reason
+    assert sel.tests == [pin]
+
+
+def test_no_consumer_paths_do_not_mask_an_unmapped_change():
+    # Only the no-consumer paths are exempt: an unmapped doc change next to one
+    # still means "cannot tell" -> FULL.
+    sel = _select(["changelog.d/3590.fixed.md", "docs/website/guides/loading-states.md"])
+    assert sel.full
 
 
 # --------------------------------------------------------------------------

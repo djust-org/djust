@@ -50,6 +50,14 @@ export PYTHONPATH="${WT:+$WT:}."
 if [ -f scripts/select-tests.py ] && [ "${DJUST_PREPUSH_FULL:-}" != "1" ]; then
     SEL_OUT="$(mktemp)"
     if bash scripts/run-with-venv-python.sh scripts/select-tests.py >"$SEL_OUT"; then
+        # NONE: every pushed path has no pytest consumer by design (Playwright /
+        # JS tests, changelog fragments — select-tests.py
+        # NO_PYTEST_CONSUMER_PREFIXES). Their own hooks and CI jobs cover them.
+        if [ "$(head -n 1 "$SEL_OUT")" = "NONE" ]; then
+            rm -f "$SEL_OUT"
+            echo "select-tests: no pytest consumer in the pushed range — skipping pytest."
+            exit 0
+        fi
         if [ "$(head -n 1 "$SEL_OUT")" != "FULL" ]; then
             SELECTED=()
             while IFS= read -r _sel; do
