@@ -32,14 +32,20 @@ _STATIC_DIR = Path(__file__).resolve().parent.parent / "static" / "djust_theming
 # Pattern to extract CSS custom property references: var(--name, ...)
 _CSS_VAR_RE = re.compile(r"var\(\s*(--[a-zA-Z0-9_-]+)")
 
-# Allowlist of valid component identifiers built at import time from the actual
-# HTML files present on disk. CodeQL recognizes `x in frozenset(...)` as a
-# taint-clearing sanitizer for py/path-injection.
-_ALLOWED_COMPONENTS: frozenset[str] = (
-    frozenset(p.stem for p in _COMPONENTS_DIR.glob("*.html"))
-    if _COMPONENTS_DIR.exists()
-    else frozenset()
+# Every default component template, keyed by name, built once at import time
+# from the files on disk. A lookup takes a name and hands back a path that came
+# from the directory listing, so no path is ever assembled from the caller's
+# string: an unknown name, "../x", an absolute path or an encoded separator is
+# simply not a key. (A membership test on a set built from a glob, followed by
+# ``_COMPONENTS_DIR / f"{name}.html"``, was safe too, but it still built the
+# path from the caller's value; code scanning flagged it as py/path-injection,
+# alerts #3085/#3086.)
+_COMPONENT_TEMPLATES: dict[str, Path] = (
+    {p.stem: p for p in sorted(_COMPONENTS_DIR.glob("*.html"))} if _COMPONENTS_DIR.exists() else {}
 )
+
+#: The component names that have a default template.
+_ALLOWED_COMPONENTS: frozenset[str] = frozenset(_COMPONENT_TEMPLATES)
 
 
 def get_component_template_source(component_name: str) -> str:
@@ -49,18 +55,20 @@ def get_component_template_source(component_name: str) -> str:
         component_name: Component name, e.g. "button", "card".
 
     Returns:
-        Template source as a string, or empty string if not found.
+        Template source as a string, or empty string if *component_name* is
+        not a shipped component template.
     """
-    # Allowlist-based validation — CodeQL recognizes `in frozenset(...)` as
-    # a taint-clearing sanitizer for path-injection.
-    if component_name not in _ALLOWED_COMPONENTS:
+    template_path = _COMPONENT_TEMPLATES.get(component_name)
+    if template_path is None:
         return ""
-    template_path = _COMPONENTS_DIR / f"{component_name}.html"
-    # Defense-in-depth: resolve + relative_to ensures the path stays within
-    # the components directory even if the allowlist were somehow bypassed.
-    try:
-        template_path.resolve().relative_to(_COMPONENTS_DIR.resolve())
-    except ValueError:
+    # A template that is a symlink pointing outside the components directory
+    # is refused rather than followed.
+    if not template_path.resolve().is_relative_to(_COMPONENTS_DIR.resolve()):
+        logger.warning(
+            "Refusing component template %s: it resolves outside %s",
+            sanitize_for_log(component_name),
+            _COMPONENTS_DIR,
+        )
         return ""
     return template_path.read_text()
 

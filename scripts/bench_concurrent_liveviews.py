@@ -411,9 +411,9 @@ def main(argv: List[str] | None = None) -> int:
     if args.profile:
         profile = HopProfile(cprofile=bool(args.cprofile))
         profile.install()
-    import djust
+    from djust import __file__ as djust_file
 
-    print(f"djust from {os.path.dirname(djust.__file__)}")
+    print(f"djust from {os.path.dirname(djust_file)}")
     print(
         f"python {sys.version.split()[0]}  n={args.n}  rows={args.rows}  query={args.query}  "
         f"worker_threads={args.worker_threads or 'off'}"

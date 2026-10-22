@@ -390,7 +390,11 @@ def _get_chain() -> _Chain:
     global _chain
     chain = _chain
     if chain is None:
-        chain = _chain = _build_chain()
+        # Two statements, not ``chain = _chain = ...``: code scanning read the
+        # chained store as an unused global (alert #3087), but ``_chain`` is the
+        # module-level cache every later turn reads above.
+        _chain = _build_chain()
+        chain = _chain
     return chain
 
 

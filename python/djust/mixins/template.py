@@ -205,8 +205,6 @@ def _mask_raw_text(html: str) -> str:
     return _RAW_TEXT_RE.sub(lambda m: "\x00" * len(m.group(0)), html)
 
 
-# HTML whitespace (not Python's broader Unicode whitespace class).
-_HTML_SPACE = " \t\n\r\f"
 _COMMENT_CLOSE_RE = re.compile(r"--!?>")
 _RAW_CLOSE_RES = {
     name: re.compile(r"</" + name + r"(?=[ \t\n\r\f/>])", re.IGNORECASE)
