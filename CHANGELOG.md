@@ -7,6 +7,820 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0rc11] - 2026-10-22
+
+A 1.3 pre-release with security fixes; upgrading from 1.3.0rc10 is recommended. An `async def
+check_permissions` no longer allows every request, `reauth_on_event` covers every live turn, the
+WebSocket Origin check compares the full origin, and the theming gallery reads component templates only
+from its own listing. Also: async `mount()`, `handle_params()` and permission checks on the event loop,
+a worker pool for renders, the HTML cleanup in Rust without the GIL, turn middleware, a keyboard-complete
+combobox, a native-dialog modal, an accessible `{% tabs %}`, and form fields that fill from the new
+`--input-background` token.
+
+### Added
+
+- **`async def check_permissions(self, request)`.** A view's permission check
+  may be a coroutine. Over WebSocket and SSE djust awaits it on the event loop,
+  before `mount()` and, with `reauth_on_event`, before every event, URL change
+  and server turn, so a check that does I/O no longer holds asgiref's shared
+  sync thread (and every other connection's handlers and renders) while it
+  waits. The sync form is unchanged. A refusal behaves exactly like a sync
+  one, and an exception fails closed. Async callers of djust's auth helpers can
+  use the new `djust.auth.acheck_view_auth`, `acheck_view_auth_lightweight` and
+  `arun_pre_mount_auth`. See "Async checks" in the authentication guide and
+  ADR-044 D10. Cases in `python/djust/tests/test_async_check_permissions.py`.
+- **`mount()` and `handle_params()` may be `async def`.** A sync `mount()` runs
+  on asgiref's one shared sync thread, so when many pages open at once every
+  mount queues behind the other sessions' database reads. An `async def mount`
+  is now awaited on the event loop over WebSocket and SSE, so its awaits (the
+  async ORM, an async service) overlap instead; the HTTP render, the page-POST
+  fallback, `{% live_render %}` children, lazy containers and
+  `LiveViewTestClient` run it to completion. Before, an `async def mount` raised
+  `TypeError` over the socket and never ran its body over HTTP. A sync `mount()`
+  runs as before. 7 cases in `python/djust/tests/test_async_mount.py`, including
+  an overlap test: eight async mounts are all inside `mount()` at once, while
+  the same pages with a sync mount run one at a time.
+- **Server-push handlers and `handle_info()` may be `async def`.** They are
+  awaited on the event loop; a sync handler still runs off the loop. Before, an
+  async push handler raised `TypeError` on the stock path and, with
+  `worker_threads` on, returned a coroutine that never ran. A push turn with an
+  async handler keeps the stock path instead of moving to the worker thread.
+  7 cases in `python/djust/tests/test_async_push_hooks.py`, with the worker
+  pool off and on.
+- **`cancel_async_on_disconnect = True` cancels a legacy root's `start_async`
+  work when its socket or SSE stream closes.** By default that work still runs
+  to completion and its result is discarded (#3234), which suits work that must
+  finish; work that only serves the open page (a follower, a live feed) kept
+  running for a page nobody could see, and apps cancelled it themselves from
+  `disconnected()`. Navigation does not cancel it, and explicit-exposure views,
+  which are always disposed with their work, are unaffected. The LiveView
+  reference no longer says that every view's `start_async` tasks are cancelled
+  on disconnect. 2 cases in
+  `python/djust/tests/test_legacy_async_cancel_on_disconnect.py`, plus WebSocket,
+  navigation and SSE cases in `test_legacy_navigation_waiters_3236.py`.
+- **`{% dropdown_menu %}` item kinds and `{% confirm_dialog_block %}`.**
+  Menu items (`items=` entries and `{% menu_item %}`) accept `href` (a link),
+  `type="checkbox"`/`type="radio"` with `checked` (`menuitemcheckbox` /
+  `menuitemradio` with `aria-checked`; `checked` alone implies a checkbox),
+  `value` (sent with the item's event) and `heading` (a group label); icons are
+  `aria-hidden`. `{% menu_item %}` / `{% menu_divider %}` children were a
+  template error under the Rust engine and now render, and other markup inside
+  `{% dropdown_menu %}` is kept instead of dropped. Both engines render the same
+  markup (`dj-dropdown-menu--open` and `data-open` when open); items inherit the
+  menu's colour and font. `{% confirm_dialog_block %}...{% endconfirm_dialog_block %}`
+  is `{% confirm_dialog %}` with a body slot (a note field, a pending line, an
+  error) under the optional message.
+- **`{% dropdown_menu %}` keyboard support, `{% modal native=True %}`, and
+  form-field ARIA for `{% combobox %}` / `{% rich_select %}`.**
+  - The client's keyboard handler only knew `{% dropdown %}`
+    (`.dj-dropdown`), so ArrowDown on a `{% dropdown_menu %}` trigger left focus
+    there and Escape did nothing. Both menus now get the WAI-ARIA menu pattern:
+    arrows rove over `menuitem` / `menuitemradio` / `menuitemcheckbox` items,
+    skipping disabled ones; Home / End jump to the ends; type-ahead works;
+    Escape sends the toggle event and returns focus to the trigger.
+  - `{% modal native=True %}` renders a `<dialog dj-dialog="open">`, opened with
+    `showModal()`: top layer, inert page, native Escape. A browser-side close
+    (Escape, a backdrop click) sends `close_event` back through
+    `dj-dialog-close-event`. The focus trap and return focus still apply, and
+    focus now returns to the opener even though `showModal()` has already moved
+    focus into the dialog. The default markup is unchanged.
+  - `combobox` and `rich_select` take `error=`, `helper=`, `describedby=`,
+    `invalid=` and `field=` (a Django bound field). Their help text and error
+    are named by `aria-describedby`, and an error sets `aria-invalid="true"`.
+    The Rust handler for `combobox` now also passes `required`, `error` and
+    `helper` through, which it used to drop.
+- **`LiveView.get_http_status()` sets the HTTP status of the first render.**
+  Return `404`, `403` or any status (default `None`, which keeps 200); it is
+  read after `mount()` and the render, so it can depend on what `mount()` found,
+  and the page body is kept. The WebSocket path never consults it. The
+  `djust.V013` hint (an override of `get()` never runs on the socket mount) now
+  points to it. The async/streaming `aget` path keeps the status too. 4 cases in
+  `python/djust/tests/test_http_status_hook.py`.
+- **`djust.lifespan.with_lifespan(app, startup=..., shutdown=...)` answers the
+  ASGI `lifespan` protocol.** Django's ASGI handler and channels'
+  `ProtocolTypeRouter` do not, so a project had no supported place to start
+  services bound to the server's event loop and stop them on shutdown. The
+  wrapper runs the hooks on the server's loop (sync hooks through
+  `sync_to_async`), reports a failed startup as `lifespan.startup.failed`, runs
+  every shutdown hook in reverse even when one raises, and passes every other
+  scope to the wrapped application. Hooks can also be registered with
+  `@on_startup` / `@on_shutdown`. Documented in the deployment guide. 7 cases
+  in `python/djust/tests/test_lifespan.py`.
+- **The client dispatches `djust:patched` after every frame that changed the
+  page**: a server push, a tick, an async result or the page's own event, with
+  `detail.source` saying which (`"broadcast"`, `"tick"`, `"async"`, `"event"`).
+  `djust:rendered` skips push frames, because it confirms a view's own state, so
+  client code that re-syncs after any patch had nothing to listen to for a
+  pushed render. `djust:rendered` is unchanged. 10 cases in
+  `tests/js/patched-event.test.js`, over WebSocket and SSE.
+- **`permission_required` accepts "any of": `djust.auth.AnyOf(...)`.** A view
+  attribute or `@permission_required` handler decorator set to
+  `AnyOf("runs.agent_run", "chat.chat_general")` admits a user holding at
+  least one of them; a list may mix strings and `AnyOf` groups (every string,
+  one permission of each group). It is honoured by the HTTP GET, the WebSocket
+  and SSE mounts, `reauth_on_event`, the client route map and the admin
+  widgets. `djust_audit` reports the groups (`permission_required_any`),
+  `--dump-permissions` writes them, and `--permissions` compares them with a
+  new `permissions_any` key in `permissions.yaml` (P005 on a mismatch).
+  Cases in `python/tests/test_auth_any_of.py` and
+  `python/djust/tests/test_reauth_any_of.py`.
+- **System check `djust.V022` reports view code that assigns an attribute djust
+  keeps its own state under** (`_streams`, `_components`, `_pending_navigation`
+  and the other attributes `LiveView.__init__` sets; `request` and `_object`
+  are allowed). A view that kept its own lists in `self._streams` failed every
+  render with `'builtin_function_or_method' object is not iterable`; the
+  streams context now raises a `TypeError` that names `_streams` instead. The
+  reserved names are read from a bare `LiveView`, not a hand-kept list. 5 cases
+  in `python/djust/tests/test_reserved_view_attributes.py`.
+- **Turn middleware: `LIVEVIEW_MIDDLEWARE` wraps every LiveView turn (ADR-044).**
+  An ordered list of `async def mw(turn, next)` callables, shaped like Django
+  middleware, runs around every turn on every transport (WebSocket, SSE, the
+  HTTP page GET / POST fallback and the auto-exposed HTTP API): mount and
+  reconnect (page, slot, `mount_batch`, `live_redirect`, lazy), client events
+  and deferred `dj_activity` replays, `handle_params`, server push / `db_notify`
+  / tick / presence / `push_event` delivery, `start_async` / `@background`
+  starts and results, and the recovery render. `turn.kind` / `turn.source` /
+  `turn.transport` say which. A middleware refuses with `djust.turns.Refuse`
+  (`deny`, `login`, `redirect`, `flash`, `rate_limited`) or `PermissionDenied`,
+  mapped to each transport's established frames and responses. Context
+  variables it sets reach the handler and the background work the turn starts.
+  Built-ins (`error_boundary`, `reauth`) run outermost and cannot be removed.
+  Per-turn timings at `/_djust/observability/turn_timings/`; system check
+  `djust.C026` rejects a sync or unimportable entry. Guide:
+  `docs/website/guides/turn-middleware.md`. Tests in
+  `python/djust/tests/test_turn_middleware_core.py`,
+  `python/djust/tests/test_turn_middleware_transports.py` and
+  `tests/js/turn-reconnect-hint.test.js`.
+- **`self.create_task(coro)` / `self.track_task(task)` tie a task the view's
+  own async code starts to the view's `start_async` work.** A follower started
+  from an `async def mount` or a push handler was unknown to the framework, so
+  neither `cancel_async_on_disconnect = True` nor an explicit view's disposal
+  could stop it, and apps cancelled it by hand. A registered task is now
+  cancelled by `cancel_async_all()`, an explicit view's disposal on disconnect
+  or navigation, and a legacy view's close with `cancel_async_on_disconnect =
+  True`. 7 cases in `python/djust/tests/test_view_tracked_tasks.py`.
+
+### Changed
+
+- **`djust.S012`'s system check no longer parses the source of every imported
+  LiveView.** It looked up each class's source line (which reads and parses the
+  class's whole module) before filtering to the project's app directories, so
+  `manage.py check` paid for every installed and test-defined view. The line is
+  now looked up only for a view the check actually reports. Measured under the
+  test suite: the S009/S012 check tests went from 14.8s to 0.6s.
+- **Less CPU per LiveView mount and event, so more pages fit on the one sync
+  thread.** A process runs every WebSocket session's sync work on one
+  thread, so 40 pages mounting at once wait for 40 pages' CPU. Profiling that
+  case (`scripts/bench_concurrent_liveviews.py`, new) found the time in
+  pure-Python walks, not thread hops. The change-detection fingerprint
+  (`change_detection._walk`) now handles plain `dict` / `list` / `tuple`
+  nodes and scalar leaves without a call per leaf (same fingerprints, node for
+  node). Extracting a rendered page's root masks the page once instead of
+  twice, and the tag scanner skips character runs with compiled patterns. The
+  mount frame's `@cache` / `@debounce` / `@throttle` scan no longer reads
+  properties, so it stops fingerprinting the whole state four times per mount
+  through `changed_fields` / `is_dirty`. 40 pages of 300 rows in one process:
+  mount p50 1.85 s → 1.13 s, mount CPU −39 %, one page alone 45 → 26 ms;
+  event CPU −8 %. 11 regression tests in
+  `python/djust/tests/test_concurrent_liveview_cpu.py`.
+- **Development and locked dependencies refreshed.** `happy-dom` 20.14.5 to
+  21.0.4 (the default vitest environment; the suite passes unchanged),
+  `black>=26.10.1` in `requirements-dev.txt`, and in `Cargo.lock`
+  `serde_json` 1.0.154, `uuid` 1.28.0, `smallvec` 1.16.3 and the dev-only
+  `proptest` 1.12.0. `python/djust/djust.cdx.json` is regenerated to record
+  the new runtime crate versions.
+- **The filter-parity differential's leak totals count live markup only.**
+  `--compare` already split newly flagged cells into live markup and a
+  payload fragment inside fully escaped text. The BEFORE and AFTER totals
+  now use the same split: the headline counts cells with an unescaped tag
+  opener, and the escaped-text cells are reported on their own line.
+- **The HTML clean-up after each render runs in Rust, without the GIL.**
+  `TemplateMixin._strip_comments_and_whitespace` (the egress normalizer every
+  HTTP, socket, SSE, streaming and recovery render passes through) now calls
+  `djust_core::html_whitespace::strip_comments_and_whitespace` for a plain
+  render, detached from the interpreter. It applies the same rules in the
+  same order — `<script>`/`<style>` preserved before comments are stripped
+  (#1927), dj-if markers kept (#1678), `<pre>`/`<code>`/`<textarea>`
+  preserved, text white space kept (#3570), the inter-tag rule (#2999) — and
+  gives the same bytes. A render carrying provenance, and the rare input the
+  port declines (a character Python's case-insensitive match folds to ASCII,
+  such as `ſ`, or a non-ASCII character right after `dj-if` in a comment),
+  run the previous Python code, now `_strip_comments_and_whitespace_py`.
+  Single-thread the pass is 1.5–2x faster; eight threads normalizing a
+  300-row table page 400 times take 20 ms instead of 255–320 ms. The parity
+  test `tests/unit/test_egress_normalizer_rust_parity.py` compares the two
+  over the VDOM fixtures, every repository template (raw and rendered), a
+  12,000-input fuzzed corpus and every code point below U+3100 in the places
+  a character's class decides a rule.
+- **Extracting a rendered page's LiveView root uses the Rust scanner.**
+  `_extract_liveview_content` runs on every WebSocket mount and full render,
+  and masked the whole page in Python first: on a 300-row page with `dj-id` on
+  every element that was 11 ms, about half of the mount's CPU, all on the
+  process's one sync thread. The new `djust._rust.root_content_range` wraps the
+  existing Rust twin of the locator (`find_dj_root_content_range`, pinned to the
+  same #3031 root rule) and takes 0.4 ms; it is now the only locator of a
+  rendered page's root (see the html5ever-aligned fixes under Fixed). 40 pages
+  of 300 rows in one process: mount p50 881 → 431 ms, one page
+  alone 23 → 11 ms. Covered in `python/djust/tests/test_concurrent_liveview_cpu.py`.
+- **The WebSocket consumer and the SSE session share one error-frame builder
+  (#3500).** `djust.security.build_error_frame(error, **context)` builds the
+  `{"type": "error", ...}` frame both transports' `send_error` sends, so
+  debug fields are handled in one place. `debug_detail`, `hint` and
+  `_exc_info` are never copied onto the frame as given; under `DEBUG` the
+  builder adds `debug_detail`, `hint` and an abbreviated `traceback`. SSE
+  error frames now carry those `DEBUG`-only fields as WebSocket frames
+  already did.
+  `python/djust/tests/test_error_frame_transport_parity.py` pins identical
+  frames from both transports with `DEBUG` on and off.
+- **The Rust state sync walks each structured context value once instead of
+  three times.** The change-detection fingerprint, the `SafeString` path scan
+  and the conversion for the Rust renderer now come from one traversal
+  (`python/djust/state_pass.py`); a value with any shape the walk does not handle (a
+  model, a form, a component, any subclass, a cycle) still takes the original
+  passes, so the output is unchanged. On a 300-row table page the sync's
+  Python time per mount + event drops from ~7.3 ms to ~4.7 ms. Equivalence
+  cases in `python/djust/tests/test_state_single_pass.py`.
+- **`trigger_submit()` on a form without `dj-trigger-action` now warns outside
+  debug mode.** The refusal was logged only with `djustDebug`, so in production
+  the submit silently did nothing. It is now a `console.warn` naming the
+  selector. 1 new case in `tests/js/form_polish.test.js`.
+- **The per-IP WebSocket refusal (close code 4429) now says which limit
+  applied.** The log names `max_connections_per_ip` or `reconnect_cooldown`,
+  and when the request carries `X-Forwarded-For` but `DJUST_TRUSTED_PROXY_COUNT`
+  is 0 it says every client behind the proxy shares one address. The defaults
+  (10 sockets per address per process, 5 s cooldown after a rate-limit
+  disconnect) are unchanged; the security guide now explains sizing them behind
+  a proxy. 3 cases in `python/tests/test_ws_per_ip_refusal_message.py`.
+
+### Fixed
+
+- **`from djust.decorators import *` now includes `action` and `is_action`
+  (#3500).** The top-level `djust` package exported both from
+  `djust.decorators`, but `djust.decorators.__all__` left them out.
+  `python/djust/tests/test_decorators_all_agrees_with_top_level.py` derives the
+  check from the lazy-export table, so the two lists cannot drift again.
+- **The HTTP POST fallback no longer drops `push_event`, `set_layout` and
+  `defer()` (#3500).** An event answered over HTTP carried only navigation,
+  flash and page metadata. Its JSON answer now also carries `_push_events`
+  (`{event, payload}` per `push_event` / `push_commands`) and `_layout`
+  (`{path, html}` for `set_layout`), and `defer()` callbacks run after the
+  answer is built, as on the WebSocket, including for an embedded child's
+  event. The client's `applyHttpSideChannels` dispatches each push event
+  (`djust:push_event` and the `dj-hook` handlers) and applies the layout, as
+  the WebSocket `push_event` / `layout` cases do. 10 regression cases in
+  `python/tests/test_http_side_channels_push_layout_defer.py`, plus
+  `tests/js/http-side-channels-push-layout-3541.test.js` for the client.
+- **`broadcast_to_presence()` broadcasts and live-cursor updates now reach
+  the page (#3501).** The server sent `presence_event` frames, but the
+  client's WebSocket frame switch had no case for them and dropped every one.
+  The client now dispatches a `djust:presence` CustomEvent on `window` with
+  `detail: {event, payload}`. Documented in the presence guide. 3 regression
+  cases in `tests/js/presence-event-3501.test.js`.
+- **`djust_doctor` warns below Django 4.2, the declared floor (#3504).** Its
+  `django_version` check warned only below 4.0, so 4.0 and 4.1 passed
+  silently although `pyproject.toml` requires `Django>=4.2.29`. The threshold
+  is now `_DJANGO_FLOOR = (4, 2)`, and a test keeps it equal to the
+  major.minor of the `Django>=` requirement (three new cases in
+  `TestCheckDjangoVersion`, `python/tests/test_management_doctor.py`).
+- **Action menus sit on `--popover`.** The dropdown menu (`.dropdown-menu`, and djust.theming's `.dropdown-menu`), context menu (`.ctx-menu`), split-button menu, `.popover` and notification dropdown filled with `--card`, while djust's `.dj-dropdown-menu`, the option lists and shadcn's DropdownMenu and Popover use `--popover`. They now fill with `hsl(var(--popover, var(--card)) / var(--overlay-surface-opacity, 1))` and set `--popover-foreground` text, falling back to `--card` / `--card-foreground`. Their items (`.dropdown-item`, `.ctx-item`, `.split-btn-option`, and djust.theming's `.dropdown-item`) take the menu's text colour instead of `--muted-foreground` / `--foreground`. `test_option_lists_use_popover.py` pins the menus and items.
+- **`djust_audit --live` no longer reports `/.git/config`, `/.env` and
+  `/__debug__/` as exposed when they redirect to a sign-in page.** The probes
+  followed the redirect and read the sign-in page's 200 (L040/L041/L042). They
+  now read the path's own response: only a direct 2xx is exposed; a redirect,
+  401, 403 or 404 is not. Cases in `python/tests/test_audit_live.py`.
+- **djust.auth's sign-in fields fill from `--input-background` and outline with `--input`.** The `.dj-auth-control` inputs and selects filled with the page `--background` and outlined with a bare `hsl(var(--input))`; they now read `hsl(var(--input-background, var(--background)))` and `hsl(var(--input, var(--border)))`, like the component and theme field rules. The `--input-background` lint in `test_theming_input_background.py` now pins `auth.css` too.
+- **Buttons render in the page font.** Browsers do not inherit `font-family` into `<button>`, and almost no djust button rule set one, so every djust button (the modal close ×, primary and secondary actions, tab triggers, pagination, dropdown and context-menu items, toggle groups, split buttons, icon buttons) rendered in the browser default, Arial, next to page text in the theme font. Every rule that sets `cursor: pointer` in `components.css`, `components-classes.css` (`.dj-btn`), djust.theming's `components.css` and `scaffold.css`, and djust.auth's mode toggle now sets `font-family: inherit` and keeps its own size and weight (170 rules), as do the generated `.btn-primary` / `.btn-secondary` / `.btn-destructive` utilities, the Tailwind `@apply` examples, the design-system `.btn, button` rule, the `.interactive` utility, and the theme pack's `button, a, .clickable` rule. Native controls with no text (checkboxes, radios, the range input, colour swatches, carousel dots) are unchanged. `test_buttons_inherit_font.py` pins the named buttons and fails on any new clickable rule that sets no font family.
+- **Buttons that paint a background set their text colour.** A `<button>` does not inherit `color`, so `.dj-dropdown-menu__trigger`, which painted `--background` and set no colour, showed a black label on a near-black fill in dark themes. Every clickable rule that sets a background without a text colour now sets the paired foreground: `.dj-dropdown-menu__trigger`, `.rich-select-trigger`, the data-table copy/import/cancel buttons, `.dropzone` and `.dj-img-upload__dropzone` take `--foreground`; `.dj-org__card` and `.dj-data-card-grid__filter` take `--card-foreground`; `.dj-reactions__btn` takes `--accent-foreground`; djust.theming's `.upload-area` takes `--foreground`. The transparent icon and text buttons (`.notif-trigger`, `.collapsible-trigger`, `.dj-notif-popover__bell`, `.dj-mminput__btn`, `.dj-feedback__btn`, `.dj-tour__prev`, `.dj-md-editor__btn`, the cookie-consent, export-dialog, error-boundary, image-cropper and signature-pad secondary buttons) set `color: inherit`. `test_buttons_set_text_colour.py` fails on a new clickable rule that sets a background without a colour.
+- **A `check_permissions()` refusal is a 403 for a signed-in user.** Returning
+  False or raising `PermissionDenied` sent a signed-in user to `LOGIN_URL`;
+  they now get `PermissionDenied` (Django's `handler403` on the page GET, close
+  4403 on a live mount), and only an anonymous user is redirected to sign in,
+  as `permission_required` and Django's `AccessMixin` already do. Cases in
+  `TestCheckPermissionsRefusal` (`python/tests/test_auth_any_of.py`).
+- **A `dj-poll` inside a `{% live_render %}` child view now reaches that child.**
+  The poll was sent without the child's `view_id`, so the parent view received
+  it (and usually had no such handler). A poll inside a component still reaches
+  its host view. Cases in `tests/js/poll_root_and_child.test.js`.
+- **A click no longer overtakes a debounced edit made before it.** Typing into a
+  `dj-input` field (debounced, 300 ms by default for text) and clicking a
+  `dj-click` button within the window sent the click first; the input followed
+  with text typed before the click, so a "typing clears the error" handler undid
+  what the click's handler had shown. A click now sends the pending debounced
+  edits first (element `dj-debounce` and handler `@debounce`; `@throttle`
+  windows are kept). A `dj-submit` now also flushes debounced fields outside its
+  own form (it flushed only its form's, #1278). 5 cases in
+  `tests/js/click_flushes_debounced_input.test.js`.
+- **The injected "djust configuration" script, and the DEBUG debug-info script,
+  now carry the request's CSP nonce.** Under a policy without `'unsafe-inline'`
+  the browser blocked both on every page, so the client ran on its defaults and
+  the debug panel had no view info. The nonce is HTML-escaped and omitted when
+  the request has none. 4 cases in
+  `python/djust/tests/test_client_script_nonce.py`.
+- **The combobox's Escape no longer closes the dialog around it, and a
+  committed typed label no longer swallows the first Tab.** With the list
+  open inside a `{% modal %}` or `{% sheet %}`, Escape closed the whole
+  dialog: the combobox only called `preventDefault()`, so app-level bindings
+  such as `dj-window-keydown.escape` closed it too. Typing an exact label and
+  pressing Tab committed the option but pulled focus back to the input, so a
+  second Tab was needed, and the list stayed filtered to the typed text.
+  - With the list open, Escape is handled in the capture phase and stops
+    there: the modal's keyboard handling and window bindings don't see it,
+    and a native `<dialog>`'s `cancel` for that key press is refused. With the
+    list closed, Escape closes the dialog as before.
+  - A commit on blur no longer refocuses the input; it closes the list and
+    clears its filter, so one Tab moves on.
+- **The combobox works from the keyboard (WAI-ARIA combobox pattern).** The
+  arrow keys did not move through the options (typing only filtered), Enter
+  submitted the form with the old value, a typed exact label set the value in
+  the browser without telling the server, and focus dropped to the page after
+  a pick.
+  - ArrowDown / ArrowUp now move `aria-activedescendant` through the visible
+    options, wrapping. Each option renders a stable id, `<prefix>-option-<n>`.
+  - Enter commits the active option, or a typed exact label, by pressing it,
+    so the value event reaches the server exactly as a mouse pick does, and
+    the form does not submit.
+  - An exact typed label also commits on blur, sending its event once.
+  - Escape closes the list and restores the chosen label.
+  - After a pick, focus stays on the input. The list closes
+    (`combobox--closed`) until the next keystroke, and typing or an arrow key
+    reopens it.
+- **`combobox` / `rich_select` validate their field, the combobox's search is
+  opt-in, and `{% modal %}` takes a heading level and a description block.**
+  - Picking an option sent `validate_field` without the field's name, so
+    `FormMixin.validate_field` returned without validating. When the component is
+    a form field (`field=`) or its `event` is `validate_field`, options now carry
+    `data-field` (the field's `html_name`), which the click sends as `field`,
+    like other inputs.
+  - The combobox always wired a `dj-input="<name>_search"` handler, which an
+    ordinary Django form does not have. Server search is now opt-in
+    (`search_event=`); without it, typing filters the given options in the
+    browser. The `Combobox` class behaves the same way. A view that relied on
+    the implicit `<name>_search` event must now pass `search_event=` explicitly.
+  - `{% modal %}` takes `heading_level=` (2-6, default 3) for the title, and a
+    `{% modal_description %}...{% endmodal_description %}` block whose
+    template markup the modal names in `aria-describedby` (both engines).
+- **`combobox` / `rich_select` submit the chosen option's value, and
+  `{% modal %}` takes a role, a description and an optional close button.**
+  - The combobox's visible text input carried the field's name, so a form
+    submitted whatever was typed, not the chosen option's value. The selected
+    value is now submitted from a hidden `.combobox-value` input named after the
+    field, which the client updates on a pick; the visible input has no `name`.
+    (The legacy `_target` hint of its `dj-input` event is now the input's id.)
+    Typed text that exactly matches an option label picks it; other text is
+    discarded on change unless `allow_free_text=True`. `rich_select` also
+    updates its hidden value and trigger on a pick, before the server round
+    trip. The `Combobox` class gets the same hidden input and shows the
+    selected option's label instead of its value.
+  - With `field=`, both derive their ids from the bound field's `auto_id` (form
+    prefix included) instead of the field name, so two forms rendering the
+    same field on one page no longer produce duplicate ids. `id=` sets them
+    explicitly. Without either, the combobox keeps its `<name>-input` ids.
+  - `{% modal %}` (both the `<div>` and the `native=True` dialog) takes
+    `role="alertdialog"`, `description=` (a paragraph named by
+    `aria-describedby`), `describedby=` and `close_button=False`.
+- **The remaining component tags work under a strict CSP.** `{% popover %}`,
+  `{% popconfirm %}`, `{% collapsible %}`, `{% context_menu %}`,
+  `{% file_dropzone %}`, `{% kanban_board %}`, `{% rich_text_editor %}`,
+  `{% multi_select %}`, `{% split_pane %}`, `{% code_block %}` and
+  `{% tutorial_bubble %}` used inline event handlers (`onclick`, `ondrop`,
+  `oncontextmenu`, `oninput`, `onmousedown` ...) or an inline `<script>`, which a
+  Content-Security-Policy without `'unsafe-inline'` refuses. Their behaviour now
+  runs from delegated listeners in the client bundle. `{% code_block %}`
+  highlights through the static `python/djust/components/static/djust_components/code-block-highlight.js`,
+  still loading highlight.js once per page. Also fixed along the way:
+  - popover, popconfirm, collapsible and context_menu render the same markup
+    under both engines. The Rust popover and popconfirm toggled a class the CSS
+    never styled (it keys on `data-open`), so they only opened through
+    `:focus-within`.
+  - The random ids on popover, collapsible, context_menu, popconfirm,
+    split_pane, rich_text_editor and multi_select are gone: ids come from `id=`,
+    or from `name` for the editor (`rte-<name>`) and multi-select (`ms-<name>`).
+  - The triggers carry `aria-expanded`. The popover is `role="dialog"` (it was
+    `role="tooltip"` around interactive content), and the popconfirm
+    `role="alertdialog"`.
+  - kanban's move event is a `data-move-event` attribute on the board.
+- **Component tags work under a strict nonce CSP, with stable ids and dialog
+  semantics.** A Content-Security-Policy without `'unsafe-inline'` refuses
+  inline event handlers, and several component tags depended on them; others
+  rendered markup a socket render could not diff.
+  - `{% theme_toggle %}` rendered a new random id on every render, so every
+    re-render patched it. It now renders no id (pass `id=` for one). Its
+    buttons are `role="radio"` with `aria-checked` and carry `data-theme-mode`,
+    so djust.theming's `theme.js` switches the mode with `{% theme_head %}`
+    alone; without `theme.js` the client bundle does it. The choice is stored
+    under `djust-theme-mode` (the old `djust-theme` key is migrated by the
+    legacy `theme-toggle.js`, which is no longer needed). With `event=`, each
+    button sends it with `data-value` set to its mode; the buttons no longer
+    carry `data-theme`, which matched `[data-theme="dark"]` theme selectors.
+  - `{% rich_select %}` (tag, Rust handler and `RichSelect`) and
+    `{% combobox %}` open, close, filter and keep focus through delegated
+    listeners in the client bundle instead of `onclick`/`onkeydown`/`oninput`/
+    `onmousedown`. `rich_select`'s id is `rs-<name>` (or `id=`), not random;
+    its trigger names its listbox with `aria-controls`. The combobox input is
+    `role="combobox"` with `aria-controls`/`aria-expanded`, its list
+    `role="listbox"`, its options `role="option"` with `aria-selected`.
+  - `{% modal %}` rendered by the Rust engine (every socket render) had no
+    `role="dialog"`/`aria-modal` and put its size class (`modal-md`) on the
+    full-screen backdrop, where djust.theming's `.modal-md { max-width }`
+    squeezed it. The Rust handler now renders the same markup as the Django
+    tag (`dj-modal-backdrop` / `dj-modal dj-modal--md`).
+  - `{% copy_button %}` uses the client's `dj-copy` directive instead of an
+    inline handler (and the Rust handler now passes `copied_label`).
+  - `critical_css`'s deferred stylesheet is swapped in by a script carrying the
+    request nonce, not by an inline `onload=`.
+  - `{% colocated_hook %}` carries the request nonce; the client registers a
+    nonce-bearing hook through a script element with that nonce instead of
+    `new Function`, so a strict CSP needs no `'unsafe-eval'`.
+  - `{% confirm_dialog %}` ids derive from `id=` (default `dj-confirm`) instead
+    of a random suffix.
+- **Custom template filters receive the object, not its `str()`, on the Rust
+  engine.** A project `@register.filter` was handed the string form of any
+  object in the context (a dataclass, a pydantic model, a domain object), for
+  its value and for a resolved argument, so `{{ row|my_filter }}` could not read
+  `row`'s attributes. Filters now receive the object the context holds, through
+  the same conversion the bridged-tag path uses (model fields the serializer
+  protects stay protected).
+- **A view with a public `@property` that raised lost its client
+  `@debounce` / `@throttle` / `@cache` config.** The mount frame's scan read
+  every public attribute on the instance, on the event loop, inside one `try`;
+  a property that raised (an ORM read refuses to run there) dropped the whole
+  `handler_config` and `cache_config` without a log line, so the browser sent
+  every keystroke. The scan now skips class attributes that are descriptors
+  other than functions, `staticmethod` and `classmethod`, so no property,
+  `cached_property` or class-level component runs during it. Covered in
+  `python/djust/tests/test_concurrent_liveview_cpu.py`.
+- **`dictsort` and `dictsortreversed` type a variable argument by its value.**
+  `{{ p|dictsort:k }}` read a context string such as `k = "3"` as if it were
+  an unquoted integer literal, and sorted a list of strings by character.
+  Django's `itemgetter("3")` is a key lookup there, which raises `TypeError`,
+  and the filter renders `""`; djust now does the same. A context `int` or
+  `bool` still indexes, and a non-integer number (`1.5`, `Decimal("0")`)
+  renders `""`, as in Django.
+  `dictsortreversed` also keeps equal keys in their input order, as
+  `sorted(..., reverse=True)` does; it reversed ties too.
+- **A `<script>` or `<style>` inside a `<pre>`, `<code>` or `<textarea>` no
+  longer disappears from the page.** The egress normalizer hides those blocks
+  behind `__PRESERVED_BLOCK_<n>__` placeholders and puts them back after
+  folding white space. A raw-text block is hidden first, so a `<pre>` that
+  contained one held its placeholder, and the old restore never reached it:
+  the page showed a literal `__PRESERVED_BLOCK_0__` where the script had been.
+  Blocks are now put back recursively. The same restore also replaced page
+  text that happened to spell a placeholder: a value such as a display name of
+  `__PRESERVED_BLOCK_0__` was swapped for the page's first preserved block.
+  That text is now escaped for the duration of the pass, including when
+  removing an HTML comment joins two pieces of text into it. The plain path
+  (Rust and its Python reference) is fixed; the provenance path already
+  restored by position. New cases in
+  `tests/unit/test_egress_normalizer_rust_parity.py`: no placeholder ever
+  reaches the output across the fuzzed corpus, look-alike text behaves like
+  any other text, and 240 nested-block pages come back verbatim.
+- **An HTTP GET normalizes its template source once, not three times.**
+  `get_template()` runs several times per GET (the GET body, the
+  template-hash slot, the Rust view's initialization), and each run passed the
+  same template source through the egress normalizer again — four passes over
+  ~100 KB for one demo homepage load. The normalized source is now cached on
+  the view class, keyed by the source and the normalizer, so an edited
+  template or an overridden normalizer is never served a stale entry. A GET
+  now normalizes its response once (plus its template source the first time
+  that source is seen). Tests in `tests/unit/test_egress_normalizer_calls.py`.
+- **Full-width field controls no longer overflow their container.** `.form-input`, `.form-select` and `.form-textarea` (and so the combobox input) set `width: 100%` with padding and a border on the default `content-box` model, so on a page without a global `box-sizing` reset they stuck out past the edge of a modal or card. They and the other full-width field controls (`.data-table-filter`, `.data-table-row-editing td input`, `.data-grid-cell-editing input`, `.dj-search-input__input`, `.dj-password-input__input`, `.rich-select-search-input`, `.dj-dependent-select__control select`, `.dj-mentions__input`, `.dj-prompt-editor__textarea`) now set `box-sizing: border-box`. `test_field_controls_box_sizing.py` pins each one and sweeps the component, theming and auth stylesheets for any padded full-width field rule without it.
+- **Field controls render in the page font.** Browsers do not inherit `font-family` into form controls, so `.form-input` (and the combobox input) rendered in the browser default sans-serif and `.form-textarea` in monospace, next to page text in the theme font. Every text-bearing field control now sets `font-family: inherit` and keeps its own size and line-height: `.form-input`, `.form-select`, `.form-textarea`, `.table-search`, `.data-table-search input`, `.data-table-filter`, `.data-table-cell-editing input`, `.data-table-row-editing td input`, `.multi-select-search`, `.otp-digit`, `.number-stepper-input`, `.tag-input-field`, `.dj-search-input__input`, `.rich-select-trigger`, `.rich-select-search-input`, `.dj-dependent-select__control select`, `.dj-currency-input__field`, `.dj-form-array__input`, `.dj-import-wizard__field-select`, and djust.theming's `.input`. The prompt editor, cron input, colour hex input and markdown editor stay monospace. `test_field_controls_inherit_font.py` pins both.
+- **The HTTP POST fallback now logs when it drops background work.** A handler
+  that calls `start_async` or is decorated `@background` queues work that the
+  HTTP fallback never runs, because it has no channel to deliver the result.
+  The tasks used to be discarded with no sign. The fallback now logs one
+  WARNING per view class, naming the handler. Behaviour is otherwise
+  unchanged; what the fallback should do instead is an open 2.0 design
+  question (#3500). Regression cases in
+  `python/tests/test_http_fallback_background_warning.py`.
+- **Restoring saved state no longer replaces a view method of the same name.**
+  The HTTP event fallback (and the socket snapshot, sticky-child, lazy-child and
+  client-snapshot restores) wrote every saved context key back onto the view
+  with `setattr`. A context key named like a method of the view
+  (`ctx["images_go_out"] = self.images_go_out()`) replaced the method with the
+  saved value, and the next render failed with
+  `TypeError: 'bool' object is not callable`. All five restores now go through
+  one helper that skips a key naming a method (with a warning, once per view
+  class and key) or a property of the class. Covered in
+  `python/djust/tests/test_http_fallback_restore_shape.py`.
+- **The HTTP event fallback rebuilds private attributes the session could not
+  hold.** Private attributes are saved only when they are JSON (a service
+  client, a dataclass or a stored callable is not), so the fallback's fresh
+  instance lacked them and a handler that read one answered 500 with
+  `AttributeError`. The session now records which private attributes were not
+  saved; when there are any, the fallback runs `mount()` to rebuild them and
+  then applies the saved public and private state on top. Background work that
+  `mount()` queues is not run (the page already has its results). A view whose
+  private state is all JSON is not re-mounted.
+- **A page loaded over HTTP keeps the white space of its text.** The HTTP
+  normalizer folded every run of white space outside `pre`, `code`,
+  `textarea`, `script` and `style` to one space, including the white space
+  inside text. A `white-space: pre-wrap` message `"question\n\n[1 image]"` read
+  "question [1 image]" on a fresh load and kept its lines when patched in over
+  the WebSocket. Django renders text verbatim, and the VDOM parser keeps it.
+  The fold now applies only inside markup and to whitespace-only text between
+  tags, which the #2999 rule then keeps or drops. One Rust rule
+  (`djust_core::html_whitespace::fold_whitespace_edits`) serves both the plain
+  and the provenance-tracking render paths.
+- **Hot view replacement follows an edit to a mixin or base class in another
+  module.** Saving a module that defines no LiveView (a mixin) did nothing,
+  and views in other modules kept inheriting from the class objects they were
+  built with. The saved module and every module defining a LiveView whose MRO
+  holds one of its classes are now reloaded, bases before subclasses, so a
+  fresh page load, a new socket mount and a mounted view (`hvr_meta.modules`)
+  run the new code. A reload also drops the module's cached bytecode, which two
+  same-size saves within one second would otherwise reuse. Cases in `python/djust/tests/test_hvr_cross_module.py`.
+- **Hot view replacement: a saved view or template reaches the next page
+  load.** With DEBUG and watchdog, an edit to a view's `get_context_data` and
+  its template was not served to a new request until a restart. The URLconf's
+  `as_view()` callables now follow the reloaded class; a template-only edit
+  drops the template hash that kept a session on the renderer of the old
+  template; an editor's atomic save (temp file renamed over the original) is
+  seen under the original's name; and every file saved in one debounce window
+  is handled, not only the first. Cases in
+  `tests/unit/test_hvr_http_and_watcher.py`.
+- **A page with a dynamic `{% include %}` no longer fails on an include it does
+  not render.** Such a page goes through lazy-container planning, which walks
+  every `{% include %}` in the template tree, outside the `{% for %}` and
+  `{% if %}` around it. It resolved each include's `with` bindings and operand
+  against the page context and raised on failure, so
+  `{% for r in rows %}{% include "card.html" with fields=m|f:r.key %}{% endfor %}`
+  500ed with "argument `r.key` does not resolve", and so did an include behind a
+  false `{% if %}` whose binding, operand or template could not be resolved or
+  parsed. Django resolves these only when the include renders. Planning now
+  treats what it cannot resolve as unknown and tracks provenance for that
+  render; a real failure still comes from the render itself.
+- **Form fields are filled with a new `--input-background` token, not the `--input` border colour.** `--input` is the field border (`.border-input`, the shadcn convention), but `components.css` (`.form-input`, `.form-select`, `.form-textarea`, `.form-checkbox`, `.form-radio`, `.table-search`, `.data-table-search input`, `.data-table-filter`, `.data-table-cell-editing input`, `.data-table-row-editing td input`, `.multi-select-search`, `.otp-digit`, `.number-stepper-input`, `.tag-input-field`, `.dj-search-input__input`) and the generated Bootstrap overrides (`.form-control`, `.form-select`) used it as the fill, so a preset with a mid-slate border painted every field slate with dark text on it. The theme generator now emits `--input-background` for every preset in light and dark mode (default: the page `--background`; `ThemeTokens.input_background`, `bg-input-background` in Tailwind), and those rules read it with a `--card` fallback. A test fails on any djust CSS, static or generated, that fills with `--input`, and every preset's field text is gated at 4.5:1 on the new fill. Field outlines now read `--input`, the input-border token, instead of the `--border` divider token, as `hsl(var(--input, var(--border)))`: the same field rules plus `.number-stepper-controls`, `.input-group`, `.rich-select-trigger`, `.rich-select-search-input`, `.dj-dependent-select__control select`, `.dj-currency-input__control`, `.dj-filter-bar__select`, `.dj-mminput`, `.dj-mentions__input`, `.dj-md-textarea`, `.dj-form-array__input`, `.dj-import-wizard__field-select`, `.dj-signature-pad__typed-input`, `.dj-prompt-editor__textarea` and `.dj-cron-input__input`, and the pack `.form-control` / `.form-select`; of those, the ones with a page or card fill (`.rich-select-trigger`, the dependent-select, currency, filter-bar, mminput, mentions and cron inputs) now fill from `--input-background` too, keeping their own fallback and `--dj-*` override variables (`.data-table-cell-editing input` keeps its `--ring` edit border; the stepper's inner dividers keep `--border`). A test pins each outline to `--input`, and `--input` is gated at 3:1 on `--input-background` (WCAG 1.4.11) for every preset and mode, with the shipped presets' documented `--input` exemptions still honoured.
+- **With `worker_threads` on, sockets of one session on one page no longer race
+  on a shared Rust view.** The in-memory state backend stored the socket's own
+  live `RustLiveView` under the page's key, and every other socket of the
+  session cloned that object while its owner rendered or tore it down on another
+  pool thread: `round-trip failed … Already mutably borrowed`, `set_raw_py_values
+  failed during teardown: Already borrowed`, and failed mount renders. The
+  backend now stores a serialized snapshot (as the Redis backend does) and
+  refreshes it after each render on the owner's thread
+  (`StateBackend.refresh`, a no-op for remote backends), so the next request of
+  the page still diffs against the last render and no Rust object is shared.
+  Measured with 40 sockets of one session on one page: borrow errors 156 → 0 and
+  failed mounts 25 → 0 on 3.14t with 8 workers, with the pool's speed-up kept
+  (mount p50 0.36 s vs 0.76 s without the pool). 6 cases in
+  `python/djust/tests/test_pool_shared_session_view.py`.
+- **`@debounce`, `@throttle`, `@cache`, `@client_state`, `@rate_limit`,
+  `@permission_required` and `@optimistic` keep an `async def` handler a
+  coroutine function.** They wrapped every handler in a plain `def`, so djust
+  ran an async handler as sync code, got an un-awaited coroutine back and the
+  body never ran, with no error. The wrapper is now `async` when the handler is.
+  22 cases in `python/djust/tests/test_metadata_decorators_async.py`, including
+  a WebSocket run of decorated async handlers.
+- **Floating option lists sit on `--popover`.** The combobox and rich-select lists, and the mentions list, filled with `--card`, while djust's own dropdown menu and autocomplete (and shadcn's Select and Command) use `--popover` / `--popover-foreground`; the model selector's list set no background at all, so the page showed through it. Every floating `role="listbox"` surface (`.combobox-dropdown`, `.rich-select-dropdown`, `.dj-autocomplete__dropdown`, `.dj-mentions__dropdown`, `.dj-model-sel__dropdown`) now fills with `hsl(var(--popover, var(--card)) / var(--overlay-surface-opacity, 1))` and sets `--popover-foreground` text, falling back to `--card` / `--card-foreground`. Combobox options take the list's text colour instead of `--muted-foreground`. `--dj-mentions-dropdown-bg` still overrides the mentions list. `test_option_lists_use_popover.py` pins them and fails on a new rendered listbox that is not on the list.
+- **Modals, sheets, popovers and the other floating surfaces are opaque by default.** They painted `hsl(var(--card) / 0.95)` (the rich-select dropdown `/ 0.98`) behind a backdrop blur, so in light mode a dialog read faintly grey next to the white card-coloured fields inside it. `.modal-content` / `.dj-modal`, `.sheet`, `.popover`, `.dj-popconfirm`, `.dropdown-menu`, `.ctx-menu`, `.palette`, `.combobox-dropdown`, `.rich-select-dropdown`, `.notif-dropdown`, `.split-btn-menu`, `.toast` and `.tooltip` / `.dj-tooltip__text` now read `hsl(var(--card) / var(--overlay-surface-opacity, 1))` and keep their blur; set `--overlay-surface-opacity: 0.95` to restore the translucent glass look. `test_overlay_surfaces_opaque.py` pins each surface and fails on any new blurred `--card` fill at a fixed alpha.
+- **A `dj-poll` timer now stops when its element leaves the page.** Removal
+  paths cleared the interval only on the node they replaced, never on a
+  `[dj-poll]` inside it, so a poll nested in a page view kept firing after a
+  `live_redirect` mounted another view (the server logged "Handler not found"
+  on every tick). One teardown helper now stops the polls of everything a
+  mount, morph, VDOM `Replace`/`RemoveChild`/`RemoveSubtree` patch, view-slot
+  mount, `mount_batch` or stream op removes. Each bind pass also stops polls
+  whose element left the document or dropped `dj-poll`, and a poll stops itself
+  if it fires while detached. An unchanged poll on a surviving element still
+  keeps its phase (#2858). New cases in `tests/js/poll_teardown.test.js`.
+- **A push from work an event handler started is no longer skipped on the page
+  that started it.** The originator tag that lets a session skip its own
+  self-broadcast (#1677) lived in a ContextVar, and an asyncio task copies the
+  context it is created in, so a task started during the handler's turn (a pump
+  or follower a service launched) kept the tag after the turn ended and its
+  later pushes were dropped on the originating socket. The tag now covers only
+  the turn that set it (`djust.push.originating_turn`); a tag code sets itself
+  with `origin_channel.set()` is honoured as before. 5 cases in
+  `python/djust/tests/test_push_origin_turn_scoped.py`.
+- **An `{% include %}` inside a `{% tab %}` (or another raw-body tag such as
+  `{% split_pane %}`) renders on the Rust engine.** The body of such a tag is
+  compiled with Django's own parser, which djust built without a template
+  origin, so every `{% include %}` in it raised `'NoneType' object has no
+  attribute 'template_name'`. The parser now carries the origin Django gives a
+  template built from a string. An include of a name renders as Django renders
+  it. A relative name (`"./x.html"`) fails as it does in a Django string
+  template, because the enclosing template's name does not reach the body.
+- **The LiveView root of a rendered page is found by one locator, the Rust
+  scanner, read as html5ever reads the page.** The WebSocket frame, the
+  initial-GET shell splice, `_strip_liveview_root_in_html`, the streaming split
+  (`_split_for_streaming`, `arender_chunks`), the `dj-view` stamp and the test
+  client's dj-id helper used a Python twin that disagreed with the Rust scanner
+  and with the VDOM (built by html5ever) in three ways, now fixed:
+  `{% if %}` / `{% else %}` text left in rendered output (a `{% verbatim %}`
+  block, say) was balanced as template branches, so the root closed early and
+  the initial GET spliced its tail in twice, or never closed and the whole page
+  went out as the frame; a `<body>` tag anywhere (a child document's, inside an
+  embedded child's wrapper) now adds its attributes to the one body element as
+  html5ever does, a `<body>` that is another view's container is never a root,
+  and a `<body>` root runs to the last `</body>` instead of a child's stray
+  one; and a `<` or NUL inside a tag name is part of the name, so
+  `<div<x dj-root>` is a root (`djust._rust.root_element_span`,
+  `dj_root_stamp_offsets`). The Python fallback in `_extract_liveview_content`
+  is gone. Template SOURCE keeps the Python locator, which balances
+  `{% if %}` branches. Pinned by new cases in the shared corpus
+  `python/tests/fixtures/root_selection_3031.json` (with each expected root
+  content checked against html5ever's tree) and by
+  `python/djust/tests/test_rendered_root_locator.py`.
+- **`reset_form()` resets the form the event came from in the browser.** The
+  client reset the first `<form>` of the page whatever form the server reset,
+  so opening a form from a button cleared an unrelated draft in another form.
+  It now resets the submitted form or the form holding the triggering element;
+  with neither, the page's form only when there is exactly one. Covered in
+  `tests/js/reset_form_target.test.js`.
+- **`dj-poll` on the view's root element (`<div dj-root dj-poll="...">`) now
+  polls.** The bind pass scanned only the root's descendants. Because a mount
+  replaces only the root's content, the mount frame now carries the root's own
+  `dj-poll` / `dj-poll-interval` (`root_poll`, `{}` for none), and the WebSocket
+  and SSE clients apply it to the root: a live navigation gives the root the
+  destination view's poll and stops the departing view's. Cases in
+  `tests/js/poll_root_and_child.test.js` and
+  `python/djust/tests/test_root_poll_mount_frame.py`.
+- **`re_path()` LiveView routes no longer corrupt the derived client route
+  map.** A regex leaf entered the map as its raw text; a catch-all
+  `re_path(r"^", NotFoundView)` became `"/"` and, listed after `path("")`,
+  replaced the home page, so `dj-navigate` to `/` mounted the 404 view. A regex
+  route now enters the map only as a plain path whose named groups match one
+  segment (`(?P<slug>[-\w]+)` → `:slug`); anything else (`.*`, alternation, a
+  bare `^`) is left out, and the first pattern for a client path wins, as in
+  Django's resolver. 10 cases in
+  `python/djust/tests/test_route_map_regex_routes.py`.
+- **SSE pages ignored `set_layout()`.** The server sends the `layout` frame
+  from the shared turn end, so it reaches SSE pages too, but the SSE transport
+  had no case for it and dropped it as an unknown frame. It now swaps the
+  layout as the WebSocket transport does. Covered by
+  `tests/js/sse_layout_frame.test.js`, which runs on both transports.
+- **`stream_text(mode="append")` no longer drops text sent inside the rate
+  window.** An op that landed within ~16 ms of the last send replaced the
+  stream's queued op ("only latest matters"), which is right for a replace but
+  lost every earlier chunk of an append: five tight appends of `"a"`..`"e"`
+  reached the client as `"ae"`. Queued text appends (and prepends) are now
+  merged into one op, a replace still supersedes what is queued for its
+  target, and ops for different targets of one stream are all kept. 8 cases in
+  `python/djust/tests/test_stream_text_append_coalesce.py`.
+- **`{% tabs %}` follows the WAI-ARIA tabs pattern.** Every tab was a Tab stop
+  until an arrow key was pressed: the server rendered no `tabindex`. The
+  selected tab now renders with `tabindex="0"` and the others with `-1` (the
+  first tab when none is selected), and when focus leaves the tab list the
+  client gives the Tab stop back to the selected tab. The tab list takes an
+  accessible name, `label=` (`aria-label`) or `labelledby=`
+  (`aria-labelledby`). With `param="<name>"` each tab is a `dj-patch` to
+  `?<name>=<tab id>` instead of a `dj-click` event, so the view reads the tab
+  in `handle_params` and Back/Forward and bookmarks select it.
+- **`{% tabs %}` renders a tab list and only the active pane on the Rust
+  engine.** Its Rust handler received the already-rendered body, so it rendered
+  every `{% tab %}` pane (duplicate ids) and no tab list. The tag now renders
+  through Django's own `do_tabs`, as `{% split_pane %}` does, and its output
+  matches Django's. `LibraryRawBlockTagHandler` takes a `libraries=` argument
+  for tags whose body holds their own child tags.
+- **A closing socket's teardown no longer races a render of its view still in
+  flight** (`clear_live_handles` / `set_raw_py_values failed during teardown:
+  Already borrowed`, most often with `worker_threads` on). The teardown dropped
+  the Rust view's live handles on the event loop while a render of the same
+  view (a tick, a deferred push or a background result already queued on its
+  sync thread) could still hold the view; the handles then stayed. The
+  WebSocket and runtime teardowns now use `arelease_root_view`, which clears the
+  handles as a hop on the view's sync thread, after that render. 4 cases in
+  `python/djust/tests/test_teardown_waits_for_render.py`, with the pool off and
+  on.
+- **A `<template>` element's contents are rendered and patched.** The VDOM held
+  every `<template>` empty (the HTML parser keeps a template's children in its
+  contents fragment, not its child list): a template inserted by a patch
+  arrived with no children, and content rendered into an existing template
+  after the first render (a list loaded on demand) produced no patch at all.
+  The parser now reads a template's contents as its children, and the client
+  builds, addresses (`SetText`, `InsertChild`, `RemoveChild`, `MoveChild`) and
+  morphs them in `template.content`. Cases in
+  `crates/djust_vdom/tests/test_template_contents.rs`,
+  `tests/js/template_contents_patch.test.js` and
+  `python/djust/tests/test_template_element_patches.py`.
+- **djust.theming's own `.input`, `.select` and `.textarea` now fill from `--input-background` and outline with `--input`, like the component `.form-*` rules.** They still filled with the page `--background` and outlined with a bare `hsl(var(--input))`, so a theme that gives fields a distinct `--input-background` left these classes on the page colour. They now read `hsl(var(--input-background, var(--background)))` and `hsl(var(--input, var(--border)))`, and the generated Tailwind `.input` applies `bg-input-background` instead of `bg-background`. The `--input-background` lint in `test_theming_input_background.py` now covers all four.
+- **The theme switcher renders in the page font.** The inline theme switcher's mode buttons (`.theme-mode-btn`) and preset `<select>` (`.theme-preset-select`) set no font family, so the select rendered in the browser default. Both now set `font-family: inherit`. The #3028 reference copy of the old processor (`_eager_theme_context_3028.py`) carries the same two lines by the maintainer's decision, so the lazy/eager byte-equivalence tests keep guarding everything else.
+- **`start_async()` queued in `handle_params()` now runs on a URL change.**
+  Browser Back/Forward and `dj-patch` call `handle_params()` through the
+  `url_change` path, which rendered and flushed every queue but never
+  dispatched the background work `handle_params()` queued, so the read silently
+  did not happen. It is dispatched after the frame, as on mount and events.
+  Covered in `python/djust/tests/test_url_change_async_and_mount_query.py`,
+  which also pins that the socket mount's `request.GET` carries the page's
+  query string.
+- **A WebSocket frame over `max_message_size` now gets an actionable error.**
+  The server announces the limit in its `connect` frame, and the client no
+  longer sends a larger frame: it reports an `error` with code
+  `message_too_large` (logged and dispatched as `djust:error`) and settles the
+  event's loading state. A frame that reaches the server anyway is answered with
+  the same code, the limit, and a pointer to `UploadMixin` and the setting. The
+  `Message too large (N bytes)` prefix that clients parse is unchanged. The limit
+  is now documented in the security and uploads guides. 2 cases in
+  `python/tests/test_message_size_limit.py`, 4 in
+  `tests/js/message_size_limit.test.js`.
+- **A WebSocket `live_redirect` to another view class now updates the page
+  container's `dj-view`.** The container kept the old view path, so the next
+  reconnect (which mounts from `dj-view`) mounted the old view at the new URL.
+  The SSE mount already did this; the WebSocket mount now does too, for the page
+  view only. 3 cases in `tests/js/ws-mount-dj-view-follows-view.test.js`.
+
+### Security
+
+- **An `async def check_permissions` no longer allows every request.** It was
+  called without being awaited; the coroutine is truthy, so the check passed
+  for everyone on every transport (fail open). It is now awaited everywhere the
+  check runs: on the event loop over WebSocket and SSE, and from the request
+  thread on the HTTP GET, the page-POST fallback, the API and embedded
+  children. A synchronous caller on the event loop's own thread refuses with
+  an error instead.
+- **The locked `certifi` is now 2026.10.19 (PYSEC-2026-4320 /
+  GHSA-6q48-6c7w-9gw2).** 2026.2.25 bundled the `emSign ECC Root CA - G3`
+  root, under which eight revoked eMudhra intermediates have compromised keys;
+  an on-path attacker holding one could pass TLS verification for any host in
+  clients that trust certifi (`requests`, `httpx`). 2026.10.19 drops the
+  affected root. Only `uv.lock` changes: djust does not depend on certifi
+  directly. It was the finding failing the push-to-main `pip-audit` gate.
+- **The component catalogue no longer builds a file path from the requested
+  component name** (code-scanning alerts #3085/#3086, py/path-injection).
+  `get_component_template_source` looked the name up in a set and then read
+  the file named after it; it now looks the name up in a name-to-path map
+  built from the directory listing at import, so a caller's string never
+  becomes part of a path, and a listed template that is a symlink resolving
+  outside the components directory is refused with a warning. This was not
+  exploitable before: the detail page already answered 404 for any name that
+  is not a known component, and the set check rejected traversal. New tests
+  pin `../`, absolute paths, percent-encoded and backslash separators, a
+  symlink escape and the 404 on the detail page.
+- **`reauth_on_event` now notices a sign-out in another tab.** The per-event
+  re-check resolved the user from the socket's `scope["session"]`, the session
+  object loaded at connect, whose cached data still named the user after the
+  stored session was deleted; the open socket kept running events. The re-check
+  now reloads the session from the configured `SESSION_ENGINE` by key before
+  resolving the user, so a signed-out socket closes with 4403 and the handler
+  does not run. 2 regression cases in
+  `python/djust/tests/test_reauth_reads_stored_session.py` (real DB session, no
+  mock of `get_user`).
+- **`reauth_on_event` now covers every live turn, and SSE frames are
+  rate-limited on arrival (ADR-044).** The re-check runs once, as the turn
+  chain's `reauth` built-in, instead of in three hand-written copies. Two turns
+  it missed are now re-checked: a legacy view's `url_change` (`handle_params`)
+  and background results on the shared runtime (`start_async` / `@background`
+  over SSE, and over WebSocket for event-started work); `push_event` delivery
+  to a socket is gated like presence. Over SSE, root-view events, `url_change`
+  and page mounts were not charged to the per-connection rate limiter; every
+  POSTed frame now is, as the WebSocket charges every frame.
+- **The JS test toolchain's `vitest`, `@vitest/ui` and
+  `@vitest/coverage-istanbul` are now 5.0.5 (GHSA-p458-7748-mcp3).** All three
+  move together; 5.0.4 is still inside the affected range. They are
+  development dependencies only: nothing in the published package changes.
+- **The WebSocket Origin check now compares the full origin and refuses a
+  missing one.** It compared only the Origin's host with `ALLOWED_HOSTS`, so a
+  page on another port or scheme of an allowed host (`http://localhost:9999`
+  against an app on `http://localhost:8001`) could open a socket, and a
+  handshake with no `Origin` was let through. The consumer, and the new
+  `djust.routing.DjustOriginValidator` that `DjustMiddlewareStack` now uses in
+  place of channels' host-only `AllowedHostsOriginValidator`, accept an Origin
+  only when it is the socket's own origin (scheme from the handshake or
+  `SECURE_PROXY_SSL_HEADER`, host and port from `Host`, the host validated
+  against `ALLOWED_HOSTS`) or is listed in the new `DJUST_ALLOWED_ORIGINS`
+  setting (default: `CSRF_TRUSTED_ORIGINS`; `https://*.example.com` matches
+  subdomains). A missing Origin is refused unless `DJUST_ALLOW_MISSING_ORIGIN =
+  True`, for non-browser clients. The SSE event endpoints apply the same rule to
+  a present Origin. **Upgrade note:** a page on one host that opens a socket to
+  another (both in `ALLOWED_HOSTS`) must now list its origin in
+  `CSRF_TRUSTED_ORIGINS` or `DJUST_ALLOWED_ORIGINS`; behind a TLS-terminating
+  proxy set `SECURE_PROXY_SSL_HEADER`; test suites that open a Channels
+  `WebsocketCommunicator` without headers need `DJUST_ALLOW_MISSING_ORIGIN = True`
+  in their test settings. The `djust new` scaffold now wraps its router in
+  `DjustOriginValidator`. 20 regression cases in
+  `python/tests/test_websocket_full_origin.py`.
+
+### Documentation
+
+- **The README, `docs/TEMPLATE_BACKEND.md`, `docs/TESTING.md` and the
+  deployment guide now use the canonical module paths**
+  (`djust.template.backend.DjustTemplateBackend`, `djust.state_backends`)
+  instead of the `djust.template_backend` and `djust.state_backend` shims.
+  djust 2.0 removes the shims; the canonical paths work on 1.x too.
+- **Server push: a push is a message, not a call.** `push_to_view()` /
+  `apush_to_view()` return once the message is sent; the handler runs later in
+  each receiving session (later still in a busy one), so code after the push
+  cannot read back state the handler sets. The guide shows the shape to use
+  instead.
+
+### Removed
+
+- **The i18n side-channel flush, which never ran (#3502).** `_flush_i18n` on
+  the WebSocket consumer and `ViewRuntime` called `view._drain_i18n_commands()`
+  behind a `hasattr` guard, but nothing defines that method, and the client
+  had no `i18n` frame case. Both flushers and the `"i18n"` page-level frame
+  entry are gone; the turn-end drain is now seven queues on both paths.
+- **The wheel and sdist no longer ship djust's own test suite
+  (`djust/tests/`), the client's source modules (`djust/static/djust/src/`)
+  or three unreferenced images** (`djust2_logo.pxd`, `djust3_logo.pxd`,
+  `static/images/djust-icon-original.png`, about 1.4 MB). Nothing at runtime
+  imported `djust.tests` or read the source modules; the shipped `client.js` /
+  `client.min.js` are their concatenation. The component catalogue's
+  "hook shipped" lookup now scans `client.js` instead of the source modules.
+  CI builds both artifacts and fails if either ships the excluded paths
+  (`scripts/check-package-contents.py`).
+
 ## [1.3.0rc10] - 2026-10-16
 
 A 1.3 pre-release with a security fix; upgrading from 1.3.0rc9 is recommended.
