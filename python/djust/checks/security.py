@@ -498,15 +498,22 @@ def _http_only_access_messages(
     from djust.auth.core import is_framework_module, live_auth_refused_findings
     from djust.checks.utils import _walk_subclasses
 
-    def _source(obj: Any) -> tuple[str, Optional[int]]:
-        path = ""
-        line = None
+    # File first, line only for a class that is analysed AND refused:
+    # getsourcelines() reads and parses the class's whole module, and this
+    # loop sees every imported LiveView subclass — under the test suite a
+    # worker holds thousands, nearly all outside app_dirs. Looking the line up
+    # for each of them was ~95% of check_security's time there.
+    def _file(obj: Any) -> str:
         try:
-            path = inspect.getfile(obj)
-            line = inspect.getsourcelines(obj)[1]
+            return inspect.getfile(obj)
         except (OSError, TypeError):
-            pass  # Source introspection may fail for built-in or C-extension objects
-        return path, line
+            return ""  # Source introspection may fail for built-in or C-extension objects
+
+    def _line(obj: Any) -> Optional[int]:
+        try:
+            return inspect.getsourcelines(obj)[1]
+        except (OSError, TypeError):
+            return None
 
     try:
         routed = {view_cls for _route, _callback, view_cls in _routed_liveview_callbacks()}
@@ -524,7 +531,7 @@ def _http_only_access_messages(
             or cls.__dict__.get("abstract") is True
         ):
             continue
-        cls_file, cls_line = _source(cls)
+        cls_file = _file(cls)
         if not _in_app_dirs(cls_file, app_dirs):
             continue
         analysed.add((os.path.realpath(cls_file), cls.__name__))
@@ -553,7 +560,7 @@ def _http_only_access_messages(
                         % (cls.__qualname__, "; ".join(refusals), declare)
                     ),
                     "file_path": cls_file,
-                    "line_number": cls_line,
+                    "line_number": _line(cls),
                 },
             )
         )
