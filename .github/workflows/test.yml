@@ -599,6 +599,36 @@ jobs:
       - name: Run JavaScript tests
         run: npm test
 
+      - name: Run JavaScript linter (if configured)
+        run: |
+          if [ -f "package.json" ] && grep -q "lint" package.json; then
+            npm run lint
+          fi
+
+  # The coverage pass re-runs the whole vitest suite against INSTRUMENTED
+  # bundles (tests/js/coverage-support) and enforces the regression floors in
+  # vitest.coverage.config.js. It used to run after `npm test` in the same job
+  # (3.1 + 6.0 min p50), which made javascript-tests the longest job once the
+  # Python shards dropped to ~5 min. Now it is its own job: in parallel on main,
+  # and — like the Python `slow` tier — skipped on pull requests unless the PR
+  # is labelled `full-tests`. The plain `npm test` (shipped bundle) still gates
+  # every PR; main pushes (never cancelled) enforce the coverage floors.
+  # Pinned by tests/test_ci_js_coverage_tier.py.
+  javascript-coverage:
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'full-tests')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Install JavaScript dependencies
+        run: npm ci
+
       - name: Measure JavaScript source coverage
         run: npm run test:coverage
 
@@ -609,12 +639,6 @@ jobs:
           name: javascript-coverage
           path: coverage/
           if-no-files-found: ignore
-
-      - name: Run JavaScript linter (if configured)
-        run: |
-          if [ -f "package.json" ] && grep -q "lint" package.json; then
-            npm run lint
-          fi
 
   # Playwright browser tests - runs in parallel (optional, doesn't block CI)
   playwright-tests:
@@ -1140,7 +1164,7 @@ jobs:
   # Summary job - waits for all test jobs
   test-summary:
     runs-on: ubuntu-latest
-    needs: [benchmarks, rust-tests, python-tests, windows-ai-inventory, javascript-tests, playwright-tests, browser-smoke, nav-hooks-guard, security-scan, security-tests, demo-checks, django-template-suite]
+    needs: [benchmarks, rust-tests, python-tests, windows-ai-inventory, javascript-tests, javascript-coverage, playwright-tests, browser-smoke, nav-hooks-guard, security-scan, security-tests, demo-checks, django-template-suite]
     if: always()
     steps:
       # `needs.python-tests.result` is the MATRIX-WIDE result: GitHub reports
@@ -1157,6 +1181,7 @@ jobs:
           echo "  Python tests: ${{ needs.python-tests.result }}"
           echo "  Windows AI inventory: ${{ needs.windows-ai-inventory.result }}"
           echo "  JavaScript tests: ${{ needs.javascript-tests.result }}"
+          echo "  JavaScript coverage: ${{ needs.javascript-coverage.result }} (skipped on PRs without full-tests)"
           echo "  Playwright tests: ${{ needs.playwright-tests.result }} (optional)"
           echo "  Browser-smoke: ${{ needs.browser-smoke.result }}"
           echo "  Nav/hooks guard: ${{ needs.nav-hooks-guard.result }}"
@@ -1176,6 +1201,8 @@ jobs:
              [ "${{ needs.python-tests.result }}" == "success" ] && \
              [ "${{ needs.windows-ai-inventory.result }}" == "success" ] && \
              [ "${{ needs.javascript-tests.result }}" == "success" ] && \
+             { [ "${{ needs.javascript-coverage.result }}" == "success" ] || \
+               { [ "${{ needs.javascript-coverage.result }}" == "skipped" ] && [ "${{ github.event_name }}" == "pull_request" ]; }; } && \
              [ "${{ needs.browser-smoke.result }}" == "success" ] && \
              [ "${{ needs.nav-hooks-guard.result }}" == "success" ] && \
              [ "${{ needs.security-tests.result }}" == "success" ] && \
