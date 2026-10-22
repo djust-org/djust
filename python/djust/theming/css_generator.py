@@ -94,6 +94,7 @@ class ThemeCSSGenerator:
             ("brand-text", tokens.brand_text),
             ("border", tokens.border),
             ("input", tokens.input),
+            ("input-background", tokens.input_background),
             ("ring", tokens.ring),
             ("surface-1", tokens.surface_1),
             ("surface-2", tokens.surface_2),

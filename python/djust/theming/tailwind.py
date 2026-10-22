@@ -79,6 +79,7 @@ def _generate_color_config(preset: ThemePreset, extend: bool = True) -> Dict[str
     colors = {
         "border": "hsl(var(--border))",
         "input": "hsl(var(--input))",
+        "input-background": "hsl(var(--input-background))",
         "ring": "hsl(var(--ring))",
         "background": "hsl(var(--background))",
         "foreground": "hsl(var(--foreground))",
@@ -342,6 +343,7 @@ def _tokens_to_theme_vars(tokens: ThemeTokens, prefix: str = "") -> list[tuple[s
         ("selection-foreground", f"hsl({tokens.selection_foreground.to_hsl()})"),
         ("border", f"hsl({tokens.border.to_hsl()})"),
         ("input", f"hsl({tokens.input.to_hsl()})"),
+        ("input_background", f"hsl({tokens.input_background.to_hsl()})"),
         ("ring", f"hsl({tokens.ring.to_hsl()})"),
         ("surface_1", f"hsl({tokens.surface_1.to_hsl()})"),
         ("surface_2", f"hsl({tokens.surface_2.to_hsl()})"),

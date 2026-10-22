@@ -303,6 +303,17 @@ djust components use the theme's CSS custom properties for styling. Color tokens
 
 `--destructive` is a fill (it sits under `--destructive-foreground`). Anything that paints "error" as text or an icon reads `--destructive-text` instead, which the theme generator derives from `--destructive` so that it reaches 4.5:1 on the page in every preset and mode. Set it yourself only if you do not use the theme generator; the component stylesheet falls back to `--destructive` when it is absent. See [Accessibility](../guides/accessibility.md#error-text-uses---destructive-text-not---destructive). The same goes for `--primary`, `--info`, `--success` and `--warning`: they are fills, and anything that paints them as text reads `--primary-text`, `--info-text`, `--success-text` or `--warning-text` (fallback to the fill when absent); see [Accessibility](../guides/accessibility.md#primary-and-status-colours-as-text-use---primary-text---info-text---success-text---warning-text).
 
+`--input` is the **border** of a form field (shadcn convention: `.border-input`), not its fill. A field's fill is `--input-background`, which the theme generator emits for every preset in light and dark mode and which defaults to the page `--background`, so `--foreground` text typed into a field reads at 4.5:1. Every field rule in the component stylesheet (`.form-input`, `.form-select`, `.form-textarea`, `.form-checkbox`, `.form-radio`, the combobox, search, tag, OTP, number-stepper and data-table inputs) and the framework overrides (`.form-control`, `.form-select`) read `--input-background`, falling back to `--card` when it is absent. To give fields a distinct fill, set it yourself:
+
+```css
+:root { --input-background: 210 20% 98%; }
+[data-theme="dark"] { --input-background: 222 47% 9%; }
+```
+
+Those with an opaque fill read `--input-background` too; a component's own `--dj-*-bg` / `--dj-*-border` override still wins. A preset can set it through `extra_css_vars`. Never paint a field with `--input`: a test fails on any `background` that reads it.
+
+Every djust field control (the rules above, the number stepper's outer box `.number-stepper-controls`, and the rich select, dependent select, currency, filter-bar, mentions, multi-modal, markdown, form-array, import-wizard, signature, prompt-editor and cron inputs) draws its **outline** from `--input`, written `hsl(var(--input, var(--border)))` so a theme without `--input` keeps its `--border` outline. `--border` stays the divider token: cards, tables, separators and the stepper's inner dividers keep it. For a visible field edge, give `--input` 3:1 against `--input-background` (WCAG 1.4.11); a custom preset is measured on it.
+
 For the full component library and design system, install the extras:
 
 ```bash
