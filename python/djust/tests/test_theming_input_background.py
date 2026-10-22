@@ -344,3 +344,26 @@ def test_tailwind_input_class_fills_from_the_field_token():
     assert "bg-input-background" in rule
     assert "bg-background" not in rule
     assert "border-input" in rule
+
+
+# --- djust.auth's form fields ---------------------------------------------------
+
+AUTH_FIELD_RULE = (
+    ".dj-auth-control input:not([type=checkbox]):not([type=radio]), .dj-auth-control select"
+)
+
+
+def _auth_field_rule() -> str:
+    css = (ROOT / "auth/static/djust_auth/auth.css").read_text(encoding="utf-8")
+    rule = re.search(r"(?m)^" + re.escape(AUTH_FIELD_RULE) + r"\s*\{([^}]*)\}", css)
+    assert rule, AUTH_FIELD_RULE
+    return rule.group(1)
+
+
+def test_auth_fields_fill_from_the_field_token():
+    fills = [m.group(1).strip() for m in _BACKGROUND_DECL.finditer(_auth_field_rule())]
+    assert fills == ["hsl(var(--input-background, var(--background)))"], fills
+
+
+def test_auth_fields_outline_with_the_input_border_token():
+    assert _border_colours(_auth_field_rule()) == ["hsl(var(--input, var(--border)))"]
