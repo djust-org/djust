@@ -24,7 +24,10 @@
 //                     the server like a mouse pick; Escape closes the list and
 //                     restores the chosen label. Focus stays on the input
 //                     after a pick; `combobox--closed` hides the list until
-//                     the next keystroke.
+//                     the next keystroke. Escape with the list open is the
+//                     combobox's alone: it does not also close a dialog or
+//                     sheet around it. Text committed on blur (Tab) does not
+//                     pull focus back and leaves the list unfiltered.
 //   .dj-theme-toggle  switch the colour mode (`data-theme-mode`) when
 //                     djust.theming's theme.js is not on the page, and keep
 //                     every toggle's aria-checked in step with the mode.
@@ -147,6 +150,10 @@
         if (!open) _setComboboxActive(box, null);
     }
 
+    // False while a commit runs on blur: the pick must not pull focus back
+    // to the input the user is leaving.
+    let _comboboxRefocus = true;
+
     function _comboboxSelectedLabel(box) {
         const hidden = box.querySelector('.combobox-value');
         if (!hidden) return null;
@@ -230,7 +237,7 @@
                 // list closes until the next keystroke.
                 _setComboboxOpen(box, false);
                 const input = _comboboxInput(box);
-                if (input && document.activeElement !== input) input.focus();
+                if (_comboboxRefocus && input && document.activeElement !== input) input.focus();
             }
         }
 
@@ -271,15 +278,45 @@
                 // to the chosen label) before the form submits.
                 _commitComboboxText(box, input);
             }
-        } else if (e.key === 'Escape') {
-            if (!open && !_comboboxActive(box)) return;
-            e.preventDefault();
-            const label = _comboboxSelectedLabel(box);
-            if (label !== null) input.value = label;
-            _comboboxOptions(box).forEach(function (opt) { opt.style.display = ''; });
-            _setComboboxOpen(box, false);
         }
     });
+
+    // Escape with the list open closes the list and nothing else. This runs
+    // in the capture phase on document, ahead of the dialog keyboard handler
+    // (51-keyboard-nav.js, bubble phase on document) and of window-level
+    // bindings such as `dj-window-keydown.escape` on a sheet, and stops the
+    // event there so they do not also close the dialog or sheet. A native
+    // <dialog> closes itself on Escape through its `cancel` event, which is
+    // cancelled below for the same key press. With the list closed Escape
+    // passes through as before.
+    let _comboboxEscape = null;
+    document.addEventListener('keydown', function (e) {
+        _comboboxEscape = null;
+        if (e.key !== 'Escape') return;
+        const input = e.target;
+        if (!input || !input.classList || !input.classList.contains('combobox-input')) return;
+        const box = _closest(input, '.combobox');
+        if (!box) return;
+        if (box.classList.contains('combobox--closed') && !_comboboxActive(box)) return;
+        e.preventDefault();
+        e.stopPropagation();
+        _comboboxEscape = input;
+        const label = _comboboxSelectedLabel(box);
+        if (label !== null) input.value = label;
+        _comboboxOptions(box).forEach(function (opt) { opt.style.display = ''; });
+        _setComboboxOpen(box, false);
+    }, true);
+    document.addEventListener('keyup', function (e) {
+        if (e.key === 'Escape') _comboboxEscape = null;
+    }, true);
+    // `cancel` does not bubble; the capture phase still reaches document.
+    document.addEventListener('cancel', function (e) {
+        const dialog = e.target;
+        if (_comboboxEscape && dialog && typeof dialog.contains === 'function' &&
+            dialog.contains(_comboboxEscape)) {
+            e.preventDefault();
+        }
+    }, true);
 
     document.addEventListener('keydown', function (e) {
         const richSelect = _closest(e.target, '.rich-select');
@@ -500,7 +537,18 @@
             if (zone) _showFileCount(zone, input.files || []);
         } else if (input.classList.contains('combobox-input')) {
             const box = _closest(input, '.combobox');
-            if (box) _commitComboboxText(box, input);
+            if (!box) return;
+            // `change` fires as focus leaves the input (Tab, a click away):
+            // commit without pulling focus back, so one Tab moves on, and
+            // close the list unfiltered for the next visit.
+            _comboboxRefocus = false;
+            try {
+                _commitComboboxText(box, input);
+            } finally {
+                _comboboxRefocus = true;
+            }
+            _comboboxOptions(box).forEach(function (opt) { opt.style.display = ''; });
+            _setComboboxOpen(box, false);
         }
     });
 

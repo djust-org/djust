@@ -1378,9 +1378,16 @@ The combobox follows the WAI-ARIA combobox keyboard pattern. ArrowDown / ArrowUp
 move `aria-activedescendant` through the visible options, wrapping. Enter commits
 the active option, or a typed label that exactly matches an option, the same way a
 mouse pick does: the value event goes to the server, and the form isn't submitted.
-An exact typed label also commits when the input loses focus. Escape closes the
-list and restores the chosen label. After a pick, focus stays on the input, and
-the list stays closed until the next keystroke.
+An exact typed label also commits when the input loses focus, without pulling
+focus back: one Tab moves on, and the list is unfiltered the next time it opens.
+Escape closes the list and restores the chosen label. After a pick, focus stays
+on the input, and the list stays closed until the next keystroke.
+
+While its list is open, Escape belongs to the combobox alone. Inside a
+`{% modal %}` (native `<dialog>` or not) or a `{% sheet %}`, the first Escape
+closes only the list; the dialog's own Escape, the modal's keyboard handling and
+app-level bindings such as `dj-window-keydown.escape` don't see it. A second
+Escape, with the list closed, closes the dialog as before.
 
 ### Layouts under a LiveView base template
 
