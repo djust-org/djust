@@ -298,6 +298,7 @@
     height: 2.5rem;
     width: 100%;
     padding: 0.5rem 0.75rem;
+    font-family: inherit;
     font-size: 0.875rem;
     line-height: 1.25rem;
     background-color: hsl(var(--input-background, var(--background)));
