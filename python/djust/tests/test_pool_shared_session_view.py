@@ -32,6 +32,9 @@ from djust.state_backends.memory import InMemoryStateBackend
 pytest.importorskip("channels")
 
 VIEW = f"{__name__}._TablePage"
+#: Connect / close deadline. channels' default is 1 s, which a loaded CI runner
+#: exceeded while 48 sockets connected at once; only a hung socket reaches this.
+_SOCKET_TIMEOUT = 30
 _BORROW_MARKERS = (
     "Already borrowed",
     "Already mutably borrowed",
@@ -104,7 +107,7 @@ async def _one_page(key, results, delay=0.0, events=4):
     await asyncio.sleep(delay)
     comm = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
     comm.scope["session"] = _ScopeSession()
-    assert (await comm.connect())[0]
+    assert (await comm.connect(timeout=_SOCKET_TIMEOUT))[0]
     try:
         await comm.receive_json_from(timeout=10)
         await comm.send_json_to({"type": "mount", "view": VIEW, "url": "/table/"})
@@ -121,12 +124,16 @@ async def _one_page(key, results, delay=0.0, events=4):
                 while str((await comm.receive_json_from(timeout=30)).get("ref")) != str(ref):
                     pass
     finally:
-        await comm.disconnect()
+        await comm.disconnect(timeout=_SOCKET_TIMEOUT)
 
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
 async def test_many_sockets_of_one_session_on_one_page_do_not_race(pool, memory_backend, caplog):
+    """End to end: the shape the race was found in. Whether one run hits the
+    window depends on scheduling (with the fix reverted it failed 13 of 20
+    runs under ``-n 4``), so the regression guard is the deterministic pair
+    below; this one shows the whole path stays clean, and must never flake."""
     key = await _session_key()
     results: list = []
     caplog.set_level(logging.WARNING)
@@ -237,7 +244,7 @@ async def test_a_render_failure_at_mount_answers_with_an_error_frame(workers, mo
     monkeypatch.setattr(worker_pool, "_pool", [])
     with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__]):
         comm = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
-        assert (await comm.connect())[0]
+        assert (await comm.connect(timeout=_SOCKET_TIMEOUT))[0]
         try:
             await comm.receive_json_from(timeout=10)
             await comm.send_json_to(
@@ -245,5 +252,5 @@ async def test_a_render_failure_at_mount_answers_with_an_error_frame(workers, mo
             )
             frame = await comm.receive_json_from(timeout=10)
         finally:
-            await comm.disconnect()
+            await comm.disconnect(timeout=_SOCKET_TIMEOUT)
     assert frame["type"] == "error", frame
