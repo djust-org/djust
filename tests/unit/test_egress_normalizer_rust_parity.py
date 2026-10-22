@@ -17,6 +17,11 @@ to identical bytes over:
   character's class decides a rule: the ``\\s*`` before ``dj-if``, the ``\\b``
   after it, and the end of a preserved block's tag name.
 
+Beyond parity, the normalizer itself must not lose content (#3570 follow-up):
+no placeholder ever reaches the page, a block nested in a later preserved block
+(``<pre><script>…</script></pre>``) comes back verbatim, and page text that
+spells the placeholder is treated as text.
+
 It also pins that the port does the work: it may decline only the inputs it
 documents (the case-folding specials, a non-ASCII character right after
 ``dj-if`` in a comment), so a port that returned ``None`` everywhere fails.
@@ -342,3 +347,180 @@ def test_known_shapes():
     assert strip("<script>\n// c\nx()\n</script>") == "<script>\n// c\nx()\n</script>"
     assert strip("<style>a{}</style>\n<pre> a  b </pre>") == "<style>a{}</style><pre> a  b </pre>"
     assert strip("<p><b>A</b> <i>B</i></p>") == "<p><b>A</b> <i>B</i></p>"
+
+
+# --- the normalizer keeps content (no placeholder ever leaks) -------------
+
+_CORE = "PRESERVED_BLOCK_"
+_LOOKALIKE = "PRESERVEZ_BLOCK_"  # same length and character classes, no meaning
+
+
+def _strip(html: str) -> str:
+    return TemplateMixin()._strip_comments_and_whitespace(html)
+
+
+@pytest.mark.parametrize("seed", [3570, 1927, 1678])
+def test_no_placeholder_ever_leaks_and_lookalike_text_is_text(seed):
+    """Page text spelling the placeholder behaves exactly like any other text,
+    and output never holds a placeholder the input did not."""
+    leaks = []
+    for html in _fuzz_corpus(4000, seed):
+        assert _LOOKALIKE not in html
+        neutral = html.replace(_CORE, _LOOKALIKE)
+        out = _strip(neutral)
+        if _CORE in out:
+            leaks.append(neutral)
+        assert _strip(html) == out.replace(_LOOKALIKE, _CORE), html
+    assert not leaks, f"{len(leaks)} outputs hold a placeholder, e.g. {leaks[0]!r}"
+
+
+_OUTER = {
+    "pre": [("<pre>", "</pre>"), ('<pre class="x">', "</pre >")],
+    "code": [("<code>", "</code>"), ("<CODE>", "</code>")],
+    "textarea": [("<textarea>", "</textarea>"), ('<textarea name="t">', "</textarea\n>")],
+}
+_INNER = {
+    "script": ("<script>", "</script>"),
+    "style": ("<style>", "</style>"),
+    "pre": ("<pre>", "</pre>"),
+    "code": ("<code>", "</code>"),
+    "textarea": ("<textarea>", "</textarea>"),
+}
+_INNER_BODY = [
+    "\n x  y \n",
+    "// c\nvar s = '<!-- k -->';",
+    "a { b: c }",
+    "",
+    "  ",
+    "__PRESERVED_BLOCK_0__",
+    "<b>t</b>  <i>u</i>",
+    "é 🙂",
+]
+_AROUND = [
+    "",
+    "\n  ",
+    "<p> a  b </p>\n",
+    "<b>x</b> ",
+    "<!-- gone -->",
+    " <i>y</i>",
+    "<script>\n s \n</script>\n",
+    "<div>\n<p>q</p>\n</div>",
+]
+
+
+def _nested_cases(rng: random.Random):
+    for outer, forms in _OUTER.items():
+        for open_tag, close_tag in forms:
+            for _ in range(40):
+                parts = []
+                for _ in range(rng.randint(1, 4)):
+                    inner = rng.choice([t for t in _INNER if t != outer])
+                    i_open, i_close = _INNER[inner]
+                    body = rng.choice(_INNER_BODY)
+                    if inner not in ("script", "style"):
+                        # A comment in pre/code/textarea is a real comment,
+                        # stripped by design; only raw text keeps it.
+                        body = body.replace("<!-- k -->", "k")
+                    if inner in ("pre", "code", "textarea") and rng.random() < 0.4:
+                        deepest = rng.choice(["script", "style"])
+                        d_open, d_close = _INNER[deepest]
+                        body += d_open + rng.choice(_INNER_BODY) + d_close
+                    parts.append(rng.choice(["", " ", "\n  ", "w  w"]) + i_open + body + i_close)
+                block = open_tag + "".join(parts) + rng.choice(["", "\n", " t "]) + close_tag
+                yield rng.choice(_AROUND), block, rng.choice(_AROUND), (open_tag, close_tag)
+
+
+def test_a_block_nested_in_a_later_preserved_block_comes_back_verbatim():
+    """``<pre><script>…</script></pre>``: the script is hidden first, so the
+    ``<pre>`` block holds its placeholder. The whole ``<pre>`` must reach the
+    page as Django rendered it — the expected output is the page normalized
+    with a plain stand-in block, the stand-in then swapped for the original."""
+    rng = random.Random(1927)
+    count = 0
+    for k, (before, block, after, (open_tag, close_tag)) in enumerate(_nested_cases(rng)):
+        stand_in = f"{open_tag}STANDIN{k}{close_tag}"
+        page = f"<div>{before}{block}{after}</div>"
+        expected = _strip(f"<div>{before}{stand_in}{after}</div>").replace(stand_in, block)
+        got = _strip(page)
+        assert got == expected, f"{page!r}\n got={got!r}\n exp={expected!r}"
+        assert _PY(page) == expected
+        assert "PRESERVED_BLOCK" not in got.replace("__PRESERVED_BLOCK_0__", "")
+        count += 1
+    assert count == 240
+
+
+def test_fixed_shapes():
+    """The two former losses, pinned literally."""
+    assert (
+        _strip("<div>\n <pre> a\n <script>\n x  y\n</script>\n</pre>\n</div>")
+        == "<div><pre> a\n <script>\n x  y\n</script>\n</pre></div>"
+    )
+    assert (
+        _strip('<p title="__PRESERVED_BLOCK_0__">hi</p>\n<script>\na("b")\n</script>')
+        == '<p title="__PRESERVED_BLOCK_0__">hi</p><script>\na("b")\n</script>'
+    )
+    # A removed comment that spells the placeholder out is page text too.
+    assert (
+        _strip("<p>__PRESERVED_<!-- c -->BLOCK_0__</p>\n<script>s</script>")
+        == "<p>__PRESERVED_BLOCK_0__</p><script>s</script>"
+    )
+    assert _strip("<p>PRESERVED_<!---->BLOCK_~x</p>") == "<p>PRESERVED_BLOCK_~x</p>"
+
+
+_LEFT = [
+    "__PRESERVED_",
+    "_PRESERVED_BLOCK",
+    "PRESERVED_BLOCK",
+    "__PRES",
+    "x__PRESERVED_BLOCK_",
+    "PRESERVED_",
+    "",
+    "a b",
+]
+_RIGHT = [
+    "BLOCK_0__",
+    "_0__",
+    "ERVED_BLOCK_0__",
+    "BLOCK_~",
+    "__PRESERVED_BLOCK_~",
+    "_~x",
+    "~0__",
+    "BLOCK_1__ tail",
+    "",
+]
+_SPLIT = ["<!-- c -->", "<!---->", "<!--\n-->"]
+
+
+def test_a_placeholder_spelled_out_by_a_removed_comment_is_text():
+    """``__PRESERVED_<!-- c -->BLOCK_0__`` reads as a placeholder once the
+    comment is gone; it is page text, so the page keeps it and the script
+    stays where it was. Both implementations, every split."""
+    count = 0
+    for left in _LEFT:
+        for right in _RIGHT:
+            for split in _SPLIT:
+                for tail in ("", "_", "__PRESERVED_BLOCK_0__"):
+                    page = f"<p>{left}{split}{right}{tail}</p>\n<script>\n s \n</script>\n<pre> p </pre>"
+                    expected = f"<p>{left}{right}{tail}</p><script>\n s \n</script><pre> p </pre>"
+                    assert _strip(page) == expected, page
+                    assert _PY(page) == expected, page
+                    count += 1
+    # A join right before one of the normalizer's own placeholders borrows its
+    # underscore; that is not page text and must not be escaped.
+    for page, expected in [
+        (
+            "<p>PRESERVED_BLOCK<!----><script>x</script></p>",
+            "<p>PRESERVED_BLOCK<script>x</script></p>",
+        ),
+        (
+            "<p>PRESERVED_BLOCK_<!----><code> a </code></p>",
+            "<p>PRESERVED_BLOCK_<code> a </code></p>",
+        ),
+        (
+            "<p>__PRESERVED_<!---->BLOCK_<!---->0__<script>y</script></p>",
+            "<p>__PRESERVED_BLOCK_0__<script>y</script></p>",
+        ),
+    ]:
+        assert _strip(page) == expected, page
+        assert _PY(page) == expected, page
+    assert count == len(_LEFT) * len(_RIGHT) * len(_SPLIT) * 3

@@ -697,6 +697,11 @@ def test_old_occurrence_address_is_refused():
         "<style>/* <!-- literal --> */\np { white-space: pre; }</style>",
         "<pre>é\n  🙂</pre>\n<code> x  y </code>\n<textarea>a\n b</textarea>",
         "<!-- removed --><b>é</b> \n <i>🙂</i>",
+        # A raw-text block inside a later preserved block, and page text that
+        # spells the placeholder: the plain path now restores both as the
+        # tracked path always did.
+        "<pre> a\n <script>\n x  y\n</script>\n</pre>\n<textarea> <style>p {}</style> </textarea>",
+        "<p>__PRESERVED_BLOCK_0__ and __PRESERVED_<!-- c -->BLOCK_1__</p>\n<pre> z </pre>",
     ],
 )
 def test_tracked_normalization_is_byte_identical_and_keeps_real_container_authority(middle):

@@ -10,7 +10,7 @@ import os
 import re
 import threading
 from html import escape as _html_escape
-from typing import Any, Dict, Optional, Tuple, TYPE_CHECKING
+from typing import Any, Callable, Dict, List, Optional, Tuple, TYPE_CHECKING
 
 from .._child_rendering import reconcile_child_render
 from ..template_libraries import library_render_scope
@@ -598,6 +598,54 @@ def _search_template_root_open(template: str) -> "Optional[re.Match[str]]":
 
 _BLOCK_TAG_RE = re.compile(r"<([A-Za-z][^\s/>]*)")
 
+# The egress normalizer hides whitespace-preserving blocks behind
+# ``__PRESERVED_BLOCK_<n>__`` placeholders. Page text that already spells the
+# placeholder's core (a user-supplied value, a page documenting this very
+# function) is escaped to ``PRESERVED_BLOCK_~`` for the duration of the pass, so
+# only the normalizer's own placeholders are ever treated as one, and the
+# escape is undone at the end. ``djust_core::html_whitespace`` does the same.
+_MARKER_CORE = "PRESERVED_BLOCK_"
+_MARKER_CORE_ESCAPED = "PRESERVED_BLOCK_~"
+_PLACEHOLDER_RE = re.compile(r"__PRESERVED_BLOCK_([0-9]+)__")
+_COMMENT_RE = re.compile(r"<!--(?!\s*/?dj-if\b).*?-->", re.DOTALL)
+
+
+def _escape_joined_markers(html: str, joins: List[int], cat: Callable[[List[str]], str]) -> str:
+    """Escape a placeholder core that removing a comment spelled out.
+
+    ``PRESERVED_<!-- x -->BLOCK_0__`` reads ``PRESERVED_BLOCK_0__`` once the
+    comment is gone, and was not escaped up front because the input did not
+    contain it. An occurrence straddling a join is page text, unless it only
+    exists by borrowing an underscore of one of the normalizer's own
+    placeholders (whose real text starts with ``<``).
+    """
+    core = len(_MARKER_CORE)
+    straddling: List[int] = []
+    for j in joins:
+        k = html.find(_MARKER_CORE, max(0, j - core + 1), j + core - 1)
+        while k != -1:
+            if k < j < k + core and (not straddling or straddling[-1] != k):
+                straddling.append(k)
+            k = html.find(_MARKER_CORE, k + 1, j + core - 1)
+    if not straddling:
+        return html
+    straddling = sorted(set(straddling))
+    forged = set(straddling)
+    ours = [
+        (m.start(), m.end()) for m in _PLACEHOLDER_RE.finditer(html) if m.start() + 2 not in forged
+    ]
+    parts: List[str] = []
+    cursor = 0
+    for k in straddling:
+        if any(a < k + core and k < b for a, b in ours):
+            continue
+        parts.extend((html[cursor : k + core], "~"))
+        cursor = k + core
+    if not parts:
+        return html
+    parts.append(html[cursor:])
+    return cat(parts)
+
 
 class TemplateMixin:
     """Template-related methods: get_template, render, render_full_template, render_with_diff,
@@ -969,6 +1017,20 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                 return RenderedHTML(self._strip_comments_and_whitespace(str(html)))
             html = RenderedHTML(html, spans, html.held, html.origins)
 
+        from .._render_provenance import join
+
+        is_rendered = isinstance(html, RenderedHTML)
+
+        def cat(parts: List[str]) -> str:
+            return join(parts) if is_rendered else "".join(parts)
+
+        # Page text spelling the placeholder core is escaped for the pass, so
+        # a value such as ``__PRESERVED_BLOCK_0__`` is never mistaken for a
+        # placeholder (and replaced with the page's first <script>).
+        escaped = _MARKER_CORE in html
+        if escaped:
+            html = sub(re.escape(_MARKER_CORE), _MARKER_CORE_ESCAPED, html)
+
         preserved_blocks: list[str] = []
 
         def preserve_block(match: "re.Match[str]") -> str:
@@ -1015,7 +1077,18 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         # Remove HTML comments — but NOT dj-if boundary markers (#1678). The
         # negative lookahead skips comments whose body is ``dj-if …`` or
         # ``/dj-if`` so they survive; all other comments are stripped.
-        html = sub(r"<!--(?!\s*/?dj-if\b).*?-->", "", html, flags=re.DOTALL)
+        parts: List[str] = []
+        joins: List[int] = []
+        cursor = kept = 0
+        for comment in _COMMENT_RE.finditer(html):
+            piece = html[cursor : comment.start()]
+            parts.append(piece)
+            kept += len(piece)
+            joins.append(kept)
+            cursor = comment.end()
+        if joins:
+            parts.append(html[cursor:])
+            html = _escape_joined_markers(cat(parts), joins, cat)
 
         # Preserve whitespace inside <pre>, <code>, and <textarea> tags
         html = sub(
@@ -1062,14 +1135,29 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
             block_tags.append(m.group(1).lower() if m else "")
         html = collapse(html, block_tags)
 
-        # Restore preserved blocks
-        from .._render_provenance import RenderedHTML, restore_preserved
+        # Restore preserved blocks, each verbatim — including the ones a later
+        # block swallowed (a <script> inside a <pre> is hidden first, so the
+        # <pre> block holds its placeholder): expand those recursively. Only
+        # the normalizer's own placeholders are left unescaped at this point.
+        from .._render_provenance import restore_preserved
 
         if isinstance(html, RenderedHTML):
-            return restore_preserved(html)
-        for i, block in enumerate(preserved_blocks):
-            html = html.replace(f"__PRESERVED_BLOCK_{i}__", block)
+            html = restore_preserved(html)
+        else:
 
+            def expand(text: str) -> str:
+                return _PLACEHOLDER_RE.sub(
+                    lambda m: (
+                        expand(preserved_blocks[int(m.group(1))])
+                        if int(m.group(1)) < len(preserved_blocks)
+                        else m.group(0)
+                    ),
+                    text,
+                )
+
+            html = expand(html)
+        if _MARKER_CORE_ESCAPED in html:
+            html = html.replace(_MARKER_CORE_ESCAPED, _MARKER_CORE)
         return html
 
     async def arender_chunks(
