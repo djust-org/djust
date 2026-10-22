@@ -460,7 +460,8 @@ and saturation kept, to the nearest lightness that reads: usually to dark ink on
 fill. No fill, background or border token moved: only the label tokens and `link` / `link_hover` changed. `--muted-foreground` is also drawn as dots, switch tracks and scrollbar thumbs, which follow its move (away from the page). A label is only painted on the fill it belongs to; a test scans every rule that sets `color` from a `--*-foreground` token and requires the same rule's background to be that fill. A move must also not make its label read worse where else it is painted (a solid button's hover fill, the `--code` surface behind syntax comments): the solver keeps those, and a move that cannot is held and documented.
 Some pairs are documented exemptions in `djust.theming.a11y_exemptions` on purpose:
 tokens whose source documents a brand hex that the palette keeps (monokai and stripe
-`link`, github and stripe muted text), and the `--input` border, which is a non-text UI
+`link`, github and stripe muted text), and the `--input` border (a border only; a field's
+fill is `--input-background`, the page background by default), which is a non-text UI
 component whose 3:1 (WCAG 1.4.11) is not applied to the shipped presets (revisit on
 request). User-authored presets are still measured on all of them. `accent_foreground`
 is the one label still open, because `.status-badge-accent` paints it as a background.
