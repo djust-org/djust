@@ -5,6 +5,11 @@ relative imports are made absolute), kept as a test oracle. The tests in
 ``test_theming_lazy_context_3028.py`` and ``test_theming_lazy_paths_3028.py`` render a
 page through this processor and through the lazy one and require the same bytes.
 Do not "fix" it: its job is to stay the old behaviour.
+
+One deliberate exception (maintainer's decision, 2026-10-22): the theme switcher's
+``.theme-mode-btn`` and ``.theme-preset-select`` rules carry ``font-family: inherit``
+here as in the live processor, so the switcher uses the page font. Every other byte
+is still the copy at ``b44f7905a``.
 """
 
 import logging
@@ -347,6 +352,7 @@ def _render_theme_switcher(state: ThemeState, presets: list[dict]) -> str:
     color: hsl(var(--muted-foreground));
     border-radius: calc(var(--radius) - 0.125rem);
     cursor: pointer;
+    font-family: inherit;
     transition: all 0.15s ease;
 }}
 .theme-mode-btn:hover {{
@@ -365,6 +371,7 @@ def _render_theme_switcher(state: ThemeState, presets: list[dict]) -> str:
     background-color: hsl(var(--background));
     color: hsl(var(--foreground));
     color-scheme: light;
+    font-family: inherit;
     font-size: 0.875rem;
     cursor: pointer;
     appearance: none;

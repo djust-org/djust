@@ -187,3 +187,14 @@ def test_theme_pack_buttons_inherit():
 
     css = ThemePackCSSGenerator("corporate").generate_css()
     assert _family(_generated_body(css, "button, a, .clickable")) == "inherit"
+
+
+def test_theme_switcher_controls_inherit():
+    from djust.theming.context_processors import _render_theme_switcher
+    from djust.theming.manager import ThemeState
+
+    state = ThemeState(theme="material", preset="default", mode="light", resolved_mode="light")
+    presets = [{"name": "default", "display_name": "Default", "is_active": True}]
+    html = _render_theme_switcher(state, presets)
+    for selector in (".theme-mode-btn", ".theme-preset-select"):
+        assert _family(_generated_body(html, selector)) == "inherit", selector
