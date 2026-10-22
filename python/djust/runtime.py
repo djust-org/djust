@@ -2227,7 +2227,7 @@ class WSConsumerTransport:
 
         consumer = self._consumer
         try:
-            from .auth.core import check_view_auth_lightweight
+            from .auth.core import acheck_view_auth_lightweight
 
             fresh_user = await _stored_scope_user(consumer.scope)
             # The mount request is stored on the view (handle_mount:
@@ -2238,7 +2238,8 @@ class WSConsumerTransport:
                 # bespoke guard, which only re-checks when a request exists).
                 return True
             request.user = fresh_user  # reflect current auth for the check + handler
-            authorized = await sync_to_async(check_view_auth_lightweight)(view, request)
+            # An ``async def check_permissions`` is awaited on the loop.
+            authorized = await acheck_view_auth_lightweight(view, request)
         except Exception as exc:  # noqa: BLE001 — fail CLOSED: an unverifiable check denies
             # Only the exception TYPE and view class are logged — never the
             # message, traceback or request data (log-exposure pin).
@@ -2846,7 +2847,7 @@ class SSESessionTransport:
 
         session = self._session
         try:
-            from .auth.core import check_view_auth_lightweight
+            from .auth.core import acheck_view_auth_lightweight
 
             # The live event-POST request, stamped on the session by the SSE
             # endpoint right before dispatch. Falls back to the mount request
@@ -2856,7 +2857,8 @@ class SSESessionTransport:
             request = getattr(session, "_event_request", None) or getattr(session, "_request", None)
             if request is None:
                 return True
-            authorized = await sync_to_async(check_view_auth_lightweight)(view, request)
+            # An ``async def check_permissions`` is awaited on the loop.
+            authorized = await acheck_view_auth_lightweight(view, request)
         except Exception as exc:  # noqa: BLE001 — fail CLOSED: an unverifiable check denies
             # Only the exception TYPE and view class are logged — never the
             # message, traceback or request data (log-exposure pin).
@@ -4681,9 +4683,9 @@ class ViewRuntime(RuntimeTurnPort):
                 return
             if not uses_legacy_exposure(self.view_instance):
                 try:
-                    from ._exposure_auth import authorize_event
+                    from ._exposure_auth import aauthorize_event
 
-                    authorized_request = await sync_to_async(authorize_event)(
+                    authorized_request = await aauthorize_event(
                         self.view_instance, explicit_request, self._explicit_mount_binding
                     )
                     self.view_instance._djust_event_request = authorized_request
@@ -6958,13 +6960,19 @@ class ViewRuntime(RuntimeTurnPort):
           fail-closed envelope, matching the WebSocket mount path which already
           aborts on any non-auth-verdict exception during this sequence.
         """
-        from .auth import run_pre_mount_auth
+        from .auth import arun_pre_mount_auth, run_pre_mount_auth
+        from .auth.core import has_async_check_permissions
         from django.core.exceptions import PermissionDenied
 
         auth_view = self.view_instance
         legacy_diagnostics = _diagnostics_policy_allows(auth_view)
         try:
-            redirect_url = await sync_to_async(run_pre_mount_auth)(self.view_instance, request)
+            if has_async_check_permissions(auth_view):
+                # ``async def check_permissions``: awaited on the event loop, in
+                # this turn's context, never on the shared sync thread.
+                redirect_url = await arun_pre_mount_auth(auth_view, request)
+            else:
+                redirect_url = await sync_to_async(run_pre_mount_auth)(auth_view, request)
         except PermissionDenied:
             if not await self._refused_view("permission_denied"):
                 await self.transport.send(
@@ -7298,8 +7306,8 @@ class ViewRuntime(RuntimeTurnPort):
         deny with :meth:`deny_explicit_turn` and never stringify the exception.
         """
         from ._exposure import ExposureError
-        from ._exposure_auth import authorize_event, fresh_socket_request
-        from .auth.core import enforce_object_permission
+        from ._exposure_auth import aauthorize_event, authorize_event, fresh_socket_request
+        from .auth.core import enforce_object_permission, has_async_check_permissions
 
         binding = self._explicit_mount_binding
         if view is None or view is not self.view_instance or binding is None:
@@ -7310,7 +7318,14 @@ class ViewRuntime(RuntimeTurnPort):
             enforce_object_permission(view, request)
             return request
 
-        request = await sync_to_async(_authorize)()
+        if has_async_check_permissions(view):
+            # ``async def check_permissions``: awaited on the loop, not the sync thread.
+            request = await aauthorize_event(
+                view, await sync_to_async(fresh_socket_request)(view), binding
+            )
+            await sync_to_async(enforce_object_permission)(view, request)
+        else:
+            request = await sync_to_async(_authorize)()
         # Authorization hooks are application code; their success does not
         # prove the owner was left in place.
         if view is not self.view_instance:

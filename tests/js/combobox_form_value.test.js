@@ -16,10 +16,10 @@ import fs from 'fs';
 
 const clientCode = fs.readFileSync('./python/djust/static/djust/client.js', 'utf-8');
 
-function combobox({ value = '', shown = '', freeText = false } = {}) {
+function combobox({ value = '', shown = '', freeText = false, clientFilter = true } = {}) {
     return `
 <form id="f"><div class="form-group">
-  <div class="combobox" id="id_run-city-combobox"${freeText ? ' data-allow-free-text' : ''}>
+  <div class="combobox" id="id_run-city-combobox"${freeText ? ' data-allow-free-text' : ''}${clientFilter ? ' data-filter="client"' : ''}>
     <input type="hidden" class="combobox-value" id="id_run-city-value" name="run-city" value="${value}">
     <input class="combobox-input form-input" type="text" id="id_run-city" placeholder="Search" value="${shown}"
            role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="id_run-city-listbox" autocomplete="off">
@@ -123,5 +123,29 @@ describe('rich_select submits the selected value', () => {
         expect(trigger.querySelector('.rich-select-chevron')).not.toBeNull();
         expect(doc.querySelector('[data-value="b"]').getAttribute('aria-selected')).toBe('true');
         expect(doc.querySelector('.rich-select').classList.contains('rich-select--open')).toBe(false);
+    });
+});
+
+describe('combobox without a search handler filters on the client', () => {
+    function typeOnly(dom, input, text) {
+        input.value = text;
+        input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    }
+
+    it('typing hides the options that do not contain the text', () => {
+        const dom = createDom(combobox());
+        const doc = dom.window.document;
+        typeOnly(dom, doc.querySelector('.combobox-input'), 'et');
+        expect(doc.querySelector('[data-value="a"]').style.display).toBe('none');
+        expect(doc.querySelector('[data-value="b"]').style.display).toBe('');
+        typeOnly(dom, doc.querySelector('.combobox-input'), '');
+        expect(doc.querySelector('[data-value="a"]').style.display).toBe('');
+    });
+
+    it('a combobox with a server search event is left to the server', () => {
+        const dom = createDom(combobox({ clientFilter: false }));
+        const doc = dom.window.document;
+        typeOnly(dom, doc.querySelector('.combobox-input'), 'et');
+        expect(doc.querySelector('[data-value="a"]').style.display).toBe('');
     });
 });

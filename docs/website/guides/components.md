@@ -1329,7 +1329,17 @@ Both forms take `role="alertdialog"` for a dialog that needs an answer (the
 default is `dialog`). `description="..."` renders a description paragraph that
 `aria-describedby` names, and `describedby=` adds ids of your own.
 `close_button=False` omits the × button. On the `<div>` modal, mark your own
-closing control `data-dj-close` to keep Escape-to-close.
+closing control `data-dj-close` to keep Escape-to-close. `heading_level=2`
+(2–6, default 3) sets the title's heading element. For a description built in the
+template, put a `{% modal_description %}` block in the body. The modal gives it
+the description id and names it in `aria-describedby`:
+
+```django
+{% modal open=show native=True title="Send request" heading_level=2 %}
+  {% modal_description %}Approvers in <strong>{{ team }}</strong> are notified.{% endmodal_description %}
+  ...
+{% endmodal %}
+```
 
 ```django
 {% modal open=show_request native=True title="Request access" close_event="close_request" %}
@@ -1356,6 +1366,13 @@ focus, unless the combobox has `allow_free_text=True`, in which case the text is
 the value. With `field=`, the ids derive from the field's `auto_id`, form prefix
 included, like Django's own widgets, so two forms rendering the same field on
 one page don't collide. Pass `id=` to set them yourself.
+
+Picking an option sends the field's name as `field` (as other form inputs do)
+when the component is a form field (`field=`) or its `event` is
+`validate_field`, so `FormMixin.validate_field` validates that field. The
+combobox only searches on the server when you give it `search_event=`; without
+one, typing filters the given options in the browser, so a plain Django form
+needs no search handler.
 
 ### Layouts under a LiveView base template
 

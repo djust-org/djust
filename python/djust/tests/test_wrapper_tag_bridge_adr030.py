@@ -68,7 +68,7 @@ def test_the_component_census_matches_adr_030():
     reasons = {
         name: tl._wrapper_refusal(name, library.tags[name]) for name in _raw_body_tags(library)
     }
-    assert len(reasons) == 58
+    assert len(reasons) == 59
     assert all(reasons[name] is None for name in FIVE)
     assert "more than one body segment" in reasons["split_pane"]
     # confirm_dialog_block renders its body only when open; it has its own
@@ -82,7 +82,9 @@ def test_the_component_census_matches_adr_030():
     refused = sorted(name for name, reason in reasons.items() if reason is not None)
     # A deliberate pin: a new body-consuming component tag moves one of these
     # counts, and the change should say which side it landed on.
-    assert len(wrappers) == 40 and len(refused) == 18, (wrappers, refused)
+    # modal_description (a wrapper: it always renders its body) is the 41st;
+    # it has its own Rust block handler, so it does not need the bridge.
+    assert len(wrappers) == 41 and len(refused) == 18, (wrappers, refused)
 
 
 def test_a_bridged_wrapper_renders_through_the_rust_engine(bridged_components):

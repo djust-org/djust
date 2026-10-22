@@ -4,7 +4,7 @@ RustBridgeMixin - Rust backend integration for LiveView.
 
 import hashlib
 import logging
-from typing import TYPE_CHECKING, Any, ClassVar, Dict, Iterable, List, Optional, Set, Union
+from typing import TYPE_CHECKING, Any, ClassVar, Dict, Iterable, List, Optional, Set, Tuple, Union
 from urllib.parse import parse_qs, urlencode
 
 from django.utils.datastructures import MultiValueDict
@@ -18,6 +18,7 @@ from .._exposure_providers import (
 from ..change_detection import deep_fingerprint, fingerprints_by_content, warn_fingerprint_truncated
 from ..security import sanitize_for_log
 from ..serialization import normalize_django_value
+from ..state_pass import convert_for_render, fingerprint_and_convert
 from ..template_filters import _ensure_custom_filters_bridged
 from ..utils import get_template_dirs
 from ..render_env import apply_render_env
@@ -958,6 +959,11 @@ class RustBridgeMixin:
             # (#2664). Computed at most once per key per sync (compare + store).
             prev_fps = getattr(self, "_prev_context_fingerprints", {})
             new_fps: Dict[str, Any] = {}
+            # Safe-key paths + rendered value of a key whose fingerprint was
+            # taken in the same walk (``state_pass``): the key is being sent,
+            # so the walk below that finds its SafeStrings and converts it for
+            # Rust need not run again.
+            converted_by_fp: Dict[str, Tuple[List[str], Any]] = {}
 
             # ADR-031 / #2900: a class-level component is an opaque wrapper
             # whose State is the thing that changes. ``fingerprints_by_content``
@@ -968,10 +974,15 @@ class RustBridgeMixin:
             def _is_structural(value: Any) -> bool:
                 return isinstance(value, (dict, list, tuple)) or fingerprints_by_content(value)
 
-            def _fp_of(key: str, value: Any) -> Any:
+            def _fp_of(key: str, value: Any, convert: bool = False) -> Any:
                 fp = new_fps.get(key, _MISSING)
                 if fp is _MISSING:
-                    fp, truncated = deep_fingerprint(value)
+                    if convert:
+                        fp, truncated, converted = fingerprint_and_convert(value, key)
+                        if converted is not None:
+                            converted_by_fp[key] = converted
+                    else:
+                        fp, truncated = deep_fingerprint(value)
                     new_fps[key] = fp
                     if truncated:
                         warn_fingerprint_truncated(type(self), key, value)
@@ -1088,8 +1099,11 @@ class RustBridgeMixin:
                 for k, v in full_context.items()
                 if k not in _request_scoped_keys and isinstance(v, _IMMUTABLE_TYPES_FOR_SYNC)
             }
+            # A key already known to be sent (first render, a new key, a
+            # changed name, ...) has not been fingerprinted yet: take the
+            # fingerprint, the SafeString paths and the Rust value in one walk.
             self._prev_context_fingerprints = {
-                k: _fp_of(k, v)
+                k: _fp_of(k, v, convert=context.get(k, _MISSING) is v)
                 for k, v in full_context.items()
                 if k not in _request_scoped_keys and _is_structural(v)
             }
@@ -1108,6 +1122,9 @@ class RustBridgeMixin:
             safe_keys: List[str] = []
             sidecar_only_keys: Set[str] = set()
             rendered_context: Dict[str, Any] = {}
+            # Rust values already produced by ``state_pass``; every other key
+            # goes through ``normalize_django_value`` below as before.
+            converted_values: Dict[str, Any] = {}
             needs_normalize = False
             for key, value in context.items():
                 # #1786: request-scoped, framework-provided context values
@@ -1152,14 +1169,30 @@ class RustBridgeMixin:
                         safe_keys.append(key)
                     rendered_context[key] = value
                 else:
-                    # Complex types (dict, list, etc.): full scan
-                    safe_keys.extend(_collect_safe_keys(value, key))
+                    # Complex types (dict, list, etc.): full scan. One walk
+                    # finds the SafeStrings and converts the value
+                    # (``state_pass``); a shape it does not handle returns
+                    # None and takes the original two passes.
+                    converted = converted_by_fp.get(key)
+                    if converted is None:
+                        converted = convert_for_render(value, key)
+                    if converted is None:
+                        safe_keys.extend(_collect_safe_keys(value, key))
+                    else:
+                        safe_keys.extend(converted[0])
+                        converted_values[key] = converted[1]
                     rendered_context[key] = value
                     needs_normalize = True
 
             # Skip normalize_django_value when context only has JSON-native types
             if needs_normalize:
-                json_compatible_context = normalize_django_value(rendered_context)
+                # ``normalize_django_value`` of a plain dict is its values
+                # normalized one by one; the keys ``state_pass`` already
+                # converted are taken as they are.
+                json_compatible_context = {
+                    k: (converted_values[k] if k in converted_values else normalize_django_value(v))
+                    for k, v in rendered_context.items()
+                }
             else:
                 json_compatible_context = rendered_context
 

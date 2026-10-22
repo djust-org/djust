@@ -153,6 +153,10 @@ def _walk(value: Any, counter: List[int], depth: int, path_ids: Tuple[int, ...])
     exact scalar leaves are handled here without a call per leaf; anything
     else goes to :func:`_walk_general`. The output is identical, node for
     node and budget unit for budget unit, in the same order.
+
+    ``state_pass._fused`` repeats this walk while converting the value for
+    the Rust sync; a change here must be made there too
+    (``test_state_single_pass.py`` compares the two).
     """
     t = type(value)
     if t in _EXACT_SCALARS:

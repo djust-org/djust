@@ -94,18 +94,57 @@ def check_view_auth(
             permissions or ``check_permissions()`` refuses them. Matches
             Django's PermissionRequiredMixin behavior.
     """
-    login_required = getattr(view_instance, "login_required", None) or any(
-        _is_djust_auth_login_mixin(k) for k in type(view_instance).__mro__
+    login_url = _view_login_url(view_instance)
+
+    # 1 + 2. Login and permission_required.
+    redirect = _check_login_and_permission(view_instance, request, login_url)
+    if redirect is not None:
+        return redirect
+
+    # 3. Custom hook (only if subclass overrides it). A refusal follows the
+    #    same rule as step 2 and Django's AccessMixin.handle_no_permission():
+    #    a signed-in person is refused with a 403 (PermissionDenied), only an
+    #    anonymous one is sent to sign in. An ``async def check_permissions``
+    #    is awaited (``_await_test``): from a worker thread on the serving
+    #    loop, refused with an error on the loop's own thread. Async callers
+    #    use :func:`acheck_view_auth`, which awaits it on the loop instead.
+    if _has_custom_check_permissions(view_instance):
+        try:
+            result = view_instance.check_permissions(request)
+            if inspect.isawaitable(result):
+                pending = result
+                result = _await_test(lambda: pending)
+        except PermissionDenied:
+            if _custom_check_raised(view_instance, request):
+                raise
+            return login_url
+        redirect = _custom_check_verdict(view_instance, request, login_url, result)
+        if redirect is not None:
+            return redirect
+
+    # 4 + 5. Django's access mixins; access control only HTTP dispatch runs.
+    return _check_after_custom(
+        view_instance, request, login_url, http_dispatched=http_dispatched, event=event
     )
-    permission_required = getattr(view_instance, "permission_required", None)
+
+
+def _view_login_url(view_instance: Any) -> str:
     # ``LOGIN_URL`` is always a non-empty str (Django default
     # ``/accounts/login/``); cast for the strict ``login_url: str`` contract
     # without altering the original ``or``-fallback runtime behavior.
-    login_url: str = cast(
+    return cast(
         str,
         getattr(view_instance, "login_url", None)
         or getattr(settings, "LOGIN_URL", "/accounts/login/"),
     )
+
+
+def _check_login_and_permission(view_instance: Any, request: Any, login_url: str) -> Optional[str]:
+    """Steps 1 and 2 of :func:`check_view_auth` (same contract)."""
+    login_required = getattr(view_instance, "login_required", None) or any(
+        _is_djust_auth_login_mixin(k) for k in type(view_instance).__mro__
+    )
+    permission_required = getattr(view_instance, "permission_required", None)
 
     # 1. Login check (also Django's LoginRequiredMiddleware, see
     #    djust.auth._login_required_middleware)
@@ -140,31 +179,41 @@ def check_view_auth(
             if getattr(user, "is_authenticated", False):
                 raise PermissionDenied(f"User lacks required permission(s): {required}")
             return login_url
+    return None
 
-    # 3. Custom hook (only if subclass overrides it). A refusal follows the
-    #    same rule as step 2 and Django's AccessMixin.handle_no_permission():
-    #    a signed-in person is refused with a 403 (PermissionDenied), only an
-    #    anonymous one is sent to sign in.
-    if _has_custom_check_permissions(view_instance):
-        try:
-            result = view_instance.check_permissions(request)
-        except PermissionDenied:
-            logger.info(
-                "Auth denied for %s: check_permissions() raised PermissionDenied",
-                view_instance.__class__.__name__,
-            )
-            if _is_authenticated(request):
-                raise
-            return login_url
-        if result is False:
-            logger.info(
-                "Auth denied for %s: check_permissions() returned False",
-                view_instance.__class__.__name__,
-            )
-            if _is_authenticated(request):
-                raise PermissionDenied("check_permissions() refused the request")
-            return login_url
 
+def _custom_check_raised(view_instance: Any, request: Any) -> bool:
+    """``check_permissions()`` raised PermissionDenied: log it.
+
+    Returns True when the caller re-raises it (a signed-in person: 403);
+    False when the caller sends the anonymous person to sign in.
+    """
+    logger.info(
+        "Auth denied for %s: check_permissions() raised PermissionDenied",
+        view_instance.__class__.__name__,
+    )
+    return _is_authenticated(request)
+
+
+def _custom_check_verdict(
+    view_instance: Any, request: Any, login_url: str, result: Any
+) -> Optional[str]:
+    """Map ``check_permissions()``'s return value: only ``False`` refuses."""
+    if result is False:
+        logger.info(
+            "Auth denied for %s: check_permissions() returned False",
+            view_instance.__class__.__name__,
+        )
+        if _is_authenticated(request):
+            raise PermissionDenied("check_permissions() refused the request")
+        return login_url
+    return None
+
+
+def _check_after_custom(
+    view_instance: Any, request: Any, login_url: str, *, http_dispatched: bool, event: bool
+) -> Optional[str]:
+    """Steps 4 and 5 of :func:`check_view_auth` (same contract)."""
     # 4. Honor Django's standard auth mixins (the AccessMixin family).
     #    These enforce via ``dispatch()`` on the HTTP path, but the WS/SSE
     #    mount path authorizes through this function rather than dispatch().
@@ -2049,6 +2098,109 @@ def check_view_auth_lightweight(view_instance: Any, request: Any) -> bool:
         return check_view_auth(view_instance, request) is None
     except PermissionDenied:
         return False
+
+
+def has_async_check_permissions(view_instance: Any) -> bool:
+    """Whether the view overrides ``check_permissions`` with an ``async def``.
+
+    A sync-looking wrapper around an ``async def`` (``functools.wraps``) counts.
+    """
+    if not _has_custom_check_permissions(view_instance):
+        return False
+    from .._view_hooks import is_async_hook
+
+    return is_async_hook(getattr(view_instance, "check_permissions", None))
+
+
+async def acheck_view_auth(
+    view_instance: Any, request: Any, *, http_dispatched: bool = False, event: bool = False
+) -> Optional[str]:
+    """:func:`check_view_auth` for async callers (same contract, same order).
+
+    A view with ``async def check_permissions(self, request)`` has the check
+    awaited here, on the event loop, in the caller's context (turn middleware
+    context variables are visible); the steps around it (login,
+    ``permission_required``, Django's access mixins, HTTP-only access
+    control) run in a worker thread as before, since they may touch the ORM.
+    A sync check runs exactly as before: the whole of :func:`check_view_auth`
+    in one ``sync_to_async`` call.
+
+    A refusal is the same as :func:`check_view_auth`'s: a login URL for an
+    anonymous person, :class:`PermissionDenied` for a signed-in one. Any other
+    exception from the check propagates; every caller fails closed on it.
+    """
+    from asgiref.sync import sync_to_async
+
+    if not has_async_check_permissions(view_instance):
+        return await sync_to_async(check_view_auth)(
+            view_instance, request, http_dispatched=http_dispatched, event=event
+        )
+
+    login_url = _view_login_url(view_instance)
+    redirect = await sync_to_async(_check_login_and_permission)(view_instance, request, login_url)
+    if redirect is not None:
+        return redirect
+    try:
+        result = await view_instance.check_permissions(request)
+    except PermissionDenied:
+        if _custom_check_raised(view_instance, request):
+            raise
+        return login_url
+    redirect = _custom_check_verdict(view_instance, request, login_url, result)
+    if redirect is not None:
+        return redirect
+    return await sync_to_async(_check_after_custom)(
+        view_instance, request, login_url, http_dispatched=http_dispatched, event=event
+    )
+
+
+async def acheck_view_auth_lightweight(view_instance: Any, request: Any) -> bool:
+    """:func:`check_view_auth_lightweight` for async callers (the reauth step).
+
+    True = authorized; False = refused. Other exceptions propagate (callers
+    fail closed). A sync check runs :func:`check_view_auth_lightweight` in one
+    ``sync_to_async`` call, exactly as before.
+    """
+    if not has_async_check_permissions(view_instance):
+        from asgiref.sync import sync_to_async
+
+        return bool(await sync_to_async(check_view_auth_lightweight)(view_instance, request))
+    try:
+        return await acheck_view_auth(view_instance, request) is None
+    except PermissionDenied:
+        return False
+
+
+async def arun_pre_mount_auth(view_instance: Any, request: Any) -> Optional[str]:
+    """:func:`run_pre_mount_auth` for async callers (the live mount).
+
+    Same sequence and contract. With a sync ``check_permissions`` (or none) it
+    is one ``sync_to_async(run_pre_mount_auth)`` call, exactly as before. With
+    ``async def check_permissions`` the auth step is :func:`acheck_view_auth`
+    (the check awaited on the loop) and the tenant steps run in a worker
+    thread around it, in the same order; the tenant context variable bound
+    there is copied back to the caller by ``sync_to_async``.
+    """
+    from asgiref.sync import sync_to_async
+
+    if not has_async_check_permissions(view_instance):
+        return await sync_to_async(run_pre_mount_auth)(view_instance, request)
+
+    from .._exposure import uses_legacy_exposure
+
+    def _tenant() -> None:
+        if hasattr(view_instance, "_ensure_tenant"):
+            view_instance._ensure_tenant(request)
+        _bind_current_tenant(getattr(view_instance, "_tenant", None))
+
+    # Explicit policy authorizes in the tenant context mount will use.
+    if not uses_legacy_exposure(view_instance):
+        await sync_to_async(_tenant)()
+    redirect_url = await acheck_view_auth(view_instance, request)
+    if redirect_url:
+        return redirect_url  # skip tenant resolution on a denial, as run_pre_mount_auth
+    await sync_to_async(_tenant)()
+    return None
 
 
 def check_handler_permission(handler: Any, request: Any) -> bool:

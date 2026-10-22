@@ -35,6 +35,9 @@ from .any_of import AnyOf
 from .core import (
     LoginRequiredMixin,
     PermissionRequiredMixin,
+    acheck_view_auth,
+    acheck_view_auth_lightweight,
+    arun_pre_mount_auth,
     check_handler_permission,
     check_object_permission,
     check_view_auth,
@@ -46,6 +49,10 @@ __all__ = [
     # Core auth (WebSocket-level)
     "check_view_auth",
     "check_view_auth_lightweight",
+    # Async forms: an ``async def check_permissions`` is awaited on the loop
+    "acheck_view_auth",
+    "acheck_view_auth_lightweight",
+    "arun_pre_mount_auth",
     "check_object_permission",
     "check_handler_permission",
     # "Any of" for permission_required (views and @permission_required)

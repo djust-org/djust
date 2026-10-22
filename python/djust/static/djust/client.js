@@ -23233,7 +23233,9 @@ globalThis.djust.djTransitionGroup = {
 //                     the picked option's value goes to the hidden
 //                     `.combobox-value` input the form submits, and typed text
 //                     that matches no option is discarded on change unless the
-//                     combobox has `data-allow-free-text`.
+//                     combobox has `data-allow-free-text`. Without a server
+//                     search event (`data-filter="client"`) typing filters
+//                     the options here.
 //   .dj-theme-toggle  switch the colour mode (`data-theme-mode`) when
 //                     djust.theming's theme.js is not on the page, and keep
 //                     every toggle's aria-checked in step with the mode.
@@ -23600,6 +23602,13 @@ globalThis.djust.djTransitionGroup = {
         if (field.classList.contains('rte-editor')) {
             const hidden = _closest(field, '.rte').querySelector('input[type=hidden]');
             if (hidden) hidden.value = field.innerHTML;
+        } else if (field.classList.contains('combobox-input')) {
+            const box = _closest(field, '.combobox[data-filter="client"]');
+            if (!box) return;
+            const query = field.value.trim().toLowerCase();
+            _comboboxOptions(box).forEach(function (opt) {
+                opt.style.display = opt.textContent.toLowerCase().indexOf(query) >= 0 ? '' : 'none';
+            });
         } else if (field.classList.contains('multi-select-search')) {
             const query = field.value.toLowerCase();
             _closest(field, '.multi-select').querySelectorAll('.multi-select-option')
