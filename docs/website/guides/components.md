@@ -1374,6 +1374,14 @@ combobox only searches on the server when you give it `search_event=`; without
 one, typing filters the given options in the browser, so a plain Django form
 needs no search handler.
 
+The combobox follows the WAI-ARIA combobox keyboard pattern. ArrowDown / ArrowUp
+move `aria-activedescendant` through the visible options, wrapping. Enter commits
+the active option, or a typed label that exactly matches an option, the same way a
+mouse pick does: the value event goes to the server, and the form isn't submitted.
+An exact typed label also commits when the input loses focus. Escape closes the
+list and restores the chosen label. After a pick, focus stays on the input, and
+the list stays closed until the next keystroke.
+
 ### Layouts under a LiveView base template
 
 The layouts in `djust_theming/layouts/` expose blocks a LiveView page needs, and
