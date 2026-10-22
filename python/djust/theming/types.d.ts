@@ -265,6 +265,7 @@ export interface DesignSystemCSSVariables {
   '--warning-text': string;
   '--border': string;
   '--input': string;
+  '--input-background': string;
   '--ring': string;
   '--radius': string;
 }

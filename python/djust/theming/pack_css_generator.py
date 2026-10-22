@@ -22,7 +22,7 @@ _FRAMEWORK_CSS = {
     "bootstrap4": """/* Theme → Bootstrap 4 component overrides */
 
 /* Forms */
-.form-control { color: hsl(var(--foreground)); background-color: hsl(var(--input, var(--card))); border-color: hsl(var(--border)); }
+.form-control { color: hsl(var(--foreground)); background-color: hsl(var(--input-background, var(--card))); border-color: hsl(var(--border)); }
 .form-control:focus { border-color: hsl(var(--ring, var(--primary))); box-shadow: 0 0 0 var(--form-focus-ring-width, 0.2rem) hsl(var(--ring, var(--primary)) / var(--form-focus-ring-opacity, 0.25)); }
 .form-control::placeholder { color: hsl(var(--muted-foreground) / 0.6); }
 .form-control:disabled { background-color: hsl(var(--muted) / 0.5); }
@@ -79,10 +79,10 @@ hr { border-color: hsl(var(--border)); }
     "bootstrap5": """/* Theme → Bootstrap 5 component overrides */
 
 /* Forms */
-.form-control { color: hsl(var(--foreground)); background-color: hsl(var(--input, var(--card))); border-color: hsl(var(--border)); }
+.form-control { color: hsl(var(--foreground)); background-color: hsl(var(--input-background, var(--card))); border-color: hsl(var(--border)); }
 .form-control:focus { border-color: hsl(var(--ring, var(--primary))); box-shadow: 0 0 0 var(--form-focus-ring-width, 0.25rem) hsl(var(--ring, var(--primary)) / var(--form-focus-ring-opacity, 0.25)); }
 .form-control::placeholder { color: hsl(var(--muted-foreground) / 0.6); }
-.form-select { color: hsl(var(--foreground)); background-color: hsl(var(--input, var(--card))); border-color: hsl(var(--border)); }
+.form-select { color: hsl(var(--foreground)); background-color: hsl(var(--input-background, var(--card))); border-color: hsl(var(--border)); }
 .form-select:focus { border-color: hsl(var(--ring, var(--primary))); box-shadow: 0 0 0 0.25rem hsl(var(--ring, var(--primary)) / 0.25); }
 .form-check-input:checked { background-color: hsl(var(--primary)); border-color: hsl(var(--primary)); }
 
