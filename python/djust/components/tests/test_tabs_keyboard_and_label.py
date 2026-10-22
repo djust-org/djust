@@ -22,15 +22,19 @@ from __future__ import annotations
 import re
 
 import pytest
-from django.template import Context, Engine
+from django import template as django_template
 
 pytestmark = pytest.mark.components
 
-_ENGINE = Engine(libraries={"djust_components": "djust.components.templatetags.djust_components"})
+_ENGINE = django_template.Engine(
+    libraries={"djust_components": "djust.components.templatetags.djust_components"}
+)
 
 
 def _django(source: str, ctx: dict) -> str:
-    return _ENGINE.from_string("{% load djust_components %}" + source).render(Context(ctx))
+    return _ENGINE.from_string("{% load djust_components %}" + source).render(
+        django_template.Context(ctx)
+    )
 
 
 def _rust(source: str, ctx: dict) -> str:
