@@ -197,6 +197,9 @@ class TestGuardCoversTheRenderSurface:
             "root_content_range",
             "root_element_span",
             "dj_root_stamp_offsets",
+            # The egress normalizer: scans every rendered page and template
+            # source (comments, raw-text blocks, white space) after each render.
+            "strip_html_comments_and_whitespace",
         }
     )
 
