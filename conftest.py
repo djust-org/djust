@@ -22,6 +22,7 @@ pytest_plugins = [
     "pytester",  # pytest's plugin-testing fixture, for tests/test_lost_items_guard.py
     "tests.lost_items_guard",  # #2746: a run that loses collected items goes red
     "tests.corpus_shards",  # share the full differential sweep within one CI shard
+    "tests.slow_tier",  # mark tests > 1s in .test_durations `slow` (fast tier: -m "not slow")
 ]
 
 
