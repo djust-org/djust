@@ -1,5 +1,6 @@
 """Owned-subtree disposal for the gated explicit lifecycle."""
 
+import asyncio
 import inspect
 import logging
 import weakref
@@ -319,7 +320,9 @@ async def fire_view_disconnected(view: Any) -> None:
     await sync_to_async(run_view_disconnected)(view)
 
 
-def release_root_view(view: Any, *, navigation: bool, reason: str) -> None:
+def release_root_view(
+    view: Any, *, navigation: bool, reason: str, clear_live_handles: bool = True
+) -> None:
     """Tear down a root view its transport discards (#3244, #3245).
 
     The one view teardown shared by every place a transport lets go of its
@@ -379,4 +382,29 @@ def release_root_view(view: Any, *, navigation: bool, reason: str) -> None:
                     unregister(view_id)
                 except Exception:  # noqa: BLE001
                     logger.warning("Unregistering a released legacy view's child failed")
-    _clear_live_handles(view)
+    if clear_live_handles:
+        _clear_live_handles(view)
+
+
+async def arelease_root_view(view: Any, *, navigation: bool, reason: str) -> None:
+    """:func:`release_root_view` for a transport on the event loop.
+
+    The live handles are dropped on the view's sync thread rather than on
+    the loop: ``clear_live_handles`` borrows the Rust view mutably, and a
+    render of the view may still be running on that thread (a tick, a
+    deferred push or a background result queued before the release; a
+    cancelled coroutine does not stop its thread). On the loop the two
+    collided as ``Already borrowed`` and the handles stayed; as a hop on the
+    same thread the clear runs after that render. The rest of the release
+    stays on the loop, where the waiters and tasks it cancels live.
+    """
+    from .websocket import _clear_live_handles
+
+    release_root_view(view, navigation=navigation, reason=reason, clear_live_handles=False)
+    try:
+        await sync_to_async(_clear_live_handles)(view)
+    except asyncio.CancelledError:
+        # Cancelled again while waiting for the thread: drop the handles here
+        # rather than not at all.
+        _clear_live_handles(view)
+        raise

@@ -2994,13 +2994,13 @@ async def _release_failed_view(view: Any) -> None:
     handles, and a failing ``connected()`` was entered; the view is gone, so
     its ``disconnected()`` hook runs and they go with it. Never raises.
     """
-    from ._child_lifecycle import fire_view_disconnected, release_root_view
+    from ._child_lifecycle import arelease_root_view, fire_view_disconnected
 
     try:
         try:
             await fire_view_disconnected(view)
         finally:
-            release_root_view(view, navigation=False, reason="mount_failed")
+            await arelease_root_view(view, navigation=False, reason="mount_failed")
     except Exception as exc:  # noqa: BLE001 — cleanup after a failure already reported
         from ._exposure_diagnostics import log_failure_for
 
@@ -7340,7 +7340,7 @@ class ViewRuntime(RuntimeTurnPort):
         closed (#3250 review L1): nulling it alone left its background work,
         waiters and live handles to a disconnect that no longer saw it.
         """
-        from ._child_lifecycle import fire_view_disconnected, release_root_view
+        from ._child_lifecycle import arelease_root_view, fire_view_disconnected
 
         view = self.view_instance
         self.view_instance = None
@@ -7353,7 +7353,7 @@ class ViewRuntime(RuntimeTurnPort):
             try:
                 await fire_view_disconnected(view)
             finally:
-                release_root_view(view, navigation=False, reason="view_disconnect")
+                await arelease_root_view(view, navigation=False, reason="view_disconnect")
 
     def _save_explicit_root(self, view: Any, request: Any) -> None:
         """Sync body of the root save: the binding check, projection and write.
