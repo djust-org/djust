@@ -662,7 +662,7 @@
 
 /* --- Notification Popover --- */
 .dj-notif-popover { position: relative; display: inline-block; }
-.dj-notif-popover__bell { position: relative; background: none; border: none; cursor: pointer; font-family: inherit; }
+.dj-notif-popover__bell { position: relative; background: none; color: inherit; border: none; cursor: pointer; font-family: inherit; }
 .dj-notif-popover__badge { position: absolute; top: -0.25rem; right: -0.25rem; min-width: 1.15rem; height: 1.15rem; font-size: 0.625rem; font-weight: 700; line-height: 1.15rem; text-align: center; border-radius: 9999px; background: hsl(var(--destructive, 0 84% 60%)); color: hsl(var(--destructive-foreground, 0 0% 100%)); }
 .dj-notif-popover__panel { display: none; position: absolute; right: 0; top: 100%; margin-top: 0.5rem; width: 20rem; max-height: 24rem; overflow-y: auto; border-radius: 0.5rem; box-shadow: 0 4px 16px rgba(0,0,0,0.12); z-index: 50; }
 .dj-notif-popover--open .dj-notif-popover__panel { display: block; }
@@ -693,11 +693,11 @@
 .dj-mminput { display: flex; align-items: flex-end; gap: 0.375rem; padding: 0.5rem; border: 1px solid; border-radius: 0.75rem; }
 .dj-mminput--disabled { opacity: 0.5; pointer-events: none; }
 .dj-mminput__text { flex: 1; border: none; outline: none; background: transparent; resize: none; font: inherit; min-height: 1.5em; max-height: 8rem; }
-.dj-mminput__btn { display: flex; align-items: center; justify-content: center; width: 2rem; height: 2rem; border: none; border-radius: 0.375rem; background: transparent; cursor: pointer; font-family: inherit; flex-shrink: 0; }
+.dj-mminput__btn { display: flex; align-items: center; justify-content: center; width: 2rem; height: 2rem; border: none; border-radius: 0.375rem; background: transparent; color: inherit; cursor: pointer; font-family: inherit; flex-shrink: 0; }
 
 /* --- Feedback Widget (classes) --- */
 .dj-feedback { display: inline-flex; align-items: center; gap: 0.25rem; }
-.dj-feedback__btn { display: flex; align-items: center; justify-content: center; border: none; background: transparent; cursor: pointer; font-family: inherit; padding: 0.25rem; border-radius: 0.25rem; font-size: 1.125rem; }
+.dj-feedback__btn { display: flex; align-items: center; justify-content: center; border: none; background: transparent; color: inherit; cursor: pointer; font-family: inherit; padding: 0.25rem; border-radius: 0.25rem; font-size: 1.125rem; }
 .dj-feedback__btn--active, .dj-feedback__star--active { font-weight: bold; }
 
 /* --- Approval Gate (classes) --- */

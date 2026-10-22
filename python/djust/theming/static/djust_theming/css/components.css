@@ -1591,7 +1591,7 @@ label .text-danger, .form-label .text-danger { color: hsl(var(--destructive-text
 .info-box { background: hsl(var(--muted) / 0.5); border-left: 4px solid hsl(var(--primary)); padding: 1rem 1.25rem; border-radius: 0.25rem; margin-bottom: 1.5rem; }
 .info-box p { margin: 0; }
 
-.upload-area { border: 2px dashed hsl(var(--border)); border-radius: 0.5rem; padding: 3rem 2rem; text-align: center; background: hsl(var(--muted) / 0.3); cursor: pointer; font-family: inherit; transition: border-color 0.15s ease, background 0.15s ease; }
+.upload-area { border: 2px dashed hsl(var(--border)); border-radius: 0.5rem; padding: 3rem 2rem; text-align: center; background: hsl(var(--muted) / 0.3); color: hsl(var(--foreground)); cursor: pointer; font-family: inherit; transition: border-color 0.15s ease, background 0.15s ease; }
 .upload-area:hover:not(.upload-area--disabled) { border-color: hsl(var(--primary)); background: hsl(var(--primary) / 0.05); }
 .upload-area.dragover { border-color: hsl(var(--primary)); background: hsl(var(--primary) / 0.1); }
 .upload-area--disabled { opacity: 0.65; cursor: not-allowed; }
