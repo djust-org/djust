@@ -21,42 +21,58 @@ def test_runtime_guard_accepts_actual_version_and_rejects_wrong_version():
     assert "Interpreter mismatch" in bad.stderr
 
 
-def test_matrix_selects_interpreter_and_checks_before_build():
-    job = yaml.safe_load((ROOT / ".github/workflows/test.yml").read_text())["jobs"]["python-tests"]
+def _jobs():
+    return yaml.safe_load((ROOT / ".github/workflows/test.yml").read_text())["jobs"]
+
+
+def _step(job, name):
+    return next(step for step in job["steps"] if step.get("name") == name)
+
+
+def _assert_interpreter_selected_and_checked(job, step_name, then):
+    """setup-python's path -> uv sync -> check-ci-python.py -> `then`."""
     steps = job["steps"]
     assert not any(".venv" in str(step.get("with", {}).get("path", "")) for step in steps)
-    build = next(
-        step
-        for step in steps
-        if step.get("name") == "Install Python dependencies and build extension"
-    )
-    assert build["env"]["UV_PYTHON"] == "${{ steps.python.outputs.python-path }}"
-    assert build["env"]["EXPECTED_PYTHON"] == "${{ matrix.python-version }}"
-    setup = next(step for step in steps if "actions/setup-python@" in step.get("uses", ""))
+    step = _step(job, step_name)
+    assert step["env"]["UV_PYTHON"] == "${{ steps.python.outputs.python-path }}"
+    assert step["env"]["EXPECTED_PYTHON"] == "${{ matrix.python-version }}"
+    setup = next(s for s in steps if "actions/setup-python@" in s.get("uses", ""))
     assert setup["id"] == "python"
-    run = build["run"]
+    run = step["run"]
     assert '--python "$UV_PYTHON"' in run
     assert 'export UV_PYTHON="$PWD/.venv/bin/python"' in run
-    assert (
-        run.index("check-ci-python.py")
-        < run.index("export UV_PYTHON")
-        < run.index("maturin develop")
+    assert run.index("check-ci-python.py") < run.index("export UV_PYTHON") < run.index(then)
+    return run
+
+
+def test_matrix_selects_interpreter_and_checks_before_build():
+    """The wheel is built for the interpreter the cell names, verified first."""
+    job = _jobs()["python-build"]
+    _assert_interpreter_selected_and_checked(
+        job, "Install Python dependencies and build extension", "maturin build"
+    )
+    assert job["continue-on-error"] == "${{ matrix.python-version == '3.15' }}"
+
+
+def test_shards_check_the_interpreter_before_installing_the_shared_build():
+    """A shard verifies its interpreter, then installs the wheel built for it.
+
+    The install script's own import check catches an ABI mismatch, but only
+    after the venv exists; the interpreter check names the cause.
+    """
+    job = _jobs()["python-tests"]
+    run = _assert_interpreter_selected_and_checked(
+        job, "Install Python dependencies and prebuilt extension", "ci-install-prebuilt-djust.sh"
     )
     assert 'echo "UV_PYTHON=$UV_PYTHON" >> "$GITHUB_ENV"' in run
-    assert run.index("check-ci-python.py") < run.index("maturin develop")
-    tools = next(step for step in steps if step.get("name") == "Install test tools")
+    tools = _step(job, "Install test tools")
     assert "uv pip install --python .venv/bin/python" in tools["run"]
     assert job["continue-on-error"] == "${{ matrix.python-version == '3.15' }}"
 
 
-def test_maturin_develop_command_uses_supported_cli_arguments():
+def test_maturin_build_command_uses_supported_cli_arguments():
     """Exercise the installed CLI parser, not a string pin on an invalid flag."""
-    job = yaml.safe_load((ROOT / ".github/workflows/test.yml").read_text())["jobs"]["python-tests"]
-    build = next(
-        step
-        for step in job["steps"]
-        if step.get("name") == "Install Python dependencies and build extension"
-    )
+    build = _step(_jobs()["python-build"], "Install Python dependencies and build extension")
     command = next(
         line.strip()
         for line in build["run"].splitlines()
