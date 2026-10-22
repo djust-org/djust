@@ -2157,12 +2157,12 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         background work, waiters and live handles outlived the connection."""
         if view is None:
             return
-        from ._child_lifecycle import fire_view_disconnected, release_root_view
+        from ._child_lifecycle import arelease_root_view, fire_view_disconnected
 
         try:
             await fire_view_disconnected(view)
         finally:
-            release_root_view(view, navigation=False, reason="view_disconnect")
+            await arelease_root_view(view, navigation=False, reason="view_disconnect")
 
     @staticmethod
     def _end_explicit_turn(view: Any) -> None:
@@ -2611,8 +2611,8 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         """Handle WebSocket disconnection"""
         from ._child_lifecycle import (
             discard_sticky_child,
+            arelease_root_view,
             fire_view_disconnected,
-            release_root_view,
         )
 
         self._disconnect_entered = True
@@ -2706,7 +2706,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             try:
                 await fire_view_disconnected(view)
             finally:
-                release_root_view(view, navigation=False, reason="view_disconnect")
+                await arelease_root_view(view, navigation=False, reason="view_disconnect")
 
         # Sticky LiveViews (Phase C Fix F2): drain any sticky children that
         # were staged on the consumer during a live_redirect but for which
@@ -4725,7 +4725,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         ``_defer_presence_untrack``). A view that goes with nothing replacing it
         (an unmount, a refusal) is untracked at once.
         """
-        from ._child_lifecycle import fire_view_disconnected, release_root_view
+        from ._child_lifecycle import arelease_root_view, fire_view_disconnected
         from .presence import PresenceManager
         from .runtime import leave_consumer_view_groups
 
@@ -4785,7 +4785,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             try:
                 await fire_view_disconnected(view)
             finally:
-                release_root_view(view, navigation=navigation, reason=reason)
+                await arelease_root_view(view, navigation=navigation, reason=reason)
 
         consumer.view_instance = None
         # (#1919, Finding A) Null the shared runtime's view too BEFORE the

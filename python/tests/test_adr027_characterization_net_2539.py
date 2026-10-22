@@ -1476,20 +1476,28 @@ class TestTheHandleNeverReachesTheWire2539:
         # Since #3244 the call is in the one view teardown every transport
         # shares, ``release_root_view``, as its last step...
         lifecycle = (PYTHON_DIR / "djust" / "_child_lifecycle.py").read_text(encoding="utf-8")
-        release = lifecycle.split("def release_root_view", 1)[1]
+        release = lifecycle.split("def release_root_view", 1)[1].split("\nasync def ", 1)[0]
         assert release.rstrip().endswith("_clear_live_handles(view)"), (
             "the clear is not the last step of the shared view teardown"
         )
-        # ...which the disconnect runs for every mounted view before dropping
-        # the view reference it drains.
+        # ...and the async form the event-loop transports use runs it as a hop
+        # on the view's sync thread, after a render still in flight there.
+        arelease = lifecycle.split("async def arelease_root_view", 1)[1].split("\ndef ", 1)[0]
+        assert "clear_live_handles=False" in arelease
+        assert "await sync_to_async(_clear_live_handles)(view)" in arelease, (
+            "the async teardown does not clear the live handles"
+        )
+        # The disconnect runs it for every mounted view before dropping the
+        # view reference it drains.
         disconnect = consumer.split("    async def disconnect(", 1)[1].split("\n    async def ", 1)[
             0
         ]
         assert (
-            'release_root_view(view, navigation=False, reason="view_disconnect")' in disconnect
+            'await arelease_root_view(view, navigation=False, reason="view_disconnect")'
+            in disconnect
         ), "the shared teardown is not wired at the disconnect"
         # (each view's consumer, the page view's or a slot's, #3252).
-        assert disconnect.index("release_root_view(view,") < disconnect.index(
+        assert disconnect.index("arelease_root_view(view,") < disconnect.index(
             "consumer.view_instance = None"
         )
 
