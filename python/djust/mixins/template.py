@@ -935,6 +935,29 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         positional patch paths over-counted the client's children (index N vs
         a marker-less DOM) and every subsequent event fell back to
         ``html_recovery``.
+
+        A plain render runs the Rust port of these rules
+        (``djust_core::html_whitespace::strip_comments_and_whitespace``),
+        detached from the interpreter; a render carrying provenance, and the
+        few inputs the port declines, run the Python reference below
+        (:meth:`_strip_comments_and_whitespace_py`). The two are held to
+        identical bytes by ``tests/unit/test_egress_normalizer_rust_parity.py``.
+        """
+        from .._render_provenance import RenderedHTML
+
+        if not isinstance(html, RenderedHTML):
+            from .._rust import strip_html_comments_and_whitespace
+
+            stripped = strip_html_comments_and_whitespace(html)
+            if stripped is not None:
+                return stripped
+        return self._strip_comments_and_whitespace_py(html)
+
+    def _strip_comments_and_whitespace_py(self, html: str) -> str:
+        """The Python reference of :meth:`_strip_comments_and_whitespace`.
+
+        Runs for provenance-tracking renders and the inputs the Rust port
+        declines; the parity test compares the two over its corpus.
         """
         from .._render_provenance import sub, collapse, fold, RenderedHTML
 
