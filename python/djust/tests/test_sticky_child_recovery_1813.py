@@ -343,7 +343,7 @@ def test_handle_request_html_rerenders_parent_fresh_source():
     recovery HTML reflects the live child's current state (the (b2)(ii) choice)."""
     import djust.websocket as ws_mod
 
-    source = inspect.getsource(ws_mod.LiveViewConsumer.handle_request_html)
+    source = inspect.getsource(ws_mod.LiveViewConsumer._request_html_turn)
     assert "_handle_request_html_locked" in source
     source = inspect.getsource(ws_mod.LiveViewConsumer._handle_request_html_locked)
     assert "render_with_diff" in source or "render_full_template" in source, (

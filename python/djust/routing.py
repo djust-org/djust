@@ -6,6 +6,7 @@ DjustMiddlewareStack for apps without django.contrib.auth,
 and emitting a client-side route map for live_redirect navigation.
 """
 
+import logging
 import re
 from typing import Any, Dict, List, Optional
 
@@ -15,6 +16,9 @@ from django.utils.html import format_html
 from django.utils.safestring import mark_safe
 
 from .auth.any_of import AnyOf, user_has_permission_spec
+from .security.log_sanitizer import sanitize_for_log
+
+logger = logging.getLogger(__name__)
 
 # Django ``<int:id>`` / ``<slug:x>`` → JS-friendly ``:id`` / ``:x``. Shared by
 # ``live_session`` and ``build_route_map_from_urlconf`` so both engines emit the
@@ -70,6 +74,35 @@ def _reset_route_map_cache() -> None:
     _route_gating_cache.clear()
 
 
+class DjustOriginValidator:
+    """ASGI middleware: deny a WebSocket handshake whose Origin is not allowed.
+
+    Applies :mod:`djust.security.origin` — the same policy as
+    ``LiveViewConsumer.connect()``: the Origin must be the server's own origin
+    (scheme, host and port) or listed in ``DJUST_ALLOWED_ORIGINS`` (default
+    ``CSRF_TRUSTED_ORIGINS``), and a missing Origin is denied unless
+    ``DJUST_ALLOW_MISSING_ORIGIN = True``. Settings are read per handshake.
+
+    channels' ``AllowedHostsOriginValidator`` compares the host alone, so a
+    page on another port or scheme of an allowed host passes it.
+    """
+
+    def __init__(self, application: Any) -> None:
+        self.application = application
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> Any:
+        if scope.get("type") == "websocket":
+            from channels.security.websocket import WebsocketDenier
+
+            from .security.origin import websocket_origin_rejection
+
+            rejection = websocket_origin_rejection(scope)
+            if rejection is not None:
+                logger.warning("WebSocket handshake denied: %s", sanitize_for_log(rejection))
+                return await WebsocketDenier()(scope, receive, send)
+        return await self.application(scope, receive, send)
+
+
 def DjustMiddlewareStack(inner: Any, *, validate_origin: bool = True) -> Any:
     """
     ASGI middleware stack for djust that doesn't require django.contrib.auth.
@@ -77,31 +110,18 @@ def DjustMiddlewareStack(inner: Any, *, validate_origin: bool = True) -> Any:
     Use this instead of ``channels.auth.AuthMiddlewareStack`` when your app
     doesn't need authentication. It wraps the inner application with session
     middleware (so ``request.session`` works, but ``request.user`` is not
-    populated) and, by default, with
-    ``channels.security.websocket.AllowedHostsOriginValidator`` to prevent
+    populated) and, by default, with :class:`DjustOriginValidator` to prevent
     Cross-Site WebSocket Hijacking (CSWSH, #653).
 
     Args:
         inner: The ASGI application to wrap (typically a ``URLRouter``).
-        validate_origin: When True (the default), the returned stack will
-            also wrap ``inner`` in ``AllowedHostsOriginValidator``, which
-            rejects WebSocket handshakes whose ``Origin`` header is not in
-            ``settings.ALLOWED_HOSTS``. Set to False to opt out — NOT
-            recommended; only use this for non-browser clients that you
-            control end-to-end, or when an upstream proxy already strips
-            hostile Origin headers.
-
-    Note:
-        ``channels.security.websocket.AllowedHostsOriginValidator`` snapshots
-        ``settings.ALLOWED_HOSTS`` at the moment this function runs (i.e. at
-        ASGI-application construction time). If you change ``ALLOWED_HOSTS``
-        at runtime (e.g. via ``django.test.override_settings`` in tests),
-        only the consumer-level ``_is_allowed_origin`` check in
-        ``LiveViewConsumer.connect()`` will see the new value; the
-        middleware-level validator will keep using the value it captured
-        when the stack was built. This matters for tests — prefer the
-        consumer-level check over asserting on the middleware in
-        override-settings tests.
+        validate_origin: When True (the default), the returned stack denies
+            WebSocket handshakes whose ``Origin`` is not this server's own
+            origin or a trusted one (see :class:`DjustOriginValidator`). Set to
+            False to opt out — NOT recommended. To accept non-browser clients
+            that send no Origin, set ``DJUST_ALLOW_MISSING_ORIGIN = True``
+            instead; to accept another origin, list it in
+            ``DJUST_ALLOWED_ORIGINS``.
 
     Example::
 
@@ -118,12 +138,7 @@ def DjustMiddlewareStack(inner: Any, *, validate_origin: bool = True) -> Any:
 
     stack = SessionMiddlewareStack(inner)
     if validate_origin:
-        # Lazy import keeps the top-level import surface of djust.routing
-        # stable (channels.security is importable whenever channels itself
-        # is, so the import cost is only paid when the stack is built).
-        from channels.security.websocket import AllowedHostsOriginValidator
-
-        stack = AllowedHostsOriginValidator(stack)
+        stack = DjustOriginValidator(stack)
     return stack
 
 

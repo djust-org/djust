@@ -300,8 +300,14 @@ async def test_real_sse():
     from djust.sse import DjustSSEMessageView, DjustSSEStreamView, _sse_sessions
     from djust.tests.test_exposure_sse_navigation import drain, request_for
 
+    from djust.config import config
+
     sid = str(uuid.uuid4())
     outcomes = []
+    # One session carries the whole matrix; lift the per-connection burst cap
+    # (SSE charges every frame on arrival, as the WebSocket does; ADR-044).
+    limits = config.get("rate_limit")
+    config.set("rate_limit", {**limits, "burst": 1000})
     with override_settings(LIVEVIEW_ALLOWED_MODULES=["djust.tests"], DJUST_TENANTS=None):
         request = await sync_to_async(request_for)(
             "GET", f"/djust/sse/{sid}/", {"view": __name__ + ".ParityView", "_djust_url": "/p/"}
@@ -323,6 +329,7 @@ async def test_real_sse():
                 outcomes.append(_take())
         finally:
             _sse_sessions.pop(sid, None)
+            config.set("rate_limit", limits)
     _check(outcomes)
 
 

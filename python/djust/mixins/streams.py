@@ -238,7 +238,17 @@ class StreamsMixin:
         The copy is shallow: the ITEMS are shared, which is correct — they are
         the caller's own objects. Only the list container is independent.
         """
-        return {name: list(stream_obj.items) for name, stream_obj in self._streams.items()}
+        streams = self._streams
+        if not isinstance(streams, dict) or not all(
+            isinstance(stream_obj, Stream) for stream_obj in streams.values()
+        ):
+            raise TypeError(
+                "%s._streams is reserved by djust's StreamsMixin, which keeps its "
+                "Stream objects there; this view replaced it with a %s. Rename its own "
+                "attribute (check djust.V022 reports such assignments), or use "
+                "self.stream(name, items)." % (type(self).__name__, type(streams).__name__)
+            )
+        return {name: list(stream_obj.items) for name, stream_obj in streams.items()}
 
     def _get_stream_operations(self) -> list:
         """Get and clear pending stream operations."""

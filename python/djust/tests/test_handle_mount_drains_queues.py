@@ -47,7 +47,7 @@ class TestRuntimeDispatchMountSourceShape:
     (the #1391 pin MOVED here in the Phase-3.0 grow)."""
 
     def _source(self) -> str:
-        return inspect.getsource(ViewRuntime.dispatch_mount)
+        return inspect.getsource(ViewRuntime._dispatch_mount_body)
 
     def test_calls_dispatch_async_work(self):
         """``dispatch_mount`` must call ``_dispatch_async_work``. Closes #1280 on

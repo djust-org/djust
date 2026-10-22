@@ -46,7 +46,10 @@ def test_explicit_render_state_never_enters_shared_backend(backend, rf, transpor
 @pytest.mark.parametrize("transport", ["http", "ws"])
 def test_explicit_view_cannot_restore_legacy_render_context(backend, rf, transport):
     legacy = initialize("legacy", transport, rf)
+    # The backend stores a snapshot, refreshed after each render (it never
+    # keeps the view's own object), so the state reaches it through a render.
     legacy._rust_view.update_state({"display": "LEGACY_RENDER_SENTINEL"})
+    legacy._refresh_cached_rust_view()
     assert backend._cache, "Legacy caching must remain exercised"
     explicit = initialize("explicit", transport, rf)
     assert "LEGACY_RENDER_SENTINEL" not in explicit._rust_view.render()

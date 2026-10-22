@@ -657,6 +657,41 @@ def _check_ws_path(errors: list[CheckMessage]) -> None:
     )
 
 
+def _check_liveview_middleware(errors: list[CheckMessage]) -> None:
+    """C026 — every ``LIVEVIEW_MIDDLEWARE`` entry is an importable ``async def`` (ADR-044).
+
+    The turn-middleware chain is built on the first turn; a bad entry would
+    otherwise fail every turn at runtime (each one raising
+    ``ImproperlyConfigured``). Sync middleware is not supported: it would
+    cost a thread hop on every turn.
+    """
+    from django.conf import settings
+    from django.core.exceptions import ImproperlyConfigured
+
+    from ..turns import resolve_middleware
+
+    if _is_check_suppressed("djust.C026"):
+        return
+    try:
+        resolve_middleware(getattr(settings, "LIVEVIEW_MIDDLEWARE", None))
+    except ImproperlyConfigured as exc:
+        errors.append(
+            DjustError(
+                str(exc),
+                hint=(
+                    "LIVEVIEW_MIDDLEWARE is a list of dotted paths to "
+                    "`async def mw(turn, next)` callables; every LiveView turn runs them."
+                ),
+                id="djust.C026",
+                fix_hint=(
+                    "Point each `LIVEVIEW_MIDDLEWARE` entry at an importable `async def "
+                    "mw(turn, next)` function that returns `await next(turn)` or a "
+                    "`djust.turns.Refuse` refusal."
+                ),
+            )
+        )
+
+
 def _check_unknown_extensions(errors: list) -> None:
     """C015 -- unknown adapter name in ``DJUST_CONFIG['extensions']`` (#2063).
 
@@ -1260,6 +1295,7 @@ def check_configuration(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
 
     # C025 -- DJUST_WS_PATH is not a root-relative path (#3186)
     _check_ws_path(errors)
+    _check_liveview_middleware(errors)
 
     # C005 -- WebSocket routes missing AuthMiddlewareStack
     # A001 -- WebSocket routes missing AllowedHostsOriginValidator (#659)
@@ -1320,20 +1356,20 @@ def check_configuration(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
                 if not has_origin_validator:
                     errors.append(
                         DjustError(
-                            "WebSocket routes are not wrapped in AllowedHostsOriginValidator; "
+                            "WebSocket routes are not wrapped in an Origin validator; "
                             "the app is vulnerable to Cross-Site WebSocket Hijacking (CSWSH).",
                             hint=(
                                 "Any cross-origin page on the internet can open a WebSocket "
                                 "connection to your app, mount any LiveView, and dispatch events "
                                 "from a victim browser. Wrap the WebSocket router in "
-                                "channels.security.websocket.AllowedHostsOriginValidator "
-                                "(DjustMiddlewareStack does this by default since #653). "
+                                "djust.routing.DjustOriginValidator, which compares the full "
+                                "origin (DjustMiddlewareStack does this by default). "
                                 "Prerequisite: settings.ALLOWED_HOSTS must not contain '*'."
                             ),
                             id="djust.A001",
                             fix_hint=(
                                 "Wrap your WebSocket router: "
-                                '"websocket": AllowedHostsOriginValidator(DjustMiddlewareStack(URLRouter(...))). '
+                                '"websocket": DjustOriginValidator(AuthMiddlewareStack(URLRouter(...))). '
                                 "Or update DjustMiddlewareStack — since djust 0.4.1 it wraps "
                                 "the origin validator by default."
                             ),

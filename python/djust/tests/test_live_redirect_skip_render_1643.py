@@ -172,15 +172,16 @@ def test_turn_end_paths_use_single_flush_helper():
     # WS-only turn-end paths (no runtime equivalent — server_push / db_notify are
     # the WS tick/broadcast loops; _run_async_work + _dispatch_single_event run on
     # the consumer).
+    # ADR-044: each of these is now a turn wrapper; the body it runs is pinned.
     for name in (
-        "_dispatch_single_event",
+        "_dispatch_single_event_body",
         # server_push's apply + render + flush body lives in the turn helper
         # shared with the deferred-push drain (#3001).
         "_run_server_push_turn",
         # db_notify routes to each listening view (#3252); the per-view body
         # does the apply + render + flush.
-        "_db_notify_to_view",
-        "_run_async_work",
+        "_db_notify_locked",
+        "_run_async_work_body",
     ):
         src = inspect.getsource(getattr(ws_mod.LiveViewConsumer, name))
         assert "_flush_all_pending" in src, (

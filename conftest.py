@@ -46,6 +46,29 @@ def _load_tolerant_ws_communicator_defaults():
             method.__defaults__ = defaults
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _accept_communicators_without_origin():
+    """Let header-less Channels communicators connect.
+
+    djust refuses a WebSocket handshake with no ``Origin`` unless
+    ``DJUST_ALLOW_MISSING_ORIGIN`` is True, and most consumer tests build a
+    ``WebsocketCommunicator`` without headers. The Origin tests remove the
+    setting to run against the shipped default.
+    """
+    try:
+        from django.conf import settings
+
+        settings.DJUST_ALLOW_MISSING_ORIGIN = True
+    except Exception:  # noqa: BLE001 — Django not configured: nothing to set
+        yield
+        return
+    yield
+    try:
+        del settings.DJUST_ALLOW_MISSING_ORIGIN
+    except AttributeError:
+        pass
+
+
 def pytest_sessionstart(session):
     """Stop the hot-reload file watcher in every pytest process (#3099).
 

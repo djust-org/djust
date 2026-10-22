@@ -4,7 +4,6 @@ WebSocket consumer for LiveView real-time updates
 
 import asyncio
 import collections
-import contextlib
 import functools
 import inspect
 import json
@@ -51,6 +50,8 @@ from .signals import full_html_update, liveview_server_error
 from .mixins.async_work import has_pending_async_work
 from ._view_lanes import ViewLane
 from ._view_slots import ViewSlot, valid_target_id
+from ._turn_ports import ConsumerTurnPort, reauth_live_turn
+from .turns import Turn, run_turn
 
 logger = logging.getLogger(__name__)
 hotreload_logger = logging.getLogger("djust.hotreload")
@@ -104,6 +105,54 @@ def _binds_tenant_of(view_of: Callable[..., Any]) -> Callable[[Any], Any]:
                 return await turn(self, *args, **kwargs)
 
         return bound
+
+    return decorate
+
+
+def _consumer_turn(
+    kind: str, source: str, *, releases_lock: bool = False, locked: bool = True
+) -> Callable[[Any], Any]:
+    """Run a consumer method as one turn through the turn-middleware chain (ADR-044).
+
+    The method's first positional argument is the turn's view (the owner the
+    work was addressed to). With no view there is no view code to run, so the
+    method runs without a turn. ``releases_lock``: the caller holds
+    ``_render_lock`` and the method releases it, so a refused turn (the method
+    never ran) releases it here. ``locked``: the turn body runs under the
+    render lock (a refused view is released right away, not deferred).
+    """
+
+    def decorate(method: Any) -> Any:
+        @functools.wraps(method)
+        async def turn_method(self: Any, view: Any, *args: Any, **kwargs: Any) -> Any:
+            if view is None:
+                return await method(self, view, *args, **kwargs)
+            ran = False
+            result: Any = None
+
+            async def body(turn: Turn) -> None:
+                nonlocal ran, result
+                ran = True
+                result = await method(self, view, *args, **kwargs)
+
+            turn = Turn(
+                kind,
+                "ws",
+                source=source,
+                view=view,
+                scope=getattr(self, "scope", None),
+                session_id=getattr(self, "session_id", None),
+                port=self,
+            )
+            turn._locked = locked
+            try:
+                await run_turn(turn, body)
+            finally:
+                if releases_lock and not ran:
+                    self._render_lock.release()
+            return result
+
+        return turn_method
 
     return decorate
 
@@ -189,69 +238,29 @@ def _is_send_after_close_error(exc: RuntimeError) -> bool:
     return "websocket.close" in str(exc)
 
 
-def _is_allowed_origin(origin: Optional[bytes]) -> bool:
+def _is_allowed_origin(origin: Optional[bytes], scope: Optional[Dict[str, Any]] = None) -> bool:
+    """Whether a request's ``Origin`` header passes djust's Origin policy.
+
+    ``scope`` is the request's ASGI scope; it supplies the origin the request
+    was made to (scheme, ``Host``). Without it only the trusted origins
+    (``DJUST_ALLOWED_ORIGINS`` / ``CSRF_TRUSTED_ORIGINS``) can match. The full
+    policy, including the ``DJUST_ALLOW_MISSING_ORIGIN`` opt-out for a missing
+    header, is in :mod:`djust.security.origin` (#653 CSWSH; the scheme and
+    port were not compared before).
     """
-    Check whether a WebSocket Origin header is allowed under settings.ALLOWED_HOSTS.
+    from .security.origin import missing_origin_allowed, origin_rejection, scope_origin
 
-    Policy:
-      * Missing/empty Origin header -> ALLOW. Non-browser clients (curl, Python
-        WebsocketCommunicator, native mobile) do not send an Origin header, and
-        blocking them would break legitimate integrations and every existing
-        test that uses WebsocketCommunicator without explicit headers.
-        Browsers always send Origin on cross-origin WS handshakes, so a CSWSH
-        attacker cannot forge a missing header from a victim's browser.
-      * Non-ASCII / malformed Origin -> REJECT. Malformed headers are never
-        legitimate.
-      * Otherwise extract the host (stripping scheme, port, brackets, path) and
-        compare against settings.ALLOWED_HOSTS using Django's own
-        django.http.request.validate_host() so wildcard (".example.com", "*")
-        semantics match Django's HTTP layer exactly.
-
-    This helper is defense-in-depth: DjustMiddlewareStack also wraps routers
-    in channels.security.websocket.AllowedHostsOriginValidator by default, but
-    the consumer-level check still protects apps that route directly to
-    LiveViewConsumer without going through DjustMiddlewareStack.
-
-    Note on userinfo smuggling: a hostile string like
-    ``https://evil.example@target.com/`` parses via ``urlparse`` to
-    ``hostname="target.com"`` (RFC 3986 — "evil.example" is the userinfo).
-    This is safe because RFC 6454 §7 explicitly forbids browsers from
-    serializing userinfo in the ``Origin`` header, so a real victim browser
-    will never actually send such a string. Even if an attacker constructed
-    one by hand outside a browser, the extracted host is "target.com" — the
-    attacker's claim is effectively "I'm on target.com", and that's what we
-    check against ALLOWED_HOSTS. There's no cross-host authority gain.
-
-    Similarly, a hostile string like ``https://target.com.evil.com/`` parses
-    to ``hostname="target.com.evil.com"``, which Django's ``validate_host``
-    correctly rejects when ``target.com`` is listed as an exact entry in
-    ALLOWED_HOSTS.
-
-    See #653 (CSWSH pentest finding, 2026-04-10).
-    """
-    if not origin:
-        return True  # non-browser client
-    try:
-        origin_str = origin.decode("ascii")
-    except (UnicodeDecodeError, AttributeError):
-        return False
-
-    # Parse the origin into a host (no scheme, no port, no path).
-    from urllib.parse import urlparse
-
-    try:
-        parsed = urlparse(origin_str)
-    except ValueError:
-        return False
-
-    host = parsed.hostname  # urlparse strips scheme, port, brackets, and path
-    if host is None:
-        # "null" origin (sandboxed iframes, file://) or an unparseable value.
-        # Reject conservatively: a browser that sends "null" is not on an
-        # allowed host by any definition.
-        return False
-
-    return _host_in_allowed_hosts(host)
+    if origin:
+        try:
+            origin_str: Optional[str] = origin.decode("ascii")
+        except (UnicodeDecodeError, AttributeError):
+            return False
+    else:
+        origin_str = None
+    return (
+        origin_rejection(origin_str, scope_origin(scope), allow_missing=missing_origin_allowed())
+        is None
+    )
 
 
 def _host_in_allowed_hosts(host: str) -> bool:
@@ -739,7 +748,7 @@ def _clear_live_handles(view_instance: Any) -> None:
             logger.warning("%s failed during teardown", name, exc_info=True)
 
 
-class LiveViewConsumer(AsyncWebsocketConsumer):
+class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
     """
     WebSocket consumer for handling LiveView connections.
 
@@ -1380,6 +1389,43 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         kwargs: Any,
         event_name: Optional[str] = None,
     ) -> None:
+        """Run a start_async callback as an ``async``/``start`` turn (ADR-044).
+
+        The turn chain runs before the callback starts; the result is handled
+        in a nested ``async``/``result`` turn under the render lock. See
+        :meth:`_run_async_work_body`.
+        """
+        await self._async_start_turn(
+            self.view_instance, task_name, callback, args, kwargs, event_name
+        )
+
+    @_consumer_turn("async", "start", locked=False)
+    async def _async_start_turn(
+        self,
+        view: Any,
+        task_name: str,
+        callback: Callable[..., Any],
+        args: Any,
+        kwargs: Any,
+        event_name: Optional[str] = None,
+    ) -> None:
+        await self._run_async_work_body(task_name, callback, args, kwargs, event_name)
+
+    @_consumer_turn("async", "result")
+    async def _async_result_turn(
+        self, view: Any, task_name: str, complete: Callable[[], Awaitable[None]]
+    ) -> None:
+        """Handle a background result as an ``async``/``result`` turn (lock held)."""
+        await complete()
+
+    async def _run_async_work_body(
+        self,
+        task_name: str,
+        callback: Callable[..., Any],
+        args: Any,
+        kwargs: Any,
+        event_name: Optional[str] = None,
+    ) -> None:
         """
         Execute a start_async callback in a thread, then re-render the view.
 
@@ -1497,77 +1543,81 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             # wait and skipping: a skipped async render is an async result the
             # client never receives, whereas a delayed one still lands.
             async with self._render_lock:
-                if self.view_instance is not view:
-                    return
-                if not await self._authorize_explicit_consumer_turn(view):
-                    return
-                # Call handle_async_result if defined (success path) — INSIDE
-                # the lock (#2840): a handler that mutates view state (the
-                # documented pattern — set ``self.result`` / ``self.error`` so
-                # the re-render displays it) must not interleave with a
-                # concurrent lock-holding render of the same view. The extra
-                # lock hold-time matches what ``_flush_all_pending`` below
-                # already contributes (user deferred callbacks run inline
-                # under the lock); the documented "an async render must not
-                # be slow" trade covers the handler too. Ordering: the
-                # handler still runs BEFORE the identity re-check below
-                # (mirrors the error arm), so a view torn down mid-handler
-                # still gets its user callback — only the stale re-render is
-                # dropped.
-                if hasattr(view, "handle_async_result"):
-                    await sync_to_async(view.handle_async_result)(
-                        task_name, result=result, error=None
-                    )
 
-                # Identity re-check INSIDE the lock (#1940): the guard above ran
-                # before the unbounded handler + render wait, during which the
-                # view can be torn down or replaced. Rendering the stale view
-                # would bump the connection-wide version and overwrite
-                # _recovery_html with old-view HTML. (The wait's cost to the
-                # tick / broadcast paths is documented on the error arm below.)
-                if self.view_instance is not view:
-                    return
-                # Re-render and send patches (mirrors the server_push path)
-                rendered = await self._render_background(view)
-                if rendered is None:
-                    return
-                html, patches = rendered.html, rendered.patches
+                async def complete() -> None:
+                    if self.view_instance is not view:
+                        return
+                    if not await self._authorize_explicit_consumer_turn(view):
+                        return
+                    # Call handle_async_result if defined (success path) — INSIDE
+                    # the lock (#2840): a handler that mutates view state (the
+                    # documented pattern — set ``self.result`` / ``self.error`` so
+                    # the re-render displays it) must not interleave with a
+                    # concurrent lock-holding render of the same view. The extra
+                    # lock hold-time matches what ``_flush_all_pending`` below
+                    # already contributes (user deferred callbacks run inline
+                    # under the lock); the documented "an async render must not
+                    # be slow" trade covers the handler too. Ordering: the
+                    # handler still runs BEFORE the identity re-check below
+                    # (mirrors the error arm), so a view torn down mid-handler
+                    # still gets its user callback — only the stale re-render is
+                    # dropped.
+                    if hasattr(view, "handle_async_result"):
+                        await sync_to_async(view.handle_async_result)(
+                            task_name, result=result, error=None
+                        )
 
-                if patches is not None:
-                    patch_list = fast_json_loads(patches) if patches else []
-                    # Refresh the recovery baseline so a later request_html (e.g.
-                    # an async-triggered patch that fails on the client) has fresh
-                    # HTML to serve. Mirrors handle_event and server_push (#1202).
-                    # Without this, an html_recovery that already consumed
-                    # _recovery_html leaves it None, the next request_html returns
-                    # "Recovery HTML unavailable", and the client freezes at the
-                    # transitional state even though the backend advanced (#1636).
-                    # Stamp the consumer-owned wire version (#1788), discarding the
-                    # Rust ``version`` for the wire, AND arm recovery in one step so
-                    # _recovery_version == this frame's version (#1817).
-                    version = self._next_version_armed(html)
-                    await self._send_update(
-                        patches=patch_list,
-                        version=version,
-                        event_name=event_name,
-                        source="async",
-                        **rendered.send_fields,
-                    )
-                else:
-                    # Full HTML fallback
-                    # The fallback sends the full render to the client, so the
-                    # recovery baseline must track it too (#1636). Consumer-owned
-                    # wire version + recovery arm in one step (#1788, #1817).
-                    version = self._next_version_armed(html)
-                    await self._send_update(
-                        html=rendered.content,
-                        version=version,
-                        event_name=event_name,
-                        source="async",
-                        **rendered.send_fields,
-                    )
+                    # Identity re-check INSIDE the lock (#1940): the guard above ran
+                    # before the unbounded handler + render wait, during which the
+                    # view can be torn down or replaced. Rendering the stale view
+                    # would bump the connection-wide version and overwrite
+                    # _recovery_html with old-view HTML. (The wait's cost to the
+                    # tick / broadcast paths is documented on the error arm below.)
+                    if self.view_instance is not view:
+                        return
+                    # Re-render and send patches (mirrors the server_push path)
+                    rendered = await self._render_background(view)
+                    if rendered is None:
+                        return
+                    html, patches = rendered.html, rendered.patches
 
-                await self._flush_all_pending()
+                    if patches is not None:
+                        patch_list = fast_json_loads(patches) if patches else []
+                        # Refresh the recovery baseline so a later request_html (e.g.
+                        # an async-triggered patch that fails on the client) has fresh
+                        # HTML to serve. Mirrors handle_event and server_push (#1202).
+                        # Without this, an html_recovery that already consumed
+                        # _recovery_html leaves it None, the next request_html returns
+                        # "Recovery HTML unavailable", and the client freezes at the
+                        # transitional state even though the backend advanced (#1636).
+                        # Stamp the consumer-owned wire version (#1788), discarding the
+                        # Rust ``version`` for the wire, AND arm recovery in one step so
+                        # _recovery_version == this frame's version (#1817).
+                        version = self._next_version_armed(html)
+                        await self._send_update(
+                            patches=patch_list,
+                            version=version,
+                            event_name=event_name,
+                            source="async",
+                            **rendered.send_fields,
+                        )
+                    else:
+                        # Full HTML fallback
+                        # The fallback sends the full render to the client, so the
+                        # recovery baseline must track it too (#1636). Consumer-owned
+                        # wire version + recovery arm in one step (#1788, #1817).
+                        version = self._next_version_armed(html)
+                        await self._send_update(
+                            html=rendered.content,
+                            version=version,
+                            event_name=event_name,
+                            source="async",
+                            **rendered.send_fields,
+                        )
+
+                    await self._flush_all_pending()
+
+                await self._async_result_turn(view, task_name, complete)
 
         except Exception as e:
             error = e
@@ -1623,24 +1673,28 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 # documented contention philosophy (db_notify's note), but it
                 # is why an async render must not be slow.
                 async with self._render_lock:
-                    if self.view_instance is not view:
-                        return
-                    if not await self._authorize_explicit_consumer_turn(view):
-                        return
-                    if hasattr(view, "handle_async_result"):
-                        await sync_to_async(view.handle_async_result)(
-                            task_name, result=None, error=error
-                        )
 
-                    # Identity re-check INSIDE the lock: the guard above ran
-                    # before an UNBOUNDED wait (now handler + render), during
-                    # which the view can be torn down or replaced (#1940).
-                    # Rendering the stale view would bump the
-                    # connection-wide version and overwrite _recovery_html
-                    # with old-view HTML.
-                    if self.view_instance is not view:
-                        return
-                    await self._send_async_render(view, event_name)
+                    async def complete_error() -> None:
+                        if self.view_instance is not view:
+                            return
+                        if not await self._authorize_explicit_consumer_turn(view):
+                            return
+                        if hasattr(view, "handle_async_result"):
+                            await sync_to_async(view.handle_async_result)(
+                                task_name, result=None, error=error
+                            )
+
+                        # Identity re-check INSIDE the lock: the guard above ran
+                        # before an UNBOUNDED wait (now handler + render), during
+                        # which the view can be torn down or replaced (#1940).
+                        # Rendering the stale view would bump the
+                        # connection-wide version and overwrite _recovery_html
+                        # with old-view HTML.
+                        if self.view_instance is not view:
+                            return
+                        await self._send_async_render(view, event_name)
+
+                    await self._async_result_turn(view, task_name, complete_error)
 
             except Exception as exc:
                 self._log_view_hook_failure(
@@ -2031,13 +2085,16 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         D-l), each is authorized against a freshly loaded session before the
         application hook runs; :meth:`_render_background` then commits declared
         state before the frame. A revoked turn gets the foreground denial.
-        Legacy views pass through unchanged. The caller pops the stashed
+        Legacy views pass through unchanged (their ``reauth_on_event`` runs on
+        the turn chain). The caller pops the stashed
         request with :meth:`_end_explicit_turn` when the turn ends.
         """
         from ._exposure import uses_legacy_exposure
 
         if uses_legacy_exposure(view):
-            return await self._reauth_legacy_server_turn(view)
+            # ``reauth_on_event`` for legacy roots runs on the turn chain's
+            # ``reauth`` built-in, before this turn's body (ADR-044 D7).
+            return True
         runtime = getattr(self, "_runtime", None)
         try:
             if runtime is None:
@@ -2057,15 +2114,14 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             await self._release_revoked_view(revoked)
             return False
 
-    async def _reauth_legacy_server_turn(self, view: Any) -> bool:
+    async def _reauth_legacy_server_turn(self, view: Any, *, locked: bool = True) -> bool:
         """``reauth_on_event`` re-check for a server-originated turn on a legacy view.
 
-        ``reauth_on_event`` re-checks the principal before every client event;
-        tick, server_push / push_to_view, db_notify, presence and async-result
-        turns carry no event, so a socket whose user was logged out or lost a
-        permission kept receiving frames. This runs the SAME fresh-principal
-        check as the event path (``WSConsumerTransport.recheck_event_auth``)
-        at the top of such a turn. The caller holds ``_render_lock``.
+        The turn chain's ``reauth`` built-in (ADR-044 D7) calls this for every
+        ``push`` / ``async`` turn on this socket (tick, server_push /
+        push_to_view, db_notify, presence, client push, async starts and
+        results). It runs the SAME fresh-principal check as the event path
+        (``WSConsumerTransport.recheck_event_auth``).
 
         Gated like the event path (setting on AND the view sets
         ``login_required`` / ``permission_required``), so default views pay
@@ -2074,8 +2130,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         every tick; the first turn after a longer gap always re-checks. On
         failure the transport has already sent navigate-to-login and closed
         4403 (fail closed on any exception); the view is dropped and released
-        and the turn does not run. Explicit-policy roots never reach this:
-        :meth:`_authorize_explicit_consumer_turn` authorizes them itself.
+        (under the render lock: now if ``locked``, else once it is free) and
+        the turn does not run.
         """
         if not (
             djust_config.get("reauth_on_event")
@@ -2084,43 +2140,13 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             )
         ):
             return True
-        import time
-
-        try:
-            interval = float(djust_config.get("reauth_server_turn_interval") or 0)
-        except (TypeError, ValueError):
-            interval = _SERVER_TURN_REAUTH_INTERVAL_S
-        last = self._server_turn_reauth_at
-        now = time.monotonic()
-        if last is not None and interval > 0 and 0 <= now - last < interval:
-            return True
         from .runtime import WSConsumerTransport
 
         runtime = getattr(self, "_runtime", None)
         transport = getattr(runtime, "transport", None) or WSConsumerTransport(self)
-        try:
-            allowed = await transport.recheck_event_auth(view)
-        except Exception as exc:  # noqa: BLE001 — fail CLOSED; type + view class only
-            # Type and view class only: never the message or traceback.
-            exc_type = type(exc).__name__
-            logger.warning(
-                "reauth_on_event server-turn re-check raised %s on view %s; denying the turn",
-                exc_type,
-                type(view).__name__,
-            )
-            allowed = False
-            with contextlib.suppress(Exception):
-                await self.close(code=4403)
-        if allowed:
-            self._server_turn_reauth_at = time.monotonic()
+        if await reauth_live_turn(self, transport, view, server=True):
             return True
-        self._server_turn_reauth_at = None
-        if runtime is not None and runtime.view_instance is view:
-            runtime.view_instance = None
-        revoked = None
-        if self.view_instance is view:
-            revoked, self.view_instance = view, None
-        await self._release_revoked_view(revoked)
+        await self._drop_revoked_view(view, locked=locked)
         return False
 
     @staticmethod
@@ -2145,6 +2171,40 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             view.__dict__.pop("_djust_event_request", None)
 
     async def _dispatch_single_event(
+        self,
+        target_view: Any,
+        event_name: str,
+        params: Dict[str, Any],
+        event_ref: Optional[int] = None,
+    ) -> None:
+        """Replay one deferred ``dj_activity`` event as an ``event``/``deferred`` turn.
+
+        ADR-044: the replay runs a handler, so it runs the turn chain. See
+        :meth:`_dispatch_single_event_body` for the dispatch itself.
+        """
+        if target_view is None:
+            return
+        turn = Turn(
+            "event",
+            "ws",
+            source="deferred",
+            view=target_view,
+            event=event_name if isinstance(event_name, str) else None,
+            params=params if isinstance(params, dict) else None,
+            scope=getattr(self, "scope", None),
+            session_id=getattr(self, "session_id", None),
+            port=self,
+            ref=event_ref,
+        )
+        turn._locked = True  # the flush runs under the render lock
+        await run_turn(
+            turn,
+            lambda _turn: self._dispatch_single_event_body(
+                target_view, event_name, params, event_ref
+            ),
+        )
+
+    async def _dispatch_single_event_body(
         self,
         target_view: Any,
         event_name: str,
@@ -2449,6 +2509,35 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         peer = client[0] if client else None
         return resolve_client_ip(fwd, peer)
 
+    def _log_per_ip_refusal(self, client_ip: str, max_per_ip: int) -> None:
+        """Log why the per-IP limit refused this socket (close code 4429)."""
+        from ._client_ip import _trusted_proxy_count
+
+        if ip_tracker.in_cooldown(client_ip):
+            reason = (
+                "the address is in its reconnect cooldown after a rate-limit "
+                "disconnect (LIVEVIEW_CONFIG['rate_limit']['reconnect_cooldown'])"
+            )
+        else:
+            reason = (
+                "the address already has %d open WebSockets on this process "
+                "(LIVEVIEW_CONFIG['rate_limit']['max_connections_per_ip'])" % max_per_ip
+            )
+        headers = dict(self.scope.get("headers", []))
+        proxy_note = ""
+        if headers.get(b"x-forwarded-for") and _trusted_proxy_count() == 0:
+            proxy_note = (
+                ". The request carries X-Forwarded-For but DJUST_TRUSTED_PROXY_COUNT "
+                "is 0, so every client behind the proxy counts as this one address; "
+                "set DJUST_TRUSTED_PROXY_COUNT to the number of proxies in front of the app"
+            )
+        logger.warning(
+            "WebSocket from %s refused with close code 4429: %s%s",
+            client_ip,
+            reason,
+            proxy_note,
+        )
+
     async def connect(self) -> None:
         """Handle WebSocket connection"""
         # Per-connection default: the socket is open until a close()/disconnect()
@@ -2457,20 +2546,18 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         # before connect() runs.
         self._ws_close_sent = False
 
-        # CSWSH defense (#653): reject the handshake if the Origin header is
-        # not in settings.ALLOWED_HOSTS *before* calling self.accept(). This
-        # is defense in depth on top of DjustMiddlewareStack's
-        # AllowedHostsOriginValidator wrap — the consumer-level check still
+        # CSWSH defense (#653): reject the handshake *before* self.accept()
+        # unless its Origin is this server's own origin (scheme, host, port)
+        # or a trusted one (djust.security.origin). Defense in depth on top of
+        # DjustMiddlewareStack's validator — the consumer-level check still
         # protects apps that route directly to LiveViewConsumer.
-        headers = dict(self.scope.get("headers", []))
-        origin = headers.get(b"origin")
-        if not _is_allowed_origin(origin):
-            # decode(errors="replace") never raises on bytes, so no try/except
-            # is needed — the "if origin else ''" guard covers the None case.
-            origin_repr = origin.decode("ascii", errors="replace") if origin else ""
+        from .security.origin import websocket_origin_rejection
+
+        rejection = websocket_origin_rejection(self.scope)
+        if rejection is not None:
             logger.warning(
-                "WebSocket connection rejected: disallowed Origin %s",
-                sanitize_for_log(origin_repr),
+                "WebSocket connection rejected: %s",
+                sanitize_for_log(rejection),
             )
             await self.close(code=4403)
             return
@@ -2494,7 +2581,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         if self._client_ip:
             max_per_ip = rl_cfg.get("max_connections_per_ip", 10)
             if not ip_tracker.connect(self._client_ip, max_per_ip):
-                logger.warning("Connection rejected for IP %s (limit or cooldown)", self._client_ip)
+                self._log_per_ip_refusal(self._client_ip, max_per_ip)
                 await self.close(code=4429)
                 return
 
@@ -2515,6 +2602,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             {
                 "type": "connect",
                 "session_id": self.session_id,
+                # The client refuses to send a frame over this (0 = no limit).
+                "max_message_size": djust_config.get("max_message_size", 65536),
             }
         )
 
@@ -2674,7 +2763,15 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
                 raw_size = 0
             if max_msg_size and raw_size > max_msg_size:
                 logger.warning("Message too large (%d bytes, max %d)", raw_size, max_msg_size)
-                await self.send_error(f"Message too large ({raw_size} bytes)")
+                await self.send_error(
+                    # The "Message too large (N bytes)" prefix is parsed by
+                    # clients (signature-pad.js); keep it.
+                    f"Message too large ({raw_size} bytes); the server's max_message_size "
+                    f"is {max_msg_size}. Send files with UploadMixin, or raise "
+                    "LIVEVIEW_CONFIG['max_message_size'].",
+                    code="message_too_large",
+                    limit=max_msg_size,
+                )
                 return
 
             # Check for binary upload frames
@@ -3371,7 +3468,7 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             if via_message:
                 await runtime.dispatch_message({**data, "type": "mount"})
             else:
-                await runtime.dispatch_mount(data)
+                await runtime.dispatch_mount(data, turn_source="batch")
         except Exception:
             slot.facade._mounting_in_batch = False
             await self._release_slot(slot, reason="mount_failed")
@@ -5130,8 +5227,14 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         return any(getattr(child, "sticky_id", None) for child in children.values())
 
     async def handle_request_html(self, data: Dict[str, Any]) -> None:
-        """Serialize recovery with other renders and reject a replaced owner."""
-        view = self.view_instance
+        """Serialize recovery with other renders and reject a replaced owner.
+
+        A ``render``/``recovery`` turn (ADR-044): it can re-render the view.
+        """
+        await self._request_html_turn(self.view_instance, data)
+
+    @_consumer_turn("render", "recovery", locked=False)
+    async def _request_html_turn(self, view: Any, data: Dict[str, Any]) -> None:
         async with self._render_lock:
             owner = getattr(self, "_recovery_owner", None)
             if self.view_instance is not view or (owner is not None and owner() is not view):
@@ -5776,31 +5879,25 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         mount was refused or never happened) the event is dropped. With several
         views mounted, it is forwarded for each that joined the group (#3252).
         """
-        from ._exposure import uses_legacy_exposure
-
         for consumer in self._channel_targets(event):
-            view = consumer.view_instance
-            if (
-                view is not None
-                and uses_legacy_exposure(view)
-                and djust_config.get("reauth_on_event")
-            ):
-                # The presence payload is data the viewer may no longer be
-                # entitled to: same re-check as a server-originated render
-                # turn, run for THE VIEW THAT RECEIVES THE FRAME (the page
-                # view or a slot's stand-in), under the render lock.
-                async with consumer._render_lock:
-                    if consumer.view_instance is not view:
-                        continue
-                    if not await consumer._reauth_legacy_server_turn(view):
-                        continue
-            await consumer.send_json(
-                {
-                    "type": "presence_event",
-                    "event": event.get("event", ""),
-                    "payload": event.get("payload", {}),
-                }
-            )
+            # The presence payload is data the viewer may no longer be entitled
+            # to: each delivery is a ``push``/``presence`` turn (ADR-044) for THE
+            # VIEW THAT RECEIVES THE FRAME (the page view or a slot's stand-in),
+            # so ``reauth_on_event`` and app middleware gate it.
+            await consumer._deliver_presence_event(consumer.view_instance, event)
+
+    @_consumer_turn("push", "presence", locked=False)
+    async def _deliver_presence_event(self, view: Any, event: Dict[str, Any]) -> None:
+        """Send one presence frame to this view's client (a ``push`` turn)."""
+        if self.view_instance is not view:
+            return
+        await self.send_json(
+            {
+                "type": "presence_event",
+                "event": event.get("event", ""),
+                "payload": event.get("payload", {}),
+            }
+        )
 
     async def server_push(self, event: Dict[str, Any]) -> None:
         """
@@ -5892,8 +5989,12 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         await self._run_server_push_turn(view, event)
 
     @_binds_tenant_of(lambda self, view, *events: view)
+    @_consumer_turn("push", "server_push", releases_lock=True)
     async def _run_server_push_turn(self, view: Any, *events: Dict[str, Any]) -> None:
         """Apply pushes to the view, render once and send. Caller holds the lock.
+
+        One ``push``/``server_push`` turn (ADR-044): the turn-middleware chain
+        runs first; a refused turn applies nothing (the lock is still released).
 
         Always releases ``_render_lock``. The direct path passes one push;
         the deferred-push drain (#3001) passes every push queued while the
@@ -6048,10 +6149,8 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             try:
                 if self.view_instance is not view:
                     return
-                # Legacy root: same fresh-principal check as the stock turn
-                # (``reauth_on_event``; a no-op unless enabled).
-                if not await self._reauth_legacy_server_turn(view):
-                    return
+                # Legacy root: ``reauth_on_event`` already ran on the turn
+                # chain (ADR-044), like the stock turn.
                 runtime = getattr(self, "_runtime", None)
                 tenant = getattr(view, "_tenant", None)
 
@@ -6354,13 +6453,20 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
         when this connection has no mounted view, like ``server_push``.
         """
         for consumer in self._channel_targets(event):
-            await consumer.send_json(
-                {
-                    "type": "push_event",
-                    "event": event.get("event", ""),
-                    "payload": event.get("payload", {}),
-                }
-            )
+            await consumer._deliver_client_push_event(consumer.view_instance, event)
+
+    @_consumer_turn("push", "client_push", locked=False)
+    async def _deliver_client_push_event(self, view: Any, event: Dict[str, Any]) -> None:
+        """Send one ``push_event`` frame to this view's client (a ``push`` turn, ADR-044)."""
+        if self.view_instance is not view:
+            return
+        await self.send_json(
+            {
+                "type": "push_event",
+                "event": event.get("event", ""),
+                "payload": event.get("payload", {}),
+            }
+        )
 
     async def db_notify(self, event: Dict[str, Any]) -> None:
         """Handle a PostgreSQL NOTIFY forwarded by ``PostgresNotifyListener``.
@@ -6430,97 +6536,106 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
 
             # ``view`` is the owner captured before the lock wait: a view
             # swapped in while waiting must not receive this notification.
-            dispatch_work = False
-            try:
-                if self.view_instance is not view:
-                    return
-                if not await self._authorize_explicit_consumer_turn(view):
-                    return
-                handler = getattr(self.view_instance, "handle_info", None)
-                if handler and callable(handler):
-                    try:
-                        await call_hook(handler, message)
-                        # start_async work handle_info queued runs once the
-                        # lock is released (#2955).
-                        dispatch_work = True
-                    except Exception as exc:  # noqa: BLE001
-                        self._log_view_hook_failure(
-                            view,
-                            exc,
-                            "db_notify: handle_info raised on %s: %s",
-                            view.__class__.__name__,
-                            exc,
-                            traceback=True,
-                        )
-                        return
-
-                if self.view_instance is not view:
-                    return
-                # handle_info may have moved the session (#3004).
-                from .push import sync_push_scope_groups
-
-                await sync_push_scope_groups(self, view)
-                if self.view_instance is not view:
-                    return
-                # _resolve_skip_render owns the decision (#2834):
-                # _force_full_html (#1981, set_changed_keys()) wins over
-                # _skip_render — the explicitly requested forced render must
-                # not be silently dropped (#1646 class), and the skip flag
-                # is consumed here either way.
-                if _resolve_skip_render(self.view_instance):
-                    # No noop frame for a notification (#3034), as for
-                    # server_push; queued side effects still go out.
-                    await self._flush_all_pending()
-                    return
-
-                rendered = await self._render_background(view)
-                if rendered is None:
-                    return
-                html, patches = rendered.html, rendered.patches
-
-                if patches is not None:
-                    if isinstance(patches, str):
-                        patches = fast_json_loads(patches)
-                    # Render-send: arm recovery so _recovery_version tracks this
-                    # db_notify broadcast's version (#1817), mirroring server_push.
-                    # ``html`` is the pre-strip render from render_with_diff() above.
-                    await self._send_update(
-                        patches=patches,
-                        version=self._next_version_armed(html),
-                        broadcast=True,
-                        source="broadcast",
-                        **rendered.send_fields,
-                    )
-                else:
-                    await self._send_update(
-                        html=rendered.content,
-                        version=self._next_version_armed(html),
-                        broadcast=True,
-                        source="broadcast",
-                        **rendered.send_fields,
-                    )
-
-                # v0.7.0 — If handle_info flipped an activity to visible,
-                # drain its queue in the same round-trip. The flush is
-                # async and awaited inline. Safe no-op when no deferred
-                # events exist.
-                if hasattr(self.view_instance, "_flush_deferred_activity_events"):
-                    try:
-                        await self.view_instance._flush_deferred_activity_events(self)
-                    except Exception as exc:  # noqa: BLE001
-                        self._log_view_hook_failure(
-                            view,
-                            exc,
-                            "dj_activity: deferred-event flush raised (db_notify path)",
-                            traceback=True,
-                        )
-            finally:
-                self._end_explicit_turn(view)
-                self._render_lock.release()
-                if dispatch_work and self.view_instance is view:
-                    await self._dispatch_async_work(event_name=None)
+            # The rest is one ``push`` turn (ADR-044) and releases the lock.
+            await self._db_notify_locked(view, message)
         except Exception as e:  # noqa: BLE001
             self._log_view_hook_failure(view, e, "Error in db_notify: %s", e, traceback=True)
+
+    @_consumer_turn("push", "db_notify", releases_lock=True)
+    async def _db_notify_locked(self, view: Any, message: Dict[str, Any]) -> None:
+        """The locked part of :meth:`_db_notify_to_view` (a ``push``/``db_notify`` turn).
+
+        Caller holds ``_render_lock``; this always releases it.
+        """
+        dispatch_work = False
+        try:
+            if self.view_instance is not view:
+                return
+            if not await self._authorize_explicit_consumer_turn(view):
+                return
+            handler = getattr(self.view_instance, "handle_info", None)
+            if handler and callable(handler):
+                try:
+                    await call_hook(handler, message)
+                    # start_async work handle_info queued runs once the
+                    # lock is released (#2955).
+                    dispatch_work = True
+                except Exception as exc:  # noqa: BLE001
+                    self._log_view_hook_failure(
+                        view,
+                        exc,
+                        "db_notify: handle_info raised on %s: %s",
+                        view.__class__.__name__,
+                        exc,
+                        traceback=True,
+                    )
+                    return
+
+            if self.view_instance is not view:
+                return
+            # handle_info may have moved the session (#3004).
+            from .push import sync_push_scope_groups
+
+            await sync_push_scope_groups(self, view)
+            if self.view_instance is not view:
+                return
+            # _resolve_skip_render owns the decision (#2834):
+            # _force_full_html (#1981, set_changed_keys()) wins over
+            # _skip_render — the explicitly requested forced render must
+            # not be silently dropped (#1646 class), and the skip flag
+            # is consumed here either way.
+            if _resolve_skip_render(self.view_instance):
+                # No noop frame for a notification (#3034), as for
+                # server_push; queued side effects still go out.
+                await self._flush_all_pending()
+                return
+
+            rendered = await self._render_background(view)
+            if rendered is None:
+                return
+            html, patches = rendered.html, rendered.patches
+
+            if patches is not None:
+                if isinstance(patches, str):
+                    patches = fast_json_loads(patches)
+                # Render-send: arm recovery so _recovery_version tracks this
+                # db_notify broadcast's version (#1817), mirroring server_push.
+                # ``html`` is the pre-strip render from render_with_diff() above.
+                await self._send_update(
+                    patches=patches,
+                    version=self._next_version_armed(html),
+                    broadcast=True,
+                    source="broadcast",
+                    **rendered.send_fields,
+                )
+            else:
+                await self._send_update(
+                    html=rendered.content,
+                    version=self._next_version_armed(html),
+                    broadcast=True,
+                    source="broadcast",
+                    **rendered.send_fields,
+                )
+
+            # v0.7.0 — If handle_info flipped an activity to visible,
+            # drain its queue in the same round-trip. The flush is
+            # async and awaited inline. Safe no-op when no deferred
+            # events exist.
+            if hasattr(self.view_instance, "_flush_deferred_activity_events"):
+                try:
+                    await self.view_instance._flush_deferred_activity_events(self)
+                except Exception as exc:  # noqa: BLE001
+                    self._log_view_hook_failure(
+                        view,
+                        exc,
+                        "dj_activity: deferred-event flush raised (db_notify path)",
+                        traceback=True,
+                    )
+        finally:
+            self._end_explicit_turn(view)
+            self._render_lock.release()
+            if dispatch_work and self.view_instance is view:
+                await self._dispatch_async_work(event_name=None)
 
     async def _render_background(self, view: Any) -> Optional[BackgroundRender]:
         """Capture one background render under the caller's existing render lock.
@@ -6677,7 +6792,16 @@ class LiveViewConsumer(AsyncWebsocketConsumer):
             return False
 
         # ``view`` is the owner captured before the lock wait: a view swapped
-        # in while waiting must not be ticked by this task.
+        # in while waiting must not be ticked by this task. The rest of the
+        # tick is one ``push`` turn (ADR-044) and releases the lock.
+        return bool(await self._tick_locked(view))
+
+    @_consumer_turn("push", "tick", releases_lock=True)
+    async def _tick_locked(self, view: Any) -> bool:
+        """The locked part of :meth:`_tick_once` (a ``push``/``tick`` turn).
+
+        Caller holds ``_render_lock``; this always releases it.
+        """
         dispatch_work = False
         try:
             if self.view_instance is not view:

@@ -5,6 +5,7 @@ RequestMixin - HTTP GET/POST request handling for LiveView.
 import asyncio
 import inspect
 import json
+from types import MappingProxyType
 import logging
 import time
 from contextlib import contextmanager
@@ -362,6 +363,29 @@ class RequestMixin:
 
     @method_decorator(ensure_csrf_cookie)
     def get(self, request: "HttpRequest", *args: Any, **kwargs: Any) -> HttpResponse:
+        """Handle GET requests - initial page load, as one ``mount`` turn (ADR-044).
+
+        The turn-middleware chain runs around :meth:`_get_turn_body` when
+        ``LIVEVIEW_MIDDLEWARE`` lists any middleware (and the request is not
+        already inside its own turn, as under :meth:`aget`).
+        """
+        from ..turns import app_chain_configured, current_turn
+
+        running = current_turn()
+        if not app_chain_configured() or (running is not None and running.request is request):
+            return self._get_turn_body(request, *args, **kwargs)
+        from .._turn_ports import run_http_turn
+
+        return run_http_turn(
+            request,
+            lambda: self._get_turn_body(request, *args, **kwargs),
+            kind="mount",
+            source="page",
+            view=self,
+            json_body=False,
+        )
+
+    def _get_turn_body(self, request: "HttpRequest", *args: Any, **kwargs: Any) -> HttpResponse:
         """Handle GET requests - initial page load.
 
         On WSGI deployments, or when ``streaming_render = False``, this is
@@ -827,6 +851,29 @@ class RequestMixin:
             return False
 
     async def aget(self, request: "HttpRequest", *args: Any, **kwargs: Any) -> HttpResponse:
+        """Async-streaming GET path, as one ``mount`` turn (ADR-044).
+
+        The chunk producer this starts inherits the turn's context, so view
+        code it runs after this returns still sees what middleware set.
+        """
+        from ..turns import app_chain_configured
+
+        if not app_chain_configured():
+            return await self._aget_turn_body(request, *args, **kwargs)
+        from .._turn_ports import run_async_http_turn
+
+        return await run_async_http_turn(
+            request,
+            lambda: self._aget_turn_body(request, *args, **kwargs),
+            kind="mount",
+            source="page",
+            view=self,
+            json_body=False,
+        )
+
+    async def _aget_turn_body(
+        self, request: "HttpRequest", *args: Any, **kwargs: Any
+    ) -> HttpResponse:
         """Async-streaming GET path. PR-A foundation (ADR-015).
 
         Parallel to :meth:`get`. Returns a ``StreamingHttpResponse`` whose
@@ -1133,6 +1180,43 @@ class RequestMixin:
         return JsonResponse(response)
 
     def post(self, request: "HttpRequest", *args: Any, **kwargs: Any) -> HttpResponse:
+        """Handle POST requests - event handling, as one turn (ADR-044).
+
+        An ``event`` turn (``http``/``client``), or a ``mount``/``lazy`` turn
+        for a lazy slot's mount. The turn-middleware chain runs around
+        :meth:`_post_turn_body` when ``LIVEVIEW_MIDDLEWARE`` lists any.
+        """
+        from ..turns import app_chain_configured
+
+        if not app_chain_configured():
+            return self._post_turn_body(request, *args, **kwargs)
+        from .._lazy_containers import MOUNT_EVENT
+        from .._turn_ports import run_http_turn
+
+        event_name: Any = None
+        params: Any = None
+        try:
+            data = json.loads(request.body) if request.body else {}
+            if isinstance(data, dict):
+                event_name = data.get("event") or request.headers.get("X-Djust-Event")
+                params = data.get("params") if "event" in data else data
+        except Exception:  # noqa: BLE001 - a best-effort label; the body re-parses and answers
+            event_name = request.headers.get("X-Djust-Event")
+        if not isinstance(event_name, str):
+            event_name = None
+        lazy = event_name == MOUNT_EVENT
+        return run_http_turn(
+            request,
+            lambda: self._post_turn_body(request, *args, **kwargs),
+            kind="mount" if lazy else "event",
+            source="lazy" if lazy else "client",
+            view=self,
+            event=event_name,
+            params=MappingProxyType(params) if isinstance(params, dict) else None,
+            json_body=True,
+        )
+
+    def _post_turn_body(self, request: "HttpRequest", *args: Any, **kwargs: Any) -> HttpResponse:
         """Handle POST requests - event handling"""
         from ..components.base import LiveComponent
 
