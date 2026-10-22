@@ -235,6 +235,7 @@ def get_interactive_utilities() -> str:
     return """/* Interactive state patterns */
 .interactive {
   cursor: pointer;
+  font-family: inherit;
   transition: all var(--duration-fast) ease;
   -webkit-tap-highlight-color: transparent;
 }

@@ -146,6 +146,7 @@
      follows --primary; a literal white failed AA on bright primaries (#2996). */
   color: var(--dj-btn-primary-fg, hsl(var(--primary-foreground, 0 0% 100%)));
   cursor: pointer;
+  font-family: inherit;
   transition: all 0.15s ease;
   white-space: nowrap;
 }
@@ -297,6 +298,7 @@
 /* Clickable card */
 .dj-card-clickable {
   cursor: pointer;
+  font-family: inherit;
 }
 
 /* Card sections */
@@ -652,7 +654,7 @@
 
 /* --- Hover Card --- */
 .dj-hover-card { position: relative; display: inline-block; }
-.dj-hover-card__trigger { cursor: pointer; }
+.dj-hover-card__trigger { cursor: pointer; font-family: inherit; }
 .dj-hover-card__content { display: none; position: absolute; z-index: 50; border-radius: 0.5rem; box-shadow: 0 4px 12px rgba(0,0,0,0.1); padding: 0.75rem 1rem; max-width: 20rem; min-width: 12rem; }
 .dj-hover-card:hover .dj-hover-card__content { display: block; }
 .dj-hover-card--bottom .dj-hover-card__content { top: 100%; left: 50%; transform: translateX(-50%); margin-top: 0.5rem; }
@@ -660,12 +662,12 @@
 
 /* --- Notification Popover --- */
 .dj-notif-popover { position: relative; display: inline-block; }
-.dj-notif-popover__bell { position: relative; background: none; border: none; cursor: pointer; }
+.dj-notif-popover__bell { position: relative; background: none; border: none; cursor: pointer; font-family: inherit; }
 .dj-notif-popover__badge { position: absolute; top: -0.25rem; right: -0.25rem; min-width: 1.15rem; height: 1.15rem; font-size: 0.625rem; font-weight: 700; line-height: 1.15rem; text-align: center; border-radius: 9999px; background: hsl(var(--destructive, 0 84% 60%)); color: hsl(var(--destructive-foreground, 0 0% 100%)); }
 .dj-notif-popover__panel { display: none; position: absolute; right: 0; top: 100%; margin-top: 0.5rem; width: 20rem; max-height: 24rem; overflow-y: auto; border-radius: 0.5rem; box-shadow: 0 4px 16px rgba(0,0,0,0.12); z-index: 50; }
 .dj-notif-popover--open .dj-notif-popover__panel { display: block; }
 .dj-notif-popover__header { padding: 0.75rem 1rem; font-weight: 600; }
-.dj-notif-popover__item { padding: 0.625rem 1rem; cursor: pointer; }
+.dj-notif-popover__item { padding: 0.625rem 1rem; cursor: pointer; font-family: inherit; }
 .dj-notif-popover__item--read { opacity: 0.6; }
 
 /* --- Conversation Thread (classes) --- */
@@ -691,11 +693,11 @@
 .dj-mminput { display: flex; align-items: flex-end; gap: 0.375rem; padding: 0.5rem; border: 1px solid; border-radius: 0.75rem; }
 .dj-mminput--disabled { opacity: 0.5; pointer-events: none; }
 .dj-mminput__text { flex: 1; border: none; outline: none; background: transparent; resize: none; font: inherit; min-height: 1.5em; max-height: 8rem; }
-.dj-mminput__btn { display: flex; align-items: center; justify-content: center; width: 2rem; height: 2rem; border: none; border-radius: 0.375rem; background: transparent; cursor: pointer; flex-shrink: 0; }
+.dj-mminput__btn { display: flex; align-items: center; justify-content: center; width: 2rem; height: 2rem; border: none; border-radius: 0.375rem; background: transparent; cursor: pointer; font-family: inherit; flex-shrink: 0; }
 
 /* --- Feedback Widget (classes) --- */
 .dj-feedback { display: inline-flex; align-items: center; gap: 0.25rem; }
-.dj-feedback__btn { display: flex; align-items: center; justify-content: center; border: none; background: transparent; cursor: pointer; padding: 0.25rem; border-radius: 0.25rem; font-size: 1.125rem; }
+.dj-feedback__btn { display: flex; align-items: center; justify-content: center; border: none; background: transparent; cursor: pointer; font-family: inherit; padding: 0.25rem; border-radius: 0.25rem; font-size: 1.125rem; }
 .dj-feedback__btn--active, .dj-feedback__star--active { font-weight: bold; }
 
 /* --- Approval Gate (classes) --- */
@@ -712,7 +714,7 @@
 .dj-approval--critical .dj-approval__icon { color: var(--dj-approval-critical-color, hsl(var(--destructive-text, var(--destructive, 0 84% 60%)))); }
 .dj-approval__message { margin-bottom: 0.75rem; }
 .dj-approval__actions { display: flex; gap: 0.5rem; justify-content: flex-end; }
-.dj-approval__btn { padding: 0.375rem 0.75rem; border: 1px solid; border-radius: 0.375rem; cursor: pointer; font-size: 0.875rem; font-weight: 500; }
+.dj-approval__btn { padding: 0.375rem 0.75rem; border: 1px solid; border-radius: 0.375rem; cursor: pointer; font-family: inherit; font-size: 0.875rem; font-weight: 500; }
 .dj-approval__btn--reject { background: transparent; }
 .dj-approval__btn--approve { color: white; }
 .dj-approval--low .dj-approval__btn--approve { background: var(--dj-approval-low-color, hsl(var(--success, 142 71% 45%))); border-color: var(--dj-approval-low-color, hsl(var(--success, 142 71% 45%))); }
@@ -739,7 +741,7 @@
 .dj-model-sel__dropdown { display: none; position: absolute; top: 100%; left: 0; right: 0; margin-top: 0.25rem; border: 1px solid; border-radius: 0.375rem; max-height: 16rem; overflow-y: auto; z-index: 50; }
 /* The host LiveView owns `is_open`; the component renders it as `data-open`. */
 .dj-model-sel[data-open="true"] .dj-model-sel__dropdown { display: block; }
-.dj-model-sel__opt { padding: 0.5rem 0.75rem; cursor: pointer; }
+.dj-model-sel__opt { padding: 0.5rem 0.75rem; cursor: pointer; font-family: inherit; }
 .dj-model-sel__opt--active { font-weight: 600; }
 .dj-model-sel__info { display: flex; flex-direction: column; gap: 0.125rem; }
 .dj-model-sel__name { font-weight: 500; }
@@ -792,7 +794,7 @@
 .dj-mentions--disabled { opacity: 0.5; pointer-events: none; }
 .dj-mentions__input { width: 100%; padding: 0.5rem 0.75rem; border: 1px solid; border-radius: 0.5rem; font: inherit; font-size: 0.875rem; outline: none; }
 .dj-mentions__dropdown { display: none; position: absolute; top: 100%; left: 0; right: 0; margin: 0; padding: 0.25rem 0; list-style: none; border: 1px solid; border-radius: 0.375rem; max-height: 12rem; overflow-y: auto; z-index: 50; }
-.dj-mentions__item { display: flex; align-items: center; gap: 0.5rem; padding: 0.375rem 0.75rem; cursor: pointer; }
+.dj-mentions__item { display: flex; align-items: center; gap: 0.5rem; padding: 0.375rem 0.75rem; cursor: pointer; font-family: inherit; }
 .dj-mentions__avatar { display: flex; align-items: center; justify-content: center; width: 1.5rem; height: 1.5rem; border-radius: 9999px; overflow: hidden; flex-shrink: 0; }
 .dj-mentions__avatar-img { width: 100%; height: 100%; object-fit: cover; }
 .dj-mentions__avatar-initials { font-size: 0.625rem; font-weight: 600; }
