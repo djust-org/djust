@@ -71,6 +71,13 @@ class Combobox(Component):
         e_name = html.escape(self.name)
         e_label = html.escape(self.label)
         e_value = html.escape(self.value)
+        # The visible text is the selected option's label, not its value.
+        shown = self.value
+        for opt in options:
+            if isinstance(opt, dict) and str(opt.get("value", "")) == str(self.value):
+                shown = str(opt.get("label", self.value))
+                break
+        e_shown = html.escape(shown)
         event = self.event or self.name
         search_event = self.search_event or (self.name + "_search")
         e_placeholder = html.escape(self.placeholder)
@@ -92,8 +99,11 @@ class Combobox(Component):
         return (
             f'<div class="form-group">{label_html}'
             f'<div class="{cls}">'
-            f'<input class="combobox-input form-input" type="text" name="{e_name}" '
-            f'placeholder="{e_placeholder}" value="{e_value}" role="combobox" '
+            # The form submits the selected value from the hidden input; the
+            # visible text input has no name.
+            f'<input type="hidden" class="combobox-value" name="{e_name}" value="{e_value}">'
+            f'<input class="combobox-input form-input" type="text" '
+            f'placeholder="{e_placeholder}" value="{e_shown}" role="combobox" '
             f'aria-autocomplete="list" aria-expanded="false" aria-controls="{e_name}-listbox"'
             f"{aria} "
             f"{self.event_attrs(search_event, trigger='input')}>"

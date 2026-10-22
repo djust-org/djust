@@ -92,17 +92,20 @@ class TestComboboxFieldAria:
             "{% combobox field=f options=opts %}", {"f": _bound({"city": "zz"}), "opts": OPTIONS}
         )
         tag = _attrs_of(out, 'role="combobox"')
-        assert 'name="city"' in tag
-        assert 'aria-describedby="city-helper city-error"' in tag
+        # Ids follow the bound field's auto_id; the field name is on the
+        # hidden input that carries the selected value.
+        assert 'id="id_city"' in tag
+        assert re.search(r'class="combobox-value"[^>]*name="city"', out)
+        assert 'aria-describedby="id_city-helper id_city-error"' in tag
         assert 'aria-invalid="true"' in tag
         assert "Where you work." in out
         assert "Select a valid choice." in out
-        assert '<label class="form-label" for="city-input">City</label>' in out
+        assert '<label class="form-label" for="id_city">City</label>' in out
 
     def test_bound_field_without_errors_is_not_invalid(self):
         out = _django("{% combobox field=f options=opts %}", {"f": _bound(), "opts": OPTIONS})
         tag = _attrs_of(out, 'role="combobox"')
-        assert 'aria-describedby="city-helper"' in tag
+        assert 'aria-describedby="id_city-helper"' in tag
         assert "aria-invalid" not in tag
 
     def test_component_class(self):
@@ -148,7 +151,7 @@ class TestRichSelectFieldAria:
             "{% rich_select field=f options=opts %}", {"f": _bound({"city": "zz"}), "opts": OPTIONS}
         )
         tag = _attrs_of(out, 'class="rich-select-trigger')
-        assert 'aria-describedby="rs-city-helper rs-city-error"' in tag
+        assert 'aria-describedby="id_city-helper id_city-error"' in tag
         assert 'aria-invalid="true"' in tag
         assert '<input type="hidden" name="city"' in out
         assert "Select a valid choice." in out

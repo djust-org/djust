@@ -1318,6 +1318,12 @@ the server, so `open` stays in step. The focus trap and return focus to the
 opener work as for the default modal. The default (`native=False`) markup is
 unchanged.
 
+Both forms take `role="alertdialog"` for a dialog that needs an answer (the
+default is `dialog`). `description="..."` renders a description paragraph that
+`aria-describedby` names, and `describedby=` adds ids of your own.
+`close_button=False` omits the × button. On the `<div>` modal, mark your own
+closing control `data-dj-close` to keep Escape-to-close.
+
 ```django
 {% modal open=show_request native=True title="Request access" close_event="close_request" %}
   ...
@@ -1334,6 +1340,15 @@ the name, label, value, first error and help text from the form field instead:
 {% combobox field=form.city options=cities %}
 {% rich_select field=form.status options=statuses describedby="status-note" %}
 ```
+
+Both submit the selected option's value from a hidden input named after the
+field, so a Django form validates the key rather than the visible text. The
+combobox's visible text input has no `name`. Typed text that exactly matches an
+option label picks that option; other text is discarded when the input loses
+focus, unless the combobox has `allow_free_text=True`, in which case the text is
+the value. With `field=`, the ids derive from the field's `auto_id`, form prefix
+included, like Django's own widgets, so two forms rendering the same field on
+one page don't collide. Pass `id=` to set them yourself.
 
 ### Layouts under a LiveView base template
 
