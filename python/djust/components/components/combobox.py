@@ -15,7 +15,8 @@ class Combobox(Component):
         value: currently selected value
         options: list of dicts with keys: value, label
         event: dj-change event name
-        search_event: dj-input event for search
+        search_event: dj-input event for the search text; without one the
+            client filters the options
         placeholder: search input placeholder"""
 
     #: ADR-033 D3: the walked state keys; ``options`` (the data) compares by
@@ -79,7 +80,8 @@ class Combobox(Component):
                 break
         e_shown = html.escape(shown)
         event = self.event or self.name
-        search_event = self.search_event or (self.name + "_search")
+        search_event = self.search_event
+        filter_attr = "" if search_event else ' data-filter="client"'
         e_placeholder = html.escape(self.placeholder)
         label_html = f'<label class="form-label">{e_label}</label>' if self.label else ""
         aria = field_aria_attrs(e_name, describedby=self.describedby, invalid=self.invalid)
@@ -98,7 +100,7 @@ class Combobox(Component):
             )
         return (
             f'<div class="form-group">{label_html}'
-            f'<div class="{cls}">'
+            f'<div class="{cls}"{filter_attr}>'
             # The form submits the selected value from the hidden input; the
             # visible text input has no name.
             f'<input type="hidden" class="combobox-value" name="{e_name}" value="{e_value}">'

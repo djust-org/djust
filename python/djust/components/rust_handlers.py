@@ -117,6 +117,15 @@ class ModalHandler:
         return str(render_modal(kw, content))
 
 
+class ModalDescriptionHandler:
+    """Block handler for {% modal_description %}...{% endmodal_description %}."""
+
+    def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
+        from djust.components.templatetags.djust_components import render_modal_description
+
+        return str(render_modal_description(content))
+
+
 class CardHandler:
     def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
@@ -1990,6 +1999,7 @@ INLINE_HANDLERS = [
 # Block handlers: (tag_name, end_tag_name, handler_instance)
 BLOCK_HANDLERS = [
     ("modal", "endmodal", ModalHandler()),
+    ("modal_description", "endmodal_description", ModalDescriptionHandler()),
     ("card", "endcard", CardHandler()),
     ("accordion", "endaccordion", AccordionHandler()),
     ("accordion_item", "endaccordion_item", AccordionItemHandler()),
