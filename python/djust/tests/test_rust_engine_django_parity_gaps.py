@@ -298,3 +298,112 @@ class TestTabsRendersOnlyTheActivePane:
         """A Rust template uses component tags without ``{% load %}``; the
         body's ``{% tab %}`` blocks must still parse."""
         assert "pane B" in _rust(TABS, {"tab": "b", "x": ""})
+
+
+# --------------------------------------------------------------------------
+# 4. {% include %} inside a raw-body tag ({% tabs %}, {% split_pane %})
+# --------------------------------------------------------------------------
+#
+# The raw path compiles the tag's body with a synthetic Django ``Parser``. It
+# had no ``origin``, so every node it built had ``origin = None`` and
+# ``IncludeNode.render`` raised ``'NoneType' object has no attribute
+# 'template_name'``. The parser now carries ``Origin(UNKNOWN_SOURCE)``, the
+# origin Django gives a template built from a string -- which is also what the
+# Django side of these comparisons uses, so a RELATIVE include fails the same
+# way on both.
+
+INCLUDE_IN_TAB = {
+    "literal": '{% include "pane.html" %}',
+    "with-binding": '{% include "pane.html" with who=x %}',
+    "only": '{% include "pane.html" with who="solo" only %}',
+    "variable-name": "{% include pane_name %}",
+}
+
+
+@pytest.fixture
+def include_dir(tmp_path):
+    from django.conf import settings
+
+    from djust.tests.test_tag_bridge_object_parity_2731 import _repoint_template_engines
+
+    (tmp_path / "pane.html").write_text("<em>{{ who }}</em>")
+    original = settings.TEMPLATES[0]["DIRS"]
+    settings.TEMPLATES[0]["DIRS"] = [str(tmp_path)]
+    _repoint_template_engines()
+    yield str(tmp_path)
+    settings.TEMPLATES[0]["DIRS"] = original
+    _repoint_template_engines()
+
+
+def _tabs_with(body_a: str, body_b: str = "B") -> str:
+    return (
+        '{% tabs id="t" active=tab %}'
+        '{% tab id="a" label="A" %}' + body_a + "{% endtab %}"
+        '{% tab id="b" label="B" %}' + body_b + "{% endtab %}"
+        "{% endtabs %}"
+    )
+
+
+def _django_components(source: str, ctx: dict, dirs: list) -> str:
+    engine = Engine(
+        dirs=dirs,
+        libraries={"djust_components": "djust.components.templatetags.djust_components"},
+    )
+    return engine.from_string("{% load djust_components %}" + source).render(Context(ctx))
+
+
+@pytest.mark.usefixtures("_component_tags")
+class TestIncludeInsideARawBodyTag:
+    CTX = {"tab": "a", "x": "<x>", "who": "W", "pane_name": "pane.html"}
+
+    @pytest.mark.parametrize("case", sorted(INCLUDE_IN_TAB))
+    def test_include_in_the_active_tab_matches_django(self, case, include_dir):
+        source = _tabs_with(INCLUDE_IN_TAB[case])
+        expected = _django_components(source, self.CTX, [include_dir])
+        assert _rust(source, self.CTX, [include_dir]) == expected
+
+    def test_a_missing_template_in_an_inactive_tab_is_not_loaded(self, include_dir):
+        """Django renders only the active pane, so an include it never
+        renders is never resolved."""
+        source = _tabs_with("A", '{% include "nope/missing.html" %}')
+        expected = _django_components(source, self.CTX, [include_dir])
+        assert _rust(source, self.CTX, [include_dir]) == expected
+
+    def test_through_the_djust_template_backend(self, include_dir):
+        """The route a LiveView page takes when the project uses djust's
+        backend (the split_pane suite drives the same one)."""
+        from djust.template.backend import DjustTemplateBackend
+
+        backend = DjustTemplateBackend(
+            {"NAME": "tabs-include", "DIRS": [include_dir], "APP_DIRS": False, "OPTIONS": {}}
+        )
+        source = _tabs_with('{% include "pane.html" %}')
+        html = backend.from_string(source).render(dict(self.CTX))
+        assert "<em>W</em>" in html
+
+    def test_a_relative_include_fails_as_django_does_for_a_string_template(self, include_dir):
+        """No enclosing name crosses the Rust boundary, so a relative include
+        is resolved against no template -- Django's own string-template case,
+        which raises (it does not render the wrong file)."""
+        source = _tabs_with('{% include "./pane.html" %}')
+        # Django 5.2: `construct_relative_path(None, ...)` -> AttributeError.
+        with pytest.raises(AttributeError, match="lstrip") as django_error:
+            _django_components(source, self.CTX, [include_dir])
+        with pytest.raises(AttributeError) as rust_error:
+            _rust(source, self.CTX, [include_dir])
+        assert str(rust_error.value) == str(django_error.value)
+
+    def test_split_pane_with_an_include_matches_django(self, include_dir):
+        source = (
+            '{% split_pane direction="horizontal" %}{% include "pane.html" %}'
+            "{% pane %}right{% endsplit_pane %}"
+        )
+
+        # `split_pane` draws a fresh element id per render.
+        def same_ids(html: str) -> str:
+            return re.sub(r"sp-[0-9a-f]{6}", "sp-ID", html)
+
+        expected = _django_components(source, self.CTX, [include_dir])
+        got = _rust(source, self.CTX, [include_dir])
+        assert "<em>W</em>" in got
+        assert same_ids(got) == same_ids(expected)

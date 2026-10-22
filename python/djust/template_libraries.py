@@ -1202,10 +1202,20 @@ def _parser(tokens: List[Any]) -> Any:
     """A Django ``Parser`` over ``tokens`` that knows the builtins (so
     ``40|add:2`` inside an operand compiles) and every library loaded so
     far (so a cross-library filter inside an operand resolves)."""
-    from django.template.base import Parser
+    from django.template.base import UNKNOWN_SOURCE, Origin, Parser
 
+    # The origin Django gives a template built from a string. Every node the
+    # parser builds carries it, and `IncludeNode.render` reads
+    # `self.origin.template_name`: without one, a raw body holding an
+    # `{% include %}` (`{% tabs %}`…`{% tab %}{% include "x.html" %}`) raised
+    # AttributeError. The enclosing template's name does not cross the Rust
+    # boundary, so a RELATIVE include (`"./x.html"`) gets Django's own
+    # "unknown template origin" error, exactly as `Template("…")` does.
     parser = Parser(
-        tokens, libraries=dict(_engine_state("_loaded", _loaded)), builtins=_builtin_libraries()
+        tokens,
+        libraries=dict(_engine_state("_loaded", _loaded)),
+        builtins=_builtin_libraries(),
+        origin=Origin(UNKNOWN_SOURCE),
     )
     for library in _engine_state("_loaded", _loaded).values():
         parser.add_library(library)
