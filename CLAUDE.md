@@ -1225,10 +1225,10 @@ bugs.
   carrying (a) the reference impl to lift verbatim (#1077), (b) an explicit
   "verify the cited path/environment symptom-up" instruction, and (c) the
   gate-off self-test (#1468). Review every resulting PR (CI + diff) before
-  merge — do not rubber-stamp. Caveat surfaced: the native pre-push hook
-  hardcodes `.venv/bin/python` and fails inside a worktree, so subagents push
-  `--no-verify` after running gates manually; CI is the authoritative gate.
-  Tracked at #1796.
+  merge — do not rubber-stamp. The pre-push hook runs from linked worktrees
+  (#1796 interpreter resolution, #1810 worktree `python/` + `.so` — both in
+  `scripts/run-with-venv-python.sh`), so subagents push normally; never
+  `--no-verify`.
 
 ## Process canonicalizations from v1.0.5-2 retro arc (render-path + cleanup drain)
 
