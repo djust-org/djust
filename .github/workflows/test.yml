@@ -19,8 +19,16 @@ on:
 # Force-pushes, dependabot rebases, and quick fixup commits otherwise burn
 # the full ~30 compute-min suite on every intermediate revision. Mirrors
 # the block in codeql.yml (which has had this since #1340).
+#
+# EXCEPT main: there every push is a merged change that must get its own full
+# post-merge run, or a red main cannot be bisected. Keyed by ref alone, back-to-
+# back merges cancelled each other — 11 of 20 main runs on 2026-10-21/22 ended
+# `cancelled`. A per-commit group on main makes each run its own group (nothing
+# to cancel, and no single "pending" slot for a newer merge to evict), while
+# branches and PRs keep cancelling superseded revisions as before.
+# Pinned by tests/test_ci_main_runs_not_cancelled.py.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
   cancel-in-progress: true
 
 # Least-privilege GITHUB_TOKEN (#2523). Every job here only reads the
