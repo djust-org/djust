@@ -268,7 +268,9 @@ def test_component_template_source_reads_only_listed_files(monkeypatch):
     from djust.theming.gallery import catalogue
 
     assert "button" in catalogue._COMPONENT_TEMPLATES
-    assert catalogue._ALLOWED_COMPONENTS == frozenset(catalogue._COMPONENT_TEMPLATES)
+    assert set(catalogue._COMPONENT_TEMPLATES) == {
+        p.stem for p in catalogue._COMPONENTS_DIR.glob("*.html")
+    }
     assert "<button" in catalogue.get_component_template_source("button")
 
     # A name that is not a key reads nothing, even if a file by that name

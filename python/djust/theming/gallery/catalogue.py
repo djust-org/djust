@@ -44,9 +44,6 @@ _COMPONENT_TEMPLATES: dict[str, Path] = (
     {p.stem: p for p in sorted(_COMPONENTS_DIR.glob("*.html"))} if _COMPONENTS_DIR.exists() else {}
 )
 
-#: The component names that have a default template.
-_ALLOWED_COMPONENTS: frozenset[str] = frozenset(_COMPONENT_TEMPLATES)
-
 
 def get_component_template_source(component_name: str) -> str:
     """Read and return the raw HTML source of a default component template.
