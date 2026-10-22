@@ -300,9 +300,9 @@
     padding: 0.5rem 0.75rem;
     font-size: 0.875rem;
     line-height: 1.25rem;
-    background-color: hsl(var(--background));
+    background-color: hsl(var(--input-background, var(--background)));
     color: hsl(var(--foreground));
-    border: 1px solid hsl(var(--input));
+    border: 1px solid hsl(var(--input, var(--border)));
     border-radius: var(--radius);
     transition: all 0.15s ease;
 }
@@ -1665,9 +1665,9 @@ label .text-danger, .form-label .text-danger { color: hsl(var(--destructive-text
     font-family: inherit;
     font-size: 0.875rem;
     line-height: 1.25rem;
-    background-color: hsl(var(--background));
+    background-color: hsl(var(--input-background, var(--background)));
     color: hsl(var(--foreground));
-    border: 1px solid hsl(var(--input));
+    border: 1px solid hsl(var(--input, var(--border)));
     border-radius: var(--radius);
     /* Native popup and arrow follow the theme mode. With no `data-theme` yet
        (no JS, or before the head script runs) they follow the OS, as the
@@ -1705,9 +1705,9 @@ label .text-danger, .form-label .text-danger { color: hsl(var(--destructive-text
     font-family: inherit;
     font-size: 0.875rem;
     line-height: 1.25rem;
-    background-color: hsl(var(--background));
+    background-color: hsl(var(--input-background, var(--background)));
     color: hsl(var(--foreground));
-    border: 1px solid hsl(var(--input));
+    border: 1px solid hsl(var(--input, var(--border)));
     border-radius: var(--radius);
     resize: vertical;
     transition: all 0.15s ease;

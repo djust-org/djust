@@ -308,3 +308,39 @@ def test_field_outline_meets_non_text_contrast(preset: str, mode: str):
         assert ratio < 3.0, f"{preset} {mode}: --input now {ratio:.2f}:1, remove its exemption row"
     else:
         assert ratio >= 3.0, f"{preset} {mode}: field outline {ratio:.2f}:1"
+
+
+# --- djust.theming's own field classes ------------------------------------------
+
+# ``.input``, ``.select`` and ``.textarea`` from djust.theming's ``components.css``
+# (the classes the theme gallery and scaffolds use). They filled with the page
+# ``--background`` and outlined with a bare ``--input``.
+THEME_FIELD_RULES = (".input", ".select", ".textarea")
+
+
+def _theme_rule(selector: str) -> str:
+    css = (ROOT / "theming/static/djust_theming/css/components.css").read_text(encoding="utf-8")
+    rule = re.search(r"(?m)^" + re.escape(selector) + r"\s*\{([^}]*)\}", css)
+    assert rule, selector
+    return rule.group(1)
+
+
+@pytest.mark.parametrize("selector", THEME_FIELD_RULES)
+def test_theme_field_classes_fill_from_the_field_token(selector: str):
+    fills = [m.group(1).strip() for m in _BACKGROUND_DECL.finditer(_theme_rule(selector))]
+    assert fills == ["hsl(var(--input-background, var(--background)))"], (selector, fills)
+
+
+@pytest.mark.parametrize("selector", THEME_FIELD_RULES)
+def test_theme_field_classes_outline_with_the_input_border_token(selector: str):
+    assert _border_colours(_theme_rule(selector)) == ["hsl(var(--input, var(--border)))"], selector
+
+
+def test_tailwind_input_class_fills_from_the_field_token():
+    from djust.theming import tailwind
+
+    source = Path(tailwind.__file__).read_text(encoding="utf-8")
+    rule = source.split("\n.input {", 1)[1].split("}", 1)[0]
+    assert "bg-input-background" in rule
+    assert "bg-background" not in rule
+    assert "border-input" in rule
