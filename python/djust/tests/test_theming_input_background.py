@@ -82,8 +82,15 @@ def test_framework_override_css_never_fills_with_the_border_token():
     assert _FRAMEWORK_CSS
     for framework, css in _FRAMEWORK_CSS.items():
         assert _offending_backgrounds(css) == [], framework
-        if ".form-control {" in css:
-            assert "var(--input-background" in css.split(".form-control {", 1)[1].split("}", 1)[0]
+        for selector in (".form-control", ".form-select"):
+            if f"\n{selector} {{" not in css:
+                continue
+            rule = css.split(f"\n{selector} {{", 1)[1].split("}", 1)[0]
+            assert "var(--input-background" in rule, (framework, selector)
+            assert _border_colours(rule) == ["hsl(var(--input, var(--border)))"], (
+                framework,
+                selector,
+            )
 
 
 @pytest.mark.parametrize("preset", sorted(THEME_PRESETS))
@@ -113,6 +120,73 @@ def test_the_field_rules_read_the_field_token():
         rule = re.search(re.escape(selector) + r"\s*\{([^}]*)\}", css)
         assert rule, selector
         assert "var(--input-background" in rule.group(1), selector
+
+
+# The rules whose border IS the field outline. ``.data-table-cell-editing input`` is
+# left out on purpose: its border is the ``--ring`` edit state. The number stepper's
+# outline is ``.number-stepper-controls``; ``.number-stepper-input``'s inline borders
+# divide the value from the buttons, so they stay ``--border``, a divider.
+FIELD_OUTLINE_RULES = (
+    ".form-input",
+    ".form-select",
+    ".form-textarea",
+    ".form-checkbox",
+    ".form-radio",
+    ".table-search",
+    ".data-table-search input",
+    ".data-table-filter",
+    ".data-table-row-editing td input",
+    ".multi-select-search",
+    ".otp-digit",
+    ".number-stepper-controls",
+    ".tag-input-field",
+    ".dj-search-input__input",
+)
+
+# The colour part of every ``border``/``border-color``/``border-<side>`` declaration.
+_BORDER_DECL = re.compile(
+    r"(?<![\w-])border(?:-(?:top|right|bottom|left|inline|block))?(?:-color)?\s*:\s*([^;]*)"
+)
+
+
+def _border_colours(rule: str) -> list[str]:
+    colours = []
+    for value in _BORDER_DECL.findall(rule):
+        if value.strip() == "none":
+            continue
+        match = re.search(r"hsl\(.*\)\s*$", value.strip())
+        assert match, value
+        colours.append(match.group(0))
+    return colours
+
+
+def test_the_border_matcher_reads_the_colour():
+    """Non-vacuous: what the outline test compares is the declared colour."""
+    assert _border_colours(" border: 1px solid hsl(var(--border)); border-radius: 4px;") == [
+        "hsl(var(--border))"
+    ]
+    assert _border_colours(" border: none; border-inline: 1px solid hsl(var(--x));") == [
+        "hsl(var(--x))"
+    ]
+    assert _border_colours(" border-color: hsl(var(--input, var(--border)));") == [
+        "hsl(var(--input, var(--border)))"
+    ]
+
+
+@pytest.mark.parametrize("selector", FIELD_OUTLINE_RULES)
+def test_field_outlines_read_the_input_border_token(selector: str):
+    """A field's outline is ``--input`` (the input-border token), with ``--border``
+    only as the fallback for a theme that does not set it, never ``--border`` alone."""
+    css = (ROOT / "components/static/djust_components/components.css").read_text(encoding="utf-8")
+    rule = re.search(r"(?m)^" + re.escape(selector) + r"\s*\{([^}]*)\}", css)
+    assert rule, selector
+    colours = _border_colours(rule.group(1))
+    assert colours, selector
+    for colour in colours:
+        assert re.fullmatch(r"hsl\(var\(--input, var\(--border(, [^)]*)?\)\)\)", colour), (
+            selector,
+            colour,
+        )
 
 
 # --- the token -------------------------------------------------------------------
@@ -179,3 +253,26 @@ def test_field_text_meets_wcag_aa(preset: str, mode: str):
     tokens = getattr(THEME_PRESETS[preset], mode)
     ratio = _ratio(tokens.foreground, tokens.input_background)
     assert ratio >= 4.5, f"{preset} {mode}: field text {ratio:.2f}:1"
+
+
+# --- the outline against the fill (WCAG 1.4.11) ------------------------------------
+
+
+@pytest.mark.parametrize("mode", MODES)
+@pytest.mark.parametrize("preset", sorted(THEME_PRESETS))
+def test_field_outline_meets_non_text_contrast(preset: str, mode: str):
+    """``--input`` reaches 3:1 on ``--input-background`` (WCAG 1.4.11). A shipped
+    preset that the owner exempted (``INPUT_BORDER_EXEMPTION_REASON`` in
+    ``a11y_exemptions``) must still fail, so a fixed palette drops its row."""
+    from djust.theming.a11y_exemptions import A11Y_EXEMPTIONS
+
+    tokens = getattr(THEME_PRESETS[preset], mode)
+    ratio = _ratio(tokens.input, tokens.input_background)
+    exempt = (preset, mode, "input", "background") in A11Y_EXEMPTIONS
+    if exempt:
+        assert (
+            tokens.input_background == tokens.background
+        )  # the exemption is measured on --background
+        assert ratio < 3.0, f"{preset} {mode}: --input now {ratio:.2f}:1, remove its exemption row"
+    else:
+        assert ratio >= 3.0, f"{preset} {mode}: field outline {ratio:.2f}:1"

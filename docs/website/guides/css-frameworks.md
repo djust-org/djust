@@ -273,7 +273,7 @@ editing Bootstrap source:
 Example output (Bootstrap 5, abridged):
 
 ```css
-.form-control { color: hsl(var(--foreground)); background-color: hsl(var(--input-background, var(--card))); border-color: hsl(var(--border)); }
+.form-control { color: hsl(var(--foreground)); background-color: hsl(var(--input-background, var(--card))); border-color: hsl(var(--input, var(--border))); }
 .btn-primary { --bs-btn-bg: hsl(var(--primary)); --bs-btn-border-color: hsl(var(--primary)); --bs-btn-color: hsl(var(--primary-foreground)); }
 .alert-info { background-color: hsl(var(--info) / 0.1); border-color: hsl(var(--info) / 0.3); color: hsl(var(--info)); }
 ```

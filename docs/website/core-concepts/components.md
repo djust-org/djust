@@ -312,6 +312,8 @@ djust components use the theme's CSS custom properties for styling. Color tokens
 
 A preset can set it through `extra_css_vars`. Never paint a field with `--input`: a test fails on any `background` that reads it.
 
+The same field rules (and the number stepper's outer box, `.number-stepper-controls`) draw their **outline** from `--input`, written `hsl(var(--input, var(--border)))` so a theme without `--input` keeps its `--border` outline. `--border` stays the divider token: cards, tables, separators and the stepper's inner dividers keep it. For a visible field edge, give `--input` 3:1 against `--input-background` (WCAG 1.4.11); a custom preset is measured on it.
+
 For the full component library and design system, install the extras:
 
 ```bash
