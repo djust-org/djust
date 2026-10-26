@@ -521,7 +521,9 @@ class LiveViewTestClient:
             return str(self.view_instance.render(request))
 
         # Django fallback
-        context = self.view_instance.get_context_data()
+        from .sync_turn import run_sync_step
+
+        context = run_sync_step(self.view_instance, "render", self.view_instance.get_context_data)
 
         from django.template.loader import get_template
 

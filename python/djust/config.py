@@ -103,6 +103,11 @@ class LiveViewConfig:
         # "auto" = one thread per available CPU (max 32); an int = that many
         # threads. Each session stays on one thread. See djust.worker_pool.
         "worker_threads": None,
+        # A context manager factory ``wrapper(view, step, turn)`` (or its
+        # dotted path) entered on the thread around each sync step djust runs
+        # for a view: handler, mount, handle_params, start_async callback,
+        # get_context_data. None (default) = no wrapper. See djust.sync_turn.
+        "sync_turn_wrapper": None,
         # With worker_threads on: True (default) pins each WebSocket session to
         # one pool thread; False gives it a lane, its calls one at a time and
         # in order on any free thread of the pool, so a slow hop of one session

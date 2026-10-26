@@ -152,6 +152,55 @@ Background work also runs the chain itself: once before the callback starts
 (`async`/`start`) and again before its result is handled and rendered
 (`async`/`result`), so a caller who signed out in between is refused.
 
+## A transaction per sync step: `sync_turn_wrapper`
+
+A middleware wraps the whole turn, which is async: the turn runs the view's
+sync code in separate hops (the handler, `mount`, `handle_params`, a
+`start_async` callback, the render's `get_context_data()`, where the JIT
+evaluates the view's QuerySets) with awaits between them. With
+`worker_threads` a pool thread runs other sessions' hops in those gaps, and
+Django's database connection belongs to the thread. So a `transaction.atomic()`
+opened in a middleware would span awaits and take in other sessions' queries.
+
+`LIVEVIEW_CONFIG["sync_turn_wrapper"]` is the place for thread-bound state such
+as a transaction. It names a callable `wrapper(view, step, turn)` returning a
+context manager; djust enters it **on the thread that runs the step**, around
+the step, so what it opens closes inside one sync call:
+
+```python
+# settings.py
+LIVEVIEW_CONFIG = {"sync_turn_wrapper": "myapp.db.caller_scope"}
+
+# myapp/db.py
+from contextlib import contextmanager, nullcontext
+from django.db import connection, transaction
+
+def caller_scope(view, step, turn):
+    if turn is not None and turn.transport == "http":
+        return nullcontext()        # the request's own transaction holds
+    user = turn.user if turn is not None else getattr(view.request, "user", None)
+    return _as_caller(getattr(user, "pk", None))
+
+@contextmanager
+def _as_caller(user_id):
+    with transaction.atomic(), connection.cursor() as cursor:
+        cursor.execute("SELECT set_config('app.user_id', %s, true)", [str(user_id or "")])
+        yield
+```
+
+- `step` is `"event"`, `"mount"`, `"handle_params"`, `"hook"` (another sync view
+  hook), `"async"` (a `start_async` / `@background` callback) or `"render"`
+  (every call djust makes to `get_context_data()`, on every transport).
+- `view` is the view or component whose code runs; `turn` is
+  `djust.turns.current_turn()`, or `None` when the step runs outside a turn (a
+  `start_async` callback runs between its start and result turns).
+- A step that runs inside another step on the same thread (a handler that calls
+  `get_context_data()`) does not enter the wrapper again.
+- An `async def` handler or hook runs on the event loop and is not wrapped; its
+  own `sync_to_async` calls are yours to scope. A `sync_safe` view renders on
+  the loop, so its wrapper runs there too.
+- Unset (the default), nothing is wrapped and nothing is paid.
+
 ## Hot path
 
 Turn middleware runs on **every** event, tick and push. Keep it cheap:

@@ -827,8 +827,12 @@ class RustBridgeMixin:
             # Per-render, before anything is formatted (#2209, #2221).
             self._apply_render_env()
 
+            from ..sync_turn import run_sync_step
+
             full_context = (
-                preloaded_context if preloaded_context is not None else self.get_context_data()
+                preloaded_context
+                if preloaded_context is not None
+                else run_sync_step(self, "render", self.get_context_data)
             )
 
             # Defensive normalize pass for DB values added after super() (#1205, #1207).
