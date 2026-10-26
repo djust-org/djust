@@ -7,6 +7,138 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0rc12] - 2026-10-26
+
+### Added
+
+- **`LiveView.handle_restore(request)`: re-read what the session does not hold
+  after a restore.** The HTTP page-POST fallback rebuilds a view from its saved
+  session state and either does not call `mount()` or calls it before the saved
+  state is put back, so `mount()` never saw the restored ids and rows kept off
+  the session were never read again (a page stayed "loading" over the fallback).
+  The hook runs after the restore and the object permission check, before the
+  handler, and after a socket mount restored from the session. 4 regression
+  cases in `python/djust/tests/test_handle_restore.py`.
+- **`LiveView.template_paths()` and `LiveView.serialize_for_template(value,
+  name)`.** The first returns the dotted paths the view's template reads, by
+  name (the JIT's own extraction). The second hands the template a value by
+  those paths: models, QuerySets and model lists through the JIT, any other
+  object (a dataclass, a presenter) reduced to the paths read of `name`, with
+  the serialization floor applied. A view no longer needs the private
+  `djust.mixins.jit._cached_extract_template_variables` to give the renderer
+  plain data instead of a live object. Covered by `python/tests/test_jit_template_paths.py`,
+  with the path fixes.
+- **`djust.T026`: two template libraries the project loads register one tag or
+  filter name.** djust's Rust engine keeps one registry for the process, so
+  each `{% load %}` of either library took the name from the other and every
+  cached template was parsed again; a template rendered whichever version
+  loaded last. `manage.py check` now reports each such name (libraries a
+  project template loads, one module under two labels counted once), and djust
+  logs a warning the first time a `{% load %}` takes a name from another
+  library.
+- **`LiveView.get_render_only_context()`: template values that render but are
+  never saved.** Its models, QuerySets and model lists go through the JIT like
+  public attributes (only the template's paths, `djust_exclude_fields`
+  applied), and no session save keeps them: not the HTTP GET's, not the
+  page-POST fallback's, not a socket turn's. Until now the mechanism existed
+  only as the private `djust.forms` hooks `_djust_render_only_context` /
+  `_djust_render_only_context_keys`. 9 regression cases in
+  `python/djust/tests/test_render_only_context.py` cover this and the change
+  below.
+- **`LIVEVIEW_CONFIG["sync_turn_wrapper"]`: a scope around each sync step of a
+  turn.** A socket turn runs a view's sync code in separate hops with awaits
+  between them, so a `LIVEVIEW_MIDDLEWARE` could not hold a database
+  transaction for it (with `worker_threads`, other sessions' hops run on the
+  same thread in the gaps). The wrapper, `wrapper(view, step, turn)` returning a
+  context manager, is entered on the thread around each sync event handler,
+  `mount`, `handle_params`, other sync hook, `start_async` callback and every
+  framework call of `get_context_data()` (`djust.sync_turn`); a nested step
+  does not enter it again. See the turn middleware guide. 8 regression cases
+  in `python/djust/tests/test_sync_turn_wrapper.py`.
+- **`view_state_in_session` turns the session copy of view state off.** Set `LIVEVIEW_CONFIG["view_state_in_session"] = False` (also read from `DJUST_CONFIG`) and djust never writes or reads the `liveview_<path>` session key or its `__private`, `__private_unsaved` and `_components` siblings: not on the first GET, not on the page-POST fallback, not on a WebSocket or SSE turn. Each fallback POST then runs `mount()`, applies the event and renders, so state that lives only on the view (a "load more" offset, a form draft) resets on every fallback POST. The default, `True`, keeps today's behaviour. A value that is not a bool is reported by the new system check `djust.C027`. See [Keeping view state out of the session](docs/website/guides/http-only-mode.md#keeping-view-state-out-of-the-session).
+- **`LIVEVIEW_CONFIG["worker_pinning"] = False`: worker pool lanes instead of pinned threads.** With
+  `worker_threads` on, each WebSocket session is pinned to one pool thread, so a slow hop of one session (a long
+  handler, a heavy mount, a `start_async` callback) holds up every session pinned to the same thread while other
+  threads may be idle. Opt in to `worker_pinning: False` and each session gets a lane instead: its thread-sensitive
+  calls still run one at a time and in order, on its home thread while that thread is free, and on any idle thread
+  of the pool when it is not; a lane goes to the back of its queue after each call, so sessions take turns. The
+  default (`True`) is unchanged. `djust.C021` also reports a `worker_pinning` that is not a bool. 17 regression cases
+  in `python/djust/tests/test_worker_lanes.py`.
+
+### Changed
+
+- **A legacy session save keeps the view's state, not the whole render
+  context.** The HTTP GET, the page-POST fallback, a socket turn's save and a
+  lazy child's save kept every key `get_context_data()` returned except the
+  render-only ones, so a key an override added on top of `super()` was saved
+  too: a QuerySet as a list of dicts with every column of each row, content a
+  view never meant to persist. They now keep only what the base
+  `get_context_data()` built from the view's attributes
+  (`djust.mixins.context.legacy_unsaved_keys`, one filter for all four sites).
+  A key an override adds is computed again on every render, and is no longer
+  set back on the view as an attribute after a restore. A view whose override
+  never calls `super()` saves as before.
+
+### Fixed
+
+- **The worker pools work with asgiref 3.13.** asgiref 3.13.0's
+  `SyncToAsync.__call__` reads `_exited` on the thread-sensitive context, and
+  djust's pool slots (`worker_pool._Slot`, `_HTTPSlot`, set as that context by
+  `worker_threads` and `PooledHTTP`) had no such attribute, so every
+  `sync_to_async` of a pooled session raised `AttributeError`. A slot never
+  exits while the pool lives: `_exited` is a class attribute that is always
+  False. 3 regression cases in
+  `python/djust/tests/test_worker_pool_asgiref_contract.py`.
+- **The JIT serializer no longer prints to stderr on every render.**
+  `JITMixin._jit_serialize_queryset` wrote its "no paths", "Cache HIT",
+  "Cache MISS" and "Query optimization" lines with `print(..., file=sys.stderr)`;
+  the cache-hit line fired on every render of a view that assigns a QuerySet,
+  bypassing logging's levels and handlers. They are `logger.debug` records of
+  `djust.mixins.jit` now (`docs/JIT_SERIALIZATION_PATTERN.md` shows how to turn
+  them on). 4 regression cases in `python/tests/test_jit_logs_not_stderr.py`.
+- **A property returning a list of dicts serialized as `{}` when the template
+  read inside its items.** `{% for tool in agent.tools %}{{ tool.name }}`, with
+  `tools` a property returning a list, gave `agent.tools == {}` on the codegen
+  path (a single model, a `list[Model]`): the generated serializer took
+  `tools.name` as an attribute of the list. The Rust QuerySet path already kept
+  the list. The generated code now takes a list, tuple, set or QuerySet item by
+  item by the rest of the paths (`codegen.take_by_tree`): dict items whole,
+  object items through the same `emittable_names` gate. 6 regression cases in
+  `python/tests/test_jit_list_property.py`.
+- **The JIT finds the paths a template reads inside `{% tabs %}` and in the
+  includes of an inline template.** A variable read only in the body of a
+  raw-block tag (`{% tabs %}…{% tab %}`, `{% split_pane %}`) had no path,
+  because the body reaches Python as source; `extract_template_variables` now
+  parses those bodies (best effort; render-time dependency tracking is
+  unchanged). An inline `template` string, and a file template with no
+  `{% extends %}` once `get_template()` had run, were not given their
+  `{% include %}` partials. In both cases a `list[Model]` was serialized with
+  every field and none of its annotations. 15 regression cases in
+  `python/tests/test_jit_template_paths.py` (with the new `template_paths()` API).
+- **Two per-render costs of an unchanged template are paid once per template.**
+  The JIT built its extraction source again on every render that serialized a
+  model (the `{% extends %}` chain in Rust, every `{% include %}` read from
+  disk, a SHA-256 of the result), and the dj-model allowlist walked the
+  template and its includes, with the `{% load %}` hook for each, after every
+  render (measured downstream at 7 ms and a third of a chat page's server CPU).
+  With `DEBUG` off both are now kept per template source and template
+  directories (`djust._render_caches`); the allowlist is cached in Rust by the
+  exact source, never a short hash, and only after a successful walk. With
+  `DEBUG` on every render builds them as before; a change of `DEBUG`,
+  `TEMPLATES` or `INSTALLED_APPS` and a hot-reload template refresh clear them.
+  Also: the JIT's template-hash cache was keyed by `id()` of the source (a
+  reused id gave a new template an old hash, and it grew by one entry per
+  render), and a name serialized as a QuerySet and later as a model read the
+  QuerySet's cache slot as a serializer and fell back to every field. 18
+  regression cases in `python/tests/test_per_render_template_caches.py` cover
+  this and `djust.T026`.
+
+### Security
+
+- **The distributed SBOM lists tokio 1.54.1 (#3607).** `python/djust/djust.cdx.json`
+  still named tokio 1.53.2 (RUSTSEC-2026-0386) after the lock moved past it;
+  `make vendor` regenerated it from the current `Cargo.lock`.
+
 ## [1.3.0rc11] - 2026-10-22
 
 A 1.3 pre-release with security fixes; upgrading from 1.3.0rc10 is recommended. An `async def
