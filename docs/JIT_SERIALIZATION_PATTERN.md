@@ -646,7 +646,11 @@ names. Nested static includes are resolved with a bounded depth; dynamic include
 names still cannot be inferred statically.
 
 Dictionary and list properties retain their structure, so their contents can be
-used in template lookups and loops. Scalar FK IDs such as `entry.owner_id` do not
+used in template lookups and loops. A list (or tuple, set, QuerySet) whose items
+the template reads into, such as `{% for tool in agent.tools %}{{ tool.name }}`,
+is taken item by item by the rest of the paths, on every path (a single model,
+a list of models, a QuerySet): dict items whole, object items by the paths, under
+the same serialization gate as a model. Scalar FK IDs such as `entry.owner_id` do not
 add a join; accessing `entry.owner.name` does. Optional `FileField` and `ImageField`
 values support the usual `{% if entry.image %}{{ entry.image.url }}{% endif %}`
 guard, including when serialization falls back to generated Python code. The
