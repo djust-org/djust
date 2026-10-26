@@ -47,6 +47,16 @@ export PYTHONPATH="${WT:+$WT:}."
 # When the selector is absent or cannot run, the full suite runs: a narrower
 # run that was never chosen is worse than a slow one. DJUST_PREPUSH_FULL=1
 # forces the full suite by hand.
+#
+# DJUST_PREPUSH_TARGETED=1 narrows it the other way, by hand: when the selector
+# would answer FULL only because of transitive impact or a blast-radius path
+# (the package roots, live_view.py / websocket.py, a package __init__.py,
+# state_backends/, the engine crates' src/), it prints the direct selection
+# instead (changed tests, tests named after or importing a changed module,
+# basename mentions) and says on stderr which FULL reasons it waived. Harness
+# changes, the branch-name rule and unclassified paths still run FULL, and an
+# empty direct selection still runs the full fast tier. CI stays the
+# authoritative full run. Use it on a loaded machine, never to hide a failure.
 if [ -f scripts/select-tests.py ] && [ "${DJUST_PREPUSH_FULL:-}" != "1" ]; then
     SEL_OUT="$(mktemp)"
     if bash scripts/run-with-venv-python.sh scripts/select-tests.py >"$SEL_OUT"; then
