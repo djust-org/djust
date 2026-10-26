@@ -62,6 +62,15 @@ class _Slot:
 
     __slots__ = ("index", "sessions", "db_check_due", "checks_on_run", "__weakref__")
 
+    #: asgiref 3.13's ``SyncToAsync.__call__`` reads ``_exited`` on the
+    #: thread-sensitive context before it picks the executor (an exited
+    #: ``ThreadSensitiveContext(executor=...)`` refuses calls). A pool slot
+    #: never exits while the pool lives, so this is always False. A class
+    #: attribute, not a slot: asgiref only ever writes ``_exited`` on its own
+    #: ``ThreadSensitiveContext``. Harmless on asgiref 3.11 and 3.12, which do
+    #: not read it.
+    _exited = False
+
     def __init__(self, index: int) -> None:
         self.index = index
         self.sessions = 0
@@ -86,6 +95,10 @@ class _HTTPSlot:
     """
 
     __slots__ = ("index", "sessions", "__weakref__")
+
+    #: See ``_Slot._exited``: asgiref 3.13 reads it on every thread-sensitive
+    #: call this slot routes.
+    _exited = False
 
     def __init__(self, index: int) -> None:
         self.index = index
