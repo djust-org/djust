@@ -1955,16 +1955,16 @@
       "version": "2.7.0"
     },
     {
-      "bom-ref": "rust:pkg:cargo/tokio@1.53.2",
+      "bom-ref": "rust:pkg:cargo/tokio@1.54.1",
       "licenses": [
         {
           "expression": "MIT"
         }
       ],
       "name": "tokio",
-      "purl": "pkg:cargo/tokio@1.53.2",
+      "purl": "pkg:cargo/tokio@1.54.1",
       "type": "library",
-      "version": "1.53.2"
+      "version": "1.54.1"
     },
     {
       "bom-ref": "rust:pkg:cargo/tracing-attributes@0.1.31",
