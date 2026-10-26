@@ -626,7 +626,9 @@ def render_embedded_child_html(child_view: Any) -> str:
 
     legacy_child = uses_legacy_exposure(child_view)
     try:
-        context = child_view.get_context_data()
+        from .sync_turn import run_sync_step
+
+        context = run_sync_step(child_view, "render", child_view.get_context_data)
         if not legacy_child and "view" in context:
             raise ExposureError("Explicit child context contains a reserved name")
         from django.template import engines
@@ -2363,6 +2365,8 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             return
 
         # Render + diff (mirrors the simpler arm of handle_event).
+        from .sync_turn import run_sync_step
+
         _gcd = view.get_context_data
         _skip_thread = inspect.iscoroutinefunction(_gcd) or getattr(view, "sync_safe", False)
         t0 = time.perf_counter()
@@ -2371,13 +2375,13 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                 if inspect.iscoroutinefunction(_gcd):
                     await _gcd()
                 else:
-                    _gcd()
+                    run_sync_step(view, "render", _gcd)
                 with profiler.profile(profiler.OP_RENDER):
                     html, patches, version = view.render_with_diff()
             else:
 
                 def _sync_context_and_render() -> Any:
-                    _gcd()
+                    run_sync_step(view, "render", _gcd)
                     with profiler.profile(profiler.OP_RENDER):
                         return view.render_with_diff()
 

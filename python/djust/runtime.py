@@ -2383,7 +2383,9 @@ class WSConsumerTransport:
         from .render_env import apply_render_env
 
         apply_render_env()
-        context_data = await sync_to_async(view.get_context_data)()
+        from .sync_turn import sync_step
+
+        context_data = await sync_to_async(sync_step(view, "render", view.get_context_data))()
         result = await consumer.actor_handle.mount(
             view_path,
             context_data,
@@ -5613,7 +5615,9 @@ class ViewRuntime(RuntimeTurnPort):
             if inspect.iscoroutinefunction(_gcd_save):
                 save_context = async_to_sync(_gcd_save)()
             else:
-                save_context = _gcd_save()
+                from .sync_turn import run_sync_step
+
+                save_context = run_sync_step(target_view, "render", _gcd_save)
 
             from .mixins.context import legacy_render_only_keys
 
@@ -7909,7 +7913,11 @@ class ViewRuntime(RuntimeTurnPort):
                 and hasattr(view, "get_context_data")
             ):
                 try:
-                    _ctx_snapshot = await sync_to_async(view.get_context_data)()
+                    from .sync_turn import sync_step
+
+                    _ctx_snapshot = await sync_to_async(
+                        sync_step(view, "render", view.get_context_data)
+                    )()
                 except Exception:  # noqa: BLE001 — snapshot is best-effort DEBUG metadata
                     _ctx_snapshot = None
             _on_render = getattr(self.transport, "on_render_emitted", None)
@@ -8033,7 +8041,9 @@ class ViewRuntime(RuntimeTurnPort):
             # Verify, do not predict: the page is exact only if nothing the
             # template can read changed besides the component — including
             # values DERIVED from it elsewhere on the view.
-            context = await sync_to_async(view.get_context_data)()
+            from .sync_turn import sync_step
+
+            context = await sync_to_async(sync_step(view, "render", view.get_context_data))()
             reason = _context_changed_besides(view, context, name)
             if reason is not None:
                 logger.debug("Scoped render of %r: %r changed too; full render", name, reason)

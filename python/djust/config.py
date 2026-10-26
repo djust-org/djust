@@ -103,6 +103,11 @@ class LiveViewConfig:
         # "auto" = one thread per available CPU (max 32); an int = that many
         # threads. Each session stays on one thread. See djust.worker_pool.
         "worker_threads": None,
+        # A context manager factory ``wrapper(view, step, turn)`` (or its
+        # dotted path) entered on the thread around each sync step djust runs
+        # for a view: handler, mount, handle_params, start_async callback,
+        # get_context_data. None (default) = no wrapper. See djust.sync_turn.
+        "sync_turn_wrapper": None,
         # Maximum incoming WebSocket message size in bytes (0 = no limit)
         "max_message_size": 65536,  # 64KB
         # How many views one WebSocket may host besides the page view: the

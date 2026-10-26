@@ -38,11 +38,22 @@ async def _await(awaitable: Any) -> Any:
     return await awaitable
 
 
+_HOOK_STEPS = {"mount": "mount", "handle_params": "handle_params"}
+
+
+def _hook_step(fn: Any) -> str:
+    """The ``sync_turn_wrapper`` step of a view hook (``djust.sync_turn``)."""
+    return _HOOK_STEPS.get(getattr(fn, "__name__", ""), "hook")
+
+
 async def call_hook(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
     """Call ``fn`` from async code: awaited on the loop if async, else threaded."""
     if is_async_hook(fn):
         return await fn(*args, **kwargs)
-    result = await sync_to_async(fn)(*args, **kwargs)
+    from .sync_turn import sync_step
+
+    stepped = sync_step(getattr(fn, "__self__", None), _hook_step(fn), fn)
+    result = await sync_to_async(stepped)(*args, **kwargs)
     if inspect.isawaitable(result):
         # A sync callable that returned a coroutine (a wrapper the check above
         # could not see through): run it here, on the loop.
@@ -52,7 +63,12 @@ async def call_hook(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
 
 def call_hook_sync(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
     """Call ``fn`` from sync code, running an async hook to completion."""
-    result = fn(*args, **kwargs)
+    if is_async_hook(fn):
+        result = fn(*args, **kwargs)
+    else:
+        from .sync_turn import run_sync_step
+
+        result = run_sync_step(getattr(fn, "__self__", None), _hook_step(fn), fn, *args, **kwargs)
     if inspect.isawaitable(result):
         result = async_to_sync(_await)(result)
     return result

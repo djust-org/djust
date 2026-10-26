@@ -494,7 +494,9 @@ class RequestMixin:
         # messages, etc.). This is intentional — those callers only need
         # serialized view state, not request-scoped processor context.
         t0 = time.perf_counter()
-        context = self.get_context_data()
+        from ..sync_turn import run_sync_step
+
+        context = run_sync_step(self, "render", self.get_context_data)
         self._cached_context = dict(context)
         context = self._apply_context_processors(context, request)
         t_get_context = (time.perf_counter() - t0) * 1000
@@ -1584,7 +1586,9 @@ class RequestMixin:
 
                     async_to_sync(handler)(*call_args, **call_kwargs)
                 else:
-                    handler(*call_args, **call_kwargs)
+                    from ..sync_turn import run_sync_step
+
+                    run_sync_step(owner, "event", handler, *call_args, **call_kwargs)
                 t_handler_ms = (time.perf_counter() - t0_handler) * 1000
                 _warn_http_background_work_dropped(owner, event_name)
 
@@ -1632,7 +1636,9 @@ class RequestMixin:
                         request.session.pop(f"{view_key}__private", None)
                     _save_unsaved_private_keys(self, request.session, view_key, private_state)
 
-                updated_context = self.get_context_data()
+                from ..sync_turn import run_sync_step
+
+                updated_context = run_sync_step(self, "render", self.get_context_data)
                 from .context import legacy_render_only_keys
                 from ..components.base import is_component_collection
 
