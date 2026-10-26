@@ -551,7 +551,11 @@ class RequestMixin:
                 and k not in _render_only
             }
             t0_sc = time.perf_counter()
-            if view_key is not None:
+            from ..config import view_state_in_session
+
+            # ``view_state_in_session=False``: nothing about the view goes in
+            # the session; the fallback POST mounts again instead.
+            if view_key is not None and view_state_in_session():
                 request.session[view_key] = normalize_django_value(
                     _session_state, state_roundtrip=True
                 )
@@ -1310,7 +1314,11 @@ class RequestMixin:
             # None = tenant view with no resolved tenant: restore and save nothing (#2973).
             view_key = session_view_key(self, request.path)
             legacy_exposure = uses_legacy_exposure(self)
-            session_state = legacy_exposure and view_key is not None
+            from ..config import view_state_in_session
+
+            # ``view_state_in_session=False``: read and write nothing of the
+            # view's in the session; the empty state below runs mount() first.
+            session_state = legacy_exposure and view_key is not None and view_state_in_session()
             saved_state = request.session.get(view_key, {}) if session_state else {}
 
             # #2252: the write side tagged every Decimal
