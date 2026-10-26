@@ -2766,8 +2766,13 @@ pub fn extract_template_variables(
 
     let mut variables: HashMap<String, Vec<String>> = HashMap::new();
 
-    // Walk the AST and extract variable paths
-    extract_from_nodes(&nodes, &mut variables);
+    // Walk the AST and extract variable paths. The bodies of raw-block tags
+    // (`{% tabs %}`, `{% split_pane %}`, `{% blocktranslate %}`) are walked
+    // too, for this caller only: see [`RawBodyWalk`].
+    {
+        let _walk = RawBodyWalk::enter();
+        extract_from_nodes(&nodes, &mut variables);
+    }
 
     // Normalize, deduplicate and sort paths for each variable.
     //
@@ -2795,6 +2800,60 @@ pub fn extract_template_variables(
     }
 
     Ok(variables)
+}
+
+thread_local! {
+    /// Set while [`extract_template_variables`] walks a template.
+    static WALK_RAW_BODIES: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Walk the bodies of raw-block tags while extracting template variables.
+///
+/// A raw-block tag (`Node::RawBlockCustomTag`, #2558) hands its body to Python
+/// as un-rendered source, so the AST has no nodes for it, and a variable read
+/// only inside it (`{% tabs %}{% tab %}{% for r in rows %}{{ r.name }}…`)
+/// produced no path. The JIT then serialized `rows` with every column and none
+/// of its annotations. The body is template source that the handler renders
+/// with the same context, so its reads are the template's reads.
+///
+/// Only [`extract_template_variables`] (the JIT's path extraction) parses the
+/// bodies. The render-time dependency walks (`extract_per_node_deps`,
+/// `body_root_var_names`) keep the `"*"` wildcard a raw-block tag already gets
+/// and never parse during a render. A body that does not parse on its own
+/// (`{% blocktranslate %}` with `{% plural %}`) contributes nothing, as before.
+struct RawBodyWalk {
+    previous: bool,
+}
+
+impl RawBodyWalk {
+    fn enter() -> Self {
+        Self {
+            previous: WALK_RAW_BODIES.with(|flag| flag.replace(true)),
+        }
+    }
+}
+
+impl Drop for RawBodyWalk {
+    fn drop(&mut self) {
+        WALK_RAW_BODIES.with(|flag| flag.set(self.previous));
+    }
+}
+
+/// The variables the body of a raw-block tag reads (see [`RawBodyWalk`]).
+fn extract_from_raw_body(
+    body: &str,
+    variables: &mut std::collections::HashMap<String, Vec<String>>,
+) {
+    if !WALK_RAW_BODIES.with(|flag| flag.get()) {
+        return;
+    }
+    let Ok(tokens) = crate::lexer::tokenize(body) else {
+        return;
+    };
+    let Ok(nodes) = parse(&tokens) else {
+        return;
+    };
+    extract_from_nodes(&nodes, variables);
 }
 
 /// A dotted-path segment that is a sequence index (`0` in `rows.0.username`)
@@ -3263,6 +3322,11 @@ fn extract_from_nodes(
                 // For block tags, also recurse into children
                 if let Node::BlockCustomTag { children, .. } = node {
                     extract_from_nodes(children, variables);
+                }
+                // A raw-block tag's body is source; parse it for the JIT's
+                // path extraction only (see `RawBodyWalk`).
+                if let Node::RawBlockCustomTag { body, .. } = node {
+                    extract_from_raw_body(body, variables);
                 }
                 // Custom tags can reference arbitrary vars internally; mark
                 // the enclosing wrapper as "*" so partial render re-renders

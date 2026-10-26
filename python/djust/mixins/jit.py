@@ -92,6 +92,41 @@ except ImportError:
 _EXTENDS_STUB_RE = re.compile(r"^\s*\{%\s*extends\s+[^%]*%\}\s*$")
 
 
+# (type, paths) -> compiled serializer, for serialize_for_template's non-model
+# objects. Bounded like the other JIT caches.
+_object_serializer_cache: Dict[Tuple[type, Tuple[str, ...]], Any] = {}
+_OBJECT_SERIALIZER_CACHE_MAX = 256
+
+_LEAF_TYPES = (str, bytes, int, float, bool, dict)
+
+
+def _serialize_object_by_paths(value: Any, paths: List[str]) -> Any:
+    """A non-model ``value`` reduced to ``paths`` (``serialize_for_template``)."""
+    if value is None or isinstance(value, _LEAF_TYPES):
+        return value
+    if not paths:
+        return normalize_django_value(value)
+    if not JIT_AVAILABLE:
+        return normalize_django_value(value)
+    key = (type(value), tuple(sorted(set(paths))))
+    serializer = _object_serializer_cache.get(key)
+    if serializer is None:
+        name = type(value).__name__
+        if not name.isidentifier():
+            name = "Object"
+        func_name = "serialize_object_%s" % hashlib.sha256(repr(key).encode()).hexdigest()[:8]
+        try:
+            code = generate_serializer_code(name, list(key[1]), func_name)
+            serializer = compile_serializer(code, func_name)
+        except (ValueError, SyntaxError):
+            logger.debug("No path serializer for %s; using normalize_django_value", name)
+            return normalize_django_value(value)
+        if len(_object_serializer_cache) >= _OBJECT_SERIALIZER_CACHE_MAX:
+            _object_serializer_cache.clear()
+        _object_serializer_cache[key] = serializer
+    return serializer(value)
+
+
 class JITMixin:
     """JIT serialization: _jit_serialize_queryset, _jit_serialize_model, _get_template_content."""
 
@@ -118,12 +153,16 @@ class JITMixin:
         # for the initial GET); a stub has no variable paths, and returning
         # it here silently disabled JIT query optimization on every
         # inheritance-using view. Fall through to the resolver instead.
+        # Both sources below are the template's own text, which can
+        # ``{% include %}`` partials: inline them, as the ``template_name``
+        # path does, or a variable read only inside a partial has no path and
+        # the JIT serializes every field of its rows (Point Guard N-34).
         if hasattr(self, "_full_template") and self._full_template:
             if not _EXTENDS_STUB_RE.match(self._full_template):
-                return self._full_template
+                return self._with_includes(self._full_template)
 
         if hasattr(self, "template") and self.template:
-            return self.template
+            return self._with_includes(self.template)
 
         if hasattr(self, "template_name") and self.template_name:
             # Try Rust template inheritance resolution first
@@ -168,6 +207,76 @@ class JITMixin:
                 return None
 
         return None
+
+    def _with_includes(self, source: str) -> str:
+        """``source`` with its static ``{% include %}`` partials inlined."""
+        try:
+            from ..utils import get_template_dirs
+
+            return self._inline_includes(source, get_template_dirs())
+        except Exception:  # noqa: BLE001 — extraction source only, never rendered
+            # Value-free: the error can carry template text.
+            logger.debug("Could not inline includes for JIT extraction")
+            return source
+
+    def template_paths(self) -> Dict[str, List[str]]:
+        """The dotted paths the view's template reads, by top-level name.
+
+        The same extraction the JIT serializes models by: the template with its
+        ``{% extends %}`` chain and static ``{% include %}`` partials, loop
+        variables folded onto their iterable (``{% for c in cards %}{{ c.title }}``
+        gives ``cards: ["title"]``). A name read whole (``{{ card }}``) maps to
+        an empty list. Returns ``{}`` when the template cannot be read or
+        parsed.
+
+        Use it with :meth:`serialize_for_template` to hand the template a value
+        that is not a model.
+        """
+        content = self._get_template_content()
+        if not content:
+            return {}
+        found = _cached_extract_template_variables(content) or {}
+        return {name: list(paths) for name, paths in found.items() if name != "*"}
+
+    def serialize_for_template(self, value: Any, name: str) -> Any:
+        """``value`` as the plain data the template reads under ``name``.
+
+        A model, a QuerySet or a list of models goes through the JIT, exactly as
+        a public attribute of that name would. Any other object (a dataclass of
+        view logic, a presenter) is reduced to the paths the template reads of
+        ``name`` (:meth:`template_paths`): attributes and properties by name, a
+        ``get_*`` method called, a dict taken whole, and a list or tuple item by
+        item. The serialization floor (``DJUST_SENSITIVE_FIELDS``,
+        ``djust_exclude_fields``) applies as it does to a model.
+
+        So a ``get_context_data()`` override can hand the renderer plain data
+        instead of the live object (which is not JSON, and which djust warns
+        about on every render)::
+
+            def get_context_data(self, **kwargs):
+                context = super().get_context_data(**kwargs)
+                context["cards"] = self.serialize_for_template(self._cards, "cards")
+                return context
+
+        With no path for ``name`` (the template prints the object whole, or
+        does not use it), the value goes through ``normalize_django_value``.
+        """
+        from django.db import models
+        from django.db.models import QuerySet
+
+        from ..utils import is_model_list
+
+        content = self._get_template_content() or ""
+        if isinstance(value, QuerySet):
+            return self._jit_serialize_queryset(value, content, name)
+        if isinstance(value, models.Model):
+            return self._jit_serialize_model(value, content, name)
+        if is_model_list(value):
+            return self._jit_serialize_model_list(value, content, name)
+        paths = self.template_paths().get(name, [])
+        if isinstance(value, (list, tuple)):
+            return [_serialize_object_by_paths(item, paths) for item in value]
+        return _serialize_object_by_paths(value, paths)
 
     @staticmethod
     def _inline_includes(template_content: str, template_dirs: List[str]) -> str:
