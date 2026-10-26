@@ -206,6 +206,10 @@ _FRAMEWORK_INTERNAL_ATTRS: frozenset = frozenset(
         "_djust_mount_kwargs",
         "_jit_serialized_keys",
         "_context_processor_keys",
+        # What the last legacy render built from attributes / as render-only
+        # (``mixins/context.py`` ``legacy_unsaved_keys``).
+        "_djust_state_context_keys",
+        "_djust_render_only_keys",
         "_cached_csrf_token",
         "_djust_id_counter",  # Render-cycle ID allocation is not reactive state.
         "_sync_done_this_cycle",

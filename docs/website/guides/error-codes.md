@@ -300,7 +300,7 @@ In development, pages render without Tailwind utilities until you compile the CS
 
 **Severity**: Error
 
-**What causes it**: `LIVEVIEW_CONFIG['worker_threads']` is set to something other than `None`, `False`, `True`, `"auto"` or an integer `>= 0` (for example `"8"` or `2.5`). The setting opts the WebSocket path into a pinned worker pool (#3074). At runtime an invalid value is logged and treated as off, so every session keeps sharing one thread.
+**What causes it**: `LIVEVIEW_CONFIG['worker_threads']` is set to something other than `None`, `False`, `True`, `"auto"` or an integer `>= 0` (for example `"8"` or `2.5`). The setting opts the WebSocket path into a pinned worker pool (#3074). At runtime an invalid value is logged and treated as off, so every session keeps sharing one thread. The same check reports a `LIVEVIEW_CONFIG['worker_pinning']` that is not `True` or `False`; at runtime such a value keeps each session pinned to one thread.
 
 **Fix**: Use `True` (one thread per CPU, up to 32), an integer thread count such as `8`, or remove the key. See [More than one core per process](deployment.md#more-than-one-core-per-process-worker_threads). Suppress with `DJUST_CONFIG = {"suppress_checks": ["C021"]}`.
 
@@ -353,6 +353,16 @@ In development, pages render without Tailwind utilities until you compile the CS
 **What causes it**: `LIVEVIEW_MIDDLEWARE` is not a list of dotted paths, an entry cannot be imported, or an entry is a sync function. Turn middleware must be `async def mw(turn, next)`.
 
 **Fix**: Point each entry at an importable `async def mw(turn, next)` that returns `await next(turn)` or a `djust.turns.Refuse` refusal. See [Turn middleware](turn-middleware.md). Suppress with `DJUST_CONFIG = {"suppress_checks": ["C026"]}`.
+
+---
+
+### C027: Invalid view_state_in_session
+
+**Severity**: Error
+
+**What causes it**: `LIVEVIEW_CONFIG['view_state_in_session']` is set to something other than `True` or `False`, such as the string `"false"`. Only `False` turns the session copy of view state off, so with any other value djust keeps saving each view's state in the session.
+
+**Fix**: Set it to `False` (stateless) or `True`, or remove it. See [Keeping view state out of the session](http-only-mode.md#keeping-view-state-out-of-the-session). Suppress with `DJUST_CONFIG = {"suppress_checks": ["C027"]}`.
 
 ---
 

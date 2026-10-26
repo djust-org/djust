@@ -538,10 +538,10 @@ class RequestMixin:
         # per GET, and streams exist precisely to keep large collections OUT of
         # state.
         if uses_legacy_exposure(self):
-            from .context import legacy_render_only_keys
+            from .context import legacy_unsaved_keys
             from ..components.base import is_component_collection
 
-            _render_only = legacy_render_only_keys(self)
+            _render_only = legacy_unsaved_keys(self, _cached)
             _session_state = {
                 k: v
                 for k, v in _cached.items()
@@ -551,7 +551,11 @@ class RequestMixin:
                 and k not in _render_only
             }
             t0_sc = time.perf_counter()
-            if view_key is not None:
+            from ..config import view_state_in_session
+
+            # ``view_state_in_session=False``: nothing about the view goes in
+            # the session; the fallback POST mounts again instead.
+            if view_key is not None and view_state_in_session():
                 request.session[view_key] = normalize_django_value(
                     _session_state, state_roundtrip=True
                 )
@@ -1310,7 +1314,11 @@ class RequestMixin:
             # None = tenant view with no resolved tenant: restore and save nothing (#2973).
             view_key = session_view_key(self, request.path)
             legacy_exposure = uses_legacy_exposure(self)
-            session_state = legacy_exposure and view_key is not None
+            from ..config import view_state_in_session
+
+            # ``view_state_in_session=False``: read and write nothing of the
+            # view's in the session; the empty state below runs mount() first.
+            session_state = legacy_exposure and view_key is not None and view_state_in_session()
             saved_state = request.session.get(view_key, {}) if session_state else {}
 
             # #2252: the write side tagged every Decimal
@@ -1633,10 +1641,10 @@ class RequestMixin:
                     _save_unsaved_private_keys(self, request.session, view_key, private_state)
 
                 updated_context = self.get_context_data()
-                from .context import legacy_render_only_keys
+                from .context import legacy_unsaved_keys
                 from ..components.base import is_component_collection
 
-                render_only = legacy_render_only_keys(self)
+                render_only = legacy_unsaved_keys(self, updated_context)
                 state = {
                     k: v
                     for k, v in updated_context.items()

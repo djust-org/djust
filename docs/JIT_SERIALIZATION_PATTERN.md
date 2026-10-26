@@ -378,33 +378,35 @@ When refactoring a view to use JIT pattern:
 - [ ] Call `super().get_context_data()` to trigger JIT serialization
 - [ ] Don't add QuerySet to context dict (parent already did it)
 - [ ] Only add non-model context to context dict
-- [ ] Verify JIT is working by checking server logs for `[JIT] Serialized N objects`
+- [ ] Verify JIT is working with the `djust.mixins.jit` logger at `DEBUG` (see below)
 
 ## Debugging JIT Serialization
 
-Enable debug mode to see detailed JIT logging:
+The JIT logs through Python's `logging`, on the `djust.mixins.jit` logger at
+`DEBUG` level. It never writes to stdout or stderr, so production logs stay
+quiet unless you turn that logger up:
 
 ```python
 # In Django settings
-LIVEVIEW_CONFIG = {
-    'debug_vdom': True,  # Enable detailed VDOM and JIT logging
+LOGGING = {
+    "version": 1,
+    "handlers": {"console": {"class": "logging.StreamHandler"}},
+    "loggers": {
+        "djust.mixins.jit": {"handlers": ["console"], "level": "DEBUG"},
+    },
 }
 ```
 
-Or temporarily in code:
-
-```python
-from djust.config import config
-config.set('debug_vdom', True)
-```
-
-You should see logs like:
+You should see records like:
 
 ```
-[JIT] Serialized 7 MaintenanceRequest objects for 'requests' using Rust
-[JIT] Extracted paths from template: ['property.name', 'tenant.user.get_full_name', 'created_at']
-[JIT] Auto-applied select_related: ['property', 'tenant__user']
+[JIT] Cache MISS for 'requests' (MaintenanceRequest) - generating serializer for paths: ['created_at', 'property.name', 'tenant.user.get_full_name']
+[JIT] Query optimization: select_related=['property', 'tenant__user'], prefetch_related=[]
+[JIT] Cache HIT for 'requests' - using cached paths: ['created_at', 'property.name', 'tenant.user.get_full_name']
 ```
+
+`LIVEVIEW_CONFIG['jit_debug'] = True` adds a record per serialization with the
+row count and the first row's keys.
 
 ## JIT Serialization Behavior
 
@@ -685,7 +687,11 @@ class InboxView(LiveView):
   whole (no path) falls back to `normalize_django_value`.
 
 Dictionary and list properties retain their structure, so their contents can be
-used in template lookups and loops. Scalar FK IDs such as `entry.owner_id` do not
+used in template lookups and loops. A list (or tuple, set, QuerySet) whose items
+the template reads into, such as `{% for tool in agent.tools %}{{ tool.name }}`,
+is taken item by item by the rest of the paths, on every path (a single model,
+a list of models, a QuerySet): dict items whole, object items by the paths, under
+the same serialization gate as a model. Scalar FK IDs such as `entry.owner_id` do not
 add a join; accessing `entry.owner.name` does. Optional `FileField` and `ImageField`
 values support the usual `{% if entry.image %}{{ entry.image.url }}{% endif %}`
 guard, including when serialization falls back to generated Python code. The
