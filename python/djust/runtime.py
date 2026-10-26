@@ -3792,8 +3792,12 @@ class ViewRuntime(RuntimeTurnPort):
         from ._tenant_state import session_view_key
 
         # None = tenant view with no resolved tenant: restore nothing (#2973).
+        from .config import view_state_in_session
+
         view_key = session_view_key(view_instance, page_url)
-        if opt_in and session is not None and view_key is not None:
+        # ``view_state_in_session=False``: no saved view state to read. The
+        # signed client snapshot below is not in the session and stays on.
+        if opt_in and view_state_in_session() and session is not None and view_key is not None:
             try:
                 saved_state = await session.aget(view_key, {})
             except Exception:  # noqa: BLE001 — session backend may be absent
@@ -5567,6 +5571,12 @@ class ViewRuntime(RuntimeTurnPort):
             # ``commit_explicit_turn`` (E3); this best-effort save would ack a
             # failed write (#3211). Refused before any read or write.
             require_legacy_state_api(target_view)
+            from .config import view_state_in_session
+
+            # ``view_state_in_session=False``: nothing of the view goes in the
+            # session; this counts as saved, as a turn with no session does.
+            if not view_state_in_session():
+                return
             scope_session = (
                 (self.scope.get("session") if self.scope else None)
                 if mount_request is None
