@@ -538,10 +538,10 @@ class RequestMixin:
         # per GET, and streams exist precisely to keep large collections OUT of
         # state.
         if uses_legacy_exposure(self):
-            from .context import legacy_render_only_keys
+            from .context import legacy_unsaved_keys
             from ..components.base import is_component_collection
 
-            _render_only = legacy_render_only_keys(self)
+            _render_only = legacy_unsaved_keys(self, _cached)
             _session_state = {
                 k: v
                 for k, v in _cached.items()
@@ -1633,10 +1633,10 @@ class RequestMixin:
                     _save_unsaved_private_keys(self, request.session, view_key, private_state)
 
                 updated_context = self.get_context_data()
-                from .context import legacy_render_only_keys
+                from .context import legacy_unsaved_keys
                 from ..components.base import is_component_collection
 
-                render_only = legacy_render_only_keys(self)
+                render_only = legacy_unsaved_keys(self, updated_context)
                 state = {
                     k: v
                     for k, v in updated_context.items()

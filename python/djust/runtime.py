@@ -5615,9 +5615,9 @@ class ViewRuntime(RuntimeTurnPort):
             else:
                 save_context = _gcd_save()
 
-            from .mixins.context import legacy_render_only_keys
+            from .mixins.context import legacy_unsaved_keys
 
-            render_only = legacy_render_only_keys(target_view)
+            render_only = legacy_unsaved_keys(target_view, save_context)
             from .components.base import LiveComponent as _LC, is_component_collection
 
             save_state = {

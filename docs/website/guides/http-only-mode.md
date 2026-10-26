@@ -87,7 +87,9 @@ Browser                    Server
 
 ### What the page-POST fallback keeps between events
 
-Every POST to the page URL builds a fresh view instance. A view on the default state policy gets its attributes back from the dict that `get_context_data()` returned on the previous request, which djust saved in the session, and `mount()` is not called again once that saved state exists. An attribute that `get_context_data()` leaves out is therefore unset on the next POST, and a handler that reads it raises `AttributeError` (a 500), while the same event works over the WebSocket, where the one view instance stays alive.
+Every POST to the page URL builds a fresh view instance. A view on the default state policy gets its attributes back from the state the base `get_context_data()` built from its public attributes on the previous request, which djust saved in the session, and `mount()` is not called again once that saved state exists. An attribute that `get_context_data()` leaves out is therefore unset on the next POST, and a handler that reads it raises `AttributeError` (a 500), while the same event works over the WebSocket, where the one view instance stays alive.
+
+What is not saved: the keys an override adds on top of `super().get_context_data()` (they are computed again on every render), and the values of [`get_render_only_context()`](../api-reference/liveview.md#get_render_only_context---dict). Put content that must not reach the session there.
 
 So:
 

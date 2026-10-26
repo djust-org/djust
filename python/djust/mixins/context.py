@@ -164,6 +164,33 @@ def legacy_render_only_keys(view: Any) -> frozenset:
     return frozenset(keys()) if callable(keys) else frozenset()
 
 
+def legacy_unsaved_keys(view: Any, context: Dict[str, Any]) -> frozenset:
+    """The keys of ``context`` a legacy session save drops.
+
+    A legacy save keeps the view's state: the keys the base
+    ``get_context_data()`` built from the view's attributes. It drops
+
+    - the render-only keys (:meth:`ContextMixin.get_render_only_context`, the
+      framework's private ``_djust_render_only_context`` hooks), and
+    - every key an override added on top of ``super().get_context_data()``.
+      Such a value is computed again on every render, so saving it only
+      copied derived data (a query set's rows with every column, content
+      that must not reach the session) into ``django_session`` and set it
+      back as an attribute on restore (Point Guard N-31 and Phase 2
+      decision 185).
+
+    Every legacy save site (the HTTP GET, the page-POST fallback, the socket
+    turn's save, a lazy child) filters through this one function.
+    """
+    unsaved = set(legacy_render_only_keys(view))
+    recorded = getattr(view, "__dict__", {})
+    unsaved.update(recorded.get("_djust_render_only_keys", ()))
+    base = recorded.get("_djust_state_context_keys")
+    if base is not None:
+        unsaved.update(key for key in context if key not in base)
+    return frozenset(unsaved)
+
+
 def _drop_request_scoped_values(view: Any, context: Dict[str, Any]) -> Dict[str, Any]:
     """Return ``context`` without its non-serializable request-scoped values.
 
@@ -376,12 +403,20 @@ class ContextMixin:
                             continue
                 context[key] = value
 
-        # Render-only values a mixin supplies (ADR-035's managed ``object``).
-        # Added before model serialization so they render like any other model;
-        # ``legacy_render_only_keys`` keeps them out of every session save.
+        # Render-only values: a mixin's (ADR-035's managed ``object``) and the
+        # view's own (``get_render_only_context``). Added before model
+        # serialization so they render like any other model;
+        # ``legacy_unsaved_keys`` keeps them out of every session save.
+        render_only_keys: set = set()
         render_only = getattr(self, "_djust_render_only_context", None)
         if callable(render_only):
-            context.update(render_only())
+            items = render_only()
+            context.update(items)
+            render_only_keys.update(items)
+        items = self.get_render_only_context()
+        if items:
+            context.update(items)
+            render_only_keys.update(items)
 
         # JIT auto-serialization for QuerySets and Models
         jit_serialized_keys = set()
@@ -579,7 +614,37 @@ class ContextMixin:
             if streams_ctx:
                 context["streams"] = streams_ctx
 
+        # What a legacy session save may keep (``legacy_unsaved_keys``): the
+        # keys built here from the view's attributes, not the render-only
+        # ones (nor the counts derived from them), and not what an override
+        # adds after this returns.
+        derived = {key + "_count" for key in render_only_keys}
+        self._djust_render_only_keys = frozenset(render_only_keys | derived)
+        self._djust_state_context_keys = frozenset(
+            key for key in context if key not in render_only_keys and key not in derived
+        )
+
         return context
+
+    def get_render_only_context(self) -> Dict[str, Any]:
+        """Template values that render but are never saved. Override to add some.
+
+        The returned dict joins the context of every render. Its models,
+        QuerySets and lists of models go through the JIT like public
+        attributes (only the paths the template reads, with
+        ``djust_exclude_fields`` applied), but no session save keeps them:
+        not the HTTP GET's, not the page-POST fallback's, not a socket turn's.
+        Use it for content that must not persist, or for rows a handler
+        already holds on a private attribute::
+
+            def get_render_only_context(self):
+                return {"chat": self._rows.chat, "messages": self._rows.messages}
+
+        A key here wins over a public attribute of the same name, and that
+        attribute is then not saved either. Called once per render, before
+        the JIT runs.
+        """
+        return {}
 
     def _get_explicit_context_data(self, **kwargs: Any) -> Dict[str, Any]:
         """Render-only context from deliberate additions and known providers.
@@ -683,6 +748,13 @@ class ContextMixin:
                 context._provide(UPLOADS_PROVIDER.name, name, value)
 
         self._explicit_context_provider_keys = context.provider_keys()
+        # Explicit exposure saves declared server fields only, so the
+        # render-only values are just more render context.
+        render_only_items = self.get_render_only_context()
+        if render_only_items:
+            if any(key in context.provider_keys() for key in render_only_items):
+                raise ExposureError("Explicit context provider collision")
+            context.update(render_only_items)
         context.update(kwargs)
         self._jit_serialized_keys = set()
         return context
