@@ -514,3 +514,106 @@ def test_shared_dependency_and_demo_settings_require_full_even_with_a_pin(path):
     sel = _select([path], tests=[test], texts={test: repr(path)})
     assert sel.full
     assert path in sel.reason
+
+
+# --------------------------------------------------------------------------
+# DJUST_PREPUSH_TARGETED=1: direct selection instead of a blast-radius FULL
+# --------------------------------------------------------------------------
+
+
+def test_targeted_trades_transitive_impact_for_the_direct_selection():
+    texts = {**TEXTS, "python/djust/consumer.py": "from djust.forms import FormMixin"}
+    kwargs = dict(all_modules=["python/djust/consumer.py"])
+    default = st.select_tests(["python/djust/forms.py"], TESTS, texts.__getitem__, **kwargs)
+    targeted = st.select_tests(
+        ["python/djust/forms.py"], TESTS, texts.__getitem__, targeted=True, **kwargs
+    )
+    assert default.full and "transitive impact" in default.reason
+    assert not targeted.full
+    assert targeted.tests == ["tests/unit/test_forms.py"]
+    assert "DJUST_PREPUSH_TARGETED=1" in targeted.reason
+    assert "consumer.py imports djust.forms (transitive impact)" in targeted.reason
+
+
+@pytest.mark.parametrize(
+    "path, test, text",
+    [
+        (
+            "python/djust/live_view.py",
+            "tests/unit/test_pin.py",
+            "from djust.live_view import LiveView",
+        ),
+        ("python/djust/websocket.py", "python/djust/tests/test_websocket_mount.py", None),
+        ("crates/djust_templates/src/renderer.rs", "python/tests/test_renderer_pins.py", None),
+        ("python/djust/mixins/__init__.py", "tests/unit/test_pin.py", "import djust.mixins"),
+        ("python/djust/state_backends/base.py", "tests/unit/test_pin.py", "'base.py'"),
+    ],
+)
+def test_targeted_trades_a_blast_radius_path_for_its_direct_consumers(path, test, text):
+    tests, texts = TESTS, TEXTS
+    if text is not None:
+        tests, texts = [test], {test: text}
+    assert _select([path], tests=tests, texts=texts).full
+    sel = st.select_tests([path], tests, texts.__getitem__, "feat/x", targeted=True)
+    assert not sel.full, sel.reason
+    assert test in sel.tests
+    assert "direct selection instead of FULL for: %s changed" % path in sel.reason
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "pyproject.toml",
+        "scripts/pre-push-pytest.sh",
+        "scripts/select-tests.py",
+        "python/tests/conftest.py",
+        "tests/corpus_shards.py",
+        ".github/workflows/test.yml",
+    ],
+)
+def test_targeted_keeps_full_for_the_harness(path):
+    test = "tests/unit/test_pin.py"
+    sel = st.select_tests([path], [test], {test: repr(path)}.__getitem__, "feat/x", targeted=True)
+    assert sel.full
+    assert path in sel.reason
+
+
+def test_targeted_keeps_full_for_the_branch_rule_and_unclassified_paths():
+    sel = st.select_tests(
+        ["python/djust/live_view.py"], TESTS, TEXTS.__getitem__, "feat/routing-flip", targeted=True
+    )
+    assert sel.full and "branch name" in sel.reason
+    sel = st.select_tests(
+        ["python/djust/websocket.py", "docs/unknown.md"],
+        TESTS,
+        TEXTS.__getitem__,
+        "feat/x",
+        targeted=True,
+    )
+    assert sel.full and "unclassified" in sel.reason and "docs/unknown.md" in sel.reason
+
+
+def test_targeted_with_an_empty_direct_selection_is_still_full():
+    sel = st.select_tests(
+        ["crates/djust_core/src/value.rs"], TESTS, TEXTS.__getitem__, "feat/x", targeted=True
+    )
+    assert sel.full
+    assert "selection is empty" in sel.reason
+
+
+def test_targeted_cli_reads_the_environment_and_prints_the_reason(monkeypatch, capsys):
+    monkeypatch.setenv("DJUST_PREPUSH_TARGETED", "1")
+    seen = {}
+
+    def fake_select(*args, **kwargs):
+        seen.update(kwargs)
+        return st.Selection(False, "1 test file(s) selected; DJUST_PREPUSH_TARGETED=1: x", ["t.py"])
+
+    monkeypatch.setattr(st, "select_tests", fake_select)
+    monkeypatch.setattr(st, "_range", lambda a, b: ("origin/main", "HEAD"))
+    monkeypatch.setattr(st, "_changed_files", lambda a, b: ["python/djust/live_view.py"])
+    assert st.main(["--branch", "feat/x"]) == 0
+    out = capsys.readouterr()
+    assert seen["targeted"] is True
+    assert out.out.strip() == "t.py"
+    assert "DJUST_PREPUSH_TARGETED=1" in out.err
