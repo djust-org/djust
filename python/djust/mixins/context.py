@@ -404,19 +404,21 @@ class ContextMixin:
 
         if has_db_values:
             try:
-                template_content = self._get_template_content()
+                from ..mixins.jit import _jit_template_content
+
+                template_content = _jit_template_content(self)
                 if template_content:
                     # Extract variable paths once for list[Model] optimization
                     from ..mixins.jit import _cached_extract_template_variables
 
                     variable_paths_map = _cached_extract_template_variables(template_content)
 
-                    # Compute template hash once for codegen cache keys
-                    import hashlib
+                    # Template hash once for codegen cache keys
+                    from ..mixins.jit import _template_hash
                     from ..session_utils import _jit_serializer_cache, _get_model_hash
                     from ..optimization.codegen import generate_serializer_code, compile_serializer
 
-                    template_hash = hashlib.sha256(template_content.encode()).hexdigest()[:8]
+                    template_hash = _template_hash(template_content)
 
                     for key, value in list(context.items()):
                         if isinstance(value, QuerySet):

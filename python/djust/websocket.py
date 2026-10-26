@@ -4091,6 +4091,11 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                         "Could not clear template cache for %s: %s", engine.name, e
                     )
 
+        # The per-template render caches (JIT source, dj-model allowlist).
+        from ._render_caches import clear_render_caches
+
+        clear_render_caches()
+
         hotreload_logger.debug("Cleared %d template caches", caches_cleared)
         return caches_cleared
 

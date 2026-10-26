@@ -9,16 +9,19 @@ import re
 import sys
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
 
+from .._render_caches import render_caches_enabled
 from ..serialization import model_identity, normalize_django_value
 from ..session_utils import _jit_serializer_cache, _get_model_hash
 
 logger = logging.getLogger(__name__)
 
-# Cache template_content id → sha256 hash (avoids recomputing per variable within a single request).
-# Keyed by id(template_content) which is safe within a single request lifetime where the
-# caller holds a reference to the string. Used only by _jit_serialize_queryset/_jit_serialize_model
-# for the _expected_keys_cache and _jit_serializer_cache lookups (not for _variable_extraction_cache).
-_template_hash_cache: Dict[int, str] = {}
+# Template source → its short sha256 (``_template_hash``). Keyed by the source
+# itself, not ``id()``: an id is reused once its string is freed, and a cache
+# keyed by it handed a new template the hash of an old one (and grew without
+# bound, one entry per render). A dict lookup by the same string object costs
+# an identity check, so a cached source (``_jit_template_content``) hashes once.
+_template_hash_cache: Dict[str, str] = {}
+_TEMPLATE_HASH_CACHE_MAX = 256
 
 # Cache (template_hash, variable_name) → expected top-level key count
 _expected_keys_cache: Dict[Tuple[str, str], int] = {}
@@ -53,9 +56,7 @@ def _cached_extract_template_variables(template_content: str) -> Optional[dict]:
     if extract_template_variables is None:
         return None
 
-    # Compute SHA-256 directly from content — safe regardless of GC/id reuse.
-    # ~2µs for a ~10KB string, negligible vs the Rust FFI call being cached.
-    content_hash = hashlib.sha256(template_content.encode()).hexdigest()[:8]
+    content_hash = _template_hash(template_content)
 
     # One lookup, not `in` then `[]`: another thread may `.clear()` the cache
     # between the two (#3074). The cached value itself can be None.
@@ -76,6 +77,81 @@ def _cached_extract_template_variables(template_content: str) -> Optional[dict]:
 
     _variable_extraction_cache[content_hash] = result
     return result
+
+
+def _template_hash(template_content: str) -> str:
+    """The short sha256 of a template source, computed once per source."""
+    try:
+        return _template_hash_cache[template_content]
+    except KeyError:
+        pass
+    digest = hashlib.sha256(template_content.encode()).hexdigest()[:8]
+    if len(_template_hash_cache) >= _TEMPLATE_HASH_CACHE_MAX:
+        _template_hash_cache.clear()
+    _template_hash_cache[template_content] = digest
+    return digest
+
+
+# The JIT's extraction source per template (Point Guard N-37). Building it
+# resolves the ``{% extends %}`` chain in Rust and reads every ``{% include %}``
+# from disk, on every render that serializes a model. The result depends on
+# the template's text and the template directories only, so it is kept per
+# (source or name, directories) while templates are cached: with DEBUG off,
+# when Django's cached loader serves a template unchanged until restart. With
+# DEBUG on (hot reload edits templates) it is built on every render, as before.
+_template_source_cache: Dict[Tuple[str, str, Tuple[str, ...]], str] = {}
+_TEMPLATE_SOURCE_CACHE_MAX = 256
+
+
+def clear_template_source_caches() -> None:
+    """Forget every cached extraction source, hash and variable map."""
+    _template_source_cache.clear()
+    _template_hash_cache.clear()
+    _variable_extraction_cache.clear()
+
+
+def _template_source_key(view: Any) -> Optional[Tuple[str, str, Tuple[str, ...]]]:
+    from ..utils import get_template_dirs
+
+    full = getattr(view, "_full_template", None)
+    if full and not _EXTENDS_STUB_RE.match(full):
+        kind, ident = "full", full
+    elif getattr(view, "template", None):
+        kind, ident = "inline", view.template
+    elif getattr(view, "template_name", None):
+        kind, ident = "name", view.template_name
+    else:
+        return None
+    if not isinstance(ident, str):
+        return None
+    return (kind, ident, tuple(get_template_dirs()))
+
+
+def _jit_template_content(view: Any) -> Optional[str]:
+    """``view._get_template_content()``, kept per template while templates are cached.
+
+    A view (or an instance) that overrides ``_get_template_content`` is called
+    every time: its answer may depend on more than the template.
+    """
+    if (
+        "_get_template_content" in getattr(view, "__dict__", {})
+        or getattr(type(view), "_get_template_content", None) is not JITMixin._get_template_content
+        or not render_caches_enabled()
+    ):
+        return cast(Optional[str], view._get_template_content())
+    key = _template_source_key(view)
+    if key is None:
+        return cast(Optional[str], view._get_template_content())
+    try:
+        return _template_source_cache[key]
+    except KeyError:
+        pass
+    content = view._get_template_content()
+    if content:
+        if len(_template_source_cache) >= _TEMPLATE_SOURCE_CACHE_MAX:
+            _template_source_cache.clear()
+        _template_source_cache[key] = content
+    return cast(Optional[str], content)
 
 
 try:
@@ -255,12 +331,7 @@ class JITMixin:
                 return [normalize_django_value(obj) for obj in queryset]
 
             model_class = queryset.model
-            _tc_id = id(template_content)
-            if _tc_id not in _template_hash_cache:
-                _template_hash_cache[_tc_id] = hashlib.sha256(
-                    template_content.encode()
-                ).hexdigest()[:8]
-            template_hash = _template_hash_cache[_tc_id]
+            template_hash = _template_hash(template_content)
             model_hash = _get_model_hash(model_class)
             cache_key = (template_hash, variable_name, model_hash)
 
@@ -405,14 +476,12 @@ class JITMixin:
                 return model_identity(obj)
 
             model_class = obj.__class__
-            _tc_id = id(template_content)
-            if _tc_id not in _template_hash_cache:
-                _template_hash_cache[_tc_id] = hashlib.sha256(
-                    template_content.encode()
-                ).hexdigest()[:8]
-            template_hash = _template_hash_cache[_tc_id]
+            template_hash = _template_hash(template_content)
             model_hash = _get_model_hash(model_class)
-            cache_key = (template_hash, variable_name, model_hash)
+            # Its own slot: ``_jit_serialize_queryset`` keeps (paths,
+            # optimization) under the three-part key, and a name served as a
+            # QuerySet once and a model later read that tuple as a serializer.
+            cache_key = (template_hash, variable_name, model_hash, "model")
 
             if cache_key in _jit_serializer_cache:
                 serializer, _ = _jit_serializer_cache[cache_key]

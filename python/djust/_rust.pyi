@@ -596,6 +596,9 @@ def active_unlocalized_number_format() -> Optional[Tuple[str, str, List[int], bo
     rather than assume it (#2017). Its `use_grouping` is always False.
     """
 
+def clear_dj_model_fields_cache() -> None:
+    """Forget every cached ``RustLiveView.dj_model_fields(cache=True)`` result."""
+
 def dj_model_fields_from_template(
     template_source: str,
     template_dirs: Optional[List[str]] = None,
@@ -1285,10 +1288,15 @@ class RustLiveView:
         """
         ...
 
-    def dj_model_fields(self) -> List[str]:
+    def dj_model_fields(self, cache: bool = False) -> List[str]:
         """
         Return the fields bound via static ``dj-model="<field>"`` in this
         view's CURRENT template source (and any ``{% include %}``d templates).
+
+        With ``cache=True`` a successful walk is kept process-wide, keyed by
+        the exact template source and directories; pass it only while
+        templates are cached (DEBUG off). :func:`clear_dj_model_fields_cache`
+        forgets every entry.
 
         The immune source for the dj-model mass-assignment allowlist
         (CWE-915): values come from the parsed template AST's ``Node::Text``
@@ -1544,6 +1552,7 @@ __all__ = [
     "MAX_CONVERSION_DEPTH",
     "MAX_MD_NESTING",
     "dj_model_fields_from_template",
+    "clear_dj_model_fields_cache",
     "serialize_queryset",
     "serialize_context",
     "serialize_models_fast",

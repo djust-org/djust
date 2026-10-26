@@ -1334,6 +1334,28 @@ the page content, such as `<div dj-root>`. See
 
 ---
 
+### T026: Two loaded template libraries register one tag or filter name
+
+**Severity**: Warning
+
+**What causes it**: Two template libraries that the project's templates
+`{% load %}` both register a tag or filter with the same name (one module
+installed under two labels counts once). Django scopes `{% load %}` to the
+template; djust's Rust engine keeps one registry for the process. Each
+`{% load %}` of either library takes the name from the other, which drops and
+re-parses every cached template on the next render, and a template renders
+whichever version loaded last.
+Message: "Template libraries '<a>', '<b>' all register the <tag|filter>
+'<name>'. ..."
+
+**Fix**: Register the name in one library and load that one where it is used;
+rename the other copy. Only libraries a template under the project's template
+directories loads are compared, so a library only Django's own engine renders
+(the admin's) does not count. Suppress with
+`DJUST_CONFIG = {"suppress_checks": ["T026"]}`.
+
+---
+
 ## Code Quality (Q0xx)
 
 ### Q001: print() statement
