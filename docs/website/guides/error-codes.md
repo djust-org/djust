@@ -300,7 +300,7 @@ In development, pages render without Tailwind utilities until you compile the CS
 
 **Severity**: Error
 
-**What causes it**: `LIVEVIEW_CONFIG['worker_threads']` is set to something other than `None`, `False`, `True`, `"auto"` or an integer `>= 0` (for example `"8"` or `2.5`). The setting opts the WebSocket path into a pinned worker pool (#3074). At runtime an invalid value is logged and treated as off, so every session keeps sharing one thread.
+**What causes it**: `LIVEVIEW_CONFIG['worker_threads']` is set to something other than `None`, `False`, `True`, `"auto"` or an integer `>= 0` (for example `"8"` or `2.5`). The setting opts the WebSocket path into a pinned worker pool (#3074). At runtime an invalid value is logged and treated as off, so every session keeps sharing one thread. The same check reports a `LIVEVIEW_CONFIG['worker_pinning']` that is not `True` or `False`; at runtime such a value keeps each session pinned to one thread.
 
 **Fix**: Use `True` (one thread per CPU, up to 32), an integer thread count such as `8`, or remove the key. See [More than one core per process](deployment.md#more-than-one-core-per-process-worker_threads). Suppress with `DJUST_CONFIG = {"suppress_checks": ["C021"]}`.
 
