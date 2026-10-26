@@ -103,6 +103,12 @@ class LiveViewConfig:
         # "auto" = one thread per available CPU (max 32); an int = that many
         # threads. Each session stays on one thread. See djust.worker_pool.
         "worker_threads": None,
+        # With worker_threads on: True (default) pins each WebSocket session to
+        # one pool thread; False gives it a lane, its calls one at a time and
+        # in order on any free thread of the pool, so a slow hop of one session
+        # no longer holds up the sessions sharing its thread. See
+        # djust.worker_pool._Lane.
+        "worker_pinning": True,
         # Maximum incoming WebSocket message size in bytes (0 = no limit)
         "max_message_size": 65536,  # 64KB
         # How many views one WebSocket may host besides the page view: the

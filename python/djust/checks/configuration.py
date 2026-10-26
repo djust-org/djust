@@ -565,6 +565,7 @@ def _check_worker_threads(errors: list[CheckMessage]) -> None:
     ``None`` / ``False`` / ``0`` (stock), ``True`` / ``"auto"`` (one thread per
     CPU) or an ``int`` thread count (#3074). Anything else is treated as "off"
     at runtime, so a typo would silently keep the single shared thread.
+    ``LIVEVIEW_CONFIG['worker_pinning']`` must be ``True`` or ``False``.
     """
     from ..config import config
     from ..worker_pool import resolve_pool_size
@@ -587,6 +588,21 @@ def _check_worker_threads(errors: list[CheckMessage]) -> None:
                     "Set `LIVEVIEW_CONFIG['worker_threads']` to `True` (one thread per CPU), "
                     "an integer thread count, or remove it."
                 ),
+            )
+        )
+    pinning = config.get("worker_pinning", True)
+    if pinning is not True and pinning is not False:
+        errors.append(
+            DjustError(
+                "LIVEVIEW_CONFIG['worker_pinning'] must be True or False; got %s"
+                % repr(pinning)[:80],
+                hint=(
+                    "worker_pinning=False gives each WebSocket session a lane of the "
+                    "worker pool instead of a thread of its own. With an invalid value "
+                    "djust keeps the default: each session pinned to one thread."
+                ),
+                id="djust.C021",
+                fix_hint="Set `LIVEVIEW_CONFIG['worker_pinning']` to `True` or `False`, or remove it.",
             )
         )
 
