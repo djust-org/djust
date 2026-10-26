@@ -235,7 +235,11 @@ When you assign a QuerySet to a public instance variable and call `super().get_c
 1. **Template Analysis**: JIT analyzes the template (including `{% include %}` directives) to extract all field access paths
    - Example: `{{ request.property.name }}` → extracts `property.name`
    - Example: `{{ tenant.user.get_full_name }}` → extracts `tenant.user`
-   - Included templates are inlined so their variables are also discovered
+   - Included templates are inlined so their variables are also discovered,
+     for a `template_name`, an inline `template` string and a file template
+     with no `{% extends %}` alike
+   - The bodies of raw-block tags (`{% tabs %}…{% tab %}`, `{% split_pane %}`)
+     are read too: a model list used only inside a tab gets its paths
 
 2. **Automatic Optimization**: JIT automatically applies `select_related()`, `prefetch_related()`, and model-declared annotations
    - Eliminates N+1 query problems
@@ -656,6 +660,41 @@ Static includes preserve their `with` aliases during field extraction. For examp
 entry. Aliases are local to the include, and `only` excludes unbound outer-context
 names. Nested static includes are resolved with a bounded depth; dynamic include
 names still cannot be inferred statically.
+
+### Objects that are not models
+
+The JIT serializes models, QuerySets and lists of models by the paths the
+template reads. Any other object in the context (a dataclass of view logic, a
+presenter) reaches the renderer as the live object, which is not JSON and logs
+a "non-serializable value" warning on every render. Hand the template plain
+data instead, taken by the same paths:
+
+```python
+@dataclass
+class Card:
+    title: str
+    call: Call
+
+class InboxView(LiveView):
+    template_name = "inbox.html"   # {% for card in cards %}{{ card.title }} {{ card.call.label }}…
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["cards"] = self.serialize_for_template(self._cards, "cards")
+        # -> [{"title": "...", "call": {"label": "..."}}, ...]
+        return context
+```
+
+- `view.template_paths()` returns the extraction itself: a dict of top-level
+  name to the dotted paths read under it (`{"cards": ["call.label", "title"]}`),
+  from the template with its `{% extends %}` chain and static includes.
+- `view.serialize_for_template(value, name)` sends a model, a QuerySet or a
+  list of models through the JIT, as a public attribute of that name would.
+  Any other object is reduced to the paths read of `name`: attributes and
+  properties by name, `get_*` methods called, dicts taken whole, lists and
+  tuples item by item. The serialization floor (`DJUST_SENSITIVE_FIELDS`,
+  `djust_exclude_fields`) applies as for a model. A name the template prints
+  whole (no path) falls back to `normalize_django_value`.
 
 Dictionary and list properties retain their structure, so their contents can be
 used in template lookups and loops. A list (or tuple, set, QuerySet) whose items
