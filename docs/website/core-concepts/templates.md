@@ -246,6 +246,15 @@ Filters that need to know whether the surrounding template is in
 auto-escape mode declare ``needs_autoescape=True`` and accept
 ``autoescape`` as a kwarg — same as Django.
 
+**One library per tag or filter name.** Django scopes ``{% load %}`` to the
+template, so two libraries may both define ``at``. djust's Rust engine keeps one
+registry for the process: each ``{% load %}`` of either library takes the name
+from the other, which drops and re-parses every cached template, and a template
+renders whichever version loaded last. Give each name to one library.
+``manage.py check`` reports a name that two libraries your templates load both
+register (``djust.T026``), and djust logs a warning the first time a
+``{% load %}`` takes a name from another library.
+
 ## Inline Templates
 
 For small views, define the template directly on the class:

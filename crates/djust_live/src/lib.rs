@@ -141,6 +141,20 @@ type LazyRenderOutput = (
 );
 type CachedTemplate = (Arc<Template>, u64, bool, Vec<LazyDependency>);
 static TEMPLATE_CACHE: Lazy<DashMap<(u64, String), CachedTemplate>> = Lazy::new(DashMap::new);
+
+/// `RustLiveView.dj_model_fields(cache=True)` results, keyed by the exact
+/// template source and template directories (N-39). Bounded: cleared when full.
+type DjModelFieldsKey = (String, Vec<PathBuf>);
+static DJ_MODEL_FIELDS_CACHE: Lazy<DashMap<DjModelFieldsKey, Vec<String>>> =
+    Lazy::new(DashMap::new);
+const DJ_MODEL_FIELDS_CACHE_MAX: usize = 512;
+
+/// Forget every cached `dj_model_fields(cache=True)` result (hot reload, a
+/// settings change, test isolation).
+#[pyfunction]
+fn clear_dj_model_fields_cache() {
+    DJ_MODEL_FIELDS_CACHE.clear();
+}
 /// Global supervisor for managing actor lifecycle
 /// Created once with 1-hour TTL
 static SUPERVISOR: Lazy<Arc<ActorSupervisor>> =
@@ -705,17 +719,40 @@ impl RustLiveViewBackend {
     /// `dj-model="{{ field }}"` is NOT captured (fail-closed; opt in via
     /// `allowed_model_fields`). An unresolvable include or a parse error yields
     /// no fields for that branch (fail-closed) — it never widens the allowlist.
-    fn dj_model_fields(&self) -> PyResult<Vec<String>> {
+    ///
+    /// With `cache=True` the result is kept process-wide, keyed by the exact
+    /// template source and template directories (never by a short hash: this
+    /// is a security allowlist), so an unchanged template is walked once
+    /// instead of on every render (Point Guard N-39: a third of a page's server CPU).
+    /// Only a successful walk is kept. The Python caller passes `cache=True`
+    /// only while templates are cached (DEBUG off), since an `{% include %}`d
+    /// file can change on disk without the source changing.
+    #[pyo3(signature = (cache=false))]
+    fn dj_model_fields(&self, cache: bool) -> PyResult<Vec<String>> {
         guard_panic("dj_model_fields", move || {
             use djust_templates::inheritance::FilesystemTemplateLoader;
+            let key = (self.template_source.clone(), self.template_dirs.clone());
+            if cache {
+                if let Some(hit) = DJ_MODEL_FIELDS_CACHE.get(&key) {
+                    return Ok(hit.value().clone());
+                }
+            }
             let loader = FilesystemTemplateLoader::new(self.template_dirs.clone());
             // Fail-closed: any error (parse failure, etc.) leaves the auto-allowlist
             // empty rather than over-allowing. The explicit `allowed_model_fields`
             // path on the Python side still applies.
-            Ok(
-                djust_templates::extract_dj_model_fields(&self.template_source, Some(&loader))
-                    .unwrap_or_default(),
-            )
+            match djust_templates::extract_dj_model_fields(&self.template_source, Some(&loader)) {
+                Ok(fields) => {
+                    if cache {
+                        if DJ_MODEL_FIELDS_CACHE.len() >= DJ_MODEL_FIELDS_CACHE_MAX {
+                            DJ_MODEL_FIELDS_CACHE.clear();
+                        }
+                        DJ_MODEL_FIELDS_CACHE.insert(key, fields.clone());
+                    }
+                    Ok(fields)
+                }
+                Err(_) => Ok(Vec::new()),
+            }
         })
     }
 
@@ -6563,6 +6600,7 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(active_unlocalized_number_format, m)?)?;
     m.add_function(wrap_pyfunction!(virtual_keyed_ops_enabled, m)?)?;
     m.add_function(wrap_pyfunction!(dj_model_fields_from_template, m)?)?;
+    m.add_function(wrap_pyfunction!(clear_dj_model_fields_cache, m)?)?;
 
     // Actor system exports
     m.add_class::<SessionActorHandlePy>()?;

@@ -608,7 +608,17 @@ JIT serializers are cached for performance. The cache key includes:
 - Variable name
 - Model structure hash (changes when model fields change)
 
-Template hashes are further cached by `id(template_content)` to avoid recomputing the SHA-256 for every variable in the same request. This is safe because the template string is kept alive by the caller for the duration of `get_context_data()`.
+Template hashes are cached by the template source itself (bounded), so the
+SHA-256 is computed once per source, not once per variable or per render.
+
+The extraction source (the template with its `{% extends %}` chain resolved and
+its `{% include %}` partials inlined) is built once per template and template
+directories while `DEBUG` is off, when Django's cached loader also serves a
+template unchanged until restart. With `DEBUG` on it is built on every render,
+so an edited template or partial is picked up. A change of `DEBUG`, `TEMPLATES`
+or `INSTALLED_APPS` and a hot-reload template refresh clear it
+(`djust._render_caches.clear_render_caches()` does it by hand). The dj-model
+allowlist follows the same rule (see the model-binding guide).
 
 **In development**, the cache auto-clears when Django's autoreloader runs.
 

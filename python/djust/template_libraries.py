@@ -111,7 +111,7 @@ from weakref import WeakValueDictionary
 import logging
 import importlib
 import threading
-from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
+from typing import Any, Callable, Dict, FrozenSet, Iterable, Iterator, List, Optional, Set, Tuple
 
 from django.utils.functional import Promise
 
@@ -772,6 +772,7 @@ def _bridge_library(label: str, library: Any) -> None:
         return
     from .template_filters import bridge_library_filters
 
+    _note_shared_names(label, library, module)
     _arm_scope_tags(module)
     bridge_library_filters(library, refuse=refused_filters(module))
     native = tuple(_NATIVE_SCOPE_TAGS.get(module, ())) + tuple(_NATIVE_TAG_SKIPS.get(module, ()))
@@ -797,6 +798,101 @@ def _bridge_library(label: str, library: Any) -> None:
         if name not in refused:
             _engine_state("_filter_owner", _filter_owner)[name] = label
     _engine_state("_loaded", _loaded)[label] = library
+
+
+#: (kind, name, the two library modules) already warned about (N-38).
+_warned_shared_names: Set[Tuple[str, str, FrozenSet[str]]] = set()
+
+
+def _note_shared_names(label: str, library: Any, module: str) -> None:
+    """Warn once per tag or filter name this library takes from another one.
+
+    Django scopes ``{% load %}`` to the template; the Rust engine keeps one
+    registry for the process. Two libraries that register one name take it
+    from each other on every ``{% load %}`` of either: the library is bridged
+    again, the registry generation moves, and every parsed template is dropped
+    and parsed again on its next render. Which version a template gets depends
+    on which library loaded last. ``manage.py check`` reports every such name
+    up front (``djust.T026``, :func:`shared_library_names`).
+    """
+    loaded = _engine_state("_loaded", _loaded)
+    for kind, names, owners in (
+        ("tag", library.tags, _engine_state("_tag_owner", _tag_owner)),
+        ("filter", library.filters, _engine_state("_filter_owner", _filter_owner)),
+    ):
+        for name in names:
+            previous = owners.get(name)
+            if previous is None or previous == label:
+                continue
+            other_module = _library_module(loaded.get(previous)) if previous in loaded else ""
+            if other_module == module:
+                continue  # one module under two labels: the same definition
+            key = (kind, name, frozenset((other_module or previous, module)))
+            if key in _warned_shared_names:
+                continue
+            _warned_shared_names.add(key)
+            logger.warning(
+                "Template libraries '%s' and '%s' both register the %s '%s'. djust's "
+                "template engine has one registry for the process, so each load of "
+                "either library takes the name from the other and every cached "
+                "template is parsed again, and a template gets whichever version "
+                "loaded last. Give the name to one library (manage.py check "
+                "reports these as djust.T026).",
+                previous,
+                label,
+                kind,
+                name,
+            )
+
+
+def shared_library_names(
+    labels: Optional[Iterable[str]] = None,
+) -> List[Tuple[str, str, Tuple[str, ...]]]:
+    """Every tag or filter name two bridged template libraries register.
+
+    ``(kind, name, labels)`` with ``kind`` ``"tag"`` or ``"filter"`` and the
+    ``{% load %}`` labels of the libraries (one per module, so a module
+    installed under two labels is one library), sorted, for ``djust.T026``.
+    Only libraries ``{% load %}`` bridges into the Rust engine count, minus
+    the names it does not bridge (native tags, refused filters). With
+    ``labels``, only those libraries are compared (the ones a project's
+    templates load).
+    """
+    from django.template.library import Library, import_library
+
+    by_name: Dict[Tuple[str, str], Dict[str, str]] = {}
+    known = _library_map()
+    wanted = set(known) if labels is None else set(labels) & set(known)
+    for label in sorted(wanted):
+        entry = known[label]
+        try:
+            library = entry if isinstance(entry, Library) else import_library(entry)
+        except Exception:  # noqa: BLE001 — a broken library is another check's concern
+            logger.debug("Template library '%s' could not be imported", label)
+            continue
+        module = _library_module(library)
+        if not module:
+            continue
+        if module.startswith(_UNBRIDGED_PREFIXES):
+            allowed = _DJUST_TAGS_BRIDGED.get(module)
+            if not allowed:
+                continue
+            library = _djust_subset(module, library, allowed)
+        if module.startswith("django.templatetags.") and module not in _DJANGO_LIBRARIES_BRIDGED:
+            continue
+        native = set(_NATIVE_SCOPE_TAGS.get(module, ())) | set(_NATIVE_TAG_SKIPS.get(module, ()))
+        refused = refused_filters(module)
+        for name in library.tags:
+            if name not in native:
+                by_name.setdefault(("tag", name), {}).setdefault(module, label)
+        for name in library.filters:
+            if name not in refused:
+                by_name.setdefault(("filter", name), {}).setdefault(module, label)
+    return sorted(
+        (kind, name, tuple(sorted(modules.values())))
+        for (kind, name), modules in by_name.items()
+        if len(modules) > 1
+    )
 
 
 def _djust_subset(module: str, library: Any, allowed: frozenset) -> Any:
