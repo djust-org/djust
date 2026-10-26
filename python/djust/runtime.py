@@ -3842,6 +3842,12 @@ class ViewRuntime(RuntimeTurnPort):
                         elif isinstance(component, DropdownMenuCollection):
                             component._renew_observation_lifetimes()
 
+                # mount() did not run: let the view read again what the
+                # session does not hold, from the restored state.
+                handle_restore = getattr(view_instance, "handle_restore", None)
+                if callable(handle_restore):
+                    await call_hook(handle_restore, request)
+
                 mounted_from_restore = True
 
         # (2) Signed state_snapshot HMAC restore (WS websocket.py:2491-2587,

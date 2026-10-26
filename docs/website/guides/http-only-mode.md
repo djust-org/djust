@@ -92,6 +92,7 @@ Every POST to the page URL builds a fresh view instance. A view on the default s
 So:
 
 - Set your state in `mount()`.
+- Read again in `handle_restore(request)` what the session does not hold (rows on a private attribute that is not JSON, content you keep out of the session). `mount()` never sees the restored state: it does not run when the saved state covers every private attribute, and runs *before* the saved state is put back when one could not be saved. `handle_restore()` runs after the restore and the object permission check, before the event handler.
 - Always call `super().get_context_data(**kwargs)` in an override, and add to its result rather than replacing it. See [`get_context_data`](../api-reference/liveview.md#get_context_datakwargs---dict).
 
 A view that declares [explicit exposure](../state/explicit-exposure.md) is rebuilt differently: `mount()` runs on each POST and only the declared server fields are restored.
