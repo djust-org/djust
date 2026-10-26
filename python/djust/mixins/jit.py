@@ -6,7 +6,6 @@ import hashlib
 import logging
 import os
 import re
-import sys
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
 
 from ..serialization import model_identity, normalize_django_value
@@ -248,9 +247,9 @@ class JITMixin:
             paths_for_var = variable_paths_map.get(variable_name, [])
 
             if not paths_for_var:
-                print(
-                    f"[JIT] No paths found for '{variable_name}', using DjangoJSONEncoder fallback",
-                    file=sys.stderr,
+                logger.debug(
+                    "[JIT] No paths found for '%s', using DjangoJSONEncoder fallback",
+                    variable_name,
                 )
                 return [normalize_django_value(obj) for obj in queryset]
 
@@ -266,21 +265,25 @@ class JITMixin:
 
             if cache_key in _jit_serializer_cache:
                 paths_for_var, optimization = _jit_serializer_cache[cache_key]
-                print(
-                    f"[JIT] Cache HIT for '{variable_name}' - using cached paths: {paths_for_var}",
-                    file=sys.stderr,
+                logger.debug(
+                    "[JIT] Cache HIT for '%s' - using cached paths: %s",
+                    variable_name,
+                    paths_for_var,
                 )
             else:
                 optimization = analyze_queryset_optimization(model_class, paths_for_var)
 
-                print(
-                    f"[JIT] Cache MISS for '{variable_name}' ({model_class.__name__}) - generating serializer for paths: {paths_for_var}",
-                    file=sys.stderr,
+                logger.debug(
+                    "[JIT] Cache MISS for '%s' (%s) - generating serializer for paths: %s",
+                    variable_name,
+                    model_class.__name__,
+                    paths_for_var,
                 )
                 if optimization:
-                    print(
-                        f"[JIT] Query optimization: select_related={sorted(optimization.select_related)}, prefetch_related={sorted(optimization.prefetch_related)}",
-                        file=sys.stderr,
+                    logger.debug(
+                        "[JIT] Query optimization: select_related=%s, prefetch_related=%s",
+                        sorted(optimization.select_related),
+                        sorted(optimization.prefetch_related),
                     )
 
                 _jit_serializer_cache[cache_key] = (paths_for_var, optimization)

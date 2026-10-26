@@ -112,8 +112,18 @@ def test_restore_never_replaces_a_method_or_property_with_saved_state(caplog):
     assert "images_go_out" not in view.__dict__
     assert "status" not in view.__dict__
 
-    # The second event restores what the first saved, including the key named
-    # like the method; before the fix the render then called a bool.
+    # A key an override adds that no attribute walk produced is no longer
+    # saved (it is computed again on every render), so it cannot shadow the
+    # method...
+    view_key = next(
+        k for k in initial.session.keys() if k.startswith("liveview_") and "__" not in k
+    )
+    saved = initial.session[view_key]
+    assert "images_go_out" not in saved
+    # ...but a session written before that change can still hold such keys,
+    # and the restore must still refuse them: seed one and run the next event.
+    initial.session[view_key] = {**saved, "images_go_out": True, "status": "busy"}
+    initial.session.save()
     with caplog.at_level(logging.WARNING, logger="djust"):
         view, second = _post(ShadowingView, initial, "bump")
     assert second.status_code == 200, second.content

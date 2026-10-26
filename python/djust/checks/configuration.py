@@ -565,6 +565,7 @@ def _check_worker_threads(errors: list[CheckMessage]) -> None:
     ``None`` / ``False`` / ``0`` (stock), ``True`` / ``"auto"`` (one thread per
     CPU) or an ``int`` thread count (#3074). Anything else is treated as "off"
     at runtime, so a typo would silently keep the single shared thread.
+    ``LIVEVIEW_CONFIG['worker_pinning']`` must be ``True`` or ``False``.
     """
     from ..config import config
     from ..worker_pool import resolve_pool_size
@@ -587,6 +588,21 @@ def _check_worker_threads(errors: list[CheckMessage]) -> None:
                     "Set `LIVEVIEW_CONFIG['worker_threads']` to `True` (one thread per CPU), "
                     "an integer thread count, or remove it."
                 ),
+            )
+        )
+    pinning = config.get("worker_pinning", True)
+    if pinning is not True and pinning is not False:
+        errors.append(
+            DjustError(
+                "LIVEVIEW_CONFIG['worker_pinning'] must be True or False; got %s"
+                % repr(pinning)[:80],
+                hint=(
+                    "worker_pinning=False gives each WebSocket session a lane of the "
+                    "worker pool instead of a thread of its own. With an invalid value "
+                    "djust keeps the default: each session pinned to one thread."
+                ),
+                id="djust.C021",
+                fix_hint="Set `LIVEVIEW_CONFIG['worker_pinning']` to `True` or `False`, or remove it.",
             )
         )
 
@@ -653,6 +669,37 @@ def _check_ws_path(errors: list[CheckMessage]) -> None:
             ),
             id="djust.C025",
             fix_hint="Set `DJUST_WS_PATH` to a path such as `'/ws/live/'`, or remove it.",
+        )
+    )
+
+
+def _check_view_state_in_session(errors: list[CheckMessage]) -> None:
+    """C027 — ``LIVEVIEW_CONFIG['view_state_in_session']`` must be a bool.
+
+    Only ``False`` turns the session copy of view state off. Any other value
+    (``"false"``, ``0``, ``None``) keeps the default, so a typo would silently
+    keep writing view state into ``django_session``.
+    """
+    from ..config import config
+
+    if _is_check_suppressed("djust.C027"):
+        return
+    value = config.get("view_state_in_session", True)
+    if type(value) is bool:
+        return
+    errors.append(
+        DjustError(
+            "LIVEVIEW_CONFIG['view_state_in_session'] is %s; it must be True or False."
+            % repr(value)[:80],
+            hint=(
+                "Only False keeps view state out of the Django session. With any other "
+                "value djust keeps the default and saves each view's state in the session."
+            ),
+            id="djust.C027",
+            fix_hint=(
+                "Set `LIVEVIEW_CONFIG['view_state_in_session']` to `False` (stateless) "
+                "or `True`, or remove it."
+            ),
         )
     )
 
@@ -1296,6 +1343,9 @@ def check_configuration(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
     # C025 -- DJUST_WS_PATH is not a root-relative path (#3186)
     _check_ws_path(errors)
     _check_liveview_middleware(errors)
+
+    # C027 -- LIVEVIEW_CONFIG['view_state_in_session'] is not a bool
+    _check_view_state_in_session(errors)
 
     # C005 -- WebSocket routes missing AuthMiddlewareStack
     # A001 -- WebSocket routes missing AllowedHostsOriginValidator (#659)

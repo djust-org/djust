@@ -89,7 +89,7 @@ async def mount(self, request, pk=None, **kwargs):
 
 Called before every render — both the initial HTTP render and every WebSocket update. Return the template context.
 
-Always call `super().get_context_data(**kwargs)` so the JIT serialization and change-detection machinery runs. It also matters on the HTTP page-POST fallback: there a view on the default state policy is rebuilt from the dict this method returned on the previous request, so an attribute your override leaves out is unset when the next event handler runs (see [HTTP-Only Mode](../guides/http-only-mode.md#what-the-page-post-fallback-keeps-between-events)). Set state in `mount()`, and add to the result instead of replacing it:
+Always call `super().get_context_data(**kwargs)` so the JIT serialization and change-detection machinery runs. It also matters on the HTTP page-POST fallback: there a view on the default state policy is rebuilt from the state the base `get_context_data()` built from its attributes on the previous request, so an attribute your override leaves out is unset when the next event handler runs (see [HTTP-Only Mode](../guides/http-only-mode.md#what-the-page-post-fallback-keeps-between-events)). Set state in `mount()`, and add to the result instead of replacing it:
 
 ```python
 def get_context_data(self, **kwargs):
@@ -100,6 +100,32 @@ def get_context_data(self, **kwargs):
     })
     return context
 ```
+
+A key your override adds on top of `super()`'s result renders but is never saved in the session: it is computed again on every render. Only the view's attributes are state.
+
+---
+
+#### `get_render_only_context() -> dict`
+
+Template values that render on every transport but are never saved: not by the HTTP GET, not by the page-POST fallback, not by a socket turn's session save. Models, QuerySets and lists of models in it go through the JIT like public attributes (only the paths the template reads, with `djust_exclude_fields` applied). Use it for content that must not persist (a conversation's messages, a document's text) or for rows a handler already holds on a private attribute:
+
+```python
+class ChatView(LiveView):
+    template_name = "chat.html"
+
+    def mount(self, request, chat_id, **kwargs):
+        self.chat_id = chat_id          # state: saved, restored
+        self._load()
+
+    def _load(self):
+        self._chat = Chat.objects.get(pk=self.chat_id)
+        self._messages = list(self._chat.messages.order_by("-created")[:50])
+
+    def get_render_only_context(self):
+        return {"chat": self._chat, "messages": self._messages}
+```
+
+It is called once per render, before the JIT. A key it returns wins over a public attribute of the same name, and that attribute is then not saved either. After the page-POST fallback rebuilds the view, private attributes that are not JSON are gone; read the rows again (as `_load()` above) before the render needs them.
 
 ---
 

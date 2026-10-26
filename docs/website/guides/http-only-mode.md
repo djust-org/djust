@@ -87,7 +87,9 @@ Browser                    Server
 
 ### What the page-POST fallback keeps between events
 
-Every POST to the page URL builds a fresh view instance. A view on the default state policy gets its attributes back from the dict that `get_context_data()` returned on the previous request, which djust saved in the session, and `mount()` is not called again once that saved state exists. An attribute that `get_context_data()` leaves out is therefore unset on the next POST, and a handler that reads it raises `AttributeError` (a 500), while the same event works over the WebSocket, where the one view instance stays alive.
+Every POST to the page URL builds a fresh view instance. A view on the default state policy gets its attributes back from the state the base `get_context_data()` built from its public attributes on the previous request, which djust saved in the session, and `mount()` is not called again once that saved state exists. An attribute that `get_context_data()` leaves out is therefore unset on the next POST, and a handler that reads it raises `AttributeError` (a 500), while the same event works over the WebSocket, where the one view instance stays alive.
+
+What is not saved: the keys an override adds on top of `super().get_context_data()` (they are computed again on every render), and the values of [`get_render_only_context()`](../api-reference/liveview.md#get_render_only_context---dict). Put content that must not reach the session there.
 
 So:
 
@@ -97,6 +99,28 @@ So:
 A view that declares [explicit exposure](../state/explicit-exposure.md) is rebuilt differently: `mount()` runs on each POST and only the declared server fields are restored.
 
 A `live_redirect()` or `live_patch()` that a handler queues is returned in the answer's `_navigation` list, in the shape of the WebSocket `navigation` frame, and the client applies it. After a `live_redirect()` nothing is rendered or saved for that request, so a handler can call `logout()` and then redirect. The flip side: a handler that changes state and then calls `live_redirect()` back to the same view's URL does not keep that change over the HTTP fallback, because the state is not saved. A `live_patch()` renders as usual and carries its frame beside the patches.
+
+### Keeping view state out of the session
+
+By default a view on the default state policy keeps its state in the Django session between requests, under `liveview_<path>` and its `__private`, `__private_unsaved` and `_components` siblings. A project that must keep `django_session` free of view content can turn that off with one setting:
+
+```python
+LIVEVIEW_CONFIG = {
+    "view_state_in_session": False,  # default True
+}
+```
+
+(`DJUST_CONFIG` is read too; `LIVEVIEW_CONFIG` wins when both set it.)
+
+With `False`, djust neither writes nor reads those keys on any path:
+
+- The first GET renders the page and saves nothing of the view in the session.
+- Every page-POST fallback builds a fresh view, runs `mount()`, applies the event and renders. Nothing is restored from or saved to the session.
+- WebSocket and SSE turns save nothing of the view in the session, even for a view with `enable_state_snapshot = True`, and a mount never restores from it. The signed client `state_snapshot` that such a view sends back on reconnect is not stored in the session, so it still works.
+
+The trade-off: state that lives only on the view resets on each fallback POST, because `mount()` runs again. A "load more" offset, a form draft or a selected tab that a handler set on `self` is back at its `mount()` value on the next POST. Keep such state somewhere `mount()` can read it again (the URL, the database), or use the WebSocket or SSE transport, where the one view instance stays alive between events.
+
+The setting does not touch state you opt into elsewhere: a view's `persist="server"` fields under [explicit exposure](../state/explicit-exposure.md) and a [sticky child that opted in to state persistence](sticky-child-persistence.md) still use the session. A value that is not a bool is reported by system check `djust.C027`.
 
 ### Embedded views over the HTTP fallback
 

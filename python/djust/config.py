@@ -108,6 +108,12 @@ class LiveViewConfig:
         # for a view: handler, mount, handle_params, start_async callback,
         # get_context_data. None (default) = no wrapper. See djust.sync_turn.
         "sync_turn_wrapper": None,
+        # With worker_threads on: True (default) pins each WebSocket session to
+        # one pool thread; False gives it a lane, its calls one at a time and
+        # in order on any free thread of the pool, so a slow hop of one session
+        # no longer holds up the sessions sharing its thread. See
+        # djust.worker_pool._Lane.
+        "worker_pinning": True,
         # Maximum incoming WebSocket message size in bytes (0 = no limit)
         "max_message_size": 65536,  # 64KB
         # How many views one WebSocket may host besides the page view: the
@@ -239,6 +245,20 @@ class LiveViewConfig:
         # after a streak of low-hit renders (#3071; see
         # RustBridgeMixin._LOOP_CACHE_BYPASS_AFTER).
         "loop_render_cache_enabled": True,
+        # Whether a view on the default (legacy) state policy keeps its state
+        # in the Django session between requests: the ``liveview_<path>`` key
+        # and its ``__private`` / ``__private_unsaved`` / ``_components``
+        # siblings. ``True`` (default) is the long-standing behaviour. ``False``
+        # makes djust stateless on that path: the first GET, every HTTP
+        # fallback POST and every WebSocket / SSE turn neither write nor read
+        # those keys, so each fallback POST runs ``mount()`` again before it
+        # applies the event, and a socket mount never restores from the
+        # session (the signed client ``state_snapshot`` of a view with
+        # ``enable_state_snapshot`` is not in the session and still works).
+        # State that only lives on the
+        # view (a "load more" offset, a form draft) resets on each fallback
+        # POST. Must be a bool (system check ``djust.C027``).
+        "view_state_in_session": True,
         # `[dj-virtual]` keyed splice ops in the VDOM differ (ADR-026, #2017
         # items 2-4). A windowed list holds off-window rows DETACHED, so the
         # index-addressed ops the differ normally emits are meaningless for it:
@@ -833,6 +853,21 @@ def get_djust_config() -> Dict[str, Any]:
         return result
     except Exception:
         return {}
+
+
+def view_state_in_session() -> bool:
+    """Whether legacy view state is kept in the Django session.
+
+    The single reader of ``LIVEVIEW_CONFIG['view_state_in_session']`` (also
+    read from ``DJUST_CONFIG``). Only ``False`` turns it off; any other value
+    keeps the default, and system check ``djust.C027`` reports a value that is
+    not a bool. A config read that raises keeps the default.
+    """
+    try:
+        return get_config().get("view_state_in_session", True) is not False
+    except Exception:  # pragma: no cover - defensive
+        logger.debug("[djust] view_state_in_session read failed; keeping the default")
+        return True
 
 
 def template_auto_call_enabled() -> bool:
