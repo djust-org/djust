@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0rc13] - 2026-10-26
+
+It also ships every change listed under 1.3.0rc12 below. 1.3.0rc12 was tagged but never published to PyPI: its
+release's security audit blocked it on the Twisted and undici advisories that this release fixes.
+
+### Security
+
+- **Apps served by daphne should upgrade Twisted to 26.10.0rc1 or later
+  (CVE-2026-115877 / GHSA-q7qq-6mhp-9rc4).** Twisted 26.4.0's
+  `twisted.web.http.HTTPChannel` accepts a bare CR or LF inside a header
+  value, which allows HTTP request smuggling behind a front end that treats
+  the bare character as a line end. daphne parses HTTP with that class.
+  djust's published dependencies (`channels[daphne]`, which allows
+  `twisted[tls]>=22.4`) still resolve to 26.4.0, because installers skip
+  pre-releases. If you serve with daphne, run
+  `pip install "twisted[tls]>=26.10.0rc1"` or serve with uvicorn, as djust's
+  docs and scaffolds already do. djust's own `uv.lock` now pins 26.10.0rc1
+  through a `[tool.uv]` constraint until 26.10.0 final is out. Four more
+  Twisted 26.4.0 advisories (CVE-2026-115774, -115775, -115776 and -115778)
+  are in `twisted.mail`, `twisted.words` and `twisted.conch`, which djust
+  never imports, so they are allowlisted in the release `pip-audit` gate
+  until the final is locked.
+- **The JS test toolchain's `undici` is now 8.12.3 (GHSA-4qv8-2p9j-2685,
+  GHSA-f72v-6w45-q472, GHSA-xjj6-f33q-929c).** 8.11.2 was inside the affected
+  `8.0.0 - 8.12.1` range of all three: unbounded memory in the EventSource
+  parser (high), a Subresource Integrity bypass through non-lowercase algorithm
+  tokens, and an unhandled error on excessive content-encodings. `undici`
+  reaches the lockfile only through `jsdom`, whose `^8.11.2` range already
+  allows the fix, so only `package-lock.json` changes. It is a development
+  dependency only: nothing in the published package changes. It was the
+  finding failing the 1.3.0rc12 release audit's `npm audit` gate.
+
 ## [1.3.0rc12] - 2026-10-26
 
 ### Added
