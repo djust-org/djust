@@ -1422,6 +1422,15 @@ class RequestMixin:
                     status=403,
                 )
 
+            # The view was rebuilt from the session (all of it, or mount()
+            # first and the saved state on top): let it read again what the
+            # session does not hold, from the restored state. After the object
+            # check, so it never reads for a denied object.
+            if legacy_exposure and saved_state:
+                handle_restore = getattr(self, "handle_restore", None)
+                if callable(handle_restore):
+                    call_hook_sync(handle_restore, request)
+
             # Call the event handler — only @event_handler-decorated methods
             # can be invoked via POST (matches WS security)
             t_handler_ms = 0.0

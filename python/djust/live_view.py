@@ -1668,6 +1668,28 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
         """Override for periodic server-side updates. Called every tick_interval ms."""
         pass
 
+    def handle_restore(self, request: Any) -> None:
+        """Called after the view was rebuilt from its saved session state.
+
+        A view rebuilt from the session gets its saved public and private
+        state back, but ``mount()`` either does not run (everything was saved)
+        or runs BEFORE that state is applied (some private attribute could not
+        be saved, so ``mount()`` rebuilds it and the saved state goes back on
+        top). Either way ``mount()`` never sees the restored state, so rows a
+        view keeps out of the session (not JSON, or content that must not be
+        saved) are not read again. Override this to read them from the restored
+        ids and cursors::
+
+            def handle_restore(self, request):
+                self._rows = Chat.objects.filter(pk=self.chat_id)   # chat_id was restored
+
+        It runs on the HTTP page-POST fallback (after the object permission
+        check, before the event handler) and on a WebSocket/SSE mount restored
+        from the session (``enable_state_snapshot``). It does not run after a
+        plain ``mount()``. May be ``async def``.
+        """
+        pass
+
     # ============================================================================
     # STATE SERIALIZATION VALIDATION
     # ============================================================================

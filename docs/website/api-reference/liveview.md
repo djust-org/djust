@@ -129,6 +129,19 @@ It is called once per render, before the JIT. A key it returns wins over a publi
 
 ---
 
+#### `handle_restore(request)`
+
+Called after the view was rebuilt from its saved session state: on the HTTP page-POST fallback (after the object permission check, before the event handler) and on a WebSocket/SSE mount restored from the session (`enable_state_snapshot`). `mount()` never sees that state (it does not run, or runs before the state is put back), so read here what the session does not hold, from the restored ids:
+
+```python
+def handle_restore(self, request):
+    self._rows = list(Message.objects.filter(chat_id=self.chat_id)[:50])
+```
+
+Not called after a plain `mount()`. May be `async def`.
+
+---
+
 #### `handle_params(params, uri)`
 
 Called after `mount()` on the initial WebSocket connect, on every `live_patch()` (soft navigation without a full page reload), and on browser back/forward navigation. It may be `async def`, like `mount()`.
