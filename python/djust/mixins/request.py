@@ -1582,6 +1582,11 @@ class RequestMixin:
                     )
                     return JsonResponse({"error": "Embedded view not found"}, status=400)
                 owner = child_view
+                # The page was mounted (and rendered) only to register its
+                # children. What it queued while doing so is not this event's
+                # work: discard it, so the work that runs after the child's
+                # handler is only what the handler queued.
+                _take_queued_background_work(self)
                 from .._lazy_containers import MOUNT_EVENT
 
                 if event_name == MOUNT_EVENT and view_id in getattr(
@@ -1698,9 +1703,9 @@ class RequestMixin:
                 # its first render (``assign_async``, ``start_async`` in mount()
                 # or handle_params()) finish now, so the event meets the loaded
                 # page and the answer does not bring back a loading state
-                # (#3624). Not for an embedded child's event, which answers with
-                # the child's own HTML and does not render the page.
-                if mount_work_pending and child_view is None:
+                # (#3624). Not for an event with no handler: that one passes no
+                # @rate_limit check, so it must not start the page's reads.
+                if mount_work_pending:
                     _run_http_background_work(self)
                 mount_work_pending = False
                 from ..components._interactive import DropdownMenu
@@ -1724,11 +1729,6 @@ class RequestMixin:
                 _run_http_background_work(owner)
                 if owner is not self:
                     _run_http_background_work(self)
-
-            if mount_work_pending and child_view is None:
-                # No handler ran (an event the view does not define): the page
-                # is still rendered, so it still gets the loaded state.
-                _run_http_background_work(self)
 
             if child_view is not None:
                 return self._http_child_response(

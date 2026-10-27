@@ -395,11 +395,12 @@ class TestMountWorkWaitsForEveryRefusal:
         assert response.status_code == 200
         assert RefusalView.loads == 1 and view.data == "rows"
 
-    def test_an_event_the_view_does_not_define_still_loads_the_page(self):
+    def test_an_event_the_view_does_not_define_starts_no_work(self):
+        """It passes no ``@rate_limit`` check, so it must not start the page's reads."""
         with STATELESS:
-            view, response, body = _post(RefusalView, "no_such_handler")
+            _, response, body = _post(RefusalView, "no_such_handler")
         assert response.status_code == 200, body
-        assert RefusalView.loads == 1 and view.data == "rows"
+        assert RefusalView.loads == 0
 
 
 class SerialLoaders(BackgroundView):
@@ -559,3 +560,53 @@ class TestTheGuideSGuardForLongLivedWork:
             _, response, body = _post(WatcherView, "plain")
         assert response.status_code == 200, body
         assert ("watcher-skipped",) in LOG
+
+
+class PokeChild(BgChild):
+    def mount(self, request, **kwargs):
+        super().mount(request, **kwargs)
+        LOG.append(("kid-mount",))
+
+    @event_handler()
+    def poke(self, **kwargs):
+        self.start_async(lambda: LOG.append(("kid-task",)), name="kid")
+        self._parent_view.start_async(lambda: LOG.append(("parent-task",)), name="from-kid")
+
+
+class PokePage(LiveView):
+    exposure_policy = "legacy"
+    template = (
+        "{% load live_tags %}"
+        '<div dj-root dj-view="' + __name__ + '.PokePage">'
+        '{% live_render "' + __name__ + '.PokeChild" view_id="kid" %}'
+        "</div>"
+    )
+
+    def mount(self, request, **kwargs):
+        LOG.append(("page-mount",))
+        self.start_async(lambda: LOG.append(("PAGE-MOUNT-TASK-RAN",)), name="page-mount")
+
+
+setattr(sys.modules[__name__], "PokeChild", PokeChild)
+setattr(sys.modules[__name__], "PokePage", PokePage)
+
+
+class TestChildEventDoesNotRunThePagesMountWork:
+    def test_only_the_work_the_childs_handler_queued_runs(self):
+        with STATELESS:
+            initial = _get_request()
+            PokePage.as_view()(initial)
+            initial.session.save()
+            LOG.clear()
+            request = RequestFactory().post(
+                PATH,
+                data=json.dumps({"view_id": "kid"}),
+                content_type="application/json",
+                HTTP_X_DJUST_EVENT="poke",
+            )
+            request.user, request.session, request.tenant = initial.user, initial.session, None
+            response = PokePage.as_view()(request)
+        assert response.status_code == 200, response.content
+        assert ("PAGE-MOUNT-TASK-RAN",) not in LOG, LOG
+        assert ("kid-task",) in LOG, LOG
+        assert ("parent-task",) in LOG, LOG
