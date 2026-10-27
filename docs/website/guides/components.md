@@ -1470,7 +1470,22 @@ works in Python: it renders on each read and caches nothing. Assigning one in a
 subclass (`self.theme_head = ...`) still takes precedence, and, like any
 assignment, makes it state. The mixin does not need `theme_context` in
 `context_processors`; when both are present, the mixin's values win, as they did
-when they were attributes.
+when they were attributes. This holds for a view that skipped `mount()` as well
+(a reconnect that restores state, a restored sticky child): the values resolve
+their manager from the request.
+
+What changed for code that reached the old attributes through the context:
+
+- `get_context_data()` no longer returns `theme_head`, `theme_css`,
+  `theme_switcher` or `theme_presets`. A subclass that read
+  `ctx["theme_head"]` there must read `self.theme_head` instead. The names are
+  supplied when the template is rendered, from the view's request; a view with no
+  request renders them empty (every framework path sets one, a view driven by
+  hand in a test may not).
+- `theme_presets_count` is still available to templates, as before.
+- After `set_theme_mode`, `set_theme_preset`, `toggle_theme_mode` or
+  `cycle_theme_preset` the next render re-sends all four, so a `dj-root` template
+  that reads `{{ theme_head|length }}` or the switcher shows the new theme.
 
 A page that only uses the `{% theme_head %}` and `{% theme_switcher %}` tags
 needs none of this, and a plain `LiveView` does not need `ThemeMixin` for the

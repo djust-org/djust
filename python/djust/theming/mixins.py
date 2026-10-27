@@ -231,6 +231,17 @@ class ThemeMixin:
         manager, _state = self._theme_manager_and_state()
         return manager.get_available_presets()
 
+    def _mark_theme_values_changed(self) -> None:
+        """Tell the next sync that the four rendered values changed.
+
+        They are request-scoped, so change detection never sees them change, and
+        a dj-root template that reads ``{{ theme_head|length }}`` or the
+        ``theme_switcher`` would keep the last render's text after a switch
+        (the old attributes were state, so they were re-sent). ``rust_bridge``
+        consumes this once and adds the names to the keys it reports changed.
+        """
+        self._djust_forced_changed_keys = set(_RENDERED_THEME_NAMES)
+
     def _theme_css_raw_for_push(self) -> str:
         """The raw CSS ``push_event`` sends to the client on a preset change."""
         _manager, state = self._theme_manager_and_state()
@@ -260,8 +271,10 @@ class ThemeMixin:
         """
         own = set(context)
         result: dict[str, Any] = super()._apply_context_processors(context, request)  # type: ignore[misc]
-        if self._theme_manager is None or self._theme_state is None:
-            return result
+        # No early return for a view whose ``mount()`` did not run: a reconnect
+        # restores state in lieu of mounting, and ``_theme_manager`` is not
+        # serialisable. The chunks resolve their manager from the request, as the
+        # Python reads do (``_theme_manager_and_state``).
 
         lazy = {
             "theme_head": LazyThemeHTML(self._render_theme_head, name="ThemeMixin.theme_head"),
@@ -282,6 +295,12 @@ class ThemeMixin:
         if "theme_presets" not in own and "theme_presets" not in self.__dict__:
             result["theme_presets"] = LazyThemeList(self._theme_presets_list)
             added.add("theme_presets")
+        # ``theme_presets_count``: ``get_context_data()`` derives ``<list>_count``
+        # for every list in the context, and the old ``theme_presets`` attribute
+        # was one. It is an int, so it needs no laziness, and it is not recorded
+        # as a request-scoped key: change detection tracks it like any value.
+        if "theme_presets_count" not in own and "theme_presets_count" not in self.__dict__:
+            result["theme_presets_count"] = len(self._theme_presets_list())
         # Record them as framework-supplied, like the processor keys: that is
         # what keeps them out of the change-detection fingerprint and, for the
         # lazy chunks, out of the stored state.
@@ -337,6 +356,7 @@ class ThemeMixin:
             if success:
                 self._theme_state = self._theme_manager.get_state()
                 self._setup_theme_context()  # Refresh context
+                self._mark_theme_values_changed()
 
                 # Push update to client (mode only - CSS doesn't change)
                 self._push_theme_update(mode=mode)
@@ -366,6 +386,7 @@ class ThemeMixin:
             if success:
                 self._theme_state = self._theme_manager.get_state()
                 self._setup_theme_context()  # Refresh context with new CSS
+                self._mark_theme_values_changed()
 
                 # Push update to client with new CSS
                 self._push_theme_update(preset=preset, css=self._theme_css_raw_for_push())
@@ -383,6 +404,7 @@ class ThemeMixin:
             new_mode = self._theme_manager.toggle_mode()
             self._theme_state = self._theme_manager.get_state()
             self._setup_theme_context()
+            self._mark_theme_values_changed()
 
             # Push update to client
             self._push_theme_update(mode=new_mode)
@@ -406,6 +428,7 @@ class ThemeMixin:
             self._theme_manager.set_preset(next_preset)
             self._theme_state = self._theme_manager.get_state()
             self._setup_theme_context()
+            self._mark_theme_values_changed()
 
             # Push update to client with new CSS
             self._push_theme_update(preset=next_preset, css=self._theme_css_raw_for_push())

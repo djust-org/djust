@@ -581,8 +581,6 @@ Use `dj-loading.*` attributes for zero-JS loading indicators:
 <div dj-loading.class="opacity-50">Content</div>
 ```
 
----
-
 ### 6. Large LiveView state
 
 The `Large LiveView state detected ... (threshold: 100KB)` warning measures the
@@ -611,6 +609,8 @@ What reduces each part, measured on the demo project with a 30-row page of about
 
 A view that mixes in `ThemeMixin` no longer adds the theme HTML to this
 snapshot; see [Reactive Theme Switching](components.md#reactive-theme-switching-with-liveview).
+
+---
 
 ## Security
 

@@ -35,7 +35,10 @@ def class_member_kind(cls: type, name: str) -> Optional[str]:
     attr = inspect.getattr_static(cls, name, _MISSING)
     if attr is _MISSING:
         return None
-    if isinstance(attr, property):
+    if isinstance(attr, property) or getattr(attr, "_djust_framework_derived", False):
+        # A framework-derived attribute computes its value itself (ThemeMixin's
+        # rendered HTML, #3626); a value saved by an older release must not
+        # shadow it.
         return "property"
     if isinstance(attr, (staticmethod, classmethod)) or callable(attr):
         return "method"

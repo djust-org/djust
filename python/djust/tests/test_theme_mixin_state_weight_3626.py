@@ -411,12 +411,20 @@ async def _drive_ws(view_name):
 
     stored = []
     real_set = InMemoryStateBackend.set
+    real_refresh = InMemoryStateBackend.refresh
 
-    def recording_set(self, cache_key, view, *args, **kwargs):
+    def _record(view, kind):
         blob = view.serialize_msgpack()
         _t, state, _v, _ver, _ts = msgpack.unpackb(blob, raw=False, strict_map_key=False)
-        stored.append((len(blob), sorted(state)))
+        stored.append((len(blob), sorted(state), kind, blob))
+
+    def recording_set(self, cache_key, view, *args, **kwargs):
+        _record(view, "set")
         return real_set(self, cache_key, view, *args, **kwargs)
+
+    def recording_refresh(self, cache_key, view):
+        _record(view, "refresh")
+        return real_refresh(self, cache_key, view)
 
     communicator = WebsocketCommunicator(
         LiveViewConsumer.as_asgi(),
@@ -424,7 +432,10 @@ async def _drive_ws(view_name):
         headers=[(b"host", b"testserver"), (b"origin", b"http://testserver")],
     )
     communicator.scope["session"] = Session()
-    with patch.object(InMemoryStateBackend, "set", recording_set):
+    with (
+        patch.object(InMemoryStateBackend, "set", recording_set),
+        patch.object(InMemoryStateBackend, "refresh", recording_refresh),
+    ):
         connected, _ = await communicator.connect()
         assert connected
         await communicator.receive_json_from(timeout=2)
@@ -459,19 +470,28 @@ class TestTheWebSocketPath:
             patches = json.dumps(frame.get("patches"))
             assert "data-theme-switcher" not in patches and "<style" not in patches
 
-    async def test_no_stored_snapshot_holds_the_heavy_values(self):
+    async def test_the_snapshot_after_the_events_holds_none_of_the_heavy_values(self):
+        """The backend's ``set`` runs once at the mount, BEFORE the first sync, with
+        an empty state; the render's state is stored by ``refresh`` afterwards. So
+        read what ``refresh`` stores, after the mount and after each event, and
+        look for the strings themselves, not only the key names."""
+        from asgiref.sync import sync_to_async
         from django.test import override_settings
 
-        from asgiref.sync import sync_to_async
-
-        def smallest_chunk():
+        def rendered_strings():
             view, _request_, _response = _get(TagOnlyView)
-            return min(_chunk_sizes(view).values())
+            return {
+                name: str(getattr(view, name)) for name in HEAVY_NAMES if name != "theme_presets"
+            }
 
-        floor = await sync_to_async(smallest_chunk)()
+        strings = await sync_to_async(rendered_strings)()
         with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__]):
             _frames, stored = await _drive_ws("WsTagOnly")
-        assert stored, "the state backend was never written"
-        for size, keys in stored:
+        refreshed = [entry for entry in stored if entry[2] == "refresh"]
+        assert len(refreshed) >= 3, f"the post-render store never ran: {stored}"
+        floor = min(len(text) for text in strings.values())
+        for size, keys, _kind, blob in refreshed:
             assert [n for n in HEAVY_NAMES if n in keys] == [], keys
             assert size < floor, f"a one-counter view stores {size} bytes (a chunk is {floor})"
+            for name, text in strings.items():
+                assert text[:200].encode() not in blob, f"{name} is inside the stored snapshot"
