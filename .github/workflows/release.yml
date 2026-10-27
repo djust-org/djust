@@ -32,6 +32,83 @@ jobs:
       issues: write
       security-events: write
 
+  # A blocked audit publishes nothing, and (before this job) told nobody: the
+  # release then exists only as a tag and a Release Drafter draft (v1.2.4 sat
+  # unpublished for about four days; #3482). Open one issue per tag, or comment
+  # on it when the run is retried, naming the tag, the failing audit job(s) and
+  # the run URL. Nothing `needs` this job, so a failure here cannot block or
+  # unblock the release itself.
+  audit-blocked-alert:
+    name: Alert when the audit blocks the release
+    needs: [security-audit]
+    if: ${{ always() && needs.security-audit.result == 'failure' }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+    env:
+      TAG: ${{ github.ref_name }}
+      RUN_ID: ${{ github.run_id }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - name: Open or update the release-blocked issue
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const tag = process.env.TAG;
+            const runUrl = process.env.RUN_URL;
+            const title = `Release ${tag} blocked by the pre-release security audit`;
+
+            const { data: jobs } = await github.rest.actions.listJobsForWorkflowRun({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: Number(process.env.RUN_ID),
+              per_page: 100,
+            });
+            const failed = jobs.jobs
+              .filter((j) => j.conclusion === 'failure' && j.name.startsWith('Pre-release security audit'))
+              .map((j) => `- ${j.name}: ${j.html_url}`);
+            const failedList = failed.length ? failed.join('\n') : '- (no failing audit job was listed; open the run)';
+
+            const body = [
+              `The pre-release security audit failed on tag \`${tag}\`. Nothing was published to PyPI or attached to a GitHub Release.`,
+              '',
+              `Run: ${runUrl}`,
+              '',
+              'Failing audit jobs:',
+              failedList,
+              '',
+              'Fix the advisory (or allowlist it with a reason), then re-run the failed jobs of this run, or cut a new tag. This issue is opened by `release.yml` (#3482).',
+            ].join('\n');
+
+            const { data: open } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'release',
+              per_page: 100,
+            });
+            const existing = open.find((i) => i.title === title && !i.pull_request);
+            if (existing) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existing.number,
+                body: `The audit failed again.\n\nRun: ${runUrl}\n\nFailing audit jobs:\n${failedList}`,
+              });
+              core.notice(`Commented on #${existing.number}`);
+            } else {
+              const { data: issue } = await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title,
+                body,
+                labels: ['release'],
+              });
+              core.notice(`Opened ${issue.html_url}`);
+            }
+
   # Verify release before building
   verify:
     name: Verify release
