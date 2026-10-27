@@ -163,6 +163,18 @@ Two name shapes appear in this roadmap, with distinct meanings:
 | ~~**P1**~~ | ~~#3462 — `djust ai inventory`: compare the Windows owner SID/DACL of a discovered `manage.py`~~ ✅ (#3474) | v1.3.0 |
 | ~~**P2**~~ | ~~#3470 — carry the unfinished #3129 review items forward into the 1.3.0 final audit checklist~~ ✅ (#3474) | v1.3.0 |
 
+### v1.3.0-10 — HTTP fallback parity, sync-turn-wrapper coverage, theme state weight (drain bucket → ships in 1.3)
+
+*Kind:* transport parity and state weight, all reported by a downstream app on 1.3.0rc13. Four PRs, one per row group: the stateless HTTP fallback (#3624, #3503), the sync-turn wrapper (#3625), `ThemeMixin` state (#3626), and the silent release-audit failure (#3482). #3607 (tokio advisory) was already fixed on `main` (#3619) and is closed.
+
+| Priority | Task | Milestone |
+|---|---|---|
+| ~~**P1**~~ | ~~#3624 — The stateless HTTP fallback POST calls `mount()` but not `handle_params()`, so a page that reads its URL meets the event with defaults; also documents the dropped `start_async` work and the hidden-field rule for forms~~ ✅ (#3630) | v1.3.0 |
+| ~~**P2**~~ | ~~#3503 — Check whether the HTTP POST fallback drops `push_event` / deferred work / layout side effects the WebSocket and SSE paths flush (repro first)~~ ✅ (closed without code: not reproducible; pinned by #3630, accessibility/focus gap #3629) | v1.3.0 |
+| ~~**P2**~~ | ~~#3625 — `sync_turn_wrapper` is entered around `handle_tick()` and `handle_async_result()`, and around the test client's `send_event()`, `send_push()` and `render_async()`~~ ✅ (#3636; unwrapped hops #3637) | v1.3.0 |
+| **P2** | #3626 — `ThemeMixin` stops putting ~60KB of rendered HTML in every view's state (part 1); the `Large LiveView state` warning reports what it measures and gives advice that matches (part 2) Part 1 and the warning text shipped in #3633; the stored-tree and `theme_presets` remainder is #3632 / #3631 (issue stays open). | v1.3.0 |
+| **P3** | #3482 — A release run blocked by the pre-release audit opens or updates an issue naming the tag, the failing job and the run URL PR #3638 (needs the `release-workflow-reviewed` label). | v1.3.0 |
+
 ## Next: v1.2.1 — non-breaking fixes (drain)
 
 > Planned 2026-09-24 from a triage of every open issue. **Policy:** non-breaking bug fixes ship in 1.2.1; anything breaking, new features, and parser/dependency upgrades go to 1.3. Issues split into a 1.2.1 part and a 1.3 part are marked. The ADR-034–038 stack (#2944, #2954) merges after 1.2.1 is cut. Already shipped toward 1.2.1 on `main`: #3009 (inline whitespace, #2999/#3010), the CSRF resolver (#2978), SerializerCache removal (#2992), the audit gate (#2989).

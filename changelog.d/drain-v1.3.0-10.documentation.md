@@ -1,0 +1,1 @@
+- **Roadmap: v1.3.0-10 drain bucket** — adds the HTTP fallback parity, sync-turn-wrapper coverage and theme state weight issues (#3624, #3503, #3625, #3626, #3482) to the v1.3 drain plan, with the shipped rows marked done.
