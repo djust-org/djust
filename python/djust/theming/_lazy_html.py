@@ -178,3 +178,80 @@ class LazyThemeHTML(Promise, SafeData):
         if name.startswith("_"):
             raise AttributeError(name)
         return getattr(self._render(), name)
+
+
+class LazyThemeList:
+    """A list of plain data that is built on its first read (#3626).
+
+    :class:`LazyThemeHTML` is for trusted HTML; this is its sibling for the one
+    theme value that is a list (``theme_presets``, ~12 KB of dicts). A list
+    that a view's context holds is plain data, so djust copies it into the
+    stored Rust state whether or not the template reads it. This object is not
+    JSON data (``json.dumps`` rejects it), so it rides the raw-value sidecar
+    instead: the renderer converts it through ``__djust_serialize__`` only when
+    a template reads it, and the page shell and Django's own engine iterate it
+    like any list.
+
+    The factory runs at most once per reader race (the first stored result
+    wins, as in :class:`LazyThemeHTML`); the list is then fixed. It is never
+    handed out as the stored list itself: iteration and ``__djust_serialize__``
+    give a fresh ``list`` each time, so a template cannot mutate the memo.
+    """
+
+    __slots__ = ("_cell", "_factory")
+
+    def __init__(self, factory: Callable[[], Any]) -> None:
+        self._factory = factory
+        self._cell: dict[str, list[Any]] = {}
+
+    @property
+    def evaluated(self) -> bool:
+        """Whether the list has been built yet. Reading it never builds it."""
+        return "v" in self._cell
+
+    def _items(self) -> list[Any]:
+        cell = self._cell
+        value = cell.get("v")
+        if value is None:
+            value = cell.setdefault("v", list(self._factory()))
+        return value
+
+    def __djust_serialize__(self) -> list[Any]:
+        return list(self._items())
+
+    def __iter__(self) -> Iterator[Any]:
+        return iter(self._items())
+
+    def __len__(self) -> int:
+        return len(self._items())
+
+    def __bool__(self) -> bool:
+        return bool(self._items())
+
+    def __getitem__(self, key: Any) -> Any:
+        return self._items()[key]
+
+    def __contains__(self, item: object) -> bool:
+        return item in self._items()
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, LazyThemeList):
+            return self._items() == other._items()
+        if isinstance(other, list):
+            return self._items() == other
+        return NotImplemented
+
+    __hash__ = None  # type: ignore[assignment]  # a list is unhashable
+
+    def __copy__(self) -> LazyThemeList:
+        return self
+
+    def __deepcopy__(self, memo: dict[int, Any]) -> LazyThemeList:
+        return self
+
+    def __reduce__(self) -> tuple[Any, ...]:
+        return (list, (self._items(),))
+
+    def __repr__(self) -> str:
+        # Never builds the list: a debugger or a log line must not pay for it.
+        return f"<LazyThemeList evaluated={self.evaluated}>"

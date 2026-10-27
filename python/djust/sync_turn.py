@@ -1,8 +1,9 @@
 """``LIVEVIEW_CONFIG["sync_turn_wrapper"]``: a scope around each sync step.
 
 A turn (``djust.turns``) runs a view's sync code in separate hops: the event
-handler, ``mount``, ``handle_params``, a ``start_async`` callback, and the
-render's ``get_context_data()`` (where the JIT evaluates the view's QuerySets).
+handler, ``mount``, ``handle_params``, a ``start_async`` callback and its
+``handle_async_result``, ``handle_tick``, and the render's
+``get_context_data()`` (where the JIT evaluates the view's QuerySets).
 Between the hops the turn awaits, and with ``worker_threads`` the pool thread
 runs other sessions' hops. A ``LIVEVIEW_MIDDLEWARE`` therefore cannot hold a
 database transaction (or any thread-bound state) for the turn: it would span
@@ -35,6 +36,10 @@ An ``async def`` handler or hook runs on the event loop and is not wrapped:
 its own ``sync_to_async`` calls are the app's to scope. A ``sync_safe`` view's
 render runs on the loop, so its wrapper runs there too.
 
+A hop is one wrapper entry, not one step name: a ``start_async`` callback and
+the ``handle_async_result`` call that follows it are two hops, each entered on
+its own (the awaits between them are the point of the wrapper).
+
 Reported downstream by Point Guard (N-30): Postgres row-level security sets
 the caller per transaction, so a socket turn that reads rows needs each sync
 hop in a transaction with the caller set.
@@ -49,7 +54,10 @@ from typing import Any, Callable, ContextManager, Optional, Tuple, TypeVar
 __all__ = ["SYNC_STEPS", "SyncTurnWrapper", "run_sync_step", "sync_step"]
 
 #: Every ``step`` the wrapper is called with.
-SYNC_STEPS = frozenset({"event", "mount", "handle_params", "hook", "async", "render"})
+#:
+#: ``"async"`` covers a ``start_async`` callback AND the ``handle_async_result``
+#: that receives its outcome; ``"tick"`` is ``handle_tick`` (#3625).
+SYNC_STEPS = frozenset({"event", "mount", "handle_params", "hook", "async", "tick", "render"})
 
 SyncTurnWrapper = Callable[[Any, str, Any], ContextManager[Any]]
 

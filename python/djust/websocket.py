@@ -15,7 +15,7 @@ from typing import Any, Awaitable, Callable, ContextManager, Deque, Dict, List, 
 from asgiref.sync import sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
 
-from ._view_hooks import call_hook, is_async_hook
+from ._view_hooks import call_async_result, call_hook, call_tick, is_async_hook
 from ._background_render import (
     BackgroundRender,
     _discard_baseline,
@@ -1561,8 +1561,8 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                     # still gets its user callback — only the stale re-render is
                     # dropped.
                     if hasattr(view, "handle_async_result"):
-                        await sync_to_async(view.handle_async_result)(
-                            task_name, result=result, error=None
+                        await call_async_result(
+                            view, view.handle_async_result, task_name, result=result, error=None
                         )
 
                     # Identity re-check INSIDE the lock (#1940): the guard above ran
@@ -1678,8 +1678,8 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                         if not await self._authorize_explicit_consumer_turn(view):
                             return
                         if hasattr(view, "handle_async_result"):
-                            await sync_to_async(view.handle_async_result)(
-                                task_name, result=None, error=error
+                            await call_async_result(
+                                view, view.handle_async_result, task_name, result=None, error=error
                             )
 
                         # Identity re-check INSIDE the lock: the guard above ran
@@ -6825,11 +6825,13 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             # which is the same: that sync only joins and leaves groups.
             offloaded: Optional[Tuple[bool, bool]] = None
             if offload_enabled():
+                from .sync_turn import run_sync_step
+
                 tick_view = self.view_instance
 
                 def tick_turn() -> Tuple[bool, bool, Optional[BaseException]]:
                     before = _snapshot_assigns(tick_view)
-                    tick_view.handle_tick()
+                    run_sync_step(tick_view, "tick", tick_view.handle_tick)
                     # handle_tick ran: a later failure is reported after the
                     # caller marks its queued work for dispatch, as in the
                     # stock path.
@@ -6851,7 +6853,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                 # Snapshot state before tick to detect changes
                 pre_assigns = _snapshot_assigns(self.view_instance)
 
-                await sync_to_async(self.view_instance.handle_tick)()
+                await call_tick(self.view_instance)
             # start_async work handle_tick queued runs once the lock is
             # released (#2955).
             dispatch_work = True
