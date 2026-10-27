@@ -1175,3 +1175,56 @@ async def test_payload_initialization_does_not_consume_stopping_wait_budget():
             run = c._lookup("factory-budget:room")
             if run is not None:
                 await asyncio.wait_for(asyncio.wrap_future(run.done), 3)
+
+
+@pytest.mark.asyncio
+async def test_wait_keeps_absolute_deadline_if_clock_advances_before_timer_starts():
+    """A delayed timer task must not shift an already scheduled beat."""
+    time = ManualClock()
+    c = clock(time, lambda tick: None)
+    run = SimpleNamespace(wake=asyncio.Event())
+    waiter = asyncio.create_task(c._wait(run, 0.1))
+    try:
+        # Let _wait queue its timer, but advance before the timer task runs.
+        await asyncio.sleep(0)
+        time.value = 0.1
+        await time.settle()
+        assert waiter.done(), "the due timer must not wait for another advance"
+    finally:
+        waiter.cancel()
+        await asyncio.gather(waiter, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_room_clock_step_runs_when_timer_starts_after_its_deadline():
+    """A single advance to the due beat runs it even if timer startup is delayed."""
+    register_serving_loop()
+    time, ticks = ManualClock(), []
+    c = clock(time, ticks.append)
+    original_wait = c._wait
+    first = True
+
+    async def advance_before_timer_starts(run, deadline):
+        nonlocal first
+        if not first:
+            return await original_wait(run, deadline)
+        first = False
+        waiter = asyncio.create_task(original_wait(run, deadline))
+        try:
+            # _wait queues the timer; this coroutine resumes before it runs.
+            await asyncio.sleep(0)
+            await time.advance(0.1)
+            await waiter
+        finally:
+            waiter.cancel()
+            await asyncio.gather(waiter, return_exceptions=True)
+
+    with patch.object(c, "_wait", advance_before_timer_starts):
+        try:
+            assert await c.aensure(view(), "room")
+            # The injected advance itself settles for 100 loop turns.
+            await time.settle(turns=500)
+            assert len(ticks) == 1
+            assert ticks[0].scheduled_at == pytest.approx(0.1)
+        finally:
+            await cleanup(c, time)

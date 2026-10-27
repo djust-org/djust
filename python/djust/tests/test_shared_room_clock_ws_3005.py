@@ -1,6 +1,7 @@
 """Presence-bound clocks through actual LiveView WebSocket consumers."""
 
 import asyncio
+import sys
 import threading
 from unittest.mock import patch
 
@@ -577,6 +578,60 @@ async def test_presence_timeout_retries_after_retirement_without_another_join(mo
             release.set()
             await close_all(sockets)
             await retire_followup(clock)
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+async def test_presence_retry_fires_when_replacement_timer_starts_after_advance(
+    monkeypatch, caplog
+):
+    """Exercise the observed timeout with the actual WebSocket retry path."""
+    gate = asyncio.Event()
+    scheduled = asyncio.Event()
+    caught = False
+    real_create_task = asyncio.create_task
+    real_advance = TIME.advance
+
+    def delay_replacement_timer(coro, *args, **kwargs):
+        nonlocal caught
+        # The replacement's _wait queues the timer before the original test
+        # advances TIME. Hold that one timer until after the advance.
+        frame = sys._getframe(1)
+        owner = frame.f_locals.get("self")
+        if (
+            not caught
+            and frame.f_code.co_name == "_wait"
+            and getattr(owner, "name", None) == "presence-retry"
+            and TIME.now() >= 0.1
+        ):
+            caught = True
+
+            async def held_timer():
+                scheduled.set()
+                await gate.wait()
+                return await coro
+
+            return real_create_task(held_timer(), *args, **kwargs)
+        return real_create_task(coro, *args, **kwargs)
+
+    async def advance_before_timer(seconds):
+        if TIME.now() >= 0.1:
+            await asyncio.wait_for(scheduled.wait(), 10)
+            TIME.value += seconds
+            gate.set()
+            await TIME.settle()
+        else:
+            await real_advance(seconds)
+
+    monkeypatch.setattr(asyncio, "create_task", delay_replacement_timer)
+    monkeypatch.setattr(TIME, "advance", advance_before_timer)
+    try:
+        await test_presence_timeout_retries_after_retirement_without_another_join(
+            "sync", "none", caplog
+        )
+        assert caught, "the replacement timer must have been delayed"
+    finally:
+        gate.set()
 
 
 @pytest.mark.django_db(transaction=True)

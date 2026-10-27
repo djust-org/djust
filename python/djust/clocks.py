@@ -637,7 +637,12 @@ class RoomClock:
             self._failure(run, exc, "publish")
 
     async def _wait(self, run: _Run, deadline: float) -> None:
-        sleep = asyncio.create_task(self._time.sleep(max(0, deadline - self._time.now())))
+        async def sleep_until_deadline() -> None:
+            # Compute the remaining delay when the task runs, not when it is
+            # queued: scheduling may be delayed past the absolute deadline.
+            await self._time.sleep(max(0, deadline - self._time.now()))
+
+        sleep = asyncio.create_task(sleep_until_deadline())
         wake = asyncio.create_task(run.wake.wait())
         try:
             await asyncio.wait((sleep, wake), return_when=asyncio.FIRST_COMPLETED)

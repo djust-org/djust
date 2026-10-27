@@ -1,0 +1,1 @@
+- **Keep shared-room clock deadlines when timer tasks start late.** The timer calculates its remaining delay when it runs, preventing a delayed task from postponing a due clock step.
