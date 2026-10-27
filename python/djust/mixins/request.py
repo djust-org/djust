@@ -1443,7 +1443,9 @@ class RequestMixin:
 
             # True when mount() ran on a view with nothing restored over it: the
             # work it (and handle_params) queued has to finish before the event
-            # is applied, below, once the object check has passed.
+            # is applied. It runs right before the handler, after every refusal
+            # (object permission, handler permission, rate limit, parameter
+            # validation), so a refused request starts none of it.
             mount_work_pending = False
             if not legacy_exposure:
                 from .._exposure_sessions import load_server_state
@@ -1452,14 +1454,16 @@ class RequestMixin:
                 # The persisted projection is validated separately and overlays
                 # only declared server fields, never render/context attributes.
                 call_hook_sync(self.mount, request, **kwargs)
-                # As on the GET: the URL is read after mount() and before the
-                # persisted server fields go back on top (#3624).
-                _run_http_handle_params(self, request)
-                mount_work_pending = True
                 restored = load_server_state(self, request)
                 if restored is not None:
                     for key, value in restored.items():
                         safe_setattr(self, key, value, allow_private=False, raise_on_blocked=True)
+                # The socket mount restores, then reads the URL (``dispatch_mount``:
+                # mount, ``load_server_state``, ``handle_params``). Same order
+                # here, so the URL this request carries wins over a persisted
+                # server field the previous request saved (#3624).
+                _run_http_handle_params(self, request)
+                mount_work_pending = True
             elif not saved_state:
                 call_hook_sync(self.mount, request, **kwargs)
                 self._snapshot_user_private_attrs()
@@ -1531,14 +1535,6 @@ class RequestMixin:
                 handle_restore = getattr(self, "handle_restore", None)
                 if callable(handle_restore):
                     call_hook_sync(handle_restore, request)
-
-            # Reads the page makes after its first render (``assign_async``,
-            # ``start_async`` in mount() or handle_params()) finish now, so the
-            # event meets the loaded page and the answer does not bring back a
-            # loading state (#3624). After the object check, so a denied object
-            # is never read.
-            if mount_work_pending:
-                _run_http_background_work(self)
 
             # Call the event handler — only @event_handler-decorated methods
             # can be invoked via POST (matches WS security)
@@ -1698,6 +1694,15 @@ class RequestMixin:
                     )
 
                 call_args, call_kwargs = validated_call_arguments(validation)
+                # Every refusal above has passed: the reads the page makes after
+                # its first render (``assign_async``, ``start_async`` in mount()
+                # or handle_params()) finish now, so the event meets the loaded
+                # page and the answer does not bring back a loading state
+                # (#3624). Not for an embedded child's event, which answers with
+                # the child's own HTML and does not render the page.
+                if mount_work_pending and child_view is None:
+                    _run_http_background_work(self)
+                mount_work_pending = False
                 from ..components._interactive import DropdownMenu
 
                 if isinstance(owner, DropdownMenu) and event_name == "observe_toggle":
@@ -1719,6 +1724,11 @@ class RequestMixin:
                 _run_http_background_work(owner)
                 if owner is not self:
                     _run_http_background_work(self)
+
+            if mount_work_pending and child_view is None:
+                # No handler ran (an event the view does not define): the page
+                # is still rendered, so it still gets the loaded state.
+                _run_http_background_work(self)
 
             if child_view is not None:
                 return self._http_child_response(

@@ -24,7 +24,7 @@ from django.contrib.sessions.backends.db import SessionStore
 from django.test import RequestFactory, override_settings
 
 from djust import LiveView
-from djust.decorators import event_handler
+from djust.decorators import event_handler, state
 
 pytestmark = pytest.mark.django_db
 
@@ -191,3 +191,114 @@ class TestExplicitExposure:
         assert response.status_code == 200, response.content
         assert view.scope == "mine"
         assert ScopedView.handle_params_calls == [({"scope": "mine"}, url)]
+
+
+SEEN: list = []
+
+
+class ExplicitPersisted(LiveView):
+    """A declared ``persist="server"`` field that ``handle_params()`` also sets."""
+
+    exposure_policy = "explicit"
+    template = "<div dj-root>{{ scope }}</div>"
+    scope = state("all", persist="server")
+
+    def mount(self, request, **kwargs):
+        # Work mount queues reads the page's scope, as an ``assign_async`` loader does.
+        self.start_async(self._snapshot, name="snapshot")
+
+    def _snapshot(self):
+        SEEN.append(("mount-work", self.scope))
+
+    def handle_params(self, params, uri):
+        self.scope = params.get("scope", "all")
+
+    def get_context_data(self, **kwargs):
+        return super().get_context_data(scope=self.scope, **kwargs)
+
+    @event_handler()
+    def archive(self, **kwargs):
+        SEEN.append(("handler", self.scope))
+
+
+setattr(sys.modules[__name__], "ExplicitPersisted", ExplicitPersisted)
+
+
+class TestExplicitExposureOrder:
+    def test_the_url_this_request_carries_wins_over_the_persisted_field(self):
+        """The socket mount restores, then calls ``handle_params``; so must the POST.
+
+        POST ``?scope=a`` persists ``scope="a"``. The next POST, ``?scope=b``,
+        must meet ``b`` in the handler and in the work mount queued; reading
+        the URL before the overlay put the stale ``a`` back on top.
+        """
+        SEEN.clear()
+        initial = _get_request(PATH + "?scope=a")
+        first = _post(initial, ExplicitPersisted(), "archive", url=PATH + "?scope=a")
+        assert first.status_code == 200, first.content
+        SEEN.clear()
+
+        second = _post(initial, ExplicitPersisted(), "archive", url=PATH + "?scope=b")
+        assert second.status_code == 200, second.content
+        assert ("handler", "b") in SEEN, SEEN
+        assert ("mount-work", "b") in SEEN, SEEN
+
+
+class _Repo:
+    """A non-JSON private attribute the session cannot hold."""
+
+    def __init__(self, scope):
+        self.scope = scope
+
+
+class PrivateFromUrl(LiveView):
+    """Default policy; non-JSON private state, one part built from the URL."""
+
+    template = '<div dj-root dj-id="0"><p>{{ count }}</p><p>{{ note }}</p></div>'
+
+    def mount(self, request, **kwargs):
+        self.count = 0
+        self.note = ""
+        self._client = _Repo("mount")
+
+    def handle_params(self, params, uri):
+        self._repo = _Repo(params.get("scope", "all"))
+
+    @event_handler()
+    def bump(self, **kwargs):
+        self.count += 1
+        self.note = self._repo.scope
+
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        ctx["count"] = self.count
+        ctx["note"] = self.note
+        return ctx
+
+
+setattr(sys.modules[__name__], "PrivateFromUrl", PrivateFromUrl)
+
+
+class TestMountRerunsWithSavedStateOnTop:
+    def test_handle_params_rebuilds_private_state_from_the_url(self):
+        """Saved state covers every attribute but the non-JSON ones: mount() reruns."""
+        url = PATH + "?scope=mine"
+        initial = _get_request(url)
+        PrivateFromUrl().get(initial)
+
+        view = PrivateFromUrl()
+        response = _post(initial, view, "bump", url=url)
+
+        assert response.status_code == 200, response.content
+        assert view.note == "mine"
+
+    def test_the_saved_state_goes_back_on_top_of_mount(self):
+        url = PATH + "?scope=mine"
+        initial = _get_request(url)
+        PrivateFromUrl().get(initial)
+        _post(initial, PrivateFromUrl(), "bump", url=url)
+
+        view = PrivateFromUrl()
+        _post(initial, view, "bump", url=url)
+
+        assert view.count == 2, "mount() sets 0; the saved 1 must go back on top"

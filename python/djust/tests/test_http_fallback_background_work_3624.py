@@ -23,8 +23,9 @@ from django.contrib.sessions.backends.db import SessionStore
 from django.test import RequestFactory, override_settings
 
 from djust import LiveView
-from djust.decorators import background, event_handler
+from djust.decorators import background, event_handler, permission_required, rate_limit
 from djust.mixins import request as request_mixin
+from djust.rate_limit import reset_handler_buckets
 
 pytestmark = pytest.mark.django_db
 
@@ -155,11 +156,14 @@ def _get_request():
     return request
 
 
-def _post(view_cls, event, initial=None):
+def _post(view_cls, event, initial=None, params=None, url=PATH):
     initial = initial or _get_request()
     view_cls().get(initial)
     request = RequestFactory().post(
-        PATH, data=json.dumps({}), content_type="application/json", HTTP_X_DJUST_EVENT=event
+        url,
+        data=json.dumps(params or {}),
+        content_type="application/json",
+        HTTP_X_DJUST_EVENT=event,
     )
     request.user, request.session, request.tenant = initial.user, initial.session, None
     view = view_cls()
@@ -220,7 +224,9 @@ class TestHandlerWork:
             _, response, body = _post(BackgroundView, "chain")
         assert response.status_code == 200, body
         pages = [entry for entry in LOG if entry[0] == "page"]
-        assert len(pages) == request_mixin._HTTP_BACKGROUND_MAX_ROUNDS
+        # The number the guide documents, written out: a changed cap must change the guide.
+        assert len(pages) == 8
+        assert request_mixin._HTTP_BACKGROUND_MAX_ROUNDS == 8
         assert any("kept queueing background work" in r.getMessage() for r in caplog.records)
 
     def test_no_work_no_noise(self, caplog):
@@ -316,8 +322,240 @@ setattr(sys.modules[__name__], "RebuiltWithSavedState", RebuiltWithSavedState)
 
 class TestMountWorkIsNotRepeatedOverRestoredState:
     def test_default_policy_with_saved_state_does_not_run_mount_s_reads_again(self):
-        """Saved state holds mount's results already; running them again repeats the read."""
+        """Mount's tasks are dropped when ``mount()`` reruns under saved state.
+
+        The saved state is put back on top of ``mount()``, so mount's queued
+        read would only repeat; its tasks are discarded. Over HTTP alone no one
+        ever ran them on the GET, so that page keeps the loading state the
+        session saved: a known gap, tracked in #3635.
+        """
         RebuiltWithSavedState.loads = 0
         view, response, body = _post(RebuiltWithSavedState, "plain")
         assert response.status_code == 200, body
         assert RebuiltWithSavedState.loads == 0
+
+
+class RefusalView(LoadsAfterFirstRender):
+    """Mount queues one read; each handler is refused a different way."""
+
+    loads = 0
+
+    @event_handler()
+    @permission_required("auth.change_user")
+    def guarded(self, **kwargs):
+        self.status = "guarded-ran"
+
+    @event_handler()
+    @rate_limit(rate=1, burst=1)
+    def limited(self, **kwargs):
+        self.status = "limited-ran"
+
+    @event_handler()
+    def needs_int(self, n: int = 0, **kwargs):
+        self.status = "int:%d" % n
+
+
+setattr(sys.modules[__name__], "RefusalView", RefusalView)
+
+
+class TestMountWorkWaitsForEveryRefusal:
+    """Mount-queued reads run right before the handler, after the checks."""
+
+    @pytest.fixture(autouse=True)
+    def _fresh(self):
+        reset_handler_buckets()
+        RefusalView.loads = 0
+        yield
+        reset_handler_buckets()
+
+    def test_a_handler_the_caller_may_not_run_starts_no_work(self):
+        with STATELESS:
+            _, response, _ = _post(RefusalView, "guarded")
+        assert response.status_code == 403
+        assert RefusalView.loads == 0
+
+    def test_a_rate_limited_post_starts_no_work(self):
+        initial = _get_request()
+        with STATELESS:
+            _, first, _ = _post(RefusalView, "limited", initial=initial)
+            _, second, _ = _post(RefusalView, "limited", initial=initial)
+        assert first.status_code == 200
+        assert second.status_code == 429
+        assert RefusalView.loads == 1, "only the admitted POST may start mount's reads"
+
+    def test_an_invalid_parameter_starts_no_work(self):
+        with STATELESS:
+            _, response, _ = _post(RefusalView, "needs_int", params={"n": "notanint"})
+        assert response.status_code == 400
+        assert RefusalView.loads == 0
+
+    def test_an_admitted_post_still_gets_the_loaded_page(self):
+        with STATELESS:
+            view, response, _ = _post(RefusalView, "needs_int", params={"n": "3"})
+        assert response.status_code == 200
+        assert RefusalView.loads == 1 and view.data == "rows"
+
+    def test_an_event_the_view_does_not_define_still_loads_the_page(self):
+        with STATELESS:
+            view, response, body = _post(RefusalView, "no_such_handler")
+        assert response.status_code == 200, body
+        assert RefusalView.loads == 1 and view.data == "rows"
+
+
+class SerialLoaders(BackgroundView):
+    """Mount queues three loaders that each take a moment."""
+
+    def mount(self, request, **kwargs):
+        super().mount(request, **kwargs)
+        for i in range(3):
+            self.start_async(self._load, i, name="load%d" % i)
+
+    def _load(self, i):
+        import time
+
+        LOG.append(("start", i))
+        time.sleep(0.02)
+        LOG.append(("end", i))
+
+
+setattr(sys.modules[__name__], "SerialLoaders", SerialLoaders)
+
+
+class TestTasksRunSeriallyInQueueOrder:
+    def test_each_task_finishes_before_the_next_starts(self):
+        """The guide says latency is the sum, not the longest: pin the order."""
+        with STATELESS:
+            _post(SerialLoaders, "plain")
+        loads = [entry for entry in LOG if entry[0] in ("start", "end")]
+        assert loads == [
+            ("start", 0),
+            ("end", 0),
+            ("start", 1),
+            ("end", 1),
+            ("start", 2),
+            ("end", 2),
+        ]
+
+
+class LegacyPendingView(BackgroundView):
+    @event_handler()
+    def legacy(self, **kwargs):
+        self.status = "queued"
+        self._async_pending = (self._work, (), {})  # the single-task tuple
+
+
+class ParamsQueuedView(BackgroundView):
+    """``handle_params()`` queues the read for the scope the URL names."""
+
+    def handle_params(self, params, uri):
+        self.start_async(self._load_scope, params.get("scope", "all"), name="scope")
+
+    def _load_scope(self, scope):
+        self.data = "scope:" + scope
+
+    @event_handler()
+    def select(self, **kwargs):
+        self.status = "saw:" + self.data
+
+
+class AssignAsyncView(BackgroundView):
+    def mount(self, request, **kwargs):
+        super().mount(request, **kwargs)
+        self.assign_async("rows", self._rows)
+
+    def _rows(self):
+        return "loaded"
+
+    @event_handler()
+    def select(self, **kwargs):
+        self.status = "saw:%s:%s" % (self.rows.ok, self.rows.result)
+
+
+for _cls in (LegacyPendingView, ParamsQueuedView, AssignAsyncView):
+    setattr(sys.modules[__name__], _cls.__name__, _cls)
+
+
+class TestOtherWaysToQueueWork:
+    def test_the_legacy_single_task_tuple_runs(self):
+        with STATELESS:
+            view, _, body = _post(LegacyPendingView, "legacy")
+        assert view.status == "done", body
+        assert LOG == [("result", "_default", "ok", None)]
+
+    def test_work_handle_params_queued_runs_before_the_event(self):
+        with STATELESS:
+            view, response, body = _post(ParamsQueuedView, "select", url=PATH + "?scope=mine")
+        assert response.status_code == 200, body
+        assert view.status == "saw:scope:mine"
+
+    def test_assign_async_is_loaded_when_the_event_arrives(self):
+        with STATELESS:
+            view, response, body = _post(AssignAsyncView, "select")
+        assert response.status_code == 200, body
+        assert view.status == "saw:True:loaded"
+
+
+class ParentPokingChild(BgChild):
+    """A child handler that queues work on the page that holds it."""
+
+    @event_handler()
+    def poke_parent(self, **kwargs):
+        self._parent_view.start_async(self._parent_view.parent_work, name="parent")
+
+
+class PokedPage(BgPage):
+    template = (
+        "{% load live_tags %}"
+        '<div dj-root dj-view="' + __name__ + '.PokedPage">'
+        '{% live_render "' + __name__ + '.ParentPokingChild" view_id="kid" %}'
+        "</div>"
+    )
+
+    def parent_work(self):
+        LOG.append(("parent-work",))
+
+
+setattr(sys.modules[__name__], "ParentPokingChild", ParentPokingChild)
+setattr(sys.modules[__name__], "PokedPage", PokedPage)
+
+
+class TestChildEventRunsTheParentsWorkToo:
+    def test_work_a_child_handler_queued_on_its_page_runs(self):
+        initial = _get_request()
+        PokedPage.as_view()(initial)
+        initial.session.save()
+        request = RequestFactory().post(
+            PATH,
+            data=json.dumps({"view_id": "kid"}),
+            content_type="application/json",
+            HTTP_X_DJUST_EVENT="poke_parent",
+        )
+        request.user, request.session, request.tenant = initial.user, initial.session, None
+        response = PokedPage.as_view()(request)
+        assert response.status_code == 200, response.content
+        assert ("parent-work",) in LOG, LOG
+
+
+class WatcherView(BackgroundView):
+    """A watcher the guide says to guard: it only belongs on a live connection."""
+
+    def mount(self, request, **kwargs):
+        super().mount(request, **kwargs)
+        self.start_async(self._watch, name="watch")
+
+    def _watch(self):
+        if not hasattr(self, "_websocket_session_id"):
+            LOG.append(("watcher-skipped",))
+            return
+        raise AssertionError("the fallback never sets _websocket_session_id")
+
+
+setattr(sys.modules[__name__], "WatcherView", WatcherView)
+
+
+class TestTheGuideSGuardForLongLivedWork:
+    def test_the_documented_guard_keeps_a_watcher_off_the_fallback(self):
+        with STATELESS:
+            _, response, body = _post(WatcherView, "plain")
+        assert response.status_code == 200, body
+        assert ("watcher-skipped",) in LOG
