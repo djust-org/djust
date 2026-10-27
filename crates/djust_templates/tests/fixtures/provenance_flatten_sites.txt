@@ -723,6 +723,9 @@ s.insert("highlight_id".to_string(), Value::Integer(highlight_id));
 "rows".to_string(),
 let mut view = RustLiveViewBackend::new_rust(TEMPLATE.to_string());
 view.set_changed_keys(vec!["label".to_string()]);
+view.update_template(TEMPLATE.to_string());
+view.set_changed_keys(vec!["label".to_string()]);
+view.set_changed_keys(vec!["label".to_string()]);
 view.set_changed_keys(vec!["label".to_string()]);
 let mut view = RustLiveViewBackend::new_rust(template.to_string());
 s.insert("x".to_string(), Value::String(x.to_string()));
