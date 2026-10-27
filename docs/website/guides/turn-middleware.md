@@ -156,7 +156,8 @@ Background work also runs the chain itself: once before the callback starts
 
 A middleware wraps the whole turn, which is async: the turn runs the view's
 sync code in separate hops (the handler, `mount`, `handle_params`, a
-`start_async` callback, the render's `get_context_data()`, where the JIT
+`start_async` callback and its `handle_async_result`, `handle_tick`, the
+render's `get_context_data()`, where the JIT
 evaluates the view's QuerySets) with awaits between them. With
 `worker_threads` a pool thread runs other sessions' hops in those gaps, and
 Django's database connection belongs to the thread. So a `transaction.atomic()`
@@ -189,7 +190,9 @@ def _as_caller(user_id):
 ```
 
 - `step` is `"event"`, `"mount"`, `"handle_params"`, `"hook"` (another sync view
-  hook), `"async"` (a `start_async` / `@background` callback) or `"render"`
+  hook: a push handler, `handle_info`), `"async"` (a `start_async` /
+  `@background` callback **and** the `handle_async_result` call that receives
+  its outcome, two separate entries), `"tick"` (`handle_tick`) or `"render"`
   (every call djust makes to `get_context_data()`, on every transport).
 - `view` is the view or component whose code runs; `turn` is
   `djust.turns.current_turn()`, or `None` when the step runs outside a turn (a
@@ -199,6 +202,12 @@ def _as_caller(user_id):
 - An `async def` handler or hook runs on the event loop and is not wrapped; its
   own `sync_to_async` calls are yours to scope. A `sync_safe` view renders on
   the loop, so its wrapper runs there too.
+- `LiveViewTestClient` enters the same steps, so a test of a handler that reads
+  rows runs inside the same scope as the socket: `send_event()` (`"event"`),
+  `send_push()` and `trigger_info()` (`"hook"`), and the callbacks and
+  `handle_async_result` calls that `render_async()` drains (`"async"`);
+  `LiveComponentTestClient.send_event()` is an `"event"` step too. The client
+  does not tick, so `handle_tick` is called by your own test.
 - Unset (the default), nothing is wrapped and nothing is paid.
 
 ## Hot path
