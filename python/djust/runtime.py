@@ -69,7 +69,7 @@ from typing import (
 
 from asgiref.sync import async_to_sync, sync_to_async
 
-from ._view_hooks import call_hook
+from ._view_hooks import call_async_result, call_hook
 
 if TYPE_CHECKING:
     from ._async_batch import AsyncBatch
@@ -8644,8 +8644,8 @@ class ViewRuntime(RuntimeTurnPort):
 
                 async def complete() -> None:
                     if hasattr(view, "handle_async_result"):
-                        await sync_to_async(view.handle_async_result)(
-                            task_name, result=result, error=None
+                        await call_async_result(
+                            view, view.handle_async_result, task_name, result=result, error=None
                         )
                     # Identity re-check INSIDE the lock (#1940): the handler await
                     # above is an unbounded wait during which the view can be torn
@@ -8679,8 +8679,12 @@ class ViewRuntime(RuntimeTurnPort):
 
                     async def complete_error() -> None:
                         if hasattr(view, "handle_async_result"):
-                            await sync_to_async(view.handle_async_result)(
-                                task_name, result=None, error=failure
+                            await call_async_result(
+                                view,
+                                view.handle_async_result,
+                                task_name,
+                                result=None,
+                                error=failure,
                             )
                         if self.view_instance is not view:
                             return
@@ -8800,7 +8804,9 @@ class ViewRuntime(RuntimeTurnPort):
                     handler = getattr(view, "handle_async_result", None)
                     if callable(handler):
                         try:
-                            await sync_to_async(handler)(task_name, result=result, error=error)
+                            await call_async_result(
+                                view, handler, task_name, result=result, error=error
+                            )
                         except Exception as exc:  # noqa: BLE001
                             from ._exposure_diagnostics import log_failure_for
 
