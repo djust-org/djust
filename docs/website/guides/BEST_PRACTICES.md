@@ -538,7 +538,7 @@ no bandwidth. Use it only if you call those helpers yourself.
 
 ### 4. Temporary assigns for append-only lists
 
-For collections that grow over time (chat messages, logs), use `temporary_assigns` to clear state after each render. Only new items are sent over the wire.
+For collections that grow over time (chat messages, logs), use `temporary_assigns` to clear state after each render. Only new items are sent over the wire. (This empties the context copy the server keeps, not the rendered tree it diffs against; see [Large LiveView state](#6-large-liveview-state).)
 
 ```python
 class ChatView(LiveView):
@@ -582,6 +582,35 @@ Use `dj-loading.*` attributes for zero-JS loading indicators:
 ```
 
 ---
+
+### 6. Large LiveView state
+
+The `Large LiveView state detected ... (threshold: 100KB)` warning measures the
+whole snapshot the state backend stores for a view, not just the attributes you
+assign. The snapshot holds three things, and the warning prints each one's size:
+
+| Part | What it is | Grows with |
+| --- | --- | --- |
+| context ("state") | every context key the template used, including render-only values and stream items | the rows and fields you pass to the template |
+| rendered tree | the page as last rendered, which the next turn diffs against | the HTML you render |
+| template | the template source | the template |
+
+What reduces each part, measured on the demo project with a 30-row page of about 2 KB of markup per row:
+
+- **Render fewer and leaner rows.** Paginate, filter in the query, and pass only
+  the fields the template prints. Five rows stored about a fifth of 30; rows
+  reduced to an id stored about a twelfth. This is the only change that
+  lowers both the context and the tree.
+- **`temporary_assigns`** empties the context copy after the next render (the
+  context part fell to about an eighth after the first event) but the tree keeps
+  the rows, because it is what the page looks like. It does not lower a snapshot
+  taken right after the first render.
+- **Streams** and **`get_render_only_context()`** do not lower the snapshot: the
+  rows stay in the context and in the tree. `get_render_only_context()` keeps a
+  value out of the *session* save, which is a different store.
+
+A view that mixes in `ThemeMixin` no longer adds the theme HTML to this
+snapshot; see [Reactive Theme Switching](components.md#reactive-theme-switching-with-liveview).
 
 ## Security
 
