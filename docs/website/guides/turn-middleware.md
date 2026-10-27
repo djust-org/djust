@@ -202,13 +202,46 @@ def _as_caller(user_id):
 - An `async def` handler or hook runs on the event loop and is not wrapped; its
   own `sync_to_async` calls are yours to scope. A `sync_safe` view renders on
   the loop, so its wrapper runs there too.
-- `LiveViewTestClient` enters the same steps, so a test of a handler that reads
-  rows runs inside the same scope as the socket: `send_event()` (`"event"`),
-  `send_push()` and `trigger_info()` (`"hook"`), and the callbacks and
-  `handle_async_result` calls that `render_async()` drains (`"async"`);
-  `LiveComponentTestClient.send_event()` is an `"event"` step too. The client
-  does not tick, so `handle_tick` is called by your own test.
+- `LiveViewTestClient` enters the same steps for **sync** code, so a test of a
+  handler that reads rows runs inside the same scope as the socket:
+  `send_event()` (`"event"`), `send_push()` and `trigger_info()` (`"hook"`), and
+  the callbacks and `handle_async_result` calls that `render_async()` drains
+  (`"async"`); `LiveComponentTestClient.send_event()` is an `"event"` step too.
+  An `async def` hook is run to completion unwrapped, as on the socket (inside a
+  running event loop, on a helper thread). The one gap: `send_event()` with an
+  `async def` handler still only calls it and drops the coroutine, so that test
+  does not run the handler at all. The client does not tick, so `handle_tick` is
+  called by your own test.
+- A `handle_async_result` (or, on the default tick, `handle_tick`) written as
+  `async def` is refused with `TypeError: sync_to_async can only be applied to
+  sync functions`, with or without a wrapper: both are called off the loop.
+- One entry per hop, not per task: a `start_async` callback and the
+  `handle_async_result` that receives its outcome are two entries. If the
+  wrapper's own exit raises after `handle_async_result` succeeded, the failure
+  is reported as the task's error and `handle_async_result` is called a second
+  time with `error=`. Keep the wrapper's exit from raising (let the
+  transaction's commit failure surface in the handler instead), or make the hook
+  safe to run twice.
 - Unset (the default), nothing is wrapped and nothing is paid.
+
+### Not wrapped
+
+These sync view hooks run on the worker thread through `sync_to_async` and do
+**not** enter the wrapper, so a per-turn scope is not open in them (tracked in
+[#3637](https://github.com/djust-org/djust/issues/3637)):
+
+- `get_object()` and `has_object_permission()`, in the mount-time and the
+  per-event object-permission check (`check_object_permission` /
+  `enforce_object_permission`). With a row-level-security scope in the wrapper
+  `get_object()` reads no rows here and the check **fails closed** as "Access
+  denied" for a caller who is allowed.
+- `on_mount` hooks, `connected()` and `disconnected()`.
+- `handle_cursor_move()`, `update_presence_heartbeat()` and
+  `get_presence_key()`.
+- The time-travel `replay_event` re-run of a handler.
+
+Until that lands, scope these yourself (for example open the same
+`transaction.atomic()` with the caller set inside `get_object()`).
 
 ## Hot path
 
