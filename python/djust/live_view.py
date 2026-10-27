@@ -188,6 +188,9 @@ _FRAMEWORK_INTERNAL_ATTRS: frozenset = frozenset(
         "_prev_context_refs",
         "_prev_context_immutables",
         "_prev_context_fingerprints",
+        "_djust_computed_cache",
+        "_djust_computed_deps",
+        "_djust_computed_lock",
         "_dirty_baseline",
         "_rust_render_timing",
         # Adaptive loop-cache bypass bookkeeping (#3071), written after a render.
@@ -1078,7 +1081,8 @@ class LiveView(
         if fingerprints_by_content(v):
             # Structural (#2664): ``self.items[0]["qty"] = 2`` is dirty;
             # a class-level component's State likewise (#2900).
-            return ("c", id(v), deep_fingerprint(v)[0])
+            fp, truncated = deep_fingerprint(v)
+            return ("c", id(v), object() if truncated else fp)
         return ("id", id(v))
 
     def _capture_dirty_baseline(self) -> None:

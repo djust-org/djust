@@ -3089,7 +3089,8 @@ def _context_changed_besides(view: Any, context: Dict[str, Any], name: str) -> O
         if key in skip:
             continue
         if isinstance(value, (dict, list, tuple)) or fingerprints_by_content(value):
-            if key not in prev_fps or prev_fps[key] != deep_fingerprint(value)[0]:
+            fp, truncated = deep_fingerprint(value)
+            if truncated or key not in prev_fps or prev_fps[key] != fp:
                 return str(key)
         elif isinstance(value, _IMMUTABLE_TYPES_FOR_SYNC):
             if key not in prev_immutables or prev_immutables[key] != value:
@@ -8088,7 +8089,8 @@ class ViewRuntime(RuntimeTurnPort):
         try:
             from .change_detection import deep_fingerprint
 
-            view._prev_context_fingerprints[name] = deep_fingerprint(context[name])[0]
+            fp, truncated = deep_fingerprint(context[name])
+            view._prev_context_fingerprints[name] = object() if truncated else fp
         except Exception:  # noqa: BLE001 — bookkeeping; a miss only costs a re-sync
             pass
         timing = getattr(rust_view, "get_render_timing", None)

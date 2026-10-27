@@ -51,6 +51,13 @@
     // leak its chart, and so JS.ext commands can find the instance for a
     // target element without reaching into the hook registry.
     const charts = new WeakMap();
+    // Track all raw host attributes, including presentation attributes used
+    // by Chart.js/plugins. Never retain parsed objects that the library may
+    // mutate; removed and empty attributes remain distinct.
+    const inputs = new WeakMap();
+    function rememberInputs(el) {
+        inputs.set(el, Array.from(el.attributes, (attr) => [attr.name, attr.value]));
+    }
 
     /** The user-supplied library, or null when they forgot to load it. */
     function resolveLib() {
@@ -103,6 +110,18 @@
             const chart = new Lib(ctx, cfg);
             charts.set(this.el, chart);
             this._chart = chart;
+            rememberInputs(this.el);
+        },
+
+        shouldUpdate() {
+            // Existing adapters may read external plugin/theme state. Only
+            // an explicitly opted-in chart promises attributes capture every
+            // dependency; callers can change dj-chart-revision to invalidate.
+            if (this.el.getAttribute('dj-chart-update') !== 'attributes') return true;
+            const previous = inputs.get(this.el);
+            if (!this._chart || !previous) return true; // retry late library loading
+            return this.el.attributes.length !== previous.length ||
+                previous.some(([name, value]) => this.el.getAttribute(name) !== value);
         },
 
         updated() {
@@ -122,6 +141,7 @@
                 chart.options = cfg.options;
             }
             chart.update();
+            rememberInputs(this.el);
         },
 
         destroyed() {
@@ -129,6 +149,7 @@
             if (!chart) return;
             chart.destroy();
             charts.delete(this.el);
+            inputs.delete(this.el);
             // Null the ref so a double lifecycle dispatch cannot
             // double-destroy (Chart.js throws on destroy-after-destroy).
             this._chart = null;
@@ -152,6 +173,8 @@
                 const chart = charts.get(el);
                 if (!chart || !args || !args.data) return;
                 chart.data = args.data;
+                // On the next server render, reapply the declared server data.
+                inputs.delete(el);
                 chart.update();
             });
         });

@@ -65,7 +65,10 @@ renders nothing). For those, assign a new value or call
 `self.set_changed_keys("rows")` to force a re-render — see the State
 Management API reference. A container so large it exceeds the
 fingerprint budget (20 000 nodes) is reported once per view class with
-the attribute name in the warning, and needs the same hatch.
+the attribute name in the warning. Its change detection and dependent
+computed values conservatively invalidate until the state is narrowed.
+That means a memoized computed value with an oversized dependency is
+recomputed on each access, and a no-op event can cause an extra render.
 
 **Skip the cache.** Use plain `@computed` (no args) when the
 computation is cheap enough that property semantics are fine — every

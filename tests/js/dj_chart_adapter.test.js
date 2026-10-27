@@ -148,15 +148,16 @@ describe('dj-chart adapter — lifecycle', () => {
 
     beforeEach(() => {
         const made = createDom(
-            `dj-hook-value-type='"bar"' ` +
+            `dj-chart-update="attributes" dj-hook-value-type='"bar"' ` +
             `dj-hook-value-data='{"labels":["a"],"datasets":[{"data":[1]}]}'`
         );
         dom = made.dom;
         calls = [];
         dom.window.Chart = makeFakeChartLib(calls);
         loadAdapter(dom);
-        // Ignore any mounting that client.js init did on its own; each test
-        // asserts on what its own driver call produced.
+        // Start from an unmounted state even if bootstrap already mounted the
+        // chart; tests then control its attributes and library before mounting.
+        dom.window.djust.destroyAllHooks();
         calls.length = 0;
     });
 
@@ -190,6 +191,120 @@ describe('dj-chart adapter — lifecycle', () => {
         expect(updates.length).toBeGreaterThan(0);
         // The live-Proxy re-read must have reached the instance.
         expect(updates[updates.length - 1].data.datasets[0].data).toEqual([1, 2]);
+    });
+
+    it('refreshes by default when a plugin depends on external state', () => {
+        let external = 'light';
+        const seen = [];
+        const made = createDom();
+        made.dom.window.Chart = function () {
+            this.update = () => seen.push(external);
+            this.destroy = () => {};
+        };
+        loadAdapter(made.dom);
+        made.dom.window.djust.mountHooks(made.dom.window.document);
+        external = 'dark';
+        made.dom.window.djust.updateHooks(made.dom.window.document);
+        expect(seen).toEqual(['dark']);
+    });
+
+    it('lets an opted-in chart invalidate an external dependency by revision', () => {
+        const el = dom.window.document.getElementById('c1');
+        el.setAttribute('dj-chart-update', 'attributes');
+        mount();
+        const hook = dom.window.djust.getHook(el);
+        expect(hook).not.toBeNull();
+        expect(String(hook.shouldUpdate)).toContain('dj-chart-update');
+        expect(hook._chart).toBeTruthy();
+        expect(calls.filter((c) => c.op === 'construct')).toHaveLength(1);
+        expect(hook.shouldUpdate()).toBe(false);
+        dom.window.djust.updateHooks(dom.window.document);
+        expect(calls.filter((c) => c.op === 'update')).toHaveLength(0);
+        el.setAttribute('dj-chart-revision', 'theme-dark');
+        dom.window.djust.updateHooks(dom.window.document);
+        expect(calls.filter((c) => c.op === 'update')).toHaveLength(1);
+    });
+
+    it('does not redraw for unrelated DOM updates or unchanged inputs', () => {
+        dom.window.document.getElementById('c1').setAttribute('dj-chart-update', 'attributes');
+        mount();
+        const node = dom.window.document.createElement('span');
+        node.textContent = 'changed';
+        dom.window.document.querySelector('[dj-root]').appendChild(node);
+        dom.window.djust.updateHooks(dom.window.document);
+        expect(calls.filter((c) => c.op === 'update')).toHaveLength(0);
+        setData('{"labels":["b"],"datasets":[{"data":[2]}]}');
+        dom.window.djust.updateHooks(dom.window.document);
+        expect(calls.filter((c) => c.op === 'update')).toHaveLength(1);
+        dom.window.djust.updateHooks(dom.window.document);
+        expect(calls.filter((c) => c.op === 'update')).toHaveLength(1);
+    });
+
+    it('retries mount when the library arrives after an earlier sweep', () => {
+        const made = createDom(`dj-hook-value-type='"bar"'`);
+        loadAdapter(made.dom);
+        made.dom.window.djust.mountHooks(made.dom.window.document);
+        const lateCalls = [];
+        made.dom.window.Chart = makeFakeChartLib(lateCalls);
+        made.dom.window.djust.updateHooks(made.dom.window.document);
+        expect(lateCalls.filter((c) => c.op === 'construct')).toHaveLength(1);
+    });
+
+    it('updates when canvas presentation attributes change', () => {
+        dom.window.document.getElementById('c1').setAttribute('dj-chart-update', 'attributes');
+        mount();
+        dom.window.document.getElementById('c1').setAttribute('width', '640');
+        dom.window.djust.updateHooks(dom.window.document);
+        expect(calls.filter((c) => c.op === 'update')).toHaveLength(1);
+    });
+
+    it('tracks data changes through incremental patches and full morphs', () => {
+        dom.window.document.getElementById('c1').setAttribute('dj-chart-update', 'attributes');
+        mount();
+        const el = dom.window.document.getElementById('c1');
+        el.setAttribute('dj-id', 'chart-1');
+        const data = '{"labels":["patch"],"datasets":[{"data":[3]}]}';
+        dom.window.djust._applySinglePatch({type:'SetAttr', d:'chart-1', path:[], key:'dj-hook-value-data', value:data});
+        dom.window.djust.updateHooks(dom.window.document);
+        expect(calls.filter((c) => c.op === 'update').at(-1).data.datasets[0].data).toEqual([3]);
+        const desired = el.cloneNode(false);
+        desired.setAttribute('dj-hook-value-data', '{"labels":["morph"],"datasets":[{"data":[4]}]}');
+        dom.window.djust.morphElement(el, desired);
+        dom.window.djust.updateHooks(dom.window.document);
+        expect(calls.filter((c) => c.op === 'update').at(-1).data.datasets[0].data).toEqual([4]);
+        dom.window.djust.updateHooks(dom.window.document);
+        expect(calls.filter((c) => c.op === 'update')).toHaveLength(2);
+    });
+
+    it('remounts a replaced canvas and destroys the old chart', () => {
+        mount();
+        const old = dom.window.document.getElementById('c1');
+        old.replaceWith(old.cloneNode(false));
+        dom.window.djust.updateHooks(dom.window.document);
+        expect(calls.filter((c) => c.op === 'construct')).toHaveLength(2);
+        expect(calls.filter((c) => c.op === 'destroy')).toHaveLength(1);
+        dom.window.djust.destroyAllHooks();
+        expect(calls.filter((c) => c.op === 'destroy')).toHaveLength(2);
+    });
+
+    it('destroys and remounts if a new canvas reuses the old hook ID', () => {
+        mount();
+        const old = dom.window.document.getElementById('c1');
+        const replacement = old.cloneNode(false);
+        replacement._djustHookId = old._djustHookId;
+        old.replaceWith(replacement);
+        dom.window.djust.updateHooks(dom.window.document);
+        expect(calls.filter((c) => c.op === 'construct')).toHaveLength(2);
+        expect(calls.filter((c) => c.op === 'destroy')).toHaveLength(1);
+    });
+
+    it('reapplies server data after an explicit chart_set_data command', async () => {
+        dom.window.document.getElementById('c1').setAttribute('dj-chart-update', 'attributes');
+        mount();
+        const el = dom.window.document.getElementById('c1');
+        await dom.window.djust.js._executeOps([['ext.chart_set_data', {data:{labels:['x'], datasets:[{data:[9]}]}}]], el);
+        dom.window.djust.updateHooks(dom.window.document);
+        expect(calls.filter((c) => c.op === 'update').at(-1).data.datasets[0].data).toEqual([1]);
     });
 
     it('destroyed() destroys the instance exactly once', () => {

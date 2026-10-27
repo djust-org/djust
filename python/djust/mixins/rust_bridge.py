@@ -952,6 +952,9 @@ class RustBridgeMixin:
                             converted_by_fp[key] = converted
                     else:
                         fp, truncated = deep_fingerprint(value)
+                    if truncated:
+                        # An incomplete fingerprint cannot prove equality.
+                        fp = object()
                     new_fps[key] = fp
                     if truncated:
                         warn_fingerprint_truncated(type(self), key, value)

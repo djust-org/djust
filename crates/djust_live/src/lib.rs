@@ -648,6 +648,16 @@ impl RustLiveViewBackend {
     /// Update the template source while preserving VDOM state
     /// This allows dynamic templates to change without losing diffing capability
     fn update_template(&mut self, new_template_source: String) {
+        // An unchanged source keeps the previous HTML and text-node index,
+        // allowing a text-only VDOM update. Still rerender the full template:
+        // custom filters and other external inputs can change even when no
+        // tracked context key does. Loop fragments have the same constraint.
+        if self.template_source == new_template_source {
+            self.node_html_cache.clear();
+            self.fragment_text_map = None;
+            self.loop_render_cache.clear();
+            return;
+        }
         self.template_source = new_template_source;
         self.node_html_cache = Vec::new(); // Invalidate partial render cache
         self.last_html = None; // Invalidate text fast path cache
@@ -7530,6 +7540,33 @@ mod fast_path_flag_tests {
         let patches = patches.expect("a diff render returns patches");
         assert!(patches.contains("SetText"), "patches: {patches}");
         assert!(!patches.contains("SetAttr"), "patches: {patches}");
+    }
+
+    #[test]
+    fn identical_template_source_keeps_the_text_region_fast_path() {
+        let mut view = mounted();
+        view.update_template(TEMPLATE.to_string());
+        view.update_state_rust(state("v1", 0, 107));
+        view.set_changed_keys(vec!["label".to_string()]);
+        let (html, patches, _version) = view.render_with_diff_detached().expect("re-render");
+        assert!(html.contains("v1"));
+        assert!(patches.expect("patches").contains("SetText"));
+        assert_eq!(timing(&view, "fast_path"), FAST_PATH_TEXT_REGION);
+    }
+
+    #[test]
+    fn changed_template_source_still_invalidates_the_render_cache() {
+        let mut view = mounted();
+        let changed = TEMPLATE.replace("<p>{{ label }}</p>", "<strong>{{ label }}</strong>");
+        view.update_template(changed);
+        view.update_state_rust(state("new", 0, 107));
+        view.set_changed_keys(vec!["label".to_string()]);
+        let (html, patches, _version) = view.render_with_diff_detached().expect("re-render");
+        assert!(html.contains("<strong"), "{html}");
+        assert!(html.contains("new"), "{html}");
+        assert!(!html.contains("<p>v0</p>"), "{html}");
+        assert!(patches.is_some());
+        assert_eq!(timing(&view, "fast_path"), FAST_PATH_NONE);
     }
 
     // #2898: fragments and the HTML byte diff are RAW html; a SetText carries

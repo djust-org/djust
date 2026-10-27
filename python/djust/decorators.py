@@ -876,7 +876,8 @@ def computed(*deps: Any) -> Any:
                 elif fingerprints_by_content(v):
                     # Structural (#2664): an in-place edit of a dep invalidates;
                     # a class-level component's State likewise (#2900).
-                    parts.append((name, "c", id(v), deep_fingerprint(v)[0]))
+                    fp, truncated = deep_fingerprint(v)
+                    parts.append((name, "c", id(v), object() if truncated else fp))
                 else:
                     parts.append((name, "id", id(v)))
             return tuple(parts)

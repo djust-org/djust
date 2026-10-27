@@ -461,7 +461,7 @@ def _snapshot_assigns(view_instance: Any) -> Dict[str, Any]:
         # ``deep_fingerprint`` walks dict/list/tuple/set down to the leaves
         # and shares no reference with the state, so ``columns["done"]
         # .append(card)`` changes the post-snapshot. The budget bounds the
-        # cost; past it the remainder collapses to id() and we say so once.
+        # cost; a truncated value is conservatively treated as changed.
         vid = id(v)
         # Structural FIRST: ``_IMMUTABLE_TYPES`` holds ``tuple``, whose items
         # need not be immutable (``([1],)``), so it must be walked before the
@@ -474,7 +474,7 @@ def _snapshot_assigns(view_instance: Any) -> Dict[str, Any]:
             # walked as its State: the wrapper's id() never changes.
             content_fp, truncated = deep_fingerprint(v)
             size = len(v) if isinstance(v, CONTAINER_TYPES) else None
-            snapshot[k] = (vid, size, content_fp)
+            snapshot[k] = (vid, size, object() if truncated else content_fp)
             if truncated:
                 warn_fingerprint_truncated(type(view_instance), k, v)
         elif isinstance(v, _IMMUTABLE_TYPES):

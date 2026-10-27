@@ -1,0 +1,1 @@
+- **Bound large-state fingerprint work and avoid unnecessary rendering work.** Oversized fingerprints conservatively invalidate, unchanged dynamic templates retain safe text-update state, and widget hooks can opt out of updates when their inputs are unchanged. The Chart.js adapter offers this opt-in and cleans up replaced canvases.

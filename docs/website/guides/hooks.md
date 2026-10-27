@@ -85,10 +85,20 @@ window.djust.hooks = Object.assign(window.djust.hooks || {}, {
 |----------|------------|
 | `mounted()` | Element first appears in the DOM. Initialize libraries, bind listeners. |
 | `updated()` | After a server re-render patches the DOM. Sync libraries with new data. |
+| `shouldUpdate()` | Optional synchronous predicate before `updated()`; returning `false` skips that callback only. |
 | `beforeUpdate()` | Before an incremental patch batch or full HTML morph, once per update within the updated root (including scoped child updates). Save state that would be lost (scroll position, selection). |
 | `destroyed()` | Element removed from the DOM. Clean up libraries, observers, timers. |
 | `disconnected()` | WebSocket connection drops. Show offline indicators. |
 | `reconnected()` | WebSocket restored after disconnect. Refresh state. |
+
+Hooks normally receive `updated()` after every update, including unrelated
+changes. For an expensive widget, `shouldUpdate()` can compare its relevant
+inputs and return `false` when no work is needed. Compare raw attribute values
+before reading `this.values` if parsing large JSON payloads is costly. This
+opt-in does not suppress `beforeUpdate()`, removal cleanup, or connection
+callbacks. Only synchronous `false` skips the update; errors and promises
+fail open. A widget must account for every dependency it uses, including any
+changes to children or external state, before opting in.
 
 ### Async lifecycle callbacks (v0.8.6+)
 

@@ -94,6 +94,56 @@ describe('hooks', () => {
             expect(updatedFn).toHaveBeenCalledTimes(1);
         });
 
+        it('lets hooks explicitly skip unchanged updates without skipping cleanup', () => {
+            const { window, document } = createEnv('<div id="widget" dj-hook="Widget" dj-view="test"></div>');
+            const updated = vi.fn();
+            const destroyed = vi.fn();
+            const beforeUpdate = vi.fn();
+            let changed = false;
+            window.djust.hooks = { Widget: { shouldUpdate() { return changed; }, beforeUpdate, updated, destroyed } };
+            window.djust.mountHooks(document);
+            window.djust.beforeUpdateHooks(document);
+            window.djust.updateHooks(document);
+            expect(beforeUpdate).toHaveBeenCalledTimes(1);
+            expect(updated).not.toHaveBeenCalled();
+            changed = true;
+            window.djust.updateHooks(document);
+            expect(updated).toHaveBeenCalledTimes(1);
+            document.querySelector('#widget').remove();
+            window.djust.updateHooks(document);
+            expect(destroyed).toHaveBeenCalledTimes(1);
+        });
+
+        it('fails open when a predicate returns a promise', () => {
+            const { window, document } = createEnv('<div dj-hook="Widget"></div>');
+            const updated = vi.fn();
+            window.djust.hooks = { Widget: { async shouldUpdate() { return false; }, updated } };
+            window.djust.mountHooks(document);
+            window.djust.updateHooks(document);
+            expect(updated).toHaveBeenCalledTimes(1);
+        });
+
+        it('destroys the old hook and mounts the new one when its name changes', () => {
+            const { window, document } = createEnv('<div id="widget" dj-hook="A"></div>');
+            const destroyed = vi.fn();
+            const mounted = vi.fn();
+            window.djust.hooks = { A: { destroyed }, B: { mounted } };
+            window.djust.mountHooks(document);
+            document.querySelector('#widget').setAttribute('dj-hook', 'B');
+            window.djust.updateHooks(document);
+            expect(destroyed).toHaveBeenCalledTimes(1);
+            expect(mounted).toHaveBeenCalledTimes(1);
+        });
+
+        it('runs updated if a predicate throws', () => {
+            const { window, document } = createEnv('<div dj-hook="Widget"></div>');
+            const updated = vi.fn();
+            window.djust.hooks = { Widget: { shouldUpdate() { throw new Error('oops'); }, updated } };
+            window.djust.mountHooks(document);
+            window.djust.updateHooks(document);
+            expect(updated).toHaveBeenCalledTimes(1);
+        });
+
         it('calls destroyed() for removed elements', () => {
             const { window, document } = createEnv('<div dj-hook="MyHook" dj-view="test"></div>');
             const destroyedFn = vi.fn();
