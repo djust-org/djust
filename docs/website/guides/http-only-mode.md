@@ -99,6 +99,10 @@ So:
 
 A view that declares [explicit exposure](../state/explicit-exposure.md) is rebuilt differently: `mount()` runs on each POST and only the declared server fields are restored.
 
+Whenever the fallback runs `mount()` it then runs `handle_params(params, uri)`, as the GET and the socket mount do, with the POST's own query string (the browser posts to `window.location.href`, so `?scope=mine` is on the request). A page that reads its URL there meets the event with the state the browser shows, and the answer is a diff against that page, not against `mount()`'s defaults. Over restored state it does not run: the saved state already holds what the previous request set.
+
+`start_async()` and `@background` work runs inside the request, before the answer is rendered, because the fallback has one response and no later frame to deliver a result. That covers work `mount()` or `handle_params()` queued (a page that loads its rows after its first render, `assign_async`) and work the handler queued. The handler's loading state is therefore never rendered on this transport: the one answer holds the result. Each task goes through the same dispatch the socket uses, so `async def` callbacks, `cancel_async()` and `handle_async_result(name, result=..., error=...)` behave as they do there; a failing task is logged and handed to `handle_async_result` rather than failing the request. Work that queues more work runs in further rounds, up to eight, and anything still queued after that is dropped with a warning. A slow task holds the request open for as long as it runs, so keep fallback-reachable work short or use the WebSocket or SSE transport.
+
 A `live_redirect()` or `live_patch()` that a handler queues is returned in the answer's `_navigation` list, in the shape of the WebSocket `navigation` frame, and the client applies it. After a `live_redirect()` nothing is rendered or saved for that request, so a handler can call `logout()` and then redirect. The flip side: a handler that changes state and then calls `live_redirect()` back to the same view's URL does not keep that change over the HTTP fallback, because the state is not saved. A `live_patch()` renders as usual and carries its frame beside the patches.
 
 ### Keeping view state out of the session
@@ -120,6 +124,8 @@ With `False`, djust neither writes nor reads those keys on any path:
 - WebSocket and SSE turns save nothing of the view in the session, even for a view with `enable_state_snapshot = True`, and a mount never restores from it. The signed client `state_snapshot` that such a view sends back on reconnect is not stored in the session, so it still works.
 
 The trade-off: state that lives only on the view resets on each fallback POST, because `mount()` runs again. A "load more" offset, a form draft or a selected tab that a handler set on `self` is back at its `mount()` value on the next POST. Keep such state somewhere `mount()` can read it again (the URL, the database), or use the WebSocket or SSE transport, where the one view instance stays alive between events.
+
+So a form must post what identifies its target. Nothing of the page's open UI state survives between POSTs: a dialog that was open is closed again on the next request, and its submit meets no dialog. Put the target in the form (hidden fields, or `dj-value-*` attributes on the button) and let the handler read it from its parameters, or reopen the dialog from them before it acts. The URL is read again by `handle_params()` on every POST, so state that lives in the query string (a filter, a scope, `?tab=`) needs nothing extra.
 
 The setting does not touch state you opt into elsewhere: a view's `persist="server"` fields under [explicit exposure](../state/explicit-exposure.md) and a [sticky child that opted in to state persistence](sticky-child-persistence.md) still use the session. A value that is not a bool is reported by system check `djust.C027`.
 
