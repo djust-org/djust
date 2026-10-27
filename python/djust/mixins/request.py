@@ -1707,7 +1707,6 @@ class RequestMixin:
                 # @rate_limit check, so it must not start the page's reads.
                 if mount_work_pending:
                     _run_http_background_work(self)
-                mount_work_pending = False
                 from ..components._interactive import DropdownMenu
 
                 if isinstance(owner, DropdownMenu) and event_name == "observe_toggle":
