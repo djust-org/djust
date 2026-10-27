@@ -541,7 +541,7 @@ class RustBridgeMixin:
         rust_view = getattr(self, "_rust_view", None)
         if not cache_key or rust_view is None:
             return
-        from ..state_backend import get_backend
+        from ..state_backends import get_backend
 
         refresh = getattr(get_backend(), "refresh", None)
         if callable(refresh):

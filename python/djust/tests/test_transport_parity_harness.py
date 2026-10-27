@@ -206,8 +206,8 @@ async def _run_ws(turn: str) -> Dict[str, Any]:
 async def _run_sse(turn: str) -> Dict[str, Any]:
     sid = "22222222-2222-2222-2222-222222222222"
     _sse_sessions.pop(sid, None)
-    rf = RequestFactory()
-    get = rf.get(f"/djust/sse/{sid}/?view={VIEW_PATH}", HTTP_ORIGIN=ORIGIN)
+    rf = RequestFactory(HTTP_HOST="example.com")
+    get = rf.get(f"/djust/sse/{sid}/?view={VIEW_PATH}", HTTP_ORIGIN=ORIGIN, secure=True)
     get.user = AnonymousUser()
     await DjustSSEStreamView().get(get, session_id=sid)
     session = _sse_sessions[sid]
@@ -229,6 +229,7 @@ async def _run_sse(turn: str) -> Dict[str, Any]:
             data=json.dumps({"type": "event", "event": turn, "params": {}, "ref": 1}),
             content_type="application/json",
             HTTP_ORIGIN=ORIGIN,
+            secure=True,
         )
         post.user = MagicMock(is_authenticated=True, pk=7)
         response = await DjustSSEMessageView().post(post, session_id=sid)

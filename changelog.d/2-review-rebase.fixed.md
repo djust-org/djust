@@ -1,0 +1,1 @@
+- Preserve main's object serialization and render-cache refresh after the 2.0 removals: use mandatory JIT serialization and the canonical state-backend module. Update the transport parity harness to send same-origin HTTPS requests under the current origin policy.

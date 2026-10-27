@@ -147,7 +147,6 @@ def _jit_template_content(view: Any) -> Optional[str]:
     return cast(Optional[str], content)
 
 
-
 # A `_full_template` that is nothing but `{% extends "x" %}`: the child's
 # real source lives behind the loader, so this carries zero variable paths.
 _EXTENDS_STUB_RE = re.compile(r"^\s*\{%\s*extends\s+[^%]*%\}\s*$")
@@ -166,8 +165,6 @@ def _serialize_object_by_paths(value: Any, paths: List[str]) -> Any:
     if value is None or isinstance(value, _LEAF_TYPES):
         return value
     if not paths:
-        return normalize_django_value(value)
-    if not JIT_AVAILABLE:
         return normalize_django_value(value)
     key = (type(value), tuple(sorted(set(paths))))
     serializer = _object_serializer_cache.get(key)
