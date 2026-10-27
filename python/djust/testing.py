@@ -73,6 +73,37 @@ def _run_step(view: Any, step: str, fn: Callable[..., Any], /, *args: Any, **kwa
     return run_sync_step(view, step, fn, *args, **kwargs)
 
 
+def _call_hook(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+    """``call_hook_sync`` that also works inside a running event loop.
+
+    An ``async def`` hook is run to completion by ``async_to_sync``, which
+    refuses to run in a thread that already has a running loop (a test written
+    as ``async def`` with ``pytest-asyncio``). There the coroutine runs on a
+    helper thread with its own loop instead, with the caller's context
+    variables, so the hook still runs and nothing is left un-awaited.
+    """
+    import asyncio
+
+    from ._view_hooks import call_hook_sync, is_async_hook
+
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return call_hook_sync(fn, *args, **kwargs)
+    if not is_async_hook(fn):
+        return call_hook_sync(fn, *args, **kwargs)
+
+    import concurrent.futures
+    import contextvars
+
+    async def run() -> Any:
+        return await fn(*args, **kwargs)
+
+    context = contextvars.copy_context()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(context.run, asyncio.run, run()).result()
+
+
 class NoHandlerFoundError(Exception):
     """Raised by :meth:`LiveViewTestClient.send_event` when no handler exists
     for the requested event name (#2823).
@@ -410,7 +441,6 @@ class LiveViewTestClient:
         if not self._mounted or not self.view_instance:
             raise RuntimeError("View not mounted. Call client.mount() first.")
 
-        from ._view_hooks import call_hook_sync
         from .websocket import LiveViewConsumer
 
         state_before = self.get_state()
@@ -426,7 +456,7 @@ class LiveViewTestClient:
                 handler_fn, kwargs = hook
                 # As the consumer's ``call_hook``: the ``hook`` step, and an
                 # ``async def`` push handler runs to completion.
-                call_hook_sync(handler_fn, **kwargs)
+                _call_hook(handler_fn, **kwargs)
         except Exception as e:
             error = str(e)
         duration_ms = (time.perf_counter() - start_time) * 1000
@@ -1095,14 +1125,12 @@ class LiveViewTestClient:
             raise AttributeError(
                 f"{type(self.view_instance).__name__} does not define handle_info()."
             )
-        from ._view_hooks import call_hook_sync
-
         state_before = self.get_state()
         start_time = time.perf_counter()
         error = None
         try:
             # As the consumer's ``call_hook``: the ``hook`` step.
-            call_hook_sync(handler, message)
+            _call_hook(handler, message)
         except Exception as exc:
             error = str(exc)
         duration_ms = (time.perf_counter() - start_time) * 1000

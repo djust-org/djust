@@ -74,6 +74,12 @@ async def call_async_result(
     """
     from .sync_turn import sync_step
 
+    if is_async_hook(handler):
+        # Not wrapped, as ``call_hook`` and ``run_async_callback`` do not wrap an
+        # ``async def``: ``sync_to_async`` refuses it with the same TypeError it
+        # raises with no wrapper configured, instead of the wrapper's
+        # ``functools.wraps`` shim hiding it and dropping the coroutine.
+        return await sync_to_async(handler)(name, **outcome)
     return await sync_to_async(sync_step(view, "async", handler))(name, **outcome)
 
 
@@ -85,6 +91,9 @@ async def call_tick(view: Any) -> Any:
     """
     from .sync_turn import sync_step
 
+    if is_async_hook(view.handle_tick):
+        # See call_async_result: refused loudly, with or without a wrapper.
+        return await sync_to_async(view.handle_tick)()
     return await sync_to_async(sync_step(view, "tick", view.handle_tick))()
 
 
