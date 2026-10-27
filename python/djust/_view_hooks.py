@@ -61,6 +61,33 @@ async def call_hook(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
     return result
 
 
+async def call_async_result(
+    view: Any, handler: Callable[..., Any], name: str, **outcome: Any
+) -> Any:
+    """Call ``view``'s ``handle_async_result`` off the loop, as an ``async`` step.
+
+    The one place the framework runs that hook from async code, so the
+    ``sync_turn_wrapper`` (``djust.sync_turn``) sees it on every transport and
+    for every owner (a root view, an embedded child, a sticky child). ``handler``
+    is the view's bound ``handle_async_result``; ``outcome`` is ``result=`` /
+    ``error=`` (#3625).
+    """
+    from .sync_turn import sync_step
+
+    return await sync_to_async(sync_step(view, "async", handler))(name, **outcome)
+
+
+async def call_tick(view: Any) -> Any:
+    """Call ``view.handle_tick`` off the loop, as a ``tick`` step (#3625).
+
+    The offloaded tick (``worker_threads``) runs ``handle_tick`` inside its own
+    sync hop and enters the step there with ``run_sync_step`` instead.
+    """
+    from .sync_turn import sync_step
+
+    return await sync_to_async(sync_step(view, "tick", view.handle_tick))()
+
+
 def call_hook_sync(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
     """Call ``fn`` from sync code, running an async hook to completion."""
     if is_async_hook(fn):

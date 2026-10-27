@@ -55,6 +55,24 @@ from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple, Type
 from django.test import RequestFactory
 
 
+def _run_step(view: Any, step: str, fn: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Any:
+    """Call ``fn`` the way the consumer does, inside its ``sync_turn_wrapper`` step.
+
+    A sync callable runs inside ``LIVEVIEW_CONFIG["sync_turn_wrapper"]`` (a
+    no-op when none is configured); an ``async def`` one is called as is,
+    because the consumer runs it on the loop, unwrapped (``djust.sync_turn``).
+    Without this a test of a handler that reads rows runs without the scope the
+    socket and the HTTP fallback both provide (#3625).
+    """
+    from ._view_hooks import is_async_hook
+
+    if is_async_hook(fn):
+        return fn(*args, **kwargs)
+    from .sync_turn import run_sync_step
+
+    return run_sync_step(view, step, fn, *args, **kwargs)
+
+
 class NoHandlerFoundError(Exception):
     """Raised by :meth:`LiveViewTestClient.send_event` when no handler exists
     for the requested event name (#2823).
@@ -341,7 +359,7 @@ class LiveViewTestClient:
         start_time = time.perf_counter()
         error = None
         try:
-            handler(*call_args, **call_kwargs)
+            _run_step(self.view_instance, "event", handler, *call_args, **call_kwargs)
         except Exception as e:
             error = str(e)
 
@@ -392,6 +410,7 @@ class LiveViewTestClient:
         if not self._mounted or not self.view_instance:
             raise RuntimeError("View not mounted. Call client.mount() first.")
 
+        from ._view_hooks import call_hook_sync
         from .websocket import LiveViewConsumer
 
         state_before = self.get_state()
@@ -405,7 +424,9 @@ class LiveViewTestClient:
                 error = "Push handler %r is not callable by server push" % handler
             elif hook is not None:
                 handler_fn, kwargs = hook
-                handler_fn(**kwargs)
+                # As the consumer's ``call_hook``: the ``hook`` step, and an
+                # ``async def`` push handler runs to completion.
+                call_hook_sync(handler_fn, **kwargs)
         except Exception as e:
             error = str(e)
         duration_ms = (time.perf_counter() - start_time) * 1000
@@ -916,7 +937,8 @@ class LiveViewTestClient:
         has_handler = hasattr(self.view_instance, "handle_async_result")
         for name, (callback, args, kwargs) in pending:
             try:
-                result = callback(*args, **kwargs)
+                # The ``async`` step, as ``run_async_callback`` enters it.
+                result = _run_step(self.view_instance, "async", callback, *args, **kwargs)
                 if inspect.iscoroutine(result):
                     result = async_to_sync(_await_coro)(result)
             except Exception as exc:
@@ -925,13 +947,27 @@ class LiveViewTestClient:
                 # handler chooses to swallow the exception (e.g. set an error
                 # attribute on the view), the test sees that state.
                 if has_handler:
-                    self.view_instance.handle_async_result(name, result=None, error=exc)
+                    _run_step(
+                        self.view_instance,
+                        "async",
+                        self.view_instance.handle_async_result,
+                        name,
+                        result=None,
+                        error=exc,
+                    )
                 raise
             else:
                 # Success path: invoke handle_async_result so tests see the
                 # same post-callback state that a WS client would see.
                 if has_handler:
-                    self.view_instance.handle_async_result(name, result=result, error=None)
+                    _run_step(
+                        self.view_instance,
+                        "async",
+                        self.view_instance.handle_async_result,
+                        name,
+                        result=result,
+                        error=None,
+                    )
 
     def follow_redirect(self) -> "LiveViewTestClient":
         """After a handler queued a ``live_redirect``, mount the destination.
@@ -1059,11 +1095,14 @@ class LiveViewTestClient:
             raise AttributeError(
                 f"{type(self.view_instance).__name__} does not define handle_info()."
             )
+        from ._view_hooks import call_hook_sync
+
         state_before = self.get_state()
         start_time = time.perf_counter()
         error = None
         try:
-            handler(message)
+            # As the consumer's ``call_hook``: the ``hook`` step.
+            call_hook_sync(handler, message)
         except Exception as exc:
             error = str(exc)
         duration_ms = (time.perf_counter() - start_time) * 1000
@@ -1159,7 +1198,7 @@ class LiveComponentTestClient:
 
         state_before = self.get_state()
         started = time.perf_counter()
-        handler(**params)
+        _run_step(component, "event", handler, **params)
         duration_ms = (time.perf_counter() - started) * 1000
 
         result = {
