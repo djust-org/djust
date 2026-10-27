@@ -316,6 +316,16 @@ _loaded_subsets: Dict[tuple, Any] = {}
 # (#2668 ratchet, 1032 → 1031). Ownership + presence is the skip condition.
 _tag_owner: Dict[str, str] = {}
 _filter_owner: Dict[str, str] = {}
+# Tag names a library registers that djust already provides (`_may_override`
+# refused them): library LABEL → those names. The library does not own them,
+# so they are not in `_tag_owner`, and `_still_bridged` must not look for the
+# library's entry in the registry, because the built-in holds the name. That
+# probe failed on every `{% load %}`, so the library was bridged again each
+# time, logged each refusal again and moved the registry generation (N-47).
+_refused_tags: Dict[str, Set[str]] = {}
+
+#: (library label, tag name) refusals already warned about (N-47).
+_warned_refused_tags: Set[Tuple[str, str]] = set()
 
 
 # Weak references keep node-level engine selection from extending backend lifetime.
@@ -724,9 +734,14 @@ def _still_bridged(label: str, library: Any, module: str) -> bool:
     from djust._rust import registry_entry_is_local
 
     native = tuple(_NATIVE_SCOPE_TAGS.get(module, ())) + tuple(_NATIVE_TAG_SKIPS.get(module, ()))
+    refused_tags = _engine_state("_refused_tags", _refused_tags).get(label, ())
     for name in library.tags:
         if name in native:
             continue
+        if name in refused_tags:
+            if _may_override(name):
+                return False  # the built-in is gone: bridge the library's version
+            continue  # still djust's: the library's version is not bridged (N-47)
         if _engine_state("_tag_owner", _tag_owner).get(name) != label:
             return False  # another library registered this name since
         if name in _RAW_BLOCK_TAGS:
@@ -776,16 +791,21 @@ def _bridge_library(label: str, library: Any) -> None:
     _arm_scope_tags(module)
     bridge_library_filters(library, refuse=refused_filters(module))
     native = tuple(_NATIVE_SCOPE_TAGS.get(module, ())) + tuple(_NATIVE_TAG_SKIPS.get(module, ()))
+    refused_tags = _engine_state("_refused_tags", _refused_tags).setdefault(label, set())
     for name, compile_func in library.tags.items():
         if name in _RAW_BLOCK_TAGS:
-            _bridge_raw_block_tag(label, name, compile_func)
+            bridged = _bridge_raw_block_tag(label, name, compile_func)
         elif name in _BESPOKE_BLOCK_TAGS:
-            _bridge_bespoke_block_tag(label, name)
+            bridged = _bridge_bespoke_block_tag(label, name)
         elif name in native:
             continue
         else:
-            _bridge_tag(label, name, compile_func)
-        _engine_state("_tag_owner", _tag_owner)[name] = label
+            bridged = _bridge_tag(label, name, compile_func)
+        if bridged:
+            refused_tags.discard(name)
+            _engine_state("_tag_owner", _tag_owner)[name] = label
+        else:
+            refused_tags.add(name)
     if module in _DJUST_TAGS_BRIDGED:
         # djust's own bridged tags share one RenderContext per render (#3044).
         owned = _engine_state("_owned_tags", _owned_tags)
@@ -931,7 +951,7 @@ def _arm_scope_tags(module: str) -> None:
     arm_scope_tags(list(names))
 
 
-def _bridge_raw_block_tag(label: str, name: str, compile_func: Callable[..., Any]) -> None:
+def _bridge_raw_block_tag(label: str, name: str, compile_func: Callable[..., Any]) -> bool:
     """Register a raw block-consuming tag through the raw-body kind (#2558).
 
     The collision policy is the SAME ``_may_override`` rule the inline
@@ -945,13 +965,8 @@ def _bridge_raw_block_tag(label: str, name: str, compile_func: Callable[..., Any
     even when the compile function is shared.
     """
     if not _may_override(name):
-        logger.warning(
-            "Template library '%s' registers tag '%s', which djust already provides; "
-            "the library's version is not bridged (the built-in wins process-wide).",
-            label,
-            name,
-        )
-        return
+        _warn_refused(label, name)
+        return False
     try:
         from djust._rust import register_raw_block_tag_handler, unregister_tag_handler
     except ImportError:
@@ -961,7 +976,7 @@ def _bridge_raw_block_tag(label: str, name: str, compile_func: Callable[..., Any
             name,
             label,
         )
-        return
+        return True
     handler = _engine_state("_handlers", _handlers).get(compile_func)
     if not isinstance(handler, LibraryRawBlockTagHandler) or handler.end_name != "end" + name:
         handler = LibraryRawBlockTagHandler(label, name, compile_func)
@@ -969,18 +984,15 @@ def _bridge_raw_block_tag(label: str, name: str, compile_func: Callable[..., Any
     register_raw_block_tag_handler(name, handler.end_name, handler)
     unregister_tag_handler(name)
     _engine_state("_owned_tags", _owned_tags)[name] = (label, handler)
+    return True
 
 
-def _bridge_tag(label: str, name: str, compile_func: Callable[..., Any]) -> None:
+def _bridge_tag(label: str, name: str, compile_func: Callable[..., Any]) -> bool:
+    """Register one library tag; ``False`` when djust already provides the name."""
     kind = _classify(compile_func)
     if not _may_override(name):
-        logger.warning(
-            "Template library '%s' registers tag '%s', which djust already provides; "
-            "the library's version is not bridged (the built-in wins process-wide).",
-            label,
-            name,
-        )
-        return
+        _warn_refused(label, name)
+        return False
     try:
         from djust._rust import (
             register_block_tag_handler,
@@ -995,7 +1007,7 @@ def _bridge_tag(label: str, name: str, compile_func: Callable[..., Any]) -> None
             name,
             label,
         )
-        return
+        return True
     handler = _engine_state("_handlers", _handlers).get(compile_func)
     if kind == "simple_block_tag":
         # Per-NAME, not per-compile-function (#2558): decorator aliases
@@ -1046,6 +1058,20 @@ def _bridge_tag(label: str, name: str, compile_func: Callable[..., Any]) -> None
         register_tag_handler(name, handler)
         unregister_block_tag_handler(name)
     _engine_state("_owned_tags", _owned_tags)[name] = (label, handler)
+    return True
+
+
+def _warn_refused(label: str, name: str) -> None:
+    """Warn once per process that ``label``'s ``name`` tag is not bridged."""
+    if (label, name) in _warned_refused_tags:
+        return
+    _warned_refused_tags.add((label, name))
+    logger.warning(
+        "Template library '%s' registers tag '%s', which djust already provides; "
+        "the library's version is not bridged (the built-in wins process-wide).",
+        label,
+        name,
+    )
 
 
 def _may_override(name: str) -> bool:
@@ -1880,29 +1906,25 @@ def _resolve_cache_operand(token: str, context: Dict[str, Any]) -> Any:
     return _parser([]).compile_filter(token.strip()).resolve(ctx)
 
 
-def _bridge_bespoke_block_tag(label: str, name: str) -> None:
+def _bridge_bespoke_block_tag(label: str, name: str) -> bool:
     """Register one of :data:`_BESPOKE_BLOCK_TAGS` (#2517).
 
     Same collision policy as every other bridge path: a name djust itself owns
     is never displaced.
     """
     if not _may_override(name):
-        logger.warning(
-            "Template library '%s' registers tag '%s', which djust already provides; "
-            "the library's version is not bridged (the built-in wins process-wide).",
-            label,
-            name,
-        )
-        return
+        _warn_refused(label, name)
+        return False
     try:
         from djust._rust import register_block_tag_handler, unregister_tag_handler
     except ImportError:  # pragma: no cover — the extension is a hard dependency
         logger.warning("djust._rust extension not available; '%s' not bridged", name)
-        return
+        return True
     handler = CacheTagHandler()
     register_block_tag_handler(name, _BESPOKE_BLOCK_TAGS[name], handler)
     unregister_tag_handler(name)
     _engine_state("_owned_tags", _owned_tags)[name] = (label, handler)
+    return True
 
 
 class LibraryRawBlockTagHandler:
