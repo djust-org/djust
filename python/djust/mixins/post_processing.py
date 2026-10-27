@@ -100,7 +100,9 @@ def _read_debug_attr(view: Any, name: str) -> "tuple[Any, Dict[str, Any] | None]
             static = inspect.getattr_static(view, name)
         except AttributeError:
             static = _MISSING
-        if isinstance(static, _property_types()):
+        if isinstance(static, _property_types()) or getattr(
+            static, "_djust_framework_derived", False
+        ):
             return _MISSING, {
                 "name": name,
                 "type": "property",

@@ -263,6 +263,30 @@ def _contract_error_response() -> JsonResponse:
     )
 
 
+def _view_supplies(view: Any, key: str) -> bool:
+    """Whether ``view`` itself provides ``key``, so a processor value must not replace it.
+
+    ``hasattr`` is not enough: a framework-derived class attribute (the marker
+    ``get_context_data`` already honours, ``_djust_framework_derived``) answers
+    ``hasattr`` but is deliberately NOT collected into the context, so the
+    processor's value is the only copy of that name the render would get.
+    ``ThemeMixin.theme_head`` is one (#3626). Such an attribute is injectable
+    only when it is a non-data descriptor, which an instance assignment
+    shadows and ``delattr`` then uncovers again.
+    """
+    if key in view.__dict__:
+        return True
+    for klass in type(view).__mro__:
+        if key in klass.__dict__:
+            descriptor = klass.__dict__[key]
+            if getattr(descriptor, "_djust_framework_derived", False) and not hasattr(
+                type(descriptor), "__set__"
+            ):
+                return False
+            return True
+    return hasattr(view, key)
+
+
 class RequestMixin:
     """HTTP handling: get, post."""
 
@@ -342,7 +366,7 @@ class RequestMixin:
         processor_output = self._apply_context_processors({}, request)
         injected_keys = []
         for key, value in processor_output.items():
-            if not hasattr(self, key):
+            if not _view_supplies(self, key):
                 injected_keys.append(key)
                 setattr(self, key, value)
         # These attributes are framework-injected, not view state: ADR-038

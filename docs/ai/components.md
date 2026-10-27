@@ -281,7 +281,7 @@ LIVEVIEW_CONFIG = {
 }
 ```
 - Template tags: `{% theme_head %}`, `{% theme_switcher %}`, `{% theme_mode_toggle %}`
-- LiveView mixin: `ThemeMixin` for reactive theme switching (no page reload)
+- LiveView mixin: `ThemeMixin` for reactive theme switching (no page reload); its `theme_head` / `theme_css` / `theme_switcher` / `theme_presets` are computed when read and are not view state (#3626)
 - shadcn/ui import/export compatible
 - Tailwind integration via `manage.py djust_theme tailwind-config`
 

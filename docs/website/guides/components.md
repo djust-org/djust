@@ -1452,11 +1452,44 @@ class DashboardView(ThemeMixin, LiveView):
 
     def mount(self, request, **kwargs):
         super().mount(request, **kwargs)
-        # theme_head, theme_switcher, theme_preset, theme_mode
-        # are automatically available in the template context
+        # theme_head, theme_css, theme_switcher, theme_presets, theme_preset
+        # and theme_mode are available in the template context
 ```
 
 Theme changes happen instantly over WebSocket -- no page reload.
+
+`theme_preset`, `theme_mode` and `theme_resolved_mode` are ordinary attributes
+of the view: a few bytes each, and a template that branches on them re-renders
+when they change. `theme_head`, `theme_css`, `theme_switcher` and
+`theme_presets` are **not** attributes: together they are about 80 KB, and every
+public attribute is stored in the view's state. The mixin supplies them to the
+template lazily, next to the context processors' output, so they render when a
+template reads them, are never stored, and cost nothing on a page that prints
+only the `{% theme_head %}` tag. `view.theme_head` (and the other three) still
+works in Python: it renders on each read and caches nothing. Assigning one in a
+subclass (`self.theme_head = ...`) still takes precedence, and, like any
+assignment, makes it state. The mixin does not need `theme_context` in
+`context_processors`; when both are present, the mixin's values win, as they did
+when they were attributes. This holds for a view that skipped `mount()` as well
+(a reconnect that restores state, a restored sticky child): the values resolve
+their manager from the request.
+
+What changed for code that reached the old attributes through the context:
+
+- `get_context_data()` no longer returns `theme_head`, `theme_css`,
+  `theme_switcher` or `theme_presets`. A subclass that read
+  `ctx["theme_head"]` there must read `self.theme_head` instead. The names are
+  supplied when the template is rendered, from the view's request; a view with no
+  request renders them empty (every framework path sets one, a view driven by
+  hand in a test may not).
+- `theme_presets_count` is still available to templates, as before.
+- After `set_theme_mode`, `set_theme_preset`, `toggle_theme_mode` or
+  `cycle_theme_preset` the next render re-sends all four, so a `dj-root` template
+  that reads `{{ theme_head|length }}` or the switcher shows the new theme.
+
+A page that only uses the `{% theme_head %}` and `{% theme_switcher %}` tags
+needs none of this, and a plain `LiveView` does not need `ThemeMixin` for the
+tags.
 
 ### shadcn/ui Compatibility
 

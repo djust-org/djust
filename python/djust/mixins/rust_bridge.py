@@ -1334,6 +1334,17 @@ class RustBridgeMixin:
                 if _candidate:
                     user_changed = _candidate
 
+            # Values the view supplies lazily and keeps out of state (ThemeMixin's
+            # rendered HTML, #3626) are request-scoped, so the detector above never
+            # reports them. After a theme switch the view names them here, once, so
+            # a template that reads them re-renders that node. (Measured: on a view
+            # that has not rendered yet, naming changed keys still renders in full.)
+            forced = self.__dict__.pop("_djust_forced_changed_keys", None)
+            if forced:
+                user_changed = sorted(
+                    {*(user_changed or ()), *(k for k in forced if k in full_context)}
+                )
+
             # Full-context truth (#2564): drop every Rust state key the context
             # no longer carries, BEFORE the merge. ``update_state`` only ever
             # extends, and a key that is simply absent is not a change the

@@ -10,7 +10,12 @@ from typing import Optional, Dict, Any, Tuple
 from djust._rust import RustLiveView
 from djust.profiler import profiler
 
-from .base import StateBackend, DjustPerformanceWarning, DEFAULT_STATE_SIZE_WARNING_KB
+from .base import (
+    StateBackend,
+    DjustPerformanceWarning,
+    DEFAULT_STATE_SIZE_WARNING_KB,
+    large_state_warning_message,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -274,10 +279,7 @@ class InMemoryStateBackend(StateBackend):
         # Warn about large states
         if warn_on_large_state and state_size > self._state_size_warning_kb * 1024:
             warnings.warn(
-                f"Large LiveView state detected for '{key}': {state_size / 1024:.1f}KB "
-                f"(threshold: {self._state_size_warning_kb}KB). "
-                "Consider using temporary_assigns or streams to reduce memory usage. "
-                "See: https://djust.org/docs/optimization/temporary-assigns",
+                large_state_warning_message(key, state_size, self._state_size_warning_kb, snapshot),
                 DjustPerformanceWarning,
                 stacklevel=3,
             )
