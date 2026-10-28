@@ -358,6 +358,47 @@ Known limits of the harness:
 - A crash with no test in flight (in a class or module `setUpClass`) cannot be attributed to a test. The run stops with a message naming how many tests had finished; isolate the module with `--label`.
 - Django's runner turns `RuntimeWarning` and `ResourceWarning` into errors. A future warning raised by djust would surface as ERRORs. That is a finding about the backend, not a harness bug.
 
+### Parity of djust's own template libraries
+
+`djust_components` and `theme_tags` can each render a tag two ways: through Django's engine (the Python tag) or through `DjustTemplateBackend`, where a registered native handler wins. The two are independent implementations, and for most tags they do not render the same bytes (class names, ARIA attributes, `dj-*` wiring, escaping of `mark_safe` values, how invalid input is treated; [#3663](https://github.com/djust-org/djust/issues/3663), [#3669](https://github.com/djust-org/djust/issues/3669)). A ratchet measures that, tag by tag, and holds the measurement in a checked-in file so a difference cannot grow, or be fixed, without a reviewed diff.
+
+```bash
+make template-library-parity            # check: exits 1 when the measurement differs from the baseline
+make template-library-parity-baseline   # regenerate scripts/template-library-parity-baseline.csv
+scripts/template-library-parity.py --repro badge   # both engines' output for every variant of one tag
+scripts/template-library-parity-gateoff.py         # mutate the ratchet and the tags in a throwaway copy of the tree; each must turn the test red
+```
+
+**What is measured.** Every tag of the two libraries that has a native handler is rendered by both engines from generated templates: keyword calls, typical and hostile values, a `mark_safe` value, a string literal with HTML specials, a missing variable, `None`, positional use, no arguments, and hand-written composites for tags that need a parent or child. Tags with no native handler are not measured, because the bridge runs Django's own node for them. Three things decide whether a row means anything:
+
+- **What the harness sends.** A native handler or compile function rarely reads its arguments itself; it hands them to a `render_*` helper (`render_modal`, `render_menu_item`, ...). Discovery follows those calls through the module AST (within `djust.components` and `djust.theming`), so the generated calls pass every parameter the tag can read. Each string parameter also gets its own call with one `mark_safe` value and one hostile value, with every other parameter left out (apart from boolean switches such as `open=True`), because setting everything at once lets a branch-selecting parameter (`divider=`) decide what renders and hides the rest. Keys only the native handler reads are passed in one more call, which the Python tag rejects.
+- **Whether the tag's own output appeared.** A tag that only renders inside a parent (`menu_item` in `dropdown_menu`) is rendered inside the parent, open, and compared on what it added to the parent's bare output; a difference in the parent's own markup is not charged to the child, and a child the parent hides contributes nothing.
+- **How much was tried.** A tag whose own output never appeared, or on which the harness passed under half of the parameters its implementations can read, is `UNEXERCISED`, never `IDENTICAL`: "no difference found" says nothing when little was tried. One proven difference still makes a tag `DIFFERENT`.
+
+**What the baseline holds** (`scripts/template-library-parity-baseline.csv`, one short row per tag, no markup):
+
+| column | meaning |
+| --- | --- |
+| `class` | `IDENTICAL`; `WHITESPACE-ONLY`; `DIFFERENT-escape-policy-only` (only the `literal` / `mark_safe` calls differ); `NOT-RENDERABLE-IN-ONE-ENGINE`; `DIFFERENT` (markup differs); `UNEXERCISED` |
+| `different` | how many variants differ |
+| `aspects` | `<aspect>:<variants it differs in>`, over `text`, `tags`, `classes`, `a11y`, `data/dj-attrs`, `ids`, `other-attrs`, `escaping` |
+| `errors` | variants one engine rejected and the other rendered, as `<variant>:<engine that raised>` |
+| `compared` | variants both engines rendered |
+| `exercised` | `<parameters passed>/<parameters the tag can read>` |
+| `own_output` | variants in which the tag's own output appeared |
+
+`IDENTICAL` is a property of the output, not a claim of independence: several native handlers call the Python tag or its helper, so they are identical by construction.
+
+**What a baseline diff means.** The ratchet is exact in both directions, and it moves inside `DIFFERENT` too, because `different` and the per-aspect counts are part of the row: one more variant that differs is a regression, one fewer is a fix. A tag that gets worse (a worse class, more differing variants or aspects, a new one-engine error, fewer variants compared, fewer parameters exercised or more that it can read) fails, and so does a tag that gets better, with a message telling you to run `make template-library-parity-baseline` and commit the new file. A baseline that only guarded against regressions would let a fixed tag slide back unnoticed. A tag that gains a native handler has no row and fails until it is classified; a row for a tag that was removed fails until it is deleted. Never edit the file by hand: a test pins that it is exactly what the tool writes.
+
+**What it cannot see.** The row records whether and how widely the two implementations differ, not what the bytes are. A change that moves a difference from one value to another inside the same variants and aspects (`card-primary` to `card-default` on a tag that already differs in `classes` everywhere) leaves the row as it was. Pinning bytes would make this a golden-file test of two implementations, and every legitimate edit to a template would need a baseline update.
+
+**Maintenance cost.** Because discovery reads the code, refactoring a handler or a node (moving a key read into a helper, renaming a helper) can change the generated calls and therefore the rows without changing behaviour. The tell is the diff: such a change moves `exercised`, `own_output` or the counts together and leaves `class` alone, and it is the tool, not the template, that changed. If `exercised` drops, discovery lost sight of a parameter; fix discovery rather than the baseline.
+
+**Determinism.** The harness runs in its own process (the tests start it as a subprocess, which is also why nothing it patches can reach another test). It fixes `uuid` and the clock before Django is imported, resets the one process-global id counter in these libraries before every render, sets its own `TIME_ZONE`, `LANGUAGE_CODE` and `ROOT_URLCONF`, and avoids `html.parser` (whose handling of malformed markup has changed between point releases). The id normaliser knows the shape of the harness's own uuids only, so `item-deadbeef` against `item-cafebabe` is a difference. `scripts/template-library-parity.py --self-compare` renders Django against itself and must find every tag identical; `--plant TAG` makes the Python tag emit an extra element and the ratchet must flag it. `python/tests/test_template_library_parity_3663.py` runs both, and carries the `pr_tier` marker: its cost is a module fixture charged to whichever test asks first, so without the marker the first refresh of `.test_durations` would mark the one test that asserts the ratchet `slow` and drop it from PR runs (`tests/slow_tier.py` honours the marker).
+
+The gate-off script never writes to your checkout: it copies what the test needs (the compiled extension is symlinked) into a temporary directory, mutates there, and deletes the copy in a `finally`, including on SIGTERM, SIGINT and SIGHUP. An earlier version edited the real files in place, so a reader of the tree measured a mutant and a kill mid-run left one behind; a test starts the script, kills it mid-mutation, and asserts the real files are byte-identical before, during and after.
+
 ## Performance
 
 ### Benchmarks
