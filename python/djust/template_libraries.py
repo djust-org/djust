@@ -125,6 +125,16 @@ logger = logging.getLogger(__name__)
 #: (measured: 15 suite failures).
 _UNBRIDGED_PREFIXES = ("djust.templatetags.",)
 
+#: Modules that ship inside djust. A refusal of one of their tags is expected (#3655).
+_DJUST_OWN_MODULE_PREFIX = "djust."
+
+#: The module of the library :func:`_bridge_library` is bridging right now, so the
+#: refusal warning knows whose tag it is without changing the signature of every
+#: ``_bridge_*`` helper (tests wrap them).
+_bridging_module: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "djust_bridging_module", default=""
+)
+
 #: The exceptions to :data:`_UNBRIDGED_PREFIXES` (#2958): tags of djust's own
 #: libraries that have NO native Rust handler, and so failed in every root
 #: LiveView template with "Invalid block tag". They bridge through the generic
@@ -764,6 +774,15 @@ def _still_bridged(label: str, library: Any, module: str) -> bool:
 def _bridge_library(label: str, library: Any) -> None:
     """Register every filter and tag of ``library`` with the Rust engine."""
     module = _library_module(library)
+    token = _bridging_module.set(module)
+    try:
+        _bridge_library_in(label, library, module)
+    finally:
+        _bridging_module.reset(token)
+
+
+def _bridge_library_in(label: str, library: Any, module: str) -> None:
+    """The body of :func:`_bridge_library`, run with ``module`` as the one being bridged."""
     if module.startswith(_UNBRIDGED_PREFIXES):
         allowed = _DJUST_TAGS_BRIDGED.get(module)
         if not allowed:
@@ -1062,10 +1081,25 @@ def _bridge_tag(label: str, name: str, compile_func: Callable[..., Any]) -> bool
 
 
 def _warn_refused(label: str, name: str) -> None:
-    """Warn once per process that ``label``'s ``name`` tag is not bridged."""
+    """Warn once per process that ``label``'s ``name`` tag is not bridged.
+
+    A library that ships inside djust (``djust.components.templatetags``,
+    ``djust.theming.templatetags``) meeting djust's own native handler is a design
+    choice, not a collision anyone can act on: it is logged at DEBUG, so the ~200 of
+    them do not bury a real clash with a third-party library (#3655). The refusal
+    itself is unchanged.
+    """
     if (label, name) in _warned_refused_tags:
         return
     _warned_refused_tags.add((label, name))
+    if _bridging_module.get().startswith(_DJUST_OWN_MODULE_PREFIX):
+        logger.debug(
+            "djust's own template library '%s' registers tag '%s', which djust already "
+            "provides natively; the native handler is used.",
+            label,
+            name,
+        )
+        return
     logger.warning(
         "Template library '%s' registers tag '%s', which djust already provides; "
         "the library's version is not bridged (the built-in wins process-wide).",
