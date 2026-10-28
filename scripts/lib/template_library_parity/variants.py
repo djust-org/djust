@@ -29,6 +29,23 @@ class TagInfo:
     native: list[str] = field(default_factory=list)  # tag / block / assign / raw
     is_block: bool = False
 
+    def readable(self) -> set[str]:
+        """Every parameter some implementation of this tag can read.
+
+        The Python signature (or the keys its compile function and node read),
+        plus the keys the native handler reads, each followed through the
+        ``render_*`` helpers they delegate to (``harness.discover``).
+        """
+        names = {
+            s[0]
+            for s in self.sig
+            if s[0] not in ("context", "self") and s[2] not in ("VAR_POSITIONAL", "VAR_KEYWORD")
+        }
+        return names | set(self.py_keys) | set(self.rust_keys or ())
+
+    def has_varargs(self) -> bool:
+        return any(s[2] == "VAR_POSITIONAL" for s in self.sig)
+
 
 BOOL_EXACT = {
     "open", "active", "disabled", "checked", "required", "collapsed", "dismissible", "loading",
@@ -293,11 +310,51 @@ def params_of(info: Optional[TagInfo]) -> list[str]:
     return names
 
 
-def wrap(label: str, name: str, args: str, is_block: bool, parent: Optional[str] = None) -> str:
+@dataclass(frozen=True)
+class Variant:
+    name: str
+    src: str
+    invalid_usage: bool = False  # a call the Python tag must reject (required args missing)
+    #: The same template WITHOUT the tag, for a tag that only renders inside a
+    #: parent: what the tag itself contributed is the difference.
+    bare: Optional[str] = None
+
+
+#: Parameter kinds whose value is a string a template author can hand a
+#: ``mark_safe`` value or hostile text.
+STRING_KINDS = ("str", "event", "url", "color")
+
+
+def passed_names(info: TagInfo) -> list[str]:
+    """The parameter names the generated calls pass."""
+    names, _, _ = param_names(info)
+    names = [n for n in names if n not in DROP.get(info.name, ())]
+    if not names and info.py_kind not in SIMPLE_KINDS:
+        names = list(_FALLBACK_NAMES)
+    return names
+
+
+def passed_count(info: TagInfo) -> int:
+    """How many distinct parameters the generated calls pass."""
+    names = set(passed_names(info))
+    if info.py_kind in SIMPLE_KINDS:
+        names |= set(param_names(info)[2])  # the ``rust_only_keys`` call
+    return len(names)
+
+
+def wrap(
+    label: str,
+    name: str,
+    args: str,
+    is_block: bool,
+    parent: Optional[str] = None,
+    parent_args: str = "",
+) -> str:
     head = "{% " + name + (" " + args if args else "") + " %}"
     inner = (head + BODY + "{% end" + name + " %}") if is_block else head
     if parent:
-        inner = "{% " + parent + " %}" + inner + "{% end" + parent + " %}"
+        open_tag = "{% " + parent + (" " + parent_args if parent_args else "") + " %}"
+        inner = open_tag + inner + "{% end" + parent + " %}"
     return "{% load " + label + " %}" + inner
 
 
@@ -305,22 +362,39 @@ def make_variants(
     info: TagInfo,
     lookup: Callable[[str], Optional[TagInfo]],
     blockness: dict[str, bool],
-) -> list[tuple[str, str, bool]]:
-    """``(variant name, template source, invalid_usage)`` for one tag.
+) -> list[Variant]:
+    """The calls to render for one tag.
 
     ``lookup`` finds a sibling tag of the same library (for a parent's
     children); ``blockness`` says which tags consume a body.
     """
     label, name = info.lib, info.name
-    names, _, _ = param_names(info)
-    names = [n for n in names if n not in DROP.get(name, ())]
-    if not names and info.py_kind not in SIMPLE_KINDS:
-        names = list(_FALLBACK_NAMES)
+    names = passed_names(info)
     parent = PARENT.get(name)
-    out: list[tuple[str, str, bool]] = []
+    parent_info = lookup(parent) if parent else None
+    # A child is rendered inside its parent OPEN, or the parent hides it and
+    # the child's own output never appears in any result.
+    parent_args = "open=True" if parent_info and "open" in parent_info.readable() else ""
+    bare = (
+        "{% load "
+        + label
+        + " %}{% "
+        + parent
+        + (" " + parent_args if parent_args else "")
+        + " %}{% end"
+        + parent
+        + " %}"
+        if parent
+        else None
+    )
+    out: list[Variant] = []
 
     def mk(variant: str, argstr: str) -> None:
-        out.append((variant, wrap(label, name, argstr, info.is_block, parent), False))
+        out.append(
+            Variant(
+                variant, wrap(label, name, argstr, info.is_block, parent, parent_args), False, bare
+            )
+        )
 
     required = [
         s[0]
@@ -329,6 +403,22 @@ def make_variants(
     ]
     has_list = any(kind_of(n) == "list" for n in names)
     overrides = TAG_OVERRIDES.get(name, {})
+
+    def args_with(mode: str) -> str:
+        return " ".join(
+            "%s=%s"
+            % (
+                n,
+                overrides[n]
+                if (n in overrides and mode not in ("missing", "none"))
+                else token(n, mode),
+            )
+            for n in names
+        )
+
+    bools = [n for n in names if kind_of(n) == "bool"]
+    fixed = list(dict.fromkeys(bools + [r for r in required if r in names]))
+
     for mode in (
         "typical",
         "typical_str",
@@ -341,17 +431,20 @@ def make_variants(
     ):
         if mode in ("typical_str", "evil_str") and not has_list:
             continue
-        args = " ".join(
-            "%s=%s"
-            % (
-                n,
-                overrides[n]
-                if (n in overrides and mode not in ("missing", "none"))
-                else token(n, mode),
-            )
-            for n in names
-        )
-        mk(mode, args)
+        mk(mode, args_with(mode))
+    # Escaping behaviour per parameter: ONE hostile / mark_safe value, set alone
+    # (plus the boolean switches and required parameters, which a tag needs to
+    # render at all: ``open=True`` for a modal). Setting every parameter at once
+    # lets a branch-selecting one (``divider=``, ``heading=``) decide what is
+    # rendered and hides the rest; a handler that mishandles ONE argument is
+    # seen only when that argument is the one that varies.
+    for mode in ("safe", "evil"):
+        for n in names:
+            if kind_of(n) in STRING_KINDS and token(n, mode) != token(n, "typical"):
+                call = ["%s=%s" % (m, token(m, "typical")) for m in fixed if m != n] + [
+                    "%s=%s" % (n, token(n, mode))
+                ]
+                mk("%s:%s" % (mode, n), " ".join(call))
     # only the required params, no others (a minimal valid call)
     if required:
         mk("required_only", " ".join("%s=%s" % (n, token(n, "typical")) for n in required))
@@ -367,12 +460,28 @@ def make_variants(
                     "positional_2",
                     token(positional[0], "typical") + " " + token(positional[1], "typical"),
                 )
+        rust_only = param_names(info)[2]
+        if rust_only:
+            # Keys only the native handler reads: the Python tag rejects them, so
+            # this is where "Rust accepts what Python refuses" is recorded.
+            mk(
+                "rust_only_keys",
+                " ".join("%s=%s" % (n, token(n, "typical")) for n in [*names, *rust_only]),
+            )
+        if info.has_varargs():
+            mk("varargs_typical", '"Ctrl" "K"')
+            mk("varargs_safe", "safe_html safe_html")
+            mk("varargs_literal", '"a<i>b</i>&amp;\'c" "<b>x</b>"')
+            mk("varargs_evil", "evil evil")
     # no arguments at all: invalid when the Python tag has required params
-    head = "{% " + name + " %}"
-    noargs = (head + BODY + "{% end" + name + " %}") if info.is_block else head
-    if parent:
-        noargs = "{% " + parent + " %}" + noargs + "{% end" + parent + " %}"
-    out.append(("noargs", "{% load " + label + " %}" + noargs, bool(required)))
+    out.append(
+        Variant(
+            "noargs",
+            wrap(label, name, "", info.is_block, parent, parent_args),
+            bool(required),
+            bare,
+        )
+    )
     # parent tags: render WITH their children (each child with typical args)
     kids = [c for c, p in PARENT.items() if p == name]
     if kids and info.is_block:
@@ -385,7 +494,7 @@ def make_variants(
             )
         pargs = " ".join("%s=%s" % (n, token(n, "typical")) for n in names)
         out.append(
-            (
+            Variant(
                 "with_children",
                 "{% load "
                 + label
@@ -397,9 +506,8 @@ def make_variants(
                 + "{% end"
                 + name
                 + " %}",
-                False,
             )
         )
     for variant, src in EXTRA.get(name, ()):
-        out.append((variant, "{% load " + label + " %}" + src, False))
+        out.append(Variant(variant, "{% load " + label + " %}" + src))
     return out

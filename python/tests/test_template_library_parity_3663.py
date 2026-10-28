@@ -33,10 +33,12 @@ Refs #3663, #3669, #3655, #1468, #1459, #1646, #1125.
 from __future__ import annotations
 
 import csv
+import dataclasses
 import datetime
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 import textwrap
@@ -47,6 +49,13 @@ from pathlib import Path
 import pytest
 
 from scripts.lib.template_library_parity import classify, harness, variants
+
+# The ratchet must run on every PR. Its cost is a module fixture (three
+# subprocesses, charged to whichever test asks first), and `.test_durations`
+# sums setup + call + teardown per test: once it records > 1 s for that test,
+# tests/slow_tier.py would mark it `slow` and `-m "not slow"` would deselect the
+# one test that asserts the ratchet. `pr_tier` is the tier's explicit opt-out.
+pytestmark = pytest.mark.pr_tier
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "template-library-parity.py"
@@ -61,6 +70,9 @@ class Run:
     stderr: str
     rows: dict[str, classify.TagRow]
     unmeasured: list[str]
+    probe: dict[str, str]
+    planted: str = ""
+    control: str = ""
 
 
 def _env() -> dict[str, str]:
@@ -84,27 +96,58 @@ def _finish(proc: subprocess.Popen[str], json_path: Path | None) -> Run:
     stdout, stderr = proc.communicate(timeout=TIMEOUT)
     rows: dict[str, classify.TagRow] = {}
     unmeasured: list[str] = []
+    probe: dict[str, str] = {}
     if json_path is not None and json_path.exists():
         payload = json.loads(json_path.read_text(encoding="utf-8"))
         rows = {
-            tag: classify.TagRow(r["class"], r["aspects"], r["errors"], int(r["compared"]))
+            tag: classify.TagRow.from_fields([r[name] for name in classify.HEADER[1:]])
             for tag, r in payload["rows"].items()
         }
-        unmeasured = payload["unmeasured"]
-    return Run(proc.returncode, stdout, stderr, rows, unmeasured)
+        unmeasured, probe = payload["unmeasured"], payload["probe"]
+    return Run(proc.returncode, stdout, stderr, rows, unmeasured, probe)
 
 
 @pytest.fixture(scope="module")
 def runs(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Run]:
-    """The three subprocess runs, started together (each is ~5 s, mostly startup)."""
+    """The three subprocess runs, started together (each is ~5-8 s, mostly startup).
+
+    The planted tag and its control are the first two ``IDENTICAL`` rows of the
+    baseline that are not child tags (a parent may render its children itself, so a
+    node planted in one is never called), so this never names a tag that a later
+    fix could make non-identical.
+    """
     out = tmp_path_factory.mktemp("parity3663")
+    identical = [
+        t.split(":", 1)[1]
+        for t, r in sorted(classify.read_baseline(BASELINE).items())
+        if r.tag_class == classify.IDENTICAL and t.split(":", 1)[1] not in variants.PARENT
+    ]
+    planted, control = identical[0], identical[1]
     paths = {name: out / (name + ".json") for name in ("check", "self", "plant")}
     procs = {
         "check": _start(["--json", str(paths["check"])]),
         "self": _start(["--self-compare", "--json", str(paths["self"])]),
-        "plant": _start(["--only", "kbd,icon", "--plant", "kbd", "--json", str(paths["plant"])]),
+        "plant": _start(
+            [
+                "--only",
+                "%s,%s" % (planted, control),
+                "--plant",
+                planted,
+                "--json",
+                str(paths["plant"]),
+            ]
+        ),
     }
-    return {name: _finish(proc, paths[name]) for name, proc in procs.items()}
+    try:
+        done = {name: _finish(proc, paths[name]) for name, proc in procs.items()}
+    finally:
+        for proc in procs.values():  # a timeout on one must not orphan the others
+            if proc.poll() is None:
+                proc.kill()
+                proc.communicate()
+    for run in done.values():
+        run.planted, run.control = planted, control
+    return done
 
 
 @pytest.fixture(scope="module")
@@ -139,13 +182,16 @@ class TestTheRatchet:
         assert set(run.rows) | set(run.unmeasured) == expected
         assert not set(run.rows) & set(run.unmeasured)
 
-    def test_every_measured_tag_was_actually_compared(self, runs):
-        """A tag whose variants all errored would look 'unchanged'; it must say so."""
-        unexercised = [
-            tag for tag, row in runs["check"].rows.items() if row.tag_class == "UNEXERCISED"
-        ]
-        assert unexercised == []
-        assert all(row.compared > 0 for row in runs["check"].rows.values())
+    def test_no_tag_claims_parity_on_little_evidence(self, runs):
+        """IDENTICAL / escape-only / WHITESPACE-ONLY / NOT-RENDERABLE are statements that nothing
+        else differs; they are only that if the tag's own output appeared and the harness
+        passed at least MIN_EXERCISED of the parameters the tag can read."""
+        for tag, row in runs["check"].rows.items():
+            if row.tag_class in (classify.DIFFERENT, "UNEXERCISED"):
+                continue
+            passed, readable = row.passed_readable()
+            assert row.own_output > 0, "%s: %s, but its own output never appeared" % (tag, row)
+            assert passed >= classify.MIN_EXERCISED * readable, "%s: %s" % (tag, row)
 
     def test_the_libraries_covered_are_the_two_djust_ships(self):
         """An intent pin, and the module names a change to either library selects this file by."""
@@ -169,7 +215,7 @@ class TestTheRatchet:
             rows = list(csv.reader(fh))
         assert rows[0] == list(classify.HEADER)
         assert all(len(r) == len(classify.HEADER) for r in rows)
-        assert max(len(",".join(r)) for r in rows) < 200
+        assert max(len(",".join(r)) for r in rows) < 400
 
     def test_the_exclusion_table_is_the_recorded_one(self, baseline):
         """Nothing is excluded. If a tag ever has to be, it needs a reason here
@@ -187,6 +233,13 @@ class TestNothingLeaks:
         assert datetime.date.today.__qualname__ == "date.today"
         assert datetime.datetime.now.__qualname__ == "datetime.now"
 
+    def test_the_subprocess_saw_the_frozen_clock_the_counting_uuid_and_this_checkout(self, runs):
+        probe = runs["check"].probe
+        assert probe["today"] == "%04d-%02d-%02d" % harness.FROZEN_DATE
+        assert re.fullmatch(r"0{8}-0{4}-0{4}-0{4}-0{9}[0-9a-f]{3}", probe["uuid"]), probe["uuid"]
+        assert Path(probe["djust"]).resolve().is_relative_to(ROOT), probe["djust"]
+        assert runs["self"].probe == probe
+
     def test_the_harness_refuses_an_already_configured_process(self):
         before = os.environ.get("DJANGO_SETTINGS_MODULE")
         with pytest.raises(RuntimeError, match="fresh process"):
@@ -196,13 +249,19 @@ class TestNothingLeaks:
 
 # --------------------------------------------------------------------------- #
 
-T = classify.TagRow
+
+def row(tag_class=classify.IDENTICAL, **kw):
+    """A TagRow with the fields a test does not care about filled in."""
+    kw.setdefault("compared", 10)
+    kw.setdefault("exercised", "5/5")
+    kw.setdefault("own_output", 10)
+    return classify.TagRow(tag_class, **kw)
 
 
-def _measure(variant, py, rs, invalid=False):
+def _measure(variant, py, rs, invalid=False, present=True):
     py_status, py_out = py
     rs_status, rs_out = rs
-    return classify.measure_variant(variant, invalid, py_status, py_out, rs_status, rs_out)
+    return classify.measure_variant(variant, invalid, py_status, py_out, rs_status, rs_out, present)
 
 
 OK = "ok"
@@ -241,10 +300,24 @@ class TestClassifier:
         v = _measure("typical", (OK, '<b title="a">x</b>'), (OK, '<b title="b">x</b>'))
         assert v.aspects == ("other-attrs",)
 
-    def test_uuids_in_ids_are_not_a_difference(self):
-        a = '<b id="x-0a1b2c3d-0000-0000-0000-000000000001">x</b>'
-        b = '<b id="x-0a1b2c3d-0000-0000-0000-000000000002">x</b>'
+    def test_the_harnesss_counting_uuids_in_ids_are_not_a_difference(self):
+        a = '<b id="x-00000000-0000-0000-0000-000000000001" for="t-00000000">x</b>'
+        b = '<b id="x-00000000-0000-0000-0000-000000000002" for="t-00000000">x</b>'
         assert _measure("typical", (OK, a), (OK, b)).aspects == ()
+        hexed = '<b id="x-%s">x</b>'
+        assert (
+            _measure(
+                "typical", (OK, hexed % ("0" * 31 + "1")), (OK, hexed % ("0" * 31 + "2"))
+            ).aspects
+            == ()
+        )
+
+    def test_other_hex_looking_ids_are_a_difference(self):
+        """Only the harness's own uuid shape is normalised: ``item-deadbeef`` vs
+        ``item-cafebabe`` are two different ids, and so are two long numbers."""
+        for a, b in (("item-deadbeef", "item-cafebabe"), ("1234567890", "1234567891")):
+            v = _measure("typical", (OK, '<b id="%s">x</b>' % a), (OK, '<b id="%s">x</b>' % b))
+            assert v.cls == classify.DIFFERENT and v.aspects == ("ids",), (a, v)
 
     def test_the_scan_survives_a_gt_in_an_attribute_a_comment_and_a_script(self):
         markup = '<b title="a > b" class="c d"><!-- <i> -->x<script>if (a<b) {}</script></b>'
@@ -269,23 +342,62 @@ class TestClassifier:
     def test_addresses_are_normalised(self):
         assert classify.norm_addr("<built-in at 0x7f3a9c001234>") == "<built-in at 0xADDR>"
 
+    def test_a_per_parameter_variant_is_an_escape_variant(self):
+        assert classify.is_escape_variant("safe") and classify.is_escape_variant("safe:title")
+        assert classify.is_escape_variant("literal")
+        assert not classify.is_escape_variant("evil:title") and not classify.is_escape_variant(
+            "typical"
+        )
+
+    # --- a child tag's own output ---------------------------------------------
+
+    def test_own_fragment_is_what_the_child_added_to_the_parent(self):
+        bare = '<div class="menu"><button>Menu</button></div>'
+        with_child = '<div class="menu"><button>Menu</button><a href="/x">Item</a></div>'
+        assert classify.own_fragment(bare, with_child) == '<a href="/x">Item</a>'
+
+    def test_a_child_the_parent_hides_contributes_nothing(self):
+        bare = '<div class="menu"><button>Menu</button></div>'
+        assert classify.own_fragment(bare, bare) == ""
+
+    def test_a_difference_in_the_parent_alone_is_not_charged_to_the_child(self):
+        py_bare = '<div class="a"><i>m</i></div>'
+        rs_bare = '<div class="b"><i>m</i></div>'
+        py = '<div class="a"><i>m</i><b>child</b></div>'
+        rs = '<div class="b"><i>m</i><b>child</b></div>'
+        assert (
+            classify.own_fragment(py_bare, py)
+            == classify.own_fragment(rs_bare, rs)
+            == "<b>child</b>"
+        )
+
     # --- the tag aggregate ----------------------------------------------------
 
-    def _tag(self, *specs):
+    def _tag(self, *specs, passed=1, readable=1):
         results = [_measure(*spec) for spec in specs]
-        return classify.classify_tag(results)
+        return classify.classify_tag(results, passed, readable)
 
     def test_a_tag_with_every_variant_identical_is_identical(self):
-        row = self._tag(("typical", (OK, "a"), (OK, "a")), ("evil", (OK, "b"), (OK, "b")))
-        assert row == T(classify.IDENTICAL, "", "", 2)
+        r = self._tag(("typical", (OK, "a"), (OK, "a")), ("evil", (OK, "b"), (OK, "b")))
+        assert r == classify.TagRow(classify.IDENTICAL, 0, "", "", 2, "1/1", 2)
 
     def test_a_difference_outside_the_escape_probes_is_markup(self):
-        row = self._tag(
+        r = self._tag(
             ("typical", (OK, '<i class="a">x</i>'), (OK, '<i class="b">x</i>')),
             ("safe", (OK, "<b>safe</b>"), (OK, "&lt;b&gt;")),
         )
-        assert row.tag_class == classify.DIFFERENT
-        assert "classes" in row.aspects.split("+")
+        assert r.tag_class == classify.DIFFERENT
+        assert r.different == 2
+        assert "classes:1" in r.aspects.split("+")
+
+    def test_the_aspects_column_counts_the_variants_each_aspect_differs_in(self):
+        r = self._tag(
+            ("typical", (OK, '<i class="a">x</i>'), (OK, '<i class="b">x</i>')),
+            ("evil", (OK, '<i class="a">y</i>'), (OK, '<i class="b">y</i>')),
+            ("none", (OK, "<i>z</i>"), (OK, "<b>z</b>")),
+        )
+        assert r.aspects == "classes:2+tags:1"
+        assert r.different == 3
 
     def test_a_difference_only_in_literal_and_safe_is_escape_policy(self):
         # Django passes a mark_safe value into an attribute raw; Rust escapes it.
@@ -293,110 +405,166 @@ class TestClassifier:
         # escaping differs.
         raw = '<p title="<b>safe</b>">x</p>'
         escaped = '<p title="&lt;b&gt;safe&lt;/b&gt;">x</p>'
-        row = self._tag(
+        r = self._tag(
             ("typical", (OK, "<i>x</i>"), (OK, "<i>x</i>")),
-            ("safe", (OK, raw), (OK, escaped)),
+            ("safe:title", (OK, raw), (OK, escaped)),
         )
-        assert row.tag_class == "DIFFERENT-escape-policy-only"
-        assert row.aspects == "escaping"
+        assert r.tag_class == "DIFFERENT-escape-policy-only"
+        assert r.aspects == "escaping:1"
 
     def test_the_same_difference_outside_literal_and_safe_is_markup(self):
         raw = '<p title="<b>safe</b>">x</p>'
         escaped = '<p title="&lt;b&gt;safe&lt;/b&gt;">x</p>'
-        row = self._tag(("typical", (OK, raw), (OK, escaped)))
-        assert row.tag_class == classify.DIFFERENT
+        r = self._tag(("typical", (OK, raw), (OK, escaped)))
+        assert r.tag_class == classify.DIFFERENT
 
     def test_a_one_engine_error_is_recorded_even_when_the_tag_is_also_different(self):
-        row = self._tag(
+        r = self._tag(
             ("typical", (OK, "<i>x</i>"), (OK, "<b>x</b>")),
             ("none", (ERR, "TypeError"), (OK, "<b>x</b>")),
         )
-        assert row.tag_class == classify.DIFFERENT
-        assert row.errors == "none:python"
+        assert r.tag_class == classify.DIFFERENT
+        assert r.errors == "none:python"
 
     def test_the_errors_column_says_which_engine_rejected_which_variant(self):
-        row = self._tag(
+        r = self._tag(
             ("typical", (OK, "a"), (OK, "a")),
             ("none", (OK, "a"), (ERR, "boom")),
             ("missing", (ERR, "boom"), (OK, "a")),
         )
-        assert row.tag_class == "NOT-RENDERABLE-IN-ONE-ENGINE"
-        assert row.errors == "missing:python+none:rust"
+        assert r.tag_class == "NOT-RENDERABLE-IN-ONE-ENGINE"
+        assert r.errors == "missing:python+none:rust"
 
     def test_an_invalid_call_does_not_decide_the_class_but_is_still_recorded(self):
-        row = self._tag(
+        r = self._tag(
             ("typical", (OK, "a"), (OK, "a")),
             ("noargs", (ERR, "missing required"), (OK, "a"), True),
         )
-        assert row.tag_class == classify.IDENTICAL
-        assert row.errors == "noargs:python"
+        assert r.tag_class == classify.IDENTICAL
+        assert r.errors == "noargs:python"
 
     def test_a_tag_where_nothing_rendered_is_unexercised_not_identical(self):
-        row = self._tag(("typical", (ERR, "x"), (ERR, "y")))
-        assert row == T("UNEXERCISED", "", "", 0)
+        r = self._tag(
+            ("typical", (ERR, "x"), (ERR, "y")), ("n", (ERR, "x"), (ERR, "y"), False, False)
+        )
+        assert r.tag_class == "UNEXERCISED"
+
+    def test_a_tag_whose_own_output_never_appeared_is_unexercised_not_identical(self):
+        """Both engines agree on the parent's empty shell: that says nothing about the child."""
+        r = self._tag(
+            ("typical", (OK, ""), (OK, ""), False, False),
+            ("evil", (OK, ""), (OK, ""), False, False),
+        )
+        assert r.tag_class == "UNEXERCISED"
+        assert r.own_output == 0
+
+    def test_a_tag_exercised_on_under_half_of_what_it_reads_is_unexercised_not_identical(self):
+        agree = [("typical", (OK, "a"), (OK, "a"))]
+        assert self._tag(*agree, passed=1, readable=11).tag_class == "UNEXERCISED"
+        assert self._tag(*agree, passed=6, readable=11).tag_class == classify.IDENTICAL
+        assert self._tag(*agree, passed=6, readable=11).exercised == "6/11"
+
+    def test_one_proven_difference_outranks_low_exercise(self):
+        r = self._tag(("typical", (OK, "a"), (OK, "b")), passed=1, readable=11)
+        assert r.tag_class == classify.DIFFERENT
 
     def test_compared_counts_only_variants_both_engines_rendered(self):
-        row = self._tag(
+        r = self._tag(
             ("typical", (OK, "a"), (OK, "a")),
             ("none", (ERR, "x"), (OK, "a")),
             ("missing", (ERR, "x"), (ERR, "x")),
         )
-        assert row.compared == 1
+        assert r.compared == 1
 
 
 class TestCompare:
     BASE = {
-        "lib:a": T(classify.IDENTICAL, "", "", 10),
-        "lib:b": T(classify.DIFFERENT, "classes+text", "", 8),
-        "lib:c": T("DIFFERENT-escape-policy-only", "escaping", "none:python", 9),
+        "lib:a": row(classify.IDENTICAL),
+        "lib:b": row(classify.DIFFERENT, different=6, aspects="classes:6+text:3", compared=8),
+        "lib:c": row(
+            "DIFFERENT-escape-policy-only", different=2, aspects="escaping:2", errors="none:python"
+        ),
     }
+
+    def _with(self, tag, **changes):
+        return dict(self.BASE, **{tag: dataclasses.replace(self.BASE[tag], **changes)})
+
+    def _one(self, now):
+        [finding] = classify.compare(now, self.BASE)
+        return finding
 
     def test_equal_tables_have_no_findings(self):
         assert classify.compare(dict(self.BASE), self.BASE) == []
 
     def test_a_regressed_class_is_worse_and_names_the_tag(self):
-        now = dict(self.BASE, **{"lib:a": T(classify.DIFFERENT, "classes", "", 10)})
-        [finding] = classify.compare(now, self.BASE)
+        finding = self._one(self._with("lib:a", tag_class=classify.DIFFERENT, different=1))
         assert (finding.tag, finding.kind) == ("lib:a", classify.WORSE)
         assert "IDENTICAL -> DIFFERENT" in finding.message
         assert "make template-library-parity-baseline" in finding.message
 
     def test_an_improved_class_fails_and_says_to_update_the_baseline(self):
-        now = dict(self.BASE, **{"lib:b": T(classify.IDENTICAL, "", "", 8)})
-        [finding] = classify.compare(now, self.BASE)
+        finding = self._one(
+            self._with("lib:b", tag_class=classify.IDENTICAL, different=0, aspects="")
+        )
         assert (finding.tag, finding.kind) == ("lib:b", classify.BETTER)
         assert "make template-library-parity-baseline" in finding.message
 
+    def test_a_new_divergence_in_an_already_different_tag_is_worse(self):
+        """The baseline moves inside DIFFERENT: one more differing variant is a regression."""
+        finding = self._one(self._with("lib:b", different=7))
+        assert finding.kind == classify.WORSE
+        assert "differing variants 6 -> 7" in finding.message
+
+    def test_a_fixed_variant_in_an_already_different_tag_is_better(self):
+        finding = self._one(self._with("lib:b", different=5, aspects="classes:5+text:3"))
+        assert finding.kind == classify.BETTER
+
+    def test_one_more_variant_differing_in_an_aspect_is_worse(self):
+        finding = self._one(self._with("lib:b", aspects="classes:6+text:4"))
+        assert finding.kind == classify.WORSE
+        assert "text" in finding.message
+
     def test_a_new_aspect_on_a_different_tag_is_worse(self):
-        now = dict(self.BASE, **{"lib:b": T(classify.DIFFERENT, "a11y+classes+text", "", 8)})
-        [finding] = classify.compare(now, self.BASE)
+        finding = self._one(self._with("lib:b", aspects="a11y:1+classes:6+text:3"))
         assert finding.kind == classify.WORSE
         assert "a11y" in finding.message
 
     def test_a_dropped_aspect_is_better(self):
-        now = dict(self.BASE, **{"lib:b": T(classify.DIFFERENT, "classes", "", 8)})
-        [finding] = classify.compare(now, self.BASE)
-        assert finding.kind == classify.BETTER
+        assert self._one(self._with("lib:b", aspects="classes:6")).kind == classify.BETTER
 
     def test_a_new_one_engine_error_is_worse(self):
-        now = dict(self.BASE, **{"lib:a": T(classify.IDENTICAL, "", "typical:rust", 10)})
-        [finding] = classify.compare(now, self.BASE)
+        finding = self._one(self._with("lib:a", errors="typical:rust"))
         assert finding.kind == classify.WORSE
         assert "typical:rust" in finding.message
 
     def test_lost_coverage_is_worse(self):
-        now = dict(self.BASE, **{"lib:a": T(classify.IDENTICAL, "", "", 7)})
-        [finding] = classify.compare(now, self.BASE)
+        finding = self._one(self._with("lib:a", compared=7))
         assert finding.kind == classify.WORSE
-        assert "coverage lost" in finding.message
+        assert "variants compared 10 -> 7" in finding.message
+
+    def test_fewer_parameters_exercised_is_worse(self):
+        finding = self._one(self._with("lib:a", exercised="4/5"))
+        assert finding.kind == classify.WORSE
+        assert "parameters exercised 5 -> 4" in finding.message
+
+    def test_a_tag_that_learns_a_parameter_the_harness_does_not_pass_is_worse(self):
+        finding = self._one(self._with("lib:a", exercised="5/6"))
+        assert finding.kind == classify.WORSE
+        assert "parameters the tag can read 5 -> 6" in finding.message
+
+    def test_a_tag_whose_own_output_disappears_is_worse(self):
+        finding = self._one(self._with("lib:a", own_output=0, tag_class="UNEXERCISED"))
+        assert finding.kind == classify.WORSE
+
+    def test_a_new_unexercised_tag_fails(self):
+        assert self._one(self._with("lib:a", tag_class="UNEXERCISED")).kind == classify.WORSE
 
     def test_better_in_one_way_and_worse_in_another_is_worse(self):
-        now = dict(self.BASE, **{"lib:b": T(classify.DIFFERENT, "a11y", "", 8)})
-        [finding] = classify.compare(now, self.BASE)
+        finding = self._one(self._with("lib:b", different=5, aspects="a11y:1+classes:5+text:3"))
         assert finding.kind == classify.WORSE
 
     def test_a_tag_with_no_baseline_row_fails_until_classified(self):
-        now = dict(self.BASE, **{"lib:new": T(classify.IDENTICAL, "", "", 3)})
+        now = dict(self.BASE, **{"lib:new": row()})
         [finding] = classify.compare(now, self.BASE)
         assert (finding.tag, finding.kind) == ("lib:new", classify.NEW)
 
@@ -406,20 +574,24 @@ class TestCompare:
         assert (finding.tag, finding.kind) == ("lib:c", classify.STALE)
 
     def test_a_restricted_run_skips_the_new_and_stale_checks_only(self):
-        now = {"lib:a": T(classify.DIFFERENT, "classes", "", 10)}
+        now = {"lib:a": dataclasses.replace(self.BASE["lib:a"], tag_class=classify.DIFFERENT)}
         [finding] = classify.compare(now, self.BASE, partial=True)
         assert finding.kind == classify.WORSE
         assert classify.compare({"lib:zz": self.BASE["lib:a"]}, self.BASE, partial=True) == []
 
     def test_a_baseline_that_does_not_parse_is_refused(self):
+        head = ",".join(classify.HEADER)
         with pytest.raises(ValueError, match="header"):
             classify.parse_baseline("tag,class\nlib:a,IDENTICAL\n")
         with pytest.raises(ValueError, match="unknown class"):
-            classify.parse_baseline(",".join(classify.HEADER) + "\nlib:a,SORT-OF-SAME,,,3\n")
+            classify.parse_baseline(head + "\nlib:a,SORT-OF-SAME,0,,,3,1/1,1\n")
         with pytest.raises(ValueError, match="twice"):
-            classify.parse_baseline(
-                ",".join(classify.HEADER) + "\nlib:a,IDENTICAL,,,3\nlib:a,IDENTICAL,,,3\n"
-            )
+            line = "lib:a,IDENTICAL,0,,,3,1/1,1\n"
+            classify.parse_baseline(head + "\n" + line + line)
+
+    def test_a_row_round_trips_through_the_file(self):
+        text = classify.render_baseline(self.BASE)
+        assert classify.parse_baseline(text) == self.BASE
 
 
 class TestGateOffs:
@@ -429,23 +601,26 @@ class TestGateOffs:
         run = runs["self"]
         assert run.returncode == 0, run.stdout + run.stderr[-2000:]
         assert run.rows, "the self-comparison measured nothing"
-        assert {r.tag_class for r in run.rows.values()} == {classify.IDENTICAL}
+        measured = {r.tag_class for r in run.rows.values()}
+        # IDENTICAL, or UNEXERCISED for a tag whose own output never appears at all
+        assert measured <= {classify.IDENTICAL, "UNEXERCISED"}
         assert {r.errors for r in run.rows.values()} == {""}
         # ... over the same tags the real run measures, not a subset
         assert set(run.rows) == set(runs["check"].rows)
 
     def test_a_difference_planted_in_the_python_tag_is_caught(self, runs, baseline):
         run = runs["plant"]
-        assert set(run.rows) == {"djust_components:kbd", "djust_components:icon"}
-        # the mutation applied: kbd is no longer what the baseline says
-        assert baseline["djust_components:kbd"].tag_class == classify.IDENTICAL
-        assert run.rows["djust_components:kbd"].tag_class == classify.DIFFERENT
+        planted, control = "djust_components:" + run.planted, "djust_components:" + run.control
+        assert set(run.rows) == {planted, control}
+        # the mutation applied: the planted tag is no longer what the baseline says
+        assert baseline[planted].tag_class == classify.IDENTICAL
+        assert run.rows[planted].tag_class == classify.DIFFERENT
         # the ratchet said so, naming the tag, with a failing exit code
         assert run.returncode == 1, run.stdout + run.stderr[-2000:]
-        assert "djust_components:kbd: WORSE" in run.stdout
+        assert "%s: WORSE" % planted in run.stdout
         # and only that tag: the control is untouched
-        assert run.rows["djust_components:icon"] == baseline["djust_components:icon"]
-        assert "djust_components:icon" not in run.stdout
+        assert run.rows[control] == baseline[control]
+        assert control not in run.stdout
 
     def test_a_flipped_baseline_row_is_caught_in_both_directions(self, runs, baseline):
         measured = runs["check"].rows
@@ -457,17 +632,32 @@ class TestGateOffs:
         )
 
         claims_worse = dict(baseline)
-        claims_worse[identical] = T(classify.DIFFERENT, "classes", "", baseline[identical].compared)
+        claims_worse[identical] = dataclasses.replace(
+            baseline[identical], tag_class=classify.DIFFERENT, different=1
+        )
         [finding] = classify.compare(measured, claims_worse)
         assert (finding.tag, finding.kind) == (identical, classify.BETTER)
 
         claims_better = dict(baseline)
-        claims_better[different] = T(classify.IDENTICAL, "", "", baseline[different].compared)
+        claims_better[different] = dataclasses.replace(
+            baseline[different], tag_class=classify.IDENTICAL, different=0, aspects=""
+        )
         [finding] = classify.compare(measured, claims_better)
         assert (finding.tag, finding.kind) == (different, classify.WORSE)
 
         assert claims_worse != baseline and claims_better != baseline  # the mutations applied
         assert classify.compare(measured, baseline) == []  # and the unmutated control is clean
+
+    def test_one_more_differing_variant_in_a_different_tag_is_caught(self, runs, baseline):
+        """The hole the review found: inside DIFFERENT the old baseline could not move."""
+        measured = runs["check"].rows
+        tag = next(t for t, r in sorted(measured.items()) if r.tag_class == classify.DIFFERENT)
+        claims_fewer = dict(baseline)
+        claims_fewer[tag] = dataclasses.replace(
+            baseline[tag], different=baseline[tag].different - 1
+        )
+        [finding] = classify.compare(measured, claims_fewer)
+        assert (finding.tag, finding.kind) == (tag, classify.WORSE)
 
     def test_a_deleted_and_an_added_baseline_row_are_caught(self, runs, baseline):
         measured = runs["check"].rows
@@ -481,8 +671,146 @@ class TestGateOffs:
             ("lib:ghost", classify.STALE)
         ]
 
+    def test_every_source_mutation_of_the_gateoff_script_still_applies(self):
+        """The list in scripts/template-library-parity-gateoff.py is how the ratchet is
+        shown to be load-bearing; a mutation whose text has moved proves nothing."""
+        spec = importlib.util.spec_from_file_location(
+            "parity_gateoff", ROOT / "scripts" / "template-library-parity-gateoff.py"
+        )
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        assert module.MUTATIONS
+        for label, path, old, new in module.MUTATIONS:
+            text = path.read_text(encoding="utf-8")
+            assert old in text, "mutation text not found for: %s" % label
+            assert text.replace(old, new, 1) != text, "no-op mutation: %s" % label
+
 
 # --------------------------------------------------------------------------- #
+
+
+class TestWhatTheHarnessSends:
+    """The review's finding: a tag whose handler delegates to a ``render_*`` helper was
+    exercised on one key of eleven, so IDENTICAL meant nothing. These pin the cure."""
+
+    def _handlers(self):
+        from djust.components import rust_handlers as rh
+
+        return rh
+
+    def test_discovery_follows_a_native_handler_into_its_render_helper(self):
+        rh = self._handlers()
+        keys, params = harness.discover(rh.ModalHandler)
+        assert {"title", "size", "open", "close_event", "description"} <= keys
+        # the entry point itself reads exactly one key; everything else comes from render_modal
+        assert harness._keys_in(harness._node_of(rh.ModalHandler)[1]) == {"open"}
+
+    def test_discovery_follows_each_of_the_delegating_handlers(self):
+        rh = self._handlers()
+        expect = {
+            rh.ConfirmDialogHandler: {"message", "title", "confirm_label", "cancel_label"},
+            rh.DropdownMenuHandler: {"label", "align", "open", "toggle_event"},
+            rh.MenuItemHandler: {"label", "icon", "event", "href", "disabled", "danger"},
+        }
+        for handler, wanted in expect.items():
+            keys, _ = harness.discover(handler)
+            assert wanted <= keys, (handler.__name__, wanted - keys)
+
+    def test_discovery_stops_at_the_libraries_under_test(self):
+        """A key read by Django or the engine is not a tag argument."""
+        rh = self._handlers()
+        keys, params = harness.discover(rh.ModalHandler)
+        assert "request" not in keys and "autoescape" not in keys
+
+    def test_discovered_keys_are_identifiers(self):
+        keys = harness._keys_of(
+            'def f(kw):\n    return kw["ok_1"], kw.get("="), kw["a b"], "x" in kw'
+        )
+        assert keys == {"ok_1", "x"}
+
+    def test_a_render_helper_parameters_count_as_arguments_but_carriers_do_not(
+        self, tmp_path, monkeypatch
+    ):
+        module = TestParameterDiscovery()._module(
+            tmp_path,
+            monkeypatch,
+            "djust.components.fake3663",
+            """
+            def render_widget(self, kw, title, label="x", content=""):
+                return title
+
+            def handler(args):
+                return render_widget(None, {}, "t")
+            """,
+        )
+        keys, params = harness.discover(module.handler)
+        assert params == {"title", "label"}
+
+    def test_each_string_parameter_gets_its_own_safe_and_evil_call(self):
+        info = variants.TagInfo(
+            lib="lib",
+            name="widget",
+            py_kind="raw",
+            py_keys=["open", "title", "label", "href"],
+            is_block=True,
+        )
+        generated = {v.name: v.src for v in variants.make_variants(info, lambda c: None, {})}
+        for param in ("title", "label"):
+            assert "%s=safe_html" % param in generated["safe:" + param]
+            assert "%s=evil" % param in generated["evil:" + param]
+        # the others are NOT hostile in that call, and the boolean switch is on so it renders
+        assert "label=safe_html" not in generated["safe:title"]
+        assert "open=True" in generated["safe:title"]
+        # an url parameter has no mark_safe form (a path), but does have a hostile one
+        assert "safe:href" not in generated and "evil:href" in generated
+
+    def test_a_tag_with_varargs_is_called_with_safe_literal_and_hostile_positionals(self):
+        info = variants.TagInfo(
+            lib="lib",
+            name="kbd",
+            py_kind="simple_tag",
+            sig=[("keys", "opt", "VAR_POSITIONAL")],
+        )
+        generated = {v.name: v.src for v in variants.make_variants(info, lambda c: None, {})}
+        assert generated["varargs_safe"] == "{% load lib %}{% kbd safe_html safe_html %}"
+        assert {"varargs_typical", "varargs_literal", "varargs_evil"} <= set(generated)
+
+    def test_a_child_tag_is_rendered_inside_an_open_parent_and_has_a_bare_parent_to_subtract(self):
+        parent = variants.TagInfo(
+            lib="lib", name="dropdown_menu", py_kind="raw", py_keys=["open"], is_block=True
+        )
+        child = variants.TagInfo(lib="lib", name="menu_item", py_kind="raw", py_keys=["label"])
+        generated = variants.make_variants(child, lambda c: parent, {})
+        typical = next(v for v in generated if v.name == "typical")
+        assert typical.src.startswith("{% load lib %}{% dropdown_menu open=True %}{% menu_item ")
+        assert typical.bare == "{% load lib %}{% dropdown_menu open=True %}{% enddropdown_menu %}"
+
+    def test_a_simple_tag_is_called_with_the_keys_only_rust_reads(self):
+        info = variants.TagInfo(
+            lib="lib",
+            name="icon",
+            py_kind="simple_tag",
+            sig=[("name", "req", "POSITIONAL_OR_KEYWORD")],
+            rust_keys=["name", "set"],
+        )
+        generated = {v.name: v.src for v in variants.make_variants(info, lambda c: None, {})}
+        assert "set=" in generated["rust_only_keys"]
+        assert variants.passed_count(info) == 2
+
+    def test_the_real_tags_the_review_named_are_no_longer_identical(self, baseline):
+        """kbd, modal, confirm_dialog, dropdown_menu and menu_item differ under input the first
+        harness never sent; if one becomes IDENTICAL it must be because it was fixed."""
+        for name in (
+            "kbd",
+            "modal",
+            "confirm_dialog",
+            "confirm_dialog_block",
+            "dropdown_menu",
+            "menu_item",
+        ):
+            row_ = baseline["djust_components:" + name]
+            assert row_.tag_class in (classify.DIFFERENT, "DIFFERENT-escape-policy-only"), name
+            assert row_.own_output > 0, name
 
 
 class TestParameterDiscovery:
@@ -493,7 +821,7 @@ class TestParameterDiscovery:
         module = importlib.util.module_from_spec(spec)
         monkeypatch.setitem(sys.modules, name, module)
         spec.loader.exec_module(module)
-        harness._top_level_sources.cache_clear()
+        harness._top_level_nodes.cache_clear()
         return module
 
     def test_a_class_bound_twice_resolves_to_the_last_binding(self, tmp_path, monkeypatch):
@@ -564,8 +892,8 @@ class TestVariantGeneration:
             ]
         )
         generated = {
-            v: (src, invalid)
-            for v, src, invalid in variants.make_variants(info, lambda c: None, {})
+            v.name: (v.src, v.invalid_usage)
+            for v in variants.make_variants(info, lambda c: None, {})
         }
         assert {"typical", "required_only", "positional_1", "positional_2", "noargs"} <= set(
             generated
@@ -581,12 +909,12 @@ class TestVariantGeneration:
     def test_a_block_tag_gets_a_body_and_its_parent(self):
         info = self._info(py_kind="raw", py_keys=["id"], is_block=True, name="item")
         [typical] = [
-            s for v, s, _ in variants.make_variants(info, lambda c: None, {}) if v == "typical"
+            v.src for v in variants.make_variants(info, lambda c: None, {}) if v.name == "typical"
         ]
         assert typical == '{% load lib %}{% item id="id1" %}' + variants.BODY + "{% enditem %}"
         child = self._info(py_kind="raw", py_keys=["id"], is_block=True, name="accordion_item")
         [wrapped] = [
-            s for v, s, _ in variants.make_variants(child, lambda c: None, {}) if v == "typical"
+            v.src for v in variants.make_variants(child, lambda c: None, {}) if v.name == "typical"
         ]
         assert wrapped.startswith("{% load lib %}{% accordion %}{% accordion_item ")
         assert wrapped.endswith("{% endaccordion_item %}{% endaccordion %}")
@@ -595,7 +923,7 @@ class TestVariantGeneration:
         info = self._info(sig=[("items", "opt", "POSITIONAL_OR_KEYWORD")])
         first = variants.make_variants(info, lambda c: None, {})
         assert first == variants.make_variants(info, lambda c: None, {})
-        assert [v for v, _, _ in first].count("typical_str") == 1  # a list parameter
+        assert [v.name for v in first].count("typical_str") == 1  # a list parameter
 
     def test_parameter_kinds_come_from_the_name(self):
         assert variants.kind_of("toggle_event") == "event"

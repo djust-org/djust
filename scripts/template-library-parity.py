@@ -48,7 +48,9 @@ DEFAULT_BASELINE = _REPO_ROOT / "scripts" / "template-library-parity-baseline.cs
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser = argparse.ArgumentParser(
+        description="Parity ratchet: djust's own template libraries, Django engine vs Rust engine (#3663)."
+    )
     parser.add_argument("--baseline", type=Path, default=DEFAULT_BASELINE)
     parser.add_argument("--json", type=Path, help="also write the measured table here")
     parser.add_argument(
@@ -81,10 +83,11 @@ def _measure(args: argparse.Namespace, only: set[str] | None) -> harness.Audit:
 def _write_json(path: Path, audit: harness.Audit) -> None:
     payload = {
         "rows": {
-            tag: dict(zip(("class", "aspects", "errors", "compared"), row.as_fields()))
+            tag: dict(zip(classify.HEADER[1:], row.as_fields()))
             for tag, row in sorted(audit.rows.items())
         },
         "unmeasured": sorted(audit.unmeasured),
+        "probe": audit.probe,
     }
     path.write_text(json.dumps(payload, indent=1, sort_keys=True) + "\n", encoding="utf-8")
 
@@ -102,11 +105,23 @@ def _repro(audit: harness.Audit, tag: str, variant: str | None) -> int:
             print("-- %s [%s]\n%s" % (record.variant, record.cls, record.src))
             print("   python (%s): %s" % record.python)
             print("   rust   (%s): %s" % record.rust)
+            if record.compared is not None:
+                print("   compared (own output beyond the parent's):")
+                print("     python: %s\n     rust:   %s" % record.compared)
     return 0
 
 
 def _self_compare(audit: harness.Audit) -> int:
-    off = {k: r for k, r in audit.rows.items() if r.tag_class != classify.IDENTICAL}
+    def differs(row: classify.TagRow) -> bool:
+        # UNEXERCISED is allowed here: a tag whose own output never appears is
+        # the same against itself. Anything that DIFFERS from itself is not.
+        return (
+            row.tag_class not in (classify.IDENTICAL, "UNEXERCISED")
+            or row.different > 0
+            or bool(row.errors)
+        )
+
+    off = {k: r for k, r in audit.rows.items() if differs(r)}
     for key, row in sorted(off.items()):
         print("%s: harness difference with Django against itself: %s" % (key, row.as_fields()))
     if off:
@@ -115,7 +130,7 @@ def _self_compare(audit: harness.Audit) -> int:
             % (len(off), len(audit.rows))
         )
         return 1
-    print("gate-off held: all %d tags IDENTICAL with Django against itself" % len(audit.rows))
+    print("gate-off held: all %d tags identical with Django against itself" % len(audit.rows))
     return 0
 
 
@@ -151,6 +166,7 @@ def main(argv: list[str] | None = None) -> int:
         audit.rows, classify.read_baseline(args.baseline), partial=only is not None
     )
     if not args.quiet:
+        print("djust from %s" % audit.probe["djust"])
         print("measured %d tags %s" % (len(audit.rows), classify.summarize(audit.rows)))
     for finding in findings:
         print(finding)

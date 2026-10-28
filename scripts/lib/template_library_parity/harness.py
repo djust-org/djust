@@ -32,6 +32,7 @@ from __future__ import annotations
 import ast
 import contextlib
 import functools
+import importlib
 import inspect
 import itertools
 import logging
@@ -64,7 +65,6 @@ PLANT_MARKER = "<i data-parity-plant></i>"
 FROZEN_DATE = (2024, 3, 15)
 FROZEN_DATETIME = (2024, 3, 15, 12, 0, 0)
 
-_KEY_RE = re.compile(r"""(?:\.get\(\s*|\[\s*)["'](\w+)["']""")
 _ids = itertools.count()
 
 
@@ -173,14 +173,26 @@ def configure_django() -> None:
 
 
 @functools.lru_cache(maxsize=None)
-def _top_level_sources(path: str) -> dict[str, str]:
-    """``{name: source}`` of a module's top-level functions and classes, LAST binding wins."""
-    text = Path(path).read_text(encoding="utf-8")
-    sources: dict[str, str] = {}
-    for node in ast.parse(text).body:
+def _module_text(path: str) -> str:
+    return Path(path).read_text(encoding="utf-8")
+
+
+@functools.lru_cache(maxsize=None)
+def _top_level_nodes(path: str) -> dict[str, ast.AST]:
+    """``{name: node}`` of a module's top-level defs, LAST binding wins."""
+    found: dict[str, ast.AST] = {}
+    for node in ast.parse(_module_text(path)).body:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            sources[node.name] = ast.get_source_segment(text, node) or ""
-    return sources
+            found[node.name] = node
+    return found
+
+
+def _node_of(obj: Any) -> tuple[str, ast.AST] | None:
+    obj = inspect.unwrap(obj)
+    module = sys.modules.get(getattr(obj, "__module__", ""))
+    path = getattr(module, "__file__", None)
+    node = _top_level_nodes(path).get(obj.__name__) if path else None
+    return (path, node) if path and node is not None else None
 
 
 def _source_of(obj: Any) -> str:
@@ -191,16 +203,121 @@ def _source_of(obj: Any) -> str:
     the name twice. Python itself resolves the name to the LAST top-level
     binding, so that is what this returns. ``""`` when there is none.
     """
-    obj = inspect.unwrap(obj)
-    module = sys.modules.get(getattr(obj, "__module__", ""))
-    path = getattr(module, "__file__", None)
-    if not path:
-        return ""
-    return _top_level_sources(path).get(obj.__name__, "")
+    found = _node_of(obj)
+    return (ast.get_source_segment(_module_text(found[0]), found[1]) or "") if found else ""
+
+
+_IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+def _keys_in(node: ast.AST) -> set[str]:
+    """String keys a function or class reads: ``x["k"]``, ``x.get("k")``, ``"k" in x``.
+
+    Only identifiers: a key that is not one cannot be a template argument.
+    """
+    keys: set[str] = set()
+    for n in ast.walk(node):
+        if isinstance(n, ast.Subscript) and isinstance(n.slice, ast.Constant):
+            if isinstance(n.slice.value, str):
+                keys.add(n.slice.value)
+        elif isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute):
+            if n.func.attr in ("get", "pop", "setdefault") and n.args:
+                first = n.args[0]
+                if isinstance(first, ast.Constant) and isinstance(first.value, str):
+                    keys.add(first.value)
+        elif isinstance(n, ast.Compare) and isinstance(n.left, ast.Constant):
+            if isinstance(n.left.value, str) and any(isinstance(o, ast.In) for o in n.ops):
+                keys.add(n.left.value)
+    return {k for k in keys if _IDENTIFIER.fullmatch(k)}
 
 
 def _keys_of(src: str) -> set[str]:
-    return set(_KEY_RE.findall(src))
+    return _keys_in(ast.parse(src))
+
+
+#: Only code in the libraries under test is followed: a helper in Django or in
+#: the engine reads keys that are not tag arguments.
+_FOLLOW_PREFIXES = ("djust.components", "djust.theming")
+#: Parameters that carry the argument dict or the body rather than name an argument.
+_CARRIERS = frozenset(
+    {
+        "self",
+        "cls",
+        "context",
+        "kw",
+        "kwargs",
+        "args",
+        "content",
+        "body",
+        "item",
+        "request",
+        "parser",
+    }
+)
+_MAX_NODES = 80
+_MAX_DEPTH = 5
+
+
+def _callees(node: ast.AST, owner: Any) -> list[Any]:
+    """The djust-library functions and classes ``node`` calls by name.
+
+    A call resolves through the node's own function-local ``from X import Y``
+    first (that is how every native handler reaches ``render_modal`` and its
+    siblings), then through the owner module's globals.
+    """
+    local: dict[str, tuple[str, str]] = {}
+    for n in ast.walk(node):
+        if isinstance(n, ast.ImportFrom) and n.module and not n.level:
+            for alias in n.names:
+                local[alias.asname or alias.name] = (n.module, alias.name)
+    module_globals = vars(sys.modules.get(getattr(owner, "__module__", ""), None) or owner)
+    found: list[Any] = []
+    for n in ast.walk(node):
+        if not (isinstance(n, ast.Call) and isinstance(n.func, ast.Name)):
+            continue
+        name = n.func.id
+        if name in local:
+            module = local[name][0]
+            if not module.startswith(_FOLLOW_PREFIXES):
+                continue
+            target = getattr(importlib.import_module(module), local[name][1], None)
+        else:
+            target = module_globals.get(name)
+        if (inspect.isfunction(target) or inspect.isclass(target)) and str(
+            getattr(target, "__module__", "")
+        ).startswith(_FOLLOW_PREFIXES):
+            found.append(target)
+    return found
+
+
+def discover(root: Any) -> tuple[set[str], set[str]]:
+    """``(keys read, helper parameters)`` for ``root``, following calls transitively.
+
+    A native handler or a compile function rarely reads its arguments itself:
+    it hands them to ``render_modal`` / ``render_menu_item`` / ..., which read
+    them. Stopping at the entry point finds one key of eleven and leaves the
+    rest of the tag never exercised, which is how a handler could drop a
+    parameter and the baseline stay green. Parameters of a ``render_*`` helper
+    count as arguments; other helpers contribute only the keys they read.
+    """
+    keys: set[str] = set()
+    params: set[str] = set()
+    seen: set[tuple[str, str]] = set()
+    queue: list[tuple[Any, int]] = [(root, 0)]
+    while queue and len(seen) < _MAX_NODES:
+        obj, depth = queue.pop(0)
+        found = _node_of(obj)
+        ident = (str(getattr(obj, "__module__", "")), str(getattr(obj, "__qualname__", "")))
+        if found is None or ident in seen:
+            continue
+        seen.add(ident)
+        node = found[1]
+        keys |= _keys_in(node)
+        if obj is not root and inspect.isfunction(obj) and obj.__name__.startswith("render_"):
+            params |= {p for p in inspect.signature(obj).parameters if p not in _CARRIERS}
+        if depth < _MAX_DEPTH:
+            queue.extend((c, depth + 1) for c in _callees(node, obj))
+    return keys, params
 
 
 def _native_kinds(name: str) -> list[str]:
@@ -231,13 +348,8 @@ def _python_params(fn: Any, kind: str) -> tuple[list[tuple[str, str, str]], list
                 )
                 sig.append((p.name, "req" if required else "opt", p.kind.name))
         return sig, []
-    src = _source_of(fn)
-    keys = _keys_of(src)
-    for cname in sorted(set(re.findall(r"return\s+(\w+)\(", src))):
-        cls = fn.__globals__.get(cname)
-        if inspect.isclass(cls):
-            keys |= _keys_of(_source_of(cls))
-    return [], sorted(keys)
+    keys, params = discover(fn)
+    return [], sorted(keys | params)
 
 
 def _rust_handler_keys() -> dict[str, list[str]]:
@@ -248,7 +360,11 @@ def _rust_handler_keys() -> dict[str, list[str]]:
         handlers[name] = handler
     for name, _end, handler in rh.BLOCK_HANDLERS:
         handlers[name] = handler
-    return {name: sorted(_keys_of(_source_of(type(h)))) for name, h in handlers.items()}
+    out = {}
+    for name, h in handlers.items():
+        keys, params = discover(type(h))
+        out[name] = sorted(keys | params)
+    return out
 
 
 def inventory() -> dict[str, variants.TagInfo]:
@@ -291,12 +407,16 @@ def _bound_form() -> Any:
         name = forms.CharField(required=True)
         age = forms.IntegerField(required=True)
 
+        def clean(self) -> None:
+            # A form-level error: ``{% form_errors %}`` renders only these.
+            raise forms.ValidationError("Form-level <b>error</b>")
+
     form = Form(data={})
     form.is_valid()
     return form
 
 
-def make_context() -> dict[str, Any]:
+def make_context(with_form: bool = True) -> dict[str, Any]:
     from django.utils.safestring import mark_safe
 
     item = {
@@ -326,7 +446,10 @@ def make_context() -> dict[str, Any]:
         "lst_evil_str": [EVIL, EVIL],
         "cp_examples": [{"label": "A", "status": "success"}, {"label": "B", "status": "error"}],
         "cp_values": {},
-        "bound_form": _bound_form(),
+        # The Rust engine serialises every key of the context on every render and
+        # a bound form is by far the most expensive; a template that never names
+        # it renders the same without it.
+        **({"bound_form": _bound_form()} if with_form else {}),
     }
 
 
@@ -334,7 +457,9 @@ def render(engine: Any, src: str) -> tuple[str, str]:
     """``("ok", output)`` or ``("err", "<ExceptionType>: <message>")``."""
     reset_ids()
     try:
-        return "ok", classify.norm_addr(engine.from_string(src).render(make_context()))
+        return "ok", classify.norm_addr(
+            engine.from_string(src).render(make_context("bound_form" in src))
+        )
     except Exception as exc:  # noqa: BLE001 - the exception IS the measurement
         return "err", "%s: %s" % (type(exc).__name__, str(exc)[:300])
 
@@ -373,6 +498,8 @@ class VariantRecord:
     cls: str
     python: tuple[str, str]
     rust: tuple[str, str]
+    #: what was compared when it is not the whole output (a child tag's own fragment)
+    compared: Optional[tuple[str, str]] = None
 
 
 @dataclass
@@ -381,10 +508,24 @@ class Audit:
     detail: dict[str, list[VariantRecord]] = field(default_factory=dict)
     #: tags of the two libraries WITHOUT a native handler: nothing to compare
     unmeasured: list[str] = field(default_factory=list)
+    #: what this process saw: the ``djust`` it imported, the date, the first uuid
+    probe: dict[str, str] = field(default_factory=dict)
 
 
 def _selected(key: str, only: Optional[set[str]]) -> bool:
     return not only or key in only or key.split(":", 1)[1] in only
+
+
+def _probe() -> dict[str, str]:
+    import datetime
+
+    import djust
+
+    return {
+        "djust": str(djust.__file__),
+        "today": datetime.date.today().isoformat(),
+        "uuid": str(uuid.uuid4()),
+    }
 
 
 def run_audit(
@@ -405,7 +546,7 @@ def run_audit(
     infos = inventory()
     targets = {k: i for k, i in infos.items() if i.native}
     blockness = {i.name: "block" in i.native for i in targets.values()}
-    audit = Audit(unmeasured=[k for k, i in infos.items() if not i.native])
+    audit = Audit(unmeasured=[k for k, i in infos.items() if not i.native], probe=_probe())
 
     def lookup_in(label: str) -> Any:
         return lambda child: infos.get("%s:%s" % (label, child))
@@ -415,22 +556,47 @@ def run_audit(
             continue
         results = []
         records = []
-        for variant, src, invalid in variants.make_variants(info, lookup_in(info.lib), blockness):
+        bare_outputs: dict[str, tuple[str, str]] = {}
+        for variant in variants.make_variants(info, lookup_in(info.lib), blockness):
             planting = (
                 planted_difference(info.lib, info.name)
                 if plant in (key, info.name)
                 else contextlib.nullcontext()
             )
             with planting:
-                py_status, py_out = render(python_engine, src)
-            rs_status, rs_out = render(rust_engine, src)
+                py_status, py_out = render(python_engine, variant.src)
+            rs_status, rs_out = render(rust_engine, variant.src)
+            py_cmp, rs_cmp, fragment = py_out, rs_out, None
+            if variant.bare is not None:
+                if variant.bare not in bare_outputs:
+                    bare_outputs[variant.bare] = (
+                        render(python_engine, variant.bare)[1],
+                        render(rust_engine, variant.bare)[1],
+                    )
+                bare_py, bare_rs = bare_outputs[variant.bare]
+                if py_status == "ok":
+                    py_cmp = classify.own_fragment(bare_py, py_out)
+                if rs_status == "ok":
+                    rs_cmp = classify.own_fragment(bare_rs, rs_out)
+                fragment = (py_cmp, rs_cmp)
+            present = bool(py_status == "ok" and py_cmp.strip()) or bool(
+                rs_status == "ok" and rs_cmp.strip()
+            )
             measured = classify.measure_variant(
-                variant, invalid, py_status, py_out, rs_status, rs_out
+                variant.name, variant.invalid_usage, py_status, py_cmp, rs_status, rs_cmp, present
             )
             results.append(measured)
             records.append(
-                VariantRecord(variant, src, measured.cls, (py_status, py_out), (rs_status, rs_out))
+                VariantRecord(
+                    variant.name,
+                    variant.src,
+                    measured.cls,
+                    (py_status, py_out),
+                    (rs_status, rs_out),
+                    fragment,
+                )
             )
-        audit.rows[key] = classify.classify_tag(results)
+        passed = variants.passed_count(info)
+        audit.rows[key] = classify.classify_tag(results, passed, max(passed, len(info.readable())))
         audit.detail[key] = records
     return audit

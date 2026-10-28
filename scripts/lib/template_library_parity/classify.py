@@ -22,6 +22,7 @@ scan at all (it is a byte comparison); only the ``aspects`` column does.
 from __future__ import annotations
 
 import csv
+import difflib
 import html
 import io
 import re
@@ -52,6 +53,17 @@ TAG_CLASSES = (
 # in markup.
 ESCAPE_VARIANTS = ("literal", "safe")
 
+#: A tag whose harness passes fewer than this share of the parameters its
+#: implementations can read is not measured, it is sampled: the class would say
+#: nothing about the rest.
+MIN_EXERCISED = 0.5
+
+
+def is_escape_variant(name: str) -> bool:
+    """``literal`` / ``safe`` and their per-parameter forms (``safe:title``)."""
+    return name.split(":", 1)[0] in ESCAPE_VARIANTS
+
+
 _XSS_MARKERS = ("<script>alert(1)</script>", "<img src=x onerror=alert(2)>")
 _LITERAL_MARKERS = ("<i>b</i>", "<b>safe</b>")
 _JS_URL = re.compile(r"""(?:href|src|action|formaction)\s*=\s*["']?\s*javascript:""")
@@ -59,7 +71,14 @@ _JS_URL = re.compile(r"""(?:href|src|action|formaction)\s*=\s*["']?\s*javascript
 _WS = re.compile(r"\s+")
 _GAP = re.compile(r">\s+<")
 _ADDR = re.compile(r"0x[0-9a-f]{6,}")
-_UUID = re.compile(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){0,3}(?:-[0-9a-f]{12})?|\b[0-9a-f]{32}\b")
+# The shapes the harness's own counting uuid4 produces (an int of a few bits):
+# the hyphenated form, the 32-digit ``.hex`` and the truncated ``.hex[:n]``.
+# NOT any run of hex digits: ``item-deadbeef`` and ``item-cafebabe`` differ.
+_UUID = re.compile(
+    r"0{8}-0{4}-0{4}-0{4}-0{9}[0-9a-f]{3}|(?<![0-9a-f])0{29}[0-9a-f]{3}(?![0-9a-f])"
+    r"|(?<![0-9a-f])0{6,12}(?![0-9a-f])"
+)
+_TOKEN = re.compile(r"<[^>]*>|[^<]+")
 
 _SCRIPT_STYLE = re.compile(
     r"""(<(script|style)\b(?:[^>"']|"[^"]*"|'[^']*')*>).*?</\2\s*>""", re.I | re.S
@@ -168,6 +187,23 @@ def classify_variant(py_status: str, py_out: str, rs_status: str, rs_out: str) -
     return ERR_ONE_ENGINE
 
 
+def own_fragment(bare: str, full: str) -> str:
+    """What a child tag contributed: ``full`` minus the same template without it.
+
+    A tag that only renders inside a parent (``menu_item`` in ``dropdown_menu``)
+    is compared on the markup it ADDED, so a difference in the parent's own
+    markup is not charged to the child, and a child the parent hides is seen to
+    contribute nothing. Token-level (tags and text runs), deterministic.
+    """
+    a, b = _TOKEN.findall(bare), _TOKEN.findall(full)
+    matcher = difflib.SequenceMatcher(None, a, b, autojunk=False)
+    return "".join(
+        "".join(b[j1:j2])
+        for op, _i1, _i2, j1, j2 in matcher.get_opcodes()
+        if op in ("insert", "replace")
+    )
+
+
 @dataclass(frozen=True)
 class VariantResult:
     variant: str
@@ -176,6 +212,8 @@ class VariantResult:
     aspects: tuple[str, ...]
     python_errored: bool
     rust_errored: bool
+    #: the tag's OWN output appeared in at least one engine (a child tag: beyond its parent's)
+    present: bool = True
 
 
 def measure_variant(
@@ -185,7 +223,9 @@ def measure_variant(
     py_out: str,
     rs_status: str,
     rs_out: str,
+    present: bool = True,
 ) -> VariantResult:
+    """``py_out`` / ``rs_out`` are what is compared: the output, or for a child tag its fragment."""
     cls = classify_variant(py_status, py_out, rs_status, rs_out)
     aspects: list[str] = []
     if cls == DIFFERENT:
@@ -194,7 +234,7 @@ def measure_variant(
         if set(raw_markers(py_out)) != set(raw_markers(rs_out)):
             aspects.append("escaping")
     return VariantResult(
-        variant, invalid_usage, cls, tuple(aspects), py_status == "err", rs_status == "err"
+        variant, invalid_usage, cls, tuple(aspects), py_status == "err", rs_status == "err", present
     )
 
 
@@ -203,21 +243,55 @@ class TagRow:
     """One line of the baseline: what is known about one tag."""
 
     tag_class: str
-    aspects: str  # "+"-joined, sorted: the structural aspects that differ
-    errors: str  # "+"-joined, sorted "<variant>:<engine>": one engine rejected the input
-    compared: int  # variants both engines rendered
+    different: int = 0  # variants whose output differs
+    aspects: str = ""  # "+"-joined sorted "<aspect>:<variants it differs in>"
+    errors: str = ""  # "+"-joined sorted "<variant>:<engine>": one engine rejected the input
+    compared: int = 0  # variants both engines rendered
+    exercised: str = "1/1"  # "<parameters the harness passed>/<parameters the tag can read>"
+    own_output: int = 0  # variants in which the tag's own output appeared
 
-    def as_fields(self) -> tuple[str, str, str, str]:
-        return (self.tag_class, self.aspects, self.errors, str(self.compared))
+    def as_fields(self) -> tuple[str, ...]:
+        return (
+            self.tag_class,
+            str(self.different),
+            self.aspects,
+            self.errors,
+            str(self.compared),
+            self.exercised,
+            str(self.own_output),
+        )
+
+    @classmethod
+    def from_fields(cls, fields: Sequence[str]) -> "TagRow":
+        tag_class, different, aspects, errors, compared, exercised, own_output = fields
+        return cls(
+            tag_class, int(different), aspects, errors, int(compared), exercised, int(own_output)
+        )
+
+    def passed_readable(self) -> tuple[int, int]:
+        passed, readable = self.exercised.split("/")
+        return int(passed), int(readable)
 
 
-def classify_tag(results: Sequence[VariantResult]) -> TagRow:
+def classify_tag(results: Sequence[VariantResult], passed: int = 1, readable: int = 1) -> TagRow:
+    """Aggregate one tag's variants.
+
+    ``passed`` / ``readable``: how many distinct parameters the generated calls
+    pass, and how many the Python tag and the native handler can read between
+    them. A tag whose own output never appeared, or that is exercised on under
+    ``MIN_EXERCISED`` of what it reads, is ``UNEXERCISED``: neither
+    ``IDENTICAL`` nor ``DIFFERENT`` would be a statement about the tag.
+    """
     valid = [r for r in results if not r.invalid_usage]
     counts = Counter(r.cls for r in valid)
-    core = [r for r in valid if r.variant not in ESCAPE_VARIANTS and r.cls == DIFFERENT]
-    escape_only = [r for r in valid if r.variant in ESCAPE_VARIANTS and r.cls == DIFFERENT]
+    core = [r for r in valid if not is_escape_variant(r.variant) and r.cls == DIFFERENT]
+    escape_only = [r for r in valid if is_escape_variant(r.variant) and r.cls == DIFFERENT]
+    own_output = sum(1 for r in results if r.present)
+    unexercised = own_output == 0 or bool(readable and passed < MIN_EXERCISED * readable)
     if core:
-        tag_class = DIFFERENT
+        tag_class = DIFFERENT  # one proven difference is a statement about the tag
+    elif unexercised:
+        tag_class = "UNEXERCISED"  # but "no difference found" is not, if little was tried
     elif escape_only:
         tag_class = "DIFFERENT-escape-policy-only"
     elif counts[ERR_ONE_ENGINE]:
@@ -228,21 +302,30 @@ def classify_tag(results: Sequence[VariantResult]) -> TagRow:
         tag_class = IDENTICAL
     else:
         tag_class = "UNEXERCISED"
-    aspects = sorted({a for r in valid for a in r.aspects})
+    aspect_counts = Counter(a for r in valid for a in set(r.aspects))
+    aspects = "+".join("%s:%d" % (a, aspect_counts[a]) for a in sorted(aspect_counts))
     errors = sorted(
         f"{r.variant}:{'python' if r.python_errored else 'rust'}"
         for r in results
         if r.cls == ERR_ONE_ENGINE
     )
     compared = sum(1 for r in results if r.cls in (IDENTICAL, WHITESPACE_ONLY, DIFFERENT))
-    return TagRow(tag_class, "+".join(aspects), "+".join(errors), compared)
+    return TagRow(
+        tag_class,
+        counts[DIFFERENT],
+        aspects,
+        "+".join(errors),
+        compared,
+        "%d/%d" % (passed, readable),
+        own_output,
+    )
 
 
 # --------------------------------------------------------------------------- #
 # The baseline file
 
 
-HEADER = ("tag", "class", "aspects", "errors", "compared")
+HEADER = ("tag", "class", "different", "aspects", "errors", "compared", "exercised", "own_output")
 
 
 def render_baseline(rows: Mapping[str, TagRow]) -> str:
@@ -263,12 +346,12 @@ def parse_baseline(text: str) -> dict[str, TagRow]:
     for fields in reader:
         if len(fields) != len(HEADER):
             raise ValueError("baseline row has %d fields: %r" % (len(fields), fields))
-        tag, tag_class, aspects, errors, compared = fields
+        tag = fields[0]
         if tag in rows:
             raise ValueError("baseline lists %s twice" % tag)
-        if tag_class not in TAG_CLASSES:
-            raise ValueError("baseline row %s has unknown class %r" % (tag, tag_class))
-        rows[tag] = TagRow(tag_class, aspects, errors, int(compared))
+        if fields[1] not in TAG_CLASSES:
+            raise ValueError("baseline row %s has unknown class %r" % (tag, fields[1]))
+        rows[tag] = TagRow.from_fields(fields[1:])
     return rows
 
 
@@ -303,13 +386,23 @@ def _tokens(joined: str) -> set[str]:
     return set(filter(None, joined.split("+")))
 
 
+def _counts(joined: str) -> dict[str, int]:
+    out = {}
+    for token in filter(None, joined.split("+")):
+        name, _, n = token.rpartition(":")
+        out[name] = int(n)
+    return out
+
+
 def _describe(row: TagRow) -> str:
-    parts = [row.tag_class]
+    parts = [row.tag_class, "different=%d" % row.different]
     if row.aspects:
         parts.append("aspects=" + row.aspects)
     if row.errors:
         parts.append("errors=" + row.errors)
-    parts.append("compared=%d" % row.compared)
+    parts.append(
+        "compared=%d exercised=%s own_output=%d" % (row.compared, row.exercised, row.own_output)
+    )
     return " ".join(parts)
 
 
@@ -321,31 +414,43 @@ def _compare_one(tag: str, now: TagRow, then: TagRow) -> Finding | None:
         return None
     worse: list[str] = []
     better: list[str] = []
+
+    def number(label: str, a: int, b: int, higher_is_worse: bool) -> None:
+        if a == b:
+            return
+        (worse if (a > b) == higher_is_worse else better).append("%s %d -> %d" % (label, b, a))
+
     rank_now, rank_then = TAG_CLASSES.index(now.tag_class), TAG_CLASSES.index(then.tag_class)
-    if rank_now > rank_then:
-        worse.append("class %s -> %s" % (then.tag_class, now.tag_class))
-    elif rank_now < rank_then:
-        better.append("class %s -> %s" % (then.tag_class, now.tag_class))
-    for label, a, b in (
-        ("aspects", now.aspects, then.aspects),
-        ("one-engine errors", now.errors, then.errors),
-    ):
-        added, removed = _tokens(a) - _tokens(b), _tokens(b) - _tokens(a)
-        if added:
-            worse.append("new %s: %s" % (label, "+".join(sorted(added))))
-        if removed:
-            better.append("%s gone: %s" % (label, "+".join(sorted(removed))))
-    if now.compared < then.compared:
-        worse.append("coverage lost: %d -> %d variants compared" % (then.compared, now.compared))
-    elif now.compared > then.compared:
-        better.append("coverage grew: %d -> %d variants compared" % (then.compared, now.compared))
+    if rank_now != rank_then:
+        (worse if rank_now > rank_then else better).append(
+            "class %s -> %s" % (then.tag_class, now.tag_class)
+        )
+    number("differing variants", now.different, then.different, True)
+    c_now, c_then = _counts(now.aspects), _counts(then.aspects)
+    for aspect in sorted(set(c_now) | set(c_then)):
+        a, b = c_now.get(aspect, 0), c_then.get(aspect, 0)
+        if a != b:
+            number("variants differing in %s" % aspect, a, b, True)
+    added, removed = (
+        _tokens(now.errors) - _tokens(then.errors),
+        _tokens(then.errors) - _tokens(now.errors),
+    )
+    if added:
+        worse.append("new one-engine errors: %s" % "+".join(sorted(added)))
+    if removed:
+        better.append("one-engine errors gone: %s" % "+".join(sorted(removed)))
+    number("variants compared", now.compared, then.compared, False)
+    number("variants showing the tag's own output", now.own_output, then.own_output, False)
+    (p_now, r_now), (p_then, r_then) = now.passed_readable(), then.passed_readable()
+    number("parameters exercised", p_now, p_then, False)
+    number("parameters the tag can read", r_now, r_then, True)
     detail = "baseline [%s] now [%s]" % (_describe(then), _describe(now))
     if worse:
         return Finding(
             tag,
             WORSE,
-            "parity regressed (%s); %s. Fix the divergence; if it is deliberate, say so in "
-            "review and %s." % ("; ".join(worse), detail, _TO_REGENERATE),
+            "parity regressed (%s); %s. Fix the divergence or restore the coverage; if it is "
+            "deliberate, say so in review and %s." % ("; ".join(worse), detail, _TO_REGENERATE),
         )
     return Finding(
         tag,
