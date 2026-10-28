@@ -171,6 +171,8 @@ On a view that declares `temporary_assigns`, the stream items are emptied after 
 
 The server keeps every row of such a container in the page it diffs against, so that tree grows with each row added and each event costs a little more (about 1 ms with 200 rows, 15 ms with 8,000). Bound a feed that grows without end yourself; `temporary_assigns` does not.
 
+The container is recognised by reading its body in the template for `streams` (or a `temporary_assigns` key), through an alias or an `{% include %}` too. What the scan sees through, what it cannot see (a value derived from the attribute, a tag that reads the view by itself) and its limits are listed under [Temporary assigns for append-only lists](BEST_PRACTICES.md#4-temporary-assigns-for-append-only-lists).
+
 ## Composing the two
 
 A chat app typically uses all three on one container:

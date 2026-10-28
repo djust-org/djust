@@ -572,13 +572,50 @@ applies to a full HTML update, which the client handles itself. Details:
   row whose `id` is already in the container is left as it is (it is not updated
   or added twice); a row with no `id` is not added (DEBUG logs a warning naming
   the view).
-- Which containers accumulate is worked out from the template: a `dj-update`
-  container whose body reads a `temporary_assigns` key (or `streams`, or has an
-  `{% include %}`) does. Any other `dj-update` list in the same view is
-  re-rendered whole every time, so a removed or edited row there still reaches
-  the page. The same goes for every list in a view that declares no
-  `temporary_assigns`.
+- Which containers accumulate is worked out from the template source: a
+  `dj-update` container whose **own body** reads a `temporary_assigns` key (or
+  `streams`) does. Any other `dj-update` list in the same view is re-rendered
+  whole every time, so a removed or edited row there still reaches the page. The
+  same goes for every list in a view that declares no `temporary_assigns`.
+  "Reads" means the key by name, **or** under another name that is certain to be
+  the same rows:
+  - an alias made with `{% with items=rows %}` or `{% with rows as items %}`,
+    including one that wraps the container from outside;
+  - a context key that holds the very same object, such as
+    `context["feed"] = self.rows` in `get_context_data` (checked by identity on
+    every render).
+- A nested `dj-update` container's body belongs to that container, not to its
+  parent: an outer list that is an ordinary attribute stays authoritative even
+  when the list inside it is fed by a `temporary_assigns` key.
+- An `{% include %}` in a container is read too: a static name is found the way
+  the renderer finds it (the template directories, then Django's loaders, `./`
+  and `../` relative to the including template) and scanned, including the
+  includes inside it. An include with `only` sees nothing but its `with` values,
+  so only those count. A name that is a variable, a filtered name, a file that
+  cannot be found, an include cycle, a chain more than 8 levels deep, a file that
+  uses `{% extends %}` or more than 64 included files are NOT seen through: the
+  include is assumed to read a temporary key, and the container accumulates.
+- **What the scan cannot see leaves the container re-rendered whole**, so only
+  the newest rows are shown and a stored row is replaced: a value derived from the
+  attribute (`feed = list(self.rows)`, a slice or a filter applied in
+  `get_context_data`), a template tag or component that reads the view without
+  naming the key in the template, and a `{% with rows=other %}` that reuses the
+  key's name for something else (which is still treated as the key). When a
+  container does not accumulate and you expected it to, name the key in its body
+  (`{% for r in rows %}`) or return the attribute itself from `get_context_data`.
+- The scan runs once per view class and is kept: edit a template (or a file it
+  includes) with the dev file watcher running and the next render reads it again;
+  without the watcher a change is read after a restart. It is bounded: a template
+  of more than 1,000,000 characters, one nesting more than 1,000 elements or one
+  that takes more than 2 seconds to scan accumulates nothing (every `dj-update`
+  list is re-rendered whole) and logs a warning. Aliases are followed through
+  at most 64 nested `{% with %}` tags; with more than 64 `{% with %}` aliases of
+  the key open at once, the later ones are not recognised.
 - `dj-update="prepend"` puts each new row first, as one insert at the front.
+  Rows may repeat an `id` (in the render that mounts the page, or within one
+  batch of new rows): they are all kept, as the client's full HTML update keeps
+  them, and each new row is still one insert at the front. A row repeating the
+  `id` of a row already in the container is left alone, as for any other row.
 - **The rows stay in the server's copy of the page.** The server keeps the whole
   container so it can tell what is new, and the stored tree it diffs against
   grows with every row you add; `temporary_assigns` empties the context copy,
