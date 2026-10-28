@@ -38,7 +38,14 @@ async def _await(awaitable: Any) -> Any:
     return await awaitable
 
 
-_HOOK_STEPS = {"mount": "mount", "handle_params": "handle_params"}
+# ``handle_async_result`` / ``handle_tick`` reach here from the HTTP fallback's
+# background work (#3630), which has no ``call_async_result`` / ``call_tick``.
+_HOOK_STEPS = {
+    "mount": "mount",
+    "handle_params": "handle_params",
+    "handle_async_result": "async",
+    "handle_tick": "tick",
+}
 
 
 def _hook_step(fn: Any) -> str:

@@ -707,6 +707,11 @@ EXPECTED_HOOK_REFERENCES = {
     ),
     # The test client drains the same hook (render_async).
     ("testing.py", "LiveViewTestClient.render_async", "handle_async_result"): "_run_step",
+    # The HTTP fallback's background work (#3630) enters the same ``async`` step.
+    ("mixins/request.py", "_run_http_background_work", "handle_async_result"): "call_hook_sync",
+    # The step table of ``call_hook`` / ``call_hook_sync``: names, not calls.
+    ("_view_hooks.py", "<module>", "handle_async_result"): None,
+    ("_view_hooks.py", "<module>", "handle_tick"): None,
     # Lookups that call nothing: the tick task is only started for a view that
     # overrides handle_tick; static checks and the schema listing read the names.
     ("runtime.py", "maybe_start_tick_task", "handle_tick"): None,

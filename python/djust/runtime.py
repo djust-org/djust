@@ -1641,7 +1641,9 @@ class WSConsumerTransport:
             return
         consumer = self._consumer
         try:
-            presence_key = await sync_to_async(view.get_presence_key)()
+            from .sync_turn import sync_step
+
+            presence_key = await sync_to_async(sync_step(view, "hook", view.get_presence_key))()
             group = PresenceManager.presence_group_name(presence_key)
             joined = getattr(consumer, "_presence_groups", None)
             if not isinstance(joined, set):
@@ -2373,7 +2375,13 @@ class WSConsumerTransport:
         from .utils import get_template_dirs
 
         get_template = getattr(view, "get_template", None)
-        template = await sync_to_async(get_template)() if get_template is not None else None
+        from .sync_turn import sync_step as _sync_step
+
+        template = (
+            await sync_to_async(_sync_step(view, "render", get_template))()
+            if get_template is not None
+            else None
+        )
         # ADR-029 (#2741): the actor path never runs `_sync_state_to_rust`,
         # so nothing pushed the render environment for THIS mount. Push it on
         # the calling thread — `SessionActorHandle.mount` captures the calling
@@ -3824,7 +3832,12 @@ class ViewRuntime(RuntimeTurnPort):
                 if hasattr(view_instance, "_restore_upload_configs"):
                     await sync_to_async(view_instance._restore_upload_configs)()
                 if hasattr(view_instance, "_restore_presence"):
-                    await sync_to_async(view_instance._restore_presence)()
+                    from .sync_turn import sync_step
+
+                    # Reads ``get_presence_key()``: a ``"hook"`` step (#3637).
+                    await sync_to_async(
+                        sync_step(view_instance, "hook", view_instance._restore_presence)
+                    )()
                 if hasattr(view_instance, "_restore_listen_channels"):
                     await sync_to_async(view_instance._restore_listen_channels)()
 
@@ -8064,7 +8077,7 @@ class ViewRuntime(RuntimeTurnPort):
             if reason is not None:
                 logger.debug("Scoped render of %r: %r changed too; full render", name, reason)
                 return None
-            html = await sync_to_async(component.render)()
+            html = await sync_to_async(sync_step(component, "render", component.render))()
             # Component-sized parse + diff; runs inline on the event loop like
             # the JSON decode of the patches. Route a large component through
             # ``sync_to_async`` before making it larger.
