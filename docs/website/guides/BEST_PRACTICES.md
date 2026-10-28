@@ -563,6 +563,21 @@ The template must use `dj-update="append"`:
 </ul>
 ```
 
+How the rows reach the page: the server renders only the rows you just assigned
+and adds them to the container's stored children, so the update is one insert
+per new row and the rows already on the page are left alone. The same rule
+applies to a full HTML update, which the client handles itself. Three details:
+
+- The container needs an `id`, and every row needs an `id`. A row whose `id` is
+  already in the container is left as it is (it is not updated or added twice);
+  a row with no `id` is not added.
+- It applies to views that declare `temporary_assigns`. On a view that does not,
+  the template lists every row each time and stays authoritative, so a row it no
+  longer lists leaves the page.
+- `dj-update="prepend"` puts the new rows first. The result on the page is
+  right, but the differ pairs rows by position, so the rows already there are
+  rewritten as they shift down (the same as prepending to any list).
+
 ### 5. Loading states
 
 Use `dj-loading.*` attributes for zero-JS loading indicators:
