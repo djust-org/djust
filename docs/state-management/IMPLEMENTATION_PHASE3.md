@@ -444,7 +444,7 @@ class OptimisticTodoView(LiveView):
     - Error handling (revert on failure)
     """
 
-    template_string = """
+    template = """
     <div dj-root class="container mt-5">
         <div class="card">
             <div class="card-header">
@@ -516,7 +516,7 @@ class OptimisticCounterView(LiveView):
     - Error handling reverts optimistic update
     """
 
-    template_string = """
+    template = """
     <div dj-root class="container mt-5">
         <div class="card">
             <div class="card-header">
