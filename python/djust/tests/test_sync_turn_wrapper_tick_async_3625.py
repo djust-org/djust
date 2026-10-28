@@ -705,12 +705,12 @@ EXPECTED_HOOK_REFERENCES = {
     ("_child_async.py", "dispatch_legacy_child_work.run_body.complete", "handle_async_result"): (
         "call_async_result"
     ),
+    # The HTTP fallback runs a start_async task in the request and hands its
+    # outcome to the hook through call_hook_sync, which names the step "async".
+    ("mixins/request.py", "_run_http_background_work", "handle_async_result"): "call_hook_sync",
     # The test client drains the same hook (render_async).
     ("testing.py", "LiveViewTestClient.render_async", "handle_async_result"): "_run_step",
-    # The HTTP fallback's background work (#3630) enters the same ``async`` step.
-    ("mixins/request.py", "_run_http_background_work", "handle_async_result"): "call_hook_sync",
-    # The step table of ``call_hook`` / ``call_hook_sync``: names, not calls.
-    ("_view_hooks.py", "<module>", "handle_async_result"): None,
+    # The step map also names ``handle_tick`` a "tick" step (#3637).
     ("_view_hooks.py", "<module>", "handle_tick"): None,
     # Lookups that call nothing: the tick task is only started for a view that
     # overrides handle_tick; static checks and the schema listing read the names.
@@ -718,6 +718,8 @@ EXPECTED_HOOK_REFERENCES = {
     ("checks/components.py", "check_liveviews", "handle_async_result"): None,
     ("checks/components.py", "check_liveviews", "handle_tick"): None,
     ("schema.py", "<module>", "handle_tick"): None,
+    # The step map that names ``handle_async_result`` an "async" step.
+    ("_view_hooks.py", "<module>", "handle_async_result"): None,
 }
 
 _NAMES = {"handle_tick", "handle_async_result"}
@@ -840,3 +842,30 @@ def test_the_pin_sees_a_raw_call_and_a_replacement_helper():
     assert "call_async_result" not in {
         _callee(n) for n in ast.walk(helper) if isinstance(n, ast.Call)
     }
+
+
+# ---------------------------------------------------------------------------
+# The HTTP fallback's result hook (the pin above lists it; this proves the step)
+# ---------------------------------------------------------------------------
+
+
+def _http_result_view():
+    from djust.tests import test_http_fallback_background_work_3624 as bg
+
+    seen: list = []
+
+    class ResultStepView(bg.BackgroundView):
+        def handle_async_result(self, name, result=None, error=None):
+            seen.append(getattr(_OPEN, "step", None))
+
+    return bg, ResultStepView, seen
+
+
+@pytest.mark.django_db
+def test_the_http_fallbacks_result_hook_runs_in_the_async_step(probe):
+    """``start_async`` work run inside a fallback POST hands its outcome to
+    ``handle_async_result`` as an ``async`` step, as on the socket (#3625)."""
+    bg, view_cls, seen = _http_result_view()
+    with bg.STATELESS:
+        bg._post(view_cls, "kick_off")
+    assert seen == ["async"], seen
