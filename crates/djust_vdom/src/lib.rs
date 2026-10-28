@@ -729,6 +729,150 @@ pub fn splice_ignore_subtrees(old: &VNode, new: &mut VNode) {
     }
 }
 
+/// How a `dj-update` container accumulates children across renders.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Accumulate {
+    Append,
+    Prepend,
+}
+
+fn accumulate_mode(node: &VNode) -> Option<Accumulate> {
+    match node.attrs.get("dj-update").map(String::as_str) {
+        Some("append") => Some(Accumulate::Append),
+        Some("prepend") => Some(Accumulate::Prepend),
+        _ => None,
+    }
+}
+
+/// Make `dj-update="append"` / `"prepend"` containers accumulate (#3639).
+///
+/// A view with `temporary_assigns` renders only the rows it just assigned: the
+/// rest were reset out of the context after the last render. Diffed like any
+/// other list, that render would rewrite the first stored row into the new one
+/// and remove the others. The client already honours `dj-update` for a full
+/// `html` frame (`applyDjUpdateElements`: a child whose `id` is not on the page
+/// is added, one that is stays untouched); this is the same rule for the patch
+/// path, so the two channels cannot disagree (#1646).
+///
+/// `ids` names the containers that accumulate: the `id` attributes of the
+/// `dj-update` containers whose rows come from a `temporary_assigns` key (the
+/// caller works that out from the template). Any other `dj-update` container
+/// is re-rendered whole every time, so the template stays authoritative there.
+///
+/// Each container is found in `old` by its `id`, NOT by its position: a
+/// `{% if %}` block before the list that appears or disappears in the same
+/// event moves the container, and pairing by index then wiped the stored rows.
+/// An `id` that is ambiguous in `old` (two containers share it) is left alone.
+/// At a container the new children are replaced by `old`'s children plus the
+/// new children whose `id` is not among them (after the stored ones, or before
+/// them for `prepend`). The diff then sees the stored rows unchanged and emits
+/// an `InsertChild` per added row; the stored tree keeps the rows, which is what
+/// the page shows. A new child with no `id` is dropped, as the client drops it;
+/// the number dropped is returned so the caller can say so.
+///
+/// For `prepend` the children are keyed by their `id` (when they carry no key
+/// of their own), including on the first render where there is no `old`: the
+/// differ then places the new rows at the front with one insert each and the
+/// ids carried forward belong to the right rows. Paired by position instead,
+/// the stored rows shift down one slot and every one of them takes the
+/// attributes and `dj-id` of the row above.
+///
+/// Costs O(stored rows) per render: the stored children are cloned into the new
+/// tree and their `id`s are collected to find what is new.
+pub fn splice_accumulating_subtrees(
+    old: Option<&VNode>,
+    new: &mut VNode,
+    ids: &std::collections::HashSet<String>,
+) -> usize {
+    if ids.is_empty() {
+        return 0;
+    }
+    let mut stored: std::collections::HashMap<&str, Option<&VNode>> =
+        std::collections::HashMap::new();
+    if let Some(old) = old {
+        collect_accumulating(old, ids, &mut stored);
+    }
+    let mut dropped = 0;
+    splice_accumulating_into(new, &stored, ids, &mut dropped);
+    dropped
+}
+
+fn collect_accumulating<'a>(
+    node: &'a VNode,
+    ids: &std::collections::HashSet<String>,
+    out: &mut std::collections::HashMap<&'a str, Option<&'a VNode>>,
+) {
+    if accumulate_mode(node).is_some() {
+        if let Some(id) = node.attrs.get("id").filter(|id| ids.contains(*id)) {
+            // A second container with the same id makes the pairing ambiguous.
+            out.entry(id.as_str())
+                .and_modify(|slot| *slot = None)
+                .or_insert(Some(node));
+            return;
+        }
+    }
+    for child in &node.children {
+        collect_accumulating(child, ids, out);
+    }
+}
+
+fn key_children_by_id(children: &mut [VNode]) {
+    for child in children {
+        if child.key.is_none() {
+            child.key = child.attrs.get("id").cloned();
+        }
+    }
+}
+
+fn splice_accumulating_into(
+    new: &mut VNode,
+    stored: &std::collections::HashMap<&str, Option<&VNode>>,
+    ids: &std::collections::HashSet<String>,
+    dropped: &mut usize,
+) {
+    if let Some(mode) = accumulate_mode(new) {
+        if let Some(id) = new.attrs.get("id").filter(|id| ids.contains(*id)).cloned() {
+            if mode == Accumulate::Prepend {
+                key_children_by_id(&mut new.children);
+            }
+            let old = match stored.get(id.as_str()) {
+                Some(Some(old)) if old.tag == new.tag && accumulate_mode(old) == Some(mode) => *old,
+                _ => return,
+            };
+            let seen: std::collections::HashSet<&str> = old
+                .children
+                .iter()
+                .filter_map(|child| child.attrs.get("id").map(String::as_str))
+                .collect();
+            let mut added = Vec::new();
+            for child in std::mem::take(&mut new.children) {
+                match child.attrs.get("id") {
+                    Some(id) if !seen.contains(id.as_str()) => added.push(child),
+                    Some(_) => {}
+                    None if !child.tag.starts_with('#') => *dropped += 1,
+                    None => {}
+                }
+            }
+            let mut merged = old.children.clone();
+            match mode {
+                Accumulate::Append => merged.extend(added),
+                Accumulate::Prepend => {
+                    key_children_by_id(&mut merged);
+                    let mut front = added;
+                    front.extend(merged);
+                    merged = front;
+                }
+            }
+            new.children = merged;
+            new.cached_html = None;
+            return;
+        }
+    }
+    for child in &mut new.children {
+        splice_accumulating_into(child, stored, ids, dropped);
+    }
+}
+
 /// Cache the HTML serialization for all `dj-update="ignore"` subtrees in a VDOM tree.
 /// Call this after the first render so subsequent `to_html()` calls can skip
 /// serialization for these static sections.

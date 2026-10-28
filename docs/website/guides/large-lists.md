@@ -149,6 +149,28 @@ Rules:
 
 The prune applies to the stream's items on the server, so the page follows through the normal render and diff. A container that keeps rows the server no longer renders (`dj-update="append"`, used with `temporary_assigns`) is not capped this way.
 
+### Handlers that only touch a stream
+
+A handler whose only effect is a stream call renders like any other change:
+
+```python
+@event_handler
+def new_message(self, **kwargs):
+    self.stream_insert("messages", Message.latest())   # nothing else assigned
+```
+
+`stream_insert`, `stream_delete`, `stream_prune`, `stream_reset` and `stream()` with items each count as a change when they change a stream, so the page gets the row in the answer to that event. (Such a handler used to be answered with a no-op, and the row only appeared with the next render, caused by something else.) A call that changes nothing, such as a prune above the current size, a delete that matches no row, or a reset of an empty stream, still leaves the event a no-op, and so does an event that touches no stream. On a view that declares `temporary_assigns` the items are emptied after every render, so a `stream_delete` or `stream_prune` in a later event finds nothing to remove and is a no-op as well: the rows already on the page stay.
+
+On a view that declares `temporary_assigns`, the stream items are emptied after every render, so give the stream container `id` and `dj-update="append"` too, and the stored rows stay while each new row is added after them (rows need an `id` too):
+
+```html
+<ul id="messages" dj-stream="messages" dj-update="append">
+  {% for msg in streams.messages %}<li id="messages-{{ msg.id }}">{{ msg.content }}</li>{% endfor %}
+</ul>
+```
+
+The server keeps every row of such a container in the page it diffs against, so that tree grows with each row added and each event costs a little more (about 1 ms with 200 rows, 15 ms with 8,000). Bound a feed that grows without end yourself; `temporary_assigns` does not.
+
 ## Composing the two
 
 A chat app typically uses all three on one container:

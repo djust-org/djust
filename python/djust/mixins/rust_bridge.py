@@ -15,6 +15,7 @@ from .._exposure_providers import (
     ExplicitRenderContext,
     require_no_provider_keys,
 )
+from .._accumulating_containers import view_accumulating_container_ids
 from ..change_detection import deep_fingerprint, fingerprints_by_content, warn_fingerprint_truncated
 from ..security import sanitize_for_log
 from ..serialization import normalize_django_value
@@ -237,6 +238,55 @@ def _collect_sub_ids(
     elif isinstance(value, (list, tuple)):
         for v in value:
             _collect_sub_ids(v, collected, visited, depth + 1)
+
+
+def _unassigned_temporary_keys(view: Any) -> Set[str]:
+    """The ``temporary_assigns`` keys that hold their reset default (#3639).
+
+    After a render each such key is reset to a fresh copy of its default, so on
+    the next sync it always looks changed (a new object whose fingerprint differs
+    from the rows it held). That is why they were left out of the changed keys:
+    treating the reset as a change would re-render the container with no rows.
+    But a handler that ASSIGNS rows (``self.rows = [new_row]``) is a change, and
+    leaving the key out as well meant the node reading it was not re-rendered
+    and the new row never reached the page. So only a key still equal to its
+    default is left out; a key holding anything else was assigned this turn.
+    """
+    out: Set[str] = set()
+    for key, default in (getattr(view, "temporary_assigns", None) or {}).items():
+        value = getattr(view, key, default)
+        if isinstance(default, (list, dict, set, tuple)):
+            same = type(value) is type(default) and len(value) == len(default) and value == default
+        else:
+            same = value is default or (type(value) is type(default) and value == default)
+        if same:
+            out.add(key)
+    return out
+
+
+def _warn_rows_without_id(view: Any) -> None:
+    """Say, once per view class and in DEBUG only, that rows without an ``id`` were dropped.
+
+    An accumulating container adds a row only by its ``id`` (as the client does),
+    so a row without one never reaches the page; without a word that reads as
+    a lost update. The count comes from the render before this sync.
+    """
+    take = getattr(view._rust_view, "take_accumulate_dropped", None)
+    dropped = take() if take is not None else 0
+    cls = type(view)
+    if not dropped or "_djust_warned_rows_without_id" in cls.__dict__:
+        return
+    from django.conf import settings
+
+    if getattr(settings, "DEBUG", False):
+        cls._djust_warned_rows_without_id = True  # type: ignore[attr-defined]
+        logger.warning(
+            "%s: %d row(s) in a dj-update container fed by temporary_assigns have no id "
+            "attribute and were not added to the page. An appended or prepended row is "
+            'added only by its id; give each row one (for example id="row-{{ r.pk }}").',
+            cls.__name__,
+            dropped,
+        )
 
 
 class RustBridgeMixin:
@@ -1323,7 +1373,7 @@ class RustBridgeMixin:
             # previous set_changed_keys call with meaningful keys.
             # Also exclude temporary_assigns keys — they're reset to new
             # objects after each render, always getting new id().
-            _temp_assigns = set(getattr(self, "temporary_assigns", {}).keys())
+            _temp_assigns = _unassigned_temporary_keys(self)
             # #1786: request-scoped keys are excluded from the change-detection
             # fingerprint above, so on every render they look "new" and would
             # otherwise be reported as changed keys — triggering spurious
@@ -1408,6 +1458,18 @@ class RustBridgeMixin:
 
             if user_changed is not None:
                 self._rust_view.set_changed_keys(user_changed)
+
+            # The ``dj-update="append"|"prepend"`` containers whose rows come from
+            # a ``temporary_assigns`` key must ACCUMULATE in the differ, as the
+            # client does for a full html frame; otherwise the rows a render lists
+            # (only the ones just assigned) replace the stored ones (#3639). Set
+            # on every sync: a restored Rust view starts with none, and
+            # ``hasattr`` covers an extension built before the method existed.
+            if hasattr(self._rust_view, "set_accumulate_containers"):
+                _warn_rows_without_id(self)
+                self._rust_view.set_accumulate_containers(
+                    list(view_accumulating_container_ids(self))
+                )
 
             # Mark static assigns as sent — subsequent syncs will skip them
             if getattr(self, "static_assigns", None) and not getattr(
