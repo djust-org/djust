@@ -20,6 +20,12 @@ class Row:
     id: int
     body: str
 
+    @property
+    def pk(self):
+        """Carried on every row as ``data-pk``, so a row that ends up with another
+        row's attributes is visible in the replayed DOM."""
+        return self.id * 10
+
 
 def rows(count):
     return [Row(i, f"row {i}") for i in range(count)]
@@ -69,7 +75,7 @@ def _append_template(mode):
         '<div class="ws-root">\n'
         f'  <ul id="list" dj-update="{mode}">\n'
         "    {% for r in rows %}\n"
-        '    <li id="rows-{{ r.id }}">{{ r.body }}</li>\n'
+        '    <li id="rows-{{ r.id }}" data-pk="{{ r.pk }}">{{ r.body }}</li>\n'
         "    {% endfor %}\n"
         "  </ul>\n"
         "  <p>count {{ k }}</p>\n"
@@ -110,3 +116,64 @@ class AppendRowsView(_TemporaryRowsView):
 
 class PrependRowsView(_TemporaryRowsView):
     template = _append_template("prepend")
+
+
+class BannerRowsView(_TemporaryRowsView):
+    """A block before the list appears in the same event that appends a row, so
+    the container sits one position later than where the stored tree has it."""
+
+    template = (
+        '<div class="ws-root">\n'
+        '  {% if banner %}<p class="banner">notice</p>{% endif %}\n'
+        '  <ul id="list" dj-update="append">\n'
+        "    {% for r in rows %}\n"
+        '    <li id="rows-{{ r.id }}" data-pk="{{ r.pk }}">{{ r.body }}</li>\n'
+        "    {% endfor %}\n"
+        "  </ul>\n"
+        "  <p>count {{ k }}</p>\n"
+        "</div>"
+    )
+
+    def mount(self, request, **kwargs):
+        super().mount(request, **kwargs)
+        self.banner = False
+
+    @event_handler()
+    def banner_and_add(self, **kwargs):
+        self.banner = not self.banner
+        self.k += 1
+        self.rows = [Row(100 + self.k, f"new {self.k}")]
+
+
+class MixedView(LiveView):
+    """``temporary_assigns`` for something else; the ``dj-update`` list is an
+    ordinary attribute, re-rendered whole, so a removal or an edit must still
+    reach the page."""
+
+    temporary_assigns = {"flash": []}
+    template = (
+        '<div class="ws-root">\n'
+        '  <ul id="list" dj-update="append">\n'
+        "    {% for r in items %}\n"
+        '    <li id="rows-{{ r.id }}" data-pk="{{ r.pk }}">{{ r.body }}</li>\n'
+        "    {% endfor %}\n"
+        "  </ul>\n"
+        "  <p>{{ flash }}</p>\n"
+        "</div>"
+    )
+
+    def mount(self, request, **kwargs):
+        self.items = rows(4)
+        self.flash = []
+
+    @event_handler()
+    def remove_first(self, **kwargs):
+        self.items = self.items[1:]
+
+    @event_handler()
+    def edit_first(self, **kwargs):
+        self.items = [Row(self.items[0].id, "edited"), *self.items[1:]]
+
+    @event_handler()
+    def add_item(self, **kwargs):
+        self.items = [*self.items, Row(50 + len(self.items), "added")]

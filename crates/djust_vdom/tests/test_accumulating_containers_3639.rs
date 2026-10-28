@@ -7,7 +7,9 @@
 //! The client already follows this rule for a full `html` frame
 //! (`applyDjUpdateElements`), so these tests pin the same rule for patches.
 
+use djust_vdom::patch::apply_patches;
 use djust_vdom::{diff, parse_html, splice_accumulating_subtrees, sync_ids, Patch, VNode};
+use std::collections::HashSet;
 
 fn page(mode: &str, rows: &[(&str, &str)], tail: &str) -> String {
     let body: String = rows
@@ -15,6 +17,15 @@ fn page(mode: &str, rows: &[(&str, &str)], tail: &str) -> String {
         .map(|(id, text)| format!(r#"<div id="{id}">{text}</div>"#))
         .collect();
     format!(r#"<div><div id="list" dj-update="{mode}">{body}</div><p>{tail}</p></div>"#)
+}
+
+fn list() -> HashSet<String> {
+    HashSet::from(["list".to_string()])
+}
+
+/// The splice as the render path calls it.
+fn splice(old: &VNode, new: &mut VNode) -> usize {
+    splice_accumulating_subtrees(Some(old), new, &list())
 }
 
 fn kinds(patches: &[Patch]) -> Vec<&'static str> {
@@ -46,7 +57,7 @@ fn append_keeps_the_stored_rows_and_adds_the_new_one_after_them() {
     let old = parse_html(&page("append", &[("r0", "a"), ("r1", "b")], "0")).unwrap();
     let mut new = parse_html(&page("append", &[("r2", "c")], "0")).unwrap();
 
-    splice_accumulating_subtrees(&old, &mut new);
+    splice(&old, &mut new);
 
     assert_eq!(ids(container(&new)), ["r0", "r1", "r2"]);
     let patches = diff(&old, &new);
@@ -68,7 +79,7 @@ fn prepend_puts_the_new_rows_before_the_stored_ones() {
     let old = parse_html(&page("prepend", &[("r0", "a"), ("r1", "b")], "0")).unwrap();
     let mut new = parse_html(&page("prepend", &[("r2", "c")], "0")).unwrap();
 
-    splice_accumulating_subtrees(&old, &mut new);
+    splice(&old, &mut new);
 
     assert_eq!(ids(container(&new)), ["r2", "r0", "r1"]);
 }
@@ -79,7 +90,7 @@ fn a_row_already_on_the_page_is_neither_added_twice_nor_updated() {
     let old = parse_html(&page("append", &[("r0", "a"), ("r1", "b")], "0")).unwrap();
     let mut new = parse_html(&page("append", &[("r1", "CHANGED"), ("r2", "c")], "0")).unwrap();
 
-    splice_accumulating_subtrees(&old, &mut new);
+    splice(&old, &mut new);
 
     assert_eq!(ids(container(&new)), ["r0", "r1", "r2"]);
     assert_eq!(
@@ -94,7 +105,7 @@ fn a_render_with_no_rows_leaves_the_stored_rows_alone() {
     let old = parse_html(&page("append", &[("r0", "a"), ("r1", "b")], "0")).unwrap();
     let mut new = parse_html(&page("append", &[], "1")).unwrap();
 
-    splice_accumulating_subtrees(&old, &mut new);
+    splice(&old, &mut new);
 
     assert_eq!(ids(container(&new)), ["r0", "r1"]);
     let patches = diff(&old, &new);
@@ -109,7 +120,7 @@ fn a_new_child_with_no_id_is_dropped_as_the_client_drops_it() {
     )
     .unwrap();
 
-    splice_accumulating_subtrees(&old, &mut new);
+    splice(&old, &mut new);
 
     assert_eq!(ids(container(&new)), ["r0"]);
 }
@@ -122,7 +133,7 @@ fn a_container_without_an_id_is_not_accumulated() {
     let mut new =
         parse_html(r#"<div><div dj-update="append"><div id="r1">b</div></div></div>"#).unwrap();
 
-    splice_accumulating_subtrees(&old, &mut new);
+    splice(&old, &mut new);
 
     assert_eq!(ids(container(&new)), ["r1"]);
 }
@@ -132,7 +143,7 @@ fn a_container_whose_mode_changed_is_not_accumulated() {
     let old = parse_html(&page("append", &[("r0", "a")], "0")).unwrap();
     let mut new = parse_html(&page("prepend", &[("r1", "b")], "0")).unwrap();
 
-    splice_accumulating_subtrees(&old, &mut new);
+    splice(&old, &mut new);
 
     assert_eq!(ids(container(&new)), ["r1"]);
 }
@@ -149,7 +160,7 @@ fn replace_and_unmarked_containers_are_untouched() {
         ))
         .unwrap();
 
-        splice_accumulating_subtrees(&old, &mut new);
+        splice(&old, &mut new);
 
         assert_eq!(ids(container(&new)), ["r1"], "attr {attr:?}");
     }
@@ -163,7 +174,7 @@ fn consecutive_renders_keep_accumulating_and_keep_ids_consistent() {
 
     for (n, row) in ["r1", "r2", "r3"].iter().enumerate() {
         let mut next = parse_html(&page("append", &[(row, "x")], &n.to_string())).unwrap();
-        splice_accumulating_subtrees(&stored, &mut next);
+        splice(&stored, &mut next);
         let patches = diff(&stored, &next);
         let inserts: Vec<_> = patches
             .iter()
@@ -179,4 +190,200 @@ fn consecutive_renders_keep_accumulating_and_keep_ids_consistent() {
     }
 
     assert_eq!(ids(container(&stored)), ["r0", "r1", "r2", "r3"]);
+}
+
+// ---------------------------------------------------------------------------
+// Review fixes: the render path's steps, replayed with the patch applier
+// ---------------------------------------------------------------------------
+
+/// A page whose rows carry an `id` and a `data-pk`, so a row that ends up with
+/// another row's attributes is visible.
+fn pk_page(mode: &str, rows: &[&str], before: &str) -> String {
+    let body: String = rows
+        .iter()
+        .map(|id| format!(r#"<li id="{id}" data-pk="pk-{id}">{id}</li>"#))
+        .collect();
+    format!(r#"<div>{before}<ul id="list" dj-update="{mode}">{body}</ul><p>x</p></div>"#)
+}
+
+/// One render turn, as `render_with_diff` runs it: parse continuing the id
+/// counter past the stored tree, splice, diff, carry ids forward. Returns the
+/// patches and the new stored tree.
+fn render_turn(
+    stored: Option<&VNode>,
+    html: &str,
+    ids: &HashSet<String>,
+) -> (Vec<Patch>, VNode, usize) {
+    if let Some(stored) = stored {
+        if let Some(max) = djust_vdom::max_djust_id_in(stored) {
+            djust_vdom::ensure_id_counter_at_least(max + 1);
+        }
+    }
+    let mut next = match stored {
+        Some(_) => djust_vdom::parse_html_continue(html).unwrap(),
+        None => parse_html(html).unwrap(),
+    };
+    let dropped = splice_accumulating_subtrees(stored, &mut next, ids);
+    let patches = stored.map(|old| diff(old, &next)).unwrap_or_default();
+    if let Some(old) = stored {
+        sync_ids(old, &mut next);
+    }
+    (patches, next, dropped)
+}
+
+fn row_attrs(root: &VNode, list_id: &str) -> Vec<(String, String, Option<String>)> {
+    fn find<'a>(node: &'a VNode, list_id: &str) -> Option<&'a VNode> {
+        if node.attrs.get("id").map(String::as_str) == Some(list_id) {
+            return Some(node);
+        }
+        node.children.iter().find_map(|c| find(c, list_id))
+    }
+    find(root, list_id)
+        .unwrap()
+        .children
+        .iter()
+        .map(|c| {
+            (
+                c.attrs.get("id").cloned().unwrap_or_default(),
+                c.attrs.get("data-pk").cloned().unwrap_or_default(),
+                c.djust_id.clone(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn prepend_over_several_events_is_one_insert_at_the_front_each_with_the_right_attributes() {
+    let ids = list();
+    let (_, mut stored, _) = render_turn(None, &pk_page("prepend", &["r0", "r1"], ""), &ids);
+    // The client's copy of the page, patched event by event.
+    let mut client = stored.clone();
+
+    for (n, row) in ["r2", "r3", "r4", "r5"].iter().enumerate() {
+        let (patches, next, dropped) =
+            render_turn(Some(&stored), &pk_page("prepend", &[row], ""), &ids);
+        assert_eq!(dropped, 0);
+        assert_eq!(kinds(&patches), ["InsertChild"], "event {n}: {patches:?}");
+        match &patches[0] {
+            Patch::InsertChild { index, node, .. } => {
+                assert_eq!(*index, 0, "event {n}");
+                assert_eq!(node.attrs.get("id").map(String::as_str), Some(*row));
+            }
+            other => panic!("{other:?}"),
+        }
+        apply_patches(&mut client, &patches);
+        stored = next;
+
+        // Every row keeps its own id and data-pk, and no dj-id repeats.
+        let rows = row_attrs(&stored, "list");
+        for (id, pk, _) in &rows {
+            assert_eq!(pk, &format!("pk-{id}"), "event {n}: {rows:?}");
+        }
+        let djust_ids: HashSet<_> = rows.iter().map(|(_, _, d)| d.clone()).collect();
+        assert_eq!(
+            djust_ids.len(),
+            rows.len(),
+            "event {n}: duplicate dj-id {rows:?}"
+        );
+        // What the patches did to the client is what the server now stores.
+        assert_eq!(row_attrs(&client, "list"), rows, "event {n}");
+    }
+    let order: Vec<_> = row_attrs(&stored, "list")
+        .into_iter()
+        .map(|r| r.0)
+        .collect();
+    assert_eq!(order, ["r5", "r4", "r3", "r2", "r0", "r1"]);
+}
+
+#[test]
+fn append_over_several_events_keeps_attributes_and_ids_too() {
+    let ids = list();
+    let (_, mut stored, _) = render_turn(None, &pk_page("append", &["r0", "r1"], ""), &ids);
+    let mut client = stored.clone();
+    for row in ["r2", "r3", "r4"] {
+        let (patches, next, _) = render_turn(Some(&stored), &pk_page("append", &[row], ""), &ids);
+        assert_eq!(kinds(&patches), ["InsertChild"], "{patches:?}");
+        apply_patches(&mut client, &patches);
+        stored = next;
+        assert_eq!(row_attrs(&client, "list"), row_attrs(&stored, "list"));
+    }
+}
+
+#[test]
+fn a_container_that_moved_is_found_by_its_id_not_by_its_position() {
+    // A block before the list appears in the same render as an appended row, so
+    // the container is one position later than in the stored tree. Paired by
+    // index the stored rows were lost.
+    let ids = list();
+    let (_, stored, _) = render_turn(None, &pk_page("append", &["r0", "r1", "r2"], ""), &ids);
+    let (patches, next, _) = render_turn(
+        Some(&stored),
+        &pk_page("append", &["r3"], "<p class=\"banner\">hi</p>"),
+        &ids,
+    );
+    let order: Vec<_> = row_attrs(&next, "list").into_iter().map(|r| r.0).collect();
+    assert_eq!(order, ["r0", "r1", "r2", "r3"], "{patches:?}");
+    // Applied to the client's copy, the result is the same page.
+    let mut client = stored.clone();
+    apply_patches(&mut client, &patches);
+    assert_eq!(row_attrs(&client, "list"), row_attrs(&next, "list"));
+}
+
+#[test]
+fn a_container_that_is_not_named_is_diffed_as_an_ordinary_list() {
+    // Same markup, but the caller does not list this container: the template
+    // is authoritative and a row it no longer renders is removed.
+    let none = HashSet::new();
+    let (_, stored, _) = render_turn(None, &pk_page("append", &["r0", "r1"], ""), &none);
+    let (patches, next, _) = render_turn(Some(&stored), &pk_page("append", &["r1"], ""), &none);
+    assert!(kinds(&patches).contains(&"RemoveChild"), "{patches:?}");
+    assert_eq!(row_attrs(&next, "list").len(), 1);
+
+    let other = HashSet::from(["elsewhere".to_string()]);
+    let (_, stored, _) = render_turn(None, &pk_page("append", &["r0", "r1"], ""), &other);
+    let (patches, _, _) = render_turn(Some(&stored), &pk_page("append", &["r1"], ""), &other);
+    assert!(kinds(&patches).contains(&"RemoveChild"), "{patches:?}");
+}
+
+#[test]
+fn two_containers_with_the_same_id_are_left_alone() {
+    let ids = list();
+    let twice = |a: &str, b: &str| {
+        format!(
+            r#"<div><ul id="list" dj-update="append"><li id="{a}">a</li></ul><ul id="list" dj-update="append"><li id="{b}">b</li></ul></div>"#
+        )
+    };
+    let (_, stored, _) = render_turn(None, &twice("a0", "b0"), &ids);
+    let (patches, next, _) = render_turn(Some(&stored), &twice("a1", "b1"), &ids);
+    // Not accumulated: each list shows what was rendered.
+    assert_eq!(next.children[0].children.len(), 1, "{patches:?}");
+}
+
+#[test]
+fn rows_without_an_id_are_counted() {
+    let ids = list();
+    let (_, stored, _) = render_turn(None, &pk_page("append", &["r0"], ""), &ids);
+    let html = r#"<div><ul id="list" dj-update="append"><li>no id</li><li id="r1">x</li><li>none</li></ul></div>"#;
+    let (_, next, dropped) = render_turn(Some(&stored), html, &ids);
+    assert_eq!(dropped, 2);
+    assert_eq!(row_attrs(&next, "list").len(), 2);
+}
+
+#[test]
+fn a_prepend_container_that_is_not_named_is_not_keyed_either() {
+    // Naming some other container must leave this one exactly as the plain
+    // differ treats it: positional, so removing the first row rewrites the rest.
+    let other = HashSet::from(["elsewhere".to_string()]);
+    let none = HashSet::new();
+    let run = |ids: &HashSet<String>| {
+        let (_, stored, _) = render_turn(None, &pk_page("prepend", &["r0", "r1", "r2"], ""), ids);
+        let (patches, _, _) =
+            render_turn(Some(&stored), &pk_page("prepend", &["r1", "r2"], ""), ids);
+        kinds(&patches)
+    };
+    assert_eq!(run(&other), run(&none));
+    assert!(
+        run(&none).contains(&"SetAttr"),
+        "the plain differ shifts rows by position"
+    );
 }

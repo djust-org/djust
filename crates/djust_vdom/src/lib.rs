@@ -754,44 +754,110 @@ fn accumulate_mode(node: &VNode) -> Option<Accumulate> {
 /// is added, one that is stays untouched); this is the same rule for the patch
 /// path, so the two channels cannot disagree (#1646).
 ///
-/// Walks `old` and `new` in parallel, like [`splice_ignore_subtrees`]. At a
-/// container whose `id` and `dj-update` mode match on both sides the new
-/// children are replaced by `old` children plus the new children whose `id` is
-/// not among them (appended after the stored ones, or put before them for
-/// `prepend`). The diff then sees the stored rows unchanged and emits an
-/// `InsertChild` per added row; the stored tree keeps the rows, which is what
-/// the page shows. A new child with no `id` is dropped, as the client drops it.
+/// `ids` names the containers that accumulate: the `id` attributes of the
+/// `dj-update` containers whose rows come from a `temporary_assigns` key (the
+/// caller works that out from the template). Any other `dj-update` container
+/// is re-rendered whole every time, so the template stays authoritative there.
 ///
-/// Only called for a view that declares `temporary_assigns`: for any other view
-/// the whole list is re-rendered and the template stays authoritative, so a row
-/// it no longer lists still leaves the page.
-pub fn splice_accumulating_subtrees(old: &VNode, new: &mut VNode) {
-    if old.tag != new.tag {
-        return;
+/// Each container is found in `old` by its `id`, NOT by its position: a
+/// `{% if %}` block before the list that appears or disappears in the same
+/// event moves the container, and pairing by index then wiped the stored rows.
+/// An `id` that is ambiguous in `old` (two containers share it) is left alone.
+/// At a container the new children are replaced by `old`'s children plus the
+/// new children whose `id` is not among them (after the stored ones, or before
+/// them for `prepend`). The diff then sees the stored rows unchanged and emits
+/// an `InsertChild` per added row; the stored tree keeps the rows, which is what
+/// the page shows. A new child with no `id` is dropped, as the client drops it;
+/// the number dropped is returned so the caller can say so.
+///
+/// For `prepend` the children are keyed by their `id` (when they carry no key
+/// of their own), including on the first render where there is no `old`: the
+/// differ then places the new rows at the front with one insert each and the
+/// ids carried forward belong to the right rows. Paired by position instead,
+/// the stored rows shift down one slot and every one of them takes the
+/// attributes and `dj-id` of the row above.
+///
+/// Costs O(stored rows) per render: the stored children are cloned into the new
+/// tree and their `id`s are collected to find what is new.
+pub fn splice_accumulating_subtrees(
+    old: Option<&VNode>,
+    new: &mut VNode,
+    ids: &std::collections::HashSet<String>,
+) -> usize {
+    if ids.is_empty() {
+        return 0;
     }
+    let mut stored: std::collections::HashMap<&str, Option<&VNode>> =
+        std::collections::HashMap::new();
+    if let Some(old) = old {
+        collect_accumulating(old, ids, &mut stored);
+    }
+    let mut dropped = 0;
+    splice_accumulating_into(new, &stored, ids, &mut dropped);
+    dropped
+}
+
+fn collect_accumulating<'a>(
+    node: &'a VNode,
+    ids: &std::collections::HashSet<String>,
+    out: &mut std::collections::HashMap<&'a str, Option<&'a VNode>>,
+) {
+    if accumulate_mode(node).is_some() {
+        if let Some(id) = node.attrs.get("id").filter(|id| ids.contains(*id)) {
+            // A second container with the same id makes the pairing ambiguous.
+            out.entry(id.as_str())
+                .and_modify(|slot| *slot = None)
+                .or_insert(Some(node));
+            return;
+        }
+    }
+    for child in &node.children {
+        collect_accumulating(child, ids, out);
+    }
+}
+
+fn key_children_by_id(children: &mut [VNode]) {
+    for child in children {
+        if child.key.is_none() {
+            child.key = child.attrs.get("id").cloned();
+        }
+    }
+}
+
+fn splice_accumulating_into(
+    new: &mut VNode,
+    stored: &std::collections::HashMap<&str, Option<&VNode>>,
+    ids: &std::collections::HashSet<String>,
+    dropped: &mut usize,
+) {
     if let Some(mode) = accumulate_mode(new) {
-        if accumulate_mode(old) == Some(mode)
-            && new.attrs.contains_key("id")
-            && old.attrs.get("id") == new.attrs.get("id")
-        {
-            let stored: std::collections::HashSet<&str> = old
+        if let Some(id) = new.attrs.get("id").filter(|id| ids.contains(*id)).cloned() {
+            if mode == Accumulate::Prepend {
+                key_children_by_id(&mut new.children);
+            }
+            let old = match stored.get(id.as_str()) {
+                Some(Some(old)) if old.tag == new.tag && accumulate_mode(old) == Some(mode) => *old,
+                _ => return,
+            };
+            let seen: std::collections::HashSet<&str> = old
                 .children
                 .iter()
                 .filter_map(|child| child.attrs.get("id").map(String::as_str))
                 .collect();
-            let added: Vec<VNode> = std::mem::take(&mut new.children)
-                .into_iter()
-                .filter(|child| {
-                    child
-                        .attrs
-                        .get("id")
-                        .is_some_and(|id| !stored.contains(id.as_str()))
-                })
-                .collect();
+            let mut added = Vec::new();
+            for child in std::mem::take(&mut new.children) {
+                match child.attrs.get("id") {
+                    Some(id) if !seen.contains(id.as_str()) => added.push(child),
+                    Some(_) => {}
+                    None if !child.tag.starts_with('#') => *dropped += 1,
+                    None => {}
+                }
+            }
             let mut merged = old.children.clone();
             match mode {
                 Accumulate::Append => merged.extend(added),
                 Accumulate::Prepend => {
+                    key_children_by_id(&mut merged);
                     let mut front = added;
                     front.extend(merged);
                     merged = front;
@@ -802,9 +868,8 @@ pub fn splice_accumulating_subtrees(old: &VNode, new: &mut VNode) {
             return;
         }
     }
-    let len = old.children.len().min(new.children.len());
-    for i in 0..len {
-        splice_accumulating_subtrees(&old.children[i], &mut new.children[i]);
+    for child in &mut new.children {
+        splice_accumulating_into(child, stored, ids, dropped);
     }
 }
 

@@ -147,7 +147,9 @@ def large_state_warning_message(
         "leaner ones (paginate, or pass only the fields the template prints). "
         "temporary_assigns empties the context copy after the next render but leaves the "
         "tree; streams and get_render_only_context() do not shrink this snapshot (the latter "
-        "only keeps values out of the session save). See the Best Practices guide, "
+        'only keeps values out of the session save). A dj-update="append" container keeps every '
+        "row it was given in the tree, so it grows that part with each row added. "
+        "See the Best Practices guide, "
         "'Large LiveView state'."
     )
     return head + breakdown + advice

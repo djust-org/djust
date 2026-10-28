@@ -19,6 +19,7 @@
 import { describe, it, expect } from 'vitest';
 import fs from 'fs';
 import { createHarnessDom, normalizeSignificantTree } from './_significant_tree.js';
+import { strictTree, duplicateDjIds } from './_strict_tree.js';
 
 function load(file) {
     return JSON.parse(fs.readFileSync(`./tests/js/fixtures/${file}`, 'utf-8'));
@@ -158,6 +159,29 @@ describe('#3639 the fixture exercises the reported flow', () => {
         const ids = Array.from(document.querySelectorAll('#feed > li')).map((li) => li.id);
         expect(ids).toEqual(['rows-200']);
     });
+
+    // The loop above compares tag/text shape only. These compare every attribute
+    // (id, data-pk, classes, dj-id values) and demand unique dj-ids, which is what
+    // a prepend that shifted the stored rows by position got wrong.
+    for (const shape of ['stream', 'append', 'prepend', 'banner', 'mixed']) {
+        it(`${shape}: every step reproduces a fresh render attribute for attribute`, async () => {
+            const sub = fx.shapes[shape];
+            const { window, logs } = createHarnessDom(sub.initial_html);
+            const { document } = window;
+            for (const [i, step] of sub.steps.entries()) {
+                await window.djust.applyPatches(step.patches, document.querySelector(fx.root_selector));
+                const tmp = document.createElement('div');
+                tmp.innerHTML = step.expected_html;
+                const actual = document.querySelector(fx.root_selector);
+                const expected = tmp.querySelector(fx.root_selector);
+                expect(strictTree(actual, window), `${shape} step ${i + 1} [${step.label}]`).toEqual(
+                    strictTree(expected, window)
+                );
+                expect(duplicateDjIds(actual), `${shape} step ${i + 1}: duplicate dj-id`).toEqual([]);
+            }
+            expect(logs.filter(([lvl]) => lvl === 'warn' || lvl === 'error')).toEqual([]);
+        });
+    }
 
     it('the append container ends with every stored row plus every assigned one', async () => {
         const sub = fx.shapes.append;

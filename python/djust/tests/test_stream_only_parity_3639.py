@@ -288,11 +288,35 @@ class TestSnapshotContract:
             lambda v: v.stream_delete("rows", {"id": 12345, "body": "absent"}),
             lambda v: v.stream("rows", []),
             lambda v: v.stream_reset("nope"),
+            # ``limit=`` whose prune removes nothing, and a reset of a stream
+            # that is new or already empty
+            lambda v: v.stream("rows", [], limit=99),
+            lambda v: v.stream("rows", [], at=0, limit=99),
+            lambda v: v.stream("fresh", [], reset=True),
+            lambda v: v.stream("fresh", [], limit=5),
         ):
             view = self._view()
             before = _snapshot_assigns(view)
             no_change(view)
             assert _snapshot_assigns(view) == before
+
+    def test_resetting_a_stream_that_is_already_empty_changes_nothing(self):
+        from djust.websocket import _snapshot_assigns
+
+        view = self._view()
+        view.stream_reset("rows")
+        before = _snapshot_assigns(view)
+        view.stream("rows", [], reset=True)
+        view.stream_reset("rows")
+        assert _snapshot_assigns(view) == before
+
+    def test_a_limit_that_does_prune_counts(self):
+        from djust.websocket import _compute_changed_keys, _snapshot_assigns
+
+        view = self._view()
+        before = _snapshot_assigns(view)
+        view.stream("rows", [{"id": 9, "body": "x"}], limit=2)
+        assert _compute_changed_keys(before, _snapshot_assigns(view)) == {"_streams"}
 
     def test_the_render_reset_does_not_register_as_a_change(self):
         """``_reset_streams`` runs after a render, outside the handler window."""
@@ -320,30 +344,55 @@ class TestSnapshotContract:
 
 class TestCallSiteInventory:
     """A new "did the handler change anything" decision has to use
-    ``_snapshot_assigns`` to see streams. List who does, so adding one means
-    reading this file (the count-based pin of CLAUDE.md, #1125)."""
+    ``_snapshot_assigns`` to see streams. This is the exact list of call sites,
+    by module and enclosing function, so a new site in any of them (not just a
+    new module) fails here and its author has to decide what a stream does there
+    (the count-based pin of CLAUDE.md, #1125)."""
 
     EXPECTED = {
-        "python/djust/runtime.py",
-        "python/djust/websocket.py",
-        "python/djust/mixins/request.py",
-        "python/djust/api/dispatch.py",
+        # the HTTP API endpoint: the ``assigns`` diff (``_streams`` never reported)
+        ("python/djust/api/dispatch.py", "_dispatch_api_authenticated"): 2,
+        # the HTTP POST fallback: the DropdownMenu observation only
+        ("python/djust/mixins/request.py", "_post_turn_body"): 2,
+        # ViewRuntime: the event spine's pre/post and noop-token, the deferred
+        # twin, the bound-component route
+        ("python/djust/runtime.py", "_dispatch_component_event"): 3,
+        ("python/djust/runtime.py", "_dispatch_event_render"): 2,
+        ("python/djust/runtime.py", "_dispatch_single_event_body"): 2,
+        ("python/djust/runtime.py", "_legacy_noop_snapshot"): 1,
+        ("python/djust/runtime.py", "handler"): 1,
+        # the consumer: its deferred twin and the tick
+        ("python/djust/websocket.py", "_dispatch_single_event_body"): 2,
+        ("python/djust/websocket.py", "_tick_locked"): 2,
+        ("python/djust/websocket.py", "tick_turn"): 2,
     }
 
-    def test_the_modules_that_snapshot_assigns_are_the_ones_this_file_covers(self):
+    def test_the_call_sites_are_exactly_the_ones_this_file_covers(self):
+        from collections import Counter
+
         root = Path(__file__).resolve().parents[3]
-        found = set()
+        found = Counter()
         for path in (root / "python" / "djust").rglob("*.py"):
             if "tests" in path.parts:
                 continue
-            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
-                if not isinstance(node, ast.Call):
-                    continue
-                func = node.func
-                name = func.id if isinstance(func, ast.Name) else getattr(func, "attr", None)
-                if name == "_snapshot_assigns":
-                    found.add(str(path.relative_to(root)))
-        assert found == self.EXPECTED, found ^ self.EXPECTED
+            rel = str(path.relative_to(root))
+
+            def visit(node, function):
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    function = node.name
+                if isinstance(node, ast.Call):
+                    func = node.func
+                    name = func.id if isinstance(func, ast.Name) else getattr(func, "attr", None)
+                    if name == "_snapshot_assigns":
+                        found[(rel, function)] += 1
+                for child in ast.iter_child_nodes(node):
+                    visit(child, function)
+
+            visit(ast.parse(path.read_text(encoding="utf-8")), None)
+        assert dict(found) == self.EXPECTED, {
+            "new or changed": {k: v for k, v in found.items() if self.EXPECTED.get(k) != v},
+            "gone": {k: v for k, v in self.EXPECTED.items() if found.get(k) != v},
+        }
 
 
 class _StreamChild(LiveView):

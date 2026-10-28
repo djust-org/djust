@@ -235,6 +235,24 @@ struct RenderTiming {
     fast_path: f64,
 }
 
+/// Whether `node` is a `dj-update="append"` / `"prepend"` container named in `ids`.
+fn is_accumulating_container(node: &VNode, ids: &HashSet<String>) -> bool {
+    matches!(
+        node.attrs.get("dj-update").map(String::as_str),
+        Some("append" | "prepend")
+    ) && node.attrs.get("id").is_some_and(|id| ids.contains(id))
+}
+
+/// Whether `node` or anything under it is such a container.
+fn holds_accumulating_container(node: &VNode, ids: &HashSet<String>) -> bool {
+    !ids.is_empty()
+        && (is_accumulating_container(node, ids)
+            || node
+                .children
+                .iter()
+                .any(|child| holds_accumulating_container(child, ids)))
+}
+
 /// A LiveView component that manages state and rendering (Rust backend)
 #[pyclass(name = "RustLiveView")]
 pub struct RustLiveViewBackend {
@@ -293,11 +311,15 @@ pub struct RustLiveViewBackend {
     /// renders don't modify the index because they only change text
     /// content, not text-node positions or count.
     text_node_index: Option<Vec<TextNodeEntry>>,
-    /// Whether `dj-update="append"` / `"prepend"` containers accumulate children
-    /// across renders (#3639). Set from Python on every sync: true for a view
-    /// that declares `temporary_assigns`, whose renders list only the rows just
-    /// assigned. Not persisted; Python sets it again before the next render.
-    accumulate_updates: bool,
+    /// The `id`s of the `dj-update="append"` / `"prepend"` containers that
+    /// accumulate children across renders (#3639): those whose rows come from a
+    /// `temporary_assigns` key, which a render lists only for the rows just
+    /// assigned. Set from Python on every sync, from the template; not
+    /// persisted.
+    accumulate_ids: HashSet<String>,
+    /// Rows without an `id` that an accumulating container dropped since Python
+    /// last asked (`take_accumulate_dropped`), so it can say so once.
+    accumulate_dropped: usize,
     /// Sidecar map of raw Python objects keyed by top-level context
     /// name. Populated by Python's `set_raw_py_values` so the Rust
     /// template engine can fall back to `getattr` for attributes
@@ -384,7 +406,8 @@ impl RustLiveViewBackend {
             changed_keys: None,
             fragment_text_map: None,
             text_node_index: None,
-            accumulate_updates: false,
+            accumulate_ids: HashSet::new(),
+            accumulate_dropped: 0,
             raw_py_values: None,
             // Default-OFF (#1967 / split-foundation #1122); flipped by
             // set_loop_render_cache_enabled from the Python config flag.
@@ -419,11 +442,18 @@ impl RustLiveViewBackend {
         }
     }
 
-    /// Make `dj-update="append"` / `"prepend"` containers accumulate children
-    /// across renders instead of being diffed as an ordinary list (#3639).
-    /// Python sets it from whether the view declares `temporary_assigns`.
-    fn set_accumulate_updates(&mut self, enabled: bool) {
-        self.accumulate_updates = enabled;
+    /// Name the `dj-update="append"` / `"prepend"` containers (by `id`) that
+    /// accumulate children across renders instead of being diffed as an
+    /// ordinary list (#3639). Python works them out from the template: the
+    /// containers whose rows come from a `temporary_assigns` key.
+    fn set_accumulate_containers(&mut self, ids: Vec<String>) {
+        self.accumulate_ids = ids.into_iter().collect();
+    }
+
+    /// How many rows without an `id` an accumulating container dropped since
+    /// the last call. The client drops them too (it adds a child only by `id`).
+    fn take_accumulate_dropped(&mut self) -> usize {
+        std::mem::take(&mut self.accumulate_dropped)
     }
 
     /// Enable or disable the per-item loop render cache (#1967).
@@ -1110,10 +1140,12 @@ impl RustLiveViewBackend {
             // Splice old VDOM subtrees for dj-update="ignore" nodes
             if let Some(old_vdom) = &self.last_vdom {
                 splice_ignore_subtrees(old_vdom, &mut new_vdom);
-                if self.accumulate_updates {
-                    splice_accumulating_subtrees(old_vdom, &mut new_vdom);
-                }
             }
+            self.accumulate_dropped += splice_accumulating_subtrees(
+                self.last_vdom.as_ref(),
+                &mut new_vdom,
+                &self.accumulate_ids,
+            );
 
             // Phase 3: VDOM diff
             let t_diff_start = Instant::now();
@@ -1208,7 +1240,7 @@ impl RustLiveViewBackend {
             use std::time::Instant;
             let t_start = Instant::now();
 
-            let accumulating = self.accumulate_updates;
+            let accumulate_ids = self.accumulate_ids.clone();
             let (Some(vdom), Some(root_ns)) = (self.last_vdom.as_mut(), self.last_root_ns) else {
                 return Ok(None);
             };
@@ -1238,10 +1270,9 @@ impl RustLiveViewBackend {
                     ancestors.push(node);
                 }
                 if ancestors.iter().any(|n| {
-                    let update = n.attrs.get("dj-update").map(String::as_str);
-                    update == Some("ignore")
-                        || (accumulating && matches!(update, Some("append" | "prepend")))
+                    n.attrs.get("dj-update").map(String::as_str) == Some("ignore")
                         || n.attrs.contains_key("dj-virtual")
+                        || is_accumulating_container(n, &accumulate_ids)
                 }) {
                     return Ok(None);
                 }
@@ -1269,6 +1300,11 @@ impl RustLiveViewBackend {
             }
             let mut new_node = roots.pop().expect("one root");
             if new_node.attrs.get("data-component-id") != Some(&component_id) {
+                return Ok(None);
+            }
+            // The full path accumulates a `dj-update` container's rows (they are
+            // spliced from the whole tree); a fragment holding one is left to it.
+            if holds_accumulating_container(&new_node, &accumulate_ids) {
                 return Ok(None);
             }
             // The fragment was parsed on its own, so it may be as deep as a
@@ -1304,17 +1340,11 @@ impl RustLiveViewBackend {
                 return Ok(None);
             };
             splice_ignore_subtrees(old_node, &mut reparsed_old);
-            if accumulating {
-                splice_accumulating_subtrees(old_node, &mut reparsed_old);
-            }
             if !djust_vdom::diff::diff_nodes(old_node, &reparsed_old, &[]).is_empty() {
                 return Ok(None);
             }
             let t_diff = Instant::now();
             splice_ignore_subtrees(old_node, &mut new_node);
-            if accumulating {
-                splice_accumulating_subtrees(old_node, &mut new_node);
-            }
             let patches =
                 djust_vdom::diff::diff_nodes_in(old_node, &new_node, &path, Some(Namespace::Html));
             sync_ids(old_node, &mut new_node);
@@ -1434,7 +1464,8 @@ impl RustLiveViewBackend {
             fragment_text_map: None,
             text_node_index: None,
             // Transient (#3639): Python re-sets it on every sync.
-            accumulate_updates: false,
+            accumulate_ids: HashSet::new(),
+            accumulate_dropped: 0,
             raw_py_values: None,
             // Transient cache — not deserialized; rebuilt fresh, default-OFF
             // until the Python flag re-enables it post-restore (#1967).
@@ -1902,10 +1933,12 @@ impl RustLiveViewBackend {
                 // Splice ignore subtrees
                 if let Some(old_vdom) = &self.last_vdom {
                     splice_ignore_subtrees(old_vdom, &mut new_vdom);
-                    if self.accumulate_updates {
-                        splice_accumulating_subtrees(old_vdom, &mut new_vdom);
-                    }
                 }
+                self.accumulate_dropped += splice_accumulating_subtrees(
+                    self.last_vdom.as_ref(),
+                    &mut new_vdom,
+                    &self.accumulate_ids,
+                );
 
                 // VDOM diff
                 let t_diff_start = Instant::now();

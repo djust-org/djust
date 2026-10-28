@@ -347,7 +347,7 @@
       ]
     },
     "append": {
-      "initial_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\" dj-update=\"append\" id=\"list\"><li dj-id=\"2\" id=\"rows-0\">row 0</li><li dj-id=\"3\" id=\"rows-1\">row 1</li><li dj-id=\"4\" id=\"rows-2\">row 2</li></ul><p dj-id=\"5\">count 0</p></div>",
+      "initial_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\" dj-update=\"append\" id=\"list\"><li data-pk=\"0\" dj-id=\"2\" id=\"rows-0\">row 0</li><li data-pk=\"10\" dj-id=\"3\" id=\"rows-1\">row 1</li><li data-pk=\"20\" dj-id=\"4\" id=\"rows-2\">row 2</li></ul><p dj-id=\"5\">count 0</p></div>",
       "steps": [
         {
           "label": "row next to another change",
@@ -362,6 +362,7 @@
               "node": {
                 "tag": "li",
                 "attrs": {
+                  "data-pk": "1010",
                   "dj-id": "8",
                   "id": "rows-101"
                 },
@@ -388,7 +389,7 @@
               "text": "count 1"
             }
           ],
-          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\" dj-update=\"append\" id=\"list\"><li dj-id=\"2\" id=\"rows-0\">row 0</li><li dj-id=\"3\" id=\"rows-1\">row 1</li><li dj-id=\"4\" id=\"rows-2\">row 2</li><li dj-id=\"8\" id=\"rows-101\">new 1</li></ul><p dj-id=\"5\">count 1</p></div>"
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\" dj-update=\"append\" id=\"list\"><li data-pk=\"0\" dj-id=\"2\" id=\"rows-0\">row 0</li><li data-pk=\"10\" dj-id=\"3\" id=\"rows-1\">row 1</li><li data-pk=\"20\" dj-id=\"4\" id=\"rows-2\">row 2</li><li data-pk=\"1010\" dj-id=\"8\" id=\"rows-101\">new 1</li></ul><p dj-id=\"5\">count 1</p></div>"
         },
         {
           "label": "row as the only change",
@@ -403,6 +404,7 @@
               "node": {
                 "tag": "li",
                 "attrs": {
+                  "data-pk": "2000",
                   "dj-id": "c",
                   "id": "rows-200"
                 },
@@ -421,7 +423,7 @@
               }
             }
           ],
-          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\" dj-update=\"append\" id=\"list\"><li dj-id=\"2\" id=\"rows-0\">row 0</li><li dj-id=\"3\" id=\"rows-1\">row 1</li><li dj-id=\"4\" id=\"rows-2\">row 2</li><li dj-id=\"8\" id=\"rows-101\">new 1</li><li dj-id=\"c\" id=\"rows-200\">only</li></ul><p dj-id=\"5\">count 1</p></div>"
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\" dj-update=\"append\" id=\"list\"><li data-pk=\"0\" dj-id=\"2\" id=\"rows-0\">row 0</li><li data-pk=\"10\" dj-id=\"3\" id=\"rows-1\">row 1</li><li data-pk=\"20\" dj-id=\"4\" id=\"rows-2\">row 2</li><li data-pk=\"1010\" dj-id=\"8\" id=\"rows-101\">new 1</li><li data-pk=\"2000\" dj-id=\"c\" id=\"rows-200\">only</li></ul><p dj-id=\"5\">count 1</p></div>"
         },
         {
           "label": "two rows",
@@ -436,6 +438,7 @@
               "node": {
                 "tag": "li",
                 "attrs": {
+                  "data-pk": "3010",
                   "dj-id": "g",
                   "id": "rows-301"
                 },
@@ -463,6 +466,7 @@
               "node": {
                 "tag": "li",
                 "attrs": {
+                  "data-pk": "3020",
                   "dj-id": "h",
                   "id": "rows-302"
                 },
@@ -481,7 +485,7 @@
               }
             }
           ],
-          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\" dj-update=\"append\" id=\"list\"><li dj-id=\"2\" id=\"rows-0\">row 0</li><li dj-id=\"3\" id=\"rows-1\">row 1</li><li dj-id=\"4\" id=\"rows-2\">row 2</li><li dj-id=\"8\" id=\"rows-101\">new 1</li><li dj-id=\"c\" id=\"rows-200\">only</li><li dj-id=\"g\" id=\"rows-301\">two a</li><li dj-id=\"h\" id=\"rows-302\">two b</li></ul><p dj-id=\"5\">count 1</p></div>"
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\" dj-update=\"append\" id=\"list\"><li data-pk=\"0\" dj-id=\"2\" id=\"rows-0\">row 0</li><li data-pk=\"10\" dj-id=\"3\" id=\"rows-1\">row 1</li><li data-pk=\"20\" dj-id=\"4\" id=\"rows-2\">row 2</li><li data-pk=\"1010\" dj-id=\"8\" id=\"rows-101\">new 1</li><li data-pk=\"2000\" dj-id=\"c\" id=\"rows-200\">only</li><li data-pk=\"3010\" dj-id=\"g\" id=\"rows-301\">two a</li><li data-pk=\"3020\" dj-id=\"h\" id=\"rows-302\">two b</li></ul><p dj-id=\"5\">count 1</p></div>"
         },
         {
           "label": "unrelated event",
@@ -495,7 +499,7 @@
               "text": "count 2"
             }
           ],
-          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\" dj-update=\"append\" id=\"list\"><li dj-id=\"2\" id=\"rows-0\">row 0</li><li dj-id=\"3\" id=\"rows-1\">row 1</li><li dj-id=\"4\" id=\"rows-2\">row 2</li><li dj-id=\"8\" id=\"rows-101\">new 1</li><li dj-id=\"c\" id=\"rows-200\">only</li><li dj-id=\"g\" id=\"rows-301\">two a</li><li dj-id=\"h\" id=\"rows-302\">two b</li></ul><p dj-id=\"5\">count 2</p></div>"
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\" dj-update=\"append\" id=\"list\"><li data-pk=\"0\" dj-id=\"2\" id=\"rows-0\">row 0</li><li data-pk=\"10\" dj-id=\"3\" id=\"rows-1\">row 1</li><li data-pk=\"20\" dj-id=\"4\" id=\"rows-2\">row 2</li><li data-pk=\"1010\" dj-id=\"8\" id=\"rows-101\">new 1</li><li data-pk=\"2000\" dj-id=\"c\" id=\"rows-200\">only</li><li data-pk=\"3010\" dj-id=\"g\" id=\"rows-301\">two a</li><li data-pk=\"3020\" dj-id=\"h\" id=\"rows-302\">two b</li></ul><p dj-id=\"5\">count 2</p></div>"
         },
         {
           "label": "another row",
@@ -510,6 +514,7 @@
               "node": {
                 "tag": "li",
                 "attrs": {
+                  "data-pk": "1030",
                   "dj-id": "q",
                   "id": "rows-103"
                 },
@@ -536,98 +541,42 @@
               "text": "count 3"
             }
           ],
-          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\" dj-update=\"append\" id=\"list\"><li dj-id=\"2\" id=\"rows-0\">row 0</li><li dj-id=\"3\" id=\"rows-1\">row 1</li><li dj-id=\"4\" id=\"rows-2\">row 2</li><li dj-id=\"8\" id=\"rows-101\">new 1</li><li dj-id=\"c\" id=\"rows-200\">only</li><li dj-id=\"g\" id=\"rows-301\">two a</li><li dj-id=\"h\" id=\"rows-302\">two b</li><li dj-id=\"q\" id=\"rows-103\">new 3</li></ul><p dj-id=\"5\">count 3</p></div>"
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\" dj-update=\"append\" id=\"list\"><li data-pk=\"0\" dj-id=\"2\" id=\"rows-0\">row 0</li><li data-pk=\"10\" dj-id=\"3\" id=\"rows-1\">row 1</li><li data-pk=\"20\" dj-id=\"4\" id=\"rows-2\">row 2</li><li data-pk=\"1010\" dj-id=\"8\" id=\"rows-101\">new 1</li><li data-pk=\"2000\" dj-id=\"c\" id=\"rows-200\">only</li><li data-pk=\"3010\" dj-id=\"g\" id=\"rows-301\">two a</li><li data-pk=\"3020\" dj-id=\"h\" id=\"rows-302\">two b</li><li data-pk=\"1030\" dj-id=\"q\" id=\"rows-103\">new 3</li></ul><p dj-id=\"5\">count 3</p></div>"
         }
       ]
     },
     "prepend": {
-      "initial_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\" dj-update=\"prepend\" id=\"list\"><li dj-id=\"2\" id=\"rows-0\">row 0</li><li dj-id=\"3\" id=\"rows-1\">row 1</li><li dj-id=\"4\" id=\"rows-2\">row 2</li></ul><p dj-id=\"5\">count 0</p></div>",
+      "initial_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\" dj-update=\"prepend\" id=\"list\"><li data-pk=\"0\" dj-id=\"2\" id=\"rows-0\">row 0</li><li data-pk=\"10\" dj-id=\"3\" id=\"rows-1\">row 1</li><li data-pk=\"20\" dj-id=\"4\" id=\"rows-2\">row 2</li></ul><p dj-id=\"5\">count 0</p></div>",
       "steps": [
         {
           "label": "row next to another change",
           "patches": [
-            {
-              "type": "SetAttr",
-              "path": [
-                0,
-                0
-              ],
-              "d": "2",
-              "key": "id",
-              "value": "rows-101"
-            },
-            {
-              "type": "SetText",
-              "path": [
-                0,
-                0,
-                0
-              ],
-              "text": "new 1"
-            },
-            {
-              "type": "SetAttr",
-              "path": [
-                0,
-                1
-              ],
-              "d": "3",
-              "key": "id",
-              "value": "rows-0"
-            },
-            {
-              "type": "SetText",
-              "path": [
-                0,
-                1,
-                0
-              ],
-              "text": "row 0"
-            },
-            {
-              "type": "SetAttr",
-              "path": [
-                0,
-                2
-              ],
-              "d": "4",
-              "key": "id",
-              "value": "rows-1"
-            },
-            {
-              "type": "SetText",
-              "path": [
-                0,
-                2,
-                0
-              ],
-              "text": "row 1"
-            },
             {
               "type": "InsertChild",
               "path": [
                 0
               ],
               "d": "1",
-              "index": 3,
+              "index": 0,
               "node": {
                 "tag": "li",
                 "attrs": {
-                  "dj-id": "4",
-                  "id": "rows-2"
+                  "data-pk": "1010",
+                  "dj-id": "8",
+                  "id": "rows-101"
                 },
                 "children": [
                   {
                     "tag": "#text",
                     "attrs": {},
                     "children": [],
-                    "text": "row 2",
+                    "text": "new 1",
                     "key": null
                   }
                 ],
                 "text": null,
-                "key": null,
-                "djust_id": "4"
+                "key": "rows-101",
+                "djust_id": "8"
               }
             },
             {
@@ -639,112 +588,79 @@
               "text": "count 1"
             }
           ],
-          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\" dj-update=\"prepend\" id=\"list\"><li dj-id=\"2\" id=\"rows-101\">new 1</li><li dj-id=\"3\" id=\"rows-0\">row 0</li><li dj-id=\"4\" id=\"rows-1\">row 1</li><li dj-id=\"4\" id=\"rows-2\">row 2</li></ul><p dj-id=\"5\">count 1</p></div>"
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\" dj-update=\"prepend\" id=\"list\"><li data-pk=\"1010\" dj-id=\"8\" id=\"rows-101\">new 1</li><li data-pk=\"0\" dj-id=\"2\" id=\"rows-0\">row 0</li><li data-pk=\"10\" dj-id=\"3\" id=\"rows-1\">row 1</li><li data-pk=\"20\" dj-id=\"4\" id=\"rows-2\">row 2</li></ul><p dj-id=\"5\">count 1</p></div>"
+        },
+        {
+          "label": "another row",
+          "patches": [
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 0,
+              "node": {
+                "tag": "li",
+                "attrs": {
+                  "data-pk": "1020",
+                  "dj-id": "c",
+                  "id": "rows-102"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "new 2",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": "rows-102",
+                "djust_id": "c"
+              }
+            },
+            {
+              "type": "SetText",
+              "path": [
+                1,
+                0
+              ],
+              "text": "count 2"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\" dj-update=\"prepend\" id=\"list\"><li data-pk=\"1020\" dj-id=\"c\" id=\"rows-102\">new 2</li><li data-pk=\"1010\" dj-id=\"8\" id=\"rows-101\">new 1</li><li data-pk=\"0\" dj-id=\"2\" id=\"rows-0\">row 0</li><li data-pk=\"10\" dj-id=\"3\" id=\"rows-1\">row 1</li><li data-pk=\"20\" dj-id=\"4\" id=\"rows-2\">row 2</li></ul><p dj-id=\"5\">count 2</p></div>"
         },
         {
           "label": "two rows",
           "patches": [
             {
-              "type": "SetAttr",
-              "path": [
-                0,
-                0
-              ],
-              "d": "2",
-              "key": "id",
-              "value": "rows-301"
-            },
-            {
-              "type": "SetText",
-              "path": [
-                0,
-                0,
-                0
-              ],
-              "text": "two a"
-            },
-            {
-              "type": "SetAttr",
-              "path": [
-                0,
-                1
-              ],
-              "d": "3",
-              "key": "id",
-              "value": "rows-302"
-            },
-            {
-              "type": "SetText",
-              "path": [
-                0,
-                1,
-                0
-              ],
-              "text": "two b"
-            },
-            {
-              "type": "SetAttr",
-              "path": [
-                0,
-                2
-              ],
-              "d": "4",
-              "key": "id",
-              "value": "rows-101"
-            },
-            {
-              "type": "SetText",
-              "path": [
-                0,
-                2,
-                0
-              ],
-              "text": "new 1"
-            },
-            {
-              "type": "SetAttr",
-              "path": [
-                0,
-                3
-              ],
-              "d": "4",
-              "key": "id",
-              "value": "rows-0"
-            },
-            {
-              "type": "SetText",
-              "path": [
-                0,
-                3,
-                0
-              ],
-              "text": "row 0"
-            },
-            {
               "type": "InsertChild",
               "path": [
                 0
               ],
               "d": "1",
-              "index": 4,
+              "index": 0,
               "node": {
                 "tag": "li",
                 "attrs": {
-                  "dj-id": "4",
-                  "id": "rows-1"
+                  "data-pk": "3010",
+                  "dj-id": "g",
+                  "id": "rows-301"
                 },
                 "children": [
                   {
                     "tag": "#text",
                     "attrs": {},
                     "children": [],
-                    "text": "row 1",
+                    "text": "two a",
                     "key": null
                   }
                 ],
                 "text": null,
-                "key": null,
-                "djust_id": "4"
+                "key": "rows-301",
+                "djust_id": "g"
               }
             },
             {
@@ -753,29 +669,30 @@
                 0
               ],
               "d": "1",
-              "index": 5,
+              "index": 1,
               "node": {
                 "tag": "li",
                 "attrs": {
-                  "dj-id": "4",
-                  "id": "rows-2"
+                  "data-pk": "3020",
+                  "dj-id": "h",
+                  "id": "rows-302"
                 },
                 "children": [
                   {
                     "tag": "#text",
                     "attrs": {},
                     "children": [],
-                    "text": "row 2",
+                    "text": "two b",
                     "key": null
                   }
                 ],
                 "text": null,
-                "key": null,
-                "djust_id": "4"
+                "key": "rows-302",
+                "djust_id": "h"
               }
             }
           ],
-          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\" dj-update=\"prepend\" id=\"list\"><li dj-id=\"2\" id=\"rows-301\">two a</li><li dj-id=\"3\" id=\"rows-302\">two b</li><li dj-id=\"4\" id=\"rows-101\">new 1</li><li dj-id=\"4\" id=\"rows-0\">row 0</li><li dj-id=\"4\" id=\"rows-1\">row 1</li><li dj-id=\"4\" id=\"rows-2\">row 2</li></ul><p dj-id=\"5\">count 1</p></div>"
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\" dj-update=\"prepend\" id=\"list\"><li data-pk=\"3010\" dj-id=\"g\" id=\"rows-301\">two a</li><li data-pk=\"3020\" dj-id=\"h\" id=\"rows-302\">two b</li><li data-pk=\"1020\" dj-id=\"c\" id=\"rows-102\">new 2</li><li data-pk=\"1010\" dj-id=\"8\" id=\"rows-101\">new 1</li><li data-pk=\"0\" dj-id=\"2\" id=\"rows-0\">row 0</li><li data-pk=\"10\" dj-id=\"3\" id=\"rows-1\">row 1</li><li data-pk=\"20\" dj-id=\"4\" id=\"rows-2\">row 2</li></ul><p dj-id=\"5\">count 2</p></div>"
         },
         {
           "label": "unrelated event",
@@ -786,10 +703,377 @@
                 1,
                 0
               ],
+              "text": "count 3"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\" dj-update=\"prepend\" id=\"list\"><li data-pk=\"3010\" dj-id=\"g\" id=\"rows-301\">two a</li><li data-pk=\"3020\" dj-id=\"h\" id=\"rows-302\">two b</li><li data-pk=\"1020\" dj-id=\"c\" id=\"rows-102\">new 2</li><li data-pk=\"1010\" dj-id=\"8\" id=\"rows-101\">new 1</li><li data-pk=\"0\" dj-id=\"2\" id=\"rows-0\">row 0</li><li data-pk=\"10\" dj-id=\"3\" id=\"rows-1\">row 1</li><li data-pk=\"20\" dj-id=\"4\" id=\"rows-2\">row 2</li></ul><p dj-id=\"5\">count 3</p></div>"
+        },
+        {
+          "label": "row as the only change",
+          "patches": [
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 0,
+              "node": {
+                "tag": "li",
+                "attrs": {
+                  "data-pk": "2000",
+                  "dj-id": "q",
+                  "id": "rows-200"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "only",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": "rows-200",
+                "djust_id": "q"
+              }
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\" dj-update=\"prepend\" id=\"list\"><li data-pk=\"2000\" dj-id=\"q\" id=\"rows-200\">only</li><li data-pk=\"3010\" dj-id=\"g\" id=\"rows-301\">two a</li><li data-pk=\"3020\" dj-id=\"h\" id=\"rows-302\">two b</li><li data-pk=\"1020\" dj-id=\"c\" id=\"rows-102\">new 2</li><li data-pk=\"1010\" dj-id=\"8\" id=\"rows-101\">new 1</li><li data-pk=\"0\" dj-id=\"2\" id=\"rows-0\">row 0</li><li data-pk=\"10\" dj-id=\"3\" id=\"rows-1\">row 1</li><li data-pk=\"20\" dj-id=\"4\" id=\"rows-2\">row 2</li></ul><p dj-id=\"5\">count 3</p></div>"
+        },
+        {
+          "label": "another row",
+          "patches": [
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 0,
+              "node": {
+                "tag": "li",
+                "attrs": {
+                  "data-pk": "1040",
+                  "dj-id": "u",
+                  "id": "rows-104"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "new 4",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": "rows-104",
+                "djust_id": "u"
+              }
+            },
+            {
+              "type": "SetText",
+              "path": [
+                1,
+                0
+              ],
+              "text": "count 4"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\" dj-update=\"prepend\" id=\"list\"><li data-pk=\"1040\" dj-id=\"u\" id=\"rows-104\">new 4</li><li data-pk=\"2000\" dj-id=\"q\" id=\"rows-200\">only</li><li data-pk=\"3010\" dj-id=\"g\" id=\"rows-301\">two a</li><li data-pk=\"3020\" dj-id=\"h\" id=\"rows-302\">two b</li><li data-pk=\"1020\" dj-id=\"c\" id=\"rows-102\">new 2</li><li data-pk=\"1010\" dj-id=\"8\" id=\"rows-101\">new 1</li><li data-pk=\"0\" dj-id=\"2\" id=\"rows-0\">row 0</li><li data-pk=\"10\" dj-id=\"3\" id=\"rows-1\">row 1</li><li data-pk=\"20\" dj-id=\"4\" id=\"rows-2\">row 2</li></ul><p dj-id=\"5\">count 4</p></div>"
+        }
+      ]
+    },
+    "banner": {
+      "initial_html": "<div class=\"ws-root\" dj-id=\"0\"><!--dj-if id=\"if-7d7219c7-0\"--><!--/dj-if--><ul dj-id=\"1\" dj-update=\"append\" id=\"list\"><li data-pk=\"0\" dj-id=\"2\" id=\"rows-0\">row 0</li><li data-pk=\"10\" dj-id=\"3\" id=\"rows-1\">row 1</li><li data-pk=\"20\" dj-id=\"4\" id=\"rows-2\">row 2</li></ul><p dj-id=\"5\">count 0</p></div>",
+      "steps": [
+        {
+          "label": "banner appears with a row",
+          "patches": [
+            {
+              "type": "InsertChild",
+              "path": [],
+              "d": "0",
+              "index": 1,
+              "node": {
+                "tag": "p",
+                "attrs": {
+                  "class": "banner",
+                  "dj-id": "7"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "notice",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": null,
+                "djust_id": "7"
+              }
+            },
+            {
+              "type": "InsertChild",
+              "path": [
+                3
+              ],
+              "d": "1",
+              "index": 3,
+              "node": {
+                "tag": "li",
+                "attrs": {
+                  "data-pk": "1010",
+                  "dj-id": "9",
+                  "id": "rows-101"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "new 1",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": null,
+                "djust_id": "9"
+              }
+            },
+            {
+              "type": "SetText",
+              "path": [
+                4,
+                0
+              ],
+              "text": "count 1"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><!--dj-if id=\"if-7d7219c7-0\"--><p class=\"banner\" dj-id=\"7\">notice</p><!--/dj-if--><ul dj-id=\"1\" dj-update=\"append\" id=\"list\"><li data-pk=\"0\" dj-id=\"2\" id=\"rows-0\">row 0</li><li data-pk=\"10\" dj-id=\"3\" id=\"rows-1\">row 1</li><li data-pk=\"20\" dj-id=\"4\" id=\"rows-2\">row 2</li><li data-pk=\"1010\" dj-id=\"9\" id=\"rows-101\">new 1</li></ul><p dj-id=\"5\">count 1</p></div>"
+        },
+        {
+          "label": "banner leaves with a row",
+          "patches": [
+            {
+              "type": "RemoveChild",
+              "path": [],
+              "d": "0",
+              "index": 1,
+              "child_d": "7"
+            },
+            {
+              "type": "InsertChild",
+              "path": [
+                2
+              ],
+              "d": "1",
+              "index": 4,
+              "node": {
+                "tag": "li",
+                "attrs": {
+                  "data-pk": "1020",
+                  "dj-id": "d",
+                  "id": "rows-102"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "new 2",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": null,
+                "djust_id": "d"
+              }
+            },
+            {
+              "type": "SetText",
+              "path": [
+                3,
+                0
+              ],
               "text": "count 2"
             }
           ],
-          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\" dj-update=\"prepend\" id=\"list\"><li dj-id=\"2\" id=\"rows-301\">two a</li><li dj-id=\"3\" id=\"rows-302\">two b</li><li dj-id=\"4\" id=\"rows-101\">new 1</li><li dj-id=\"4\" id=\"rows-0\">row 0</li><li dj-id=\"4\" id=\"rows-1\">row 1</li><li dj-id=\"4\" id=\"rows-2\">row 2</li></ul><p dj-id=\"5\">count 2</p></div>"
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><!--dj-if id=\"if-7d7219c7-0\"--><!--/dj-if--><ul dj-id=\"1\" dj-update=\"append\" id=\"list\"><li data-pk=\"0\" dj-id=\"2\" id=\"rows-0\">row 0</li><li data-pk=\"10\" dj-id=\"3\" id=\"rows-1\">row 1</li><li data-pk=\"20\" dj-id=\"4\" id=\"rows-2\">row 2</li><li data-pk=\"1010\" dj-id=\"9\" id=\"rows-101\">new 1</li><li data-pk=\"1020\" dj-id=\"d\" id=\"rows-102\">new 2</li></ul><p dj-id=\"5\">count 2</p></div>"
+        },
+        {
+          "label": "unrelated event",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                3,
+                0
+              ],
+              "text": "count 3"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><!--dj-if id=\"if-7d7219c7-0\"--><!--/dj-if--><ul dj-id=\"1\" dj-update=\"append\" id=\"list\"><li data-pk=\"0\" dj-id=\"2\" id=\"rows-0\">row 0</li><li data-pk=\"10\" dj-id=\"3\" id=\"rows-1\">row 1</li><li data-pk=\"20\" dj-id=\"4\" id=\"rows-2\">row 2</li><li data-pk=\"1010\" dj-id=\"9\" id=\"rows-101\">new 1</li><li data-pk=\"1020\" dj-id=\"d\" id=\"rows-102\">new 2</li></ul><p dj-id=\"5\">count 3</p></div>"
+        }
+      ]
+    },
+    "mixed": {
+      "initial_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\" dj-update=\"append\" id=\"list\"><li data-pk=\"0\" dj-id=\"2\" id=\"rows-0\">row 0</li><li data-pk=\"10\" dj-id=\"3\" id=\"rows-1\">row 1</li><li data-pk=\"20\" dj-id=\"4\" id=\"rows-2\">row 2</li><li data-pk=\"30\" dj-id=\"5\" id=\"rows-3\">row 3</li></ul><p dj-id=\"6\">[]</p></div>",
+      "steps": [
+        {
+          "label": "remove the first item",
+          "patches": [
+            {
+              "type": "SetAttr",
+              "path": [
+                0,
+                0
+              ],
+              "d": "2",
+              "key": "data-pk",
+              "value": "10"
+            },
+            {
+              "type": "SetAttr",
+              "path": [
+                0,
+                0
+              ],
+              "d": "2",
+              "key": "id",
+              "value": "rows-1"
+            },
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                0,
+                0
+              ],
+              "text": "row 1"
+            },
+            {
+              "type": "SetAttr",
+              "path": [
+                0,
+                1
+              ],
+              "d": "3",
+              "key": "data-pk",
+              "value": "20"
+            },
+            {
+              "type": "SetAttr",
+              "path": [
+                0,
+                1
+              ],
+              "d": "3",
+              "key": "id",
+              "value": "rows-2"
+            },
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                1,
+                0
+              ],
+              "text": "row 2"
+            },
+            {
+              "type": "SetAttr",
+              "path": [
+                0,
+                2
+              ],
+              "d": "4",
+              "key": "data-pk",
+              "value": "30"
+            },
+            {
+              "type": "SetAttr",
+              "path": [
+                0,
+                2
+              ],
+              "d": "4",
+              "key": "id",
+              "value": "rows-3"
+            },
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                2,
+                0
+              ],
+              "text": "row 3"
+            },
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 3,
+              "child_d": "5"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\" dj-update=\"append\" id=\"list\"><li data-pk=\"10\" dj-id=\"2\" id=\"rows-1\">row 1</li><li data-pk=\"20\" dj-id=\"3\" id=\"rows-2\">row 2</li><li data-pk=\"30\" dj-id=\"4\" id=\"rows-3\">row 3</li></ul><p dj-id=\"6\">[]</p></div>"
+        },
+        {
+          "label": "edit the first item",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                0,
+                0
+              ],
+              "text": "edited"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\" dj-update=\"append\" id=\"list\"><li data-pk=\"10\" dj-id=\"2\" id=\"rows-1\">edited</li><li data-pk=\"20\" dj-id=\"3\" id=\"rows-2\">row 2</li><li data-pk=\"30\" dj-id=\"4\" id=\"rows-3\">row 3</li></ul><p dj-id=\"6\">[]</p></div>"
+        },
+        {
+          "label": "add an item",
+          "patches": [
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 3,
+              "node": {
+                "tag": "li",
+                "attrs": {
+                  "data-pk": "530",
+                  "dj-id": "i",
+                  "id": "rows-53"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "added",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": null,
+                "djust_id": "i"
+              }
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\" dj-update=\"append\" id=\"list\"><li data-pk=\"10\" dj-id=\"2\" id=\"rows-1\">edited</li><li data-pk=\"20\" dj-id=\"3\" id=\"rows-2\">row 2</li><li data-pk=\"30\" dj-id=\"4\" id=\"rows-3\">row 3</li><li data-pk=\"530\" dj-id=\"i\" id=\"rows-53\">added</li></ul><p dj-id=\"6\">[]</p></div>"
         }
       ]
     }

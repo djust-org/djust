@@ -80,6 +80,8 @@ from tests.livefixtures.inline_whitespace_view import (  # noqa: E402
 from tests.livefixtures.kanban_tabs_view import KanbanTabsView  # noqa: E402
 from tests.livefixtures.stream_append_views import (  # noqa: E402
     AppendRowsView,
+    BannerRowsView,
+    MixedView,
     PrependRowsView,
     StreamFeedView,
 )
@@ -601,8 +603,29 @@ def gen_stream_append_3639():
             PrependRowsView,
             [
                 ("row next to another change", "add"),
+                ("another row", "add"),
                 ("two rows", "add_two"),
                 ("unrelated event", "bump"),
+                ("row as the only change", "add_only"),
+                ("another row", "add"),
+            ],
+        ),
+        (
+            "banner",
+            BannerRowsView,
+            [
+                ("banner appears with a row", "banner_and_add"),
+                ("banner leaves with a row", "banner_and_add"),
+                ("unrelated event", "bump"),
+            ],
+        ),
+        (
+            "mixed",
+            MixedView,
+            [
+                ("remove the first item", "remove_first"),
+                ("edit the first item", "edit_first"),
+                ("add an item", "add_item"),
             ],
         ),
     ):
