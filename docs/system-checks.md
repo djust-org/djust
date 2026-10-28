@@ -249,7 +249,7 @@ console.log("debug info"); // noqa: Q003
 ### C028 — Invalid `http_fallback_background_timeout`
 - **Severity**: Error
 - **Method**: Settings inspection
-- **What it detects**: `LIVEVIEW_CONFIG['http_fallback_background_timeout']` (or the same key in `DJUST_CONFIG`) is set to something other than `None` or a finite number of seconds greater than 0, such as `"30"`, `0`, `True` or `float("nan")`. Any other value is read as no deadline, so the page-POST fallback keeps waiting for a `start_async` task that never returns. See [Deadline](website/guides/http-only-mode.md#what-the-page-post-fallback-keeps-between-events).
+- **What it detects**: `LIVEVIEW_CONFIG['http_fallback_background_timeout']` (or the same key in `DJUST_CONFIG`) is set to something other than `None` or a number of seconds greater than 0 and at most `threading.TIMEOUT_MAX` (about 9.2e9), such as `"30"`, `0`, `True`, `float("nan")` or `1e10`. Any other value is read as no deadline, so the page-POST fallback keeps waiting for a `start_async` task that never returns. See [Deadline](website/guides/http-only-mode.md#what-the-page-post-fallback-keeps-between-events).
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C028"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C028"]` (the runtime still applies no deadline)
 - **False positives**: None
 

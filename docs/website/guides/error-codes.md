@@ -370,7 +370,7 @@ In development, pages render without Tailwind utilities until you compile the CS
 
 **Severity**: Error
 
-**What causes it**: `LIVEVIEW_CONFIG['http_fallback_background_timeout']` is set to something other than `None` or a finite number of seconds greater than 0, such as `"30"`, `0` or `True`. Any other value is read as no deadline, so the page-POST fallback keeps waiting for a `start_async` task that never returns.
+**What causes it**: `LIVEVIEW_CONFIG['http_fallback_background_timeout']` is set to something other than `None` or a number of seconds greater than 0 and at most `threading.TIMEOUT_MAX` (about 9.2e9, the longest a thread can wait), such as `"30"`, `0`, `True` or `1e10`. A value above the maximum is rejected, not clamped. Any other value is read as no deadline, so the page-POST fallback keeps waiting for a `start_async` task that never returns.
 
 **Fix**: Set it to a number of seconds such as `30`, or remove it. See [Deadline](http-only-mode.md#what-the-page-post-fallback-keeps-between-events). Suppress with `DJUST_CONFIG = {"suppress_checks": ["C028"]}`.
 
