@@ -618,12 +618,16 @@ Two more things the warning does and does not tell you:
 - **A context processor's plain data is stored.** djust copies every
   JSON-serialisable value a processor returns into the stored state. For a large
   list that no template needs stored, return it as
-  `djust._request_scoped_data.RequestScopedList(items)`: it stays a real `list`
+  `djust.request_scoped.RequestScopedList(items)`: it stays a real `list`
   (`json_script`, `json.dumps` and `isinstance` work) and rides to the renderer
   without being stored.
 - **It also fires from the post-render store.** A view that is small at mount and
   grows past the threshold during its life is reported on the render that crosses
-  it, once per view until it drops back under, not only on the next reload.
+  it, once per view until it drops back under, not only on the next reload. This
+  is a property of the in-memory state backend only: the Redis backend has no
+  large-state warning. The warning names the view's state by a short hash
+  (`state-1a2b3c4d`), never the session key or the request path, which the cache
+  key contains.
 
 Stream rows are the one big part with no cheap remedy yet: they stay in the
 stored state, and the obvious fix (clearing the stream after each render) removes

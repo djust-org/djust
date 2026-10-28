@@ -1120,7 +1120,7 @@ one-counter view stored 12,182 bytes, 11,684 of them this list). It is now a
 renderer without storing it (the same view stores 510 bytes). The one check
 that tells it from a plain list is `type(theme_presets) is list`. A processor of
 your own can opt a large, request-derived list out of the stored state the same
-way: return `djust._request_scoped_data.RequestScopedList(items)`. A plain list
+way: return `RequestScopedList(items)` from `djust.request_scoped` (public API). A plain list
 from your processor is stored as before.
 
 The HTML variables are not `str` instances: they are lazy trusted-HTML objects
