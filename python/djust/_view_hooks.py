@@ -101,6 +101,20 @@ async def call_tick(view: Any) -> Any:
     return await sync_to_async(sync_step(view, "tick", view.handle_tick))()
 
 
+def call_async_result_sync(
+    view: Any, handler: Callable[..., Any], name: str, **outcome: Any
+) -> Any:
+    """Call a result hook from sync code, using its role rather than its name."""
+    if is_async_hook(handler):
+        return call_hook_sync(handler, name, **outcome)
+    from .sync_turn import run_sync_step
+
+    result = run_sync_step(view, "async", handler, name, **outcome)
+    if inspect.isawaitable(result):
+        return async_to_sync(_await)(result)
+    return result
+
+
 def call_hook_sync(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
     """Call ``fn`` from sync code, running an async hook to completion."""
     if is_async_hook(fn):

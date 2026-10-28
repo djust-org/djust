@@ -5,13 +5,12 @@ WebSocket consumer, SSE (stream GET + ``/message/`` POST) and the HTTP POST
 fallback. Each wire's raw output is normalised into one *observation*: was
 anything rendered, which side effects reached the client (flash, page
 metadata, push events, layout, navigation), and whether ``defer()`` and
-``start_async`` callbacks ran. The observations must be equal.
+``start_async`` callbacks ran. Each turn must deliver its documented effect.
 
-Where a wire differs today, the case is ``xfail(strict=True)`` with the gap
-named in ``KNOWN_GAPS``. ``strict`` is deliberate: a fix makes the case
-XPASS, which fails the run, so the PR that closes a gap must also delete its
-entry. The transport-core PRs (docs/plans/2.0-transport-core.md §4) tick the
-entries off.
+Each named turn's observed effect is required on all three wires. HTTP
+runs queued background callbacks inside the request before responding; socket
+transports deliver their result later. This harness checks that each effect
+arrives, not that those different timing and durability contracts are equal.
 
 Test-only: no behaviour change.
 """
@@ -106,12 +105,6 @@ TURNS = [
     "async_it",
 ]
 WIRES = ["ws", "sse", "http"]
-
-#: (wire, turn) -> the gap. Each closes in a transport-core PR.
-KNOWN_GAPS: Dict[tuple, str] = {
-    ("http", "async_it"): "HTTP never runs start_async work (transport-core open question 3)",
-}
-
 
 # --------------------------------------------------------------------------- #
 # Normalisation
@@ -321,9 +314,7 @@ EXPECTED: Dict[str, Dict[str, Any]] = {
 def _cases():
     for turn in TURNS:
         for wire in WIRES:
-            gap = KNOWN_GAPS.get((wire, turn))
-            marks = [pytest.mark.xfail(strict=True, reason=gap)] if gap else []
-            yield pytest.param(wire, turn, marks=marks, id=f"{wire}-{turn}")
+            yield pytest.param(wire, turn, id=f"{wire}-{turn}")
 
 
 @pytest.mark.parametrize("wire,turn", list(_cases()))
@@ -335,9 +326,3 @@ async def test_each_wire_delivers_the_turn(parity_env, wire, turn):
             assert obs[key], (key, obs)
         else:
             assert obs[key] == want, (key, obs)
-
-
-def test_every_known_gap_names_a_real_case():
-    """A stale entry would silently hide nothing; keep the table exact."""
-    for wire, turn in KNOWN_GAPS:
-        assert wire in WIRES and turn in TURNS, (wire, turn)

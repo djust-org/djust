@@ -152,20 +152,17 @@ class TestParityWithTheSocketFlush:
             "(mixins/request.py): %s" % missing
         )
 
-    def test_the_only_socket_queues_the_fallback_lacks_have_no_framework_producer(self):
-        """The socket also drains ``_drain_announcements`` / ``_drain_focus``.
+    def test_every_socket_queue_has_a_framework_producer(self):
+        """Socket and fallback must cover the same framework-produced queues.
 
-        Nothing in the framework defines them: they are duck-typed hooks an
-        application view may add. If a producer lands on ``LiveView`` this fails,
-        and the fallback has to carry the queue (with a client half) before it
-        can pass. Tracked in #3629 (the follow-up to #3503).
+        The old duck-typed accessibility drains were removed in 2.0, so the
+        socket no longer has two extra names. A new drain on either the view or
+        socket must still be accounted for by both parity checks.
         """
         socket_flushed = _drains_in(PACKAGE / "websocket.py", "_flush_")
         defined = {n for n in dir(LiveView) if n.startswith("_drain_")}
         assert socket_flushed, "the socket flushes no _drain_* queue: the derivation is broken"
-        assert socket_flushed - defined == {"_drain_announcements", "_drain_focus"}, (
-            "the socket drains queues no view defines: %s" % sorted(socket_flushed - defined)
+        assert socket_flushed == defined, "socket-only drains: %s; view-only drains: %s" % (
+            sorted(socket_flushed - defined),
+            sorted(defined - socket_flushed),
         )
-        # Every queue a view defines is one the socket flushes, so the two
-        # checks compare like with like.
-        assert defined <= socket_flushed, sorted(defined - socket_flushed)

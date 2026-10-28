@@ -276,6 +276,67 @@ async def test_a_socket_async_result_runs_inside_the_wrapper(probe, pool, event,
     assert turns("async")[-1] == ("async", "result"), turns("async")
 
 
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("event", ["kick_off", "kick_off_failing"], ids=["success", "error"])
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+def test_http_background_result_enters_the_correct_step(probe, monkeypatch, asynchronous, event):
+    """The real fallback result uses async step for sync hooks; async hooks stay unwrapped."""
+    from . import test_http_fallback_background_work_3624 as http
+
+    if asynchronous:
+
+        async def handle_async_result(self, name, result=None, error=None):
+            note("http_result")
+            self.status = "result-seen"
+    else:
+
+        def handle_async_result(self, name, result=None, error=None):
+            note("http_result")
+            self.status = "result-seen"
+
+    monkeypatch.setattr(http.BackgroundView, "handle_async_result", handle_async_result)
+    view, response, body = http._post(http.BackgroundView, event)
+    assert response.status_code == 200, body
+    assert view.status == "result-seen"
+    assert SEEN["http_result"] == [None if asynchronous else "async"]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_http_background_result_uses_async_step_when_handler_is_aliased(probe, monkeypatch):
+    """The step follows the hook role, even when the method has another name."""
+    from . import test_http_fallback_background_work_3624 as http
+
+    def renamed_result_handler(self, name, result=None, error=None):
+        note("aliased_http_result")
+
+    monkeypatch.setattr(http.BackgroundView, "handle_async_result", renamed_result_handler)
+    _, response, body = http._post(http.BackgroundView, "kick_off")
+    assert response.status_code == 200, body
+    assert SEEN["aliased_http_result"] == ["async"]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_http_result_sync_callable_returning_awaitable_is_completed(probe, monkeypatch):
+    """Wrap the sync hop, then await its result outside that sync scope."""
+    from . import test_http_fallback_background_work_3624 as http
+
+    def renamed_result_handler(self, name, result=None, error=None):
+        note("awaitable_sync_entry")
+
+        async def finish():
+            note("awaitable_body")
+            self.status = "awaited"
+
+        return finish()
+
+    monkeypatch.setattr(http.BackgroundView, "handle_async_result", renamed_result_handler)
+    view, response, body = http._post(http.BackgroundView, "kick_off")
+    assert response.status_code == 200, body
+    assert view.status == "awaited"
+    assert SEEN["awaitable_sync_entry"] == ["async"]
+    assert SEEN["awaitable_body"] == [None]
+
+
 # ---------------------------------------------------------------------------
 # The consumer's own _run_async_work (the WS twin of the runtime's result turn)
 # ---------------------------------------------------------------------------
@@ -705,9 +766,12 @@ EXPECTED_HOOK_REFERENCES = {
     ("_child_async.py", "dispatch_legacy_child_work.run_body.complete", "handle_async_result"): (
         "call_async_result"
     ),
-    # The HTTP fallback runs a start_async task in the request and hands its
-    # outcome to the hook through call_hook_sync, which names the step "async".
-    ("mixins/request.py", "_run_http_background_work", "handle_async_result"): "call_hook_sync",
+    # HTTP fallback: synchronous result hooks enter the async step.
+    (
+        "mixins/request.py",
+        "_run_http_background_work",
+        "handle_async_result",
+    ): "call_async_result_sync",
     # The test client drains the same hook (render_async).
     ("testing.py", "LiveViewTestClient.render_async", "handle_async_result"): "_run_step",
     # Lookups that call nothing: the tick task is only started for a view that

@@ -46,7 +46,7 @@ from ..decorators import is_event_handler, is_push_only
 from ..hooks import run_on_mount_hooks
 from .._exposure import uses_legacy_exposure
 from .._tenant_state import UNSAVED_PRIVATE_SUFFIX
-from .._view_hooks import call_hook_sync
+from .._view_hooks import call_async_result_sync, call_hook_sync
 
 if TYPE_CHECKING:
     from django.http import HttpRequest
@@ -150,7 +150,9 @@ def _run_http_background_work(view: Any) -> None:
             if not hasattr(view, "handle_async_result"):
                 continue
             try:
-                call_hook_sync(view.handle_async_result, name, result=result, error=error)
+                call_async_result_sync(
+                    view, view.handle_async_result, name, result=result, error=error
+                )
             except Exception as exc:  # noqa: BLE001 - one task's handler must not fail the rest
                 log_failure_for(
                     logger,
