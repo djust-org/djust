@@ -1959,11 +1959,15 @@ class RequestMixin:
                 # Server-push only (#3002): to a browser it is a method that
                 # does not exist, as on the WebSocket and SSE paths.
                 handler = None
-            if handler is None and owner is not self:
+            if handler is None or not callable(handler):
+                # Same answer for the page view as for a component: an event
+                # that resolves to no callable must not fall through to a
+                # render and a state save as if a handler had run (the socket
+                # transports refuse it with an error frame).
                 logger.warning(
-                    "HTTP POST handler '%s' not found on component %s",
+                    "HTTP POST handler '%s' not found on %s",
                     event_name,
-                    component_id,
+                    component_id if owner is not self else type(self).__name__,
                 )
                 return JsonResponse({"error": "Event handler not found"}, status=400)
             if handler and callable(handler):
