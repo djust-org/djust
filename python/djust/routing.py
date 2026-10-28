@@ -125,10 +125,15 @@ def DjustMiddlewareStack(inner: Any, *, validate_origin: bool = True) -> Any:
 
     Example::
 
+        from django.contrib.staticfiles.handlers import ASGIStaticFilesHandler
         from djust.routing import DjustMiddlewareStack
 
+        django_asgi_app = get_asgi_application()  # before importing consumers
+
         application = ProtocolTypeRouter({
-            "http": get_asgi_application(),
+            # ASGIStaticFilesHandler serves /static/ (client.js included)
+            # under uvicorn or daphne in development, as runserver would.
+            "http": ASGIStaticFilesHandler(django_asgi_app),
             "websocket": DjustMiddlewareStack(
                 URLRouter(websocket_urlpatterns)
             ),

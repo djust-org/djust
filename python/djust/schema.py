@@ -1172,11 +1172,15 @@ BEST_PRACTICES = {
             "INSTALLED_APPS = ['djust', ...]\nASGI_APPLICATION = 'myproject.asgi.application'"
         ),
         "asgi": (
+            "from django.core.asgi import get_asgi_application\n"
+            "django_asgi_app = get_asgi_application()  # before importing djust\n"
+            "from django.contrib.staticfiles.handlers import ASGIStaticFilesHandler\n"
             "from djust.routing import live_session\n"
             "from channels.routing import ProtocolTypeRouter, URLRouter\n"
             "from channels.auth import AuthMiddlewareStack\n"
             "application = ProtocolTypeRouter({\n"
-            "    'http': get_asgi_application(),\n"
+            "    # serves /static/ (client.js) under uvicorn/daphne in development\n"
+            "    'http': ASGIStaticFilesHandler(django_asgi_app),\n"
             "    'websocket': AuthMiddlewareStack(URLRouter([\n"
             "        live_session('app/', include('myapp.urls')),\n"
             "    ])),\n"
