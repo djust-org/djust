@@ -638,7 +638,11 @@ def _repoint_http_entries(class_pairs: List[Tuple[type, type]]) -> int:
 #: template changes: the hash that keys the saved renderer, and the
 #: ``dj-update`` containers that accumulate rows (which also read the files the
 #: template includes, so ANY template edit can change them).
-_TEMPLATE_DERIVED_CLASS_CACHES = ("_djust_template_hash_slot", "_djust_accumulating_ids")
+_TEMPLATE_DERIVED_CLASS_CACHES = (
+    "_djust_template_hash_slot",
+    "_djust_accumulating_ids",
+    "_djust_accumulating_warned",
+)
 
 
 def note_template_change(path: str) -> int:

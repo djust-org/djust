@@ -128,10 +128,31 @@ class TestIncludedTemplatesAreScanned:
         assert reads == ("list",)
         assert plain == ()
 
-    def test_a_relative_include_with_no_known_origin_stays_conservative(self, tmp_path):
-        with template_files(tmp_path, {"plain.html": "x"}):
-            found = accumulating_container_ids(container('{% include "./plain.html" %}'), ("rows",))
-        assert found == ("list",)
+    def test_a_view_with_a_template_name_reads_dot_slash_the_way_the_renderer_does(self, tmp_path):
+        """The renderer reads ./rel.html of the view's own template at the root of the
+        template dirs even when the view has a template NAME in a subdirectory."""
+        files = {
+            "pages/p.html": container('{% include "./rel.html" %}'),
+            "rel.html": "plain",
+            "pages/rel.html": "{% for r in rows %}x{% endfor %}",
+        }
+
+        class Named(LiveView):
+            temporary_assigns = {"rows": []}
+            template_name = "pages/p.html"
+
+        with template_files(tmp_path, files):
+            assert view_accumulating_container_ids(Named()) == ()
+
+    def test_in_the_views_own_template_dot_slash_is_the_template_dir_root(self, tmp_path):
+        """The renderer gives the view's template no name: ``./x`` is ``x`` at the root of
+        the template dirs, and ``../x`` is not followed (the include stays assumed)."""
+        files = {"plain.html": "x", "pages/plain.html": "{% for r in rows %}x{% endfor %}"}
+        with template_files(tmp_path, files):
+            dot = accumulating_container_ids(container('{% include "./plain.html" %}'), ("rows",))
+            up = accumulating_container_ids(container('{% include "../plain.html" %}'), ("rows",))
+        assert dot == ()
+        assert up == ("list",)
 
     def test_a_relative_include_cannot_climb_out_of_the_template_dirs(self, tmp_path):
         (tmp_path.parent / "outside.html").write_text("plain")
@@ -263,9 +284,41 @@ class TestAliasesOfATemporaryKey:
         assert accumulating_container_ids(chain(mod.MAX_ALIASES - 1), ("rows",)) == ("list",)
         assert accumulating_container_ids(chain(mod.MAX_ALIASES + 5), ("rows",)) == ()
 
-    def test_a_with_that_reuses_the_key_name_for_something_else_is_still_the_key(self):
-        """Documented: shadowing is not followed, the name is treated as the key."""
+    def test_a_with_that_reuses_the_key_name_for_something_else_hides_it(self):
         page = "{% with rows=other %}" + container("{{ rows }}") + "{% endwith %}"
+        assert accumulating_container_ids(page, ("rows",)) == ()
+
+    def test_a_with_that_binds_the_key_to_itself_keeps_it(self):
+        page = "{% with rows=rows %}" + container("{{ rows }}") + "{% endwith %}"
+        assert accumulating_container_ids(page, ("rows",)) == ("list",)
+
+    def test_a_with_that_hides_every_key_leaves_nothing_to_read(self):
+        page = (
+            "{% with rows=a streams=b %}" + container("{{ rows }}{{ streams }}") + "{% endwith %}"
+        )
+        assert accumulating_container_ids(page, ("rows",)) == ()
+
+    def test_a_hidden_key_is_not_an_alias_source_and_comes_back_after_endwith(self):
+        hidden = (
+            "{% with rows=other %}{% with x=rows %}"
+            + container("{{ x }}")
+            + "{% endwith %}{% endwith %}"
+        )
+        assert accumulating_container_ids(hidden, ("rows",)) == ()
+        after = "{% with rows=other %}<p>{{ rows }}</p>{% endwith %}" + container("{{ rows }}")
+        assert accumulating_container_ids(after, ("rows",)) == ("list",)
+
+    def test_a_hidden_key_can_be_bound_again_through_an_alias(self):
+        page = (
+            "{% with a=rows %}{% with rows=other %}{% with rows=a %}"
+            + container("{{ rows }}")
+            + "{% endwith %}{% endwith %}{% endwith %}"
+        )
+        assert accumulating_container_ids(page, ("rows",)) == ("list",)
+
+    def test_a_rebinding_inside_the_container_is_not_followed(self):
+        """Documented: only a ``with`` that wraps the container is followed."""
+        page = container("{% with rows=other %}{{ rows }}{% endwith %}")
         assert accumulating_container_ids(page, ("rows",)) == ("list",)
 
     def test_after_endwith_the_alias_is_gone(self):
@@ -724,6 +777,59 @@ class DuplicateIdsPrepend(_Base):
         self.rows = [Row(base, "p1"), Row(base, "p2"), Row(base + 1, "p3")]
 
 
+class DerivedFeed(_Base):
+    """The template reads a COPY of the temporary attribute (not the same object)."""
+
+    template = _wrap(
+        "DerivedFeed",
+        '{% for r in feed %}<div id="rows-{{ r.id }}">{{ r.body }}</div>{% endfor %}',
+    )
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["feed"] = list(self.rows)
+        return context
+
+    @event_handler()
+    def bump(self, **kwargs):
+        self.k += 1
+
+
+class SupportedSpelling(_Base):
+    """What the guide asks for: the container tag and its rows in one template, the
+    temporary key read by name inside the container."""
+
+    template = _wrap("SupportedSpelling", TEMP_ROWS)
+
+    @event_handler()
+    def bump(self, **kwargs):
+        self.k += 1
+
+
+class TagInAnIncludedFile(_Base):
+    """The ``dj-update`` container's own tag lives in an included file."""
+
+    template = (
+        f'<div dj-view="{MODULE}.TagInAnIncludedFile" dj-id="0">'
+        '{% include "container_box.html" %}|{{ k }}</div>'
+    )
+
+    @event_handler()
+    def bump(self, **kwargs):
+        self.k += 1
+
+
+class RelativeAtTheRoot(_Base):
+    template = _wrap("RelativeAtTheRoot", '{% include "./rel_plain.html" %}')
+
+
+class RelativeInsideAFile(_Base):
+    template = _wrap("RelativeInsideAFile", '{% include "pages/outer.html" %}')
+
+
+CONTAINER_BOX = '<div id="list" dj-update="append">' + TEMP_ROWS + "</div>"
+
+
 def kinds(frame):
     return [p["type"] for p in frame.get("patches") or []]
 
@@ -802,3 +908,220 @@ class TestTheDocumentedNumbers:
         assert mod.MAX_ELEMENT_DEPTH == 1000
         assert mod.SCAN_BUDGET_SECONDS == 2.0
         assert mod.MAX_ALIASES == 64
+
+
+@pytest.mark.django_db
+@pytest.mark.asyncio
+class TestUnsupportedShapesAreDocumentedAsWhatTheyDo:
+    """BEST_PRACTICES.md: a container the scan cannot attribute to a temporary key is
+    re-rendered whole, which on a ``temporary_assigns`` view means the page shows
+    only the rows of the LAST render, and an unrelated event renders it empty."""
+
+    @staticmethod
+    def _removed(frame):
+        return [p for p in frame["patches"] if p["type"] == "RemoveChild" and p["path"] == [0]]
+
+    async def _check(self, view, files=None, tmp_path=None):
+        add_1, add_2, bump = await drive(view, ["add", "add", "bump"], files, tmp_path)
+        # The five mounted rows are replaced by the one assigned row ...
+        assert len(self._removed(add_1)) == 4, add_1
+        assert "InsertChild" not in kinds(add_1), add_1
+        # ... the next assigned row replaces that one (no insert after the stored rows) ...
+        assert "InsertChild" not in kinds(add_2), add_2
+        # ... and an event that assigns no rows renders the container EMPTY.
+        assert len(self._removed(bump)) == 1 and "InsertChild" not in kinds(bump), bump
+
+    async def test_a_value_derived_from_the_attribute(self):
+        await self._check("DerivedFeed")
+
+    async def test_a_container_tag_inside_an_included_file(self, tmp_path):
+        await self._check("TagInAnIncludedFile", {"container_box.html": CONTAINER_BOX}, tmp_path)
+
+    async def test_the_supported_spelling_of_the_same_page_accumulates(self):
+        """The rule in the guide: container tag and rows in one template, key by name."""
+        add_1, add_2, bump = await drive("SupportedSpelling", ["add", "add", "bump"])
+        assert [p["index"] for p in add_1["patches"] if p["type"] == "InsertChild"] == [5]
+        assert [p["index"] for p in add_2["patches"] if p["type"] == "InsertChild"] == [6]
+        assert "RemoveChild" not in kinds(add_1) + kinds(add_2) + kinds(bump)
+
+
+@pytest.mark.django_db
+@pytest.mark.asyncio
+class TestRelativeIncludesOverASocket:
+    """What the renderer does with ``./`` is what the scan does."""
+
+    async def test_dot_slash_in_the_views_template_reads_the_dir_root_file(self, tmp_path):
+        files = {"rel_plain.html": PLAIN_ROWS}
+        (frame,) = await drive("RelativeAtTheRoot", ["remove_first"], files, tmp_path)
+        assert "RemoveChild" in kinds(frame), frame
+
+    async def test_dot_slash_inside_an_included_file_is_relative_to_that_file(self, tmp_path):
+        files = {
+            "pages/outer.html": '{% include "./rel_plain.html" %}',
+            "pages/rel_plain.html": PLAIN_ROWS,
+        }
+        (frame,) = await drive("RelativeInsideAFile", ["remove_first"], files, tmp_path)
+        assert "RemoveChild" in kinds(frame), frame
+
+
+# ---------------------------------------------------------------------------
+# A scan that may not repeat is not kept (review of #3648)
+# ---------------------------------------------------------------------------
+
+
+def _fresh_view(template=None):
+    """A view class of its own (the cache lives on the class)."""
+
+    class Fresh(LiveView):
+        temporary_assigns = {"rows": []}
+
+    Fresh.template = template or container("{% for r in rows %}x{% endfor %}")
+    return Fresh()
+
+
+@pytest.fixture
+def counted_scans(monkeypatch):
+    from djust import _accumulating_containers as mod
+
+    calls = []
+    real = mod._scan_outcome
+
+    def counting(*args, **kwargs):
+        calls.append(1)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(mod, "_scan_outcome", counting)
+    return calls
+
+
+class TestATransientFailureIsNotKept:
+    def test_a_timeout_is_retried_on_the_next_render(self, monkeypatch, caplog):
+        import logging
+
+        from djust import _accumulating_containers as mod
+
+        view = _fresh_view()
+        with (
+            monkeypatch.context() as patch,
+            caplog.at_level(logging.WARNING, logger=mod.logger.name),
+        ):
+            patch.setattr(mod, "SCAN_BUDGET_SECONDS", 0.0)
+            assert view_accumulating_container_ids(view) == ()
+            assert view_accumulating_container_ids(view) == ()
+        # restored: the very next render finds the container
+        assert view_accumulating_container_ids(view) == ("list",)
+        warnings = [r for r in caplog.records if "took more than" in r.getMessage()]
+        assert len(warnings) == 1, "one warning per class and cause, not one per render"
+
+    def test_a_scan_exception_is_retried_on_the_next_render(self, monkeypatch):
+        from djust import _accumulating_containers as mod
+
+        view = _fresh_view()
+        real = mod._Scan.containers
+        state = {"fail": True}
+
+        def flaky(self):
+            if state["fail"]:
+                raise RuntimeError("cold file system")
+            return real(self)
+
+        monkeypatch.setattr(mod._Scan, "containers", flaky)
+        assert view_accumulating_container_ids(view) == ()
+        state["fail"] = False
+        assert view_accumulating_container_ids(view) == ("list",)
+
+    def test_a_get_template_exception_is_retried_on_the_next_render(self, caplog):
+        import logging
+
+        state = {"fail": True}
+
+        class Flaky(LiveView):
+            temporary_assigns = {"rows": []}
+
+            def get_template(self):
+                if state["fail"]:
+                    raise RuntimeError("not yet")
+                return container("{{ rows }}")
+
+        with caplog.at_level(logging.WARNING):
+            assert view_accumulating_container_ids(Flaky()) == ()
+            assert view_accumulating_container_ids(Flaky()) == ()
+        state["fail"] = False
+        assert view_accumulating_container_ids(Flaky()) == ("list",)
+        assert len([r for r in caplog.records if "Flaky" in r.getMessage()]) == 1
+
+    def test_an_included_file_that_could_not_be_read_is_retried(self, tmp_path, monkeypatch):
+        from djust import _accumulating_containers as mod
+
+        real = mod._resolve_include
+        state = {"fail": True}
+
+        def flaky(name, origin):
+            return mod._UNREADABLE if state["fail"] else real(name, origin)
+
+        monkeypatch.setattr(mod, "_resolve_include", flaky)
+        view = _fresh_view(container('{% include "plain.html" %}'))
+        with template_files(tmp_path, {"plain.html": "{{ item }}"}):
+            # unreadable: the include is assumed to read a key, for now
+            assert view_accumulating_container_ids(view) == ("list",)
+            state["fail"] = False
+            assert view_accumulating_container_ids(view) == ()
+
+    def test_a_missing_include_is_not_a_failure_and_is_kept(self, counted_scans):
+        view = _fresh_view(container('{% include "nope.html" %}'))
+        assert view_accumulating_container_ids(view) == ("list",)
+        assert view_accumulating_container_ids(view) == ("list",)
+        assert len(counted_scans) == 1
+
+
+class TestADeterministicOutcomeIsKept:
+    def test_a_real_result_is_scanned_once(self, counted_scans):
+        view = _fresh_view()
+        for _ in range(3):
+            assert view_accumulating_container_ids(view) == ("list",)
+        assert len(counted_scans) == 1
+
+    def test_an_oversize_template_is_scanned_once(self, counted_scans):
+        from djust import _accumulating_containers as mod
+
+        view = _fresh_view(container("{{ rows }}") + " " * (mod.MAX_SOURCE_CHARS + 1))
+        for _ in range(3):
+            assert view_accumulating_container_ids(view) == ()
+        assert len(counted_scans) == 1
+
+    def test_a_template_nested_too_deep_is_scanned_once(self, counted_scans):
+        from djust import _accumulating_containers as mod
+
+        view = _fresh_view(container("{{ rows }}" + "<b>" * (mod.MAX_ELEMENT_DEPTH + 1)))
+        for _ in range(3):
+            assert view_accumulating_container_ids(view) == ()
+        assert len(counted_scans) == 1
+
+    def test_too_many_includes_is_scanned_once(self, tmp_path, counted_scans):
+        from djust import _accumulating_containers as mod
+
+        count = mod.MAX_INCLUDED_TEMPLATES + 1
+        files = {f"p{i}.html": "plain" for i in range(count)}
+        page = container("".join('{%% include "p%d.html" %%}' % i for i in range(count)))
+        view = _fresh_view(page)
+        with template_files(tmp_path, files):
+            for _ in range(3):
+                assert view_accumulating_container_ids(view) == ("list",)
+        assert len(counted_scans) == 1
+
+    def test_the_watcher_clears_the_warning_memory_too(self, monkeypatch, caplog):
+        import logging
+
+        from djust import _accumulating_containers as mod
+        from djust.hot_view_replacement import note_template_change
+
+        view = _fresh_view()
+        with (
+            monkeypatch.context() as patch,
+            caplog.at_level(logging.WARNING, logger=mod.logger.name),
+        ):
+            patch.setattr(mod, "SCAN_BUDGET_SECONDS", 0.0)
+            view_accumulating_container_ids(view)
+            note_template_change("x.html")
+            view_accumulating_container_ids(view)
+        assert len([r for r in caplog.records if "took more than" in r.getMessage()]) == 2

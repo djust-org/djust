@@ -235,6 +235,8 @@ def _names_pattern(names: Iterable[str]) -> "re.Pattern[str]":
 
 @lru_cache(maxsize=64)
 def _compiled_names(names: Tuple[str, ...]) -> "re.Pattern[str]":
+    if not names:
+        return re.compile(r"(?!)")  # every name shadowed: nothing reads a key
     return re.compile(r"(?<![\w.])(?:%s)\b" % "|".join(re.escape(name) for name in names))
 
 
@@ -248,20 +250,28 @@ class _Budget:
             raise _ScanTimeout
 
 
+#: What :func:`_resolve_include` answers when reading the file FAILED (as opposed
+#: to the file not existing): the answer may differ next time, so it is not cached.
+_UNREADABLE: Tuple[str, str] = ("\x00unreadable", "")
+
+
 def _resolve_include(name: str, origin: Optional[str]) -> Optional[Tuple[str, str]]:
     """``(canonical name, source)`` of the template an ``{% include name %}`` renders.
 
     The renderer reads the template dirs in order (``get_template_dirs``); Django's
-    own loaders are the fallback for a template only they can find. ``./`` and
-    ``../`` names are relative to the including template's NAME, as in Django. None
-    when it cannot be found, is unreadable, or escapes the template dirs.
+    own loaders are the fallback for a template only they can find. Inside an
+    included file ``./`` and ``../`` names are relative to that file's NAME, as the
+    renderer reads them; in the view's own template (``origin`` None) the renderer
+    has no name to be relative to, so ``./x`` is ``x`` at the root of the template
+    dirs and ``../x`` is not followed. None when it cannot be found, is unreadable,
+    or escapes the template dirs.
     """
     if not name or "\x00" in name or "\\" in name:
         return None
-    if name.startswith(("./", "../")):
-        if not origin:
-            return None
+    if name.startswith(("./", "../")) and origin:
         name = posixpath.join(posixpath.dirname(origin), name)
+    # No origin: the view's own template. The renderer gives it no name, so it reads
+    # ``./x`` as ``x`` under the template dirs and cannot follow ``../x`` at all.
     name = posixpath.normpath(name)
     if name.startswith("/") or name in (".", "..") or name.startswith("../"):
         return None
@@ -277,7 +287,13 @@ def _resolve_include(name: str, origin: Optional[str]) -> Optional[Tuple[str, st
                     return name, handle.read()
         from django.template import loader
 
-        source = getattr(getattr(loader.get_template(name), "template", None), "source", None)
+        from django.template import TemplateDoesNotExist
+
+        try:
+            found = loader.get_template(name)
+        except TemplateDoesNotExist:
+            return None
+        source = getattr(getattr(found, "template", None), "source", None)
         return (name, source) if isinstance(source, str) else None
     except Exception as exc:  # noqa: BLE001 — a template we cannot read is one we cannot see through
         from ._exposure_diagnostics import log_failure_for
@@ -290,7 +306,7 @@ def _resolve_include(name: str, origin: Optional[str]) -> Optional[Tuple[str, st
             name,
             level="debug",
         )
-        return None
+        return _UNREADABLE
 
 
 class _Scan:
@@ -302,23 +318,28 @@ class _Scan:
         self.origin = origin
         self.budget = _Budget()
         self.spans = _template_spans(source)
+        #: set when an included file could not be READ (not: was not found); the
+        #: answer is then right for now but not worth keeping
+        self.transient = False
         #: included file reads, by (name, key pattern); None while being scanned
         self._memo: Dict[Tuple[str, str], Optional[bool]] = {}
 
     # -- {% with %} aliases ---------------------------------------------------
 
-    def _alias_states(self) -> Tuple[List[int], List[FrozenSet[str]]]:
-        """The ``{% with %}`` aliases of a temporary key in force at each offset.
+    def _alias_states(self) -> Tuple[List[int], List[Tuple[FrozenSet[str], FrozenSet[str]]]]:
+        """The names that mean a temporary key at each offset, through ``{% with %}``.
 
         Returns ``(offsets, states)``: from ``offsets[i]`` until ``offsets[i + 1]``
-        the aliases in force are ``states[i]``, those of the enclosing ``with``
-        tags included (``{% with b=a %}`` inside ``{% with a=rows %}`` makes ``b``
-        one too). Use :meth:`_aliases_at`.
+        ``states[i]`` is ``(aliases, shadowed)``: the extra names that stand for a
+        key (``{% with b=a %}`` inside ``{% with a=rows %}`` makes ``b`` one too, the
+        enclosing ``with`` tags included) and the key names a ``with`` rebinds to
+        something else (``{% with rows=other %}``: inside it ``rows`` is not the
+        key). Use :meth:`_names_at`.
         """
+        empty: Tuple[FrozenSet[str], FrozenSet[str]] = (frozenset(), frozenset())
         offsets: List[int] = [-1]
-        states: List[FrozenSet[str]] = [frozenset()]
-        #: aliases in force inside each open ``with``
-        stack: List[FrozenSet[str]] = []
+        states = [empty]
+        stack: List[Tuple[FrozenSet[str], FrozenSet[str]]] = []
         source = self.source
         base = frozenset(self.keys)
         for count, (start, end) in enumerate(self.spans):
@@ -329,8 +350,9 @@ class _Scan:
             match = _TAG_NAME.match(source, start)
             word = match.group(1) if match else ""
             if word == "with" and match:
-                inherited = stack[-1] if stack else frozenset()
-                pattern = _names_pattern(base | inherited)
+                aliases, shadowed = stack[-1] if stack else empty
+                active = (base | aliases) - shadowed
+                pattern = _names_pattern(active)
                 tokens = _TOKEN.findall(source[match.end() : end - 2])
                 bindings: List[Tuple[str, str]] = []
                 if len(tokens) == 3 and tokens[1] == "as":
@@ -341,21 +363,27 @@ class _Scan:
                         if kwarg:
                             bindings.append((kwarg.group(1), kwarg.group(2)))
                 bound = {alias for alias, value in bindings if pattern.search(value)}
-                if bound and len(inherited) < MAX_ALIASES:
-                    inherited = inherited | bound
-                stack.append(inherited)
+                hidden = {alias for alias, value in bindings if alias in active} - bound
+                if bound and len(aliases) < MAX_ALIASES:
+                    aliases = aliases | bound
+                state = ((aliases - hidden), (shadowed | hidden) - bound)
+                stack.append(state)
                 offsets.append(end)
-                states.append(inherited)
+                states.append(state)
             elif word == "endwith" and stack:
                 stack.pop()
                 offsets.append(start)
-                states.append(stack[-1] if stack else frozenset())
+                states.append(stack[-1] if stack else empty)
         return offsets, states
 
-    @staticmethod
-    def _aliases_at(states: Tuple[List[int], List[FrozenSet[str]]], offset: int) -> FrozenSet[str]:
+    def _names_at(
+        self,
+        states: Tuple[List[int], List[Tuple[FrozenSet[str], FrozenSet[str]]]],
+        offset: int,
+    ) -> FrozenSet[str]:
         offsets, sets = states
-        return sets[bisect_right(offsets, offset) - 1]
+        aliases, shadowed = sets[bisect_right(offsets, offset) - 1]
+        return (frozenset(self.keys) | aliases) - shadowed
 
     # -- one tag --------------------------------------------------------------
 
@@ -390,6 +418,9 @@ class _Scan:
             return True
         resolved = _resolve_include(name, origin)
         if resolved is None:
+            return True
+        if resolved is _UNREADABLE:
+            self.transient = True
             return True
         canonical, source = resolved
         memo_key = (canonical, pattern.pattern)
@@ -430,7 +461,7 @@ class _Scan:
             if not element.cid:
                 continue
             self.budget.check()
-            pattern = _names_pattern(set(self.keys) | self._aliases_at(aliases, element.body_start))
+            pattern = _names_pattern(self._names_at(aliases, element.body_start))
             nested = sorted(element.nested)
             cursor = 0
             for index in range(bisect_left(starts, element.body_start), len(self.spans)):
@@ -447,6 +478,87 @@ class _Scan:
         return tuple(sorted(found))
 
 
+class _Outcome:
+    """What one scan came to: the ids, and whether the answer is worth keeping.
+
+    ``cause`` names why the answer is ``()`` (or conservative) when it is not a
+    plain result. ``transient`` marks a cause that may not repeat: a timeout, an
+    exception, an unreadable file. The size, depth, include-count and alias bounds
+    are decided by the template itself, so they are not transient.
+    """
+
+    __slots__ = ("ids", "cause", "transient", "exc", "size")
+
+    def __init__(
+        self,
+        ids: Tuple[str, ...] = (),
+        cause: Optional[str] = None,
+        transient: bool = False,
+        exc: Optional[BaseException] = None,
+        size: int = 0,
+    ) -> None:
+        self.ids = ids
+        self.cause = cause
+        self.transient = transient
+        self.exc = exc
+        self.size = size
+
+
+def _scan_outcome(source: str, keys: Tuple[str, ...], origin: Optional[str]) -> _Outcome:
+    """Scan ``source``; never raises, never logs (see :func:`_log_outcome`)."""
+    if not keys or "dj-update" not in source:
+        return _Outcome()
+    if len(source) > MAX_SOURCE_CHARS:
+        return _Outcome(cause="too_large", size=len(source))
+    try:
+        scan = _Scan(source, keys, origin)
+        ids = scan.containers()
+        if scan.transient:
+            return _Outcome(ids, cause="unreadable_include", transient=True)
+        return _Outcome(ids)
+    except _ScanTimeout:
+        return _Outcome(cause="timeout", transient=True)
+    except _ScanTooDeep:
+        return _Outcome(cause="too_deep")
+    except Exception as exc:  # noqa: BLE001 — the scan is advisory; the page must still render
+        return _Outcome(cause="failure", transient=True, exc=exc)
+
+
+def _log_outcome(outcome: _Outcome, owners: Tuple[Any, ...] = ()) -> None:
+    cause = outcome.cause
+    if cause == "too_large":
+        logger.warning(
+            "dj-update scan: a template of %d characters is too large to scan (limit %d); "
+            "its dj-update containers are re-rendered whole instead of accumulating rows",
+            outcome.size,
+            MAX_SOURCE_CHARS,
+        )
+    elif cause == "timeout":
+        logger.warning(
+            "dj-update scan: scanning a template took more than %.1f s; its dj-update "
+            "containers are re-rendered whole instead of accumulating rows (the scan is "
+            "tried again on the next render)",
+            SCAN_BUDGET_SECONDS,
+        )
+    elif cause == "too_deep":
+        logger.warning(
+            "dj-update scan: a template nests more than %d elements; its dj-update "
+            "containers are re-rendered whole instead of accumulating rows",
+            MAX_ELEMENT_DEPTH,
+        )
+    elif cause == "failure" and outcome.exc is not None:
+        from ._exposure_diagnostics import log_failure_for
+
+        log_failure_for(
+            logger,
+            owners,
+            outcome.exc,
+            "dj-update scan failed; its dj-update containers are re-rendered whole "
+            "(the scan is tried again on the next render)",
+            level="warning",
+        )
+
+
 def accumulating_container_ids(
     source: str,
     temporary_keys: Iterable[str],
@@ -461,44 +573,21 @@ def accumulating_container_ids(
     are resolved against. Never raises: on any failure, an oversize source or a scan
     that outlasts its budget the answer is ``()``, the pre-#3645 behaviour.
     """
-    keys = tuple(temporary_keys)
-    if not keys or "dj-update" not in source:
-        return ()
-    if len(source) > MAX_SOURCE_CHARS:
-        logger.warning(
-            "dj-update scan: a template of %d characters is too large to scan (limit %d); "
-            "its dj-update containers are re-rendered whole instead of accumulating rows",
-            len(source),
-            MAX_SOURCE_CHARS,
-        )
-        return ()
-    try:
-        return _Scan(source, keys, origin).containers()
-    except _ScanTimeout:
-        logger.warning(
-            "dj-update scan: scanning a template took more than %.1f s; its dj-update "
-            "containers are re-rendered whole instead of accumulating rows",
-            SCAN_BUDGET_SECONDS,
-        )
-        return ()
-    except _ScanTooDeep:
-        logger.warning(
-            "dj-update scan: a template nests more than %d elements; its dj-update "
-            "containers are re-rendered whole instead of accumulating rows",
-            MAX_ELEMENT_DEPTH,
-        )
-        return ()
-    except Exception as exc:  # noqa: BLE001 — the scan is advisory; the page must still render
-        from ._exposure_diagnostics import log_failure_for
+    outcome = _scan_outcome(source, tuple(temporary_keys), origin)
+    _log_outcome(outcome)
+    return outcome.ids
 
-        log_failure_for(
-            logger,
-            (),
-            exc,
-            "dj-update scan failed; its dj-update containers are re-rendered whole",
-            level="warning",
-        )
-        return ()
+
+def _warn_once(cls: type, outcome: _Outcome, owners: Tuple[Any, ...]) -> None:
+    """Log ``outcome`` once per view class and cause, not on every render."""
+    cause = outcome.cause
+    if not cause or cause == "unreadable_include":
+        return
+    warned = cls.__dict__.get("_djust_accumulating_warned", frozenset())
+    if cause in warned:
+        return
+    cls._djust_accumulating_warned = warned | {cause}  # type: ignore[attr-defined]
+    _log_outcome(outcome, owners)
 
 
 def view_accumulating_container_ids(view: Any, aliases: Iterable[str] = ()) -> Tuple[str, ...]:
@@ -510,6 +599,12 @@ def view_accumulating_container_ids(view: Any, aliases: Iterable[str] = ()) -> T
     ``hot_view_replacement.note_template_change`` when the file watcher sees a
     template (or an included file) change; without the watcher it lasts until the
     process restarts, which is when templates change in production.
+
+    Only an answer the template itself decides is kept: a result, or one of the
+    size, depth, include-count and alias bounds. A timeout, an exception from the
+    scan or from ``get_template()`` and an included file that could not be read
+    may not repeat (a cold network file system, a pause), so they are not kept and
+    the next render scans again; each cause is logged once per class.
     """
     declared = getattr(view, "temporary_assigns", None)
     if not declared:
@@ -523,24 +618,30 @@ def view_accumulating_container_ids(view: Any, aliases: Iterable[str] = ()) -> T
         return cached[keys]
     try:
         source = view.get_template()
-        origin = None if getattr(view, "template", None) else getattr(view, "template_name", None)
-        ids = accumulating_container_ids(source, keys, origin=origin)
+        outcome = _scan_outcome(source, keys, None)
     except Exception as exc:  # noqa: BLE001 — an unreadable template renders nothing anyway
-        from ._exposure_diagnostics import log_failure_for
+        outcome = _Outcome(cause="template", transient=True)
+        warned = cls.__dict__.get("_djust_accumulating_warned", frozenset())
+        if "template" not in warned:
+            cls._djust_accumulating_warned = warned | {"template"}  # type: ignore[attr-defined]
+            from ._exposure_diagnostics import log_failure_for
 
-        log_failure_for(
-            logger,
-            (view,),
-            exc,
-            "%s: could not read the template to find its dj-update containers; "
-            "they are re-rendered whole instead of accumulating rows",
-            cls.__name__,
-            level="warning",
-        )
-        ids = ()
+            log_failure_for(
+                logger,
+                (view,),
+                exc,
+                "%s: could not read the template to find its dj-update containers; "
+                "they are re-rendered whole instead of accumulating rows",
+                cls.__name__,
+                level="warning",
+            )
+    else:
+        _warn_once(cls, outcome, (view,))
+    if outcome.transient:
+        return outcome.ids
     fresh = dict(cached or {})
     if len(fresh) >= 8:
         fresh = {}
-    fresh[keys] = ids
+    fresh[keys] = outcome.ids
     cls._djust_accumulating_ids = fresh  # type: ignore[attr-defined]
-    return ids
+    return outcome.ids
