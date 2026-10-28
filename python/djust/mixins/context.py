@@ -147,7 +147,7 @@ def _keeps_out_of_state(value: Any) -> bool:
     Every site that decides this asks here, so the dj-root render, the page-shell
     render and the sidecar builder cannot disagree (#1646).
     """
-    from .._request_scoped_data import is_request_scoped_data
+    from ..request_scoped import is_request_scoped_data
 
     return is_request_scoped_data(value) or not _is_json_serializable(value)
 

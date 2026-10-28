@@ -231,7 +231,7 @@ class TestThePageShell:
         from unittest.mock import patch
 
         import djust.serialization as serialization
-        from djust._request_scoped_data import RequestScopedList
+        from djust.request_scoped import RequestScopedList
 
         seen = []
         real = serialization.normalize_django_value
@@ -404,7 +404,7 @@ class TestAStaleStateEntryIsShed:
 
 class TestRequestScopedList:
     def test_it_is_a_list_that_compares_and_encodes_as_one(self):
-        from djust._request_scoped_data import RequestScopedList
+        from djust.request_scoped import RequestScopedList
 
         value = RequestScopedList([{"a": 1}, {"a": 2}])
         assert isinstance(value, list) and value == [{"a": 1}, {"a": 2}]
@@ -412,7 +412,7 @@ class TestRequestScopedList:
         assert type(value) is not list
 
     def test_only_the_marked_type_is_request_scoped_data(self):
-        from djust._request_scoped_data import RequestScopedList, is_request_scoped_data
+        from djust.request_scoped import RequestScopedList, is_request_scoped_data
 
         assert is_request_scoped_data(RequestScopedList())
         assert not is_request_scoped_data([])
@@ -423,7 +423,7 @@ class TestRequestScopedList:
         import copy
         import pickle
 
-        from djust._request_scoped_data import RequestScopedList
+        from djust.request_scoped import RequestScopedList
 
         value = RequestScopedList([{"a": 1}])
         assert copy.deepcopy(value) == value
@@ -431,7 +431,7 @@ class TestRequestScopedList:
 
     def test_a_view_that_assigns_one_itself_stores_it_like_any_list(self):
         """The marker only matters for a key the framework recorded as a processor's."""
-        from djust._request_scoped_data import RequestScopedList
+        from djust.request_scoped import RequestScopedList
 
         class Assigns(Counter):
             def mount(self, request, **kwargs):

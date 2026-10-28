@@ -22,7 +22,7 @@ from ..state_pass import convert_for_render, fingerprint_and_convert
 from ..template_filters import _ensure_custom_filters_bridged
 from ..utils import get_template_dirs
 from ..render_env import apply_render_env
-from .._request_scoped_data import is_request_scoped_data
+from ..request_scoped import is_request_scoped_data
 from .context import _keeps_out_of_state
 from .context import _request_scoped_keys as request_scoped_keys
 

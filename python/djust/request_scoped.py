@@ -19,6 +19,8 @@ Why a ``list`` subclass and not a lazy object: ``DjangoJSONEncoder`` (what
 ``json_script`` uses) handles a ``Promise`` by ``str()`` and has no hook for any
 other non-list object, so a lazy list cannot be a ``json_script`` argument.
 
+Public API: ``from djust.request_scoped import RequestScopedList``.
+
 The marker is read from the TYPE (never evaluating the value), and only matters
 for a key the framework recorded as request-scoped: a view that assigns one of
 these itself stores it like any other list.
@@ -27,6 +29,8 @@ these itself stores it like any other list.
 from __future__ import annotations
 
 from typing import Any
+
+__all__ = ["RequestScopedList", "is_request_scoped_data"]
 
 
 class RequestScopedList(list):  # type: ignore[type-arg]

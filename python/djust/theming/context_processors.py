@@ -11,7 +11,7 @@ from typing import Any
 from django.contrib.staticfiles.storage import staticfiles_storage
 from django.http import HttpRequest
 
-from .._request_scoped_data import RequestScopedList
+from ..request_scoped import RequestScopedList
 from ._lazy_html import LazyThemeHTML
 from .manager import (
     ThemeMode,
@@ -144,7 +144,7 @@ def theme_context(request: HttpRequest) -> dict:
     settings values (``theme_preset``, ``theme_mode``, ``theme_resolved_mode``,
     ``theme_pack``, ``theme_presets``, ``components_gallery_url``) are plain
     values computed here; ``theme_presets`` is a ``list`` subclass
-    (:class:`~djust._request_scoped_data.RequestScopedList`, #3631) that a LiveView
+    (:class:`~djust.request_scoped.RequestScopedList`, #3631) that a LiveView
     does not store in its state. Templates can use ``{{ theme_head }}`` /
     ``{{ theme_panel }}`` etc. instead of ``{% theme_head %}`` /
     ``{% theme_panel %}`` (#1435). The tag forms still work — they're how

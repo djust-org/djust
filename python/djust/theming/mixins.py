@@ -30,7 +30,7 @@ from django.template.loader import render_to_string
 from django.utils.safestring import mark_safe
 
 from ..utils import get_csp_nonce
-from .._request_scoped_data import RequestScopedList
+from ..request_scoped import RequestScopedList
 from ._lazy_html import LazyThemeHTML
 from .manager import ThemeManager, generate_css_for_state, get_css_prefix, get_theme_manager
 from .presets import THEME_PRESETS

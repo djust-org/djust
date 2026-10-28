@@ -15,6 +15,7 @@ from .base import (
     DjustPerformanceWarning,
     DEFAULT_STATE_SIZE_WARNING_KB,
     large_state_warning_message,
+    state_key_label,
 )
 
 logger = logging.getLogger(__name__)
@@ -275,21 +276,25 @@ class InMemoryStateBackend(StateBackend):
             return
 
         state_size = self._state_size(key, view, snapshot)
+        over = state_size > self._state_size_warning_kb * 1024
 
-        # Warn about large states
-        if warn_on_large_state and state_size > self._state_size_warning_kb * 1024:
-            with self._lock:
-                self._warned_large.add(key)
-            self._emit_large_warning(key, state_size, snapshot)
-        elif state_size <= self._state_size_warning_kb * 1024:
-            self._warned_large.discard(key)
-
+        # Store first, warn last: a ``-W error`` filter makes ``warnings.warn``
+        # raise, and the entry and its warned flag must agree when it does (a
+        # flag with no entry could never be cleared by ``delete``).
         with profiler.profile(profiler.OP_STATE_SAVE):
             with self._lock:
                 self._cache[key] = (snapshot, timestamp)
                 if state_size > 0:
                     self._state_sizes[key] = state_size
+                if over and warn_on_large_state:
+                    self._warned_large.add(key)
+                elif not over:
+                    self._warned_large.discard(key)
         self._maybe_sweep()
+
+        # Warn about large states
+        if over and warn_on_large_state:
+            self._emit_large_warning(key, state_size, snapshot)
 
     def _state_size(self, key: str, view: RustLiveView, snapshot: bytes) -> int:
         """The size ``set()`` measures for ``view`` (0 when it cannot be estimated)."""
@@ -308,13 +313,19 @@ class InMemoryStateBackend(StateBackend):
             stacklevel=3,
         )
 
-    def refresh(self, key: str, view: RustLiveView) -> None:
+    def refresh(self, key: str, view: RustLiveView, warn_on_large_state: bool = True) -> None:
         """Re-store ``view``'s snapshot after its owner rendered it.
 
         The backend keeps bytes, not the owner's object, so this is how the
         cached state follows the owner's renders (the diff baseline the next
         request of the page starts from). Only an existing entry is updated,
         and its timestamp is kept: a refresh is not a new save.
+
+        Reports a view that grew past the warning threshold during its life
+        (#3632), once per key while it stays over, unless
+        ``warn_on_large_state`` is False. This runs in the owner's render path,
+        so a warning that a filter turns into an exception (``-W error``) is
+        logged instead of raised here, after the entry is already updated.
         """
         try:
             snapshot = view.serialize_msgpack()
@@ -326,7 +337,11 @@ class InMemoryStateBackend(StateBackend):
                 self._state_sizes.pop(key, None)
                 self._warned_large.discard(key)
             log_failure_for(
-                logger, (), exc, "InMemoryStateBackend.refresh: could not snapshot key '%s'", key
+                logger,
+                (),
+                exc,
+                "InMemoryStateBackend.refresh: could not snapshot %s",
+                state_key_label(key),
             )
             return
         with self._lock:
@@ -340,14 +355,20 @@ class InMemoryStateBackend(StateBackend):
             if size <= threshold:
                 self._warned_large.discard(key)
                 return
-            if key in self._warned_large:
+            if not warn_on_large_state or key in self._warned_large:
                 return
             self._warned_large.add(key)
         # A view that GREW past the threshold during its life (#3632): ``set()``
         # saw it at creation, when it was small. The snapshot is already in hand,
         # so this costs ``len()`` and a set lookup per render, and the breakdown
         # is built only on the render that crosses the line.
-        self._emit_large_warning(key, size, snapshot)
+        try:
+            self._emit_large_warning(key, size, snapshot)
+        except DjustPerformanceWarning:
+            logger.warning(
+                "%s",
+                large_state_warning_message(key, size, self._state_size_warning_kb, snapshot),
+            )
 
     def _maybe_sweep(self) -> None:
         """Drop expired entries, at most once per sweep interval (#3080)."""
