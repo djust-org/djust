@@ -18,9 +18,12 @@ policy's hard rules mechanically:
 
 from __future__ import annotations
 
+import sys
 import warnings
+from types import FrameType
+from typing import Optional
 
-__all__ = ["warn_deprecated"]
+__all__ = ["class_statement_stacklevel", "warn_deprecated"]
 
 
 def warn_deprecated(
@@ -65,3 +68,30 @@ def warn_deprecated(
         message += f" Use {instead} instead."
 
     warnings.warn(message, DeprecationWarning, stacklevel=stacklevel)
+
+
+def _is_internal(frame: FrameType) -> bool:
+    name = frame.f_globals.get("__name__", "")
+    return (name.startswith("djust.") and not name.startswith("djust.tests.")) or name == "abc"
+
+
+def class_statement_stacklevel() -> int:
+    """The ``stacklevel`` that makes a warning raised from ``__init_subclass__``
+    point at the application's ``class`` statement.
+
+    Call it from the ``__init_subclass__`` that calls :func:`warn_deprecated`.
+    How far up the ``class`` statement sits depends on the application's base
+    order: another base's ``__init_subclass__`` (``PresenceMixin``,
+    ``TutorialMixin``) can chain to ours, and ``abc.ABCMeta.__new__`` adds a
+    Python frame. So the level is counted: skip djust's own frames and the
+    ``abc`` machinery, and stop at the first frame that is the application's.
+    Test modules (``djust.tests.*``) count as the application.
+    """
+    # Frame 1 is the ``__init_subclass__`` that called us; warn_deprecated's
+    # own ``stacklevel=2`` already means "that function", so start one above.
+    frame: Optional[FrameType] = sys._getframe(1).f_back
+    level = 3
+    while frame is not None and _is_internal(frame):
+        frame = frame.f_back
+        level += 1
+    return level

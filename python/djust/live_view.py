@@ -18,6 +18,7 @@ from django.views import View
 
 from ._class_snapshot import namespace as _class_namespace
 from ._context_provider import ContextProviderMixin  # noqa: F401  # re-exported for back-compat
+from ._deprecation import class_statement_stacklevel, warn_deprecated
 from .change_detection import deep_fingerprint, fingerprints_by_content
 from .serialization import (  # noqa: F401
     DjangoJSONEncoder,
@@ -520,6 +521,16 @@ def _protect_http_entry(cls: type, view: Callable[..., Any]) -> Callable[..., An
     return protected
 
 
+#: The two duck-typed accessibility hooks the socket and the runtime still drain
+#: behind ``hasattr``. Nothing in the framework defines them, and the shipped
+#: client has no ``window.djust.accessibility`` to receive their frames, so they
+#: are deprecated (#3629); the 2.0 line has already deleted the flush (#3539).
+_DEPRECATED_ACCESSIBILITY_HOOKS = {
+    "_drain_announcements": 'a role="status" live region the view renders',
+    "_drain_focus": "JS.focus() through push_commands()",
+}
+
+
 class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(async) intentionally co-define stream_insert/stream_delete; see live_view.pyi overloads
     ContextProviderMixin,
     StreamsMixin,
@@ -656,6 +667,14 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
 
         Multiple concurrent tasks are supported with named tasks. Phoenix LiveView users
         will find this API familiar.
+
+    .. deprecated:: 1.4
+        Defining ``_drain_announcements`` or ``_drain_focus`` on a subclass is
+        deprecated and the WebSocket/SSE flush that drains them is removed no
+        earlier than djust 2.0.0. Render a ``role="status"`` live region and
+        call ``JS.focus()`` through ``push_commands()`` instead. A hook added
+        after the class exists (``setattr``, a decorator, an instance
+        attribute) is not detected and does not warn.
     """
 
     template_name: Optional[str] = None
@@ -907,6 +926,20 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
         from ._component_subscriptions import compile_subscriptions
 
         cls._component_subscriptions = compile_subscriptions(cls)
+        for hook in _DEPRECATED_ACCESSIBILITY_HOOKS:
+            # Warn once, on the first LiveView class that has the hook (defined
+            # in its own body or reached through a plain mixin), not again on
+            # every subclass of that class.
+            if hasattr(cls, hook) and not any(
+                issubclass(base, LiveView) and hasattr(base, hook) for base in cls.__bases__
+            ):
+                warn_deprecated(
+                    "Defining %s on a LiveView" % hook,
+                    since="1.4",
+                    removed_in="2.0.0",
+                    instead=_DEPRECATED_ACCESSIBILITY_HOOKS[hook],
+                    stacklevel=class_statement_stacklevel(),
+                )
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)

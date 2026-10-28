@@ -26,6 +26,7 @@ from django.contrib.sessions.backends.db import SessionStore
 from django.test import RequestFactory, override_settings
 
 from djust import LiveView
+from djust.live_view import _DEPRECATED_ACCESSIBILITY_HOOKS
 from djust.decorators import event_handler
 from djust.mixins import layout as layout_mixin
 
@@ -152,20 +153,29 @@ class TestParityWithTheSocketFlush:
             "(mixins/request.py): %s" % missing
         )
 
-    def test_the_only_socket_queues_the_fallback_lacks_have_no_framework_producer(self):
+    def test_the_only_socket_queues_the_fallback_lacks_are_the_deprecated_hooks(self):
         """The socket also drains ``_drain_announcements`` / ``_drain_focus``.
 
         Nothing in the framework defines them: they are duck-typed hooks an
-        application view may add. If a producer lands on ``LiveView`` this fails,
-        and the fallback has to carry the queue (with a client half) before it
-        can pass. Tracked in #3629 (the follow-up to #3503).
+        application view may add, and #3629 decided to deprecate them (since
+        1.4, removed in 2.0.0, where the flush is already gone) rather than
+        carry them over HTTP: no client module defines the
+        ``window.djust.accessibility`` object their frames are handed to. So the
+        fallback deliberately does not drain them, and every queue the socket
+        drains that no view defines must be one ``LiveView.__init_subclass__``
+        warns about. A third duck-typed hook added to the socket's flush, or a
+        producer added to ``LiveView``, fails here until the HTTP half (or a
+        deprecation) is written.
         """
         socket_flushed = _drains_in(PACKAGE / "websocket.py", "_flush_")
         defined = {n for n in dir(LiveView) if n.startswith("_drain_")}
         assert socket_flushed, "the socket flushes no _drain_* queue: the derivation is broken"
-        assert socket_flushed - defined == {"_drain_announcements", "_drain_focus"}, (
-            "the socket drains queues no view defines: %s" % sorted(socket_flushed - defined)
+        assert socket_flushed - defined == set(_DEPRECATED_ACCESSIBILITY_HOOKS), (
+            "the socket drains queues no view defines that are not the deprecated "
+            "accessibility hooks: %s" % sorted(socket_flushed - defined)
         )
+        # The runtime (SSE and the shared dispatch) drains the same set.
+        assert _drains_in(PACKAGE / "runtime.py", "_flush_") == socket_flushed
         # Every queue a view defines is one the socket flushes, so the two
         # checks compare like with like.
         assert defined <= socket_flushed, sorted(defined - socket_flushed)

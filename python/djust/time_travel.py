@@ -482,6 +482,20 @@ def next_branch_id(view: Any) -> str:
     return new_id
 
 
+def _stepped_handler(view: Any, handler: Any) -> Any:
+    """``handler`` run as an ``"event"`` step of the sync-turn wrapper (#3637).
+
+    The replay re-runs a handler on a worker thread, as a client event does, so
+    it gets the same per-turn scope. An ``async def`` handler runs on a loop and
+    is not wrapped, as for a live event.
+    """
+    if inspect.iscoroutinefunction(handler):
+        return handler
+    from .sync_turn import sync_step
+
+    return sync_step(view, "event", handler)
+
+
 def replay_event(
     view: Any,
     snapshot: EventSnapshot,
@@ -617,7 +631,7 @@ def replay_event(
         logger.warning("time_travel: replay parameter contract unavailable")
         return None
 
-    invoke = handler
+    invoke = _stepped_handler(view, handler)
     if inspect.iscoroutinefunction(handler):
         # replay_event is a synchronous API. The consumer already calls it via
         # sync_to_async; async Python callers must do the same. Refuse an invalid

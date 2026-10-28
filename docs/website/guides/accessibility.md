@@ -511,6 +511,74 @@ cover. The two are complementary: theming validation answers "is this theme's
 contrast accessible?" and the `Y` checks answer "is this template's markup
 accessible?".
 
+## Announcing a change and moving focus from the server
+
+Two things a screen-reader or keyboard user needs after a server event are an
+announcement ("Saved") and focus in the right place. Both are ordinary djust
+features, and both work on every transport, including the
+[HTTP-only fallback](http-only-mode.md):
+
+- **Announce** by rendering the message into a live region the page already
+  contains. The region must be in the DOM before its text changes, so keep the
+  element in the template and change only its content.
+- **Move focus** with `JS.focus(selector)` through
+  [`push_commands()`](server-driven-ui.md).
+
+```python
+from djust import LiveView, event_handler
+from djust.js import JS
+
+
+class OrderView(LiveView):
+    template_name = "order.html"
+
+    def mount(self, request, **kwargs):
+        self.status = ""
+
+    @event_handler()
+    def save(self, **kwargs):
+        self.status = "Order saved"
+        self.push_commands(JS.focus("#order-summary"))
+```
+
+```html
+<p role="status" aria-live="polite">{{ status }}</p>
+<section id="order-summary" tabindex="-1">...</section>
+```
+
+Use `role="alert"` (assertive) only for an error the user must hear at once.
+
+A live region announces when its **text changes**, which is not the same as the
+old hook announcing every queued message:
+
+- **The same message twice in a row is announced once.** A second `save` that
+  renders the identical text produces a `noop` (no DOM change, so nothing is
+  announced), although the `JS.focus()` push still arrives. To announce a repeat,
+  make the text differ between turns, for example by alternating a no-break-space
+  suffix (`self._flip = not self._flip; self.status = "Order saved" + ("\u00a0" if self._flip else "")`).
+  Over the WebSocket this produces a text patch every turn; that is the DOM
+  mutation a live region needs. Whether a given screen reader then repeats the
+  text is up to the screen reader, and was not tested with one.
+- **Several messages in one turn** must be rendered together (a list in the
+  region), not queued one by one.
+
+### The `_drain_announcements` / `_drain_focus` hooks are deprecated
+
+The WebSocket and SSE transports also drain two duck-typed methods on the view,
+`_drain_announcements()` (sends an `accessibility` frame) and `_drain_focus()`
+(sends a `focus` frame). No 1.x release has defined either, so no built-in API
+queues an announcement or a focus command, the shipped client has no
+`window.djust.accessibility` object to receive the frames unless your own script
+assigns one, and the HTTP fallback never drained them: a view that defined the
+hooks lost them there silently.
+
+Defining either method on a `LiveView` subclass now raises a
+`DeprecationWarning` at the class statement, naming the hook. A hook added after
+the class exists (`setattr`, a decorator, an instance attribute) is not detected
+and does not warn. Both keep working on the WebSocket and SSE transports until
+2.0.0, where the flush is removed. To migrate, use a live region and `JS.focus()`
+as above, keeping the differences in mind.
+
 ## Known limitations / not yet covered
 
 In keeping with djust's commitment to honest documentation, here is what 1.0

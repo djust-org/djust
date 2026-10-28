@@ -4218,7 +4218,11 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
 
                 # Get the new template content
                 try:
-                    new_template = await database_sync_to_async(self.view_instance.get_template)()
+                    from .sync_turn import sync_step
+
+                    new_template = await database_sync_to_async(
+                        sync_step(self.view_instance, "render", self.view_instance.get_template)
+                    )()
                 except TemplateDoesNotExist as e:
                     hotreload_logger.error("Template not found for hot reload: %s", e)
                     await self.send_json(
@@ -5172,11 +5176,13 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             views = [consumer.view_instance] if consumer is not None else []
         else:
             views = self._mounted_views()
+        from .sync_turn import sync_step
+
         for view in views:
             if not hasattr(view, "update_presence_heartbeat"):
                 continue
             try:
-                await sync_to_async(view.update_presence_heartbeat)()
+                await sync_to_async(sync_step(view, "hook", view.update_presence_heartbeat))()
             except Exception as e:
                 self._log_view_hook_failure(view, e, "Error updating presence heartbeat: %s", e)
 
@@ -5185,11 +5191,13 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         if not self.view_instance or not hasattr(self.view_instance, "handle_cursor_move"):
             return
 
+        from .sync_turn import sync_step
+
         view = self.view_instance
         try:
             x = data.get("x", 0)
             y = data.get("y", 0)
-            await sync_to_async(view.handle_cursor_move)(x, y)
+            await sync_to_async(sync_step(view, "hook", view.handle_cursor_move))(x, y)
         except Exception as e:
             self._log_view_hook_failure(view, e, "Error handling cursor move: %s", e)
 
