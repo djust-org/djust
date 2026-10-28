@@ -158,8 +158,8 @@ A middleware wraps the whole turn, which is async: the turn runs the view's
 sync code in separate hops (the handler, `mount`, `handle_params`, a
 `start_async` callback and its `handle_async_result`, `handle_tick`, the
 render's `get_context_data()`, where the JIT evaluates the view's QuerySets,
-the authorization checks, the `on_mount` hooks and `connected()`) with awaits
-between them. With
+the authorization checks, the `on_mount` hooks, `connected()` and, off the event
+loop, a released view's teardown hooks) with awaits between them. With
 `worker_threads` a pool thread runs other sessions' hops in those gaps, and
 Django's database connection belongs to the thread. So a `transaction.atomic()`
 opened in a middleware would span awaits and take in other sessions' queries.
@@ -196,12 +196,12 @@ def _as_caller(user_id):
   |---|---|
   | `"event"` | an event handler; also a time-travel replay of one |
   | `"mount"`, `"handle_params"` | `mount()`, `handle_params()` |
-  | `"hook"` | another sync view hook: a push handler, `handle_info`, `handle_cursor_move()`, `update_presence_heartbeat()`, and the `get_presence_key()` / `untrack_presence()` reads |
+  | `"hook"` | another sync view hook: a push handler (in the stock turn and in the worker-pool one-hop turn), `handle_info`, `handle_cursor_move()`, `update_presence_heartbeat()`, and the `get_presence_key()` / `untrack_presence()` reads |
   | `"async"` | a `start_async` / `@background` callback **and** the `handle_async_result` call that receives its outcome (two separate entries) |
   | `"tick"` | `handle_tick()` |
   | `"render"` | every call djust makes to `get_context_data()`, on every transport |
   | `"auth"` | an authorization decision that runs your code: `check_permissions()`, Django's access mixins and replayed `dispatch` decorators (`test_func`), `@permission_required` on a handler, and the object-permission check (`get_object()` + `has_object_permission()`) |
-  | `"lifecycle"` | the `on_mount` hooks (the whole chain is one entry), `connected()` and `disconnected()` |
+  | `"lifecycle"` | the `on_mount` hooks (the whole chain is one entry), `connected()` and `disconnected()`, the snapshot overrides (`_should_restore_snapshot()`, `_restore_snapshot()`, `_capture_snapshot_state()`, including the per-event signed-snapshot refresh), the restore of private state (`_restore_private_state()`, which re-fetches private model references), and a released view's teardown hooks when they run on a worker thread (see [Not wrapped](#not-wrapped)) |
 - `view` is the view or component whose code runs; `turn` is
   `djust.turns.current_turn()`, or `None` when the step runs outside a turn (a
   `start_async` callback runs between its start and result turns).
@@ -223,11 +223,17 @@ def _as_caller(user_id):
   `mount()` that is itself being wrapped) does not enter the wrapper again, so a
   wrapper that swallows exceptions on the **outer** `"mount"` / `"event"` step is
   not guarded here. Do not suppress exceptions in a wrapper.
-- **Entries per request.** A request that mounts a view and runs its first check
-  enters the wrapper several times on every transport: for the HTTP page GET it is
-  `"auth"` (view-level), `"lifecycle"` (the `on_mount` chain, when the view has
-  one), `"mount"`, `"auth"` again for the object check (when `get_object()` is
-  overridden), then `"render"`.
+- **Entries per request.** A request enters the wrapper several times on every
+  transport. These sequences were measured with a counting wrapper against a view
+  that overrides `handle_params()` and `get_object()` (the test
+  `test_the_guides_entries_per_request_*` pins them, so this list cannot drift):
+
+  | Request | Entries, in order |
+  |---|---|
+  | HTTP page GET | `"auth"` (view-level), `"lifecycle"` (the `on_mount` chain, only when the view has one), `"mount"`, `"handle_params"`, `"auth"` (object check, when `get_object()` is overridden), `"render"`, `"render"` (the second render builds the diff baseline) |
+  | HTTP POST event, no saved state | `"auth"`, `"mount"`, `"handle_params"`, `"auth"`, `"event"`, `"render"`, `"render"` |
+  | HTTP POST event, saved state restored | `"auth"`, `"lifecycle"` (the private-state restore), `"auth"`, `"hook"` (`handle_restore()`), `"event"`, `"render"`, `"render"` |
+
   Each is one entry on the thread that runs it. Keep the wrapper cheap.
 - `disconnected()` runs when a connection ends, outside any turn: the wrapper
   gets `turn=None`. It runs the hook with the tenant bound and a failing wrapper
@@ -287,10 +293,26 @@ Everything above is the sync code djust runs on a worker thread through
 - **Tenant resolution** (`TenantMixin` `_ensure_tenant`, run beside the auth
   check): it decides *which tenant* the turn is for, the input of the scope, so
   it cannot run inside it.
-- **Teardown hooks**: `_on_sticky_unmount()`, `_cleanup_on_unregister()` and
-  `_cleanup_uploads()` run when a view or child is released (a navigation, a
-  disconnect, a discarded child), possibly on the event loop and always without a
-  turn.
+- **Teardown hooks on the event loop.** `_on_sticky_unmount()`,
+  `_cleanup_on_unregister()` and `_cleanup_uploads()` run when a view or child is
+  released. Which thread runs them depends on the transport:
+
+  | Release | Thread | Step |
+  |---|---|---|
+  | WebSocket disconnect, a second `mount` frame, the teardown of a `live_redirect` | the event loop | none |
+  | SSE: the stream's own close, a rate-limit disconnect | the event loop | none |
+  | SSE navigation, the release of a view mounted beside the page, and `response.close()` of a stream that never started | a worker thread | `"lifecycle"` |
+  | WebSocket `live_redirect` discarding a sticky child whose auth now fails | a worker thread | `"lifecycle"` |
+
+  On a worker thread each hook is its own `"lifecycle"` entry (`view` is the object
+  whose hook runs, `turn` is `None`, as for `disconnected()`). A wrapper that raises
+  on entry does not skip the hook: the failure is logged and the hook runs without
+  the scope; a wrapper that raises on exit after the hook ran is logged, not raised,
+  because the view is already released. On the event loop the hooks are not wrapped:
+  a wrapper that opens a transaction would itself raise there, and a hook that
+  queries on the loop fails with or without a wrapper. Do queries in
+  `disconnected()` instead, which always runs on a worker thread as a
+  `"lifecycle"` step.
 - **Hooks that run inside a hop that is already a step**: `_on_sticky_update()`
   runs while the parent renders (under its `"render"` step);
   `handle_component_event()`, `LiveComponent.update()` and
@@ -298,11 +320,24 @@ Everything above is the sync code djust runs on a worker thread through
   them (under its `"event"` / `"render"` step);
   `serialize_for_template()` and `get_render_only_context()` run inside the render.
   `get_http_status()` runs in the HTTP response phase.
-- **Framework state hops** that call no application hook: `restore_snapshot` (the
-  time-travel jump), `_restore_private_state`, preserving sticky children across a
-  `live_redirect`, `establish_mount_session`, the render plumbing around
-  `get_context_data()` (template build, Rust state sync). Session and
-  channel-layer I/O, not view code.
+- **State restores that assign with `setattr`.** The time-travel jump
+  (`restore_snapshot`, `restore_component_snapshot`) and a component restore
+  (`_restore_component_state`) assign saved fields with `safe_setattr` / `setattr`,
+  so a property setter you wrote would run there without the scope. They call no
+  hook by name and read no rows. (`_restore_private_state` is different: it
+  re-fetches private model references, so it is a `"lifecycle"` step.)
+- **Identity resolution before the scope exists.** `establish_mount_session` and
+  `fresh_socket_request` call Django's `get_user()`, which runs your authentication
+  backend's `get_user()` to find the caller; the scope is built from that caller,
+  so it cannot be open yet.
+- **Preserving sticky children across a `live_redirect`**
+  (`_preserve_sticky_children`) runs on a worker thread and calls two things that
+  are covered, not unwrapped: the auth re-check goes through the `"auth"` leaves,
+  and discarding a child whose auth now fails runs its teardown hooks as
+  `"lifecycle"` steps (see above).
+- **The render plumbing around `get_context_data()`** (template build, Rust state
+  sync, HTML post-processing). Only the `get_context_data()` calls inside it are
+  `"render"` steps.
 - **`get_template()` inside the render** (while the template is built for a view
   render) runs in the framework's render hop, not as its own step. Only the
   direct calls (the actor mount, a hot reload) are `"render"` steps.
@@ -311,8 +346,11 @@ Everything above is the sync code djust runs on a worker thread through
   step, so what they call directly is covered; a task they start is not.
 
 The snapshot-restore overrides are covered: `_should_restore_snapshot()`,
-`_restore_snapshot()` and `_capture_snapshot_state()` are `"lifecycle"` steps, and
-`handle_restore()` is a `"hook"` step. `PresenceMixin` entering its broadcast from
+`_restore_snapshot()` and `_capture_snapshot_state()` are `"lifecycle"` steps (the
+per-event refresh of the signed snapshot as well as the mount), and
+`handle_restore()` is a `"hook"` step. A `{% live_render lazy=True %}` child's
+`mount()` and `get_context_data()` are `"mount"` and `"render"` steps when its slot
+is filled. `PresenceMixin` entering its broadcast from
 async code (`track_presence()` under a running loop) is a `"hook"` step as well.
 
 ## Hot path
