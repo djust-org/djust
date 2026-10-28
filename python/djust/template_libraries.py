@@ -335,7 +335,7 @@ _filter_owner: Dict[str, str] = {}
 _refused_tags: Dict[str, Set[str]] = {}
 
 #: (library label, tag name) refusals already warned about (N-47).
-_warned_refused_tags: Set[Tuple[str, str]] = set()
+_warned_refused_tags: Set[Tuple[str, str, bool]] = set()
 
 
 # Weak references keep node-level engine selection from extending backend lifetime.
@@ -1089,10 +1089,14 @@ def _warn_refused(label: str, name: str) -> None:
     them do not bury a real clash with a third-party library (#3655). The refusal
     itself is unchanged.
     """
-    if (label, name) in _warned_refused_tags:
+    # Keyed on whether the library is djust's own as well, so a DEBUG-level refusal of
+    # one engine's djust library never hides a real clash that another engine's
+    # library of the same label (not djust's) has with the same tag.
+    own = _bridging_module.get().startswith(_DJUST_OWN_MODULE_PREFIX)
+    if (label, name, own) in _warned_refused_tags:
         return
-    _warned_refused_tags.add((label, name))
-    if _bridging_module.get().startswith(_DJUST_OWN_MODULE_PREFIX):
+    _warned_refused_tags.add((label, name, own))
+    if own:
         logger.debug(
             "djust's own template library '%s' registers tag '%s', which djust already "
             "provides natively; the native handler is used.",

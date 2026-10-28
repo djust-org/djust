@@ -157,13 +157,48 @@ def test_a_real_clash_is_not_buried_among_djust_s_own(
     """The point of the change: load both djust libraries AND a clashing third-party one."""
     caplog.set_level(logging.DEBUG, logger=LOGGER)
     module_name = "thirdparty_pkg.templatetags.clash_tags"
-    third = _third_party(tmp_path, monkeypatch, module_name)
+    _third_party(tmp_path, monkeypatch, module_name)
     libraries = dict(OWN, clash_tags=module_name)
     backend = _backend(tmp_path, libraries)
-    assert third is not None
     with rendering_with_backend(backend):
         template_libraries.load_libraries(list(libraries))
 
     warnings = _refusal_messages(caplog, logging.WARNING)
     assert len(warnings) == 1, warnings
     assert f"registers tag '{CLASH}'" in warnings[0]
+
+
+def test_a_djust_refusal_does_not_hide_a_third_party_clash_under_the_same_label(
+    tmp_path, monkeypatch, caplog, native_clash_tag
+):
+    """The once-per-process dedup is keyed on (label, tag, own-or-not).
+
+    Two engines can map the SAME label to different libraries. If the djust-owned one
+    is bridged first, its DEBUG refusal must not use up the key a real third-party
+    clash with the same label and tag needs, or that clash would never be reported.
+    """
+    caplog.set_level(logging.DEBUG, logger=LOGGER)
+    own_module = ModuleType("djust.t3655_own_templatetags")
+    own_module.register = Library()
+
+    def clash():
+        return "own"
+
+    clash.__module__ = "djust.t3655_own_templatetags"
+    own_module.register.simple_tag(clash, name=CLASH)
+    monkeypatch.setitem(sys.modules, "djust.t3655_own_templatetags", own_module)
+    own_backend = _backend(tmp_path, {"shared": "djust.t3655_own_templatetags"})
+
+    third_module = "thirdparty_pkg.templatetags.shared_tags"
+    _third_party(tmp_path, monkeypatch, third_module)  # registers the module in sys.modules
+    third_backend = _backend(tmp_path, {"shared": third_module})
+
+    with rendering_with_backend(own_backend):
+        template_libraries.load_libraries(["shared"])
+    with rendering_with_backend(third_backend):
+        template_libraries.load_libraries(["shared"])
+
+    warnings = _refusal_messages(caplog, logging.WARNING)
+    assert len(warnings) == 1, warnings
+    assert "Template library 'shared'" in warnings[0]
+    assert len(_refusal_messages(caplog, logging.DEBUG)) == 1
