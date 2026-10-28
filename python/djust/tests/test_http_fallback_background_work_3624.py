@@ -322,17 +322,34 @@ setattr(sys.modules[__name__], "RebuiltWithSavedState", RebuiltWithSavedState)
 
 class TestMountWorkIsNotRepeatedOverRestoredState:
     def test_default_policy_with_saved_state_does_not_run_mount_s_reads_again(self):
-        """Mount's tasks are dropped when ``mount()`` reruns under saved state.
+        """Mount's tasks are dropped when ``mount()`` reruns over a LOADED saved state.
 
         The saved state is put back on top of ``mount()``, so mount's queued
-        read would only repeat; its tasks are discarded. Over HTTP alone no one
-        ever ran them on the GET, so that page keeps the loading state the
-        session saved: a known gap, tracked in #3635.
+        read would only repeat; its tasks are discarded. The first POST after a
+        GET is the exception (#3635, ``test_http_fallback_default_policy_load_3635``):
+        the state the GET saved is a loading state, so its work runs once. Here
+        the first POST has run it; the second finds the loaded state saved.
         """
         RebuiltWithSavedState.loads = 0
-        view, response, body = _post(RebuiltWithSavedState, "plain")
-        assert response.status_code == 200, body
-        assert RebuiltWithSavedState.loads == 0
+        initial = _get_request()
+        RebuiltWithSavedState().get(initial)
+
+        def post_again():
+            request = RequestFactory().post(
+                PATH,
+                data="{}",
+                content_type="application/json",
+                HTTP_X_DJUST_EVENT="plain",
+            )
+            request.user, request.session, request.tenant = initial.user, initial.session, None
+            return RebuiltWithSavedState().post(request)
+
+        response = post_again()
+        assert response.status_code == 200, response.content
+        assert RebuiltWithSavedState.loads == 1
+        response = post_again()
+        assert response.status_code == 200, response.content
+        assert RebuiltWithSavedState.loads == 1, "the loaded state is saved: nothing to run again"
 
 
 class RefusalView(LoadsAfterFirstRender):
