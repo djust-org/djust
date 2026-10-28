@@ -11,6 +11,7 @@ from typing import Any
 from django.contrib.staticfiles.storage import staticfiles_storage
 from django.http import HttpRequest
 
+from ..request_scoped import RequestScopedList
 from ._lazy_html import LazyThemeHTML
 from .manager import (
     ThemeMode,
@@ -142,7 +143,9 @@ def theme_context(request: HttpRequest) -> dict:
     renders on its first read and not at all on a page that never reads it. The
     settings values (``theme_preset``, ``theme_mode``, ``theme_resolved_mode``,
     ``theme_pack``, ``theme_presets``, ``components_gallery_url``) are plain
-    values computed here. Templates can use ``{{ theme_head }}`` /
+    values computed here; ``theme_presets`` is a ``list`` subclass
+    (:class:`~djust.request_scoped.RequestScopedList`, #3631) that a LiveView
+    does not store in its state. Templates can use ``{{ theme_head }}`` /
     ``{{ theme_panel }}`` etc. instead of ``{% theme_head %}`` /
     ``{% theme_panel %}`` (#1435). The tag forms still work — they're how
     customization-with-args is supported — but consumers using the default
@@ -287,7 +290,12 @@ def theme_context(request: HttpRequest) -> dict:
         "theme_mode": state.mode,
         "theme_resolved_mode": state.resolved_mode,
         "theme_pack": state.pack,
-        "theme_presets": presets,
+        # A real ``list`` (``json_script``, ``json.dumps`` and ``isinstance``
+        # work), but one the bridge keeps out of the stored view state (#3631):
+        # 11.7 KB that every view in an app with this processor installed
+        # otherwise copied into its snapshot. A fresh object per call, so a
+        # template or caller that mutates it cannot reach the next request's.
+        "theme_presets": RequestScopedList(presets),
         # "" when the optional component gallery app is absent or unrouted.
         "components_gallery_url": _components_gallery_url(),
     }

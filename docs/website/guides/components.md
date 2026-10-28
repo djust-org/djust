@@ -1110,6 +1110,19 @@ variables (`theme_preset`, `theme_mode`, `theme_resolved_mode`, `theme_pack`,
 `theme_presets`, `components_gallery_url`) are plain values computed up front.
 A template that reads an HTML variable gets the same text it always did.
 
+`theme_presets` is about 12 KB of dicts, and djust copies every JSON-serialisable
+context-processor value into a LiveView's stored state, so it used to be stored
+in the snapshot of every view in an app that installs the processor (a
+one-counter view stored 12,182 bytes, 11,684 of them this list). It is now a
+`RequestScopedList`: a real `list`, so `isinstance(..., list)`, `json.dumps`,
+`{{ theme_presets|json_script:"presets" }}`, `len`, indexing, `in` and
+`{% for %}` all work in both template engines, but a LiveView sends it to the
+renderer without storing it (the same view stores 510 bytes). The one check
+that tells it from a plain list is `type(theme_presets) is list`. A processor of
+your own can opt a large, request-derived list out of the stored state the same
+way: return `RequestScopedList(items)` from `djust.request_scoped` (public API). A plain list
+from your processor is stored as before.
+
 The HTML variables are not `str` instances: they are lazy trusted-HTML objects
 (`isinstance(theme_head, str)` is `False`). `{{ ... }}`, `|safe`, `|length`,
 `|default`, `|slice`, `{% if theme_head %}`, `==` against a string and
@@ -1482,7 +1495,9 @@ What changed for code that reached the old attributes through the context:
   supplied when the template is rendered, from the view's request; a view with no
   request renders them empty (every framework path sets one, a view driven by
   hand in a test may not).
-- `theme_presets_count` is still available to templates, as before.
+- `theme_presets_count` is still available to templates, as before. In the
+  template and in `view.theme_presets`, `theme_presets` is a real `list`
+  (`json_script` and `json.dumps` work, #3631).
 - After `set_theme_mode`, `set_theme_preset`, `toggle_theme_mode` or
   `cycle_theme_preset` the next render re-sends all four, so a `dj-root` template
   that reads `{{ theme_head|length }}` or the switcher shows the new theme.

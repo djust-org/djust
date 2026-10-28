@@ -1831,6 +1831,13 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
 
         Called automatically after each render to free memory for large collections.
         """
+        # Returning here, before ``_reset_streams()``, is load-bearing: a view
+        # that uses streams WITHOUT temporary_assigns keeps its stream items so
+        # the next render lists them. The differ turns that list into DOM changes
+        # against the stored tree, so clearing it after every render would
+        # remove every row from the page on the next unrelated event (measured in
+        # ``test_stream_state_weight_3632.py``; the cost is the stream rows held
+        # in the stored state, #3632).
         if not self.temporary_assigns:
             return
 

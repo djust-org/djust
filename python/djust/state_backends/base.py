@@ -2,6 +2,7 @@
 Base state backend ABC and shared constants.
 """
 
+import hashlib
 import logging
 from abc import ABC, abstractmethod
 from typing import Optional, Dict, Any, List, Tuple, TypedDict
@@ -44,6 +45,19 @@ class SnapshotBreakdown(TypedDict):
     tree: int
     #: ``(context key, bytes)`` for the largest state entries, biggest first.
     keys: List[Tuple[str, int]]
+
+
+def state_key_label(key: str) -> str:
+    """A short, stable, non-reversible label for a state-backend cache key.
+
+    The cache key is ``{tenant}{session_key}_{view_key}_t<hash>``: the Django
+    session key is a bearer credential and the view key can carry a request path
+    (ids, PII), so neither may reach a warning, which goes to stderr and error
+    trackers. The label lets one warning be told from another, and the same key
+    always gives the same label; it does not name the view (the breakdown of
+    largest context keys in the message does that in practice).
+    """
+    return "state-" + hashlib.sha256(key.encode("utf-8", "replace")).hexdigest()[:8]
 
 
 def describe_snapshot(snapshot: bytes, top: int = 3) -> Optional[SnapshotBreakdown]:
@@ -108,8 +122,8 @@ def large_state_warning_message(
     previous advice ("use temporary_assigns or streams") did not lower this
     number for the case it was shown for.
     """
-    head = "Large LiveView state detected for '%s': %.1fKB (threshold: %sKB)." % (
-        key,
+    head = "Large LiveView state detected for %s: %.1fKB (threshold: %sKB)." % (
+        state_key_label(key),
         total / 1024,
         threshold_kb,
     )
@@ -193,7 +207,7 @@ class StateBackend(ABC):
         """
         pass
 
-    def refresh(self, key: str, view: RustLiveView) -> None:
+    def refresh(self, key: str, view: RustLiveView, warn_on_large_state: bool = True) -> None:
         """Record ``view``'s state after its owner rendered it.
 
         Called on the owner's thread after every render of a view whose state
@@ -201,7 +215,9 @@ class StateBackend(ABC):
         in-memory backend) re-stores its snapshot, so the next reader of the
         key (an HTTP page-POST request, a reconnect, another tab) starts from
         the last render. The default does nothing: a remote backend keeps the
-        state written by :meth:`set`, as it always has.
+        state written by :meth:`set`, as it always has. (So the large-state
+        warning raised from here is an in-memory-backend behaviour; the Redis
+        backend has none.) ``warn_on_large_state=False`` turns the warning off.
         """
 
     @abstractmethod
