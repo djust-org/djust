@@ -157,8 +157,9 @@ Background work also runs the chain itself: once before the callback starts
 A middleware wraps the whole turn, which is async: the turn runs the view's
 sync code in separate hops (the handler, `mount`, `handle_params`, a
 `start_async` callback and its `handle_async_result`, `handle_tick`, the
-render's `get_context_data()`, where the JIT
-evaluates the view's QuerySets) with awaits between them. With
+render's `get_context_data()`, where the JIT evaluates the view's QuerySets,
+the authorization checks, the `on_mount` hooks and `connected()`) with awaits
+between them. With
 `worker_threads` a pool thread runs other sessions' hops in those gaps, and
 Django's database connection belongs to the thread. So a `transaction.atomic()`
 opened in a middleware would span awaits and take in other sessions' queries.
@@ -189,16 +190,37 @@ def _as_caller(user_id):
         yield
 ```
 
-- `step` is `"event"`, `"mount"`, `"handle_params"`, `"hook"` (another sync view
-  hook: a push handler, `handle_info`), `"async"` (a `start_async` /
-  `@background` callback **and** the `handle_async_result` call that receives
-  its outcome, two separate entries), `"tick"` (`handle_tick`) or `"render"`
-  (every call djust makes to `get_context_data()`, on every transport).
+- `step` is one of:
+
+  | `step` | Runs |
+  |---|---|
+  | `"event"` | an event handler; also a time-travel replay of one |
+  | `"mount"`, `"handle_params"` | `mount()`, `handle_params()` |
+  | `"hook"` | another sync view hook: a push handler, `handle_info`, `handle_cursor_move()`, `update_presence_heartbeat()`, and the `get_presence_key()` / `untrack_presence()` reads |
+  | `"async"` | a `start_async` / `@background` callback **and** the `handle_async_result` call that receives its outcome (two separate entries) |
+  | `"tick"` | `handle_tick()` |
+  | `"render"` | every call djust makes to `get_context_data()`, on every transport |
+  | `"auth"` | an authorization decision that runs your code: `check_permissions()`, Django's access mixins and replayed `dispatch` decorators (`test_func`), `@permission_required` on a handler, and the object-permission check (`get_object()` + `has_object_permission()`) |
+  | `"lifecycle"` | the `on_mount` hooks (the whole chain is one entry), `connected()` and `disconnected()` |
 - `view` is the view or component whose code runs; `turn` is
   `djust.turns.current_turn()`, or `None` when the step runs outside a turn (a
   `start_async` callback runs between its start and result turns).
 - A step that runs inside another step on the same thread (a handler that calls
   `get_context_data()`) does not enter the wrapper again.
+- **An `"auth"` step fails closed.** If the wrapper raises (on entry or on exit,
+  for example a failed commit) the check is refused, never skipped, and the
+  object-permission cache (`view._object`) is only written after the step
+  exits cleanly. If the wrapper's `__exit__` swallows an exception that the
+  check or an `on_mount` hook raised, djust raises `PermissionDenied` instead of
+  treating the missing verdict as "allowed". The same guard covers the
+  `on_mount` chain, because a hook's redirect is a verdict too.
+- `disconnected()` runs when a connection ends, outside any turn: the wrapper
+  gets `turn=None`. It runs the hook with the tenant bound and a failing wrapper
+  is logged, never raised, like a failing hook.
+- The wrapper is entered on **every transport** for the `"auth"` steps and
+  `on_mount` hooks (the HTTP page GET and API included), as it already is for
+  `"render"`; a wrapper that opens a transaction for `turn.transport == "http"`
+  should return `nullcontext()` as in the example above.
 - An `async def` handler or hook runs on the event loop and is not wrapped; its
   own `sync_to_async` calls are yours to scope. A `sync_safe` view renders on
   the loop, so its wrapper runs there too.
@@ -226,22 +248,26 @@ def _as_caller(user_id):
 
 ### Not wrapped
 
-These sync view hooks run on the worker thread through `sync_to_async` and do
-**not** enter the wrapper, so a per-turn scope is not open in them (tracked in
-[#3637](https://github.com/djust-org/djust/issues/3637)):
+Everything above is the sync code djust runs on a worker thread through
+`sync_to_async`. What still runs without the wrapper, and why:
 
-- `get_object()` and `has_object_permission()`, in the mount-time and the
-  per-event object-permission check (`check_object_permission` /
-  `enforce_object_permission`). With a row-level-security scope in the wrapper
-  `get_object()` reads no rows here and the check **fails closed** as "Access
-  denied" for a caller who is allowed.
-- `on_mount` hooks, `connected()` and `disconnected()`.
-- `handle_cursor_move()`, `update_presence_heartbeat()` and
-  `get_presence_key()`.
-- The time-travel `replay_event` re-run of a handler.
-
-Until that lands, scope these yourself (for example open the same
-`transaction.atomic()` with the caller set inside `get_object()`).
+- **An `async def` hook** of any kind (`mount`, a handler, `check_permissions`,
+  `handle_tick`, a push hook): it runs on the event loop, so a thread-bound scope
+  cannot be open in it. Its own `sync_to_async` calls are yours to scope.
+- **Tenant resolution** (`TenantMixin` `_ensure_tenant`, run beside the auth
+  check): it decides *which tenant* the turn is for, the input of the scope, so
+  it cannot run inside it.
+- **Framework state hops** that call no application hook: restoring a saved
+  snapshot (`restore_snapshot`, `_restore_private_state`), preserving sticky
+  children across a `live_redirect`, `establish_mount_session`, the render
+  plumbing around `get_context_data()` (template build, Rust state sync). Session
+  and channel-layer I/O, not view code.
+- **`get_template()` inside the render** (while the template is built for a view
+  render) runs in the framework's render hop, not as its own step. Only the
+  direct calls (the actor mount, a hot reload) are `"render"` steps.
+- **A task you start yourself** with `create_task()`: it inherits the context
+  variables of the turn but is not a sync step. Handlers run inside an `"event"`
+  step, so what they call directly is covered; a task they start is not.
 
 ## Hot path
 
