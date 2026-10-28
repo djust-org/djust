@@ -24,7 +24,7 @@ from djust import LiveView
 from djust.decorators import debounce
 
 class ProductSearchView(LiveView):
-    template_string = """
+    template = """
     <div>
         <input dj-input="search" placeholder="Search products..." />
         <div>

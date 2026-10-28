@@ -21,7 +21,7 @@ JavaScript to write, no bundler, and no build step in your project.
 from djust import LiveView, event_handler
 
 class CounterView(LiveView):
-    template_string = """
+    template = """
     <div dj-root>
         <h1>Count: {{ count }}</h1>
         <button dj-click="increment">+</button>
