@@ -1511,6 +1511,18 @@
       "version": "1.0.107"
     },
     {
+      "bom-ref": "rust:pkg:cargo/psm@0.1.30",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "psm",
+      "purl": "pkg:cargo/psm@0.1.30",
+      "type": "library",
+      "version": "0.1.30"
+    },
+    {
       "bom-ref": "rust:pkg:cargo/pulldown-cmark-escape@0.11.0",
       "licenses": [
         {
@@ -1845,6 +1857,18 @@
       "purl": "pkg:cargo/socket2@0.6.3",
       "type": "library",
       "version": "0.6.3"
+    },
+    {
+      "bom-ref": "rust:pkg:cargo/stacker@0.1.23",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "stacker",
+      "purl": "pkg:cargo/stacker@0.1.23",
+      "type": "library",
+      "version": "0.1.23"
     },
     {
       "bom-ref": "rust:pkg:cargo/string_cache@0.11.0",
@@ -2303,6 +2327,18 @@
       "version": "0.5.1"
     },
     {
+      "bom-ref": "rust:pkg:cargo/windows-sys@0.59.0",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "windows-sys",
+      "purl": "pkg:cargo/windows-sys@0.59.0",
+      "type": "library",
+      "version": "0.59.0"
+    },
+    {
       "bom-ref": "rust:pkg:cargo/windows-sys@0.61.2",
       "licenses": [
         {
@@ -2313,6 +2349,114 @@
       "purl": "pkg:cargo/windows-sys@0.61.2",
       "type": "library",
       "version": "0.61.2"
+    },
+    {
+      "bom-ref": "rust:pkg:cargo/windows-targets@0.52.6",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "windows-targets",
+      "purl": "pkg:cargo/windows-targets@0.52.6",
+      "type": "library",
+      "version": "0.52.6"
+    },
+    {
+      "bom-ref": "rust:pkg:cargo/windows_aarch64_gnullvm@0.52.6",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "windows_aarch64_gnullvm",
+      "purl": "pkg:cargo/windows_aarch64_gnullvm@0.52.6",
+      "type": "library",
+      "version": "0.52.6"
+    },
+    {
+      "bom-ref": "rust:pkg:cargo/windows_aarch64_msvc@0.52.6",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "windows_aarch64_msvc",
+      "purl": "pkg:cargo/windows_aarch64_msvc@0.52.6",
+      "type": "library",
+      "version": "0.52.6"
+    },
+    {
+      "bom-ref": "rust:pkg:cargo/windows_i686_gnu@0.52.6",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "windows_i686_gnu",
+      "purl": "pkg:cargo/windows_i686_gnu@0.52.6",
+      "type": "library",
+      "version": "0.52.6"
+    },
+    {
+      "bom-ref": "rust:pkg:cargo/windows_i686_gnullvm@0.52.6",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "windows_i686_gnullvm",
+      "purl": "pkg:cargo/windows_i686_gnullvm@0.52.6",
+      "type": "library",
+      "version": "0.52.6"
+    },
+    {
+      "bom-ref": "rust:pkg:cargo/windows_i686_msvc@0.52.6",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "windows_i686_msvc",
+      "purl": "pkg:cargo/windows_i686_msvc@0.52.6",
+      "type": "library",
+      "version": "0.52.6"
+    },
+    {
+      "bom-ref": "rust:pkg:cargo/windows_x86_64_gnu@0.52.6",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "windows_x86_64_gnu",
+      "purl": "pkg:cargo/windows_x86_64_gnu@0.52.6",
+      "type": "library",
+      "version": "0.52.6"
+    },
+    {
+      "bom-ref": "rust:pkg:cargo/windows_x86_64_gnullvm@0.52.6",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "windows_x86_64_gnullvm",
+      "purl": "pkg:cargo/windows_x86_64_gnullvm@0.52.6",
+      "type": "library",
+      "version": "0.52.6"
+    },
+    {
+      "bom-ref": "rust:pkg:cargo/windows_x86_64_msvc@0.52.6",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "windows_x86_64_msvc",
+      "purl": "pkg:cargo/windows_x86_64_msvc@0.52.6",
+      "type": "library",
+      "version": "0.52.6"
     },
     {
       "bom-ref": "rust:pkg:cargo/wit-bindgen-core@0.51.0",

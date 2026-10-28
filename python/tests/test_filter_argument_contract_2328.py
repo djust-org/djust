@@ -458,7 +458,9 @@ class TestErrorsSurfaceUsefully:
         assert "seventy" in message
 
     def test_the_resolve_miss_message_names_the_identifier(self) -> None:
-        with pytest.raises(RuntimeError) as raised:
+        from django.template import VariableDoesNotExist
+
+        with pytest.raises(VariableDoesNotExist) as raised:
             _rust.render_template("{{ p|wordwrap:width }}", {"p": "a b"})
         message = str(raised.value)
         assert "wordwrap" in message

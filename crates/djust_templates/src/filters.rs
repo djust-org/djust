@@ -950,7 +950,7 @@ pub(crate) fn apply_filter_with_literal(
             }
             None if !is_literal_filter_arg(a) => {
                 return Err(DjangoRustError::VariableDoesNotExist(format!(
-                    "filter '{filter_name}' argument {a:?} does not resolve — Django \
+                    "Failed lookup: filter '{filter_name}' argument {a:?} does not resolve — Django \
                      raises VariableDoesNotExist here"
                 )));
             }

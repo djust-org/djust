@@ -178,7 +178,6 @@ scoped.mark_safe("block.super".to_string());
 (body.to_string(), Some(body))
 Ok((String::new()).into())
 Ok((django_date_format(&now, format)).into())
-"Maximum template partial recursion depth exceeded".to_string(),
 DjangoRustError::TemplateError(format!(
 DjangoRustError::TemplateError(format!(
 let parent_path = context.dj_if_include_path().to_string();

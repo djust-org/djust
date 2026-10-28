@@ -17,6 +17,7 @@ default = ["liveview"]
 liveview = ["dep:djust_vdom"]
 
 [dependencies]
+stacker = "0.1.23"
 indexmap = { workspace = true }
 pyo3.workspace = true
 serde.workspace = true

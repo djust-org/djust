@@ -291,14 +291,17 @@ an uncalled partial or lose the caller's loop or `{% with %}` context. Move the
 root around the partial invocation instead. This restriction applies to LiveView
 root extraction; ordinary Django-template backend partial rendering is separate.
 
-Partial calls may nest up to 64 levels. A deeper call fails with a template
-recursion error; sequential calls do not count toward that limit. This bound
-also applies to partials rendered through the Django-template backend.
+Partial calls are bounded by the Python interpreter's configured recursion
+limit rather than a fixed 64-call limit; exceeding the djust limit raises
+`RecursionError`. Django's precise threshold can differ because it counts Python
+frames, while djust counts partial calls. Sequential calls do not accumulate the
+count. Rust-only callers use a limit of 1,000 when Python is unavailable. Deeply
+nested Rust context values can separately exhaust a small native thread stack,
+even outside partials.
 
-The upstream Django 6.1 partial tests also expose an existing engine-wide
-exception mismatch: an unresolved filter argument such as
-`{{ blank|default:missing }}` reaches Python as `RuntimeError` rather than
-Django's `VariableDoesNotExist`. This is not specific to partials.
+Unresolved filter arguments raise Django's `VariableDoesNotExist`, including
+inside partials. djust's diagnostic identifies the filter and argument; its
+message need not match Django's exact wording.
 
 ### Supported and unsupported tags and filters
 

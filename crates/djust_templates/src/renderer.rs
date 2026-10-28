@@ -4901,17 +4901,31 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
             registry,
             site_id,
         } => {
-            thread_local! { static DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+            thread_local! {
+                static DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+                static LIMIT: std::cell::Cell<usize> = const { std::cell::Cell::new(1000) };
+            }
+            // Django's recursion is bounded by the interpreter's configurable
+            // recursion limit, not a fixed template-specific limit. Read it once
+            // per outermost partial call, including detached LiveView renders.
+            if DEPTH.with(|d| d.get()) == 0 {
+                let limit = Python::try_attach(|py| {
+                    py.import("sys")
+                        .and_then(|sys| sys.call_method0("getrecursionlimit"))
+                        .and_then(|limit| limit.extract::<usize>())
+                        .unwrap_or(1000)
+                })
+                .unwrap_or(1000);
+                LIMIT.with(|l| l.set(limit));
+            }
             struct PartialRecursionGuard;
             impl Drop for PartialRecursionGuard {
                 fn drop(&mut self) {
                     DEPTH.with(|d| d.set(d.get() - 1));
                 }
             }
-            if DEPTH.with(|d| d.get()) >= 64 {
-                return Err(DjangoRustError::TemplateError(
-                    "Maximum template partial recursion depth exceeded".to_string(),
-                ));
+            if DEPTH.with(|d| d.get()) >= LIMIT.with(|l| l.get()) {
+                return Err(DjangoRustError::TemplateRecursion);
             }
             DEPTH.with(|d| d.set(d.get() + 1));
             let _guard = PartialRecursionGuard;
@@ -4932,9 +4946,16 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
                 Some(site) => format!("{parent_path}-i{site}"),
                 None => parent_path,
             };
-            context.with_dj_if_include_path(path, |context| {
-                context
-                    .with_template_render(|inner| render_nodes_output::<L, R>(nodes, inner, loader))
+            // Rust template frames are substantially larger than Python frames.
+            // Grow on this same thread before recursing; the larger red zone also
+            // leaves room for context-value cloning between partial calls. This
+            // does not bound unrelated recursive Value clones or drops.
+            stacker::maybe_grow(2 * 1024 * 1024, 8 * 1024 * 1024, || {
+                context.with_dj_if_include_path(path, |context| {
+                    context.with_template_render(|inner| {
+                        render_nodes_output::<L, R>(nodes, inner, loader)
+                    })
+                })
             })
         }
         Node::PartialDef {

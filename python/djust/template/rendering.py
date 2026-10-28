@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any, Callable, Optional, cast
 
 from django.db import models
 from django.db.models import QuerySet
-from django.template import Context, TemplateDoesNotExist, Origin
+from django.template import Context, TemplateDoesNotExist, Origin, VariableDoesNotExist
 from django.template.backends.utils import csrf_input_lazy, csrf_token_lazy
 from django.utils.safestring import SafeString
 from django.utils.functional import cached_property
@@ -703,7 +703,7 @@ class DjustTemplate:
             # below is worth nothing next to losing the status code. A real
             # ENGINE failure (unsupported tag, parse error) still gets the
             # hint, which is what it was written for.
-            if _is_user_raised(e):
+            if _is_user_raised(e) or isinstance(e, (VariableDoesNotExist, RecursionError)):
                 self._annotate_loaded_error(e, e)
                 raise
 
