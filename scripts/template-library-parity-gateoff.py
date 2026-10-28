@@ -3,26 +3,45 @@
 
 A ratchet that survives a mutation of the thing it guards is a decoration. Each
 entry below breaks one guarantee; the test file is run against it, and a
-mutation that leaves the file GREEN is reported and fails this script. Rules
-(the same as ``doc-examples-gateoff.py``): the mutation text must be found and
-must change the source; HUNG and ERROR are reported as themselves and are not
-a pass; ``__pycache__`` is cleared before every run so a stale ``.pyc`` cannot
-certify a mutation that never ran; the original is restored with ``write_text``
-(never ``copy2``, which keeps the mtime and lets a build reuse the mutant), even
-on failure.
+mutation that leaves the file GREEN is reported and fails this script.
 
-Run: ``python scripts/template-library-parity-gateoff.py [--list]``. About ten
-seconds per mutation. ``python/tests/test_template_library_parity_3663.py``
-pins that every mutation text below still exists, so the list cannot rot.
+**The mutations are applied to a throwaway copy of the tree, never to this
+checkout.** (The first version edited the real files in place: anyone reading
+the tree meanwhile measured a mutant, and a SIGTERM mid-run left one behind.)
+The copy holds what the test needs (the package, the tests' conftests, the
+demo project, the script and the baseline); the compiled extension is
+symlinked, not copied. It is deleted in a ``finally``, and SIGTERM / SIGINT /
+SIGHUP are turned into ``SystemExit`` so the ``finally`` runs. The real tree is
+never written, so there is nothing to restore; ``--selftest`` and
+``TestGateOffs`` prove that by hashing it before, during and after a mutation
+that is killed.
+
+Rules (the same as ``doc-examples-gateoff.py``): the mutation text must be found
+and must change the source; HUNG and ERROR are reported as themselves and are
+not a pass; the copy starts without ``__pycache__`` so a stale ``.pyc`` cannot
+certify a mutation that never ran. ``test_every_source_mutation_of_the_gateoff_
+script_still_applies`` is deselected from the runs (it fails under ANY mutation,
+which would otherwise look like a catch).
+
+Run: ``python scripts/template-library-parity-gateoff.py [--list] [--only TEXT]
+[--no-control]``. About ten seconds per mutation.
+``python/tests/test_template_library_parity_3663.py`` pins that every mutation
+text below still exists, so the list cannot rot.
 """
 
 from __future__ import annotations
 
+import hashlib
+import os
 import pathlib
 import re
 import shutil
+import signal
 import subprocess
 import sys
+import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 PKG = ROOT / "scripts/lib/template_library_parity"
@@ -168,19 +187,92 @@ MUTATIONS: list[tuple[str, pathlib.Path, str, str]] = [
 ]
 
 
-def clear_pycache() -> None:
-    for top in (ROOT / "scripts", ROOT / "python/djust/components", ROOT / "python/tests"):
-        for cache in top.rglob("__pycache__"):
-            shutil.rmtree(cache, ignore_errors=True)
+#: What the test needs from the tree, relative to the root.
+_COPY_TREES = ("python/djust", "examples/demo_project", "scripts/lib/template_library_parity")
+_COPY_FILES = (
+    "pyproject.toml",
+    "conftest.py",
+    "python/tests/conftest.py",
+    "python/tests/differential_corpus_2723.py",
+    TEST,
+    "scripts/template-library-parity.py",
+    "scripts/template-library-parity-baseline.csv",
+    "scripts/template-library-parity-gateoff.py",
+)
+_SKIP = shutil.ignore_patterns("__pycache__", "*.pyc", "tests", "_rust*.so", "*.sqlite3")
+_DESELECT = "python/tests/test_template_library_parity_3663.py::TestGateOffs::test_every_source_mutation_of_the_gateoff_script_still_applies"
 
 
-def run_tests() -> tuple[str, str]:
+def tree_digest(paths: list[pathlib.Path]) -> str:
+    """One hash over the bytes of ``paths`` (the files a mutation touches)."""
+    digest = hashlib.sha256()
+    for path in sorted(set(paths)):
+        digest.update(str(path).encode() + b"\0" + path.read_bytes())
+    return digest.hexdigest()
+
+
+def make_copy(work: pathlib.Path) -> None:
+    for tree in _COPY_TREES:
+        src = ROOT / tree
+        dst = work / tree
+        if tree == "python/djust":  # the package's own tests are not needed and are large
+            shutil.copytree(src, dst, ignore=_SKIP)
+        else:
+            shutil.copytree(src, dst, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+        for ext in src.glob("_rust*.so"):  # symlink: a second copy of a mapped .so is a hazard
+            (dst / ext.name).symlink_to(ext)
+    for rel in _COPY_FILES:
+        (work / rel).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT / rel, work / rel)
+    # ``tests/`` helpers the root conftest imports (not the test files themselves)
+    (work / "tests").mkdir()
+    for helper in (ROOT / "tests").glob("*.py"):
+        if not helper.name.startswith("test_"):
+            shutil.copyfile(helper, work / "tests" / helper.name)
+
+
+@contextmanager
+def workdir() -> Iterator[pathlib.Path]:
+    """A throwaway copy of the tree; deleted on exit, including on SIGTERM / SIGINT / SIGHUP."""
+
+    def die(signum: int, _frame: object) -> None:
+        raise SystemExit(128 + signum)
+
+    previous = {s: signal.signal(s, die) for s in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP)}
+    work = pathlib.Path(tempfile.mkdtemp(prefix="parity-gateoff-")).resolve()
+    try:
+        make_copy(work)
+        yield work
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
+
+
+def run_tests(work: pathlib.Path) -> tuple[str, str]:
     """``(outcome, first failing test)``; outcome is GREEN, RED, HUNG or ERROR."""
-    clear_pycache()
+    env = {
+        **os.environ,
+        "PYTHONPATH": os.pathsep.join([str(work / "python"), str(work)]),
+        "PYTHONDONTWRITEBYTECODE": "1",
+    }
+    env.pop("DJANGO_SETTINGS_MODULE", None)
     try:
         done = subprocess.run(
-            [sys.executable, "-m", "pytest", "-q", "-x", "-p", "no:cacheprovider", TEST],
-            cwd=ROOT,
+            [
+                sys.executable,
+                "-m",
+                "pytest",
+                "-q",
+                "-x",
+                "-p",
+                "no:cacheprovider",
+                "--deselect",
+                _DESELECT,
+                TEST,
+            ],
+            cwd=work,
+            env=env,
             capture_output=True,
             text=True,
             timeout=600,
@@ -205,28 +297,40 @@ def main(argv: list[str]) -> int:
         for label, path, _old, _new in MUTATIONS:
             print("%-80s %s" % (label, path.relative_to(ROOT)))
         return 0
-    control, _ = run_tests()
-    print("control (unmutated): %s" % control)
-    if control != "GREEN":
+    only = argv[argv.index("--only") + 1] if "--only" in argv else None
+    chosen = [m for m in MUTATIONS if only is None or only in m[0]]
+    if not chosen:
+        print("no mutation matches %r" % only)
         return 2
+    real = [m[1] for m in MUTATIONS]
+    before = tree_digest(real)
     survivors = 0
-    for label, path, old, new in MUTATIONS:
-        original = path.read_text(encoding="utf-8")
-        assert old in original, "MUTATION TEXT NOT FOUND for %s" % label
-        mutated = original.replace(old, new, 1)
-        assert mutated != original, "NO-OP MUTATION for %s" % label
-        try:
-            path.write_text(mutated, encoding="utf-8")
-            outcome, first = run_tests()
-        finally:
-            path.write_text(original, encoding="utf-8")
-        assert path.read_text(encoding="utf-8") == original
-        survivors += outcome != "RED"
-        print("%-6s %s\n         %s" % (outcome, label, first.replace(TEST + "::", "")[:150]))
-    control, _ = run_tests()
-    print("control (restored): %s" % control)
-    print("%d of %d mutations turned the test red" % (len(MUTATIONS) - survivors, len(MUTATIONS)))
-    return 1 if survivors or control != "GREEN" else 0
+    with workdir() as work:
+        print("workdir: %s" % work, flush=True)
+        if "--no-control" not in argv:
+            control, _ = run_tests(work)
+            print("control (unmutated): %s" % control, flush=True)
+            if control != "GREEN":
+                return 2
+        for label, path, old, new in chosen:
+            target = work / path.relative_to(ROOT)
+            original = target.read_text(encoding="utf-8")
+            assert old in original, "MUTATION TEXT NOT FOUND for %s" % label
+            mutated = original.replace(old, new, 1)
+            assert mutated != original, "NO-OP MUTATION for %s" % label
+            target.write_text(mutated, encoding="utf-8")
+            print("mutating: %s" % label, flush=True)
+            outcome, first = run_tests(work)
+            target.write_text(original, encoding="utf-8")
+            survivors += outcome != "RED"
+            print("%-6s %s\n         %s" % (outcome, label, first.replace(TEST + "::", "")[:150]))
+        if "--no-control" not in argv:
+            control, _ = run_tests(work)
+            print("control (after the last mutation): %s" % control)
+            survivors += control != "GREEN"
+    assert tree_digest(real) == before, "the real tree changed during the run"
+    print("%d of %d mutations turned the test red" % (len(chosen) - survivors, len(chosen)))
+    return 1 if survivors else 0
 
 
 if __name__ == "__main__":

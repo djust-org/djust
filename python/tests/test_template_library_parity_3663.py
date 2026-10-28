@@ -39,9 +39,11 @@ import importlib.util
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import textwrap
+import threading
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -670,6 +672,54 @@ class TestGateOffs:
         assert [(f.tag, f.kind) for f in classify.compare(measured, with_extra)] == [
             ("lib:ghost", classify.STALE)
         ]
+
+    def test_a_gateoff_killed_mid_mutation_leaves_the_real_tree_untouched(self):
+        """The first gate-off script edited the real files in place: a reader of the tree
+        measured a mutant, and SIGTERM mid-run left one behind. It now mutates a throwaway
+        copy, so the real tree is byte-identical before, DURING and after, and the copy goes."""
+        script = ROOT / "scripts" / "template-library-parity-gateoff.py"
+        spec = importlib.util.spec_from_file_location("parity_gateoff_kill", script)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        label, target, old, _new = next(m for m in module.MUTATIONS if "kbd escapes" in m[0])
+        touched = sorted({m[1] for m in module.MUTATIONS})
+        before = {p: p.read_bytes() for p in touched}
+        proc = subprocess.Popen(
+            [sys.executable, str(script), "--only", "kbd escapes", "--no-control"],
+            cwd=ROOT,
+            env=_env(),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        guard = threading.Timer(240, proc.kill)  # never wedge the suite on a hung child
+        guard.start()
+        try:
+            work = None
+            for line in proc.stdout:
+                if line.startswith("workdir: "):
+                    work = Path(line.split(": ", 1)[1].strip())
+                if line.startswith("mutating: "):
+                    break
+            else:
+                pytest.fail("the script exited before it mutated anything")
+            # mid-mutation: the COPY carries the mutant, the real file does not
+            copy = work / target.relative_to(ROOT)
+            assert old not in copy.read_text(encoding="utf-8"), (
+                "the mutation did not apply to the copy"
+            )
+            assert old in target.read_text(encoding="utf-8")
+            assert {p: p.read_bytes() for p in touched} == before
+            proc.send_signal(signal.SIGTERM)
+            returncode = proc.wait(timeout=120)
+        finally:
+            guard.cancel()
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()
+        assert returncode in (128 + signal.SIGTERM, -signal.SIGTERM), returncode
+        assert not work.exists(), "the throwaway copy was left behind"
+        assert {p: p.read_bytes() for p in touched} == before
 
     def test_every_source_mutation_of_the_gateoff_script_still_applies(self):
         """The list in scripts/template-library-parity-gateoff.py is how the ratchet is

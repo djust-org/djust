@@ -366,7 +366,7 @@ Known limits of the harness:
 make template-library-parity            # check: exits 1 when the measurement differs from the baseline
 make template-library-parity-baseline   # regenerate scripts/template-library-parity-baseline.csv
 scripts/template-library-parity.py --repro badge   # both engines' output for every variant of one tag
-scripts/template-library-parity-gateoff.py         # mutate the ratchet and the tags; each must turn the test red
+scripts/template-library-parity-gateoff.py         # mutate the ratchet and the tags in a throwaway copy of the tree; each must turn the test red
 ```
 
 **What is measured.** Every tag of the two libraries that has a native handler is rendered by both engines from generated templates: keyword calls, typical and hostile values, a `mark_safe` value, a string literal with HTML specials, a missing variable, `None`, positional use, no arguments, and hand-written composites for tags that need a parent or child. Tags with no native handler are not measured, because the bridge runs Django's own node for them. Three things decide whether a row means anything:
@@ -396,6 +396,8 @@ scripts/template-library-parity-gateoff.py         # mutate the ratchet and the 
 **Maintenance cost.** Because discovery reads the code, refactoring a handler or a node (moving a key read into a helper, renaming a helper) can change the generated calls and therefore the rows without changing behaviour. The tell is the diff: such a change moves `exercised`, `own_output` or the counts together and leaves `class` alone, and it is the tool, not the template, that changed. If `exercised` drops, discovery lost sight of a parameter; fix discovery rather than the baseline.
 
 **Determinism.** The harness runs in its own process (the tests start it as a subprocess, which is also why nothing it patches can reach another test). It fixes `uuid` and the clock before Django is imported, resets the one process-global id counter in these libraries before every render, sets its own `TIME_ZONE`, `LANGUAGE_CODE` and `ROOT_URLCONF`, and avoids `html.parser` (whose handling of malformed markup has changed between point releases). The id normaliser knows the shape of the harness's own uuids only, so `item-deadbeef` against `item-cafebabe` is a difference. `scripts/template-library-parity.py --self-compare` renders Django against itself and must find every tag identical; `--plant TAG` makes the Python tag emit an extra element and the ratchet must flag it. `python/tests/test_template_library_parity_3663.py` runs both, and carries the `pr_tier` marker: its cost is a module fixture charged to whichever test asks first, so without the marker the first refresh of `.test_durations` would mark the one test that asserts the ratchet `slow` and drop it from PR runs (`tests/slow_tier.py` honours the marker).
+
+The gate-off script never writes to your checkout: it copies what the test needs (the compiled extension is symlinked) into a temporary directory, mutates there, and deletes the copy in a `finally`, including on SIGTERM, SIGINT and SIGHUP. An earlier version edited the real files in place, so a reader of the tree measured a mutant and a kill mid-run left one behind; a test starts the script, kills it mid-mutation, and asserts the real files are byte-identical before, during and after.
 
 ## Performance
 
