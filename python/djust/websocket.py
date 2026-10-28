@@ -483,6 +483,18 @@ def _snapshot_assigns(view_instance: Any) -> Dict[str, Any]:
             # For other objects, just use id — reassignment is detected,
             # in-place mutation is not (same as Phoenix LiveView).
             snapshot[k] = vid
+    # Streams (#3639). ``_streams`` is a framework attribute, so the walk above
+    # skips it, and a handler whose ONLY effect was ``stream_insert`` /
+    # ``stream_delete`` / ``stream_prune`` / ``stream_reset`` changed nothing it
+    # could see: the turn was answered ``noop`` and the row waited for the next
+    # unrelated render. ``StreamsMixin`` bumps ``_stream_epoch`` on every
+    # mutation that changed a stream; one int per view is the whole cost, and a
+    # turn that touched no stream compares equal. Reported under the storage
+    # name ``_streams`` (like ``_state_count`` above); the rendered key is
+    # ``streams``, which ``_sync_state_to_rust`` finds by comparing contexts.
+    stream_epoch = getattr(view_instance, "_stream_epoch", 0)
+    if stream_epoch:
+        snapshot["_streams"] = stream_epoch
     return snapshot
 
 

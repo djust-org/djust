@@ -729,6 +729,85 @@ pub fn splice_ignore_subtrees(old: &VNode, new: &mut VNode) {
     }
 }
 
+/// How a `dj-update` container accumulates children across renders.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Accumulate {
+    Append,
+    Prepend,
+}
+
+fn accumulate_mode(node: &VNode) -> Option<Accumulate> {
+    match node.attrs.get("dj-update").map(String::as_str) {
+        Some("append") => Some(Accumulate::Append),
+        Some("prepend") => Some(Accumulate::Prepend),
+        _ => None,
+    }
+}
+
+/// Make `dj-update="append"` / `"prepend"` containers accumulate (#3639).
+///
+/// A view with `temporary_assigns` renders only the rows it just assigned: the
+/// rest were reset out of the context after the last render. Diffed like any
+/// other list, that render would rewrite the first stored row into the new one
+/// and remove the others. The client already honours `dj-update` for a full
+/// `html` frame (`applyDjUpdateElements`: a child whose `id` is not on the page
+/// is added, one that is stays untouched); this is the same rule for the patch
+/// path, so the two channels cannot disagree (#1646).
+///
+/// Walks `old` and `new` in parallel, like [`splice_ignore_subtrees`]. At a
+/// container whose `id` and `dj-update` mode match on both sides the new
+/// children are replaced by `old` children plus the new children whose `id` is
+/// not among them (appended after the stored ones, or put before them for
+/// `prepend`). The diff then sees the stored rows unchanged and emits an
+/// `InsertChild` per added row; the stored tree keeps the rows, which is what
+/// the page shows. A new child with no `id` is dropped, as the client drops it.
+///
+/// Only called for a view that declares `temporary_assigns`: for any other view
+/// the whole list is re-rendered and the template stays authoritative, so a row
+/// it no longer lists still leaves the page.
+pub fn splice_accumulating_subtrees(old: &VNode, new: &mut VNode) {
+    if old.tag != new.tag {
+        return;
+    }
+    if let Some(mode) = accumulate_mode(new) {
+        if accumulate_mode(old) == Some(mode)
+            && new.attrs.contains_key("id")
+            && old.attrs.get("id") == new.attrs.get("id")
+        {
+            let stored: std::collections::HashSet<&str> = old
+                .children
+                .iter()
+                .filter_map(|child| child.attrs.get("id").map(String::as_str))
+                .collect();
+            let added: Vec<VNode> = std::mem::take(&mut new.children)
+                .into_iter()
+                .filter(|child| {
+                    child
+                        .attrs
+                        .get("id")
+                        .is_some_and(|id| !stored.contains(id.as_str()))
+                })
+                .collect();
+            let mut merged = old.children.clone();
+            match mode {
+                Accumulate::Append => merged.extend(added),
+                Accumulate::Prepend => {
+                    let mut front = added;
+                    front.extend(merged);
+                    merged = front;
+                }
+            }
+            new.children = merged;
+            new.cached_html = None;
+            return;
+        }
+    }
+    let len = old.children.len().min(new.children.len());
+    for i in 0..len {
+        splice_accumulating_subtrees(&old.children[i], &mut new.children[i]);
+    }
+}
+
 /// Cache the HTML serialization for all `dj-update="ignore"` subtrees in a VDOM tree.
 /// Call this after the first render so subsequent `to_html()` calls can skip
 /// serialization for these static sections.

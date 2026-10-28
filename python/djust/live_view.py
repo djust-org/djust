@@ -578,7 +578,8 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
                 self.messages = [msg]  # Only new messages sent to client
 
         IMPORTANT: When using temporary_assigns, use dj-update="append" in your
-        template to tell the client to append new items instead of replacing:
+        template (the container and each item need an ``id``) so the new items
+        are added after the ones already on the page instead of replacing them:
 
             <ul dj-update="append" id="messages">
                 {% for msg in messages %}
@@ -923,6 +924,13 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
         self._temporary_assigns_initialized: bool = False  # Track if temp assigns are set up
         self._streams: Dict[str, Stream] = {}  # Stream collections
         self._stream_operations: list = []  # Pending stream operations for this render
+        # Bumped by StreamsMixin._record_stream_op each time a mutation changed a
+        # stream. ``_streams`` is a framework attribute, so the pre/post-handler
+        # snapshot (``websocket._snapshot_assigns``) cannot see into it; this
+        # counter is how a handler whose only effect is a stream mutation is told
+        # apart from one that changed nothing (#3639). Framework state: set
+        # before the ``_framework_attrs`` snapshot below.
+        self._stream_epoch: int = 0
         # Initialize navigation support (live_patch, live_redirect)
         self._init_navigation()
 

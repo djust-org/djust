@@ -12,6 +12,8 @@
  *   `SetText` carries decoded text, since the client sets `textContent`.
  * - #3012: text patches whose path runs through whitespace-only text inside
  *   <pre>/<code>/<textarea>, which the server counts.
+ * - #3639: stream-only operations, and `temporary_assigns` rows under
+ *   `dj-update="append"` / `"prepend"` (tests/livefixtures/stream_append_views.py).
  */
 
 import { describe, it, expect } from 'vitest';
@@ -26,6 +28,7 @@ const FIXTURES = [
     ['#2997 keyed filter/restore', 'vdom_diff_keyed_filter_restore_2997.json'],
     ['#2898 escaped text through the fast paths', 'vdom_diff_escaped_text_2898.json'],
     ['#3012 whitespace inside pre/code/textarea', 'vdom_diff_preserve_whitespace_3012.json'],
+    ['#3639 stream operations and dj-update append/prepend', 'vdom_diff_stream_append_3639.json'],
 ];
 
 for (const [title, file] of FIXTURES) {
@@ -122,5 +125,51 @@ describe('#3012 path walking counts whitespace inside pre/code/textarea', () => 
         expect(window.djust.getSignificantChildren(s2).length).toBe(1);
         const i = window.djust._getNodeByPath([0, 2, 0, 0]);
         expect(i && i.textContent).toBe('x');
+    });
+});
+
+describe('#3639 the fixture exercises the reported flow', () => {
+    const fx = load('vdom_diff_stream_append_3639.json');
+
+    it('an appended row arrives as an InsertChild and no stored row is removed', () => {
+        for (const step of fx.shapes.append.steps) {
+            const types = step.patches.map((p) => p.type);
+            expect(types, step.label).not.toContain('RemoveChild');
+            if (step.label !== 'unrelated event') {
+                expect(types, step.label).toContain('InsertChild');
+            }
+        }
+    });
+
+    it('an unrelated event leaves the accumulated rows alone', () => {
+        for (const shape of ['append', 'prepend']) {
+            const step = fx.shapes[shape].steps.find((s) => s.label === 'unrelated event');
+            expect(step.patches.map((p) => p.type), shape).toEqual(['SetText']);
+        }
+    });
+
+    it('the stream container ends with the rows the stream operations left', async () => {
+        const sub = fx.shapes.stream;
+        const { window } = createHarnessDom(sub.initial_html);
+        const { document } = window;
+        for (const step of sub.steps) {
+            await window.djust.applyPatches(step.patches, document.querySelector(fx.root_selector));
+        }
+        const ids = Array.from(document.querySelectorAll('#feed > li')).map((li) => li.id);
+        expect(ids).toEqual(['rows-200']);
+    });
+
+    it('the append container ends with every stored row plus every assigned one', async () => {
+        const sub = fx.shapes.append;
+        const { window } = createHarnessDom(sub.initial_html);
+        const { document } = window;
+        for (const step of sub.steps) {
+            await window.djust.applyPatches(step.patches, document.querySelector(fx.root_selector));
+        }
+        const ids = Array.from(document.querySelectorAll('#list > li')).map((li) => li.id);
+        expect(ids).toEqual([
+            'rows-0', 'rows-1', 'rows-2', // mounted
+            'rows-101', 'rows-200', 'rows-301', 'rows-302', 'rows-103',
+        ]);
     });
 });

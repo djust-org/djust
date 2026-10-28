@@ -78,6 +78,11 @@ from tests.livefixtures.inline_whitespace_view import (  # noqa: E402
     state_view,
 )
 from tests.livefixtures.kanban_tabs_view import KanbanTabsView  # noqa: E402
+from tests.livefixtures.stream_append_views import (  # noqa: E402
+    AppendRowsView,
+    PrependRowsView,
+    StreamFeedView,
+)
 from tests.livefixtures.vdom_correctness_views import (  # noqa: E402
     ALL_ITEMS,
     ESCAPED_TEXT_TEMPLATE,
@@ -556,6 +561,72 @@ def gen_preserve_whitespace_3012():
     }
 
 
+def gen_stream_append_3639():
+    """#3639: a stream-only handler and ``temporary_assigns`` + ``dj-update``.
+
+    Three shapes, each a real event followed by the real render. ``stream``: a
+    ``dj-stream`` container driven only by ``stream_insert`` / ``stream_delete``
+    / ``stream_prune`` / ``stream_reset``. ``append`` and ``prepend``: a view
+    with ``temporary_assigns = {"rows": []}`` whose rows container carries
+    ``dj-update``; rows are assigned next to another change, as the only change,
+    two at a time, and an unrelated event follows. The client must end up with
+    every stored row plus the new ones, which is also what a fresh render of the
+    accumulated tree is."""
+    shapes = {}
+    for shape, view, events in (
+        (
+            "stream",
+            StreamFeedView,
+            [
+                ("insert at the end", "ins"),
+                ("insert at the front", "ins_front"),
+                ("delete a row", "dele"),
+                ("prune to two", "prune"),
+                ("reset with one row", "reset"),
+            ],
+        ),
+        (
+            "append",
+            AppendRowsView,
+            [
+                ("row next to another change", "add"),
+                ("row as the only change", "add_only"),
+                ("two rows", "add_two"),
+                ("unrelated event", "bump"),
+                ("another row", "add"),
+            ],
+        ),
+        (
+            "prepend",
+            PrependRowsView,
+            [
+                ("row next to another change", "add"),
+                ("two rows", "add_two"),
+                ("unrelated event", "bump"),
+            ],
+        ),
+    ):
+        c = LiveViewTestClient(view)
+        c.mount()
+        egress = c.view_instance._strip_comments_and_whitespace
+        initial_html, _, _ = c.render_with_patches()
+        steps = []
+        for label, event in events:
+            c.send_event(event)
+            html, patches, _ = c.render_with_patches()
+            steps.append({"label": label, "patches": patches, "expected_html": egress(html)})
+        shapes[shape] = {"initial_html": egress(initial_html), "steps": steps}
+    return {
+        "scenario": "stream_append_3639",
+        "description": (
+            "Stream-only operations, and temporary_assigns rows under "
+            'dj-update="append" / "prepend": every stored row stays, new rows arrive.'
+        ),
+        "root_selector": ".ws-root",
+        "shapes": shapes,
+    }
+
+
 SCENARIOS = {
     "vdom_diff_kanban_tabs_1678.json": gen_kanban_tabs_1678,
     "vdom_diff_inline_whitespace_2999.json": gen_inline_whitespace_2999,
@@ -565,6 +636,7 @@ SCENARIOS = {
     "vdom_diff_keyed_filter_restore_2997.json": gen_keyed_filter_restore_2997,
     "vdom_diff_escaped_text_2898.json": gen_escaped_text_2898,
     "vdom_diff_preserve_whitespace_3012.json": gen_preserve_whitespace_3012,
+    "vdom_diff_stream_append_3639.json": gen_stream_append_3639,
 }
 
 

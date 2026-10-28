@@ -28,8 +28,9 @@ use djust_templates::render_env::RenderEnvGuard;
 use djust_templates::{CompiledTemplate, Template};
 use djust_vdom::{
     cache_ignore_subtree_html_in, diff_in, find_paths_by_attr, parse_html_continue_with_namespace,
-    parse_html_fragment, parse_html_with_namespace, reset_id_counter, splice_ignore_subtrees,
-    sync_ids, try_text_only_vdom_update_inplace, Namespace, SourceOpenElements, VNode,
+    parse_html_fragment, parse_html_with_namespace, reset_id_counter, splice_accumulating_subtrees,
+    splice_ignore_subtrees, sync_ids, try_text_only_vdom_update_inplace, Namespace,
+    SourceOpenElements, VNode,
 };
 use once_cell::sync::Lazy;
 use pyo3::prelude::*;
@@ -292,6 +293,11 @@ pub struct RustLiveViewBackend {
     /// renders don't modify the index because they only change text
     /// content, not text-node positions or count.
     text_node_index: Option<Vec<TextNodeEntry>>,
+    /// Whether `dj-update="append"` / `"prepend"` containers accumulate children
+    /// across renders (#3639). Set from Python on every sync: true for a view
+    /// that declares `temporary_assigns`, whose renders list only the rows just
+    /// assigned. Not persisted; Python sets it again before the next render.
+    accumulate_updates: bool,
     /// Sidecar map of raw Python objects keyed by top-level context
     /// name. Populated by Python's `set_raw_py_values` so the Rust
     /// template engine can fall back to `getattr` for attributes
@@ -378,6 +384,7 @@ impl RustLiveViewBackend {
             changed_keys: None,
             fragment_text_map: None,
             text_node_index: None,
+            accumulate_updates: false,
             raw_py_values: None,
             // Default-OFF (#1967 / split-foundation #1122); flipped by
             // set_loop_render_cache_enabled from the Python config flag.
@@ -410,6 +417,13 @@ impl RustLiveViewBackend {
                 self.changed_keys = Some(keys.into_iter().collect());
             }
         }
+    }
+
+    /// Make `dj-update="append"` / `"prepend"` containers accumulate children
+    /// across renders instead of being diffed as an ordinary list (#3639).
+    /// Python sets it from whether the view declares `temporary_assigns`.
+    fn set_accumulate_updates(&mut self, enabled: bool) {
+        self.accumulate_updates = enabled;
     }
 
     /// Enable or disable the per-item loop render cache (#1967).
@@ -1096,6 +1110,9 @@ impl RustLiveViewBackend {
             // Splice old VDOM subtrees for dj-update="ignore" nodes
             if let Some(old_vdom) = &self.last_vdom {
                 splice_ignore_subtrees(old_vdom, &mut new_vdom);
+                if self.accumulate_updates {
+                    splice_accumulating_subtrees(old_vdom, &mut new_vdom);
+                }
             }
 
             // Phase 3: VDOM diff
@@ -1191,6 +1208,7 @@ impl RustLiveViewBackend {
             use std::time::Instant;
             let t_start = Instant::now();
 
+            let accumulating = self.accumulate_updates;
             let (Some(vdom), Some(root_ns)) = (self.last_vdom.as_mut(), self.last_root_ns) else {
                 return Ok(None);
             };
@@ -1220,7 +1238,9 @@ impl RustLiveViewBackend {
                     ancestors.push(node);
                 }
                 if ancestors.iter().any(|n| {
-                    n.attrs.get("dj-update").map(String::as_str) == Some("ignore")
+                    let update = n.attrs.get("dj-update").map(String::as_str);
+                    update == Some("ignore")
+                        || (accumulating && matches!(update, Some("append" | "prepend")))
                         || n.attrs.contains_key("dj-virtual")
                 }) {
                     return Ok(None);
@@ -1284,11 +1304,17 @@ impl RustLiveViewBackend {
                 return Ok(None);
             };
             splice_ignore_subtrees(old_node, &mut reparsed_old);
+            if accumulating {
+                splice_accumulating_subtrees(old_node, &mut reparsed_old);
+            }
             if !djust_vdom::diff::diff_nodes(old_node, &reparsed_old, &[]).is_empty() {
                 return Ok(None);
             }
             let t_diff = Instant::now();
             splice_ignore_subtrees(old_node, &mut new_node);
+            if accumulating {
+                splice_accumulating_subtrees(old_node, &mut new_node);
+            }
             let patches =
                 djust_vdom::diff::diff_nodes_in(old_node, &new_node, &path, Some(Namespace::Html));
             sync_ids(old_node, &mut new_node);
@@ -1407,6 +1433,8 @@ impl RustLiveViewBackend {
             changed_keys: None,
             fragment_text_map: None,
             text_node_index: None,
+            // Transient (#3639): Python re-sets it on every sync.
+            accumulate_updates: false,
             raw_py_values: None,
             // Transient cache — not deserialized; rebuilt fresh, default-OFF
             // until the Python flag re-enables it post-restore (#1967).
@@ -1874,6 +1902,9 @@ impl RustLiveViewBackend {
                 // Splice ignore subtrees
                 if let Some(old_vdom) = &self.last_vdom {
                     splice_ignore_subtrees(old_vdom, &mut new_vdom);
+                    if self.accumulate_updates {
+                        splice_accumulating_subtrees(old_vdom, &mut new_vdom);
+                    }
                 }
 
                 // VDOM diff
