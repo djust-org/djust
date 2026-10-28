@@ -228,8 +228,8 @@ class InMemoryStateBackend(StateBackend):
                         self._warned_large.discard(key)
                 logger.exception(
                     "InMemoryStateBackend.get: serialize/deserialize round-trip "
-                    "failed for key '%s'; entry discarded — caller should remount",
-                    key,
+                    "failed for %s; entry discarded — caller should remount",
+                    state_key_label(key),
                 )
                 return None
             return (clone, timestamp)
@@ -271,7 +271,11 @@ class InMemoryStateBackend(StateBackend):
                 self._state_sizes.pop(key, None)
                 self._warned_large.discard(key)
             log_failure_for(
-                logger, (), exc, "InMemoryStateBackend.set: could not snapshot key '%s'", key
+                logger,
+                (),
+                exc,
+                "InMemoryStateBackend.set: could not snapshot %s",
+                state_key_label(key),
             )
             return
 
@@ -303,7 +307,7 @@ class InMemoryStateBackend(StateBackend):
                 return int(view.get_state_size())
             return len(snapshot)
         except Exception:
-            logger.debug("Failed to estimate state size for key '%s'", key)
+            logger.debug("Failed to estimate state size for %s", state_key_label(key))
             return 0
 
     def _emit_large_warning(self, key: str, size: int, snapshot: bytes) -> None:
