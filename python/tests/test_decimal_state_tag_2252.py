@@ -640,8 +640,8 @@ class TestTheRealHTTPPostRoundTrip:
         assert fresh.huge == HUGE
 
     def test_the_private_decimal_survives_too(self) -> None:
-        """`_restore_private_state` is the shared decode point for all three
-        of its callers."""
+        """`_restore_private_state` (its body, `_apply_private_state`) is the shared
+        decode point for all three of its callers."""
         factory, get_request = self._seed()
         fresh = _PriceView()
         post = factory.post(
@@ -834,7 +834,8 @@ EXPECTED_DECODE_SITES = {
     # #3252: restore the lazy child's server-held public/private session state,
     # tagged at save_http_lazy's encoder-less JSON boundary.
     ("_lazy_containers.py", "mount_http_lazy"),
-    ("live_view.py", "_restore_private_state"),
+    # The body of `_restore_private_state`, which enters its `lifecycle` step around it (#3646).
+    ("live_view.py", "_apply_private_state"),
     ("mixins/components.py", "_restore_component_state"),
     ("mixins/request.py", "_post_turn_body"),  # ADR-044: inside the POST turn
     ("mixins/sticky.py", "restore_sticky_child_state"),

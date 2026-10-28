@@ -49,9 +49,13 @@ hop in a transaction with the caller set.
 
 from __future__ import annotations
 
+import asyncio
 import contextvars
 import functools
+import logging
 from typing import Any, Callable, ContextManager, Optional, Tuple, TypeVar
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "SYNC_STEPS",
@@ -59,6 +63,7 @@ __all__ = [
     "guarded_step",
     "run_guarded_step",
     "run_sync_step",
+    "run_teardown_step",
     "sync_step",
 ]
 
@@ -206,3 +211,69 @@ def guarded_step(view: Any, step: str, fn: Callable[..., _T]) -> Callable[..., _
         return run_guarded_step(view, step, fn, *args, **kwargs)
 
     return stepped
+
+
+def _on_event_loop() -> bool:
+    """Whether this thread is running an asyncio event loop."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return False
+    return True
+
+
+def run_teardown_step(
+    view: Any, step: str, fn: Callable[..., _T], /, *args: Any, **kwargs: Any
+) -> _T:
+    """Run a view's teardown ``fn`` inside the wrapper, off the event loop only.
+
+    The teardown of a released view calls application hooks
+    (``_on_sticky_unmount``, ``_cleanup_on_unregister``, ``_cleanup_uploads``).
+    Where the release runs on a worker thread (SSE: ``sync_to_async(release_root_view)``,
+    and ``shutdown()`` reached through ``abandon()`` / ``response.close()``) those
+    hooks read the database exactly like any other sync hop, so they get the same
+    scope. Where it runs on the event loop (the WebSocket release, and
+    ``shutdown()`` called from the loop) the call is NOT wrapped: a wrapper that
+    opens a transaction would itself raise on the loop (the ORM refuses to run
+    there), and a hook that queries on the loop fails with or without a wrapper.
+
+    Two differences from :func:`run_sync_step`, both because a teardown must go on:
+
+    * a wrapper that raises before the body starts does not skip it. The failure is
+      logged and the body runs without the scope (before this step existed, the
+      hooks ran without one);
+    * a wrapper that raises after the body finished is logged, not propagated: the
+      view is already released.
+
+    A failure of the body itself propagates, as for any step.
+    """
+    if _wrapper() is None or _active_step.get() is not None or _on_event_loop() or _is_async(fn):
+        return fn(*args, **kwargs)
+    started: list = []
+    finished: list = []
+
+    def body() -> _T:
+        started.append(None)
+        result = fn(*args, **kwargs)
+        finished.append(result)
+        return result
+
+    try:
+        return run_sync_step(view, step, body)
+    except Exception as exc:  # noqa: BLE001 — see below: only a wrapper failure is absorbed
+        if started and not finished:
+            raise  # the teardown's own failure
+        from ._exposure_diagnostics import log_failure_for
+
+        log_failure_for(
+            logger,
+            (view,),
+            exc,
+            "The sync_turn_wrapper failed around a %s teardown: %s",
+            step,
+            exc,
+            level="warning",
+        )
+        if finished:
+            return finished[0]
+        return fn(*args, **kwargs)

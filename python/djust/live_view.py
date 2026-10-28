@@ -1360,11 +1360,29 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
         )
 
     def _restore_private_state(self, private_state: Dict[str, Any]) -> None:
-        """Restore legacy private attributes; explicit views require a bound adapter."""
+        """Restore legacy private attributes; explicit views require a bound adapter.
+
+        A ``"lifecycle"`` step of the ``sync_turn_wrapper`` (#3646): a private model
+        reference is re-fetched here (``decode_private_model_refs``, ``Model.objects.get``)
+        and a private attribute can be a property whose setter is application code. Every
+        caller (the WebSocket state restore, the HTTP POST restore, a lazy container and
+        a sticky child's restore) reaches this method, so the step is entered here.
+
+        A guarded step, like ``_restore_snapshot``: a wrapper whose ``__exit__`` swallows
+        an exception would otherwise turn a failing restore into a silent PARTIAL one
+        (the attributes before the failing key applied, the rest skipped). The failure
+        propagates as ``PermissionDenied`` instead.
+        """
         from ._exposure import require_legacy_state_api
-        from .security import DANGEROUS_ATTRIBUTES
+        from .sync_turn import run_guarded_step
 
         require_legacy_state_api(self)
+        run_guarded_step(self, "lifecycle", lambda: self._apply_private_state(private_state))
+
+    def _apply_private_state(self, private_state: Dict[str, Any]) -> None:
+        """The body of :meth:`_restore_private_state`, run inside its step."""
+        from .security import DANGEROUS_ATTRIBUTES
+
         framework: frozenset[str] = getattr(self, "_framework_attrs", frozenset())
         meta_attrs = {"_framework_attrs", "_user_private_keys"}
         for key, value in private_state.items():

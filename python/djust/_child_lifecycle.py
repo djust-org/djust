@@ -18,6 +18,26 @@ logger = logging.getLogger(__name__)
 _CONNECTED_FLAG = "_djust_connected_phase"
 
 
+def call_teardown_hook(owner: Any, hook: Callable[[], Any]) -> Any:
+    """Call one application teardown hook of ``owner``: ``_cleanup_uploads``,
+    ``_cleanup_on_unregister`` or ``_on_sticky_unmount`` (#3646).
+
+    Every place a view or child is torn down calls its hooks through here, so a
+    hook that reads the database gets the ``sync_turn_wrapper`` scope wherever the
+    teardown runs on a worker thread: SSE navigation and the release of a view
+    mounted beside the page (``sync_to_async(release_root_view)``), SSE
+    ``shutdown()`` reached through ``abandon()`` / ``response.close()``, and a
+    WebSocket ``live_redirect`` discarding a sticky child whose auth now fails
+    (``_preserve_sticky_children`` runs on a worker thread). On the event loop
+    (the WebSocket release, the SSE stream's own close) the hook runs as before,
+    unwrapped: a wrapper that opens a transaction would raise there
+    (:func:`djust.sync_turn.run_teardown_step`).
+    """
+    from .sync_turn import run_teardown_step
+
+    return run_teardown_step(owner, "lifecycle", hook)
+
+
 def dispose_child_subtree(child: Any, *, navigation: bool = False) -> None:
     """Detach an owned graph before running descendant-first cleanup once.
 
@@ -83,7 +103,7 @@ def dispose_child_subtree(child: Any, *, navigation: bool = False) -> None:
             try:
                 hook = getattr(current, name, None)
                 if callable(hook):
-                    hook()
+                    call_teardown_hook(current, hook)
             except Exception:  # noqa: BLE001
                 logger.error("Child lifecycle cleanup failed")
 
@@ -167,7 +187,7 @@ def discard_sticky_child(child: Any, *, navigation: bool = True) -> None:
         hook = getattr(child, name, None)
         if callable(hook):
             try:
-                hook()
+                call_teardown_hook(child, hook)
             except Exception:  # noqa: BLE001 — legacy child only; cleanup must not raise
                 logger.exception("sticky child %s raised", name)
 
@@ -370,7 +390,7 @@ def release_root_view(
     else:
         if hasattr(view, "_cleanup_uploads"):
             try:
-                view._cleanup_uploads()
+                call_teardown_hook(view, view._cleanup_uploads)
             except Exception:  # noqa: BLE001
                 logger.warning("Cleaning up a released legacy view's uploads failed")
         _close_view_waiters(view, reason)
