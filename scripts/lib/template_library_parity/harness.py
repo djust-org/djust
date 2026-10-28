@@ -519,10 +519,10 @@ def _selected(key: str, only: Optional[set[str]]) -> bool:
 def _probe() -> dict[str, str]:
     import datetime
 
-    import djust
+    from djust import __file__ as djust_file  # one import style for djust in this module
 
     return {
-        "djust": str(djust.__file__),
+        "djust": str(djust_file),
         "today": datetime.date.today().isoformat(),
         "uuid": str(uuid.uuid4()),
     }
