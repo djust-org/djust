@@ -656,17 +656,20 @@ class TestOneChokepointAnswersWhichExceptionPythonRaises:
         [
             ("{% for x in p %}{{ x }}{% endfor %}", 5, "'int' object is not iterable"),
             ("{% include p %}", 5, "'int' object is not iterable"),
-            ("{% include p %}", [5], "not 'int'"),
+            ("{% include p %}", [5], "int found" if django.VERSION >= (6, 0) else "not 'int'"),
         ],
     )
     def test_plain_and_provenance_refusals_share_python_type_names(
         self, entry, source, value, message, tmp_path
     ) -> None:
+        with pytest.raises(TypeError) as expected:
+            DjangoTemplate(source).render(DjangoContext({"p": value}))
+        assert message in str(expected.value)
         view = _rust.RustLiveView(source, [str(tmp_path)])
         view.update_state({"p": value})
         with pytest.raises((TypeError, RuntimeError)) as exc:
             getattr(view, entry)()
-        assert message in str(exc.value)
+        assert str(expected.value) in str(exc.value)
 
     def test_the_constructor_is_reached_from_every_arm_that_can_refuse(self) -> None:
         """The COUNT, so an arm that grows a bespoke `Err` is visible.
