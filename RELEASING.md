@@ -126,6 +126,12 @@ tag trigger of its own; you can still dispatch it by hand on any ref
 (Actions → Pre-Release Security Audit → Run workflow) to check a branch before
 tagging — do that before cutting a release.
 
+When the audit fails on a tag push, `release.yml`'s `audit-blocked-alert` job
+opens an issue titled `Release <tag> blocked by the pre-release security audit`
+(label `release`) naming the tag, the failing audit job(s) and the run URL; a
+retried run comments on the same issue instead of opening a second one. Nothing
+is published either way, so the issue is the only signal that the tag is stuck.
+
 Every scanner blocks, and each has one reviewed allowlist:
 
 | Scanner | Fails on | Allowlist |
