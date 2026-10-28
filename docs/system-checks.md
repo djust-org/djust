@@ -32,6 +32,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | C025 | Config | Error | `DJUST_WS_PATH` is not a path starting with a single `/` (#3186) |
 | C026 | Config | Error | `LIVEVIEW_MIDDLEWARE` has an entry that is not an importable `async def mw(turn, next)` (ADR-044) |
 | C027 | Config | Error | `LIVEVIEW_CONFIG['view_state_in_session']` is not `True` or `False` |
+| C028 | Config | Error | `LIVEVIEW_CONFIG['http_fallback_background_timeout']` is not `None` or a number of seconds greater than 0 |
 | V001 | LiveView | Warning | LiveView missing template_name attribute |
 | V002 | LiveView | Info | LiveView missing mount() method |
 | V003 | LiveView | Error | mount() has wrong signature |
@@ -243,6 +244,13 @@ console.log("debug info"); // noqa: Q003
 - **Method**: Settings inspection
 - **What it detects**: `LIVEVIEW_CONFIG['view_state_in_session']` (or the same key in `DJUST_CONFIG`) is set to something other than a bool, such as `"false"`, `0` or `None`. Only `False` keeps view state out of the Django session; any other value keeps the default and saves each view's state there. See [Keeping view state out of the session](website/guides/http-only-mode.md#keeping-view-state-out-of-the-session).
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C027"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C027"]` (the runtime still keeps the default)
+- **False positives**: None
+
+### C028 — Invalid `http_fallback_background_timeout`
+- **Severity**: Error
+- **Method**: Settings inspection
+- **What it detects**: `LIVEVIEW_CONFIG['http_fallback_background_timeout']` (or the same key in `DJUST_CONFIG`) is set to something other than `None` or a finite number of seconds greater than 0, such as `"30"`, `0`, `True` or `float("nan")`. Any other value is read as no deadline, so the page-POST fallback keeps waiting for a `start_async` task that never returns. See [Deadline](website/guides/http-only-mode.md#what-the-page-post-fallback-keeps-between-events).
+- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C028"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C028"]` (the runtime still applies no deadline)
 - **False positives**: None
 
 ---

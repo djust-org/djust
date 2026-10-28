@@ -366,6 +366,16 @@ In development, pages render without Tailwind utilities until you compile the CS
 
 ---
 
+### C028: Invalid http_fallback_background_timeout
+
+**Severity**: Error
+
+**What causes it**: `LIVEVIEW_CONFIG['http_fallback_background_timeout']` is set to something other than `None` or a finite number of seconds greater than 0, such as `"30"`, `0` or `True`. Any other value is read as no deadline, so the page-POST fallback keeps waiting for a `start_async` task that never returns.
+
+**Fix**: Set it to a number of seconds such as `30`, or remove it. See [Deadline](http-only-mode.md#what-the-page-post-fallback-keeps-between-events). Suppress with `DJUST_CONFIG = {"suppress_checks": ["C028"]}`.
+
+---
+
 ### C301: Invalid VDOM cache TTL
 
 **Severity**: Error
