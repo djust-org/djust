@@ -19,6 +19,7 @@ What these tests pin:
 
 from __future__ import annotations
 
+import abc
 import warnings
 import uuid
 
@@ -29,7 +30,10 @@ from channels.testing import WebsocketCommunicator
 from django.test import override_settings
 
 from djust import LiveView, event_handler
+from djust.js import JS
+from djust.presence import PresenceMixin
 from djust.sse import SSESession
+from djust.tutorials.mixin import TutorialMixin
 from djust.websocket import LiveViewConsumer
 
 from ._ws_frames import has_type, receive_settled
@@ -61,8 +65,13 @@ class TestTheWarning:
         assert hook in text
         assert "deprecated since djust 1.4" in text
         assert "no earlier than 2.0.0" in text
-        # The migration path is named, not just the removal.
-        assert "aria-live" in text and "JS.focus()" in text
+        # The migration path is named, and the text stays short.
+        if hook == "_drain_focus":
+            assert "JS.focus()" in text and "push_commands()" in text
+        else:
+            assert 'role="status"' in text
+        assert len(text) < 200, text
+        assert "nothing in djust" not in text  # the flushers DO consume the hook
         assert cls is not None
 
     def test_the_warning_points_at_the_application_class_statement(self):
@@ -76,6 +85,41 @@ class TestTheWarning:
         warned = _deprecations(record)
         assert len(warned) == 1
         assert warned[0].filename == __file__, warned[0].filename
+
+    def test_the_warning_points_at_the_application_whatever_the_base_order(self):
+        """Another base's ``__init_subclass__`` or ``ABCMeta`` adds frames; count them."""
+
+        class ChainsFirst:
+            def __init_subclass__(cls, **kwargs):
+                super().__init_subclass__(**kwargs)
+
+        def hook(self):
+            return []
+
+        with warnings.catch_warnings(record=True) as record:
+            warnings.simplefilter("always")
+
+            class PresenceFirst(PresenceMixin, LiveView):
+                _drain_announcements = hook
+
+            class TutorialFirst(TutorialMixin, LiveView):
+                _drain_announcements = hook
+
+            class ChainingMixinFirst(ChainsFirst, LiveView):
+                _drain_announcements = hook
+
+            class AbcAfter(LiveView, abc.ABC):
+                _drain_announcements = hook
+
+            class MixinAfter(LiveView, ChainsFirst):
+                _drain_announcements = hook
+
+            class Plain(LiveView):
+                _drain_announcements = hook
+
+        warned = _deprecations(record)
+        assert len(warned) == 6, [(w.filename, str(w.message)[:40]) for w in warned]
+        assert {w.filename for w in warned} == {__file__}, sorted({w.filename for w in warned})
 
     def test_both_hooks_warn_separately(self):
         _, warned = _define({"_drain_announcements": lambda s: [], "_drain_focus": lambda s: None})
@@ -232,3 +276,62 @@ async def test_the_sse_runtime_still_sends_the_accessibility_and_focus_frames():
 
     assert {"type": "accessibility", "announcements": ["Saved"]} in frames, frames
     assert {"type": "focus", "selector": "#name", "options": {"preventScroll": True}} in frames
+
+
+# --- the documented replacement, and where it differs from the hook --------------------
+
+
+class LiveRegionView(LiveView):
+    template_name = None
+    template = '<div dj-root><p role="status" aria-live="polite">{{ status }}</p></div>'
+
+    def mount(self, request, **kwargs):
+        self.status = ""
+        self._flip = False
+
+    def get_context_data(self, **kwargs):
+        return super().get_context_data(status=self.status, **kwargs)
+
+    @event_handler()
+    def save(self, **kwargs):
+        self.status = "Order saved"
+        self.push_commands(JS.focus("#order-summary"))
+
+    @event_handler()
+    def save_alternating(self, **kwargs):
+        # The documented workaround: a changing no-break-space suffix makes the
+        # live region's text differ from the previous turn's.
+        self._flip = not self._flip
+        self.status = "Order saved" + (" " if self._flip else "")
+        self.push_commands(JS.focus("#order-summary"))
+
+
+async def _live_region_turn(socket, event):
+    await socket.send_json_to({"type": "event", "event": event, "params": {}})
+    frames = await receive_settled(
+        socket, lambda fs: any(f.get("type") in ("patch", "noop", "html_update") for f in fs)
+    )
+    return [f.get("type") for f in frames if f.get("type") in ("patch", "noop", "html_update")]
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+async def test_a_repeated_identical_message_changes_nothing_in_the_live_region():
+    """The replacement is not the hook: an unchanged live region announces nothing."""
+    request = await sync_to_async(make_request)()
+    socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
+    socket.scope.update(session=request.session, user=request.user, tenant=None)
+    assert (await socket.connect())[0]
+    await socket.receive_json_from(timeout=3)
+    await socket.send_json_to({"type": "mount", "view": f"{MOD}.LiveRegionView", "url": "/x/"})
+    assert (await socket.receive_json_from(timeout=3))["type"] == "mount"
+
+    first = await _live_region_turn(socket, "save")
+    second = await _live_region_turn(socket, "save")
+    assert first == ["patch"], first
+    assert second == ["noop"], second  # same text: no DOM change, so no announcement
+
+    third = await _live_region_turn(socket, "save_alternating")  # "Order saved" + nbsp
+    fourth = await _live_region_turn(socket, "save_alternating")  # back to "Order saved"
+    assert third == ["patch"] and fourth == ["patch"], (third, fourth)
+    await socket.disconnect()
