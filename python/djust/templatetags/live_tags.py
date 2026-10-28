@@ -2315,6 +2315,8 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
             def _render_eager() -> str:
                 # Eager mount + render path — same as the non-lazy
                 # branch below. Returns the stamped child HTML.
+                from ..sync_turn import run_sync_step
+
                 child = child_cls()
                 mark_embedded(child)
                 child.request = request
@@ -2323,7 +2325,10 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
                     raise PermissionError("child %r denied access (auth gate)" % view_path)
                 mount_fn = getattr(child, "mount", None)
                 if callable(mount_fn):
-                    mount_fn(request, **captured_kwargs)
+                    # This runs on its own worker thread (``sync_to_async`` below), outside
+                    # the parent's render hop, so the child's hooks enter their own
+                    # ``sync_turn_wrapper`` steps (#3646).
+                    run_sync_step(child, "mount", mount_fn, request, **captured_kwargs)
                 # Object-permission check (ADR-017) for the lazy embedded child
                 # — same as the eager path (finding #12). No-op unless the child
                 # overrides get_object; fail-closed otherwise.
@@ -2343,7 +2348,7 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
                 get_ctx_fn = getattr(child, "get_context_data", None)
                 if callable(get_ctx_fn):
                     try:
-                        child_context = dict(get_ctx_fn())
+                        child_context = dict(run_sync_step(child, "render", get_ctx_fn))
                     except Exception:  # noqa: BLE001
                         # Aliased so the names stay local to this closure: the
                         # enclosing live_render imports them only after the

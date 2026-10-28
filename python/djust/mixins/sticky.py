@@ -628,7 +628,9 @@ class StickyChildRegistry:
         cleanup = getattr(child, "_cleanup_on_unregister", None)
         if callable(cleanup):
             try:
-                cleanup()
+                from .._child_lifecycle import call_teardown_hook
+
+                call_teardown_hook(child, cleanup)
             except Exception:  # noqa: BLE001 — defensive: never break disconnect
                 logger.exception("child view %s _cleanup_on_unregister raised", view_id)
 

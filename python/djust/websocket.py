@@ -6182,6 +6182,9 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                 def turn() -> Tuple[List[BaseException], bool, bool, Any, Any]:
                     from django.db import close_old_connections
 
+                    from ._view_hooks import _hook_step
+                    from .sync_turn import run_sync_step
+
                     close_old_connections()
                     failures: List[BaseException] = []
                     applied = render = False
@@ -6192,7 +6195,10 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                             hook = self._prepare_server_push(view, event)
                             if hook is not None:
                                 handler_fn, payload = hook
-                                handler_fn(**payload)
+                                # The stock turn reaches the handler through ``call_hook``
+                                # (a ``hook`` step); this one-hop turn must enter the same
+                                # step, or the handler runs without the wrapper (#3646).
+                                run_sync_step(view, _hook_step(handler_fn), handler_fn, **payload)
                         except Exception as exc:  # noqa: BLE001 - logged on the loop
                             failures.append(exc)
                             continue
