@@ -310,53 +310,6 @@ class TestAViewRestoredFromAnOlderSession:
         assert len(view.theme_presets) > 20
 
 
-class TestLazyThemeList:
-    def _list(self):
-        from djust.theming._lazy_html import LazyThemeList
-
-        calls = []
-
-        def factory():
-            calls.append(1)
-            return [{"name": "a"}, {"name": "b"}]
-
-        return LazyThemeList(factory), calls
-
-    def test_building_waits_for_the_first_read(self):
-        lazy, calls = self._list()
-        repr(lazy)
-        assert calls == [] and not lazy.evaluated
-        assert len(lazy) == 2 and calls == [1] and lazy.evaluated
-        assert [p["name"] for p in lazy] == ["a", "b"]
-        assert calls == [1]
-
-    def test_it_behaves_as_a_list_to_a_template_and_the_renderer(self):
-        lazy, _calls = self._list()
-        assert bool(lazy) and lazy[1]["name"] == "b" and {"name": "a"} in lazy
-        assert lazy == [{"name": "a"}, {"name": "b"}]
-        assert lazy.__djust_serialize__() == [{"name": "a"}, {"name": "b"}]
-
-    def test_the_renderer_copy_cannot_mutate_the_memo(self):
-        lazy, _calls = self._list()
-        lazy.__djust_serialize__().append("x")
-        assert len(lazy) == 2
-
-    def test_it_is_not_json_data_so_it_stays_out_of_state(self):
-        import json
-
-        lazy, _calls = self._list()
-        with pytest.raises(TypeError):
-            json.dumps(lazy)
-
-    def test_copies_and_pickles_do_not_carry_the_factory(self):
-        import copy
-        import pickle
-
-        lazy, _calls = self._list()
-        assert copy.deepcopy(lazy) is lazy
-        assert pickle.loads(pickle.dumps(lazy)) == [{"name": "a"}, {"name": "b"}]
-
-
 # --------------------------------------------------------------------------
 # The WebSocket path: mount, then events. The processors run on every sync
 # here (``self.request`` is long-lived), which is where the processor's own

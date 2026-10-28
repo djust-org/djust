@@ -30,7 +30,8 @@ from django.template.loader import render_to_string
 from django.utils.safestring import mark_safe
 
 from ..utils import get_csp_nonce
-from ._lazy_html import LazyThemeHTML, LazyThemeList
+from .._request_scoped_data import RequestScopedList
+from ._lazy_html import LazyThemeHTML
 from .manager import ThemeManager, generate_css_for_state, get_css_prefix, get_theme_manager
 from .presets import THEME_PRESETS
 
@@ -289,18 +290,21 @@ class ThemeMixin:
                 result[name] = chunk
                 added.add(name)
         # ``theme_presets`` is plain data, which djust copies into the stored
-        # state even when it is request-scoped, so it rides as a lazy list too.
-        # A processor that is installed supplies the same list eagerly; the
-        # mixin's wins, as it did when it was an attribute.
+        # state even when it is request-scoped, so it is a ``RequestScopedList``
+        # (#3626, #3631): a real list, which the bridge sends to the renderer
+        # without storing. A processor that is installed supplies the same list;
+        # the mixin's wins, as it did when it was an attribute. The count is
+        # derived from the same list, so the presets are built once.
+        presets = self._theme_presets_list()
         if "theme_presets" not in own and "theme_presets" not in self.__dict__:
-            result["theme_presets"] = LazyThemeList(self._theme_presets_list)
+            result["theme_presets"] = RequestScopedList(presets)
             added.add("theme_presets")
         # ``theme_presets_count``: ``get_context_data()`` derives ``<list>_count``
         # for every list in the context, and the old ``theme_presets`` attribute
         # was one. It is an int, so it needs no laziness, and it is not recorded
         # as a request-scoped key: change detection tracks it like any value.
         if "theme_presets_count" not in own and "theme_presets_count" not in self.__dict__:
-            result["theme_presets_count"] = len(self._theme_presets_list())
+            result["theme_presets_count"] = len(presets)
         # Record them as framework-supplied, like the processor keys: that is
         # what keeps them out of the change-detection fingerprint and, for the
         # lazy chunks, out of the stored state.

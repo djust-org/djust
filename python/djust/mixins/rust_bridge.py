@@ -22,7 +22,8 @@ from ..state_pass import convert_for_render, fingerprint_and_convert
 from ..template_filters import _ensure_custom_filters_bridged
 from ..utils import get_template_dirs
 from ..render_env import apply_render_env
-from .context import _is_json_serializable
+from .._request_scoped_data import is_request_scoped_data
+from .context import _keeps_out_of_state
 from .context import _request_scoped_keys as request_scoped_keys
 
 logger = logging.getLogger(__name__)
@@ -916,7 +917,9 @@ class RustBridgeMixin:
             # The non-serializable ones still reach the Rust renderer through
             # the raw-value sidecar (``set_raw_py_values`` below); serializable
             # processor outputs (e.g. theming's ``{{ theme_head }}`` SafeString)
-            # stay in ``update_state`` and are unaffected.
+            # stay in ``update_state`` and are unaffected, except plain data a
+            # processor marked ``RequestScopedList`` (``theme_presets``, #3631),
+            # which rides the sidecar like the non-serializable ones.
             _request_scoped_keys = request_scoped_keys(self)
 
             # Ensure csrf_token is available for {% csrf_token %} tag (#696).
@@ -1143,7 +1146,7 @@ class RustBridgeMixin:
                 # rendering. Serializable processor outputs (e.g. theming's
                 # ``{{ theme_head }}`` SafeString) are NOT skipped — they fall
                 # through to the normal handling below.
-                if key in _request_scoped_keys and not _is_json_serializable(value):
+                if key in _request_scoped_keys and _keeps_out_of_state(value):
                     # A lazily rendered trusted-HTML value (theming's
                     # ``theme_head`` & co., #3028) is SafeData that is not a
                     # ``str``. It must NOT keep a stale state entry under the
@@ -1151,8 +1154,11 @@ class RustBridgeMixin:
                     # build whose processor stored the rendered string; the
                     # state entry would win over the sidecar and was never
                     # re-marked safe), so it is left out of the retained keys
-                    # below. That does not render it.
-                    if isinstance(value, SafeData):
+                    # below. That does not render it. The same holds for a
+                    # processor's ``RequestScopedList`` (theming's
+                    # ``theme_presets``, #3631): a snapshot stored by a build that
+                    # copied the list into the state must not keep that copy.
+                    if isinstance(value, SafeData) or is_request_scoped_data(value):
                         sidecar_only_keys.add(key)
                     continue
                 if isinstance(value, forms.BaseForm):
@@ -1234,8 +1240,16 @@ class RustBridgeMixin:
                     # `{% querystring my_qd a=2 %}` needs, so it rides the
                     # sidecar the way `build_render_sidecar` already carries
                     # it on the non-LiveView paths (#2556, #1646).
-                    if isinstance(_raw_val, _JSON_FRIENDLY) and not isinstance(
-                        _raw_val, MultiValueDict
+                    #
+                    # A ``RequestScopedList`` is a ``list`` but is NOT in the
+                    # state (#3631), so the sidecar is the only way it reaches
+                    # the renderer: it must not be skipped as "JSON friendly".
+                    if (
+                        isinstance(_raw_val, _JSON_FRIENDLY)
+                        and not isinstance(_raw_val, MultiValueDict)
+                        and not (
+                            _raw_key in _request_scoped_keys and is_request_scoped_data(_raw_val)
+                        )
                     ):
                         continue
                     # A `Component`/`LiveComponent` used to be excluded here

@@ -84,6 +84,11 @@ class InMemoryStateBackend(StateBackend):
         # ``worker_threads``. Bytes are immutable, so readers may share them.
         self._cache: Dict[str, Tuple[bytes, float]] = {}
         self._state_sizes: Dict[str, int] = {}  # Track state sizes for monitoring
+        # Keys the ``Large LiveView state`` warning already fired for, so the
+        # per-render ``refresh()`` reports a view once, not once per event (#3632).
+        # A key leaves the set when it is deleted, expires, or drops back under
+        # the threshold, so growing past it again is reported again.
+        self._warned_large: set[str] = set()
         self._default_ttl = _coerce_ttl(default_ttl)
         self._state_size_warning_kb = state_size_warning_kb
         self._lock = RLock()  # Reentrant lock for thread safety
@@ -188,6 +193,7 @@ class InMemoryStateBackend(StateBackend):
                     # than waiting for the next sweep.
                     del self._cache[key]
                     self._state_sizes.pop(key, None)
+                    self._warned_large.discard(key)
                     return None
 
             # Deserialize outside the lock: purely CPU work on immutable
@@ -218,6 +224,7 @@ class InMemoryStateBackend(StateBackend):
                     if current is not None and current[0] is snapshot:
                         self._cache.pop(key, None)
                         self._state_sizes.pop(key, None)
+                        self._warned_large.discard(key)
                 logger.exception(
                     "InMemoryStateBackend.get: serialize/deserialize round-trip "
                     "failed for key '%s'; entry discarded — caller should remount",
@@ -261,28 +268,21 @@ class InMemoryStateBackend(StateBackend):
             with self._lock:
                 self._cache.pop(key, None)
                 self._state_sizes.pop(key, None)
+                self._warned_large.discard(key)
             log_failure_for(
                 logger, (), exc, "InMemoryStateBackend.set: could not snapshot key '%s'", key
             )
             return
 
-        # Estimate state size if the view supports it
-        state_size = 0
-        try:
-            if hasattr(view, "get_state_size"):
-                state_size = view.get_state_size()
-            else:
-                state_size = len(snapshot)
-        except Exception:
-            logger.debug("Failed to estimate state size for key '%s'", key)
+        state_size = self._state_size(key, view, snapshot)
 
         # Warn about large states
         if warn_on_large_state and state_size > self._state_size_warning_kb * 1024:
-            warnings.warn(
-                large_state_warning_message(key, state_size, self._state_size_warning_kb, snapshot),
-                DjustPerformanceWarning,
-                stacklevel=3,
-            )
+            with self._lock:
+                self._warned_large.add(key)
+            self._emit_large_warning(key, state_size, snapshot)
+        elif state_size <= self._state_size_warning_kb * 1024:
+            self._warned_large.discard(key)
 
         with profiler.profile(profiler.OP_STATE_SAVE):
             with self._lock:
@@ -290,6 +290,23 @@ class InMemoryStateBackend(StateBackend):
                 if state_size > 0:
                     self._state_sizes[key] = state_size
         self._maybe_sweep()
+
+    def _state_size(self, key: str, view: RustLiveView, snapshot: bytes) -> int:
+        """The size ``set()`` measures for ``view`` (0 when it cannot be estimated)."""
+        try:
+            if hasattr(view, "get_state_size"):
+                return int(view.get_state_size())
+            return len(snapshot)
+        except Exception:
+            logger.debug("Failed to estimate state size for key '%s'", key)
+            return 0
+
+    def _emit_large_warning(self, key: str, size: int, snapshot: bytes) -> None:
+        warnings.warn(
+            large_state_warning_message(key, size, self._state_size_warning_kb, snapshot),
+            DjustPerformanceWarning,
+            stacklevel=3,
+        )
 
     def refresh(self, key: str, view: RustLiveView) -> None:
         """Re-store ``view``'s snapshot after its owner rendered it.
@@ -307,14 +324,30 @@ class InMemoryStateBackend(StateBackend):
             with self._lock:
                 self._cache.pop(key, None)
                 self._state_sizes.pop(key, None)
+                self._warned_large.discard(key)
             log_failure_for(
                 logger, (), exc, "InMemoryStateBackend.refresh: could not snapshot key '%s'", key
             )
             return
         with self._lock:
             cached = self._cache.get(key)
-            if cached is not None:
-                self._cache[key] = (snapshot, cached[1])
+            if cached is None:
+                return
+            self._cache[key] = (snapshot, cached[1])
+            threshold = self._state_size_warning_kb * 1024
+            size = len(snapshot)
+            self._state_sizes[key] = size  # ``get_stats`` follows the renders too
+            if size <= threshold:
+                self._warned_large.discard(key)
+                return
+            if key in self._warned_large:
+                return
+            self._warned_large.add(key)
+        # A view that GREW past the threshold during its life (#3632): ``set()``
+        # saw it at creation, when it was small. The snapshot is already in hand,
+        # so this costs ``len()`` and a set lookup per render, and the breakdown
+        # is built only on the render that crosses the line.
+        self._emit_large_warning(key, size, snapshot)
 
     def _maybe_sweep(self) -> None:
         """Drop expired entries, at most once per sweep interval (#3080)."""
@@ -343,6 +376,7 @@ class InMemoryStateBackend(StateBackend):
             if key in self._cache:
                 del self._cache[key]
                 self._state_sizes.pop(key, None)
+                self._warned_large.discard(key)
                 return True
             return False
 
@@ -381,6 +415,7 @@ class InMemoryStateBackend(StateBackend):
             for key in expired_keys:
                 del self._cache[key]
                 self._state_sizes.pop(key, None)
+                self._warned_large.discard(key)
         return len(expired_keys)
 
     def delete_all(self) -> int:
@@ -389,6 +424,7 @@ class InMemoryStateBackend(StateBackend):
             count = len(self._cache)
             self._cache.clear()
             self._state_sizes.clear()
+            self._warned_large.clear()
             self._observations.clear()
         if count:
             logger.info("Deleted all %s sessions from memory", count)
