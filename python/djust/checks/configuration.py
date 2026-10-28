@@ -721,7 +721,7 @@ def _check_http_fallback_background_timeout(errors: list[CheckMessage]) -> None:
     try:
         shown = repr(value)[:80]
     except ValueError:  # an int of more than 4300 digits has no repr
-        shown = "a %s too large to show" % type(value).__name__
+        shown = "an integer with too many digits to show"
     errors.append(
         DjustError(
             "LIVEVIEW_CONFIG['http_fallback_background_timeout'] is %s; it must be None or a "

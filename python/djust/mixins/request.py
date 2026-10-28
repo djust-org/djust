@@ -9,6 +9,7 @@ import inspect
 import json
 from types import MappingProxyType
 import logging
+import sys
 import threading
 import time
 from contextlib import contextmanager
@@ -66,28 +67,47 @@ _HTTP_BACKGROUND_MAX_ROUNDS = 8
 #: Name prefix of the worker threads that run background work under a deadline.
 _HTTP_BACKGROUND_THREAD_PREFIX = "djust-http-bg"
 
-#: How many abandoned worker threads (a sync callback the deadline stopped
-#: waiting for cannot be cancelled and keeps running) may be alive in this
-#: process at once. Past it a new task is not started: it is refused with a
-#: warning and a ``TimeoutError`` for ``handle_async_result``, so a callback that
-#: hangs on every POST cannot pile up threads (each holding a database
-#: connection) without limit. Counted per process, and lifted as they end.
+#: How many background worker threads may hold a slot in this process at once
+#: (a thread started under the deadline, or an abandoned one that has not
+#: ended). A sync callback the deadline stopped waiting for cannot be cancelled
+#: and keeps running, and any thread in flight can become one, so bounding the
+#: slots (reserved atomically before a worker starts) is what makes "at most this
+#: many abandoned threads are alive" true under concurrent POSTs. Past it a new
+#: task is not started: it is refused with a warning and a ``TimeoutError`` for
+#: ``handle_async_result``, so a callback that hangs on every POST cannot pile up
+#: threads (each holding a database connection) without limit. The slots of a
+#: thread that finishes, or of an abandoned one that ends, are released.
 _HTTP_BACKGROUND_MAX_ABANDONED = 16
 
 _ABANDONED_WORKERS: "set[threading.Thread]" = set()
+_WORKERS_RESERVED = 0  # in flight for a POST that is still waiting
 _ABANDONED_LOCK = threading.Lock()
 
 
-def _note_abandoned_worker(thread: threading.Thread) -> None:
+def _reserve_worker_slot() -> Optional[int]:
+    """Take a worker slot, or return how many are held when none is free.
+
+    ``None`` means a slot is now reserved and :func:`_release_worker_slot` must
+    follow. Counting and reserving are one step under a lock, so concurrent POSTs
+    cannot all pass the check before any of them starts.
+    """
+    global _WORKERS_RESERVED
     with _ABANDONED_LOCK:
         _ABANDONED_WORKERS.difference_update([t for t in _ABANDONED_WORKERS if not t.is_alive()])
-        _ABANDONED_WORKERS.add(thread)
+        held = len(_ABANDONED_WORKERS) + _WORKERS_RESERVED
+        if held >= _HTTP_BACKGROUND_MAX_ABANDONED:
+            return held
+        _WORKERS_RESERVED += 1
+        return None
 
 
-def _abandoned_workers_alive() -> int:
+def _release_worker_slot(abandoned: Optional[threading.Thread] = None) -> None:
+    """Give a reserved slot back; an abandoned worker keeps one until it ends."""
+    global _WORKERS_RESERVED
     with _ABANDONED_LOCK:
-        _ABANDONED_WORKERS.difference_update([t for t in _ABANDONED_WORKERS if not t.is_alive()])
-        return len(_ABANDONED_WORKERS)
+        _WORKERS_RESERVED -= 1
+        if abandoned is not None:
+            _ABANDONED_WORKERS.add(abandoned)
 
 
 def _http_url_params(request: Any) -> Dict[str, Any]:
@@ -217,13 +237,21 @@ def _start_background_run(
     def body() -> None:
         from django.db import connections
 
+        completed = False
         try:
             run.result = async_to_sync(runner)()
+            completed = True
         except (Exception, asyncio.CancelledError) as exc:
-            # Handed back to the request thread (a cancelled task as well);
-            # KeyboardInterrupt / SystemExit are not swallowed here.
+            # Handed back to the request thread (a cancelled task as well).
             run.error = exc
+            completed = True
         finally:
+            if not completed:
+                # Anything else (SystemExit, KeyboardInterrupt) is not swallowed
+                # here: it ends the thread, and the request thread gets the very
+                # same exception, as it would without a deadline, instead of an
+                # outcome that reads as success.
+                run.error = sys.exc_info()[1]
             try:
                 connections.close_all()
             except Exception:  # noqa: BLE001 - nothing to do for a failed close
@@ -295,46 +323,53 @@ def _run_http_background_work(view: Any, budget: Optional[_BackgroundBudget] = N
                         "start_async task %r was not started: the %.4g second budget of "
                         "http_fallback_background_timeout was spent" % (name, budget.timeout)
                     )
-                elif _abandoned_workers_alive() >= _HTTP_BACKGROUND_MAX_ABANDONED:
-                    abandoned_alive = _abandoned_workers_alive()
-                    logger.warning(
-                        "[djust HTTP] start_async task %s on %s was not started: %d abandoned "
-                        "worker threads are still running (limit %d). A callback that hangs on "
-                        "every POST would pile up threads; fix it or guard it off the fallback.",
-                        sanitize_for_log(name),
-                        view.__class__.__name__,
-                        abandoned_alive,
-                        _HTTP_BACKGROUND_MAX_ABANDONED,
-                    )
-                    error = TimeoutError(
-                        "start_async task %r was not started: %d abandoned worker threads are "
-                        "still running (limit %d)"
-                        % (name, abandoned_alive, _HTTP_BACKGROUND_MAX_ABANDONED)
-                    )
                 else:
-                    run = _start_background_run(view, name, callback, args, kwargs)
-                    if run.done.wait(budget.remaining()):
-                        if run.error is not None:
-                            raise run.error
-                        result = run.result
-                    else:
-                        run.abandon()
-                        if run.thread is not None:
-                            _note_abandoned_worker(run.thread)
+                    held = _reserve_worker_slot()
+                    if held is not None:
                         logger.warning(
-                            "[djust HTTP] start_async task %s on %s did not finish within the "
-                            "%.4g second budget of http_fallback_background_timeout; the "
-                            "fallback stopped waiting for it and answers without its result. A "
-                            "sync callback keeps running on its worker thread.",
+                            "[djust HTTP] start_async task %s on %s was not started: %d background "
+                            "worker threads (abandoned or still running) hold the %d slots. A "
+                            "callback that hangs on every POST would pile up threads; fix it or "
+                            "guard it off the fallback.",
                             sanitize_for_log(name),
                             view.__class__.__name__,
-                            budget.timeout,
+                            held,
+                            _HTTP_BACKGROUND_MAX_ABANDONED,
                         )
                         error = TimeoutError(
-                            "start_async task %r did not finish within the %.4g second budget of "
-                            "http_fallback_background_timeout; the fallback stopped waiting"
-                            % (name, budget.timeout)
+                            "start_async task %r was not started: %d background worker threads "
+                            "(abandoned or still running) hold the %d slots"
+                            % (name, held, _HTTP_BACKGROUND_MAX_ABANDONED)
                         )
+                    else:
+                        abandoned_thread: Optional[threading.Thread] = None
+                        try:
+                            run = _start_background_run(view, name, callback, args, kwargs)
+                            finished = run.done.wait(budget.remaining())
+                            if not finished:
+                                run.abandon()
+                                abandoned_thread = run.thread
+                        finally:
+                            _release_worker_slot(abandoned_thread)
+                        if finished:
+                            if run.error is not None:
+                                raise run.error
+                            result = run.result
+                        else:
+                            logger.warning(
+                                "[djust HTTP] start_async task %s on %s did not finish within the "
+                                "%.4g second budget of http_fallback_background_timeout; the "
+                                "fallback stopped waiting for it and answers without its result. "
+                                "A sync callback keeps running on its worker thread.",
+                                sanitize_for_log(name),
+                                view.__class__.__name__,
+                                budget.timeout,
+                            )
+                            error = TimeoutError(
+                                "start_async task %r did not finish within the %.4g second budget "
+                                "of http_fallback_background_timeout; the fallback stopped waiting"
+                                % (name, budget.timeout)
+                            )
             except asyncio.CancelledError:
                 continue  # cancelled while it ran: no result, as on the socket
             except Exception as exc:  # noqa: BLE001 - routed to handle_async_result below

@@ -169,6 +169,13 @@ class Watching(LiveView):
         raise asyncio.CancelledError
 
     @event_handler()
+    def kick_exit(self, **kwargs):
+        self.start_async(self._raise_exit, name="exit")
+
+    def _raise_exit(self):
+        raise SystemExit("callback asked to exit")
+
+    @event_handler()
     def kick_loop(self, **kwargs):
         self.start_async(self._record_loop, name="loop")
 
@@ -851,6 +858,72 @@ class TestAbandonedThreadsAreCapped:
         _join_workers()
 
 
+class TestConcurrentPostsCannotOvershootTheCap:
+    """The cap is an upper bound, not a check every in-flight POST passes first."""
+
+    CAP = 4
+    POSTS = 12
+
+    def _concurrent_posts(self, event="kick_sync"):
+        barrier = threading.Barrier(self.POSTS)
+        prepared = []
+        for _ in range(self.POSTS):
+            initial = _get_request()
+            Watching().get(initial)
+            request = RequestFactory().post(
+                PATH,
+                data="{}",
+                content_type="application/json",
+                HTTP_X_DJUST_EVENT=event,
+            )
+            request.user, request.session, request.tenant = initial.user, initial.session, None
+            prepared.append((Watching(), request))
+        statuses = []
+
+        def fire(view, request):
+            barrier.wait(10)
+            statuses.append(view.post(request).status_code)
+
+        threads = [threading.Thread(target=fire, args=pair) for pair in prepared]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(30)
+        return statuses
+
+    def test_no_more_than_the_cap_start_and_the_rest_are_refused(self, monkeypatch):
+        monkeypatch.setattr(request_mixin, "_HTTP_BACKGROUND_MAX_ABANDONED", self.CAP)
+        started = []
+        original = Watching._hang_sync
+
+        def counting(view):
+            started.append(1)
+            return original(view)
+
+        monkeypatch.setattr(Watching, "_hang_sync", counting)
+        with SHORT:
+            statuses = self._concurrent_posts()
+            assert statuses == [200] * self.POSTS
+            assert len(started) == self.CAP, "a worker was started past the cap"
+            assert len(_workers()) <= self.CAP
+        results = [e for e in LOG if e[0] == "result"]
+        refused = [e for e in results if "not started" in e[4]]
+        assert len(results) == self.POSTS
+        assert len(refused) == self.POSTS - self.CAP, results
+        assert all(e[3] == "TimeoutError" for e in results)
+        _join_workers()
+
+    def test_slots_of_tasks_that_finish_are_released_under_concurrency(self, monkeypatch):
+        monkeypatch.setattr(request_mixin, "_HTTP_BACKGROUND_MAX_ABANDONED", self.CAP)
+        cfg = {"view_state_in_session": False, KEY: 60}
+        with override_settings(LIVEVIEW_CONFIG=cfg):
+            self._concurrent_posts("kick_fast")
+            LOG.clear()
+            _post(Watching, "kick_fast")
+        assert LOG == [("result", "fast", "fast-result", None, "")], "a slot leaked"
+        _join_workers()
+
+
 class TestACancelledErrorFromTheCallbackIsHandedBack:
     def test_it_reaches_the_request_thread_as_a_cancelled_task(self):
         """The worker hands ``(Exception, CancelledError)`` back; the request skips it."""
@@ -867,6 +940,35 @@ class TestACancelledErrorFromTheCallbackIsHandedBack:
         source = inspect.getsource(request_mixin._start_background_run)
         assert "except BaseException" not in source
         assert "except (Exception, asyncio.CancelledError)" in source
+
+
+# ``threading`` ends a thread on ``SystemExit`` silently; only pytest's own hook reports it.
+@pytest.mark.filterwarnings("ignore::pytest.PytestUnhandledThreadExceptionWarning")
+class TestSystemExitFromTheCallbackIsNotSwallowed:
+    """Same as with no deadline: it reaches the request thread, not a fake success."""
+
+    def test_without_a_deadline_it_propagates(self):
+        with OFF, pytest.raises(SystemExit):
+            _post(Watching, "kick_exit")
+
+    def test_with_a_deadline_it_propagates_identically(self):
+        cfg = {"view_state_in_session": False, KEY: 60}
+        with override_settings(LIVEVIEW_CONFIG=cfg), pytest.raises(SystemExit) as caught:
+            _post(Watching, "kick_exit")
+        assert "callback asked to exit" in str(caught.value)
+        assert LOG == [], "handle_async_result must not hear of it as a success"
+        _join_workers()
+
+    def test_the_slot_is_released_when_it_propagates(self, monkeypatch):
+        monkeypatch.setattr(request_mixin, "_HTTP_BACKGROUND_MAX_ABANDONED", 1)
+        cfg = {"view_state_in_session": False, KEY: 60}
+        with override_settings(LIVEVIEW_CONFIG=cfg):
+            with pytest.raises(SystemExit):
+                _post(Watching, "kick_exit")
+            _join_workers()
+            _post(Watching, "kick_fast")
+        assert LOG == [("result", "fast", "fast-result", None, "")]
+        _join_workers()
 
 
 class TestAnAsyncCallbackRunsOnItsOwnLoop:
@@ -920,6 +1022,11 @@ class TestSystemCheckC028:
     @pytest.mark.parametrize("value", [None, 0.5, 1, 30, 600.0])
     def test_a_valid_value_or_none_is_clean(self, value):
         assert self._run(value) == []
+
+    def test_a_value_too_long_to_show_reads_properly(self):
+        found = self._run(10**5000)
+        assert "an integer with too many digits to show" in found[0].msg
+        assert "a integer" not in found[0].msg
 
     def test_it_can_be_suppressed(self):
         assert self._run(0, DJUST_CONFIG={"suppress_checks": ["C028"]}) == []
