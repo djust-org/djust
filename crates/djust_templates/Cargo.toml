@@ -29,7 +29,7 @@ thiserror.workspace = true
 chrono.workspace = true
 chrono-tz.workspace = true
 tracing = { workspace = true }
-pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
+pulldown-cmark = { version = "0.13.5", default-features = false, features = ["html"] }
 # `markup5ever::data::NAMED_ENTITIES` is byte-identical to CPython's
 # `html.entities.html5` (2231 entries, equality asserted in the parity suite),
 # which is what `html.unescape` resolves against — and `html.unescape` is what
