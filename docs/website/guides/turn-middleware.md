@@ -207,13 +207,28 @@ def _as_caller(user_id):
   `start_async` callback runs between its start and result turns).
 - A step that runs inside another step on the same thread (a handler that calls
   `get_context_data()`) does not enter the wrapper again.
-- **An `"auth"` step fails closed.** If the wrapper raises (on entry or on exit,
-  for example a failed commit) the check is refused, never skipped, and the
-  object-permission cache (`view._object`) is only written after the step
-  exits cleanly. If the wrapper's `__exit__` swallows an exception that the
-  check or an `on_mount` hook raised, djust raises `PermissionDenied` instead of
+- **Accept every step name.** The list of steps grows (`"auth"` and
+  `"lifecycle"` are new with #3637). A wrapper that ends in
+  `else: raise ValueError(step)` fails every mount and event after an upgrade. Let
+  a name you do not know pass through unchanged (example below).
+- **An `"auth"` step fails closed, when it is the outermost step.** If the wrapper
+  raises (on entry or on exit, for example a failed commit) the check is refused,
+  and the object-permission cache (`view._object`) is only written after the step
+  exits cleanly. If the wrapper's `__exit__` swallows an exception that the check
+  or an `on_mount` hook raised, djust raises `PermissionDenied` instead of
   treating the missing verdict as "allowed". The same guard covers the
-  `on_mount` chain, because a hook's redirect is a verdict too.
+  `on_mount` chain and the `_restore_snapshot` override, because their outcome is
+  a verdict too. The guard belongs to the step djust enters: a check that runs
+  *inside* another step on the same thread (an `"auth"` check called from a
+  `mount()` that is itself being wrapped) does not enter the wrapper again, so a
+  wrapper that swallows exceptions on the **outer** `"mount"` / `"event"` step is
+  not guarded here. Do not suppress exceptions in a wrapper.
+- **Entries per request.** A request that mounts a view and runs its first check
+  enters the wrapper several times on every transport: for the HTTP page GET it is
+  `"auth"` (view-level), `"lifecycle"` (the `on_mount` chain, when the view has
+  one), `"mount"`, `"auth"` again for the object check (when `get_object()` is
+  overridden), then `"render"`.
+  Each is one entry on the thread that runs it. Keep the wrapper cheap.
 - `disconnected()` runs when a connection ends, outside any turn: the wrapper
   gets `turn=None`. It runs the hook with the tenant bound and a failing wrapper
   is logged, never raised, like a failing hook.
@@ -246,28 +261,59 @@ def _as_caller(user_id):
   safe to run twice.
 - Unset (the default), nothing is wrapped and nothing is paid.
 
+A wrapper that accepts every step name, today's and any added later:
+
+```python
+from contextlib import nullcontext
+
+KNOWN = {"event", "mount", "handle_params", "hook", "async", "tick", "render", "auth", "lifecycle"}
+
+def caller_scope(view, step, turn):
+    if step not in KNOWN:
+        return nullcontext()      # a step added by a later djust
+    return open_scope(view, turn)  # your scope, as before
+```
+
 ### Not wrapped
 
 Everything above is the sync code djust runs on a worker thread through
 `sync_to_async`. What still runs without the wrapper, and why:
 
 - **An `async def` hook** of any kind (`mount`, a handler, `check_permissions`,
-  `handle_tick`, a push hook): it runs on the event loop, so a thread-bound scope
-  cannot be open in it. Its own `sync_to_async` calls are yours to scope.
+  `handle_tick`, a push hook, `handle_cursor_move`, `get_presence_key`): it runs
+  on the event loop, so a thread-bound scope cannot be open in it. Its own
+  `sync_to_async` calls are yours to scope. djust refuses an `async def` where
+  only a sync hook is allowed (`TypeError`), with or without a wrapper.
 - **Tenant resolution** (`TenantMixin` `_ensure_tenant`, run beside the auth
   check): it decides *which tenant* the turn is for, the input of the scope, so
   it cannot run inside it.
-- **Framework state hops** that call no application hook: restoring a saved
-  snapshot (`restore_snapshot`, `_restore_private_state`), preserving sticky
-  children across a `live_redirect`, `establish_mount_session`, the render
-  plumbing around `get_context_data()` (template build, Rust state sync). Session
-  and channel-layer I/O, not view code.
+- **Teardown hooks**: `_on_sticky_unmount()`, `_cleanup_on_unregister()` and
+  `_cleanup_uploads()` run when a view or child is released (a navigation, a
+  disconnect, a discarded child), possibly on the event loop and always without a
+  turn.
+- **Hooks that run inside a hop that is already a step**: `_on_sticky_update()`
+  runs while the parent renders (under its `"render"` step);
+  `handle_component_event()`, `LiveComponent.update()` and
+  `LiveComponent.unmount()` run inside the event handler or render that reaches
+  them (under its `"event"` / `"render"` step);
+  `serialize_for_template()` and `get_render_only_context()` run inside the render.
+  `get_http_status()` runs in the HTTP response phase.
+- **Framework state hops** that call no application hook: `restore_snapshot` (the
+  time-travel jump), `_restore_private_state`, preserving sticky children across a
+  `live_redirect`, `establish_mount_session`, the render plumbing around
+  `get_context_data()` (template build, Rust state sync). Session and
+  channel-layer I/O, not view code.
 - **`get_template()` inside the render** (while the template is built for a view
   render) runs in the framework's render hop, not as its own step. Only the
   direct calls (the actor mount, a hot reload) are `"render"` steps.
 - **A task you start yourself** with `create_task()`: it inherits the context
   variables of the turn but is not a sync step. Handlers run inside an `"event"`
   step, so what they call directly is covered; a task they start is not.
+
+The snapshot-restore overrides are covered: `_should_restore_snapshot()`,
+`_restore_snapshot()` and `_capture_snapshot_state()` are `"lifecycle"` steps, and
+`handle_restore()` is a `"hook"` step. `PresenceMixin` entering its broadcast from
+async code (`track_presence()` under a running loop) is a `"hook"` step as well.
 
 ## Hot path
 

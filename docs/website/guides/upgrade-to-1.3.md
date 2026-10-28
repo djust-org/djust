@@ -162,6 +162,30 @@ error, where your own limit or message used to answer. **Do:** Size `rate`
 and `burst` for every transport, or remove the decorator if an app-level
 limit is the one you want.
 
+**What changed:** `LIVEVIEW_CONFIG["sync_turn_wrapper"]` is now also entered
+around the authorization checks, `on_mount` hooks, `connected()` /
+`disconnected()`, the cursor and presence hooks, the snapshot-restore overrides
+and time-travel replay, under two new step names, `"auth"` and `"lifecycle"`
+(#3637). **Who:** Apps that set a `sync_turn_wrapper`. **How to tell:** A wrapper
+that ends in `else: raise ValueError(step)` (or indexes a dict by step) now
+fails every mount and event, which fails closed as a denied mount. **Do:** Make
+the wrapper ignore step names it does not know, so the next new step cannot
+break it either:
+
+```python
+from contextlib import nullcontext
+
+_SCOPED = {"event", "mount", "handle_params", "hook", "async", "tick", "render"}
+
+def caller_scope(view, step, turn):
+    if step not in _SCOPED and step not in {"auth", "lifecycle"}:
+        return nullcontext()          # a step added by a later djust
+    ...                               # open the scope, as before
+```
+
+See [Turn middleware](turn-middleware.md#a-transaction-per-sync-step-sync_turn_wrapper)
+for the full list of steps.
+
 ## 5. Update presence and server-push integration
 
 **What changed:** A session with a templated `presence_key` joins its group
