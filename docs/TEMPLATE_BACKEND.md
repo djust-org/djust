@@ -281,6 +281,21 @@ Residues, all of them named tests rather than silent gaps:
 | `{% localtime on %}` under `USE_TZ = False` | no conversion | Django's `on` forces conversion even with `USE_TZ` off; djust's `on` keeps whatever the render env pushed. `off` and the whole `USE_TZ = True` matrix agree |
 | `OPTIONS['string_if_invalid']` | not honoured by the plain backend | engine-wide (#2518), not i18n-specific: the raw-block handler reads the value it is given, and the scoreboard's engine (a real Django `Engine`) does carry it |
 
+### Django 6 template partials in LiveViews
+
+Django 6 template partials can be used inside LiveView roots, and partial
+definitions may sit outside the root. Keep the `dj-root` element itself outside
+any `{% partialdef %}` block. For named LiveView templates, djust rejects a root
+inside a partial with `ImproperlyConfigured`: extracting that root could render
+an uncalled partial or lose the caller's loop or `{% with %}` context. Move the
+root around the partial invocation instead. This restriction applies to LiveView
+root extraction; ordinary Django-template backend partial rendering is separate.
+
+The upstream Django 6.1 partial tests also expose an existing engine-wide
+exception mismatch: an unresolved filter argument such as
+`{{ blank|default:missing }}` reaches Python as `RuntimeError` rather than
+Django's `VariableDoesNotExist`. This is not specific to partials.
+
 ### Supported and unsupported tags and filters
 
 **Nineteen built-in filters run Django's own function (2.0).** `addslashes`, `capfirst`, `filesizeformat`, `get_digit`, `iriencode`, `linebreaks`, `linebreaksbr`, `linenumbers`, `make_list`, `phone2numeric`, `slugify`, `striptags`, `truncatechars_html`, `truncatewords_html`, `unordered_list`, `urlize`, `urlizetrunc`, `wordcount` and `wordwrap` are still built-ins of the Rust engine: they need no `{% load %}`, and the parse-time name and arity checks still apply. Each call runs `django.template.defaultfilters.<name>`, so its output, its escaping and the exceptions it raises are Django's own. These filters are rarely used, and none of them appears in a loop in the djust or djust.org templates. Running Django's code costs a Python call per value.

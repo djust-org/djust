@@ -1411,7 +1411,7 @@ def _register_block_form(inline: Any, body_param: str, reserved: tuple[str, ...]
     ``TemplateSyntaxError`` at compile time rather than a body that silently
     wins or loses.
     """
-    from inspect import getfullargspec, unwrap
+    from inspect import getfullargspec, signature, unwrap
 
     from django.template import TemplateSyntaxError
     from django.template.library import parse_bits
@@ -1433,9 +1433,11 @@ def _register_block_form(inline: Any, body_param: str, reserved: tuple[str, ...]
         del params[index]
         if index >= first_default:
             del defaults[index - first_default]
-    # `parse_bits` strips the leading `context` itself; the names positional
-    # arguments bind to are what follows it.
+    # Django <= 6.0 strips `context` in parse_bits; Django 6.1+ expects
+    # callers to remove it first. Detect the API once per registered tag so a
+    # downstream Django backport with either signature works too.
     positional = params[1:]
+    parse_takes_context = "takes_context" in signature(parse_bits).parameters
 
     def compile_block(parser: Any, token: Any) -> _ThemeBlockNode:
         bits = token.split_contents()[1:]
@@ -1443,17 +1445,20 @@ def _register_block_form(inline: Any, body_param: str, reserved: tuple[str, ...]
             raise TemplateSyntaxError(
                 f"'{name}' does not support 'as <variable>'; it renders in place"
             )
-        args, kwargs = parse_bits(
+        parse_args = (
             parser,
             bits,
-            params,
+            params if parse_takes_context else positional,
             spec.varargs,
             spec.varkw,
             tuple(defaults) or None,
             spec.kwonlyargs,
             spec.kwonlydefaults,
-            True,
-            name,
+        )
+        args, kwargs = (
+            parse_bits(*parse_args, True, name)
+            if parse_takes_context
+            else parse_bits(*parse_args, name)
         )
         if body_position is not None and len(args) > body_position:
             raise TemplateSyntaxError(

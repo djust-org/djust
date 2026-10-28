@@ -477,6 +477,13 @@ def _register_builtins() -> None:
 
         if django.VERSION >= (5, 1):
             from . import querystring  # noqa: F401  # Django {% querystring %} (#2556)
+
+        # The CSP nonce tag is a Django 6.1 built-in. Check the registry so
+        # older versions (and Django backports) match their installed engine.
+        from django.template.defaulttags import register as django_default_tags
+
+        if "csp_nonce_attr" in django_default_tags.tags:
+            from . import csp_nonce_attr  # noqa: F401
     except ImportError as e:
         logger.debug("Could not import built-in handlers: %s", e)
     # The `{% load app_tags %}` library loader (#2547) — installed alongside

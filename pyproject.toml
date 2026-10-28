@@ -18,6 +18,8 @@ classifiers = [
     "Framework :: Django :: 5.0",
     "Framework :: Django :: 5.1",
     "Framework :: Django :: 5.2",
+    "Framework :: Django :: 6.0",
+    "Framework :: Django :: 6.1",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
@@ -32,15 +34,15 @@ classifiers = [
 ]
 
 # Dependency ceiling policy (#910):
-# Every runtime/dev dependency pins an upper bound at the next major version
-# to prevent uncontrolled major bumps during lockfile refreshes. This was
+# Every runtime/dev dependency pins an upper bound to prevent uncontrolled
+# major bumps during lockfile refreshes. This was
 # introduced after PR #909, where a `Django>=4.2` constraint allowed `uv lock`
 # to resolve to Django 6.x and break 4.2-compatible code paths. The ceiling
 # is the next major that has not yet been validated against djust's test
-# matrix (see `classifiers` above). Bumping a ceiling is a deliberate,
-# reviewed change — not something lockfile refresh should do silently.
+# matrix (see `classifiers` above). Django is capped at the next untested
+# minor release; bumping a ceiling is deliberate, not a lockfile side effect.
 dependencies = [
-    "Django>=4.2.29,<6",
+    "Django>=4.2.29,<6.2",
     "channels[daphne]>=4.0.0,<5",
     "msgpack>=1.0.0,<2",
     "markdown>=3.0,<4",

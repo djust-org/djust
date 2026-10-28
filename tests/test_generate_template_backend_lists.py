@@ -90,6 +90,19 @@ def _run(*args: str) -> tuple[int, str]:
     return code, out + err
 
 
+def _doc_for_installed_django(gen) -> str:
+    """Use the actual generator output while preserving the committed prose.
+
+    The checked-in block targets one reference Django version; other matrix
+    versions must exercise --write against their own registry snapshot.
+    """
+    text = _DOC.read_text(encoding="utf-8")
+    code, block, err = _run_split("--print")
+    assert code == 0, err
+    start, end = gen.find_block(text)
+    return text[:start] + block + text[end:]
+
+
 # Renders each source through ``DjustTemplateBackend`` under a fresh Django
 # configuration: djust-only, or djust next to the ``DjangoTemplates`` fallback
 # engine the doc's Quick Start recommends. ``djust`` is deliberately NOT in
@@ -152,6 +165,8 @@ def _render_via_backend(sources: dict[str, str], *, with_django_engine: bool) ->
 # direction check asserts on.
 _TAG_SOURCES = {
     "block": "{% block a %}x{% endblock %}",
+    "partialdef": "{% partialdef p inline %}x{% endpartialdef %}",
+    "partial": "{% partialdef p %}x{% endpartialdef %}{% partial p %}",
     "comment": "{% comment %}x{% endcomment %}",
     "cycle": '{% for i in xs %}{% cycle "a" "b" %}{% endfor %}',
     "extends": '{% extends "zzz_missing.html" %}',
@@ -316,7 +331,10 @@ class TestExtractionMatchesTheRegistries:
         assert not (handler & unsupported)
         # The five Python-handler tags (#2556 added three) and the native collision rule
         # (`templatetag` has both an arm and a handler; the arm wins).
-        assert handler == {"debug", "lorem", "querystring", "regroup", "url"}
+        expected_handlers = {"debug", "lorem", "querystring", "regroup", "url"}
+        if "csp_nonce_attr" in django_tags:
+            expected_handlers.add("csp_nonce_attr")
+        assert handler == expected_handlers
         assert "templatetag" in native
 
     def test_native_tag_extraction_sees_an_injected_arm(self, gen, tmp_path):
@@ -344,6 +362,33 @@ class TestExtractionMatchesTheRegistries:
         assert "endif" not in names, "closers must be dropped"
         assert "endautoescape" not in names, "closers must be dropped"
         assert "endfilter" not in names, "closers must be dropped"
+
+    @pytest.mark.parametrize(
+        "django_version,expected", [((5, 2), False), ((6, 0), True), ((6, 1), True)]
+    )
+    def test_guarded_partial_arms_are_version_aware(self, gen, django_version, expected):
+        names = gen.djust_native_tags(_PARSER_RS, django_version=django_version)
+        assert ("partial" in names) is expected
+        assert ("partialdef" in names) is expected
+        assert "if" in names
+
+    def test_unrecognized_guard_is_not_silently_claimed(self, gen, tmp_path):
+        src = _PARSER_RS.read_text(encoding="utf-8")
+        anchor = '"partial" if django_partials_enabled()'
+        assert src.count(anchor) == 1
+        probe = tmp_path / "parser.rs"
+        probe.write_text(src.replace(anchor, '"partial" if unknown_guard()', 1), encoding="utf-8")
+        with pytest.raises(gen.ExtractionError, match="unknown_guard"):
+            gen.djust_native_tags(probe, django_version=(6, 1))
+
+    def test_report_native_partials_match_installed_django(self, report):
+        import django
+
+        expected = django.VERSION >= (6, 0)
+        assert ("partial" in report.native_tags) is expected
+        assert ("partialdef" in report.native_tags) is expected
+        if expected:
+            assert {"partial", "partialdef"} <= report.supported_native_tags
 
     def test_hidden_arity_row_turns_the_check_red(self, tmp_path):
         """Coverage (1) gate-off: remove one filter from the ARITY input -> red.
@@ -389,6 +434,11 @@ class TestExtractionMatchesTheRegistries:
 
 class TestCheckMode:
     def test_committed_doc_is_current(self):
+        import django
+
+        reference = _DOC.read_text(encoding="utf-8")
+        if f"Reference: Django {django.__version__} —" not in reference:
+            pytest.skip("committed support block is generated for another Django version")
         code, out = _run()
         assert code == 0, out
         assert "unchanged" in out
@@ -461,9 +511,9 @@ class TestCheckMode:
 
 
 class TestWriteMode:
-    def test_write_restores_a_corrupted_block_and_is_idempotent(self, tmp_path):
-        original = _DOC.read_bytes()
-        text = original.decode("utf-8")
+    def test_write_restores_a_corrupted_block_and_is_idempotent(self, tmp_path, gen):
+        text = _doc_for_installed_django(gen)
+        original = text.encode("utf-8")
         needle = "`querystring`, "
         assert text.count(needle) == 1
         doc = tmp_path / "TEMPLATE_BACKEND.md"
@@ -482,7 +532,7 @@ class TestWriteMode:
 
     def test_write_only_touches_the_block(self, tmp_path, gen):
         """Prose outside the markers survives --write byte for byte."""
-        text = _DOC.read_text(encoding="utf-8")
+        text = _doc_for_installed_django(gen)
         start, end = gen.find_block(text)
         doc = tmp_path / "TEMPLATE_BACKEND.md"
         doc.write_text(text[:start] + gen.MARKER_OPEN + "\n" + gen.MARKER_CLOSE + "\n" + text[end:])
@@ -511,8 +561,8 @@ class TestWriteMode:
         assert doc.read_bytes() == before, "a read-only doc must not be rewritten"
         assert [p.name for p in tmp_path.iterdir()] == ["TEMPLATE_BACKEND.md"], "no temp file"
 
-    def test_write_is_atomic_and_keeps_the_docs_mode(self, tmp_path):
-        text = _DOC.read_text(encoding="utf-8")
+    def test_write_is_atomic_and_keeps_the_docs_mode(self, tmp_path, gen):
+        text = _doc_for_installed_django(gen)
         needle = "`querystring`, "
         doc = tmp_path / "TEMPLATE_BACKEND.md"
         doc.write_text(text.replace(needle, "`zzz_bogus`, ", 1), encoding="utf-8")
@@ -872,7 +922,7 @@ class TestBridgedLibraryFilters:
         # test settings' extension tags (theming), which the doc does not list.
         code, printed, err = _run_split("--print")
         assert code == 0, err
-        doc_block = gen.current_block(_DOC.read_text(encoding="utf-8"))
+        doc_block = gen.current_block(_doc_for_installed_django(gen))
         assert printed == doc_block
         filter_lines = [ln for ln in block.splitlines() if ln.startswith("**Library filters")]
         assert filter_lines == [

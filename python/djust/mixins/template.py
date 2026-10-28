@@ -1516,14 +1516,81 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         opening_match = _search_dj_root_open(masked, _DJ_ROOT_RE, _DJ_VIEW_RE)
 
         if not opening_match:
-            return template
+            return self._retain_root_partial_definitions(template, template, 0, len(template))
 
         start_pos = opening_match.start()
 
         result = _find_root_close(masked, opening_match)
         if result[1] is not None:
-            return template[start_pos : result[1]]
+            end_pos = result[1]
+            root = template[start_pos:end_pos]
+            return self._retain_root_partial_definitions(template, root, start_pos, end_pos)
         return template
+
+    def _retain_root_partial_definitions(
+        self, source: str, root: str, root_start: int, root_end: int
+    ) -> str:
+        """Keep authored Django 6 partials needed after discarding page layout.
+
+        Only source parsed by the Rust template engine can contribute a
+        definition. Outside inline definitions become non-inline so extracting
+        the root cannot create extra DOM output. A definition surrounding the
+        root cannot safely be split, so reject it instead of changing its
+        execution semantics or broadening the live DOM to the page layout.
+        """
+        import django
+
+        if django.VERSION < (6, 0) or not re.search(r"{%\s*partialdef\s+", source):
+            return root
+
+        from django.template.base import DebugLexer
+        from djust._rust import compile_template
+
+        with library_render_scope():
+            compiled = compile_template(
+                source, getattr(self, "template_name", None), return_template=True
+            )
+        spans = compiled._partial_spans()
+        encoded = source.encode("utf-8")
+        definitions = []
+        for span in spans.values():
+            if span is None:
+                continue
+            start = len(encoded[: span[0]].decode("utf-8"))
+            end = len(encoded[: span[1]].decode("utf-8"))
+            if root_start <= start and end <= root_end:
+                continue
+            if start < root_end and end > root_start:
+                from django.core.exceptions import ImproperlyConfigured
+
+                raise ImproperlyConfigured(
+                    "A LiveView root cannot be inside a Django template partial definition. "
+                    "Move dj-root outside the partial so extraction cannot change whether "
+                    "the partial renders or discard its invocation context."
+                )
+            definitions.append((start, end))
+
+        if not re.search(r"{%\s*partial(?:def)?\s+", root):
+            return root
+
+        prefixes = []
+        covered_until = -1
+        for start, end in sorted(definitions, key=lambda pair: (pair[0], -pair[1])):
+            if end <= covered_until:
+                continue  # Nested definition is already part of its outer body.
+            original = source[start:end]
+            opening = DebugLexer(original).tokenize()[0]
+            bits = opening.split_contents()
+            # The compiled parser already validated tag grammar and name.
+            prefixes.append("{% partialdef " + bits[1] + " %}" + original[opening.position[1] :])
+            covered_until = end
+        retained = "".join(prefixes) + root
+        template_name = getattr(self, "template_name", None)
+        if template_name:
+            from djust._rust import resolve_relative_template_includes
+
+            retained = resolve_relative_template_includes(retained, template_name)
+        return retained
 
     def _extract_liveview_template_content(self, template: str) -> str:
         """

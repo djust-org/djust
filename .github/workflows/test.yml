@@ -249,8 +249,9 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ${{ github.event_name != 'pull_request' && fromJSON('["3.12","3.13","3.14","3.15"]') || fromJSON('["3.12"]') }}
+        django-version: ["5.2", "6.0", "6.1"]
         group: [1, 2, 3, 4]
-    name: python-tests (py${{ matrix.python-version }}, shard ${{ matrix.group }}/4)
+    name: python-tests (py${{ matrix.python-version }}, Django ${{ matrix.django-version }}, shard ${{ matrix.group }}/4)
     # Installs the extension python-build compiled for this interpreter rather
     # than building it per shard. `needs` waits for every python-build cell;
     # a failed build skips the shards, and a skipped python-tests is not
@@ -301,6 +302,9 @@ jobs:
         run: |
           uv sync --frozen --extra dev --no-install-project --python "$UV_PYTHON"
           .venv/bin/python scripts/check-ci-python.py "$EXPECTED_PYTHON"
+          # Exercise each Django series independently of the frozen default.
+          uv pip install --python .venv/bin/python "Django~=${{ matrix.django-version }}.0"
+          .venv/bin/python -c 'import django; assert django.get_version().startswith("${{ matrix.django-version }}."), django.get_version()'
           export UV_PYTHON="$PWD/.venv/bin/python"
           echo "UV_PYTHON=$UV_PYTHON" >> "$GITHUB_ENV"
           scripts/ci-install-prebuilt-djust.sh "$RUNNER_TEMP/djust-wheel"
@@ -425,7 +429,7 @@ jobs:
       # that fails the drift gate is exactly the shard that uploads nothing,
       # so the repair deadlocks on the one run that needed it.
       - name: Upload this shard's runner-recorded durations (#2584)
-        if: always() && matrix.python-version == '3.12'
+        if: always() && matrix.python-version == '3.12' && matrix.django-version == '5.2'
         continue-on-error: true
         uses: actions/upload-artifact@v7
         with:
@@ -472,10 +476,10 @@ jobs:
         run: .venv/bin/python scripts/check-doc-snippets.py
 
       - name: Generated template-backend support lists are current (#2533)
-        if: matrix.group == 1
-        # docs/TEMPLATE_BACKEND.md's tag/filter lists are generated from the
-        # engine's registries against the installed Django; a stale block
-        # fails here. Regenerate with `make template-backend-lists`.
+        if: matrix.group == 1 && matrix.django-version == '5.2'
+        # docs/TEMPLATE_BACKEND.md's generated block records its Django version
+        # and registry. Check it against the canonical 5.2 lock, not every cell.
+        # Regenerate with `make template-backend-lists`.
         run: PYTHONPATH=. .venv/bin/python scripts/generate-template-backend-lists.py
 
       - name: Lockfile self-entry version sync (#1498)

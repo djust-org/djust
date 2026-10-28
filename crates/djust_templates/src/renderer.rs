@@ -13,6 +13,17 @@ use pyo3::types::PyAnyMethods;
 use pyo3::{Py, PyAny, Python};
 use regex::Regex;
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+// Django 6.0 added `forloop.length`. Python sets this process-wide flag when
+// loading the extension; Django's installed version is fixed for the process.
+// Pure Rust users default to the earlier Django-compatible context.
+static DJANGO_FORLOOP_LENGTH: AtomicBool = AtomicBool::new(false);
+
+/// Configure the loop context for the installed Django version.
+pub fn set_django_forloop_length(enabled: bool) {
+    DJANGO_FORLOOP_LENGTH.store(enabled, Ordering::Relaxed);
+}
 
 /// `{% djust_audio %}` markup around the escaped manifest. Must stay
 /// byte-identical to `djust_audio` in `python/djust/templatetags/live_tags.py`
@@ -552,6 +563,8 @@ fn node_is_element_bearing(node: &Node) -> bool {
         // as element-bearing. Includes templates, components, and
         // any custom-rendered output the framework can't introspect.
         Node::Static(_)
+        | Node::PartialCall { .. }
+        | Node::PartialDef { .. }
         | Node::Include { .. }
         | Node::ReactComponent { .. }
         | Node::CustomTag { .. }
@@ -3650,6 +3663,12 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
                         let mut loop_dict: indexmap::IndexMap<djust_core::ObjectKey, Value> =
                             indexmap::IndexMap::with_capacity(7);
                         loop_dict.insert("parentloop".into(), parentloop);
+                        // Django 6.0+ adds `length` after `parentloop`, before
+                        // the counters. Insertion order is observable when the
+                        // whole forloop dict is rendered.
+                        if DJANGO_FORLOOP_LENGTH.load(Ordering::Relaxed) {
+                            loop_dict.insert("length".into(), Value::Integer(len_values));
+                        }
 
                         // Save outer dj-if loop path for nested-loop composition
                         // and per-iteration uniqueness of `{% if %}` marker ids
@@ -4841,6 +4860,55 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
             ))
         }
 
+        Node::PartialCall {
+            name,
+            registry,
+            site_id,
+        } => {
+            thread_local! { static DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+            struct Guard;
+            impl Drop for Guard {
+                fn drop(&mut self) {
+                    DEPTH.with(|d| d.set(d.get() - 1));
+                }
+            }
+            if DEPTH.with(|d| d.get()) >= 64 {
+                return Err(DjangoRustError::TemplateError(
+                    "Maximum template partial recursion depth exceeded".to_string(),
+                ));
+            }
+            DEPTH.with(|d| d.set(d.get() + 1));
+            let _guard = Guard;
+            let registry = registry.as_ref().and_then(|r| r.upgrade()).ok_or_else(|| {
+                DjangoRustError::TemplateError(format!(
+                    "Partial '{name}' is not defined in the current template."
+                ))
+                .into_template_syntax()
+            })?;
+            let nodes = registry.bodies.get(name).ok_or_else(|| {
+                DjangoRustError::TemplateError(format!(
+                    "Partial '{name}' is not defined in the current template."
+                ))
+                .into_template_syntax()
+            })?;
+            let parent_path = context.dj_if_include_path().to_string();
+            if let Some(site) = site_id {
+                context.set_dj_if_include_path(format!("{parent_path}-i{site}"));
+            }
+            let result = context
+                .with_template_render(|inner| render_nodes_output::<L, R>(nodes, inner, loader));
+            context.set_dj_if_include_path(parent_path);
+            result
+        }
+        Node::PartialDef {
+            inline, children, ..
+        } => {
+            if *inline {
+                render_nodes_output::<L, R>(children, context, loader)
+            } else {
+                Ok(String::new().into())
+            }
+        }
         Node::BlockCustomTag {
             name,
             args,

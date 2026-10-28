@@ -8,7 +8,18 @@ functions and classes.
 Generated for djust framework - see crates/djust_live/src/lib.rs
 """
 
-from typing import Any, Awaitable, Callable, Dict, List, NoReturn, Optional, Tuple
+from typing import (
+    Any,
+    Awaitable,
+    Callable,
+    Dict,
+    List,
+    Literal,
+    NoReturn,
+    Optional,
+    Tuple,
+    overload,
+)
 
 # ============================================================================
 # Core Template Rendering Functions
@@ -67,7 +78,11 @@ def render_template(
 class CompiledTemplate:
     """Immutable native template handle returned on request by compile_template."""
 
-    ...
+    def _has_partial(self, name: str) -> bool: ...
+    def _partial_spans(self) -> dict[str, tuple[int, int] | None]: ...
+    def _select_partial(
+        self, name: str, template_name: str | None = None
+    ) -> CompiledTemplate | None: ...
 
 class LazyBlock:
     """The ``block`` a bridged Django tag handler receives while a
@@ -116,9 +131,10 @@ class TemplateObject:
     def __len__(self) -> int: ...
     def __bool__(self) -> bool: ...
 
+@overload
 def compile_template(
-    template_source: str, template_name: str | None = None, *, return_template: bool = False
-) -> CompiledTemplate | None:
+    template_source: str, template_name: str | None = None, *, return_template: Literal[True]
+) -> CompiledTemplate:
     """
     Parse a template without rendering it (#2549).
 
@@ -137,6 +153,17 @@ def compile_template(
     """
     ...
 
+@overload
+def compile_template(
+    template_source: str,
+    template_name: str | None = None,
+    *,
+    return_template: Literal[False] = False,
+) -> None: ...
+@overload
+def compile_template(
+    template_source: str, template_name: str | None = None, *, return_template: bool
+) -> CompiledTemplate | None: ...
 def registry_generation() -> int:
     """Current tag/filter registry generation (test-support probe, #2668)."""
     ...
@@ -555,6 +582,10 @@ def active_unlocalized_number_format() -> Optional[Tuple[str, str, List[int], bo
     Exposed so the Python side can ASSERT the second format reached Rust
     rather than assume it (#2017). Its `use_grouping` is always False.
     """
+
+def resolve_relative_template_includes(source: str, template_name: str) -> str:
+    """Resolve parsed literal relative includes against a template name."""
+    ...
 
 def clear_dj_model_fields_cache() -> None:
     """Forget every cached ``RustLiveView.dj_model_fields(cache=True)`` result."""
@@ -1501,6 +1532,7 @@ __all__ = [
     "dj_root_stamp_offsets",
     "template_needs_provenance",
     "resolve_template_inheritance",
+    "resolve_relative_template_includes",
     # Serialization
     "fast_json_dumps",
     "extract_template_variables",

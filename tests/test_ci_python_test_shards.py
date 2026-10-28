@@ -130,12 +130,15 @@ def test_every_gated_step_names_a_matrix_value_that_exists() -> None:
         # measured needs it, and would otherwise read as an unrecognised
         # shape here.
         cond = re.sub(r"^\s*always\(\)\s*&&\s*", "", str(cond))
-        if m := re.fullmatch(r"\s*matrix\.group\s*==\s*(\d+)\s*", str(cond)):
-            gated_groups.append((name, int(m.group(1))))
-        elif m := re.fullmatch(r"\s*matrix\.python-version\s*==\s*'([^']+)'\s*", str(cond)):
-            gated_versions.append((name, m.group(1)))
-        else:
-            raise AssertionError(f"unrecognised gate on step {name!r}: {cond!r}")
+        for clause in str(cond).split("&&"):
+            if m := re.fullmatch(r"\s*matrix\.group\s*==\s*(\d+)\s*", clause):
+                gated_groups.append((name, int(m.group(1))))
+            elif m := re.fullmatch(r"\s*matrix\.python-version\s*==\s*'([^']+)'\s*", clause):
+                gated_versions.append((name, m.group(1)))
+            elif m := re.fullmatch(r"\s*matrix\.django-version\s*==\s*'([^']+)'\s*", clause):
+                assert m.group(1) in _python_tests()["strategy"]["matrix"]["django-version"]
+            else:
+                raise AssertionError(f"unrecognised gate on step {name!r}: {clause!r}")
     assert gated_groups, "expected the per-checkout checks to be gated onto one shard"
     for name, k in gated_groups:
         assert k in groups, f"step {name!r} is gated on group {k}, which no shard runs"
@@ -424,3 +427,38 @@ def test_shards_cover_current_collection_with_balanced_durations(tmp_path: Path)
     snapshot = json.loads(output.read_text())
     assert snapshot.get("shared_corpus"), "full sweep fixture was not recognized during collection"
     _validate_snapshot(snapshot, json.loads(DURATIONS_TEXT), n)
+
+
+def test_django_compatibility_matrix_tests_each_supported_series() -> None:
+    """The shipped support range must exercise every modern Django series."""
+    matrix = _python_tests()["strategy"]["matrix"]
+    assert set(matrix["django-version"]) == {"5.2", "6.0", "6.1"}
+    setup = next(
+        s
+        for s in _python_tests()["steps"]
+        if s.get("name") == "Install Python dependencies and prebuilt extension"
+    )
+    assert "Django~=${{ matrix.django-version }}.0" in setup["run"]
+    assert "django.get_version()" in setup["run"]
+
+
+def test_only_one_django_series_uploads_shard_durations() -> None:
+    """Each shard artifact has one uploader even with a Django matrix."""
+    step = next(
+        s
+        for s in _python_tests()["steps"]
+        if s.get("name") == "Upload this shard's runner-recorded durations (#2584)"
+    )
+    assert "matrix.django-version == '5.2'" in str(step.get("if", ""))
+
+
+def test_generated_template_lists_run_only_on_reference_django() -> None:
+    """The committed support list is generated against one Django release."""
+    step = next(
+        s
+        for s in _python_tests()["steps"]
+        if s.get("name") == "Generated template-backend support lists are current (#2533)"
+    )
+    condition = str(step.get("if", ""))
+    assert "matrix.group == 1" in condition
+    assert "matrix.django-version == '5.2'" in condition

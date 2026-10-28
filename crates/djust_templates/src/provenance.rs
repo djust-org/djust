@@ -833,8 +833,10 @@ pub fn annotate_source(
                 nodes, lazy_site, ..
             } = node
             {
-                if matches!(nodes.first(), Some(Node::Include { .. }))
-                    || matches!(nodes.first(), Some(Node::Variable(name, _, _)) if name == "block.super")
+                if matches!(
+                    nodes.first(),
+                    Some(Node::Include { .. } | Node::PartialCall { .. })
+                ) || matches!(nodes.first(), Some(Node::Variable(name, _, _)) if name == "block.super")
                 {
                     *lazy_site = Some(*index);
                     *index += 1;

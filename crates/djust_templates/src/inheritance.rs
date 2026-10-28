@@ -366,6 +366,7 @@ fn node_references_block_super(node: &Node) -> bool {
         // `_ => true` traded a silent under-render for an EAGER parent render,
         // which advances a `{% cycle %}` in the parent block and can raise
         // `TemplateDoesNotExist` on a template that worked.
+        Node::PartialCall { .. } | Node::PartialDef { .. } => true,
         Node::Text(_)
         | Node::Comment
         | Node::Load(_)
@@ -476,6 +477,21 @@ pub trait TemplateLoader {
     /// the cache must be loader-instance-EXTERNAL (a process-global static,
     /// not a `&self` field).
     fn load_template_cached(&self, name: &str) -> Result<std::sync::Arc<[Node]>> {
+        if let Some((base, partial)) = name
+            .split_once('#')
+            .filter(|_| crate::parser::django_partials_enabled())
+        {
+            let nodes = self.load_template_cached(base)?;
+            if partial.is_empty() {
+                return Ok(nodes);
+            }
+            return crate::parser::select_named_partial(&nodes, partial)
+                .map(std::sync::Arc::from)
+                .ok_or_else(|| DjangoRustError::TemplateNotFound {
+                    name: partial.to_string(),
+                    tried: vec![base.to_string()],
+                });
+        }
         let mut nodes = self.load_template(name)?;
         set_include_origins(&mut nodes, name)?;
         set_ifchanged_origins(
@@ -484,6 +500,7 @@ pub trait TemplateLoader {
                 .template_origin(name)
                 .unwrap_or_else(|| name.to_string()),
         );
+        crate::parser::bind_partials(&mut nodes)?;
         Ok(std::sync::Arc::from(nodes))
     }
 }
@@ -656,6 +673,7 @@ pub fn build_inheritance_chain_from<L: TemplateLoader>(
                     set_include_origins(&mut parent_nodes, name)?;
                 }
                 set_ifchanged_origins(&mut parent_nodes, &origin);
+                crate::parser::bind_partials(&mut parent_nodes)?;
                 chain.add_parent(parent_nodes);
                 history.push(origin);
                 current_name = name;
@@ -680,6 +698,9 @@ pub fn build_inheritance_chain_from<L: TemplateLoader>(
             }
             set_include_origins(&mut parent_nodes, &parent_name)?;
             set_ifchanged_origins(&mut parent_nodes, &parent_name);
+            if !crate::parser::django_partials_enabled() || !parent_name.contains('#') {
+                crate::parser::bind_partials(&mut parent_nodes)?;
+            }
             chain.add_parent(parent_nodes);
             current_name = Some(parent_name);
             depth += 1;
@@ -920,6 +941,7 @@ impl FilesystemTemplateLoader {
         );
         set_include_origins(&mut nodes, name)?;
         set_ifchanged_origins(&mut nodes, &path.to_string_lossy());
+        crate::parser::bind_partials(&mut nodes)?;
         Ok(nodes)
     }
 }
@@ -936,6 +958,11 @@ impl TemplateLoader for FilesystemTemplateLoader {
         if self.uncached_dirs.is_empty() {
             return true;
         }
+        let name = if crate::parser::django_partials_enabled() {
+            name.split_once('#').map_or(name, |(base, _)| base)
+        } else {
+            name
+        };
         let Ok(path) = self.find_template(name) else {
             return true;
         };
@@ -945,6 +972,21 @@ impl TemplateLoader for FilesystemTemplateLoader {
     }
 
     fn load_template(&self, name: &str) -> Result<Vec<Node>> {
+        if let Some((base, partial)) = name
+            .split_once('#')
+            .filter(|_| crate::parser::django_partials_enabled())
+        {
+            if !partial.is_empty() {
+                let nodes = self.load_template(base)?;
+                return crate::parser::select_named_partial(&nodes, partial).ok_or_else(|| {
+                    DjangoRustError::TemplateNotFound {
+                        name: partial.to_string(),
+                        tried: vec![base.to_string()],
+                    }
+                });
+            }
+            return self.load_template(base);
+        }
         self.parse_template_path(name, &self.find_template(name)?)
     }
 
@@ -975,6 +1017,21 @@ impl TemplateLoader for FilesystemTemplateLoader {
     /// A render-scoped selection cache avoids repeated filesystem validation
     /// inside loops; the process cache retains AST identity between renders.
     fn load_template_cached(&self, name: &str) -> Result<Arc<[Node]>> {
+        if let Some((base, partial)) = name
+            .split_once('#')
+            .filter(|_| crate::parser::django_partials_enabled())
+        {
+            let nodes = self.load_template_cached(base)?;
+            if partial.is_empty() {
+                return Ok(nodes);
+            }
+            return crate::parser::select_named_partial(&nodes, partial)
+                .map(Arc::from)
+                .ok_or_else(|| DjangoRustError::TemplateNotFound {
+                    name: partial.to_string(),
+                    tried: vec![base.to_string()],
+                });
+        }
         // Uncached loaders intentionally preserve per-call selection and
         // allocation semantics. Custom TemplateLoader implementations never
         // enter this filesystem-only optimization.
@@ -1062,6 +1119,7 @@ impl FilesystemTemplateLoader {
         );
         set_include_origins(&mut nodes_vec, name)?;
         set_ifchanged_origins(&mut nodes_vec, &path.to_string_lossy());
+        crate::parser::bind_partials(&mut nodes_vec)?;
         let arc: Arc<[Node]> = Arc::from(nodes_vec);
 
         let mut cache = PARSED_TEMPLATE_CACHE.write().map_err(|e| {
@@ -1075,11 +1133,128 @@ impl FilesystemTemplateLoader {
     }
 }
 
+/// Resolve a literal relative include while preserving dynamic operands.
+fn absolute_include_operand(origin: Option<&str>, operand: &str) -> Result<Option<String>> {
+    let Some(origin) = origin else {
+        return Ok(None);
+    };
+    if crate::filter_lexer::has_unquoted_pipe(operand) || operand.len() < 2 {
+        return Ok(None);
+    }
+    let quote = operand.as_bytes()[0];
+    if !matches!(quote, b'\'' | b'"') || operand.as_bytes()[operand.len() - 1] != quote {
+        return Ok(None);
+    }
+    let name = crate::parser::unescape_filter_arg_literal(operand);
+    if !(name.starts_with("./") || name.starts_with("../")) {
+        return Ok(None);
+    }
+    let resolved = construct_relative_path_allow_recursion(Some(origin), &name, true)?;
+    Ok(Some(format!(
+        "\"{}\"",
+        resolved.replace('\\', "\\\\").replace('"', "\\\"")
+    )))
+}
+
+/// Preserve literal include origins when a named LiveView extracts its root.
+/// Operands come from parsed nodes, not from user data or opaque raw tag bodies.
+pub fn rewrite_relative_includes(source: &str, template_name: &str) -> Result<String> {
+    let (tokens, spans) = crate::lexer::tokenize_spanned(source)?;
+    let nodes = crate::parser::parse_with_source_spanned(&tokens, &spans, source)?;
+    fn collect(
+        nodes: &[Node],
+        source: &str,
+        name: &str,
+        edits: &mut Vec<(usize, usize, String)>,
+    ) -> Result<()> {
+        for node in nodes {
+            if let Node::Located {
+                nodes: inner, span, ..
+            } = node
+            {
+                if let Some(Node::Include { template, .. }) = inner.first() {
+                    if let Some(replacement) = absolute_include_operand(Some(name), template)? {
+                        let text = &source[span.0..span.1];
+                        if let Some(offset) = text.find(template) {
+                            edits.push((
+                                span.0 + offset,
+                                span.0 + offset + template.len(),
+                                replacement,
+                            ));
+                        }
+                    }
+                }
+            }
+            for children in node.child_lists().into_iter().flatten() {
+                collect(children, source, name, edits)?;
+            }
+        }
+        Ok(())
+    }
+    let mut edits = Vec::new();
+    collect(&nodes, source, template_name, &mut edits)?;
+    edits.sort_by_key(|(start, _, _)| *start);
+    let mut output = source.to_string();
+    for (start, end, replacement) in edits.into_iter().rev() {
+        output.replace_range(start..end, &replacement);
+    }
+    Ok(output)
+}
+
 /// Convert AST nodes back to template string format (preserves Django syntax)
+#[derive(Default)]
+struct FlattenPartials {
+    registries: Vec<std::sync::Arc<crate::parser::PartialRegistry>>,
+}
+
+impl FlattenPartials {
+    fn index(&mut self, registry: std::sync::Arc<crate::parser::PartialRegistry>) -> usize {
+        if let Some(index) = self
+            .registries
+            .iter()
+            .position(|item| std::sync::Arc::ptr_eq(item, &registry))
+        {
+            index
+        } else {
+            let index = self.registries.len();
+            self.registries.push(registry);
+            index
+        }
+    }
+}
+
+fn partial_alias(index: usize, name: &str) -> String {
+    use std::fmt::Write;
+    let mut out = format!("__djust_partial_{index}_");
+    for byte in name.bytes() {
+        let _ = write!(out, "{byte:02x}");
+    }
+    out
+}
+
 fn nodes_to_template_string(nodes: &[Node]) -> String {
+    let mut state = FlattenPartials::default();
+    let mut output = nodes_to_template_string_inner(nodes, &mut state);
+    let mut index = 0;
+    while index < state.registries.len() {
+        let registry = state.registries[index].clone();
+        let mut bodies: Vec<_> = registry.bodies.iter().collect();
+        bodies.sort_by(|a, b| a.0.cmp(b.0));
+        for (name, body) in bodies {
+            let alias = partial_alias(index, name);
+            output.push_str(&format!("{{% partialdef {alias} %}}"));
+            output.push_str(&nodes_to_template_string_inner(body, &mut state));
+            output.push_str("{% endpartialdef %}");
+        }
+        index += 1;
+    }
+    output
+}
+
+fn nodes_to_template_string_inner(nodes: &[Node], state: &mut FlattenPartials) -> String {
     let mut output = String::new();
     for node in nodes {
-        output.push_str(&node_to_template_string(node));
+        output.push_str(&node_to_template_string(node, state));
     }
     output
 }
@@ -1105,9 +1280,9 @@ fn text_to_template_string(text: &str) -> String {
 }
 
 /// Convert a single node back to template string format
-fn node_to_template_string(node: &Node) -> String {
+fn node_to_template_string(node: &Node, state: &mut FlattenPartials) -> String {
     match node {
-        Node::Located { nodes, .. } => nodes_to_template_string(nodes),
+        Node::Located { nodes, .. } => nodes_to_template_string_inner(nodes, state),
         Node::Text(text) => text_to_template_string(text),
         Node::Variable(var_name, filters, _in_attr) => {
             let mut result = format!("{{{{ {var_name} ");
@@ -1154,7 +1329,7 @@ fn node_to_template_string(node: &Node) -> String {
         }
         Node::Block { name, nodes } => {
             let mut result = format!("{{% block {name} %}}");
-            result.push_str(&nodes_to_template_string(nodes));
+            result.push_str(&nodes_to_template_string_inner(nodes, state));
             result.push_str("{% endblock %}");
             result
         }
@@ -1165,10 +1340,10 @@ fn node_to_template_string(node: &Node) -> String {
             ..
         } => {
             let mut result = format!("{{% if {condition} %}}");
-            result.push_str(&nodes_to_template_string(true_nodes));
+            result.push_str(&nodes_to_template_string_inner(true_nodes, state));
             if !false_nodes.is_empty() {
                 result.push_str("{% else %}");
-                result.push_str(&nodes_to_template_string(false_nodes));
+                result.push_str(&nodes_to_template_string_inner(false_nodes, state));
             }
             result.push_str("{% endif %}");
             result
@@ -1186,10 +1361,10 @@ fn node_to_template_string(node: &Node) -> String {
                 result.push_str(" reversed");
             }
             result.push_str(" %}");
-            result.push_str(&nodes_to_template_string(nodes));
+            result.push_str(&nodes_to_template_string_inner(nodes, state));
             if !empty_nodes.is_empty() {
                 result.push_str("{% empty %}");
-                result.push_str(&nodes_to_template_string(empty_nodes));
+                result.push_str(&nodes_to_template_string_inner(empty_nodes, state));
             }
             result.push_str("{% endfor %}");
             result
@@ -1203,7 +1378,7 @@ fn node_to_template_string(node: &Node) -> String {
                 result.push_str(&format!("{key}={value}"));
             }
             result.push_str(" %}");
-            result.push_str(&nodes_to_template_string(nodes));
+            result.push_str(&nodes_to_template_string_inner(nodes, state));
             result.push_str("{% endwith %}");
             result
         }
@@ -1214,12 +1389,19 @@ fn node_to_template_string(node: &Node) -> String {
         }
         Node::Extends(_) => String::new(), // Extends is already processed
         Node::Include {
+            origin,
             template,
             with_vars,
             only,
             ..
         } => {
-            let mut result = format!("{{% include {template}");
+            // The flattened source no longer carries per-node origins. Embed
+            // the resolved literal now; dynamic operands retain their meaning.
+            let operand = absolute_include_operand(origin.as_deref(), template)
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| template.clone());
+            let mut result = format!("{{% include {operand}");
             if !with_vars.is_empty() {
                 result.push_str(" with");
                 for (key, value) in with_vars {
@@ -1284,7 +1466,7 @@ fn node_to_template_string(node: &Node) -> String {
         }
         Node::Spaceless { nodes } => {
             let mut result = "{% spaceless %}".to_string();
-            result.push_str(&nodes_to_template_string(nodes));
+            result.push_str(&nodes_to_template_string_inner(nodes, state));
             result.push_str("{% endspaceless %}");
             result
         }
@@ -1293,7 +1475,7 @@ fn node_to_template_string(node: &Node) -> String {
             // the scope is a merge-time construct and a reparse rebuilds it
             // from the chain. Emitting the child body alone is what the
             // pre-#2517 flattening emitted for the same input.
-            nodes_to_template_string(nodes)
+            nodes_to_template_string_inner(nodes, state)
         }
         Node::IfChanged {
             vars,
@@ -1308,17 +1490,17 @@ fn node_to_template_string(node: &Node) -> String {
             } else {
                 format!("{{% ifchanged {} %}}", vars.join(" "))
             };
-            result.push_str(&nodes_to_template_string(nodes));
+            result.push_str(&nodes_to_template_string_inner(nodes, state));
             if !else_nodes.is_empty() {
                 result.push_str("{% else %}");
-                result.push_str(&nodes_to_template_string(else_nodes));
+                result.push_str(&nodes_to_template_string_inner(else_nodes, state));
             }
             result.push_str("{% endifchanged %}");
             result
         }
         Node::AutoEscape { on, nodes } => {
             let mut result = format!("{{% autoescape {} %}}", if *on { "on" } else { "off" });
-            result.push_str(&nodes_to_template_string(nodes));
+            result.push_str(&nodes_to_template_string_inner(nodes, state));
             result.push_str("{% endautoescape %}");
             result
         }
@@ -1358,12 +1540,29 @@ fn node_to_template_string(node: &Node) -> String {
                 })
                 .collect();
             let mut result = format!("{{% filter {} %}}", chain.join("|"));
-            result.push_str(&nodes_to_template_string(nodes));
+            result.push_str(&nodes_to_template_string_inner(nodes, state));
             result.push_str("{% endfilter %}");
             result
         }
         Node::Now(format) => {
             format!("{{% now \"{format}\" %}}")
+        }
+        Node::PartialCall { name, registry, .. } => {
+            if let Some(registry) = registry.as_ref().and_then(|r| r.upgrade()) {
+                let index = state.index(registry);
+                format!("{{% partial {} %}}", partial_alias(index, name))
+            } else {
+                format!("{{% partial {name} %}}")
+            }
+        }
+        Node::PartialDef {
+            inline, children, ..
+        } => {
+            if *inline {
+                nodes_to_template_string_inner(children, state)
+            } else {
+                String::new()
+            }
         }
         Node::BlockCustomTag {
             name,
@@ -1377,7 +1576,7 @@ fn node_to_template_string(node: &Node) -> String {
                 result.push_str(arg);
             }
             result.push_str(" %}");
-            result.push_str(&nodes_to_template_string(children));
+            result.push_str(&nodes_to_template_string_inner(children, state));
             // The end tag the handler REGISTERED, not `end{name}`: a tag may
             // name its own closing tag (`end_theme_card_block`, #2894), and
             // re-emitting `endtheme_card_block` is a parse error on the
@@ -1408,27 +1607,27 @@ fn node_to_template_string(node: &Node) -> String {
         }
         Node::Language { expr, children } => {
             let mut result = format!("{{% language {expr} %}}");
-            result.push_str(&nodes_to_template_string(children));
+            result.push_str(&nodes_to_template_string_inner(children, state));
             result.push_str("{% endlanguage %}");
             result
         }
         Node::Timezone { expr, children } => {
             let mut result = format!("{{% timezone {expr} %}}");
-            result.push_str(&nodes_to_template_string(children));
+            result.push_str(&nodes_to_template_string_inner(children, state));
             result.push_str("{% endtimezone %}");
             result
         }
         Node::Localize { use_l10n, children } => {
             let arg = if *use_l10n { "on" } else { "off" };
             let mut result = format!("{{% localize {arg} %}}");
-            result.push_str(&nodes_to_template_string(children));
+            result.push_str(&nodes_to_template_string_inner(children, state));
             result.push_str("{% endlocalize %}");
             result
         }
         Node::LocalTime { use_tz, children } => {
             let arg = if *use_tz { "on" } else { "off" };
             let mut result = format!("{{% localtime {arg} %}}");
-            result.push_str(&nodes_to_template_string(children));
+            result.push_str(&nodes_to_template_string_inner(children, state));
             result.push_str("{% endlocaltime %}");
             result
         }

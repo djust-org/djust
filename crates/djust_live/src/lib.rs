@@ -2720,6 +2720,24 @@ static RESOLVED_LAZY_SYNTAX: Lazy<DashMap<ResolvedLazyKey, bool>> = Lazy::new(Da
 /// Inspect the compiled, merged tree without executing its values or tags.
 /// Placeholders explicitly have no literal authority, just as at render time.
 fn resolved_lazy_syntax(nodes: &[djust_templates::parser::Node]) -> bool {
+    // Partial calls can reference bodies from a different inheritance layer.
+    // Conservatively enable tracking whenever one remains in the merged tree:
+    // inspecting the hidden registry recursively would need to follow cycles,
+    // and tracking still grants authority only to authored output literals.
+    fn has_partial_call(nodes: &[djust_templates::parser::Node]) -> bool {
+        use djust_templates::parser::Node;
+        nodes.iter().any(|node| {
+            matches!(node, Node::PartialCall { .. })
+                || node
+                    .child_lists()
+                    .into_iter()
+                    .flatten()
+                    .any(|children| has_partial_call(children))
+        })
+    }
+    if has_partial_call(nodes) {
+        return true;
+    }
     fn literals(
         nodes: &[djust_templates::parser::Node],
         html: &mut String,
@@ -6369,6 +6387,15 @@ fn dj_model_fields_from_template(
     })
 }
 
+/// Resolve parsed literal relative includes against a named template.
+#[pyfunction]
+fn resolve_relative_template_includes(source: &str, template_name: &str) -> PyResult<String> {
+    guard_panic("resolve_relative_template_includes", || {
+        djust_templates::inheritance::rewrite_relative_includes(source, template_name)
+            .map_err(Into::into)
+    })
+}
+
 /// Compute the canonical 8-hex template-source hash from a raw source
 /// string, without instantiating a [`RustLiveViewBackend`]. Used by the
 /// Python state-backend cache-key construction in
@@ -6441,6 +6468,14 @@ fn crosses_as_encoded_by_conversion(obj: &Bound<'_, PyAny>) -> PyResult<bool> {
 // guards. The audit checklist and findings are recorded on issue #1432.
 #[pymodule(gil_used = false)]
 fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    // Match Django's version-specific loop context on every renderer entry,
+    // including direct Rust bindings and worker threads. Django is a required
+    // dependency, and its version is fixed for the lifetime of the process.
+    let django_version = m.py().import("django")?.getattr("VERSION")?;
+    let django_major: u32 = django_version.get_item(0)?.extract()?;
+    djust_templates::renderer::set_django_forloop_length(django_major >= 6);
+    djust_templates::parser::set_django_partials(django_major >= 6);
+
     m.add_class::<RustLiveViewBackend>()?;
     m.add_class::<CompiledTemplate>()?;
     // #2731: the shape a `Value::Encoded` takes for a bridged Django tag
@@ -6494,6 +6529,7 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(collapse_inter_tag_whitespace, m)?)?;
     m.add_function(wrap_pyfunction!(fast_json_dumps, m)?)?;
     m.add_function(wrap_pyfunction!(resolve_template_inheritance, m)?)?;
+    m.add_function(wrap_pyfunction!(resolve_relative_template_includes, m)?)?;
     m.add_function(wrap_pyfunction!(compute_template_hash, m)?)?;
     m.add_function(wrap_pyfunction!(crosses_as_encoded, m)?)?;
     m.add_function(wrap_pyfunction!(crosses_as_encoded_by_conversion, m)?)?;

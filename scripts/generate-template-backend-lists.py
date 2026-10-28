@@ -91,7 +91,7 @@ PARSER_SENTINELS = frozenset({"if", "for", "block"})
 
 ARITY_HEADER = "const ARITY: &[(&str, u8, u8, u8)] = &["
 PARSER_MATCH = "match tag_name.as_str() {"
-_ARM_RE = re.compile(r'^ {16}("[a-z_0-9]+"(?:\s*\|\s*"[a-z_0-9]+")*)\s*=>')
+_ARM_RE = re.compile(r'^ {16}("[a-z_0-9]+"(?:\s*\|\s*"[a-z_0-9]+")*)(?:\s+if\s+(.+?))?\s*=>')
 _ARITY_ROW_RE = re.compile(r'^[ \t]*\("([a-z_0-9]+)",', re.M)
 _SCOREBOARD_RE = re.compile(
     r"(?:Unsupported template tag '\{% |Invalid block tag on line \d+: ')([a-z_0-9]+)"
@@ -127,12 +127,18 @@ def djust_arity_filters(arity_rs: Path = DEFAULT_ARITY_RS) -> set[str]:
     return names
 
 
-def djust_native_tags(parser_rs: Path = DEFAULT_PARSER_RS) -> set[str]:
+def djust_native_tags(
+    parser_rs: Path = DEFAULT_PARSER_RS, *, django_version: tuple[int, ...] | None = None
+) -> set[str]:
     """Tag names with a native arm in ``parser.rs``'s ``match tag_name.as_str()``.
 
     Reads the arms at 16-space indent up to the ``_ =>`` fallthrough and
     drops the closers (``endif`` ...), which Django does not register as tags.
     """
+    if django_version is None:
+        import django
+
+        django_version = django.VERSION
     src = parser_rs.read_text(encoding="utf-8")
     if PARSER_MATCH not in src:
         raise ExtractionError(f"{parser_rs}: `{PARSER_MATCH}` not found")
@@ -143,6 +149,12 @@ def djust_native_tags(parser_rs: Path = DEFAULT_PARSER_RS) -> set[str]:
             break
         m = _ARM_RE.match(line)
         if m:
+            guard = m.group(2)
+            if guard:
+                if guard != "django_partials_enabled()":
+                    raise ExtractionError(f"{parser_rs}: unrecognized native tag guard {guard!r}")
+                if django_version < (6, 0):
+                    continue
             names.update(re.findall(r'"([a-z_0-9]+)"', m.group(1)))
     missing = PARSER_SENTINELS - names
     if missing:

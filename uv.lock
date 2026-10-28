@@ -666,7 +666,7 @@ requires-dist = [
     { name = "channels", extras = ["daphne"], specifier = ">=4.0.0,<5" },
     { name = "click", specifier = ">=8.0,<9" },
     { name = "click", marker = "extra == 'dev'", specifier = ">=8.0,<9" },
-    { name = "django", specifier = ">=4.2.29,<6" },
+    { name = "django", specifier = ">=4.2.29,<6.2" },
     { name = "django-allauth", marker = "extra == 'auth-allauth'", specifier = ">=65.0,<66" },
     { name = "django-allauth", marker = "extra == 'dev'", specifier = ">=65.0,<66" },
     { name = "djust", extras = ["redis", "compression", "performance", "admin", "deploy", "theming", "components", "s3", "gcs", "azure"], marker = "extra == 'all'" },

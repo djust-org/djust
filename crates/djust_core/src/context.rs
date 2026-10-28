@@ -1235,6 +1235,26 @@ impl Context {
         self.stack.last_mut().unwrap().render_scope = Some(id);
     }
 
+    /// Run a partial with its own render-context state, preserving variable bindings.
+    pub fn with_template_render<T>(&mut self, render: impl FnOnce(&mut Context) -> T) -> T {
+        struct Guard<'a> {
+            context: &'a mut Context,
+            previous: Option<u64>,
+        }
+        impl Drop for Guard<'_> {
+            fn drop(&mut self) {
+                self.context.stack.last_mut().unwrap().render_scope = self.previous;
+            }
+        }
+        let previous = self.stack.last().unwrap().render_scope;
+        self.begin_template_render();
+        let guard = Guard {
+            context: self,
+            previous,
+        };
+        render(&mut *guard.context)
+    }
+
     /// Set Django's `string_if_invalid` for this render.
     pub fn set_string_if_invalid(&mut self, value: impl Into<String>) {
         self.string_if_invalid = value.into();

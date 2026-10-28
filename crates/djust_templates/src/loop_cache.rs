@@ -818,7 +818,9 @@ fn node_is_position_dependent(node: &Node) -> bool {
         Node::BlockSuperScope { .. } => true,
         Node::For { .. } => true, // nested loop composes the if-loop-path
         // Opaque / Python-backed nodes — we cannot prove position-independence.
-        Node::CustomTag { .. }
+        Node::PartialCall { .. }
+        | Node::PartialDef { .. }
+        | Node::CustomTag { .. }
         | Node::BlockCustomTag { .. }
         | Node::RawBlockCustomTag { .. }
         | Node::Language { .. }
