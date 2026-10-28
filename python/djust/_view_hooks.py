@@ -38,7 +38,11 @@ async def _await(awaitable: Any) -> Any:
     return await awaitable
 
 
-_HOOK_STEPS = {"mount": "mount", "handle_params": "handle_params"}
+_HOOK_STEPS = {
+    "mount": "mount",
+    "handle_params": "handle_params",
+    "handle_async_result": "async",
+}
 
 
 def _hook_step(fn: Any) -> str:

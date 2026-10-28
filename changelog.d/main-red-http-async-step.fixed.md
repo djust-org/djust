@@ -1,0 +1,1 @@
+- **The HTTP fallback now hands a `start_async` outcome to `handle_async_result` as an `async` step** — the fallback ran the hook as a `hook` step, unlike the socket (#3625). The step map names it, and the pin test that lists every `handle_async_result` call site includes the fallback, which turned main red after #3630 and #3636 merged.
