@@ -18,6 +18,7 @@ from django.views import View
 
 from ._class_snapshot import namespace as _class_namespace
 from ._context_provider import ContextProviderMixin  # noqa: F401  # re-exported for back-compat
+from ._deprecation import warn_deprecated
 from .change_detection import deep_fingerprint, fingerprints_by_content
 from .serialization import (  # noqa: F401
     DjangoJSONEncoder,
@@ -520,6 +521,13 @@ def _protect_http_entry(cls: type, view: Callable[..., Any]) -> Callable[..., An
     return protected
 
 
+#: The two duck-typed accessibility hooks the socket and the runtime still drain
+#: behind ``hasattr``. Nothing in the framework defines them, and the shipped
+#: client has no ``window.djust.accessibility`` to receive their frames, so they
+#: are deprecated (#3629); the 2.0 line has already deleted the flush (#3539).
+_DEPRECATED_ACCESSIBILITY_HOOKS = ("_drain_announcements", "_drain_focus")
+
+
 class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(async) intentionally co-define stream_insert/stream_delete; see live_view.pyi overloads
     ContextProviderMixin,
     StreamsMixin,
@@ -906,6 +914,29 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
         from ._component_subscriptions import compile_subscriptions
 
         cls._component_subscriptions = compile_subscriptions(cls)
+        for hook in _DEPRECATED_ACCESSIBILITY_HOOKS:
+            # Warn once, on the first LiveView class that has the hook (defined
+            # in its own body or reached through a plain mixin), not again on
+            # every subclass of that class.
+            if hasattr(cls, hook) and not any(
+                issubclass(base, LiveView) and hasattr(base, hook) for base in cls.__bases__
+            ):
+                # stacklevel=3: warnings.warn -> warn_deprecated ->
+                # __init_subclass__ -> the user's ``class`` statement.
+                warn_deprecated(
+                    "Defining %s on a LiveView (a duck-typed accessibility hook that "
+                    "nothing in djust defines or consumes: the client has no "
+                    "window.djust.accessibility unless your own script assigns one, "
+                    "and the HTTP fallback never drained it)" % hook,
+                    since="1.4",
+                    removed_in="2.0.0",
+                    instead=(
+                        'a role="status" / aria-live region the view renders, to '
+                        "announce a change, and JS.focus() through push_commands(), "
+                        "to move focus"
+                    ),
+                    stacklevel=3,
+                )
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
