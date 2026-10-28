@@ -590,6 +590,13 @@ def _tenant_context(tenant: Any) -> ContextManager[Any]:
 # per-event / url-change re-bind still uses the _tenant_context manager above.
 
 
+def _lifecycle_step(view: Any, fn: Callable[..., Any]) -> Callable[..., Any]:
+    """``fn`` (a view's snapshot hook) as a ``"lifecycle"`` step for ``sync_to_async`` (#3637)."""
+    from .sync_turn import sync_step
+
+    return sync_step(view, "lifecycle", fn)
+
+
 def _consume_async_cancel(view: Any, task_name: str) -> bool:
     """True (and forget the mark) when ``task_name`` was cancelled via
     ``cancel_async`` / ``cancel_async_all``. Same consume-once semantics as
@@ -3942,8 +3949,19 @@ class ViewRuntime(RuntimeTurnPort):
                                 sanitize_for_log(view_path),
                             )
                             state_dict = None
+                    from .sync_turn import guarded_step, sync_step
+
+                    # ``_should_restore_snapshot`` / ``_restore_snapshot`` are
+                    # documented subclass overrides that may read rows: a
+                    # ``"lifecycle"`` step each, like ``on_mount`` (#3637). A
+                    # wrapper that swallows an exception from the gate reads as
+                    # "no" (None) and the view mounts fresh; one that swallows
+                    # ``_restore_snapshot``'s is a ``PermissionDenied`` here,
+                    # which the handler below turns into a fresh mount.
                     if state_dict is not None and await sync_to_async(
-                        view_instance._should_restore_snapshot
+                        sync_step(
+                            view_instance, "lifecycle", view_instance._should_restore_snapshot
+                        )
                     )(request):
                         # #2252: un-tag Decimals BEFORE handing the state to
                         # ``_restore_snapshot``, which is a documented
@@ -3953,7 +3971,11 @@ class ViewRuntime(RuntimeTurnPort):
 
                         state_dict = decode_state_roundtrip(state_dict)
                         try:
-                            await sync_to_async(view_instance._restore_snapshot)(state_dict)
+                            await sync_to_async(
+                                guarded_step(
+                                    view_instance, "lifecycle", view_instance._restore_snapshot
+                                )
+                            )(state_dict)
                             mounted_from_restore = True
                         except Exception:  # noqa: BLE001
                             logger.exception(
@@ -4028,7 +4050,9 @@ class ViewRuntime(RuntimeTurnPort):
                         and not slot_target
                         and type(incoming) is dict
                         and incoming.get("view_slug") == view_path
-                        and await sync_to_async(view_instance._should_restore_snapshot)(request)
+                        and await sync_to_async(
+                            _lifecycle_step(view_instance, view_instance._should_restore_snapshot)
+                        )(request)
                     ):
                         from ._exposure_snapshots import snapshot_codec
 
@@ -4412,7 +4436,9 @@ class ViewRuntime(RuntimeTurnPort):
                     # public state so a back-navigation restore can't hand a
                     # handler a plain dict where it expects a Model. See
                     # LiveView._reject_orm_value_in_state_persistence.
-                    public_state = await sync_to_async(snapshot_fn)(strict=True)
+                    public_state = await sync_to_async(_lifecycle_step(view_instance, snapshot_fn))(
+                        strict=True
+                    )
                     if isinstance(public_state, dict) and public_state:
                         from ._tenant_state import snapshot_tenant_scope
                         from .security import sign_snapshot

@@ -705,8 +705,10 @@ class TestTheSignedSnapshotRoundTrip:
         decodes at the CALLER. Pinned structurally, because the caller is deep
         in an async mount."""
         src = (_PKG / "runtime.py").read_text()
-        block = src[src.index("_should_restore_snapshot\n") :]
-        block = block[: block.index("_restore_snapshot)(state_dict)")]
+        # The override is entered as a "lifecycle" step (#3637), so the call reads
+        # ``guarded_step(view_instance, "lifecycle", view_instance._restore_snapshot)``.
+        call = src.index('"lifecycle", view_instance._restore_snapshot')
+        block = src[src.rindex("_should_restore_snapshot", 0, call) : call]
         assert "decode_state_roundtrip(state_dict)" in block, (
             "runtime.py must decode BEFORE calling the user-overridable "
             "_restore_snapshot — see the docstring on LiveView._restore_snapshot"

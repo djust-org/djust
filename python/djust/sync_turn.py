@@ -115,10 +115,24 @@ def _wrapper() -> Optional[SyncTurnWrapper]:
     return wrapper
 
 
+def _is_async(fn: Callable[..., Any]) -> bool:
+    """Whether calling ``fn`` returns a coroutine (it must never be wrapped).
+
+    An ``async def`` hook runs on the event loop. Wrapping it in a plain function
+    (``functools.wraps`` copies the name but not the coroutine-ness) would hide it
+    from ``sync_to_async``, which refuses a coroutine function with a ``TypeError``
+    when no wrapper is configured: with one the hook body would silently never run
+    (#3637 review).
+    """
+    from ._view_hooks import is_async_hook
+
+    return is_async_hook(fn)
+
+
 def run_sync_step(view: Any, step: str, fn: Callable[..., _T], /, *args: Any, **kwargs: Any) -> _T:
     """Call ``fn(*args, **kwargs)`` on this thread inside the configured wrapper."""
     wrapper = _wrapper()
-    if wrapper is None or _active_step.get() is not None:
+    if wrapper is None or _active_step.get() is not None or _is_async(fn):
         return fn(*args, **kwargs)
     from .turns import current_turn
 
@@ -133,9 +147,11 @@ def run_sync_step(view: Any, step: str, fn: Callable[..., _T], /, *args: Any, **
 def sync_step(view: Any, step: str, fn: Callable[..., _T]) -> Callable[..., _T]:
     """``fn`` as a callable that runs inside the wrapper (for ``sync_to_async``).
 
-    Returns ``fn`` itself when no wrapper is configured.
+    Returns ``fn`` itself when no wrapper is configured, and when ``fn`` is an
+    ``async def`` (not a sync step; ``sync_to_async`` then refuses it exactly as
+    it does with no wrapper).
     """
-    if _wrapper() is None:
+    if _wrapper() is None or _is_async(fn):
         return fn
 
     @functools.wraps(fn)
@@ -160,7 +176,7 @@ def run_guarded_step(
     wrapper itself raises, on entry or on exit, propagates as for every step;
     each caller already treats a non-``PermissionDenied`` failure as a denial.
     """
-    if _wrapper() is None or _active_step.get() is not None:
+    if _wrapper() is None or _active_step.get() is not None or _is_async(fn):
         return fn(*args, **kwargs)
     completed: list = []
 
@@ -180,9 +196,9 @@ def run_guarded_step(
 def guarded_step(view: Any, step: str, fn: Callable[..., _T]) -> Callable[..., _T]:
     """``fn`` as a callable that runs through :func:`run_guarded_step`.
 
-    Returns ``fn`` itself when no wrapper is configured.
+    Returns ``fn`` itself when no wrapper is configured or ``fn`` is ``async def``.
     """
-    if _wrapper() is None:
+    if _wrapper() is None or _is_async(fn):
         return fn
 
     @functools.wraps(fn)

@@ -29,6 +29,8 @@ Example::
 import logging
 from typing import Any, Callable, List, Optional
 
+from .sync_turn import run_guarded_step
+
 logger = logging.getLogger(__name__)
 
 
@@ -77,8 +79,6 @@ def run_on_mount_hooks(view_instance: Any, request: Any, **kwargs: Any) -> Optio
     hooks = _collect_on_mount_hooks(type(view_instance))
     if not hooks:
         return None
-    from .sync_turn import run_guarded_step
-
     # One ``"lifecycle"`` step of the sync-turn wrapper around the chain, on every
     # transport (#3637). A guarded step: a hook that raises halts nothing by being
     # swallowed by the wrapper, the mount is refused.

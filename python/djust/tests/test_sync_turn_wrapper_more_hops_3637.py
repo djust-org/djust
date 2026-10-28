@@ -558,6 +558,94 @@ async def test_a_session_restore_mount_replays_presence_inside_the_wrapper(probe
     assert SEEN["restore_presence"] == ["hook"], SEEN
 
 
+def _restore_harness(monkeypatch):
+    """The 1913 runtime-mount harness with the view's snapshot hooks recording."""
+    from djust.tests import test_runtime_mount_state_restore_1913 as harness
+
+    view_cls = harness._OptInSnapView
+    original_restore = view_cls._restore_snapshot
+    original_gate = view_cls._should_restore_snapshot
+    original_capture = view_cls._capture_snapshot_state
+
+    def _restore_snapshot(self, state):
+        note("restore_snapshot")
+        if MODE.get("restore_snapshot-raises"):
+            raise RuntimeError("the application override failed")
+        return original_restore(self, state)
+
+    def _should_restore_snapshot(self, request):
+        note("should_restore")
+        return original_gate(self, request)
+
+    def _capture_snapshot_state(self, *, strict=False):
+        note("capture_snapshot")
+        return original_capture(self, strict=strict)
+
+    monkeypatch.setattr(view_cls, "_restore_snapshot", _restore_snapshot)
+    monkeypatch.setattr(view_cls, "_should_restore_snapshot", _should_restore_snapshot)
+    monkeypatch.setattr(view_cls, "_capture_snapshot_state", _capture_snapshot_state)
+    return harness
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+async def test_the_snapshot_restore_and_capture_overrides_run_inside_the_wrapper(
+    probe, monkeypatch
+):
+    """``_should_restore_snapshot``, ``_restore_snapshot`` and ``_capture_snapshot_state``
+    are documented subclass overrides that may read rows."""
+    harness = _restore_harness(monkeypatch)
+    session = await sync_to_async(harness._make_db_session)()
+    runtime, transport = harness._make_runtime(harness._make_request(session))
+    snap = harness._signed_snapshot(
+        {"role": "admin", "n": 7}, slug=harness.VIEW_PATH, session_key=session.session_key
+    )
+
+    await harness._mount(
+        runtime,
+        {
+            "type": "mount",
+            "view": harness.VIEW_PATH,
+            "url": harness.PAGE_URL,
+            "state_snapshot": snap,
+        },
+    )
+
+    assert runtime.view_instance._mounted_from_restore is True
+    assert set(SEEN["should_restore"]) == {"lifecycle"}, SEEN
+    assert set(SEEN["restore_snapshot"]) == {"lifecycle"}, SEEN
+    assert SEEN["capture_snapshot"] and set(SEEN["capture_snapshot"]) == {"lifecycle"}, SEEN
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+async def test_a_wrapper_that_swallows_a_failing_restore_override_falls_back_to_mount(
+    probe, monkeypatch
+):
+    harness = _restore_harness(monkeypatch)
+    MODE["lifecycle"] = "swallow"
+    MODE["restore_snapshot-raises"] = "1"
+    session = await sync_to_async(harness._make_db_session)()
+    runtime, _transport = harness._make_runtime(harness._make_request(session))
+    snap = harness._signed_snapshot(
+        {"role": "admin", "n": 7}, slug=harness.VIEW_PATH, session_key=session.session_key
+    )
+
+    await harness._mount(
+        runtime,
+        {
+            "type": "mount",
+            "view": harness.VIEW_PATH,
+            "url": harness.PAGE_URL,
+            "state_snapshot": snap,
+        },
+    )
+
+    view = runtime.view_instance
+    assert view._mounted_from_restore is False, "a swallowed failure is not a restore"
+    assert view.role == "user", "the view mounted fresh instead of keeping half a restore"
+
+
 def test_the_scoped_presence_probe_runs_inside_the_wrapper(probe):
     """``_presence_probe`` (the scoped-presence sync after a turn) is one ``hook`` step."""
     from djust.push import _presence_probe
@@ -748,6 +836,78 @@ def test_the_http_fallbacks_result_hook_is_an_async_step_not_a_generic_hook(prob
     assert SEEN["http_result"] == ["async"] and SEEN["http_tick"] == ["tick"], SEEN
 
 
+@pytest.mark.parametrize("helper", ["sync_step", "guarded_step"])
+def test_an_async_def_hook_is_never_hidden_behind_a_step_wrapper(probe, helper):
+    """``functools.wraps`` copies the name, not the coroutine-ness: ``sync_to_async`` would
+    take the wrapper for a sync function and return the coroutine un-awaited, the hook
+    body silently never running. The helpers hand an ``async def`` back unchanged, so
+    ``sync_to_async`` refuses it loudly, as it does with no wrapper."""
+    from djust import sync_turn
+
+    class V(PresenceMixin, LiveView):
+        async def handle_cursor_move(self, x, y):
+            note("never")
+
+        async def update_presence_heartbeat(self):
+            note("never")
+
+        async def get_presence_key(self):
+            note("never")
+
+        async def connected(self):
+            note("never")
+
+    view = V()
+    make = getattr(sync_turn, helper)
+    for name in (
+        "handle_cursor_move",
+        "update_presence_heartbeat",
+        "get_presence_key",
+        "connected",
+    ):
+        hook = getattr(view, name)
+        stepped = make(view, "hook", hook)
+        assert stepped == hook, name
+        with pytest.raises(TypeError):
+            sync_to_async(stepped)
+    assert ENTERED == []
+
+
+@pytest.mark.parametrize("helper", ["run_sync_step", "run_guarded_step"])
+def test_the_run_helpers_do_not_enter_the_wrapper_for_an_async_def_hook(probe, helper):
+    from djust import sync_turn
+
+    async def hook():
+        note("coroutine")
+
+    coroutine = getattr(sync_turn, helper)(None, "hook", hook)
+    assert asyncio.iscoroutine(coroutine)
+    coroutine.close()
+    assert ENTERED == []
+
+
+@pytest.mark.asyncio
+async def test_a_presence_broadcast_from_async_code_runs_inside_the_wrapper(probe):
+    """``PresenceMixin._broadcast_presence_change`` called under a running loop hands
+    itself to a worker; that hop reads ``get_presence_key()`` and is a ``hook`` step."""
+
+    class V(PresenceMixin, LiveView):
+        presence_key = "probe"
+
+        def get_presence_key(self):
+            note("broadcast_key")
+            return "probe"
+
+    view = V()
+    view._broadcast_presence_change()
+    for _ in range(100):
+        if "hook" in steps():
+            break
+        await asyncio.sleep(0.02)
+
+    assert "hook" in steps(), steps()
+
+
 def test_auth_and_lifecycle_are_declared_steps():
     from djust.sync_turn import SYNC_STEPS
 
@@ -797,39 +957,61 @@ def test_handler_permission_runs_in_the_wrapper_and_a_swallowed_failure_denies(p
 
 
 # ---------------------------------------------------------------------------
-# The structural pin
+# The structural pin: an ALLOWLIST
 #
-# Every ``sync_to_async(<view hook>)`` must hand over a stepped callable
-# (``sync_step(...)`` / ``guarded_step(...)``) or name a function whose own body
-# enters the step (a "leaf"). A new raw ``sync_to_async(view.<hook>)`` fails here.
+# Every call in python/djust that hands a callable to a thread (``sync_to_async``,
+# ``database_sync_to_async``, ``asyncio.to_thread``, ``run_in_executor``) must be
+#   * STEPPED: the callable is ``sync_step(...)`` / ``guarded_step(...)``;
+#   * a LEAF: a framework function that enters its own step (verified below); or
+#   * on SAFE: a framework-internal callable, each with a reason string.
+# Anything else (a raw ``view.<hook>``, a lambda, ``functools.partial``, ``getattr``,
+# a call in a NEW file) fails. SAFE may never name an application hook.
 # ---------------------------------------------------------------------------
 
-#: Attribute names that are application hooks. ``sync_to_async(x.<name>)`` with one of
-#: these and no stepping helper is the exact bug of #3637 (and of #3625 before it).
-HOOK_ATTRS = frozenset(
-    {
-        "get_object",
-        "has_object_permission",
-        "check_permissions",
-        "connected",
-        "disconnected",
-        "handle_cursor_move",
-        "update_presence_heartbeat",
-        "get_presence_key",
-        "get_context_data",
-        "get_template",
-        "handle_tick",
-        "handle_async_result",
-        "handle_info",
-        "handle_params",
-        "mount",
-        "_restore_presence",
-    }
-)
+_FUNCTIONS = (ast.FunctionDef, ast.AsyncFunctionDef)
+_THREADERS = {"sync_to_async", "database_sync_to_async", "to_thread", "run_in_executor"}
+_STEPPERS = {"sync_step", "guarded_step", "_sync_step", "_lifecycle_step"}
 
-#: ``sync_to_async(<this exact expression>)`` that is a hook too, though its attribute
-#: name (``render``) is too common to flag on its own.
-HOOK_TEXTS = frozenset({"component.render"})
+#: Application-overridable hooks. Derived names (``_derived_override_points``) must all
+#: appear here; the value says where each is entered, or why it is not.
+HOOKS: Dict[str, str] = {
+    # entered at the framework function that calls them (LEAVES)
+    "get_object": "leaf: check_object_permission",
+    "has_object_permission": "leaf: check_object_permission",
+    "check_permissions": "leaf: check_view_auth (async def: awaited on the loop, never wrapped)",
+    # sync_step at the thread hop
+    "connected": "begin_live_connection",
+    "disconnected": "run_view_disconnected",
+    "handle_cursor_move": "websocket.py sync_step hook",
+    "update_presence_heartbeat": "websocket.py sync_step hook",
+    "get_presence_key": "runtime.py / push.py / presence.py sync_step hook",
+    "get_template": "runtime.py actor mount + websocket.py hot reload: render step",
+    "_restore_presence": "runtime.py restore branch: hook step",
+    "_should_restore_snapshot": "runtime.py: lifecycle step",
+    "_restore_snapshot": "runtime.py: lifecycle step (guarded)",
+    "_capture_snapshot_state": "runtime.py mount snapshot: lifecycle step",
+    "handle_restore": "call_hook (hook step)",
+    "get_context_data": "render step at every hop",
+    "handle_tick": "tick step (call_tick / tick_turn)",
+    "handle_async_result": "async step (call_async_result / call_hook_sync)",
+    "handle_info": "call_hook (hook step)",
+    "handle_params": "call_hook (handle_params step)",
+    "mount": "call_hook (mount step)",
+    "replay_event": "leaf: the handler is stepped by time_travel._stepped_handler",
+    "run_on_mount_hooks": "leaf: lifecycle",
+    # documented overrides that run inside another step or have no turn (see the guide)
+    "handle_component_event": "runs inside the event step of the handler that routes to it",
+    "update": "LiveComponent.update: runs inside the event step",
+    "serialize_for_template": "runs inside the render hop",
+    "get_render_only_context": "runs inside the render hop (not its own step)",
+    "get_http_status": "HTTP response phase, outside any hop",
+    "unmount": "LiveComponent.unmount: runs inside the event / render that removes it",
+    "_on_sticky_unmount": "teardown without a turn; documented as not wrapped",
+    "_on_sticky_update": "runs inside the parent's render hop",
+    "_get_all_child_views": "a registry lookup, not application code that reads rows",
+    "_handle_event": "internal dispatch",
+    "as_view": "the Django class method",
+}
 
 #: Framework functions that call application hooks and enter the step INSIDE their body,
 #: so ``sync_to_async(<leaf>)`` is sound: (file, qualname) -> (helper, step).
@@ -846,13 +1028,11 @@ LEAVES: Dict[Tuple[str, str], Tuple[str, str]] = {
     ("time_travel.py", "_stepped_handler"): ("sync_step", "event"),
 }
 
-#: ``sync_to_async(<name>)`` targets that are leaves (by the name they are called by).
+#: ``sync_to_async(<name>)`` targets that are leaves, by the name they are called by.
+#: The first group are the leaves above; the second call only those leaves.
 LEAF_NAMES = {
     "check_object_permission",
-    "enforce_object_permission",
     "check_view_auth",
-    "check_view_auth_lightweight",
-    "run_pre_mount_auth",
     "check_event_auth",
     "check_handler_permission",
     "run_on_mount_hooks",
@@ -860,11 +1040,127 @@ LEAF_NAMES = {
     "untrack_view_presence",
     "_presence_probe",
     "replay_event",
+    # call only leaves
+    "enforce_object_permission",
+    "check_view_auth_lightweight",
+    "run_pre_mount_auth",
 }
 
-_STEPPERS = {"sync_step", "guarded_step", "_sync_step"}
-_FUNCTIONS = (ast.FunctionDef, ast.AsyncFunctionDef)
-_THREADERS = {"sync_to_async", "database_sync_to_async"}
+
+def _safe(reason: str, *names: str) -> Dict[str, str]:
+    return {name: reason for name in names}
+
+
+#: Framework-internal callables handed to a thread, with the reason each is not a hook.
+SAFE: Dict[str, str] = {
+    **_safe(
+        "render plumbing: template build, Rust state sync, HTML post-processing and diff; "
+        "get_context_data is its own render step (guide: Not wrapped)",
+        "_extract_liveview_content",
+        "_strip_comments_and_whitespace",
+        "_initialize_rust_view",
+        "_sync_state_to_rust",
+        "render_with_diff",
+        "render_view_with_diff",
+        "render_background_sync",
+        "_render_hot",
+        "_sync_and_render",
+        "_sync_context_and_render",
+        "_sync_strip_and_extract",
+        "render_embedded_child_html",
+        "render_pending_layout",
+        "render",
+        "render_to_string",
+        "_render_eager",
+        "_reconstruct_explicit_page_shell",
+        "encode_view_state",
+        "update_template",
+        "contract_snapshot",
+        "mount_frame_metadata",
+        "navigation_title",
+        "page_shell",
+        "legacy_snapshot_fields",
+        "capture",
+        "snapshot_codec",
+        "project_view",
+        "server_state_adapter",
+    ),
+    **_safe(
+        "session, auth-state or storage I/O of the framework, no view code",
+        "_request_owns_session",
+        "_request_user_pk",
+        "save",
+        "save_merged",
+        "pop",
+        "load_server_state",
+        "request_binding",
+        "fresh_socket_request",
+        "_event_request",
+        "authorize_event",
+        "bind_csrf_cookie",
+        "establish_mount_session",
+        "_claim_observation",
+        "resume_entry",
+        "track_session",
+        "page_request",
+        "per_connection",
+        "_attach_socket_tenant",
+        "_tenant",
+    ),
+    **_safe(
+        "framework state hop (restore/capture of framework-owned state, child bookkeeping)",
+        "_assign_component_ids",
+        "_capture_dirty_baseline",
+        "_initialize_temporary_assigns",
+        "_restore_component_state",
+        "_restore_listen_channels",
+        "_restore_private_state",
+        "_restore_upload_configs",
+        "_snapshot_user_private_attrs",
+        "_get_private_state",
+        "_child_update",
+        "_capture_batch",
+        "resolve_explicit_child",
+        "restore_snapshot",
+        "restore_component_snapshot",
+    ),
+    **_safe(
+        "teardown of framework-owned state; no turn (guide: Not wrapped)",
+        "_clear_live_handles",
+        "abandon",
+        "release_root_view",
+        "_preserve_sticky_children",
+    ),
+    **_safe(
+        "calls only leaf functions that enter their own step",
+        "_authorize",
+    ),
+    **_safe(
+        "already stepped by the caller (a sync_step / run_sync_step result or a step body)",
+        "stepped",
+        "call",
+        "connected_hook",
+        "tick_turn",
+        "turn",
+        "call_body",
+    ),
+    **_safe(
+        "request/transport plumbing around hops that enter their own steps",
+        "dispatch",
+        "get",
+        "protected_server_error",
+        "run",
+        "CALL:detached",
+    ),
+}
+
+#: Deliberate raw threading of a hook: (file, source text). An ``async def`` hook is
+#: refused by ``sync_to_async`` with the same ``TypeError`` with or without a wrapper
+#: (#3625), so these stay raw on purpose.
+DELIBERATE_RAW = {
+    ("_view_hooks.py", "view.handle_tick"),
+    ("_view_hooks.py", "handler"),
+}
 
 
 def _callee(call: ast.Call) -> Optional[str]:
@@ -893,44 +1189,122 @@ def _source_files():
         yield relative, ast.parse(path.read_text())
 
 
-def _raw_hook_threading(tree: ast.AST) -> List[Tuple[int, str]]:
-    """(line, description) of each ``sync_to_async(<hook>)`` that is neither stepped nor a leaf."""
-    bad = []
+def _thread_target(call: ast.Call) -> Optional[ast.AST]:
+    args = call.args[1:] if _callee(call) == "run_in_executor" else call.args
+    return args[0] if args else None
+
+
+def _classify(call: ast.Call) -> Tuple[str, str]:
+    """(verdict key, source text) of a callable handed to a thread."""
+    target = _thread_target(call)
+    if target is None:
+        return "<no callable>", ""
+    text = ast.unparse(target)
+    if isinstance(target, ast.Call):
+        callee = _callee(target)
+        return ("STEPPED" if callee in _STEPPERS else "CALL:%s" % callee), text
+    if isinstance(target, ast.Attribute):
+        return target.attr, text
+    if isinstance(target, ast.Name):
+        return target.id, text
+    return "%s" % type(target).__name__.upper(), text
+
+
+def _unaccounted_thread_calls(tree: ast.AST, relative: str) -> List[str]:
+    problems = []
     for node in ast.walk(tree):
-        if not (isinstance(node, ast.Call) and _callee(node) in _THREADERS and node.args):
+        if not (isinstance(node, ast.Call) and _callee(node) in _THREADERS):
             continue
-        target = node.args[0]
-        if isinstance(target, ast.Call):  # sync_to_async(sync_step(...)) and friends
-            if _callee(target) in _STEPPERS:
-                continue
+        key, text = _classify(node)
+        if key == "STEPPED" or (relative, text) in DELIBERATE_RAW:
             continue
-        if isinstance(target, ast.Attribute) and (
-            target.attr in HOOK_ATTRS or ast.unparse(target) in HOOK_TEXTS
-        ):
-            bad.append((node.lineno, ast.unparse(target)))
-        elif isinstance(target, ast.Name) and target.id in HOOK_ATTRS:
-            bad.append((node.lineno, target.id))
-    return bad
+        if key in LEAF_NAMES or key in SAFE:
+            continue
+        problems.append("%s:%d %s(%s) [%s]" % (relative, node.lineno, _callee(node), text, key))
+    return problems
 
 
-#: Raw threading of a hook that is deliberate: ``handle_tick`` / ``handle_async_result``
-#: when ``async def`` (refused with the same TypeError as without a wrapper, #3625), and
-#: the hot paths that already step it themselves. (file, source text) pairs.
-_DELIBERATE_RAW = {
-    ("_view_hooks.py", "view.handle_tick"),
-}
-
-
-def test_no_view_hook_is_handed_to_sync_to_async_without_a_step():
+def test_every_callable_handed_to_a_thread_is_stepped_a_leaf_or_on_the_safe_list():
     problems = []
     for relative, tree in _source_files():
-        for line, text in _raw_hook_threading(tree):
-            if (relative, text) in _DELIBERATE_RAW:
-                continue
-            problems.append("%s:%d sync_to_async(%s)" % (relative, line, text))
-    assert not problems, "raw view-hook threading (use sync_step / guarded_step):\n" + "\n".join(
-        problems
+        problems.extend(_unaccounted_thread_calls(tree, relative))
+    assert not problems, (
+        "a callable is handed to a thread with no sync-turn step: route it through "
+        "sync_step / guarded_step, or add it to SAFE with a reason if it calls no "
+        "application hook:\n" + "\n".join(problems)
     )
+
+
+def test_the_safe_list_never_names_an_application_hook_and_has_no_stale_entries():
+    assert not set(SAFE) & set(HOOKS), sorted(set(SAFE) & set(HOOKS))
+    assert all(reason.strip() for reason in SAFE.values())
+    used = set()
+    for relative, tree in _source_files():
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and _callee(node) in _THREADERS:
+                used.add(_classify(node)[0])
+    stale = sorted(set(SAFE) - used)
+    assert not stale, "SAFE entries no call uses any more: %s" % stale
+
+
+def _derived_override_points() -> set:
+    """Names of the LiveView / LiveComponent methods whose docstring documents an override."""
+    import inspect
+    import re
+
+    from djust.components.base import LiveComponent
+
+    found = set()
+    for cls in (LiveView, LiveComponent):
+        for name in dir(cls):
+            if name.startswith("__"):
+                continue
+            try:
+                member = inspect.getattr_static(cls, name)
+            except AttributeError:
+                continue
+            member = getattr(getattr(member, "fget", member), "__func__", member)
+            member = getattr(member, "fget", member)
+            if callable(member) and re.search(
+                r"overrid", getattr(member, "__doc__", "") or "", re.I
+            ):
+                found.add(name)
+    return found
+
+
+def test_every_documented_override_point_has_a_disposition():
+    missing = sorted(_derived_override_points() - set(HOOKS))
+    assert not missing, (
+        "documented override points with no entry in HOOKS (enter a step or say why "
+        "not): %s" % missing
+    )
+
+
+def test_the_pin_catches_every_escape_a_name_list_missed():
+    """The allowlist is load-bearing: each way of threading a hook around the helpers,
+    in a file the pin has never seen, is reported."""
+    escapes = {
+        "raw attribute": "await sync_to_async(view.handle_restore)(request)",
+        "private hook": "await sync_to_async(view._should_restore_snapshot)(request)",
+        "lambda": "await sync_to_async(lambda: view.get_presence_key())()",
+        "partial": "await sync_to_async(functools.partial(view.get_presence_key))()",
+        "getattr": "await sync_to_async(getattr(view, 'x'))()",
+        "to_thread": "await asyncio.to_thread(view.update_presence_heartbeat)",
+        "executor": "await loop.run_in_executor(None, view.handle_cursor_move)",
+        "database_sync_to_async": "await database_sync_to_async(view.get_template)()",
+        "unknown helper": "await sync_to_async(some_new_helper)(view)",
+    }
+    for label, source in escapes.items():
+        tree = ast.parse("async def f(view):\n    %s\n" % source)
+        assert _unaccounted_thread_calls(tree, "brand_new.py"), label
+    accepted = ast.parse(
+        "async def f(view):\n"
+        "    await sync_to_async(sync_step(view, 'hook', view.handle_cursor_move))(1, 2)\n"
+        "    await database_sync_to_async(guarded_step(view, 'auth', view.get_object))()\n"
+        "    await sync_to_async(check_object_permission)(view, request)\n"
+        "    await asyncio.to_thread(sync_step(view, 'hook', view.get_presence_key))\n"
+    )
+    assert _unaccounted_thread_calls(accepted, "brand_new.py") == []
 
 
 def _find_function(tree: ast.AST, qualname: str) -> Optional[ast.AST]:
@@ -957,49 +1331,20 @@ def test_every_leaf_enters_its_step_inside_its_own_body(leaf):
     entered = []
     for call in _own_calls(function):
         if _callee(call) == helper:
-            literals = [
-                arg.value
-                for arg in call.args
-                if isinstance(arg, ast.Constant) and isinstance(arg.value, str)
-            ]
-            entered.append(literals)
+            entered.append(
+                [
+                    arg.value
+                    for arg in call.args
+                    if isinstance(arg, ast.Constant) and isinstance(arg.value, str)
+                ]
+            )
     assert any(step in literals for literals in entered), (
         "%s::%s must call %s(..., %r, ...) itself (calls: %s)"
         % (relative, qualname, helper, step, entered)
     )
 
 
-def test_a_leaf_name_a_caller_threads_is_a_registered_leaf():
-    """``sync_to_async(<a framework function that runs hooks>)`` is only sound for a
-    leaf. Every such name used in the package must be one the pin verifies."""
-    registered = {qualname.split(".")[-1] for _file, qualname in LEAVES} | {
-        "enforce_object_permission",  # leaf through check_object_permission
-        "check_view_auth_lightweight",  # leaf through check_view_auth
-        "run_pre_mount_auth",  # leaf through check_view_auth
-        "replay_event",  # leaf: the handler is stepped by _stepped_handler
-    }
-    assert LEAF_NAMES <= registered, sorted(LEAF_NAMES - registered)
-
-
-def test_the_pin_sees_a_raw_hook_call_and_accepts_a_stepped_one():
-    """The pin is not decorative: it fails on the mutation it exists for."""
-    raw = ast.parse(
-        "async def f(view):\n"
-        "    await sync_to_async(view.handle_cursor_move)(1, 2)\n"
-        "    await sync_to_async(view.get_presence_key)()\n"
-        "    await sync_to_async(self.view_instance.get_template)()\n"
-    )
-    assert [text for _line, text in _raw_hook_threading(raw)] == [
-        "view.handle_cursor_move",
-        "view.get_presence_key",
-        "self.view_instance.get_template",
-    ]
-    stepped = ast.parse(
-        "async def f(view):\n"
-        "    await sync_to_async(sync_step(view, 'hook', view.handle_cursor_move))(1, 2)\n"
-        "    await database_sync_to_async(guarded_step(view, 'auth', view.get_object))()\n"
-    )
-    assert _raw_hook_threading(stepped) == []
+def test_a_leaf_without_its_step_call_is_reported():
     leafless = ast.parse("def check_object_permission(view, request):\n    view.get_object()\n")
     function = _find_function(leafless, "check_object_permission")
     assert not [c for c in _own_calls(function) if _callee(c) == "run_guarded_step"]
@@ -1010,7 +1355,7 @@ def test_the_pin_sees_a_raw_hook_call_and_accepts_a_stepped_one():
 #: function that enters the step around each. A new call site fails here until it is
 #: routed through a step and listed.
 _SINKS = {"get_object", "has_object_permission", "check_permissions"}
-EXPECTED_SINKS: Dict[Tuple[str, str, str], str] = {
+EXPECTED_SINKS: Dict[Tuple[str, str, str], Optional[str]] = {
     ("auth/core.py", "_resolve_object_permission", "get_object"): "check_object_permission",
     ("auth/core.py", "_resolve_object_permission", "has_object_permission"): (
         "check_object_permission"
@@ -1052,12 +1397,7 @@ def _sink_sites() -> Dict[Tuple[str, str, str], None]:
 
 
 def test_application_auth_hooks_are_called_from_exactly_the_audited_sites():
-    found = {
-        site
-        for site in _sink_sites()
-        # a method that merely delegates to its own override (mixin MRO plumbing)
-        if site[0] not in ("live_view.py",)
-    }
+    found = {site for site in _sink_sites() if site[0] not in ("live_view.py",)}
     expected = set(EXPECTED_SINKS)
     assert found == expected, "new: %s; gone: %s" % (
         sorted(found - expected),

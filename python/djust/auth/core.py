@@ -45,6 +45,7 @@ from django.conf import settings
 from django.core.exceptions import ObjectDoesNotExist, PermissionDenied
 from django.http import Http404
 
+from ..sync_turn import guarded_step, run_guarded_step
 from .any_of import PermissionRequired, describe_permission_spec, user_has_permission_spec
 
 logger = logging.getLogger(__name__)
@@ -100,8 +101,6 @@ def check_view_auth(
     :func:`~djust.sync_turn.run_guarded_step`: a wrapper that swallows a failed
     check can never turn it into a pass.
     """
-    from ..sync_turn import run_guarded_step
-
     return run_guarded_step(
         view_instance,
         "auth",
@@ -279,8 +278,6 @@ def check_event_auth(view_instance: Any, request: Any) -> Optional[str]:
         getattr(view_instance, "login_url", None)
         or getattr(settings, "LOGIN_URL", "/accounts/login/"),
     )
-    from ..sync_turn import run_guarded_step
-
     # The decorators it replays are application code: an ``"auth"`` step (#3637).
     return run_guarded_step(
         view_instance, "auth", _http_only_access, view_instance, request, login_url, _PHASE_EVENT
@@ -1884,8 +1881,6 @@ def check_object_permission(view_instance: Any, request: Any) -> None:
     # The cache is written after the step, not inside it, so a wrapper whose
     # exit raises (a failed commit) cannot leave an object cached for a check
     # that was refused.
-    from ..sync_turn import run_guarded_step
-
     outcome = run_guarded_step(
         view_instance, "auth", _resolve_object_permission, view_instance, request
     )
@@ -2185,8 +2180,6 @@ async def acheck_view_auth(
         )
 
     login_url = _view_login_url(view_instance)
-    from ..sync_turn import guarded_step
-
     redirect = await sync_to_async(
         guarded_step(view_instance, "auth", _check_login_and_permission)
     )(view_instance, request, login_url)
@@ -2269,8 +2262,6 @@ def check_handler_permission(handler: Any, request: Any) -> bool:
     perm = meta.get("permission_required")
     if perm is None:
         return True
-    from ..sync_turn import run_guarded_step
-
     # ``has_perm`` runs the project's auth backends: an ``"auth"`` step (#3637).
     return run_guarded_step(
         getattr(handler, "__self__", None),
