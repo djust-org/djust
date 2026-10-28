@@ -1367,12 +1367,17 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
         and a private attribute can be a property whose setter is application code. Every
         caller (the WebSocket state restore, the HTTP POST restore, a lazy container and
         a sticky child's restore) reaches this method, so the step is entered here.
+
+        A guarded step, like ``_restore_snapshot``: a wrapper whose ``__exit__`` swallows
+        an exception would otherwise turn a failing restore into a silent PARTIAL one
+        (the attributes before the failing key applied, the rest skipped). The failure
+        propagates as ``PermissionDenied`` instead.
         """
         from ._exposure import require_legacy_state_api
-        from .sync_turn import run_sync_step
+        from .sync_turn import run_guarded_step
 
         require_legacy_state_api(self)
-        run_sync_step(self, "lifecycle", lambda: self._apply_private_state(private_state))
+        run_guarded_step(self, "lifecycle", lambda: self._apply_private_state(private_state))
 
     def _apply_private_state(self, private_state: Dict[str, Any]) -> None:
         """The body of :meth:`_restore_private_state`, run inside its step."""

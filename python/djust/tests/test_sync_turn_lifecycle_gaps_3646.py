@@ -30,6 +30,7 @@ import uuid
 from typing import Dict, List, Optional, Tuple
 
 import pytest
+from django.core.exceptions import PermissionDenied
 from asgiref.sync import sync_to_async
 from django.contrib.auth import get_user
 from django.contrib.auth.models import AnonymousUser
@@ -67,6 +68,10 @@ def recording_wrapper(view, step, turn):
         _OPEN.step = step
         try:
             yield
+        except Exception:
+            if mode == "swallow":
+                return  # a wrapper whose __exit__ swallows the body's exception
+            raise
         finally:
             _OPEN.step = None
         if mode == "exit-raises":
@@ -818,15 +823,15 @@ class SequencePageWithOnMount(SequencePage):
     on_mount = [_sequence_on_mount]
 
 
-def _page_request(method, session=None):
+def _page_request(method, session=None, view_path="seq"):
     from django.contrib.sessions.middleware import SessionMiddleware
 
     factory = RequestFactory()
     if method == "GET":
-        request = factory.get("/seq/")
+        request = factory.get("/%s/" % view_path)
     else:
         request = factory.post(
-            "/seq/",
+            "/%s/" % view_path,
             data=json.dumps({"event": "bump", "params": {}}),
             content_type="application/json",
             HTTP_X_DJUST_EVENT="bump",
@@ -876,3 +881,137 @@ def test_the_guides_entries_per_request_for_a_post_event():
     SequencePage.as_view()(first)
     restored = _entered_by(SequencePage, _page_request("POST", session=first.session))
     assert restored == ["auth", "lifecycle", "auth", "hook", "event", "render", "render"]
+
+
+# --------------------------------------------------------------------------- #
+# _restore_private_state is a GUARDED step (#3646 review): a swallowing wrapper must not
+# turn a failing restore into a silent partial one
+# --------------------------------------------------------------------------- #
+
+
+class Exploding(LiveView):
+    exposure_policy = "legacy"
+    template = "<div dj-root><span>x</span></div>"
+    applied: list = []
+
+    @property
+    def _gadget(self):
+        return self.__dict__.get("_gadget_value")
+
+    @_gadget.setter
+    def _gadget(self, value):
+        if value == "boom":
+            raise ValueError("a private setter failed")
+        self.__dict__["_gadget_value"] = value
+
+
+def _exploding():
+    view = Exploding()
+    view._framework_attrs = frozenset()
+    view._user_private_keys = set()
+    return view
+
+
+_PRIVATE = {"_a_first": 1, "_gadget": "boom", "_z_last": 3}
+
+
+def test_without_a_wrapper_a_failing_private_restore_raises_after_the_first_key():
+    djust_config.set("sync_turn_wrapper", None)
+    view = _exploding()
+
+    with pytest.raises(ValueError, match="private setter"):
+        view._restore_private_state(dict(_PRIVATE))
+
+    assert view.__dict__.get("_a_first") == 1
+    assert "_z_last" not in view.__dict__
+
+
+def test_a_swallowing_wrapper_cannot_turn_a_failing_private_restore_into_a_partial_one():
+    MODE["lifecycle"] = "swallow"
+    view = _exploding()
+
+    with pytest.raises(PermissionDenied):
+        view._restore_private_state(dict(_PRIVATE))
+
+    # The restore did not "succeed": it raised, as it does with no wrapper at all.
+    assert "_z_last" not in view.__dict__
+    assert [step for step, _thread in ENTERED] == ["lifecycle"]
+
+
+def test_a_wrapper_that_raises_refuses_the_private_restore():
+    MODE["lifecycle"] = "raise"
+    view = _exploding()
+
+    with pytest.raises(RuntimeError, match="cannot open its scope"):
+        view._restore_private_state({"_a_first": 1})
+
+    assert "_a_first" not in view.__dict__
+
+
+def test_an_allowing_wrapper_restores_every_private_key():
+    view = _exploding()
+
+    view._restore_private_state({"_a_first": 1, "_gadget": "fine", "_z_last": 3})
+
+    assert (view.__dict__["_a_first"], view._gadget, view.__dict__["_z_last"]) == (1, "fine", 3)
+
+
+class SwallowedRestorePage(LiveView):
+    exposure_policy = "legacy"
+    template = "<div dj-root><span>{{ n }}</span></div>"
+    armed = False
+
+    def mount(self, request, **kwargs):
+        self._a_first = 1
+        self._boom = 1
+        self._z_last = 3
+        self.n = 0
+
+    def __setattr__(self, name, value):
+        if name == "_boom" and type(self).armed:
+            raise ValueError("a private setter failed")
+        super().__setattr__(name, value)
+
+    def get_context_data(self, **kwargs):
+        return {"n": self.n}
+
+    @event_handler()
+    def bump(self, **kwargs):
+        self.n += 1
+
+
+@pytest.mark.parametrize("mode", [None, "swallow"])
+def test_an_http_post_with_a_failing_private_restore_fails_the_same_way_with_a_swallowing_wrapper(
+    mode,
+):
+    """The HTTP POST restore calls ``_restore_private_state``; whatever it does with no
+    wrapper (an error answer), it must do with a wrapper that swallows."""
+    first = _page_request("GET", view_path="swallowed")
+    with override_settings(LIVEVIEW_ALLOWED_MODULES=[MOD]):
+        SwallowedRestorePage.armed = False
+        SwallowedRestorePage.as_view()(first)
+        SwallowedRestorePage.armed = True
+        if mode:
+            MODE["lifecycle"] = mode
+        try:
+            response = SwallowedRestorePage.as_view()(
+                _page_request("POST", session=first.session, view_path="swallowed")
+            )
+        finally:
+            SwallowedRestorePage.armed = False
+
+    assert response.status_code >= 400, response.status_code
+
+
+def test_the_http_post_restore_page_works_when_nothing_fails():
+    """The control for the test above: the same page restores cleanly when the private
+    setter does not raise, so an error answer there is the restore's failure."""
+    first = _page_request("GET", view_path="swallowed")
+    with override_settings(LIVEVIEW_ALLOWED_MODULES=[MOD]):
+        SwallowedRestorePage.armed = False
+        SwallowedRestorePage.as_view()(first)
+        response = SwallowedRestorePage.as_view()(
+            _page_request("POST", session=first.session, view_path="swallowed")
+        )
+
+    assert response.status_code == 200, response.content[:200]

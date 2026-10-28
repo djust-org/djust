@@ -26,10 +26,20 @@ What it pins
    ``unwrapped:<category>:<reason>``, and each form is checked against the source.
 
 What it cannot see: a hand-off built dynamically (``getattr(asgiref.sync, name)``,
-``importlib``), and a hook reached through a call the exact resolver cannot follow
-(an attribute call to a method defined in several classes). The behavioural tests in
-``test_sync_turn_wrapper_more_hops_3637.py`` and ``test_sync_turn_lifecycle_gaps_3646.py``
-cover the paths the structure cannot prove.
+``importlib``), a thread API passed around in a variable and applied later (a
+``functools.partial(sync_to_async, ...)`` factory IS reported where it is built, but
+``partial(api_in_a_variable, ...)`` is not), and a hook reached through a call the exact
+resolver cannot follow (an attribute call to a method defined in several classes).
+
+What it asserts without checking: the ``outside`` (12), ``entry`` (4) and ``external`` (3)
+entries of ``ALLOWED`` are named and carry a reason, and nothing more. They are threads of
+other subsystems (clocks, the worker pool, the dev server), the HTTP request entry, and
+calls into Django or the Rust extension; no test here proves they enter no hook. And an
+``inside:`` disposition is proven by RUNNING the hook in ``test_sync_turn_inside_audit_3646.py``,
+not by this module.
+
+The behavioural tests in ``test_sync_turn_wrapper_more_hops_3637.py`` and
+``test_sync_turn_lifecycle_gaps_3646.py`` cover the paths the structure cannot prove.
 """
 
 from __future__ import annotations
@@ -165,6 +175,8 @@ def _enclosing(node: ast.AST, parents: Dict[ast.AST, ast.AST]) -> str:
 def _call_target(call: ast.Call, api: str) -> Optional[ast.AST]:
     keyword = {k.arg: k.value for k in call.keywords if k.arg}
     args = call.args
+    if _bare(call.func, {}) == "partial":
+        return args[1] if len(args) > 1 else None
     if api in WRAPPERS or api in ("to_thread", "submit", "start_new_thread", "run_sync"):
         return args[0] if args else keyword.get("func")
     if api == "run_in_executor":
@@ -188,6 +200,12 @@ def _call_target(call: ast.Call, api: str) -> Optional[ast.AST]:
 def _threader(call: ast.Call, aliases: Dict[str, str]) -> Optional[str]:
     """The canonical thread-handing API a call is, else None."""
     name = _bare(call.func, aliases)
+    if name == "partial" and call.args:
+        # ``functools.partial(sync_to_async, thread_sensitive=False)`` is a factory for the
+        # hand-off; it is reported where it is built (its target is the second argument, if any).
+        inner = _bare(call.args[0], aliases)
+        if inner in WRAPPERS | {"to_thread", "run_in_executor", "start_new_thread"}:
+            return inner
     if name in WRAPPERS or name in ("to_thread", "run_in_executor", "start_new_thread"):
         return name
     if name == "submit" and isinstance(call.func, ast.Attribute):
@@ -353,7 +371,7 @@ LEAVES: Dict[Tuple[str, str], Tuple[str, Optional[str]]] = {
     ("hooks.py", "run_on_mount_hooks"): ("run_guarded_step", "lifecycle"),
     ("_child_lifecycle.py", "run_view_disconnected"): ("run_sync_step", "lifecycle"),
     ("_child_lifecycle.py", "begin_live_connection"): ("sync_step", "lifecycle"),
-    ("live_view.py", "LiveView._restore_private_state"): ("run_sync_step", "lifecycle"),
+    ("live_view.py", "LiveView._restore_private_state"): ("run_guarded_step", "lifecycle"),
     ("security/state_snapshot.py", "legacy_snapshot_fields"): ("run_sync_step", "lifecycle"),
     # teardown hooks (#3646): every site that calls one goes through call_teardown_hook
     ("_child_lifecycle.py", "call_teardown_hook"): ("run_teardown_step", "lifecycle"),
@@ -845,22 +863,28 @@ ALLOWED: Dict[Tuple[str, str, str], Entry] = {
 #   stepped:<step>                   a framework function names the hook and enters <step>
 #                                    (or it is an @event_handler: every handler runs in
 #                                    the event step of websocket_utils._call_handler)
-#   inside:<steps>@<file>::<func>    the hook runs inside the named caller, which runs in
-#                                    one of <steps> (the caller is checked to exist and to
-#                                    name the hook; that it runs in the step is the
-#                                    behavioural tests' job)
+#   inside:<steps>@<file>::<func>    the hook runs inside the named caller. <steps> are the
+#                                    steps that were OBSERVED open when the hook body ran
+#                                    (`none` = also with no step open). The caller is checked
+#                                    to exist and to name the hook here; the steps are checked
+#                                    by RUNNING the hook, in test_sync_turn_inside_audit_3646.py
+#                                    (observed == claimed, exactly)
 #   unwrapped:<category>:<reason>    async-def     every definition is `async def`: awaited on
 #                                                  the loop, never wrapped (checked)
 #                                    not-threaded  no thread hand-off in the package names
 #                                                  it, so it runs in its caller's thread and
 #                                                  step (checked)
+#                                    template-time it runs while the template engine renders,
+#                                                  after get_context_data() returned, so NO
+#                                                  step is open and a row read in it has no
+#                                                  wrapper scope (checked by running it)
 #                                    scope-input   it produces what the scope depends on, so
 #                                                  it cannot run inside it (an ALLOWED entry
 #                                                  must declare reaching it)
 #
 # Keys are ``Class.method``; ``(app).name`` is a hook the framework defines no default for.
 
-HOOK_CATEGORIES = {"async-def", "not-threaded", "scope-input"}
+HOOK_CATEGORIES = {"async-def", "not-threaded", "scope-input", "template-time"}
 
 HOOKS: Dict[str, str] = {
     # ---- authorization (leaves: one guarded auth step per check) ----
@@ -873,9 +897,9 @@ HOOKS: Dict[str, str] = {
     "LiveView._restore_snapshot": "stepped:lifecycle",
     "LiveView._should_restore_snapshot": "stepped:lifecycle",
     "LiveView._capture_snapshot_state": "stepped:lifecycle",
-    "StickyChildRegistry._on_sticky_unmount": "stepped:lifecycle",
-    "(app)._cleanup_on_unregister": "stepped:lifecycle",
-    "UploadMixin._cleanup_uploads": "stepped:lifecycle",
+    "StickyChildRegistry._on_sticky_unmount": "inside:lifecycle|none@_child_lifecycle.py::dispose_child_subtree",
+    "(app)._cleanup_on_unregister": "inside:lifecycle|none@_child_lifecycle.py::dispose_child_subtree",
+    "UploadMixin._cleanup_uploads": "inside:lifecycle|none@_child_lifecycle.py::dispose_child_subtree",
     # ---- the turn's own hooks ----
     "ComponentMixin.mount": "stepped:mount",
     "SimpleLiveView.mount": "stepped:mount",
@@ -886,16 +910,16 @@ HOOKS: Dict[str, str] = {
     "ContextMixin.get_context_data": "stepped:render",
     "DraftModeMixin.get_context_data": "stepped:render",
     "Component.render": "stepped:render",
-    "TemplateMixin.get_template": "stepped:render",
+    "TemplateMixin.get_template": "unwrapped:template-time:read by the template build at template/render-plumbing time with no step open (an HTTP GET shows none); only the actor mount and hot reload call it inside a render step, and the hand-off pin covers those two sites",
     # ---- cursor / presence ----
     "LiveCursorMixin.handle_cursor_move": "stepped:hook",
     "PresenceMixin.update_presence_heartbeat": "stepped:hook",
     "PresenceMixin.get_presence_key": "stepped:hook",
     "TenantMixin.get_presence_key": "stepped:hook",
     "PresenceMixin._restore_presence": "stepped:hook",
-    "PresenceMixin.get_presence_user_id": "inside:mount|hook@presence.py::PresenceMixin.track_presence",
-    "PresenceMixin.handle_presence_join": "inside:mount|hook@presence.py::PresenceMixin.track_presence",
-    "PresenceMixin.handle_presence_leave": "inside:hook|event@presence.py::PresenceMixin.untrack_presence",
+    "PresenceMixin.get_presence_user_id": "inside:mount@presence.py::PresenceMixin.track_presence",
+    "PresenceMixin.handle_presence_join": "inside:mount@presence.py::PresenceMixin.track_presence",
+    "PresenceMixin.handle_presence_leave": "inside:hook@presence.py::PresenceMixin.untrack_presence",
     "PresenceMixin._on_presence_change": "inside:hook@presence.py::PresenceMixin._broadcast_presence_change",
     # ---- tenancy ----
     "TenantMixin.resolve_tenant": (
@@ -906,7 +930,7 @@ HOOKS: Dict[str, str] = {
         "that saves or restores state; it opens no scope of its own"
     ),
     # ---- components ----
-    "LiveComponent.mount": "inside:mount|event|render@components/base.py::LiveComponent.__init__",
+    "LiveComponent.mount": "inside:mount@components/base.py::LiveComponent.__init__",
     "LiveComponent.update": "inside:event@mixins/components.py::ComponentMixin.update_component",
     "LiveComponent._handle_event": (
         "inside:event@components/base.py::LiveComponent._make_event_handler.handler"
@@ -918,8 +942,8 @@ HOOKS: Dict[str, str] = {
     "ComponentMixin.handle_component_event": (
         "inside:event@mixins/components.py::ComponentMixin._register_component.component_callback"
     ),
-    "Component.get_context_data": "inside:render@components/base.py::Component.render",
-    "Component._render_custom": "inside:render@components/base.py::Component.render",
+    "Component.get_context_data": "unwrapped:template-time:a component renders while the template engine runs (`{{ component }}`), after get_context_data() returned, so no step is open; row reads in it run without the wrapper scope",
+    "Component._render_custom": "unwrapped:template-time:called by Component.render at template time, so no step is open; row reads in it run without the wrapper scope",
     "ContextMixin.get_render_only_context": (
         "inside:render@mixins/context.py::ContextMixin.get_context_data"
     ),
@@ -928,26 +952,26 @@ HOOKS: Dict[str, str] = {
         "so it runs where the app calls it (inside the render step in the documented use)"
     ),
     "StickyChildRegistry._on_sticky_update": (
-        "inside:render@templatetags/live_tags.py::_apply_sticky_input_changes"
+        "unwrapped:template-time:called by the {% live_render %} tag while the parent's template renders, so no step is open (the parent's render step covers only its get_context_data())"
     ),
     "StickyChildRegistry._get_all_child_views": (
         "unwrapped:not-threaded:a registry lookup, not an application hook "
         "(its docstring mentions overriding __init__)"
     ),
     # ---- forms ----
-    "FormMixin.get_form_class": "inside:mount|event|render@forms.py::FormMixin._init_form_state",
-    "FormMixin.get_form_kwargs": "inside:mount|event|render@forms.py::FormMixin.get_form",
+    "FormMixin.get_form_class": "inside:event|mount@forms.py::FormMixin._init_form_state",
+    "FormMixin.get_form_kwargs": "inside:event|mount@forms.py::FormMixin.get_form",
     "FormMixin._create_form": "inside:mount|event@forms.py::FormMixin.mount",
-    "FormMixin._ensure_form_state": "inside:event@forms.py::FormMixin.submit_form",
-    "FormMixin.as_live": "inside:render@templatetags/live_tags.py::live_form",
-    "FormMixin.as_live_field": "inside:render@templatetags/live_tags.py::live_field",
-    "AdminFormMixin._create_form": "inside:mount|event@admin_ext/forms.py::AdminFormMixin.mount",
-    "AdminFormMixin.get_field_value": "inside:render@templatetags/live_tags.py::field_value",
-    "AdminTailwindAdapter.render_field": "inside:render@forms.py::FormMixin.as_live_field",
-    "BaseAdapter._merge_widget_attrs": "inside:render@frameworks.py::BaseAdapter._render_input",
+    "FormMixin._ensure_form_state": "inside:event|none@forms.py::FormMixin.submit_form",
+    "FormMixin.as_live": "unwrapped:template-time:called by the {% live_form %} tag, at template time: no step is open, so a queryset the form's fields evaluate (a ModelChoiceField) is read without the wrapper scope",
+    "FormMixin.as_live_field": "unwrapped:template-time:called by the {% live_field %} tag, at template time: no step is open, so a queryset the field evaluates (a ModelChoiceField) is read without the wrapper scope",
+    "AdminFormMixin._create_form": "inside:mount@admin_ext/forms.py::AdminFormMixin.mount",
+    "AdminFormMixin.get_field_value": "inside:render|none@admin_ext/views.py::ModelListView.get_context_data",
+    "AdminTailwindAdapter.render_field": "unwrapped:template-time:called while as_live_field renders a field at template time: no step is open",
+    "BaseAdapter._merge_widget_attrs": "unwrapped:template-time:called while the form adapter renders a widget at template time: no step is open",
     "DraftModeMixin.get_draft_key": "inside:event|render@drafts.py::DraftModeMixin.get_context_data",
     "WizardMixin.on_wizard_complete": "inside:event@wizard.py::WizardMixin.submit_wizard",
-    "ReactMixin.get_react_components": "inside:render@react.py::ReactMixin.render_react_component",
+    "ReactMixin.get_react_components": "unwrapped:not-threaded:no framework code calls it (render_react_component is an app helper), so it runs wherever the app calls it; the step is whatever that is",
     # ---- the data table ----
     "DataTableMixin.handle_cell_edit": (
         "inside:event@components/mixins/data_table.py::DataTableMixin.on_table_cell_edit"
@@ -972,7 +996,7 @@ HOOKS: Dict[str, str] = {
         "inside:event@components/mixins/data_table.py::DataTableMixin._confirm_import"
     ),
     "DataTableMixin.refresh_table_server": (
-        "inside:event@components/mixins/data_table.py::DataTableMixin.refresh_table"
+        "inside:event|mount@components/mixins/data_table.py::DataTableMixin.refresh_table"
     ),
     # ---- uploads: called inline by the UploadManager from the upload frame handler ----
     "UploadWriter.open": (
@@ -1318,7 +1342,8 @@ def check_disposition(key: str, disposition: str) -> Optional[str]:
     if kind == "inside":
         steps_text, _, where = rest.partition("@")
         steps_ = steps_text.split("|")
-        if not steps_ or any(step not in SYNC_STEPS for step in steps_):
+        # ``none``: the hook also runs with no step open (a template tag calling it)
+        if not steps_ or any(step not in SYNC_STEPS | {"none"} for step in steps_):
             return "%r names a step that is not declared" % steps_text
         relative, _, qualname = where.partition("::")
         function = function_index().get(relative, {}).get(qualname)
@@ -1342,6 +1367,8 @@ def check_disposition(key: str, disposition: str) -> Optional[str]:
         elif category == "not-threaded":
             if method in handoff_target_names():
                 return "a thread hand-off names %r, so it is threaded" % method
+        elif category == "template-time":
+            pass  # checked by running it: test_sync_turn_inside_audit_3646.py
         elif category == "scope-input":
             declared = {hook for entry_ in ALLOWED.values() for hook, _why in entry_.reaches}
             if method not in declared:
@@ -1362,13 +1389,17 @@ def _reach_hooks() -> Set[str]:
         _method_of(key)
         for key, disposition in HOOKS.items()
         if disposition.startswith("stepped:") or disposition.startswith("unwrapped:scope-input")
-    } - REACH_IGNORE
+    } - REACH_IGNORE | REACH_EXTRA
 
 
 #: Hook names too generic to find by name: ``Template.render`` / ``Component.render`` /
 #: ``dict.update``. The ``component.render`` hand-off is pinned by its exact text and the
 #: scoped-render behavioural test instead.
 REACH_IGNORE = {"render", "update"}
+
+#: Hooks tracked by reach although they are not ``stepped:``: ``get_template`` runs with no
+#: step in the render plumbing (template-time), and each plumbing entry that reads it says so.
+REACH_EXTRA = {"get_template"}
 
 
 _IMPORTS: Optional[Dict[str, Dict[str, str]]] = None
@@ -1796,6 +1827,21 @@ ESCAPES = {
         "async def f(view):\n"
         "    await SyncToAsync(view.handle_restore)()\n"
     ),
+    "functools.partial factory": (
+        "import functools\n"
+        "from asgiref.sync import sync_to_async\n"
+        "threaded = functools.partial(sync_to_async, thread_sensitive=False)\n"
+    ),
+    "partial factory, aliased": (
+        "from functools import partial as bind\n"
+        "from asgiref.sync import sync_to_async as s2a\n"
+        "threaded = bind(s2a, thread_sensitive=False)\n"
+    ),
+    "partial with a callable": (
+        "import functools\n"
+        "async def f(view):\n"
+        "    await functools.partial(sync_to_async, view.handle_restore)()\n"
+    ),
     "executor.submit": "def f(view, executor):\n    executor.submit(view.handle_restore)\n",
     "threading.Thread": (
         "import threading\ndef f(view):\n    threading.Thread(target=view.handle_restore).start()\n"
@@ -2011,3 +2057,10 @@ def test_a_teardown_hook_called_without_the_helper_is_reported():
         isinstance(n, ast.Call) and _bare(n.func, {}) == "call_teardown_hook"
         for n in ast.walk(tree)
     )
+
+
+def test_the_unchecked_allowed_kinds_are_the_ones_the_module_docstring_names():
+    """The docstring says which entries carry a reason and no mechanical check; keep that
+    list from drifting (#3646 review)."""
+    counts = collections.Counter(entry_.kind for entry_ in ALLOWED.values())
+    assert (counts["outside"], counts["entry"], counts["external"]) == (12, 4, 3), counts
