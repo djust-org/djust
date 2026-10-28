@@ -704,6 +704,37 @@ def _check_view_state_in_session(errors: list[CheckMessage]) -> None:
     )
 
 
+def _check_http_fallback_background_timeout(errors: list[CheckMessage]) -> None:
+    """C028 — ``LIVEVIEW_CONFIG['http_fallback_background_timeout']`` is ``None`` or a number > 0.
+
+    Anything else (``"30"``, ``0``, ``True``, ``nan``) is read as no deadline,
+    so a typo would silently leave the page-POST fallback waiting on a task that
+    never returns (#3634).
+    """
+    from ..config import config, valid_http_fallback_background_timeout
+
+    if _is_check_suppressed("djust.C028"):
+        return
+    value = config.get("http_fallback_background_timeout")
+    if value is None or valid_http_fallback_background_timeout(value):
+        return
+    errors.append(
+        DjustError(
+            "LIVEVIEW_CONFIG['http_fallback_background_timeout'] is %s; it must be None or a "
+            "number of seconds greater than 0." % repr(value)[:80],
+            hint=(
+                "With any other value djust applies no deadline: a start_async task that does "
+                "not return holds the HTTP fallback POST open for as long as it runs."
+            ),
+            id="djust.C028",
+            fix_hint=(
+                "Set `LIVEVIEW_CONFIG['http_fallback_background_timeout']` to a number of "
+                "seconds such as `30`, or remove it."
+            ),
+        )
+    )
+
+
 def _check_liveview_middleware(errors: list[CheckMessage]) -> None:
     """C026 — every ``LIVEVIEW_MIDDLEWARE`` entry is an importable ``async def`` (ADR-044).
 
@@ -1346,6 +1377,9 @@ def check_configuration(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
 
     # C027 -- LIVEVIEW_CONFIG['view_state_in_session'] is not a bool
     _check_view_state_in_session(errors)
+
+    # C028 -- LIVEVIEW_CONFIG['http_fallback_background_timeout'] is not None or a number > 0
+    _check_http_fallback_background_timeout(errors)
 
     # C005 -- WebSocket routes missing AuthMiddlewareStack
     # A001 -- WebSocket routes missing AllowedHostsOriginValidator (#659)

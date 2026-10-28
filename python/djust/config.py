@@ -11,6 +11,7 @@ Provides centralized configuration for:
 
 import copy
 import logging
+import math
 import os
 import threading
 from typing import Any, ClassVar, Dict, Optional, Tuple
@@ -259,6 +260,18 @@ class LiveViewConfig:
         # view (a "load more" offset, a form draft) resets on each fallback
         # POST. Must be a bool (system check ``djust.C027``).
         "view_state_in_session": True,
+        # Seconds one page-POST fallback request waits, in total, for the
+        # ``start_async`` / ``@background`` work it runs before answering
+        # (#3634). ``None`` (default) = no deadline: a task that does not return
+        # holds the POST open for as long as it runs, and a sync callback runs
+        # on the request thread. A positive number runs each task on a worker
+        # thread the request does not join; when the budget is spent the
+        # fallback stops waiting, cancels an ``async def`` callback, hands
+        # ``handle_async_result`` a ``TimeoutError`` and answers. A sync
+        # callback cannot be cancelled: it keeps running, abandoned. Anything
+        # that is not a finite number greater than 0 means no deadline (system
+        # check ``djust.C028``). Does not touch the socket or SSE transports.
+        "http_fallback_background_timeout": None,
         # `[dj-virtual]` keyed splice ops in the VDOM differ (ADR-026, #2017
         # items 2-4). A windowed list holds off-window rows DETACHED, so the
         # index-addressed ops the differ normally emits are meaningless for it:
@@ -868,6 +881,37 @@ def view_state_in_session() -> bool:
     except Exception:  # pragma: no cover - defensive
         logger.debug("[djust] view_state_in_session read failed; keeping the default")
         return True
+
+
+def valid_http_fallback_background_timeout(value: Any) -> bool:
+    """Whether ``value`` is a usable ``http_fallback_background_timeout``.
+
+    A finite number of seconds greater than 0. A bool is not a number here
+    (``True`` would read as one second).
+    """
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+        and value > 0
+    )
+
+
+def http_fallback_background_timeout() -> Optional[float]:
+    """The deadline, in seconds, for background work on the page-POST fallback.
+
+    The single reader of ``LIVEVIEW_CONFIG['http_fallback_background_timeout']``
+    (also read from ``DJUST_CONFIG``). ``None`` means no deadline, which is also
+    what any value that is not a finite number greater than 0 means; system
+    check ``djust.C028`` reports such a value. A config read that raises means
+    no deadline.
+    """
+    try:
+        value = get_config().get("http_fallback_background_timeout")
+    except Exception:  # pragma: no cover - defensive
+        logger.debug("[djust] http_fallback_background_timeout read failed; no deadline")
+        return None
+    return float(value) if valid_http_fallback_background_timeout(value) else None
 
 
 def template_auto_call_enabled() -> bool:
