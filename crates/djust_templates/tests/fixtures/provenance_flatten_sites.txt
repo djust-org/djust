@@ -98,6 +98,7 @@ let mut wrapped = R::context_neutral(format!(
 wrapped.append(&R::context_neutral("<!--/dj-if-->".to_owned()));
 Value::List(s.chars().map(|c| Value::String(c.to_string())).collect()),
 loop_dict.insert("parentloop".into(), parentloop);
+loop_dict.insert("length".into(), Value::Integer(len_values));
 let parent_if_loop_path = ctx.dj_if_loop_path().to_string();
 ctx.set_dj_if_loop_path(format!("{parent_if_loop_path}-{index}"));
 loop_dict.insert("counter0".into(), Value::Integer(counter as i64));
@@ -175,6 +176,12 @@ scoped.mark_safe("block.super".to_string());
 (body.to_string(), Some(body))
 Ok((String::new()).into())
 Ok((django_date_format(&now, format)).into())
+"Maximum template partial recursion depth exceeded".to_string(),
+DjangoRustError::TemplateError(format!(
+DjangoRustError::TemplateError(format!(
+let parent_path = context.dj_if_include_path().to_string();
+context.set_dj_if_include_path(format!("{parent_path}-i{site}"));
+Ok(String::new().into())
 Ok((html).into())
 Ok((String::new()).into())
 Ok((html).into())
@@ -610,6 +617,7 @@ std::fs::metadata(path).map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_st
 let source: Arc<str> = Arc::from(
 .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?,
 LAZY_SOURCE_FILES.insert(path.to_owned(), (modified, metadata.len(), source.clone()));
+.flatten()
 for list in children.into_iter().flatten() {
 format!("{values:?}")
 keys.insert(operand.to_owned());
