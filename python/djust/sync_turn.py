@@ -3,9 +3,11 @@
 A turn (``djust.turns``) runs a view's sync code in separate hops: the event
 handler, ``mount``, ``handle_params``, a ``start_async`` callback and its
 ``handle_async_result``, ``handle_tick``, and the render's
-``get_context_data()`` (where the JIT evaluates the view's QuerySets).
-Between the hops the turn awaits, and with ``worker_threads`` the pool thread
-runs other sessions' hops. A ``LIVEVIEW_MIDDLEWARE`` therefore cannot hold a
+``get_context_data()`` (where the JIT evaluates the view's QuerySets), the
+authorization checks (``check_permissions``, ``get_object`` and
+``has_object_permission``) and the ``on_mount`` / ``connected`` /
+``disconnected`` lifecycle hooks. Between the hops the turn awaits, and with
+``worker_threads`` the pool thread runs other sessions' hops. A ``LIVEVIEW_MIDDLEWARE`` therefore cannot hold a
 database transaction (or any thread-bound state) for the turn: it would span
 those awaits and leak into the other sessions' hops.
 
@@ -51,13 +53,29 @@ import contextvars
 import functools
 from typing import Any, Callable, ContextManager, Optional, Tuple, TypeVar
 
-__all__ = ["SYNC_STEPS", "SyncTurnWrapper", "run_sync_step", "sync_step"]
+__all__ = [
+    "SYNC_STEPS",
+    "SyncTurnWrapper",
+    "guarded_step",
+    "run_guarded_step",
+    "run_sync_step",
+    "sync_step",
+]
 
 #: Every ``step`` the wrapper is called with.
 #:
 #: ``"async"`` covers a ``start_async`` callback AND the ``handle_async_result``
 #: that receives its outcome; ``"tick"`` is ``handle_tick`` (#3625).
-SYNC_STEPS = frozenset({"event", "mount", "handle_params", "hook", "async", "tick", "render"})
+#:
+#: ``"auth"`` is an authorization decision that runs application code: the
+#: view-level check (``check_permissions``, Django's access mixins and the
+#: decorators replayed from ``dispatch``) and the object-permission check
+#: (``get_object`` and ``has_object_permission``). ``"lifecycle"`` is the
+#: connection lifecycle: the ``on_mount`` hooks, ``connected()`` and
+#: ``disconnected()`` (#3637).
+SYNC_STEPS = frozenset(
+    {"event", "mount", "handle_params", "hook", "async", "tick", "render", "auth", "lifecycle"}
+)
 
 SyncTurnWrapper = Callable[[Any, str, Any], ContextManager[Any]]
 
@@ -97,10 +115,24 @@ def _wrapper() -> Optional[SyncTurnWrapper]:
     return wrapper
 
 
+def _is_async(fn: Callable[..., Any]) -> bool:
+    """Whether calling ``fn`` returns a coroutine (it must never be wrapped).
+
+    An ``async def`` hook runs on the event loop. Wrapping it in a plain function
+    (``functools.wraps`` copies the name but not the coroutine-ness) would hide it
+    from ``sync_to_async``, which refuses a coroutine function with a ``TypeError``
+    when no wrapper is configured: with one the hook body would silently never run
+    (#3637 review).
+    """
+    from ._view_hooks import is_async_hook
+
+    return is_async_hook(fn)
+
+
 def run_sync_step(view: Any, step: str, fn: Callable[..., _T], /, *args: Any, **kwargs: Any) -> _T:
     """Call ``fn(*args, **kwargs)`` on this thread inside the configured wrapper."""
     wrapper = _wrapper()
-    if wrapper is None or _active_step.get() is not None:
+    if wrapper is None or _active_step.get() is not None or _is_async(fn):
         return fn(*args, **kwargs)
     from .turns import current_turn
 
@@ -115,13 +147,62 @@ def run_sync_step(view: Any, step: str, fn: Callable[..., _T], /, *args: Any, **
 def sync_step(view: Any, step: str, fn: Callable[..., _T]) -> Callable[..., _T]:
     """``fn`` as a callable that runs inside the wrapper (for ``sync_to_async``).
 
-    Returns ``fn`` itself when no wrapper is configured.
+    Returns ``fn`` itself when no wrapper is configured, and when ``fn`` is an
+    ``async def`` (not a sync step; ``sync_to_async`` then refuses it exactly as
+    it does with no wrapper).
     """
-    if _wrapper() is None:
+    if _wrapper() is None or _is_async(fn):
         return fn
 
     @functools.wraps(fn)
     def stepped(*args: Any, **kwargs: Any) -> _T:
         return run_sync_step(view, step, fn, *args, **kwargs)
+
+    return stepped
+
+
+def run_guarded_step(
+    view: Any, step: str, fn: Callable[..., _T], /, *args: Any, **kwargs: Any
+) -> _T:
+    """:func:`run_sync_step` for a step whose outcome is an allow / deny verdict.
+
+    A context manager may suppress an exception (``__exit__`` returning true).
+    For an ordinary step that is the wrapper's business, but for a verdict it
+    would turn a denial into a pass: ``with wrapper: return check()`` falls off
+    the end, so the caller sees ``None`` ("no redirect", "mount may proceed").
+    Here a body that did not run to completion makes the call raise
+    :class:`~django.core.exceptions.PermissionDenied` instead, so a wrapper can
+    never open a way through an authorization check (#3637). Any exception the
+    wrapper itself raises, on entry or on exit, propagates as for every step;
+    each caller already treats a non-``PermissionDenied`` failure as a denial.
+    """
+    if _wrapper() is None or _active_step.get() is not None or _is_async(fn):
+        return fn(*args, **kwargs)
+    completed: list = []
+
+    def verdict() -> _T:
+        result = fn(*args, **kwargs)
+        completed.append(None)
+        return result
+
+    result = run_sync_step(view, step, verdict)
+    if not completed:
+        from django.core.exceptions import PermissionDenied
+
+        raise PermissionDenied("The sync_turn_wrapper suppressed a failed authorization step")
+    return result
+
+
+def guarded_step(view: Any, step: str, fn: Callable[..., _T]) -> Callable[..., _T]:
+    """``fn`` as a callable that runs through :func:`run_guarded_step`.
+
+    Returns ``fn`` itself when no wrapper is configured or ``fn`` is ``async def``.
+    """
+    if _wrapper() is None or _is_async(fn):
+        return fn
+
+    @functools.wraps(fn)
+    def stepped(*args: Any, **kwargs: Any) -> _T:
+        return run_guarded_step(view, step, fn, *args, **kwargs)
 
     return stepped

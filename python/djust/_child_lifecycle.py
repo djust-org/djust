@@ -187,7 +187,10 @@ def untrack_view_presence(view: Any) -> None:
     if not callable(untrack):
         return
     try:
-        untrack()
+        from .sync_turn import run_sync_step
+
+        # ``untrack_presence`` reads ``get_presence_key()``: a ``"hook"`` step (#3637).
+        run_sync_step(view, "hook", untrack)
     except Exception as exc:  # noqa: BLE001 — application hooks run inside
         from ._exposure_diagnostics import log_failure_for
 
@@ -279,7 +282,13 @@ def begin_live_connection(view: Any) -> Optional[Callable[[], Any]]:
     if not any(_defines_hook(view, name) for name in _HOOK_NAMES):
         return None
     view.__dict__[_CONNECTED_FLAG] = True
-    return _lifecycle_hook(view, "connected")
+    hook = _lifecycle_hook(view, "connected")
+    if hook is None:
+        return None
+    from .sync_turn import sync_step
+
+    # A ``"lifecycle"`` step of the sync-turn wrapper (#3637).
+    return sync_step(view, "lifecycle", hook)
 
 
 def run_view_disconnected(view: Any) -> None:
@@ -300,8 +309,10 @@ def run_view_disconnected(view: Any) -> None:
     from .runtime import _tenant_context
 
     try:
+        from .sync_turn import run_sync_step
+
         with _tenant_context(getattr(view, "_tenant", None)):
-            hook()
+            run_sync_step(view, "lifecycle", hook)
     except Exception as exc:  # noqa: BLE001 — application hook; teardown must go on
         from ._exposure_diagnostics import log_failure_for
 
