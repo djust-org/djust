@@ -137,6 +137,21 @@ def _is_json_serializable(value: Any) -> bool:
         return False
 
 
+def _keeps_out_of_state(value: Any) -> bool:
+    """Whether a REQUEST-SCOPED context value must stay out of the Rust state.
+
+    Two kinds: a value that is not JSON data (``WSGIRequest``, ``PermWrapper``,
+    ``FallbackStorage``, a lazy ``user``, a lazy HTML chunk), which the normalizer
+    would stringify, and plain data a processor marked ``RequestScopedList``
+    because storing it is the cost (#3631). Both ride the raw-value sidecar.
+    Every site that decides this asks here, so the dj-root render, the page-shell
+    render and the sidecar builder cannot disagree (#1646).
+    """
+    from ..request_scoped import is_request_scoped_data
+
+    return is_request_scoped_data(value) or not _is_json_serializable(value)
+
+
 def _request_scoped_keys(view: Any) -> set:
     """Context keys that are request-scoped, not LiveView state (#1786, #3061).
 
@@ -203,13 +218,15 @@ def _drop_request_scoped_values(view: Any, context: Dict[str, Any]) -> Dict[str,
     (``render_full_template``) agree (#3061, the #1646 parallel-path class).
     The values still reach the template through the raw-value sidecar.
     Serializable processor output (``csrf_token``, ``DEFAULT_MESSAGE_LEVELS``,
-    a theming ``SafeString``) is kept.
+    a theming ``SafeString``) is kept, except plain data a processor marked
+    ``RequestScopedList`` (``theme_presets``, #3631): it is left out here and
+    reaches the template through the sidecar, as in ``_sync_state_to_rust``.
     """
     scoped = _request_scoped_keys(view)
     return {
         key: value
         for key, value in context.items()
-        if key not in scoped or _is_json_serializable(value)
+        if key not in scoped or not _keeps_out_of_state(value)
     }
 
 

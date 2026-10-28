@@ -226,6 +226,15 @@ remains the same. **Do:** Convert on use:
 html = str(context["theme_head"])
 ```
 
+**What changed:** `theme_context`'s `theme_presets` is no longer stored in
+every LiveView's state (rc14, #3631). It is a `djust.request_scoped.RequestScopedList`,
+a `list` subclass, so `isinstance(..., list)`, `json.dumps`, `|json_script`,
+`len`, indexing and `{% for %}` behave as before. **Who:** Python code that
+tests `type(context["theme_presets"]) is list`, or hands the value to a library
+that dispatches on the exact type (`yaml.safe_dump` raises `RepresenterError`).
+**How to tell:** the `type(...) is list` check is false; `yaml.safe_dump` fails.
+**Do:** convert on use: `list(context["theme_presets"])`.
+
 **What changed:** MarkdownEditor enables its Visual-mode bubble menu by
 default (rc6, #3108). **Who:** Pages using that editor. **How to tell:** A
 selection shows the menu. **Do:** Pass `bubble_menu=False` to retain the old
