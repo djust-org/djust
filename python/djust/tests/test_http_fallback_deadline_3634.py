@@ -601,7 +601,8 @@ class TestEveryBranchOfThePostDispatch:
     def test_an_unknown_event_starts_nothing_so_nothing_waits(self):
         with SHORT:
             _, response, body = _post(MountWatcher, "no_such_handler")
-        assert response.status_code == 200, body
+        # Refused outright (400), as the socket transports do; nothing runs.
+        assert response.status_code == 400, body
         assert not STARTED.is_set()
         assert not _workers()
 

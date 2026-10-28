@@ -186,6 +186,12 @@ class _DashParent(LiveView):
     def get_context_data(self, **kwargs):
         return {"view": self, "title": getattr(self, "title", "Dash")}
 
+    @event_handler()
+    def increment(self, **kwargs):
+        """A real handler for the HTTP POST tests to drive: the POST path
+        refuses an event the page has no handler for, so the parent-driven
+        sticky sweep is exercised through an event the parent does define."""
+
 
 class _TwoStickyParent(LiveView):
     """Parent embedding TWO sticky children — for the index-set test."""
@@ -245,6 +251,12 @@ class _ParentNoOptIn(LiveView):
 
     def get_context_data(self, **kwargs):
         return {"view": self, "title": getattr(self, "title", "NoOptIn")}
+
+    @event_handler()
+    def increment(self, **kwargs):
+        """A real handler for the HTTP POST tests to drive: the POST path
+        refuses an event the page has no handler for, so the parent-driven
+        sticky sweep is exercised through an event the parent does define."""
 
 
 class _ParentChildNoOptIn(LiveView):

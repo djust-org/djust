@@ -324,7 +324,8 @@ class TestEveryRefusalStillPrecedesTheWork:
     def test_an_unknown_event_starts_no_work_and_the_load_is_still_owed(self):
         initial = _get(Loads)
         _, response, _ = _post(Loads, "no_such_handler", initial)
-        assert response.status_code == 200
+        # Refused outright (400), as the socket transports do; nothing runs.
+        assert response.status_code == 400
         assert Loads.loads == 0
         assert MARKER in initial.session, "the state saved is still a loading state"
         view, _, _ = _post(Loads, "select", initial)

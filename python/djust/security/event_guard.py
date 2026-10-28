@@ -15,7 +15,10 @@ logger = logging.getLogger(__name__)
 
 # Only allow lowercase alphanumeric + underscore, starting with a letter.
 # This blocks: _private, __dunder__, CamelCase, dots, dashes, spaces, empty strings.
-_EVENT_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
+# ``\Z`` not ``$``: ``$`` also matches before a trailing newline, so
+# ``"bump\n"`` would pass the syntactic check (fullmatch below is belt and
+# braces for the same reason).
+_EVENT_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]*\Z")
 
 
 def is_safe_event_name(name: str) -> bool:
