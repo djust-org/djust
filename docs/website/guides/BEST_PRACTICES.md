@@ -566,17 +566,28 @@ The template must use `dj-update="append"`:
 How the rows reach the page: the server renders only the rows you just assigned
 and adds them to the container's stored children, so the update is one insert
 per new row and the rows already on the page are left alone. The same rule
-applies to a full HTML update, which the client handles itself. Three details:
+applies to a full HTML update, which the client handles itself. Details:
 
-- The container needs an `id`, and every row needs an `id`. A row whose `id` is
-  already in the container is left as it is (it is not updated or added twice);
-  a row with no `id` is not added.
-- It applies to views that declare `temporary_assigns`. On a view that does not,
-  the template lists every row each time and stays authoritative, so a row it no
-  longer lists leaves the page.
-- `dj-update="prepend"` puts the new rows first. The result on the page is
-  right, but the differ pairs rows by position, so the rows already there are
-  rewritten as they shift down (the same as prepending to any list).
+- The container needs a static `id` on its tag, and every row needs an `id`. A
+  row whose `id` is already in the container is left as it is (it is not updated
+  or added twice); a row with no `id` is not added (DEBUG logs a warning naming
+  the view).
+- Which containers accumulate is worked out from the template: a `dj-update`
+  container whose body reads a `temporary_assigns` key (or `streams`, or has an
+  `{% include %}`) does. Any other `dj-update` list in the same view is
+  re-rendered whole every time, so a removed or edited row there still reaches
+  the page. The same goes for every list in a view that declares no
+  `temporary_assigns`.
+- `dj-update="prepend"` puts each new row first, as one insert at the front.
+- **The rows stay in the server's copy of the page.** The server keeps the whole
+  container so it can tell what is new, and the stored tree it diffs against
+  grows with every row you add; `temporary_assigns` empties the context copy,
+  not that tree (see [Large LiveView state](#6-large-liveview-state)). Measured,
+  each event also pays for the rows already there: about 1 ms with 200 rows,
+  4 ms with 2,000 and 15 ms with 8,000, and the stored snapshot grows to about
+  11 KB, 105 KB and 429 KB. For a feed that grows without end, cap it yourself
+  (render a bounded window, or paginate) rather than relying on
+  `temporary_assigns` to bound memory.
 
 ### 5. Loading states
 
