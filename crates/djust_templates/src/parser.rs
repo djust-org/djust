@@ -1982,12 +1982,17 @@ fn parse_token_inner(
                         .map(|s| s.trim().to_string())
                         .collect();
                     let filters = parse_filter_specs(&parts[1..], &token)?;
-                    // `"filter escape"` / `"filter safe"` are refused with
-                    // Django's message (two spaces after the period, sic).
+                    // Django 6 removed a space from these diagnostics; the
+                    // installed Django version determines the expected text.
                     for (name, _) in &filters {
                         if name == "escape" || name == "safe" {
+                            let spacing = if crate::renderer::django_6_or_later() {
+                                " "
+                            } else {
+                                "  "
+                            };
                             return Err(DjangoRustError::TemplateError(format!(
-                                "\"filter {name}\" is not permitted.  Use the \"autoescape\" tag instead."
+                                "\"filter {name}\" is not permitted.{spacing}Use the \"autoescape\" tag instead."
                             )));
                         }
                     }

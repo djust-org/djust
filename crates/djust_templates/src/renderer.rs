@@ -15,14 +15,19 @@ use regex::Regex;
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-// Django 6.0 added `forloop.length`. Python sets this process-wide flag when
-// loading the extension; Django's installed version is fixed for the process.
-// Pure Rust users default to the earlier Django-compatible context.
-static DJANGO_FORLOOP_LENGTH: AtomicBool = AtomicBool::new(false);
+// Python sets this process-wide flag when loading the extension. Django's
+// installed version is fixed for the process; pure Rust users default to the
+// earlier Django-compatible behavior.
+static DJANGO_6_OR_LATER: AtomicBool = AtomicBool::new(false);
 
-/// Configure the loop context for the installed Django version.
+/// Configure template behavior for the installed Django version.
 pub fn set_django_forloop_length(enabled: bool) {
-    DJANGO_FORLOOP_LENGTH.store(enabled, Ordering::Relaxed);
+    DJANGO_6_OR_LATER.store(enabled, Ordering::Relaxed);
+}
+
+/// Whether to match the Django 6+ template semantics.
+pub(crate) fn django_6_or_later() -> bool {
+    DJANGO_6_OR_LATER.load(Ordering::Relaxed)
 }
 
 /// `{% djust_audio %}` markup around the escaped manifest. Must stay
@@ -3666,7 +3671,7 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
                         // Django 6.0+ adds `length` after `parentloop`, before
                         // the counters. Insertion order is observable when the
                         // whole forloop dict is rendered.
-                        if DJANGO_FORLOOP_LENGTH.load(Ordering::Relaxed) {
+                        if django_6_or_later() {
                             loop_dict.insert("length".into(), Value::Integer(len_values));
                         }
 

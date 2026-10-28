@@ -216,6 +216,7 @@ import inspect
 import itertools
 import json
 import ast
+import textwrap
 import pathlib
 import re
 import sys
@@ -1696,6 +1697,7 @@ PATH_SHAPES = {
     # have), `first`/`last` are the two boundaries, and `parentloop` is the
     # only one whose value is a dict — at the outermost level Django's own
     # empty dict, which renders `{}` and is NOT the same answer as missing.
+    "forloop-length": "{% for x in p %}[{{ forloop.length }}]{% empty %}E{% endfor %}",
     "forloop-counter": "{% for x in p %}[{{ forloop.counter }}]{% empty %}E{% endfor %}",
     "forloop-counter0": "{% for x in p %}[{{ forloop.counter0 }}]{% empty %}E{% endfor %}",
     "forloop-revcounter": "{% for x in p %}[{{ forloop.revcounter }}]{% empty %}E{% endfor %}",
@@ -2878,22 +2880,6 @@ TAGS_NOT_SWEPT = {
 }
 
 
-#: The member names Django's own `ForNode.render` writes into `forloop`.
-#:
-#: Parsed out of the REFERENCE implementation's source, not transcribed and not
-#: read out of djust's — a transcription is a second copy that drifts, and
-#: reading djust's own source would make the requirement satisfiable by the
-#: very omission it exists to detect. The day Django adds a member, this axis
-#: reports it MISSING until the corpus builds a cell for it.
-#:
-#: Two spellings because `ForNode.render` has two: six members are assigned
-#: `loop_dict["<name>"] = …` per iteration, while `parentloop` is written once,
-#: in the dict literal `context["forloop"] = {"parentloop": parentloop}`.
-_FORLOOP_MEMBER = re.compile(
-    r"""loop_dict\[\s*["'](\w+)["']\s*\]|\{\s*["'](\w+)["']\s*:\s*parentloop\s*\}"""
-)
-
-
 def _required_arities() -> dict[str, str]:
     """Every `(filter, count)` Django refuses, read out of Django's registry.
 
@@ -3400,21 +3386,42 @@ def _swept_value_truthiness() -> set[str]:
 
 
 def _required_forloop_members() -> dict[str, str]:
+    """Read the keys Django writes to its loop dictionary from its source.
+
+    Django initializes the dictionary with one or more keys, then assigns
+    individual keys each iteration. Parsing both shapes avoids coupling the
+    manifest to formatting or to a transcription of Django's current keys.
+    """
     source = inspect.getsource(_django_template.defaulttags.ForNode.render)
-    out: dict[str, str] = {}
-    for assigned, in_literal in _FORLOOP_MEMBER.findall(source):
-        out.setdefault(assigned or in_literal, "django defaulttags.ForNode.render")
-    # A source the parse can silently stop matching is the failure this axis
-    # exists to prevent, one level in (the `_ARG_ERROR_MARK` lesson). Django
-    # has had exactly these seven since 1.0; fewer means the regex stopped
-    # reading `ForNode.render`, not that Django removed a member.
-    if len(out) < 7:
+    tree = ast.parse(textwrap.dedent(source))
+    members: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign):
+            continue
+        if isinstance(node.value, ast.Dict) and any(
+            isinstance(target, ast.Name) and target.id == "loop_dict" for target in node.targets
+        ):
+            members.update(
+                key.value
+                for key in node.value.keys
+                if isinstance(key, ast.Constant) and isinstance(key.value, str)
+            )
+        for target in node.targets:
+            if (
+                isinstance(target, ast.Subscript)
+                and isinstance(target.value, ast.Name)
+                and target.value.id == "loop_dict"
+                and isinstance(target.slice, ast.Constant)
+                and isinstance(target.slice.value, str)
+            ):
+                members.add(target.slice.value)
+    if len(members) < 7:
         raise AssertionError(
-            f"_FORLOOP_MEMBER matched {len(out)} members in ForNode.render "
-            f"({sorted(out)}) — expected at least 7. The parse has drifted "
-            f"from Django's source; fix the regex rather than the assertion."
+            f"ForNode.render parser matched {len(members)} members ({sorted(members)}) "
+            "— expected at least 7. The parse has drifted from Django's source; "
+            "fix the parser rather than the assertion."
         )
-    return out
+    return dict.fromkeys(sorted(members), "django defaulttags.ForNode.render")
 
 
 def _swept_forloop_members() -> set[str]:

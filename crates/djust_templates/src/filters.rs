@@ -2207,11 +2207,11 @@ fn apply_builtin_filter(
             }))
         }
         "center" => {
-            // center filter: `value.center(int(arg))`.
+            // Django <6 uses `value.center(int(arg))`; Django 6+ uses
+            // format-style center alignment, which puts the smaller half of
+            // an odd margin on the left.
             //
-            // NOT `format!("{s:^width$}")`, which was here: Rust's `^` puts the
-            // SMALLER half of an odd margin on the left, unconditionally.
-            // CPython's `str.center` is
+            // CPython's `str.center` uses:
             //
             //     marg = width - len(self)
             //     left = marg / 2 + (marg & width & 1)
@@ -2242,7 +2242,11 @@ fn apply_builtin_filter(
                 s
             } else {
                 let marg = width - len;
-                let left = marg / 2 + (marg & width & 1);
+                let left = if crate::renderer::django_6_or_later() {
+                    marg / 2
+                } else {
+                    marg / 2 + (marg & width & 1)
+                };
                 format!("{}{s}{}", " ".repeat(left), " ".repeat(marg - left))
             }))
         }

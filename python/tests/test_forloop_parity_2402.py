@@ -1,10 +1,11 @@
-"""`{{ forloop.* }}` binds Django's seven loop members (#2402).
+"""`{{ forloop.* }}` binds Django's loop members (#2402).
 
 The defect
 ----------
 Django's ``ForNode.render`` writes ``context["forloop"]`` — a dict carrying
 ``parentloop``, ``counter0``, ``counter``, ``revcounter``, ``revcounter0``,
-``first`` and ``last``, updated on every iteration. djust's ``Node::For``
+``first`` and ``last``, updated on every iteration. Django 6 also initializes
+``length``. djust's ``Node::For``
 bound none of them, so every one of those names MISSED and rendered
 ``string_if_invalid``:
 
@@ -31,6 +32,7 @@ Every expectation here is LIVE Django, never a transcription.
 import pathlib
 import re
 
+import django
 import pytest
 from django.template import Context as DjangoContext
 from django.template import Template as DjangoTemplate
@@ -47,6 +49,7 @@ REPO = pathlib.Path(__file__).resolve().parents[2]
 #: order. Read off Django's source below rather than trusted from this list.
 MEMBERS = (
     "parentloop",
+    *(("length",) if django.VERSION >= (6, 0) else ()),
     "counter0",
     "counter",
     "revcounter",

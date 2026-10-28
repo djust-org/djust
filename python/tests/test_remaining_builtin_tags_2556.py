@@ -210,8 +210,11 @@ class TestFilterTag:
         ids=["filter05", "filter05bis", "filter06", "filter06bis"],
     )
     def test_safe_and_escape_are_refused_with_djangos_message(self, src, name):
+        separator = " " if django.VERSION >= (6, 0) else "  "
         assert_refused(
-            src, {}, f'"filter {name}" is not permitted.  Use the "autoescape" tag instead.'
+            src,
+            {},
+            f'"filter {name}" is not permitted.{separator}Use the "autoescape" tag instead.',
         )
 
     def test_markers_are_off_inside_the_body_on_the_liveview_entry(self):
@@ -753,7 +756,25 @@ class TestQuerystringTag:
         ],
     )
     def test_the_request_context_cells(self, src, query, ctx, expected):
+        if django.VERSION >= (6, 0) and src == "{% querystring qd %}" and ctx["qd"] is None:
+            request = _FACTORY.get("/")
+            message = "querystring requires mappings for positional arguments"
+            with pytest.raises(TemplateSyntaxError, match=message):
+                django_render(src, ctx, request=request)
+            with pytest.raises(TemplateSyntaxError, match=message):
+                backend_render(src, ctx, request=request)
+            with pytest.raises(TemplateSyntaxError, match=message):
+                backend_render(src, ctx, request=request, request_context=True)
+            return
+        if django.VERSION >= (6, 0) and expected == "":
+            expected = "?"
         assert _assert_querystring_agrees(src, query, ctx) == expected
+
+    @pytest.mark.skipif(django.VERSION < (6, 0), reason="multiple mappings require Django 6.0+")
+    def test_multiple_query_mappings_match_django(self):
+        source = "{% querystring qd more page=2 %}"
+        context = {"qd": QueryDict("page=1&tag=old"), "more": {"tag": ["x", "y"]}}
+        assert _assert_querystring_agrees(source, "", context) == "?page=2&amp;tag=x&amp;tag=y"
 
     def test_the_explicit_query_dict_cells(self):
         request = _FACTORY.get("/", {"a": 1})
