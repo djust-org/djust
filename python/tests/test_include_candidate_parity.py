@@ -78,3 +78,31 @@ def test_include_uses_strict_missing_variable_resolution(tmp_path, operand, inva
         assert str(actual) == str(expected)
     else:
         assert actual == expected
+
+
+@pytest.mark.parametrize(
+    "choices",
+    [
+        [42],
+        [None],
+        ["missing.html", 42],
+        [42, "part.html"],
+        [None, "part.html"],
+        [b"abc", "part.html"],
+    ],
+)
+def test_mixed_include_candidates_match_installed_django(tmp_path, choices):
+    (tmp_path / "part.html").write_text("selected")
+    params = {"NAME": "test", "DIRS": [str(tmp_path)], "APP_DIRS": False, "OPTIONS": {}}
+    results = []
+    for engine in [DjangoTemplates(params), DjustTemplateBackend(params)]:
+        try:
+            results.append(engine.from_string("{% include choices %}").render({"choices": choices}))
+        except Exception as error:
+            results.append(error)
+    expected, actual = results
+    if isinstance(expected, Exception):
+        assert isinstance(actual, type(expected))
+        assert str(actual) == str(expected)
+    else:
+        assert actual == expected

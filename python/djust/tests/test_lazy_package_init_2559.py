@@ -36,6 +36,7 @@ import subprocess
 import sys
 
 import pytest
+from django.template.defaulttags import register as django_default_tags
 
 import djust
 
@@ -69,7 +70,10 @@ ALLOWLIST_PACKAGE = frozenset(
         "djust.utils",
     }
 )
-assert len(ALLOWLIST_PACKAGE) == 23
+HAS_CSP_NONCE_TAG = "csp_nonce_attr" in django_default_tags.tags
+if HAS_CSP_NONCE_TAG:
+    ALLOWLIST_PACKAGE |= {"djust.template_tags.csp_nonce_attr"}
+assert len(ALLOWLIST_PACKAGE) == 23 + HAS_CSP_NONCE_TAG
 
 ALLOWLIST_BACKEND = ALLOWLIST_PACKAGE | frozenset(
     {
@@ -89,7 +93,7 @@ ALLOWLIST_BACKEND = ALLOWLIST_PACKAGE | frozenset(
         "djust.template.serialization",
     }
 )
-assert len(ALLOWLIST_BACKEND) == 35
+assert len(ALLOWLIST_BACKEND) == 35 + HAS_CSP_NONCE_TAG
 
 
 # After ``django.setup()`` on a templates-only project: ``DjustConfig.ready()``
@@ -133,7 +137,7 @@ ALLOWLIST_SETUP = ALLOWLIST_BACKEND | frozenset(
         "djust.template_filters",
     }
 )
-assert len(ALLOWLIST_SETUP) == 68
+assert len(ALLOWLIST_SETUP) == 68 + HAS_CSP_NONCE_TAG
 
 # ``DEBUG=True`` additionally auto-enables hot reload: the file watcher only.
 # ``djust.websocket`` (and ``channels``) are deferred to a change event (#2566).

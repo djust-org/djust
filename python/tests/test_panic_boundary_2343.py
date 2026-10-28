@@ -172,6 +172,8 @@ class TestGuardCoversTheRenderSurface:
             "diff_html",
             "fast_json_dumps",
             "resolve_template_inheritance",
+            # Parses authored template source when preserving relative includes.
+            "resolve_relative_template_includes",
             "serialize_queryset_py",
             "serialize_context_py",
             "extract_template_variables_py",

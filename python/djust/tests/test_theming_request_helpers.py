@@ -68,6 +68,15 @@ def test_mode_round_trips():
     assert get_active_mode(request) == "dark"
 
 
+def test_mode_round_trips_with_empty_falsy_session():
+    request = _request()
+    request.session = {}
+    assert set_active_mode(request, "dark") is True
+    assert get_active_mode(request) == "dark"
+    reset_to_defaults(request)
+    assert not request.session
+
+
 def test_mode_rejects_an_unknown_value():
     request = _request()
     assert set_active_mode(request, "chartreuse") is False

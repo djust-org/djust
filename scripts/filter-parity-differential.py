@@ -1501,6 +1501,11 @@ def cells():
 #: goes red the day someone implements the tag and gets its escaping wrong.
 TAG_SHAPES = {
     "for": "{% for x in p|@EXPR@ %}[{{ x }}]{% empty %}E{% endfor %}",
+    **(
+        {"csp-nonce-media": "{% csp_nonce_attr p|@EXPR@ %}"}
+        if "csp_nonce_attr" in _django_template.defaulttags.register.tags
+        else {}
+    ),
     "with": "{% with q=p|@EXPR@ %}[{{ q }}]{% endwith %}",
     "if": "{% if p|@EXPR@ %}Y{% else %}N{% endif %}",
     # --- the #2355 six ---
@@ -2856,6 +2861,8 @@ def _swept_argument_errors() -> set[str]:
 #: request, or the wall clock. `autoescape` is the one row that is a real
 #: unmeasured surface rather than a non-question, and it says so.
 TAGS_NOT_SWEPT = {
+    "partial": "renders a named partial; takes a name, not a filter-expression operand",
+    "partialdef": "defines a named partial, optionally inline; its name is not a filter expression",
     "autoescape": (
         "changes the ESCAPING POLICY for a block. Every cell renders under the "
         "engine's pinned autoescape=on, so `{% autoescape off %}` is a real "

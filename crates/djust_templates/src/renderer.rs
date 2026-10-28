@@ -4204,17 +4204,39 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
                 let empty_candidates = candidates.is_empty();
                 let mut not_found = Vec::new();
                 let mut selected = None;
+                // Django 6 treats most non-string names as missing and tries later
+                // candidates. If none succeed, join(not_found) raises for the
+                // first non-string entry, with its index among unique names.
+                let mut first_invalid: Option<(usize, String)> = None;
                 for candidate in candidates {
                     // Validate each candidate only when it is reached; a later
                     // invalid name cannot invalidate an earlier successful one.
                     let name = match candidate {
                         Value::String(name) | Value::SafeString(name) => name,
-                        other => return Err(DjangoRustError::PythonException(
-                            pyo3::exceptions::PyTypeError::new_err(format!(
-                                "join() argument must be str, bytes, or os.PathLike object, not '{}'",
-                                filters::python_type_name(&other),
-                            )),
-                        )),
+                        other => {
+                            let kind = filters::python_type_name(&other).to_owned();
+                            if kind == "bytes" {
+                                let message = if django_6_or_later() {
+                                    "a bytes-like object is required, not 'str'"
+                                } else {
+                                    "Can't mix strings and bytes in path components"
+                                };
+                                return Err(DjangoRustError::PythonException(
+                                    pyo3::exceptions::PyTypeError::new_err(message),
+                                ));
+                            }
+                            if django_6_or_later() {
+                                if first_invalid.is_none() {
+                                    first_invalid = Some((not_found.len(), kind));
+                                }
+                                continue;
+                            }
+                            return Err(DjangoRustError::PythonException(
+                                pyo3::exceptions::PyTypeError::new_err(format!(
+                                    "join() argument must be str, bytes, or os.PathLike object, not '{kind}'",
+                                )),
+                            ));
+                        }
                     };
                     // Preserve cached node allocation identity for loop caches.
                     match loader.load_template_cached(&name) {
@@ -4229,6 +4251,15 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
                             }
                         }
                         Err(error) => return Err(error),
+                    }
+                }
+                if selected.is_none() {
+                    if let Some((index, kind)) = first_invalid {
+                        return Err(DjangoRustError::PythonException(
+                            pyo3::exceptions::PyTypeError::new_err(format!(
+                                "sequence item {index}: expected str instance, {kind} found"
+                            )),
+                        ));
                     }
                 }
                 let (name, nodes) = if object.is_some() {

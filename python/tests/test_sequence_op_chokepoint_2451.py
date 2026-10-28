@@ -78,7 +78,7 @@ from pathlib import Path
 
 import pytest
 
-pytest.importorskip("django")
+django = pytest.importorskip("django")
 
 from django.template import Context as DjangoContext  # noqa: E402
 from django.template import Template as DjangoTemplate  # noqa: E402
@@ -848,7 +848,7 @@ class TestTheResidueThisDoesNotTouch:
         The issue attributes 2 cells each to `default`, `default_if_none`,
         `join`, `slice` and a custom-filter probe. All ten are one thing, and
         no filter is involved: `{{ p }}` over `Decimal("Infinity")` raises
-        `TypeError: bad operand type for abs(): 'str'` in Django's
+        `TypeError: bad operand type for abs(): 'str'` in Django 5.2/6.0's
         `numberformat.format`. The filter merely passes the value through to a
         render that was already going to refuse. Filed as #2460, as a DECISION
         issue in the shape of #2429 rather than a fix.
@@ -859,19 +859,27 @@ class TestTheResidueThisDoesNotTouch:
         >200-digit performance guard, and `"{:f}".format(Decimal("Infinity"))`
         (the arm one line below it) computes exactly the text djust emits. The
         argument and its four measured facts live in
-        `python/tests/test_decimal_special_render_decision_2460.py`; this stays
-        as the premise it always was, and remains true.
+        `python/tests/test_decimal_special_render_decision_2460.py`. Django 6.1
+        fixed the crash and now renders the same text as djust.
         """
         from decimal import Decimal
 
         for value in (Decimal("Infinity"), Decimal("NaN")):
-            with pytest.raises(TypeError, match="abs"):
-                DjangoTemplate("{{ p }}").render(DjangoContext({"p": value}))
             args = (
                 ':"D"' if name.startswith("default") else (':", "' if name == "join" else ':"1:"')
             )
-            with pytest.raises(TypeError, match="abs"):
-                DjangoTemplate("{{ p|%s%s }}" % (name, args)).render(DjangoContext({"p": value}))
+            source = "{{ p|%s%s }}" % (name, args)
+            if django.VERSION >= (6, 1):
+                expected = DjangoTemplate("{{ p }}").render(DjangoContext({"p": value}))
+                assert DjangoTemplate(source).render(DjangoContext({"p": value})) == expected
+                assert (
+                    _rust.render_template(source, normalize_django_value({"p": value})) == expected
+                )
+            else:
+                with pytest.raises(TypeError, match="abs"):
+                    DjangoTemplate("{{ p }}").render(DjangoContext({"p": value}))
+                with pytest.raises(TypeError, match="abs"):
+                    DjangoTemplate(source).render(DjangoContext({"p": value}))
 
     def test_json_script_stays_permissive_by_decision(self) -> None:
         """The 2 remaining widthratio cells, decided in #2429 and not reopened."""

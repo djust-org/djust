@@ -332,6 +332,23 @@ class DjustTemplate:
                         message,
                     ),
                 )
+            # Django 6.0+ annotates TemplateSyntaxError on named template
+            # compilation with the loader origin and retains the raw message.
+            import django
+            from django.template import TemplateSyntaxError
+            from .exceptions import UNKNOWN_SOURCE
+
+            if (
+                django.VERSION >= (6, 0)
+                and isinstance(exc, TemplateSyntaxError)
+                and self.origin.name != UNKNOWN_SOURCE
+                and exc.args
+            ):
+                raw_message = exc.args[0]
+                if not user_raised and isinstance(raw_message, str):
+                    raw_message = raw_message.removeprefix("Template error: ")
+                exc.raw_error_message = raw_message
+                exc.args = (f"Template: {self.origin.name}, {raw_message}", *exc.args[1:])
             if user_raised:
                 raise
             raise exc from e

@@ -295,21 +295,23 @@ class ThemeManager:
     @property
     def session(self) -> Any:
         """Get session if available."""
-        if self.request and hasattr(self.request, "session"):
+        if self.request is not None and hasattr(self.request, "session"):
             return self.request.session
         return None
 
     def _get_session_data(self) -> dict:
         """Get theme data from session."""
-        if not self.session:
+        session = self.session
+        if session is None:
             return {}
-        data: dict = self.session.get(self._session_key, {})
+        data: dict = session.get(self._session_key, {})
         return data
 
     def _set_session_data(self, data: dict) -> None:
         """Save theme data to session."""
-        if self.session and self.config["persist_in_session"]:
-            self.session[self._session_key] = data
+        session = self.session
+        if session is not None and self.config["persist_in_session"]:
+            session[self._session_key] = data
 
     def reset(self) -> None:
         """Clear persisted theme state, returning to configured defaults.
@@ -318,8 +320,9 @@ class ThemeManager:
         later change to the project's configured defaults still takes effect
         for this user.
         """
-        if self.session:
-            self.session.pop(self._session_key, None)
+        session = self.session
+        if session is not None:
+            session.pop(self._session_key, None)
 
     def get_state(self) -> ThemeState:
         """

@@ -110,6 +110,7 @@ def test_i001_only_lists_existing_commands(reset_i001, monkeypatch):
     assert "djust_ai " not in reset_i001.check_ai_discovery_hint(None)[0].hint
 
 
+@pytest.mark.django_db
 def test_i001_end_to_end_manage_py_check(reset_i001, monkeypatch):
     monkeypatch.setenv("CLAUDECODE", "1")
     out, err = io.StringIO(), io.StringIO()

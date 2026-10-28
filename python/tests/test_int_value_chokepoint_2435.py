@@ -51,6 +51,7 @@ import pathlib
 import random
 import re
 
+import django
 import pytest
 from django.template import Context as DjangoContext
 from django.template import Template as DjangoTemplate
@@ -425,8 +426,8 @@ class TestRandomisedDifferential:
     #: exemption that silently covers a real regression.
     @staticmethod
     def _classify(source: str, value, dj: str, du: str) -> str | None:
-        if isinstance(value, decimal.Decimal) and not value.is_finite():
-            # DJANGO cannot render a non-finite Decimal AT ALL: `{{ p }}` alone
+        if django.VERSION < (6, 1) and isinstance(value, decimal.Decimal) and not value.is_finite():
+            # Earlier Django cannot render a non-finite Decimal AT ALL: `{{ p }}` alone
             # raises `TypeError: bad operand type for abs(): 'str'` from
             # `numberformat.format`. So every branch that hands the value back
             # — `get_digit`'s `except ValueError: return value` here — inherits
@@ -458,19 +459,26 @@ class TestRandomisedDifferential:
         assert cells == 1500
         assert refused > 100, f"only {refused} refusing cells — the sweep went vacuous"
         assert not bad, f"{len(bad)}/{cells} disagree, first three: {bad[:3]!r}"
-        assert set(explained) == {
-            "django-cannot-render-a-nonfinite-decimal",
-        }, f"the named residues are no longer the ones that occur: {explained}"
+        expected_explained = (
+            {"django-cannot-render-a-nonfinite-decimal"} if django.VERSION < (6, 1) else set()
+        )
+        assert set(explained) == expected_explained, (
+            f"the named residues are no longer the ones that occur: {explained}"
+        )
 
-    def test_django_itself_cannot_render_a_nonfinite_decimal(self) -> None:
-        """The premise of the first exemption, PROBED rather than declared.
-
-        If Django ever learns to render these, the exemption stops being about
-        the boundary and starts hiding a real cell — and this goes red first.
-        """
-        for value in (decimal.Decimal("NaN"), decimal.Decimal("Infinity")):
-            assert _django("{{ p }}", {"p": value}).startswith("<<EXC TypeError>>"), value
-            assert _djust("{{ p }}", {"p": value}) == str(value)
+    def test_nonfinite_decimal_rendering_matches_the_installed_django(self) -> None:
+        """Django 6.1 renders non-finite values; earlier supported versions raise."""
+        for value in (
+            decimal.Decimal("NaN"),
+            decimal.Decimal("Infinity"),
+            decimal.Decimal("-Infinity"),
+        ):
+            dj, du = _both("{{ p }}", {"p": value})
+            assert du == str(value)
+            if django.VERSION >= (6, 1):
+                assert dj == du
+            else:
+                assert dj.startswith("<<EXC TypeError>>"), value
 
     def test_the_chokepoint_filters_are_still_in_djangos_registry(self) -> None:
         """Guards the sweep against a Django release renaming one of them out

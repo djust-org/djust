@@ -97,6 +97,8 @@ import sys
 
 import differential_corpus_2723 as corpus_runs
 import pytest
+import django
+from django.template.defaulttags import register as defaulttags_register
 from differential_corpus_2723 import REPO, SCRIPT, CorpusCache, _env
 
 pytestmark = pytest.mark.nightly
@@ -299,17 +301,20 @@ class TestItWouldHaveCaughtTheHistoricalBlindSpots:
             ("PATH_SHAPES = {\n", "PATH_SHAPES: dict[str, str] = {}\n_PRE_2334_PATH_SHAPES = {\n"),
         )
         missing = rows(corpus.manifest(script))["tag"]["missing"]
-        assert sorted(missing) == [
-            "cycle",
-            "filter",
-            "firstof",
-            "for",
-            "if",
-            "ifchanged",
-            "regroup",
-            "widthratio",
-            "with",
-        ], missing
+        assert sorted(missing) == sorted(
+            (["csp_nonce_attr"] if "csp_nonce_attr" in defaulttags_register.tags else [])
+            + [
+                "cycle",
+                "filter",
+                "firstof",
+                "for",
+                "if",
+                "ifchanged",
+                "regroup",
+                "widthratio",
+                "with",
+            ]
+        ), missing
 
     def test_2355_six_tags_took_a_filter_operand_and_were_exempt(
         self, corpus: CorpusCache, tmp_path: pathlib.Path
@@ -338,7 +343,10 @@ class TestItWouldHaveCaughtTheHistoricalBlindSpots:
         row = rows(corpus.manifest(script))["tag"]
         # The six are silent — exempt, so not missing — while the three #2325
         # added are still reported. That asymmetry IS the #2355 finding.
-        assert sorted(row["missing"]) == ["for", "if", "with"], row["missing"]
+        assert sorted(row["missing"]) == sorted(
+            (["csp_nonce_attr"] if "csp_nonce_attr" in defaulttags_register.tags else [])
+            + ["for", "if", "with"]
+        ), row["missing"]
         for tag in ("cycle", "firstof", "ifchanged", "regroup", "widthratio", "filter"):
             assert tag in row["exempt"], tag
 
@@ -1037,6 +1045,7 @@ class TestTheLimitTheManifestDoesNotClose:
             "counter0",
             "first",
             "last",
+            *(["length"] if django.VERSION >= (6, 0) else []),
             "parentloop",
             "revcounter",
             "revcounter0",

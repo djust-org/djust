@@ -1,4 +1,8 @@
-"""A non-finite ``Decimal`` renders here and 500s in Django — decided (#2460).
+"""Non-finite ``Decimal`` rendering across Django versions (#2460).
+
+Django 5.2 and 6.0 raise on non-finite Decimals. Django 6.1 handles them
+and agrees with djust. The historical measurements below describe the 5.2
+behavior; version-aware assertions also check the fixed behavior.
 
 #2460 asks a question before it asks for a fix, in the shape of #2429. The
 answer is that djust stays **permissive** and the divergence is recorded. This
@@ -53,9 +57,9 @@ against a crash. #2429 decided ``json_script`` the same way, and this is the
 easier call: ``json.dumps``' refusal there is at least a documented contract,
 where ``abs('F')`` is documented nowhere.
 
-**Not fixed, deliberately. If Django fixes it upstream, this file goes red.**
-:meth:`TestTheDecisionCloses_Itself_IfDjangoFixesIt` asserts the refusal in the
-DIVERGING direction for exactly that reason.
+Djust intentionally remained permissive (#2460). Django 6.1 fixed the crash;
+the tests check parity there and retain the older divergence as long as djust
+supports Django releases that still exhibit it.
 
 Re-derived counts — the issue's are wrong
 ------------------------------------------
@@ -85,7 +89,7 @@ from pathlib import Path
 
 import pytest
 
-pytest.importorskip("django")
+django = pytest.importorskip("django")
 
 from django.template import Context as DjangoContext  # noqa: E402
 from django.template import Template as DjangoTemplate  # noqa: E402
@@ -129,11 +133,14 @@ class TestTheDivergenceItself:
     """The cell, run on both engines rather than transcribed from the issue."""
 
     @pytest.mark.parametrize("spelling", sorted(SPECIALS))
-    def test_django_500s_the_bare_render(self, spelling: str) -> None:
+    def test_django_bare_render_by_version(self, spelling: str) -> None:
         answer = dj("{{ p }}", Decimal(spelling))
-        assert answer[0] == "raised", answer
-        assert answer[1] == "TypeError", answer
-        assert answer[2] == "bad operand type for abs(): 'str'", answer
+        if django.VERSION >= (6, 1):
+            assert answer == du("{{ p }}", Decimal(spelling)) == SPECIALS[spelling]
+        else:
+            assert answer[0] == "raised", answer
+            assert answer[1] == "TypeError", answer
+            assert answer[2] == "bad operand type for abs(): 'str'", answer
 
     @pytest.mark.parametrize("spelling", sorted(SPECIALS))
     def test_djust_renders_str_of_the_value(self, spelling: str) -> None:
@@ -157,15 +164,18 @@ class TestTheDivergenceItself:
         assert default_if_none(value, "D") is value
         assert join(value, ",") is value
         assert slice_filter(value, ":1") is value
-        # And each of them 500s in a template only because `{{ }}` follows.
+        # On older Django the following bare render raises; 6.1 renders it.
         for source in (
             '{{ p|default:"D" }}',
             '{{ p|default_if_none:"D" }}',
             '{{ p|join:"," }}',
             '{{ p|slice:":1" }}',
         ):
-            assert dj(source, value)[1] == "TypeError", source
-            assert dj("{{ p }}", value)[2] == dj(source, value)[2], source
+            if django.VERSION >= (6, 1):
+                assert dj(source, value) == dj("{{ p }}", value) == du(source, value)
+            else:
+                assert dj(source, value)[1] == "TypeError", source
+                assert dj("{{ p }}", value)[2] == dj(source, value)[2], source
 
 
 class TestTheArgumentForStayingPermissive:
@@ -233,23 +243,16 @@ class TestTheArgumentForStayingPermissive:
         assert isinstance(Decimal("1.5").as_tuple().exponent, int)
 
 
-class TestTheDecisionCloses_Itself_IfDjangoFixesIt:
-    """Asserted in the DIVERGING direction, so it is self-retiring.
-
-    A decision recorded only as "we render this" would stay green forever. This
-    asserts that Django still REFUSES — so the day an upstream release makes
-    ``{{ Decimal("Infinity") }}`` render, this test goes red and names the
-    decision to revisit rather than leaving a stale divergence in the docs.
-    """
+class TestTheVersionSpecificDecision:
+    """Retain the older divergence and check Django 6.1's upstream fix."""
 
     @pytest.mark.parametrize("spelling", sorted(SPECIALS))
-    def test_django_still_refuses(self, spelling: str) -> None:
+    def test_django_version_behavior(self, spelling: str) -> None:
         answer = dj("{{ p }}", Decimal(spelling))
-        assert answer[0] == "raised", (
-            f"Django now RENDERS {{{{ Decimal({spelling!r}) }}}} as {answer!r}. "
-            "The #2460 divergence is closed upstream — delete this class, drop the "
-            "decision block in renderer.rs, and check whether djust's text matches."
-        )
+        if django.VERSION >= (6, 1):
+            assert answer == du("{{ p }}", Decimal(spelling)) == SPECIALS[spelling]
+        else:
+            assert answer[0] == "raised", answer
 
     def test_the_decision_is_recorded_where_the_code_is(self) -> None:
         """The renderer's number arm carries the argument, not just this file.
@@ -292,7 +295,10 @@ class TestTheAsymmetryTheIssueMissed:
 
     def test_get_digit_over_NaN_reaches_the_render_and_over_Infinity_does_not(self) -> None:
         nan = dj('{{ p|get_digit:"1" }}', Decimal("NaN"))
-        assert nan[1] == "TypeError" and "abs()" in nan[2], nan
+        if django.VERSION >= (6, 1):
+            assert nan == du('{{ p|get_digit:"1" }}', Decimal("NaN")) == "NaN"
+        else:
+            assert nan[1] == "TypeError" and "abs()" in nan[2], nan
         inf = dj('{{ p|get_digit:"1" }}', Decimal("Infinity"))
         assert inf[1] == "OverflowError", inf
 
@@ -314,11 +320,8 @@ class TestTheAsymmetryTheIssueMissed:
 class TestTheClassIsSweptNotListed:
     """The affected positions, computed rather than typed.
 
-    The issue's "6 filters" is a list. This sweeps the same positions the
-    differential does and asserts the property that actually defines the class:
-    *Django raises ``abs()`` and djust renders ``str(value)``* — which holds
-    for whatever set of shapes reach the bare render, including ones nobody
-    enumerated.
+    Sweep the same positions the differential reaches. Older Django raises
+    ``abs()`` while djust renders; Django 6.1 renders and must match djust.
     """
 
     #: The tag and path shapes the differential reaches this class through,
@@ -339,13 +342,16 @@ class TestTheClassIsSweptNotListed:
 
     @pytest.mark.parametrize("spelling", sorted(SPECIALS))
     @pytest.mark.parametrize("shape", SHAPES)
-    def test_django_refuses_and_djust_renders_the_text(self, shape: str, spelling: str) -> None:
+    def test_django_and_djust_render_by_version(self, shape: str, spelling: str) -> None:
         value = Decimal(spelling)
         answer = dj(shape, value)
-        assert answer[0] == "raised" and "abs()" in answer[2], (shape, answer)
         rendered = du(shape, value)
         assert not isinstance(rendered, tuple), (shape, rendered)
         assert SPECIALS[spelling] in rendered, (shape, rendered)
+        if django.VERSION >= (6, 1):
+            assert answer == rendered, (shape, answer, rendered)
+        else:
+            assert answer[0] == "raised" and "abs()" in answer[2], (shape, answer)
 
     @pytest.mark.parametrize("shape", SHAPES)
     def test_the_same_shape_over_a_FLOAT_special_agrees(self, shape: str) -> None:

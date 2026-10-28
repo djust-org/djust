@@ -117,6 +117,8 @@ cache.insert(hash, html.to_string())
 item_html.to_string(),
 other => Err(DjangoRustError::TemplateError(format!(
 format!(
+let kind = filters::python_type_name(&other).to_owned();
+pyo3::exceptions::PyTypeError::new_err(format!(
 pyo3::exceptions::PyTypeError::new_err(format!(
 (String::new(), std::sync::Arc::from(Vec::<Node>::new()))
 "No template names provided".to_string()

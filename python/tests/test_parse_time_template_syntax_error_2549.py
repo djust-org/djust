@@ -262,4 +262,6 @@ class TestExistingCallersStillCatch:
             reporter = ExceptionReporter(rf.get("/"), *sys.exc_info())
             data = reporter.get_traceback_data()
         assert data["template_info"]["during"] == "{% unknown %}"
-        assert "Invalid block tag" in data["exception_value"]
+        # Django 6.1 returns the exception object here; older versions return
+        # its string. Both are rendered as text by the technical-500 page.
+        assert "Invalid block tag" in str(data["exception_value"])
