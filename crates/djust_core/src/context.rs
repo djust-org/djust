@@ -1108,6 +1108,31 @@ impl Context {
         }
     }
 
+    /// Temporarily set the include-site path, including on panic unwinding.
+    pub fn with_dj_if_include_path<T>(
+        &mut self,
+        path: impl Into<String>,
+        render: impl FnOnce(&mut Context) -> T,
+    ) -> T {
+        struct PathGuard<'a> {
+            context: &'a mut Context,
+            previous: String,
+        }
+        impl Drop for PathGuard<'_> {
+            fn drop(&mut self) {
+                self.context
+                    .set_dj_if_include_path(std::mem::take(&mut self.previous));
+            }
+        }
+        let previous = self.dj_if_include_path().to_owned();
+        self.set_dj_if_include_path(path);
+        let guard = PathGuard {
+            context: self,
+            previous,
+        };
+        render(&mut *guard.context)
+    }
+
     /// The dj-if include-site path (#2689) — empty outside any `{% include %}`.
     pub fn dj_if_include_path(&self) -> &str {
         &self.dj_if_include_path

@@ -4902,8 +4902,8 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
             site_id,
         } => {
             thread_local! { static DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
-            struct Guard;
-            impl Drop for Guard {
+            struct PartialRecursionGuard;
+            impl Drop for PartialRecursionGuard {
                 fn drop(&mut self) {
                     DEPTH.with(|d| d.set(d.get() - 1));
                 }
@@ -4914,7 +4914,7 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
                 ));
             }
             DEPTH.with(|d| d.set(d.get() + 1));
-            let _guard = Guard;
+            let _guard = PartialRecursionGuard;
             let registry = registry.as_ref().and_then(|r| r.upgrade()).ok_or_else(|| {
                 DjangoRustError::TemplateError(format!(
                     "Partial '{name}' is not defined in the current template."
@@ -4928,13 +4928,14 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
                 .into_template_syntax()
             })?;
             let parent_path = context.dj_if_include_path().to_string();
-            if let Some(site) = site_id {
-                context.set_dj_if_include_path(format!("{parent_path}-i{site}"));
-            }
-            let result = context
-                .with_template_render(|inner| render_nodes_output::<L, R>(nodes, inner, loader));
-            context.set_dj_if_include_path(parent_path);
-            result
+            let path = match site_id {
+                Some(site) => format!("{parent_path}-i{site}"),
+                None => parent_path,
+            };
+            context.with_dj_if_include_path(path, |context| {
+                context
+                    .with_template_render(|inner| render_nodes_output::<L, R>(nodes, inner, loader))
+            })
         }
         Node::PartialDef {
             inline, children, ..
@@ -7115,6 +7116,37 @@ mod tests {
             only: false,
             site_id: None,
         }
+    }
+
+    #[test]
+    fn partial_panic_restores_marker_path_and_recursion_depth() {
+        use crate::parser::{PartialRegistry, PartialRegistryRef};
+        let registry = std::sync::Arc::new(PartialRegistry {
+            bodies: std::collections::HashMap::from([
+                ("bad".to_owned(), vec![panicking_child()]),
+                ("good".to_owned(), vec![Node::Text("OK".to_owned())]),
+            ]),
+        });
+        let call = |name: &str| Node::PartialCall {
+            name: name.to_owned(),
+            registry: Some(PartialRegistryRef::Strong(registry.clone())),
+            site_id: Some("abcd_1".to_owned()),
+        };
+        let mut context = Context::new();
+        context.set_dj_if_include_path("-iabcd_0");
+        for _ in 0..65 {
+            let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                render_node_with_loader_mut(&call("bad"), &mut context, Some(&PanickingLoader))
+            }));
+            assert!(panicked.is_err(), "the child panic must propagate");
+            assert_eq!(context.dj_if_include_path(), "-iabcd_0");
+        }
+        assert_eq!(
+            render_node_with_loader_mut(&call("good"), &mut context, Some(&PanickingLoader))
+                .unwrap(),
+            "OK"
+        );
+        assert_eq!(context.dj_if_include_path(), "-iabcd_0");
     }
 
     /// Drives `Node::Localize` through `render_node_with_loader` with a

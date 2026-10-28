@@ -182,7 +182,7 @@ Ok((django_date_format(&now, format)).into())
 DjangoRustError::TemplateError(format!(
 DjangoRustError::TemplateError(format!(
 let parent_path = context.dj_if_include_path().to_string();
-context.set_dj_if_include_path(format!("{parent_path}-i{site}"));
+Some(site) => format!("{parent_path}-i{site}"),
 Ok(String::new().into())
 Ok((html).into())
 Ok((String::new()).into())
@@ -263,6 +263,11 @@ let year = dt.format("%Y").to_string().parse::<i32>().unwrap_or(2000);
 'N' => result.push_str(&dt.format("%b.").to_string()), // Month abbrev AP style
 context.set("value_arg".into(), Value::String("-->".into()));
 template: "\"boom.html\"".to_string(),
+bodies: std::collections::HashMap::from([
+("bad".to_owned(), vec![panicking_child()]),
+("good".to_owned(), vec![Node::Text("OK".to_owned())]),
+name: name.to_owned(),
+site_id: Some("abcd_1".to_owned()),
 Err(DjangoRustError::TemplateError("exit blew up".to_string()))
 context.set("lang".to_string(), Value::String("fr".to_string()));
 context.set("nothing".to_string(), Value::None);
@@ -1120,6 +1125,7 @@ blank_openings: Vec::new(),
 let path = path.into();
 let namespace = namespace.into();
 let path = path.into();
+let previous = self.dj_if_include_path().to_owned();
 format!("{}:{id}", self.render_scope())
 format!("{}/{:?}", self.include_instance(), identity)
 self.string_if_invalid = value.into();

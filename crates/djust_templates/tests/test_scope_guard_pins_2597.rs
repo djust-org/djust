@@ -135,20 +135,28 @@ fn the_registry_declares_exactly_two_scope_exit_hooks() {
 
 /// The other half of the same net: the scope guard types themselves.
 #[test]
-fn the_renderer_declares_exactly_three_scope_guard_types() {
+fn the_renderer_declares_reviewed_drop_guard_types() {
     let found: BTreeSet<&str> = production_half(RENDERER_SRC)
         .lines()
         .filter_map(|line| line.trim().strip_prefix("impl Drop for "))
         .filter_map(|rest| rest.split_whitespace().next())
         .filter(|name| name.ends_with("Guard"))
         .collect();
-    let expected: BTreeSet<&str> = ["ActiveTimezoneGuard", "ScopeExitGuard", "UseL10nGuard"]
-        .into_iter()
-        .collect();
+    // `PartialRecursionGuard` guards partial depth, unrelated to the
+    // language/timezone family. It restores depth on return, error, or unwind.
+    // Keep it in this broad inventory so further Drop guards require review.
+    let expected: BTreeSet<&str> = [
+        "ActiveTimezoneGuard",
+        "PartialRecursionGuard",
+        "ScopeExitGuard",
+        "UseL10nGuard",
+    ]
+    .into_iter()
+    .collect();
     assert_eq!(
         found, expected,
-        "the set of scope Drop guards in renderer.rs changed — a fifth arm of \
-         the {{% language %}}/{{% timezone %}}/{{% localize %}}/\
-         {{% localtime %}} family must be guarded too (#1646)"
+        "the set of renderer Drop guards changed — review new or removed \
+         guards and update this inventory; a new language/timezone/localize/\
+         localtime scope arm must be guarded too (#1646)"
     );
 }

@@ -90,6 +90,41 @@ def test_recursive_partial_renders_finite_tree(tmp_path):
     ).render(Context(values))
 
 
+def test_partial_recursion_failure_does_not_poison_following_render():
+    from djust._rust import render_template
+
+    recursive = "{% partialdef p %}{% partial p %}{% endpartialdef %}{% partial p %}"
+    for _ in range(2):
+        with pytest.raises(RuntimeError, match="recursion"):
+            render_template(recursive, {})
+        assert render_template("{% partialdef p %}OK{% endpartialdef %}{% partial p %}", {}) == "OK"
+
+
+@pytest.mark.parametrize("depth", [64, 65])
+def test_partial_recursion_depth_limit(depth):
+    from djust._rust import render_template
+
+    node = None
+    for _ in range(depth):
+        node = {"child": node}
+    source = (
+        "{% partialdef p %}X{% if node.child %}{% with node=node.child %}"
+        "{% partial p %}{% endwith %}{% endif %}{% endpartialdef %}{% partial p %}"
+    )
+    if depth == 64:
+        assert render_template(source, {"node": node}) == "X" * depth
+    else:
+        with pytest.raises(RuntimeError, match="recursion"):
+            render_template(source, {"node": node})
+
+
+def test_many_sequential_partial_calls_do_not_accumulate_depth():
+    from djust._rust import render_template
+
+    source = "{% partialdef p %}X{% endpartialdef %}" + "{% partial p %}" * 128
+    assert render_template(source, {}) == "X" * 128
+
+
 def test_forward_partial_loop_dependency_extraction():
     from djust._rust import extract_template_variables
 

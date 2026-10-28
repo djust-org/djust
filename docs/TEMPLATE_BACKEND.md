@@ -291,6 +291,10 @@ an uncalled partial or lose the caller's loop or `{% with %}` context. Move the
 root around the partial invocation instead. This restriction applies to LiveView
 root extraction; ordinary Django-template backend partial rendering is separate.
 
+Partial calls may nest up to 64 levels. A deeper call fails with a template
+recursion error; sequential calls do not count toward that limit. This bound
+also applies to partials rendered through the Django-template backend.
+
 The upstream Django 6.1 partial tests also expose an existing engine-wide
 exception mismatch: an unresolved filter argument such as
 `{{ blank|default:missing }}` reaches Python as `RuntimeError` rather than
