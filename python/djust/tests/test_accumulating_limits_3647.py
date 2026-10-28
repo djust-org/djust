@@ -422,9 +422,14 @@ class TestNestedContainers:
 
 
 def _took(fn) -> float:
-    start = time.perf_counter()
-    fn()
-    return time.perf_counter() - start
+    """The fastest of three runs: a scheduling pause inflates one run, never all three,
+    and a quadratic scan is slow in every one of them."""
+    best = float("inf")
+    for _ in range(3):
+        start = time.perf_counter()
+        fn()
+        best = min(best, time.perf_counter() - start)
+    return best
 
 
 class TestTheScanIsBounded:
@@ -908,6 +913,7 @@ class TestTheDocumentedNumbers:
         assert mod.MAX_ELEMENT_DEPTH == 1000
         assert mod.SCAN_BUDGET_SECONDS == 2.0
         assert mod.MAX_ALIASES == 64
+        assert mod.MAX_CONSECUTIVE_TIMEOUTS == 3
 
 
 @pytest.mark.django_db
@@ -1125,3 +1131,100 @@ class TestADeterministicOutcomeIsKept:
             note_template_change("x.html")
             view_accumulating_container_ids(view)
         assert len([r for r in caplog.records if "took more than" in r.getMessage()]) == 2
+
+
+class TestARepeatedTimeoutStopsRetrying:
+    """A template that ALWAYS times out would pay the budget on every render."""
+
+    def test_after_three_timeouts_the_fourth_render_does_not_scan(
+        self, monkeypatch, counted_scans, caplog
+    ):
+        import logging
+
+        from djust import _accumulating_containers as mod
+
+        view = _fresh_view()
+        with (
+            monkeypatch.context() as patch,
+            caplog.at_level(logging.WARNING, logger=mod.logger.name),
+        ):
+            patch.setattr(mod, "SCAN_BUDGET_SECONDS", 0.0)
+            for _ in range(mod.MAX_CONSECUTIVE_TIMEOUTS):
+                assert view_accumulating_container_ids(view) == ()
+            assert len(counted_scans) == mod.MAX_CONSECUTIVE_TIMEOUTS
+            for _ in range(3):
+                assert view_accumulating_container_ids(view) == ()
+        assert len(counted_scans) == mod.MAX_CONSECUTIVE_TIMEOUTS, "the fourth render rescanned"
+        stopped = [r for r in caplog.records if "retrying has stopped" in r.getMessage()]
+        assert len(stopped) == 1
+        # Even with the stall gone, the class stays degraded until a template change.
+        assert view_accumulating_container_ids(view) == ()
+
+    def test_a_recovery_before_the_limit_resets_the_count(self, monkeypatch, counted_scans):
+        from djust import _accumulating_containers as mod
+
+        views = [_fresh_view()]
+        view = views[0]
+        limit = mod.MAX_CONSECUTIVE_TIMEOUTS
+        with monkeypatch.context() as patch:
+            patch.setattr(mod, "SCAN_BUDGET_SECONDS", 0.0)
+            for _ in range(limit - 1):
+                view_accumulating_container_ids(view)
+        assert view_accumulating_container_ids(view) == ("list",)  # finished: count cleared
+        type(view)._djust_accumulating_ids = {}  # as after a template change, to scan again
+        before = len(counted_scans)
+        with monkeypatch.context() as patch:
+            patch.setattr(mod, "SCAN_BUDGET_SECONDS", 0.0)
+            for _ in range(limit - 1):
+                assert view_accumulating_container_ids(view) == ()
+        # limit - 1 more timeouts did not reach the limit: still scanning each time
+        assert len(counted_scans) - before == limit - 1
+        assert view_accumulating_container_ids(view) == ("list",)
+
+    def test_a_template_change_clears_the_count(self, monkeypatch, counted_scans):
+        from djust import _accumulating_containers as mod
+        from djust.hot_view_replacement import note_template_change
+
+        view = _fresh_view()
+        with monkeypatch.context() as patch:
+            patch.setattr(mod, "SCAN_BUDGET_SECONDS", 0.0)
+            for _ in range(mod.MAX_CONSECUTIVE_TIMEOUTS + 2):
+                view_accumulating_container_ids(view)
+        assert view_accumulating_container_ids(view) == ()  # stopped
+        stopped_at = len(counted_scans)
+        view_accumulating_container_ids(view)
+        assert len(counted_scans) == stopped_at
+        note_template_change("page.html")
+        with monkeypatch.context() as patch:
+            patch.setattr(mod, "SCAN_BUDGET_SECONDS", 0.0)
+            # the count starts again: scanning (and timing out) resumes for a full round
+            for _ in range(mod.MAX_CONSECUTIVE_TIMEOUTS):
+                view_accumulating_container_ids(view)
+            assert len(counted_scans) == stopped_at + mod.MAX_CONSECUTIVE_TIMEOUTS
+        note_template_change("page.html")
+        assert view_accumulating_container_ids(view) == ("list",)
+
+    def test_the_count_is_per_class(self, monkeypatch):
+        from djust import _accumulating_containers as mod
+
+        slow, other = _fresh_view(), _fresh_view()
+        with monkeypatch.context() as patch:
+            patch.setattr(mod, "SCAN_BUDGET_SECONDS", 0.0)
+            for _ in range(mod.MAX_CONSECUTIVE_TIMEOUTS):
+                view_accumulating_container_ids(slow)
+        assert view_accumulating_container_ids(other) == ("list",)
+
+    def test_an_exception_is_not_counted_and_keeps_retrying(self, monkeypatch, counted_scans):
+        from djust import _accumulating_containers as mod
+
+        view = _fresh_view()
+
+        def boom(self):
+            raise RuntimeError("fast failure")
+
+        with monkeypatch.context() as patch:
+            patch.setattr(mod._Scan, "containers", boom)
+            for _ in range(mod.MAX_CONSECUTIVE_TIMEOUTS + 3):
+                assert view_accumulating_container_ids(view) == ()
+        assert len(counted_scans) == mod.MAX_CONSECUTIVE_TIMEOUTS + 3
+        assert view_accumulating_container_ids(view) == ("list",)

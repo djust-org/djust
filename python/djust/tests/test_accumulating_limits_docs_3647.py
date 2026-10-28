@@ -16,6 +16,7 @@ class TestTheDocumentedNumbers:
             "more than 1,000 elements",
             "more than 2 seconds",
             "more than 64 `{% with %}` aliases",
+            "after 3 timeouts in a row the scan stops retrying",
         ):
             assert phrase in guide, phrase
 

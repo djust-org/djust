@@ -625,7 +625,10 @@ applies to a full HTML update, which the client handles itself. Details:
   without the watcher a change is read after a restart. It is bounded: a template
   of more than 1,000,000 characters, one nesting more than 1,000 elements or one
   that takes more than 2 seconds to scan accumulates nothing (every `dj-update`
-  list is re-rendered whole) and logs a warning. Aliases are followed through
+  list is re-rendered whole) and logs a warning. A timeout is not remembered (a
+  stall should not degrade the view for good), so the next render scans again;
+  after 3 timeouts in a row the scan stops retrying and the lists stay re-rendered
+  whole until a template changes or the process restarts. Aliases are followed through
   at most 64 nested `{% with %}` tags; with more than 64 `{% with %}` aliases of
   the key open at once, the later ones are not recognised.
 - `dj-update="prepend"` puts each new row first, as one insert at the front.

@@ -63,6 +63,8 @@ MAX_INCLUDED_TEMPLATES = 64
 MAX_ELEMENT_DEPTH = 1000
 #: ``{% with %}`` aliases of a temporary key tracked at one point of a template.
 MAX_ALIASES = 64
+#: Consecutive timeouts of one view class after which the degraded answer is kept.
+MAX_CONSECUTIVE_TIMEOUTS = 3
 #: Wall-clock budget of one scan.
 SCAN_BUDGET_SECONDS = 2.0
 
@@ -540,6 +542,13 @@ def _log_outcome(outcome: _Outcome, owners: Tuple[Any, ...] = ()) -> None:
             "tried again on the next render)",
             SCAN_BUDGET_SECONDS,
         )
+    elif cause == "timeout_stopped":
+        logger.warning(
+            "dj-update scan: scanning a template timed out %d times in a row; retrying has "
+            "stopped and its dj-update containers stay re-rendered whole until the "
+            "template changes or the process restarts",
+            MAX_CONSECUTIVE_TIMEOUTS,
+        )
     elif cause == "too_deep":
         logger.warning(
             "dj-update scan: a template nests more than %d elements; its dj-update "
@@ -590,6 +599,26 @@ def _warn_once(cls: type, outcome: _Outcome, owners: Tuple[Any, ...]) -> None:
     _log_outcome(outcome, owners)
 
 
+def _count_timeouts(cls: type, outcome: _Outcome) -> _Outcome:
+    """Stop retrying a class whose scan keeps timing out.
+
+    A timeout is not kept, so that a stall does not degrade the class for good; but a
+    template that always times out would pay the whole budget on every render. After
+    :data:`MAX_CONSECUTIVE_TIMEOUTS` in a row the degraded answer is kept (and said
+    so once); any scan that finishes, or the watcher, clears the count.
+    """
+    count = cls.__dict__.get("_djust_accumulating_timeouts", 0)
+    if outcome.cause != "timeout":
+        if count:
+            cls._djust_accumulating_timeouts = 0  # type: ignore[attr-defined]
+        return outcome
+    count += 1
+    cls._djust_accumulating_timeouts = count  # type: ignore[attr-defined]
+    if count < MAX_CONSECUTIVE_TIMEOUTS:
+        return outcome
+    return _Outcome(cause="timeout_stopped")  # logged once by the caller
+
+
 def view_accumulating_container_ids(view: Any, aliases: Iterable[str] = ()) -> Tuple[str, ...]:
     """The accumulating containers of ``view``'s template, worked out once per class.
 
@@ -604,7 +633,10 @@ def view_accumulating_container_ids(view: Any, aliases: Iterable[str] = ()) -> T
     size, depth, include-count and alias bounds. A timeout, an exception from the
     scan or from ``get_template()`` and an included file that could not be read
     may not repeat (a cold network file system, a pause), so they are not kept and
-    the next render scans again; each cause is logged once per class.
+    the next render scans again; each cause is logged once per class. A class whose
+    scan times out :data:`MAX_CONSECUTIVE_TIMEOUTS` times in a row stops retrying
+    (the degraded answer is kept) until the watcher or a scan that finishes clears
+    the count.
     """
     declared = getattr(view, "temporary_assigns", None)
     if not declared:
@@ -618,7 +650,7 @@ def view_accumulating_container_ids(view: Any, aliases: Iterable[str] = ()) -> T
         return cached[keys]
     try:
         source = view.get_template()
-        outcome = _scan_outcome(source, keys, None)
+        outcome = _count_timeouts(cls, _scan_outcome(source, keys, None))
     except Exception as exc:  # noqa: BLE001 — an unreadable template renders nothing anyway
         outcome = _Outcome(cause="template", transient=True)
         warned = cls.__dict__.get("_djust_accumulating_warned", frozenset())

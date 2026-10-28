@@ -642,6 +642,7 @@ _TEMPLATE_DERIVED_CLASS_CACHES = (
     "_djust_template_hash_slot",
     "_djust_accumulating_ids",
     "_djust_accumulating_warned",
+    "_djust_accumulating_timeouts",
 )
 
 
