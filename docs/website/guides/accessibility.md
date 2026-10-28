@@ -548,20 +548,36 @@ class OrderView(LiveView):
 
 Use `role="alert"` (assertive) only for an error the user must hear at once.
 
+A live region announces when its **text changes**, which is not the same as the
+old hook announcing every queued message:
+
+- **The same message twice in a row is announced once.** A second `save` that
+  renders the identical text produces a `noop` (no DOM change, so nothing is
+  announced), although the `JS.focus()` push still arrives. To announce a repeat,
+  make the text differ between turns, for example by alternating a no-break-space
+  suffix (`self._flip = not self._flip; self.status = "Order saved" + ("\u00a0" if self._flip else "")`).
+  Over the WebSocket this produces a text patch every turn; that is the DOM
+  mutation a live region needs. Whether a given screen reader then repeats the
+  text is up to the screen reader, and was not tested with one.
+- **Several messages in one turn** must be rendered together (a list in the
+  region), not queued one by one.
+
 ### The `_drain_announcements` / `_drain_focus` hooks are deprecated
 
 The WebSocket and SSE transports also drain two duck-typed methods on the view,
 `_drain_announcements()` (sends an `accessibility` frame) and `_drain_focus()`
-(sends a `focus` frame). Nothing in djust defines either method,
-so no built-in API ever queued an announcement or a focus command, and the
-shipped client has no `window.djust.accessibility` object to receive the frames
-unless your own script assigns one. The HTTP fallback never drained them, so a
-view that defined the hooks lost them there silently.
+(sends a `focus` frame). No 1.x release has defined either, so no built-in API
+queues an announcement or a focus command, the shipped client has no
+`window.djust.accessibility` object to receive the frames unless your own script
+assigns one, and the HTTP fallback never drained them: a view that defined the
+hooks lost them there silently.
 
-Defining either method on a `LiveView` now raises a `DeprecationWarning` at the
-class statement, naming the hook. Both keep working on the WebSocket and SSE
-transports until 2.0.0, where the flush is removed. To migrate, use a live region
-and `JS.focus()` as above; both are carried by every transport.
+Defining either method on a `LiveView` subclass now raises a
+`DeprecationWarning` at the class statement, naming the hook. A hook added after
+the class exists (`setattr`, a decorator, an instance attribute) is not detected
+and does not warn. Both keep working on the WebSocket and SSE transports until
+2.0.0, where the flush is removed. To migrate, use a live region and `JS.focus()`
+as above, keeping the differences in mind.
 
 ## Known limitations / not yet covered
 

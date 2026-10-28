@@ -211,7 +211,7 @@ This is the core stability promise:
 ## Currently Deprecated Symbols
 
 Three symbols deprecated during `0.x` carry the 0.x carve-out removal floor of
-**`>= 1.1.0`**. Two access patterns deprecated during the `1.x` series carry the
+**`>= 1.1.0`**. One access pattern deprecated during the `1.x` series carries the
 standard floor of **`2.0.0`**.
 
 | Symbol | Deprecated since | Removed no earlier than | Replacement |
@@ -311,18 +311,28 @@ parent_html = context["block"].super()
 
 The WebSocket consumer and the SSE runtime drain two duck-typed methods on the
 view behind `hasattr`: `_drain_announcements()` (sends an `accessibility` frame)
-and `_drain_focus()` (sends a `focus` frame). Nothing in djust defines either, so
-no built-in API queues an announcement or a focus command, the shipped client has
-no `window.djust.accessibility` to receive the frames unless the application's own
-script assigns one, and the HTTP fallback never drained them. They are
-underscore-prefixed and undocumented, so they were never part of the public
-surface; the warning exists because an application can have supplied both halves.
+and `_drain_focus()` (sends a `focus` frame). No 1.x release has ever defined
+either: `mixins/accessibility.py` (with `announce()` / `focus()`) shipped only in
+the 0.6.0 and 0.7.0 tags, which are not ancestors of `main`, and no tag from 0.9.0
+on has it. The shipped client assigns no `window.djust.accessibility`, so the
+frames reach only an object the application's own script defines, and the HTTP
+fallback never drained them.
 
-Defining either method on a `LiveView` subclass (or reaching it through a mixin)
-emits one `DeprecationWarning` per hook at the `class` statement. Behaviour is
-unchanged until 2.0.0, where the flush is removed. Migrate to a live region the
-view renders and `JS.focus()` through `push_commands()`, which every transport
-carries (see the [accessibility guide](website/guides/accessibility.md#announcing-a-change-and-moving-focus-from-the-server)).
+The names are underscore-prefixed, which this policy treats as internal. They are
+deprecated rather than deleted because the `accessibility` and `focus` frames are
+part of the wire protocol (point 7 above) and `djust.d.ts` types
+`window.djust.accessibility`, so an application can have supplied both halves.
+
+Defining either method on a `LiveView` subclass (in its body or through a mixin)
+emits one `DeprecationWarning` per hook at the `class` statement. A hook added
+after the class exists (`setattr`, a decorator, an instance attribute) is not
+detected and does not warn. Behaviour is unchanged until 2.0.0, where the flush is
+removed. Migrate to a live region the view renders and `JS.focus()` through
+`push_commands()` (see the [accessibility guide](website/guides/accessibility.md#announcing-a-change-and-moving-focus-from-the-server)).
+The replacement is not identical: a live region announces only when its text
+changes, so the same message sent in two turns in a row announces once, and
+several messages in one turn must be rendered together. The guide shows the
+workaround (alternate a no-break-space suffix).
 
 ```python
 # Before
