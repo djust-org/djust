@@ -816,10 +816,45 @@ fn collect_accumulating<'a>(
     }
 }
 
+/// Separates an `id` from its occurrence number in the key of a row whose `id`
+/// repeats. A control character: no `id` a template writes contains it.
+const KEY_OCCURRENCE: char = '\u{1f}';
+
+/// Key the children that have no key of their own by their `id` (#3639).
+///
+/// An `id` that appears on more than one of them is not unique, and the differ
+/// does not pair rows by a key that repeats (it falls back to position for those
+/// rows only, next to keyed rows that are matched by key): a prepend then moves
+/// the repeated rows by position while the keyed ones stay put, and the client
+/// cannot apply those moves (#3647, "1 of N patches failed"). Such rows are
+/// keyed by `id` plus their occurrence number among the rows that share it, in
+/// list order, so every key is unique. The occurrence number is stable: a row
+/// keeps the key it was given (a stored row is cloned with its key), and a row
+/// added later never carries an `id` already in the container, so it cannot
+/// change the numbering of the rows that were there.
 fn key_children_by_id(children: &mut [VNode]) {
-    for child in children {
+    let mut count: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for child in children.iter() {
         if child.key.is_none() {
-            child.key = child.attrs.get("id").cloned();
+            if let Some(id) = child.attrs.get("id") {
+                *count.entry(id.clone()).or_insert(0) += 1;
+            }
+        }
+    }
+    let mut seen: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for child in children.iter_mut() {
+        if child.key.is_some() {
+            continue;
+        }
+        let Some(id) = child.attrs.get("id").cloned() else {
+            continue;
+        };
+        if count.get(&id).copied().unwrap_or(0) < 2 {
+            child.key = Some(id);
+        } else {
+            let n = seen.entry(id.clone()).or_insert(0);
+            child.key = Some(format!("{id}{KEY_OCCURRENCE}{n}"));
+            *n += 1;
         }
     }
 }

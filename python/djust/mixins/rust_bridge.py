@@ -264,6 +264,35 @@ def _unassigned_temporary_keys(view: Any) -> Set[str]:
     return out
 
 
+def _temporary_key_aliases(view: Any, context: Any) -> Tuple[str, ...]:
+    """Context keys that hold a ``temporary_assigns`` attribute's very object (#3647).
+
+    ``get_context_data`` may hand the rows to the template under another name
+    (``context["feed"] = self.rows``). A ``dj-update`` container reading ``feed``
+    is fed by the temporary key just as one reading ``rows`` is, but nothing in the
+    template says so. The two are the same object, so identity finds them; a value
+    derived from the attribute (``list(self.rows)``, a slice, a filter) is a
+    different object and is NOT found, which is a documented limit rather than a
+    guess. Only mutable containers are compared: ``None``, ``0`` and ``""`` are
+    shared by unrelated names.
+    """
+    declared = getattr(view, "temporary_assigns", None)
+    if not declared or not isinstance(context, dict):
+        return ()
+    held = {}
+    for key in declared:
+        value = getattr(view, key, None)
+        if isinstance(value, (list, dict, set)):
+            held[id(value)] = key
+    if not held:
+        return ()
+    return tuple(
+        sorted(
+            name for name, value in context.items() if name not in declared and id(value) in held
+        )
+    )
+
+
 def _warn_rows_without_id(view: Any) -> None:
     """Say, once per view class and in DEBUG only, that rows without an ``id`` were dropped.
 
@@ -886,6 +915,10 @@ class RustBridgeMixin:
                 else run_sync_step(self, "render", self.get_context_data)
             )
 
+            # Context keys that are a temporary attribute under another name (#3647);
+            # before the normalize pass below, which copies what it converts.
+            _context_aliases = _temporary_key_aliases(self, full_context)
+
             # Defensive normalize pass for DB values added after super() (#1205, #1207).
             # When a user overrides ``get_context_data`` and sets a raw DB
             # value (Model / QuerySet / list[Model]) AFTER calling ``super()``,
@@ -1468,7 +1501,7 @@ class RustBridgeMixin:
             if hasattr(self._rust_view, "set_accumulate_containers"):
                 _warn_rows_without_id(self)
                 self._rust_view.set_accumulate_containers(
-                    list(view_accumulating_container_ids(self))
+                    list(view_accumulating_container_ids(self, _context_aliases))
                 )
 
             # Mark static assigns as sent — subsequent syncs will skip them

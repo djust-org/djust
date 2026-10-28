@@ -177,3 +177,127 @@ class MixedView(LiveView):
     @event_handler()
     def add_item(self, **kwargs):
         self.items = [*self.items, Row(50 + len(self.items), "added")]
+
+
+# ---------------------------------------------------------------------------
+# #3647: the limits of per-container accumulation
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class TaggedRow:
+    """A row whose ``id`` can repeat; ``pk`` tells two rows with one ``id`` apart."""
+
+    id: int
+    body: str
+    pk: str
+
+
+class DuplicateIdsPrependView(LiveView):
+    """A prepend container whose mount rows, and then a batch, repeat an ``id``."""
+
+    temporary_assigns = {"rows": []}
+    template = _append_template("prepend")
+
+    def mount(self, request, **kwargs):
+        self.rows = [
+            TaggedRow(0, "first", "a"),
+            TaggedRow(0, "second", "b"),
+            TaggedRow(1, "third", "c"),
+        ]
+        self.k = 0
+
+    @event_handler()
+    def add(self, **kwargs):
+        self.k += 1
+        self.rows = [TaggedRow(100 + self.k, f"new {self.k}", f"n{self.k}")]
+
+    @event_handler()
+    def add_pair(self, **kwargs):
+        """Two rows of one batch share an ``id``."""
+        self.k += 1
+        base = 500 + 10 * self.k
+        self.rows = [
+            TaggedRow(base, "pair one", f"p{self.k}a"),
+            TaggedRow(base, "pair two", f"p{self.k}b"),
+            TaggedRow(base + 1, "pair three", f"p{self.k}c"),
+        ]
+
+    @event_handler()
+    def bump(self, **kwargs):
+        self.k += 1
+
+
+class UnkeyedStoredPrependView(PrependRowsView):
+    """The container was not recognised when the page was first rendered (the
+    generator hides it), so the stored rows carry no keys; it is recognised from the
+    first event on, as after a template edit that brings a container into the set."""
+
+
+class AliasedRowsView(_TemporaryRowsView):
+    """The container is fed through an alias made OUTSIDE it."""
+
+    template = (
+        '<div class="ws-root">\n'
+        "  {% with shown=rows %}\n"
+        '  <ul id="list" dj-update="append">\n'
+        "    {% for r in shown %}\n"
+        '    <li id="rows-{{ r.id }}" data-pk="{{ r.pk }}">{{ r.body }}</li>\n'
+        "    {% endfor %}\n"
+        "  </ul>\n"
+        "  {% endwith %}\n"
+        "  <p>count {{ k }}</p>\n"
+        "</div>"
+    )
+
+
+class RenamedRowsView(_TemporaryRowsView):
+    """``get_context_data`` hands the rows to the template as ``feed``."""
+
+    template = (
+        '<div class="ws-root">\n'
+        '  <ul id="list" dj-update="append">\n'
+        "    {% for r in feed %}\n"
+        '    <li id="rows-{{ r.id }}" data-pk="{{ r.pk }}">{{ r.body }}</li>\n'
+        "    {% endfor %}\n"
+        "  </ul>\n"
+        "  <p>count {{ k }}</p>\n"
+        "</div>"
+    )
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["feed"] = self.rows
+        return context
+
+
+class NestedContainersView(_TemporaryRowsView):
+    """The outer list is an ordinary attribute; only the inner one reads ``rows``."""
+
+    template = (
+        '<div class="ws-root">\n'
+        '  <div id="outer" dj-update="append">\n'
+        '    <ul id="inner" dj-update="append">\n'
+        "      {% for r in rows %}\n"
+        '      <li id="rows-{{ r.id }}" data-pk="{{ r.pk }}">{{ r.body }}</li>\n'
+        "      {% endfor %}\n"
+        "    </ul>\n"
+        "    {% for r in items %}\n"
+        '    <p id="items-{{ r.id }}" data-pk="{{ r.pk }}">{{ r.body }}</p>\n'
+        "    {% endfor %}\n"
+        "  </div>\n"
+        "  <p>count {{ k }}</p>\n"
+        "</div>"
+    )
+
+    def mount(self, request, **kwargs):
+        super().mount(request, **kwargs)
+        self.items = rows(3)
+
+    @event_handler()
+    def remove_item(self, **kwargs):
+        self.items = self.items[1:]
+
+    @event_handler()
+    def edit_item(self, **kwargs):
+        self.items = [Row(self.items[0].id, "edited"), *self.items[1:]]

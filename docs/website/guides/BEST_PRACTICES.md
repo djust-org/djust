@@ -572,13 +572,70 @@ applies to a full HTML update, which the client handles itself. Details:
   row whose `id` is already in the container is left as it is (it is not updated
   or added twice); a row with no `id` is not added (DEBUG logs a warning naming
   the view).
-- Which containers accumulate is worked out from the template: a `dj-update`
-  container whose body reads a `temporary_assigns` key (or `streams`, or has an
-  `{% include %}`) does. Any other `dj-update` list in the same view is
-  re-rendered whole every time, so a removed or edited row there still reaches
-  the page. The same goes for every list in a view that declares no
-  `temporary_assigns`.
+- Which containers accumulate is worked out from the template source: a
+  `dj-update` container whose **own body** reads a `temporary_assigns` key (or
+  `streams`) does. Any other `dj-update` list in the same view is re-rendered
+  whole every time, so a removed or edited row there still reaches the page. The
+  same goes for every list in a view that declares no `temporary_assigns`.
+  "Reads" means the key by name, **or** under another name that is certain to be
+  the same rows:
+  - an alias made with `{% with items=rows %}` or `{% with rows as items %}`,
+    including one that wraps the container from outside. A `{% with rows=other %}`
+    that wraps the container and reuses the key's name for something else hides
+    the key there (`{% with rows=rows %}` keeps it). Only a `with` around the
+    container is followed: one inside the container does not hide anything;
+  - a context key that holds the very same object, such as
+    `context["feed"] = self.rows` in `get_context_data` (checked by identity on
+    every render).
+- A nested `dj-update` container's body belongs to that container, not to its
+  parent: an outer list that is an ordinary attribute stays authoritative even
+  when the list inside it is fed by a `temporary_assigns` key.
+- An `{% include %}` in a container is read too: a static name is found the way
+  the renderer finds it (the template directories, then Django's loaders) and
+  scanned, including the includes inside it. In your view's own template `./x` is
+  `x` at the root of the template directories and `../x` is not followed (the
+  renderer has no file name to be relative to there); inside an included file
+  `./` and `../` are relative to that file. An include with `only` sees nothing
+  but its `with` values, so only those count. A name that is a variable, a
+  filtered name, a file that cannot be found, an include cycle, a chain more than
+  8 levels deep, a file that uses `{% extends %}` or more than 64 included files
+  are NOT seen through: the include is assumed to read a temporary key, and the
+  container accumulates.
+- **Unsupported shapes: a `dj-update` container the scan cannot attribute to a
+  temporary key is re-rendered whole, and on a `temporary_assigns` view that
+  empties it.** The page then shows only the rows of the *latest* render (each
+  `self.rows = [new]` replaces the previous row instead of adding to it), and an
+  *unrelated* event, one that assigns no rows, renders the container with no rows:
+  the list goes blank. Measured: after two `add` events the page shows one row,
+  after a following unrelated event it shows none. The shapes are:
+  - a value **derived** from the attribute, such as
+    `context["feed"] = list(self.rows)` (a copy, a slice or a filter is a different
+    object from `self.rows`);
+  - a container whose **tag lives inside an included file** (the scan reads the
+    `dj-update` tags of the view's own template; that container is never seen);
+  - a template tag or component that reads the view without the key being named
+    in the container.
+
+  The rule that avoids all of them: keep the `dj-update` container tag and its
+  rows in the same template, and read the temporary key (or a `{% with %}` alias,
+  or an unchanged `get_context_data` entry of it) by name inside the container.
+  Putting the *rows* in an included file is fine, as above.
+- The scan runs once per view class and is kept: edit a template (or a file it
+  includes) with the dev file watcher running and the next render reads it again;
+  without the watcher a change is read after a restart. It is bounded: a template
+  of more than 1,000,000 characters, one nesting more than 1,000 elements or one
+  that takes more than 2 seconds to scan accumulates nothing (every `dj-update`
+  list is re-rendered whole) and logs a warning. A timeout is not remembered (a
+  stall should not degrade the view for good), so the next render scans again;
+  after 3 timeouts in a row the scan stops retrying and the lists stay re-rendered
+  whole until a template changes or the process restarts. Aliases are followed through
+  at most 64 nested `{% with %}` tags; with more than 64 `{% with %}` aliases of
+  the key open at once, the later ones are not recognised.
 - `dj-update="prepend"` puts each new row first, as one insert at the front.
+  Rows may repeat an `id` (in the render that mounts the page, or within one
+  batch of new rows): they are all kept, as the client's full HTML update keeps
+  them, and each new row is still one insert at the front. A row repeating the
+  `id` of a row already in the container is left alone, as for any other row.
 - **The rows stay in the server's copy of the page.** The server keeps the whole
   container so it can tell what is new, and the stored tree it diffs against
   grows with every row you add; `temporary_assigns` empties the context copy,

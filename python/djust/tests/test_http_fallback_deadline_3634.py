@@ -904,14 +904,19 @@ class TestConcurrentPostsCannotOvershootTheCap:
         with SHORT:
             statuses = self._concurrent_posts()
             assert statuses == [200] * self.POSTS
-            assert len(started) == self.CAP, "a worker was started past the cap"
+            results = [e for e in LOG if e[0] == "result"]
+            refused = [e for e in results if "not started" in e[4]]
+            # A slot is reserved on the request thread, under a lock, before any worker
+            # runs: how many POSTs were refused does not depend on scheduling, and it
+            # is the cap's invariant. (`started` is NOT: the budget here is 0.05 s and
+            # a worker abandoned before its coroutine began cancels its task without
+            # running the callback, so under load fewer than CAP callbacks may start.)
+            assert len(results) == self.POSTS
+            assert len(refused) == self.POSTS - self.CAP, results
             assert len(_workers()) <= self.CAP
-        results = [e for e in LOG if e[0] == "result"]
-        refused = [e for e in results if "not started" in e[4]]
-        assert len(results) == self.POSTS
-        assert len(refused) == self.POSTS - self.CAP, results
         assert all(e[3] == "TimeoutError" for e in results)
-        _join_workers()
+        _join_workers()  # every admitted worker has now begun or been cancelled
+        assert len(started) <= self.CAP, "a worker was started past the cap"
 
     def test_slots_of_tasks_that_finish_are_released_under_concurrency(self, monkeypatch):
         monkeypatch.setattr(request_mixin, "_HTTP_BACKGROUND_MAX_ABANDONED", self.CAP)
