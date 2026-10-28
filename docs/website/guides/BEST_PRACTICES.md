@@ -580,7 +580,10 @@ applies to a full HTML update, which the client handles itself. Details:
   "Reads" means the key by name, **or** under another name that is certain to be
   the same rows:
   - an alias made with `{% with items=rows %}` or `{% with rows as items %}`,
-    including one that wraps the container from outside;
+    including one that wraps the container from outside. A `{% with rows=other %}`
+    that wraps the container and reuses the key's name for something else hides
+    the key there (`{% with rows=rows %}` keeps it). Only a `with` around the
+    container is followed: one inside the container does not hide anything;
   - a context key that holds the very same object, such as
     `context["feed"] = self.rows` in `get_context_data` (checked by identity on
     every render).
@@ -588,21 +591,35 @@ applies to a full HTML update, which the client handles itself. Details:
   parent: an outer list that is an ordinary attribute stays authoritative even
   when the list inside it is fed by a `temporary_assigns` key.
 - An `{% include %}` in a container is read too: a static name is found the way
-  the renderer finds it (the template directories, then Django's loaders, `./`
-  and `../` relative to the including template) and scanned, including the
-  includes inside it. An include with `only` sees nothing but its `with` values,
-  so only those count. A name that is a variable, a filtered name, a file that
-  cannot be found, an include cycle, a chain more than 8 levels deep, a file that
-  uses `{% extends %}` or more than 64 included files are NOT seen through: the
-  include is assumed to read a temporary key, and the container accumulates.
-- **What the scan cannot see leaves the container re-rendered whole**, so only
-  the newest rows are shown and a stored row is replaced: a value derived from the
-  attribute (`feed = list(self.rows)`, a slice or a filter applied in
-  `get_context_data`), a template tag or component that reads the view without
-  naming the key in the template, and a `{% with rows=other %}` that reuses the
-  key's name for something else (which is still treated as the key). When a
-  container does not accumulate and you expected it to, name the key in its body
-  (`{% for r in rows %}`) or return the attribute itself from `get_context_data`.
+  the renderer finds it (the template directories, then Django's loaders) and
+  scanned, including the includes inside it. In your view's own template `./x` is
+  `x` at the root of the template directories and `../x` is not followed (the
+  renderer has no file name to be relative to there); inside an included file
+  `./` and `../` are relative to that file. An include with `only` sees nothing
+  but its `with` values, so only those count. A name that is a variable, a
+  filtered name, a file that cannot be found, an include cycle, a chain more than
+  8 levels deep, a file that uses `{% extends %}` or more than 64 included files
+  are NOT seen through: the include is assumed to read a temporary key, and the
+  container accumulates.
+- **Unsupported shapes: a `dj-update` container the scan cannot attribute to a
+  temporary key is re-rendered whole, and on a `temporary_assigns` view that
+  empties it.** The page then shows only the rows of the *latest* render (each
+  `self.rows = [new]` replaces the previous row instead of adding to it), and an
+  *unrelated* event, one that assigns no rows, renders the container with no rows:
+  the list goes blank. Measured: after two `add` events the page shows one row,
+  after a following unrelated event it shows none. The shapes are:
+  - a value **derived** from the attribute, such as
+    `context["feed"] = list(self.rows)` (a copy, a slice or a filter is a different
+    object from `self.rows`);
+  - a container whose **tag lives inside an included file** (the scan reads the
+    `dj-update` tags of the view's own template; that container is never seen);
+  - a template tag or component that reads the view without the key being named
+    in the container.
+
+  The rule that avoids all of them: keep the `dj-update` container tag and its
+  rows in the same template, and read the temporary key (or a `{% with %}` alias,
+  or an unchanged `get_context_data` entry of it) by name inside the container.
+  Putting the *rows* in an included file is fine, as above.
 - The scan runs once per view class and is kept: edit a template (or a file it
   includes) with the dev file watcher running and the next render reads it again;
   without the watcher a change is read after a restart. It is bounded: a template
