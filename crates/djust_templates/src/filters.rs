@@ -2,8 +2,6 @@
 
 use chrono::{DateTime, Datelike, Timelike, Utc};
 use djust_core::{Context, DjangoRustError, Result, Value};
-use once_cell::sync::Lazy;
-use regex::Regex;
 
 use crate::filter_registry;
 
@@ -3651,70 +3649,6 @@ fn timesince_or_until(
     Ok(Value::String(django_timesince(now, then)))
 }
 
-/// The NON-BREAKING SPACE Django joins a file size to its unit with.
-///
-/// Spelled as an escape rather than as a literal U+00A0 in the source on
-/// purpose: the two are visually identical, so a literal one is silently
-/// destroyed by an editor that normalises whitespace, by a copy-paste through a
-/// terminal, or by a well-meaning "trailing whitespace" fixer — and the
-/// resulting output looks *exactly right* while being the wrong bytes. Same
-/// character, same reasoning, as `timesince` (#2228).
-const NBSP: &str = "\u{00A0}";
-
-/// Python's `int(x)` over a [`Value`], or `None` for what Django catches.
-///
-/// `i128`, not `i64`: `int(Decimal('12345678901234567890.123456789'))` is the
-/// exact 20-digit integer, and routing it through `as_f64() as i64` saturated at
-/// `i64::MAX` and rendered `8192.0 PB` where Django renders `10965.2 PB` — the
-/// third cause #2264 reported. The `Decimal` arm delegates to
-/// `decimal::to_i128_trunc` rather than re-deriving the truncation (#1646).
-fn filesize_to_int(value: &Value) -> Option<i128> {
-    match value {
-        Value::Integer(n) => Some(*n as i128),
-        // `int(True)` is 1. Django reaches this before any string handling.
-        Value::Bool(b) => Some(i128::from(*b)),
-        Value::Float(f) => {
-            // `int(float)` truncates toward zero. `int(nan)` raises ValueError,
-            // which Django's `except (TypeError, ValueError, UnicodeDecodeError)`
-            // CATCHES, so a NaN lands on the `0 bytes` fallback below.
-            // `int(inf)` raises OverflowError, which it does not catch — and
-            // that raise is made at the dispatch arm before this is reached
-            // (#2435). An earlier version of this comment said both propagate;
-            // measured, only the infinity does.
-            // The bound is `i128::MAX` as a double — the largest magnitude the
-            // `as i128` below can carry without saturating. NaN fails the range
-            // test on its own, so `is_finite` is not spelled separately.
-            const I128_MAX_AS_F64: f64 = 1.7014118346046923e38;
-            let truncated = f.trunc();
-            if (-I128_MAX_AS_F64..=I128_MAX_AS_F64).contains(&truncated) {
-                Some(truncated as i128)
-            } else {
-                None
-            }
-        }
-        Value::Decimal(d) => djust_core::decimal::parse_decimal_parts(d.trim())?.to_i128_trunc(),
-        // `int()` of an int is itself (#2260). Without this arm a `BigInt` fell
-        // to the wildcard and every value past `i64` rendered `0 bytes`, where
-        // before the variant it had arrived as a `Float` and got a real answer.
-        //
-        // Past `i128` — 39 digits — the digits do not fit either, and falling
-        // straight to `0 bytes` there is a regression at exactly `2**127`, which
-        // a set comparison against `main` caught as two cells. So the overflow
-        // delegates to the `Float` arm above, which is what the value used to
-        // take: one definition of that bound rather than a second copy of the
-        // constant (#1646). Beyond what a double can carry, both give up
-        // together, as they did before.
-        Value::BigInt(d) => d.parse::<i128>().ok().or_else(|| {
-            d.parse::<f64>()
-                .ok()
-                .and_then(|f| filesize_to_int(&Value::Float(f)))
-        }),
-        Value::String(s) | Value::SafeString(s) => python_int_from_str(s),
-        // `int(None)`, `int([1, 2])`, `int({'a': 1})` — all TypeError.
-        _ => None,
-    }
-}
-
 /// Python's `int(str)`: surrounding whitespace, an optional sign, then digits
 /// that may be separated by single underscores (`int("1_024")` is 1024).
 ///
@@ -6344,11 +6278,6 @@ pub(crate) enum ValueOpError {
     NotSubscriptable,
     /// `d[i]` on a mapping that has no such key — `KeyError: i`.
     MissingKey(i64),
-    /// `x.<name>()` on a value without it — `AttributeError: 'X' object has no
-    /// attribute '<name>'`. `phone2numeric`'s `phone.lower()` is the only
-    /// caller, and it is a `@keep_lazy_text` function rather than a
-    /// `@stringfilter`, so Django never coerces its input first.
-    NoAttribute(&'static str),
 }
 
 impl ValueOpError {
@@ -6358,7 +6287,6 @@ impl ValueOpError {
         match self {
             ValueOpError::NotIterable | ValueOpError::NotSubscriptable => "TypeError",
             ValueOpError::MissingKey(_) => "KeyError",
-            ValueOpError::NoAttribute(_) => "AttributeError",
         }
     }
 
@@ -6370,9 +6298,6 @@ impl ValueOpError {
             ValueOpError::NotIterable => format!("'{ty}' object is not iterable"),
             ValueOpError::NotSubscriptable => format!("'{ty}' object is not subscriptable"),
             ValueOpError::MissingKey(k) => format!("{k}"),
-            ValueOpError::NoAttribute(name) => {
-                format!("'{ty}' object has no attribute '{name}'")
-            }
         }
     }
 }

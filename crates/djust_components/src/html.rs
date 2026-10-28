@@ -221,6 +221,7 @@ pub(crate) fn html_escape(s: &str) -> String {
 
 /// Escape a value for use inside a single- or double-quoted JavaScript string
 /// literal. Combine with [`html_escape`] when the script sits in an attribute.
+#[cfg(test)]
 pub(crate) fn js_string_escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
