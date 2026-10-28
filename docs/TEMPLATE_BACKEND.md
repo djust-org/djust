@@ -358,6 +358,33 @@ Known limits of the harness:
 - A crash with no test in flight (in a class or module `setUpClass`) cannot be attributed to a test. The run stops with a message naming how many tests had finished; isolate the module with `--label`.
 - Django's runner turns `RuntimeWarning` and `ResourceWarning` into errors. A future warning raised by djust would surface as ERRORs. That is a finding about the backend, not a harness bug.
 
+### Parity of djust's own template libraries
+
+`djust_components` and `theme_tags` can each render a tag two ways: through Django's engine (the Python tag) or through `DjustTemplateBackend`, where a registered native handler wins. The two are independent implementations, and for most tags they do not render the same bytes (class names, ARIA attributes, `dj-*` wiring, escaping of `mark_safe` values, how invalid input is treated; [#3663](https://github.com/djust-org/djust/issues/3663), [#3669](https://github.com/djust-org/djust/issues/3669)). A ratchet measures that, tag by tag, and holds the measurement in a checked-in file so the gap can only shrink.
+
+```bash
+make template-library-parity            # check: exits 1 when the measurement differs from the baseline
+make template-library-parity-baseline   # regenerate scripts/template-library-parity-baseline.csv
+scripts/template-library-parity.py --repro badge   # both engines' output for every variant of one tag
+```
+
+**What is measured.** Every tag of the two libraries that has a native handler is rendered by both engines from generated templates: keyword calls, typical and hostile values, a `mark_safe` value, a string literal with HTML specials, a missing variable, `None`, positional use, no arguments, and hand-written composites for tags that need a parent or child. Arguments come from each tag's parameter names, so a tag with an unusual shape is exercised less deeply than a simple one; the `compared` column says how many variants rendered in both engines. Tags with no native handler are not measured, because the bridge runs Django's own node for them.
+
+**What the baseline holds** (`scripts/template-library-parity-baseline.csv`, one short row per tag, no markup):
+
+| column | meaning |
+| --- | --- |
+| `class` | `IDENTICAL`; `WHITESPACE-ONLY`; `DIFFERENT-escape-policy-only` (only the literal and `mark_safe` probes differ); `NOT-RENDERABLE-IN-ONE-ENGINE`; `DIFFERENT` (markup differs) |
+| `aspects` | which structural aspects differ: `text`, `tags`, `classes`, `a11y`, `data/dj-attrs`, `ids`, `other-attrs`, `escaping` |
+| `errors` | variants one engine rejected and the other rendered, as `<variant>:<engine that raised>` |
+| `compared` | variants both engines rendered |
+
+`IDENTICAL` is a property of the output, not a claim of independence: several native handlers call the Python tag, so they are identical by construction.
+
+**The ratchet is exact in both directions.** A tag that gets worse (a new difference class, a new aspect, a new one-engine error, fewer variants compared) fails, and so does a tag that gets better, with a message telling you to run `make template-library-parity-baseline` and commit the smaller baseline. A baseline that only guarded against regressions would let a fixed tag slide back to its old level unnoticed. A tag that gains a native handler has no row and fails until it is classified; a row for a tag that was removed fails until it is deleted. Never edit the file by hand: a test pins that it is exactly what the tool writes.
+
+**Determinism.** The harness runs in its own process (the tests start it as a subprocess, which is also why nothing it patches can reach another test). It fixes `uuid` and the clock before Django is imported, resets the one process-global id counter in these libraries before every render, sets its own `TIME_ZONE`, `LANGUAGE_CODE` and `ROOT_URLCONF`, and avoids `html.parser` (whose handling of malformed markup changed in security releases across the supported interpreters). `scripts/template-library-parity.py --self-compare` renders Django against itself and must find every tag `IDENTICAL`; `--plant TAG` makes the Python tag emit an extra element and the ratchet must flag it. Both run in `python/tests/test_template_library_parity_3663.py`.
+
 ## Performance
 
 ### Benchmarks
