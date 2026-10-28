@@ -80,15 +80,20 @@ CHANNEL_LAYERS = {"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}
 ```python
 import os
 from django.core.asgi import get_asgi_application
+
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "myproject.settings")
+django_asgi_app = get_asgi_application()  # sets Django up before the imports below
+
+from django.contrib.staticfiles.handlers import ASGIStaticFilesHandler
+from django.urls import path
 from channels.routing import ProtocolTypeRouter, URLRouter
 from channels.auth import AuthMiddlewareStack
 from djust.websocket import LiveViewConsumer
-from django.urls import path
-
-os.environ.setdefault("DJANGO_SETTINGS_MODULE", "myproject.settings")
 
 application = ProtocolTypeRouter({
-    "http": get_asgi_application(),
+    # ASGIStaticFilesHandler serves /static/ (djust's client.js included)
+    # under uvicorn or daphne in development, as runserver would.
+    "http": ASGIStaticFilesHandler(django_asgi_app),
     "websocket": AuthMiddlewareStack(
         URLRouter([path("ws/live/", LiveViewConsumer.as_asgi())])
     ),
