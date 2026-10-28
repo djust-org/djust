@@ -201,7 +201,7 @@ def _as_caller(user_id):
   | `"tick"` | `handle_tick()` |
   | `"render"` | every call djust makes to `get_context_data()`, on every transport |
   | `"auth"` | an authorization decision that runs your code: `check_permissions()`, Django's access mixins and replayed `dispatch` decorators (`test_func`), `@permission_required` on a handler, and the object-permission check (`get_object()` + `has_object_permission()`) |
-  | `"lifecycle"` | the `on_mount` hooks (the whole chain is one entry), `connected()` and `disconnected()`, the snapshot overrides (`_should_restore_snapshot()`, `_restore_snapshot()`, `_capture_snapshot_state()`, including the per-event signed-snapshot refresh), the restore of private state (`_restore_private_state()`, which re-fetches private model references), and a released view's teardown hooks when they run on a worker thread (see [Not wrapped](#not-wrapped)) |
+  | `"lifecycle"` | the `on_mount` hooks (the whole chain is one entry), `connected()` and `disconnected()`, the snapshot overrides (`_should_restore_snapshot()`, `_restore_snapshot()`, `_capture_snapshot_state()`, including the per-event signed-snapshot refresh), the restore of private state (`_restore_private_state()`, which re-fetches private model references; a guarded step, so a wrapper that swallows a failure cannot leave a half-restored view), and a released view's teardown hooks **only when they run on a worker thread**; on the event loop they run with no step (see [Not wrapped](#not-wrapped)) |
 - `view` is the view or component whose code runs; `turn` is
   `djust.turns.current_turn()`, or `None` when the step runs outside a turn (a
   `start_async` callback runs between its start and result turns).
@@ -217,8 +217,9 @@ def _as_caller(user_id):
   exits cleanly. If the wrapper's `__exit__` swallows an exception that the check
   or an `on_mount` hook raised, djust raises `PermissionDenied` instead of
   treating the missing verdict as "allowed". The same guard covers the
-  `on_mount` chain and the `_restore_snapshot` override, because their outcome is
-  a verdict too. The guard belongs to the step djust enters: a check that runs
+  `on_mount` chain, the `_restore_snapshot` override and `_restore_private_state`,
+  because their outcome is a verdict too (a swallowed failure in the last would
+  otherwise leave a silently half-restored view). The guard belongs to the step djust enters: a check that runs
   *inside* another step on the same thread (an `"auth"` check called from a
   `mount()` that is itself being wrapped) does not enter the wrapper again, so a
   wrapper that swallows exceptions on the **outer** `"mount"` / `"event"` step is
@@ -313,13 +314,19 @@ Everything above is the sync code djust runs on a worker thread through
   queries on the loop fails with or without a wrapper. Do queries in
   `disconnected()` instead, which always runs on a worker thread as a
   `"lifecycle"` step.
-- **Hooks that run inside a hop that is already a step**: `_on_sticky_update()`
-  runs while the parent renders (under its `"render"` step);
-  `handle_component_event()`, `LiveComponent.update()` and
-  `LiveComponent.unmount()` run inside the event handler or render that reaches
-  them (under its `"event"` / `"render"` step);
-  `serialize_for_template()` and `get_render_only_context()` run inside the render.
-  `get_http_status()` runs in the HTTP response phase.
+- **Hooks that run inside a hop that is already a step.** These were run, with a
+  recording wrapper, and the step that was open when the hook body ran is the one
+  listed (`test_sync_turn_inside_audit_3646.py`):
+  `handle_component_event()`, `LiveComponent.update()` and a component's
+  `_handle_event()` run under the `"event"` step of the handler that reaches them;
+  `LiveComponent.mount()` under the `"mount"` step of the view that creates the
+  component; `get_render_only_context()` under the `"render"` step. The
+  `DataTableMixin.handle_*` overrides run under `"event"`, and the form hooks
+  `get_form_class()`, `get_form_kwargs()` and `_create_form()` under `"mount"` and
+  `"event"`. `serialize_for_template()` is an app helper the framework never
+  calls, so it runs wherever your code calls it. `get_http_status()` runs in the
+  HTTP response phase. The *other* component and tag hooks are not here: see
+  [template-time hooks](#not-wrapped-template-time-form-and-tag-hooks).
 - **State restores that assign with `setattr`.** The time-travel jump
   (`restore_snapshot`, `restore_component_snapshot`) and a component restore
   (`_restore_component_state`) assign saved fields with `safe_setattr` / `setattr`,
@@ -339,11 +346,37 @@ Everything above is the sync code djust runs on a worker thread through
   sync, HTML post-processing). Only the `get_context_data()` calls inside it are
   `"render"` steps.
 - **`get_template()` inside the render** (while the template is built for a view
-  render) runs in the framework's render hop, not as its own step. Only the
-  direct calls (the actor mount, a hot reload) are `"render"` steps.
+  render) runs in the framework's render plumbing with no step open; an HTTP GET
+  shows none. Only the two direct calls (the actor mount, a hot reload) are
+  `"render"` steps.
 - **A task you start yourself** with `create_task()`: it inherits the context
   variables of the turn but is not a sync step. Handlers run inside an `"event"`
   step, so what they call directly is covered; a task they start is not.
+
+### Not wrapped: template-time form and tag hooks
+
+The `"render"` step covers the call to `get_context_data()`. The template engine
+runs **after** it returns, and nothing around the template engine is a step. Any
+hook that a template tag, a filter or a component's `{{ component }}` calls therefore
+runs with **no step open and no wrapper scope**, on every transport. Checked by
+running each one with a recording wrapper (`test_sync_turn_inside_audit_3646.py`):
+
+| Hook | Called by | Step open |
+|---|---|---|
+| `FormMixin.as_live()` / `as_live_field()` | `{% live_form %}` / `{% live_field %}` | none |
+| `get_field_value()` (including `AdminFormMixin`) | the `field_value` filter | none (it also runs under `"render"` when an admin view's own `get_context_data()` calls it) |
+| `_ensure_form_state()` | the same tags and filters | none (under `"event"` when `submit_form()` calls it) |
+| form adapters' `render_field()` and `_merge_widget_attrs()` | `as_live_field()` | none |
+| `Component.get_context_data()` and `_render_custom()` | `{{ component }}` | none |
+| `_on_sticky_update()` | `{% live_render ... sticky=True %}` while the parent renders | none |
+
+**A row read in one of these runs without the wrapper scope.** The clearest case
+is a `ModelChoiceField`: `{% live_field view "group" %}` evaluates the field's
+queryset while it renders the `<select>`, and a test shows that read happens with no
+step open. Under row-level security that read has no per-turn scope, whatever your
+wrapper does for `get_context_data()`. Read the rows in `mount()`, a handler or
+`get_context_data()` (all steps) and hand the template the result, rather than
+letting a tag or a field evaluate a queryset.
 
 The snapshot-restore overrides are covered: `_should_restore_snapshot()`,
 `_restore_snapshot()` and `_capture_snapshot_state()` are `"lifecycle"` steps (the
