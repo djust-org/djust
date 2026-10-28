@@ -387,3 +387,140 @@ fn a_prepend_container_that_is_not_named_is_not_keyed_either() {
         "the plain differ shifts rows by position"
     );
 }
+
+// ---------------------------------------------------------------------------
+// #3647: duplicate ids in a prepend container, and a stored tree with no keys
+// ---------------------------------------------------------------------------
+
+/// A page whose rows are `(id, pk)` pairs, so two rows can share an `id` and
+/// still be told apart by their `data-pk`.
+fn dup_page(mode: &str, rows: &[(&str, &str)]) -> String {
+    let body: String = rows
+        .iter()
+        .map(|(id, pk)| format!(r#"<li id="{id}" data-pk="{pk}">{pk}</li>"#))
+        .collect();
+    format!(r#"<div><ul id="list" dj-update="{mode}">{body}</ul><p>x</p></div>"#)
+}
+
+fn pairs(root: &VNode) -> Vec<(String, String, Option<String>)> {
+    row_attrs(root, "list")
+}
+
+fn pk_order(root: &VNode) -> Vec<String> {
+    pairs(root).into_iter().map(|r| r.1).collect()
+}
+
+/// A patch the client could not apply: a MoveChild (the prepend of one row never
+/// needs to move another) or a RemoveChild of a row that was not asked to leave.
+fn assert_only_inserts(patches: &[Patch], context: &str) {
+    assert!(
+        patches
+            .iter()
+            .all(|p| matches!(p, Patch::InsertChild { .. })),
+        "{context}: {patches:?}"
+    );
+}
+
+#[test]
+fn a_prepend_container_whose_rows_repeat_an_id_still_takes_one_insert_per_new_row() {
+    // Mount: two rows share an id. Then three events each prepend one row.
+    let ids = list();
+    let (_, mut stored, _) = render_turn(
+        None,
+        &dup_page("prepend", &[("r0", "a"), ("r0", "b"), ("r1", "c")]),
+        &ids,
+    );
+    let mut client = stored.clone();
+    for (n, pk) in ["d", "e", "f"].iter().enumerate() {
+        let id = format!("n{n}");
+        let (patches, next, _) = render_turn(
+            Some(&stored),
+            &dup_page("prepend", &[(id.as_str(), pk)]),
+            &ids,
+        );
+        assert_only_inserts(&patches, &format!("event {n}"));
+        apply_patches(&mut client, &patches);
+        assert_eq!(pairs(&client), pairs(&next), "event {n}: client != server");
+        stored = next;
+    }
+    assert_eq!(pk_order(&stored), ["f", "e", "d", "a", "b", "c"]);
+}
+
+#[test]
+fn a_batch_of_new_prepend_rows_that_repeat_an_id_is_inserted_whole() {
+    let ids = list();
+    let (_, stored, _) = render_turn(None, &dup_page("prepend", &[("r0", "a")]), &ids);
+    let (patches, next, _) = render_turn(
+        Some(&stored),
+        &dup_page("prepend", &[("x", "b"), ("x", "c"), ("y", "d")]),
+        &ids,
+    );
+    assert_only_inserts(&patches, "batch");
+    let mut client = stored.clone();
+    apply_patches(&mut client, &patches);
+    assert_eq!(pairs(&client), pairs(&next));
+    assert_eq!(pk_order(&next), ["b", "c", "d", "a"]);
+
+    // And a following event on top of it.
+    let (patches, after, _) = render_turn(Some(&next), &dup_page("prepend", &[("z", "e")]), &ids);
+    assert_only_inserts(&patches, "the event after the batch");
+    apply_patches(&mut client, &patches);
+    assert_eq!(pairs(&client), pairs(&after));
+    assert_eq!(pk_order(&after), ["e", "b", "c", "d", "a"]);
+}
+
+#[test]
+fn rows_with_unique_ids_are_still_keyed_by_id() {
+    // The keying itself stays: a prepend is one insert at index 0 and every
+    // stored row keeps its own dj-id.
+    let ids = list();
+    let (_, stored, _) = render_turn(
+        None,
+        &dup_page("prepend", &[("r0", "a"), ("r1", "b")]),
+        &ids,
+    );
+    let (patches, next, _) = render_turn(Some(&stored), &dup_page("prepend", &[("r2", "c")]), &ids);
+    assert_only_inserts(&patches, "unique ids");
+    let before: Vec<_> = pairs(&stored).into_iter().map(|r| r.2).collect();
+    let after: Vec<_> = pairs(&next).into_iter().skip(1).map(|r| r.2).collect();
+    assert_eq!(before, after, "stored rows keep their dj-ids");
+}
+
+#[test]
+fn a_prepend_container_stored_without_keys_is_rebuilt_once_then_keyed() {
+    // The stored tree was built while this container was NOT named (a template
+    // edit brought it into the set later), so its rows carry no keys. The first
+    // prepend after that pairs unkeyed stored rows against keyed new ones: the
+    // stored rows are re-created once (`merged` keys the stored children, which is
+    // not redundant for such a tree), and from then on each event is a single
+    // insert. Without that keying the stored rows stay unkeyed and are MOVED on
+    // every event, one `MoveChild` per stored row, for the life of the page.
+    let none = HashSet::new();
+    let ids = list();
+    let (_, stored, _) = render_turn(
+        None,
+        &dup_page("prepend", &[("r0", "a"), ("r1", "b"), ("r2", "c")]),
+        &none,
+    );
+    assert!(
+        stored.children[0].children.iter().all(|c| c.key.is_none()),
+        "the premise: no keys on the stored rows"
+    );
+
+    let (patches, next, _) = render_turn(Some(&stored), &dup_page("prepend", &[("r3", "d")]), &ids);
+    let mut client = stored.clone();
+    apply_patches(&mut client, &patches);
+    assert_eq!(pairs(&client), pairs(&next), "{patches:?}");
+    assert_eq!(pk_order(&next), ["d", "a", "b", "c"]);
+    assert!(
+        !patches.iter().any(|p| matches!(p, Patch::MoveChild { .. })),
+        "the stored rows are re-created once, not moved: {patches:?}"
+    );
+
+    // From here the rows are keyed: one insert per event.
+    let (patches, after, _) = render_turn(Some(&next), &dup_page("prepend", &[("r4", "e")]), &ids);
+    assert_only_inserts(&patches, "the event after the rebuild");
+    apply_patches(&mut client, &patches);
+    assert_eq!(pairs(&client), pairs(&after));
+    assert_eq!(pk_order(&after), ["e", "d", "a", "b", "c"]);
+}

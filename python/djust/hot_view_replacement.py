@@ -634,8 +634,15 @@ def _repoint_http_entries(class_pairs: List[Tuple[type, type]]) -> int:
     return changed
 
 
+#: Per-class facts worked out from a view's template source, dropped when a
+#: template changes: the hash that keys the saved renderer, and the
+#: ``dj-update`` containers that accumulate rows (which also read the files the
+#: template includes, so ANY template edit can change them).
+_TEMPLATE_DERIVED_CLASS_CACHES = ("_djust_template_hash_slot", "_djust_accumulating_ids")
+
+
 def note_template_change(path: str) -> int:
-    """Forget the template hash every LiveView class cached, after a file change.
+    """Forget what every LiveView class derived from its template, after a file change.
 
     The state backend keys a view's saved Rust renderer by the hash of its
     template (``_initialize_rust_view``), and that hash is cached on the class
@@ -643,6 +650,13 @@ def note_template_change(path: str) -> int:
     makes a new class; a template-only edit does not, so the same session kept
     getting the renderer compiled from the old template. Dropping the cached
     hash makes the next render hash the edited source and miss that entry.
+
+    The same goes for the ``dj-update`` containers found by reading the template
+    (``_accumulating_containers``, #3647): cached per class, they kept the ids of
+    the template as it was until a restart. They are dropped here too, for every
+    class, because an edit of an included file changes them without touching the
+    view's own template.
+
     Dev-only (the file watcher); returns how many classes were reset.
     """
     from djust.live_view import LiveView
@@ -655,16 +669,20 @@ def note_template_change(path: str) -> int:
         if id(cls) in seen:
             continue
         seen.add(id(cls))
-        if "_djust_template_hash_slot" in cls.__dict__:
-            try:
-                delattr(cls, "_djust_template_hash_slot")
-                reset += 1
-            except (AttributeError, TypeError):
-                # An immutable class keeps its hash; its next page load may
-                # still use the renderer of the old template until a restart.
-                logger.debug("HVR: could not reset the template hash of %s", cls.__qualname__)
+        dropped = False
+        for name in _TEMPLATE_DERIVED_CLASS_CACHES:
+            if name in cls.__dict__:
+                try:
+                    delattr(cls, name)
+                    dropped = True
+                except (AttributeError, TypeError):
+                    # An immutable class keeps its cache; its next page load may
+                    # still use what was derived from the old template until a
+                    # restart.
+                    logger.debug("HVR: could not reset %s of %s", name, cls.__qualname__)
+        reset += dropped
         stack.extend(cls.__subclasses__())
-    logger.debug("HVR: %s changed; reset the template hash of %d view classes", path, reset)
+    logger.debug("HVR: %s changed; reset the template caches of %d view classes", path, reset)
     return reset
 
 
