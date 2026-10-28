@@ -511,6 +511,58 @@ cover. The two are complementary: theming validation answers "is this theme's
 contrast accessible?" and the `Y` checks answer "is this template's markup
 accessible?".
 
+## Announcing a change and moving focus from the server
+
+Two things a screen-reader or keyboard user needs after a server event are an
+announcement ("Saved") and focus in the right place. Both are ordinary djust
+features, and both work on every transport, including the
+[HTTP-only fallback](http-only-mode.md):
+
+- **Announce** by rendering the message into a live region the page already
+  contains. The region must be in the DOM before its text changes, so keep the
+  element in the template and change only its content.
+- **Move focus** with `JS.focus(selector)` through
+  [`push_commands()`](server-driven-ui.md).
+
+```python
+from djust import LiveView, event_handler
+from djust.js import JS
+
+
+class OrderView(LiveView):
+    template_name = "order.html"
+
+    def mount(self, request, **kwargs):
+        self.status = ""
+
+    @event_handler()
+    def save(self, **kwargs):
+        self.status = "Order saved"
+        self.push_commands(JS.focus("#order-summary"))
+```
+
+```html
+<p role="status" aria-live="polite">{{ status }}</p>
+<section id="order-summary" tabindex="-1">...</section>
+```
+
+Use `role="alert"` (assertive) only for an error the user must hear at once.
+
+### The `_drain_announcements` / `_drain_focus` hooks are deprecated
+
+The WebSocket and SSE transports also drain two duck-typed methods on the view,
+`_drain_announcements()` (sends an `accessibility` frame) and `_drain_focus()`
+(sends a `focus` frame). Nothing in djust defines either method,
+so no built-in API ever queued an announcement or a focus command, and the
+shipped client has no `window.djust.accessibility` object to receive the frames
+unless your own script assigns one. The HTTP fallback never drained them, so a
+view that defined the hooks lost them there silently.
+
+Defining either method on a `LiveView` now raises a `DeprecationWarning` at the
+class statement, naming the hook. Both keep working on the WebSocket and SSE
+transports until 2.0.0, where the flush is removed. To migrate, use a live region
+and `JS.focus()` as above; both are carried by every transport.
+
 ## Known limitations / not yet covered
 
 In keeping with djust's commitment to honest documentation, here is what 1.0
