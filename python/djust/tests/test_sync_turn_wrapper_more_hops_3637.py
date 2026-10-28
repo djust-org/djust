@@ -27,7 +27,10 @@ import pytest
 from asgiref.sync import sync_to_async
 from django.contrib.auth.models import AnonymousUser
 from django.core.exceptions import PermissionDenied
+from django.contrib.auth.decorators import user_passes_test
+from django.contrib.auth.mixins import UserPassesTestMixin
 from django.test import override_settings
+from django.utils.decorators import method_decorator
 
 from djust import LiveView
 from djust.config import config as djust_config
@@ -408,6 +411,85 @@ async def test_a_sticky_childs_state_save_runs_get_context_data_inside_the_wrapp
     assert SEEN["sticky_context"] == ["render"], SEEN
 
 
+def _gate(user):
+    note("post_gate")
+    return bool(getattr(user, "is_superuser", False))
+
+
+class PostGatedView(LiveView):
+    """Access control only Django's ``post()`` runs: replayed for an event."""
+
+    template = "<div dj-root>x</div>"
+
+    @method_decorator(user_passes_test(_gate))
+    def post(self, request, *args, **kwargs):  # pragma: no cover - never called
+        return None
+
+
+class AsyncAuthView(UserPassesTestMixin, LiveView):
+    """``async def check_permissions`` makes ``acheck_view_auth`` run the sync steps
+    around it in their own hops."""
+
+    template = "<div dj-root>x</div>"
+    permission_required = "app.view"
+
+    async def check_permissions(self, request):
+        note("async_check_permissions")
+        return True
+
+    def test_func(self):
+        note("test_func")
+        return True
+
+
+class _Person:
+    is_authenticated = True
+    is_active = True
+    is_superuser = True
+    pk = 1
+
+    def has_perms(self, perms):
+        note("has_perms")
+        return True
+
+    def has_perm(self, perm):
+        note("has_perms")
+        return True
+
+
+def test_an_event_access_check_runs_the_replayed_decorator_inside_the_wrapper(probe):
+    from django.test import RequestFactory
+
+    from djust.auth.core import check_event_auth
+
+    request = RequestFactory().post("/x/")
+    request.user = _Person()
+
+    assert check_event_auth(PostGatedView(), request) is None
+
+    assert SEEN["post_gate"] == ["auth"], SEEN
+    assert steps() == ["auth"], steps()
+
+
+@pytest.mark.asyncio
+async def test_the_async_check_permissions_path_runs_its_sync_hops_inside_the_wrapper(probe):
+    from django.test import RequestFactory
+
+    from djust.auth.core import acheck_view_auth
+
+    request = RequestFactory().get("/x/")
+    request.user = _Person()
+
+    assert await acheck_view_auth(AsyncAuthView(), request) is None
+
+    # ``async def`` check_permissions: awaited on the loop, never wrapped (documented).
+    assert SEEN["async_check_permissions"] == [None], SEEN
+    # The sync hops around it: login/permission_required, then the Django mixins.
+    assert SEEN["has_perms"] == ["auth"], SEEN
+    assert SEEN["test_func"] == ["auth"], SEEN
+    assert steps() == ["auth", "auth"], steps()
+
+
 def test_the_http_sticky_state_save_runs_get_context_data_inside_the_wrapper(probe):
     from djust.mixins.sticky import save_sticky_child_state_sync
 
@@ -421,6 +503,76 @@ def test_the_http_sticky_state_save_runs_get_context_data_inside_the_wrapper(pro
     save_sticky_child_state_sync(Child(), {}, "app.Parent")
 
     assert SEEN["sticky_sync_context"] == ["render"], SEEN
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+async def test_a_scoped_component_render_runs_component_render_inside_the_wrapper(
+    probe, monkeypatch
+):
+    from djust.tests import test_component_scoped_render_2917 as harness
+
+    from djust.components.base import BoundComponent
+
+    original = BoundComponent.render
+
+    def render(self, *args, **kwargs):
+        note("component_render")
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(BoundComponent, "render", render)
+    view, runtime, transport = harness._mounted(harness.OpaquePage)
+    SEEN.clear()  # the mount baseline above renders outside any turn
+
+    await runtime.dispatch_event(
+        {"type": "event", "event": "select", "params": {"component_id": "nav", "value": "billing"}}
+    )
+
+    assert SEEN.get("component_render"), "the scoped path must have rendered the component"
+    assert set(SEEN["component_render"]) == {"render"}, SEEN
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+async def test_a_session_restore_mount_replays_presence_inside_the_wrapper(probe, monkeypatch):
+    """The restore branch of the runtime mount replaces ``mount()``; it re-registers
+    presence (``get_presence_key`` is application code) in its own hop."""
+    from djust.tests import test_runtime_mount_state_restore_1913 as harness
+
+    def _restore_presence(self):
+        note("restore_presence")
+
+    monkeypatch.setattr(
+        harness._OptInSnapView, "_restore_presence", _restore_presence, raising=False
+    )
+    session = await sync_to_async(harness._make_db_session)()
+    await session.aset(f"liveview_{harness.PAGE_URL}", {"role": "admin", "n": 42})
+    await sync_to_async(session.save)()
+    runtime, _transport = harness._make_runtime(harness._make_request(session))
+
+    await harness._mount(
+        runtime, {"type": "mount", "view": harness.VIEW_PATH, "url": harness.PAGE_URL}
+    )
+
+    assert runtime.view_instance._mounted_from_restore is True
+    assert SEEN["restore_presence"] == ["hook"], SEEN
+
+
+def test_the_scoped_presence_probe_runs_inside_the_wrapper(probe):
+    """``_presence_probe`` (the scoped-presence sync after a turn) is one ``hook`` step."""
+    from djust.push import _presence_probe
+
+    class V(PresenceMixin, LiveView):
+        presence_key = "probe"
+
+        def get_presence_key(self):
+            note("probe_key")
+            return "probe"
+
+    key, stale = _presence_probe(V(), True, False)
+
+    assert (key, stale) == ("probe", False)
+    assert SEEN["probe_key"] == ["hook"], SEEN
 
 
 # ---------------------------------------------------------------------------
@@ -671,8 +823,13 @@ HOOK_ATTRS = frozenset(
         "handle_info",
         "handle_params",
         "mount",
+        "_restore_presence",
     }
 )
+
+#: ``sync_to_async(<this exact expression>)`` that is a hook too, though its attribute
+#: name (``render``) is too common to flag on its own.
+HOOK_TEXTS = frozenset({"component.render"})
 
 #: Framework functions that call application hooks and enter the step INSIDE their body,
 #: so ``sync_to_async(<leaf>)`` is sound: (file, qualname) -> (helper, step).
@@ -747,7 +904,9 @@ def _raw_hook_threading(tree: ast.AST) -> List[Tuple[int, str]]:
             if _callee(target) in _STEPPERS:
                 continue
             continue
-        if isinstance(target, ast.Attribute) and target.attr in HOOK_ATTRS:
+        if isinstance(target, ast.Attribute) and (
+            target.attr in HOOK_ATTRS or ast.unparse(target) in HOOK_TEXTS
+        ):
             bad.append((node.lineno, ast.unparse(target)))
         elif isinstance(target, ast.Name) and target.id in HOOK_ATTRS:
             bad.append((node.lineno, target.id))
