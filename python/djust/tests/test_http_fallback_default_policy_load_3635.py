@@ -263,6 +263,15 @@ class TestOnlyWhenTheSavedStateIsStillTheLoadingState:
         assert Loads.loads == 0
         assert view.data == "-"
 
+    @pytest.mark.parametrize("value", ["é" * 64, "\u2603", "\udcff"])
+    def test_a_non_ascii_marker_is_ignored_not_a_500(self, value):
+        """``hmac.compare_digest`` raises ``TypeError`` on a non-ASCII ``str``."""
+        initial = _get(Loads)
+        initial.session[MARKER] = value
+        view, response, body = _post(Loads, "select", initial)
+        assert response.status_code == 200, body
+        assert Loads.loads == 0
+
     def test_a_marker_that_is_not_a_string_is_ignored(self):
         initial = _get(Loads)
         initial.session[MARKER] = {"x": 1}
@@ -301,6 +310,16 @@ class TestEveryRefusalStillPrecedesTheWork:
         assert first.status_code == 200
         assert second.status_code == 429
         assert Loads.loads == 1, "only the admitted POST may start mount's reads"
+
+    def test_refused_and_unknown_posts_rerun_mount_each_time_without_consuming_the_marker(self):
+        """Documented cost: ``mount()`` runs on every such POST until one is admitted."""
+        initial = _get(Loads)
+        assert Loads.mounts == 1
+        _post(Loads, "needs_int", initial, params={"n": "bad"})
+        _post(Loads, "no_such_handler", initial)
+        assert Loads.mounts == 3
+        assert Loads.loads == 0
+        assert MARKER in initial.session
 
     def test_an_unknown_event_starts_no_work_and_the_load_is_still_owed(self):
         initial = _get(Loads)

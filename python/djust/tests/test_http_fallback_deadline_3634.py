@@ -55,6 +55,7 @@ RELEASE = threading.Event()
 FINISHED = threading.Event()
 CANCELLED = threading.Event()
 THREADS: dict = {}
+LOOPS: list = []
 CTX: ContextVar = ContextVar("deadline_ctx", default="unset")
 
 
@@ -161,6 +162,20 @@ class Watching(LiveView):
         LOG.append(("ctx", CTX.get()))
 
     @event_handler()
+    def kick_cancelled(self, **kwargs):
+        self.start_async(self._raise_cancelled, name="cancelled")
+
+    def _raise_cancelled(self):
+        raise asyncio.CancelledError
+
+    @event_handler()
+    def kick_loop(self, **kwargs):
+        self.start_async(self._record_loop, name="loop")
+
+    async def _record_loop(self):
+        LOOPS.append(asyncio.get_running_loop())
+
+    @event_handler()
     def kick_chain(self, **kwargs):
         self.start_async(self._hang_sync, name="first")
 
@@ -209,6 +224,7 @@ def _reset():
         event.clear()
     LOG.clear()
     THREADS.clear()
+    LOOPS.clear()
     yield
     RELEASE.set()  # let any abandoned thread end
     for thread in threading.enumerate():
@@ -549,6 +565,21 @@ class TestEveryBranchOfThePostDispatch:
         assert response.status_code == 200, body
         _join_workers()
 
+    def test_a_deadline_during_mount_work_consumes_the_marker(self):
+        """Documented: a slow loader is not retried by the next POST; the page stays loading."""
+        marker = "liveview_%s__mount_work" % PATH
+        with override_settings(LIVEVIEW_CONFIG={KEY: 0.05}):
+            initial = _get_request()
+            MountWatcher().get(initial)
+            assert marker in initial.session
+            _post(MountWatcher, "plain", initial=initial, get=False)
+            assert STARTED.is_set()
+            assert marker not in initial.session
+            STARTED.clear()
+            _post(MountWatcher, "plain", initial=initial, get=False)
+            assert not STARTED.is_set(), "the abandoned load was started again"
+        _join_workers()
+
     def test_explicit_exposure_mount_work_is_bounded(self):
         class Explicit(MountWatcher):
             exposure_policy = "explicit"
@@ -706,6 +737,169 @@ class TestTheConfigKey:
         from djust.config import LiveViewConfig
 
         assert LiveViewConfig._defaults[KEY] is None
+
+
+HUGE_OR_BAD = [
+    1e10,
+    1e30,
+    1e300,
+    10**30,
+    10**400,
+    -(10**400),
+    -1e300,
+    # More than 4300 digits: ``repr()`` raises ``ValueError`` on it.
+    pytest.param(10**5000, id="int-5000-digits"),
+]
+
+
+class TestTheValidatorIsTotal:
+    """Values the reader, C028 and a real POST must all survive (review of #3641)."""
+
+    @pytest.mark.parametrize("value", HUGE_OR_BAD)
+    def test_the_reader_reads_no_deadline_and_does_not_raise(self, value):
+        from djust.config import http_fallback_background_timeout
+
+        with override_settings(LIVEVIEW_CONFIG={KEY: value}):
+            assert http_fallback_background_timeout() is None
+
+    def test_the_largest_wait_a_thread_accepts_is_the_largest_valid_value(self):
+        from djust.config import (
+            http_fallback_background_timeout,
+            valid_http_fallback_background_timeout,
+        )
+
+        assert valid_http_fallback_background_timeout(threading.TIMEOUT_MAX)
+        assert not valid_http_fallback_background_timeout(threading.TIMEOUT_MAX * 1.0001)
+        with override_settings(LIVEVIEW_CONFIG={KEY: threading.TIMEOUT_MAX}):
+            assert http_fallback_background_timeout() == threading.TIMEOUT_MAX
+
+    @pytest.mark.parametrize("value", HUGE_OR_BAD)
+    def test_c028_reports_it_and_does_not_raise(self, value):
+        from djust.checks.configuration import _check_http_fallback_background_timeout
+
+        with override_settings(LIVEVIEW_CONFIG={KEY: value}):
+            errors: list = []
+            _check_http_fallback_background_timeout(errors)
+        assert [e.id for e in errors] == ["djust.C028"]
+        assert "TIMEOUT_MAX" in errors[0].hint or "TIMEOUT_MAX" in errors[0].msg
+
+    @pytest.mark.parametrize("value", HUGE_OR_BAD)
+    def test_a_real_post_runs_the_task_with_no_deadline(self, value):
+        """No 500, no OverflowError reported to the view: it is simply not bounded."""
+        with override_settings(LIVEVIEW_CONFIG={"view_state_in_session": False, KEY: value}):
+            view, response, body = _post(Watching, "kick_fast")
+        assert response.status_code == 200, body
+        assert LOG == [("result", "fast", "fast-result", None, "")]
+        assert THREADS["fast"] == threading.current_thread().name
+        assert not _workers()
+
+    def test_the_largest_valid_deadline_works_in_a_real_post(self):
+        """``Event.wait`` accepts it: no OverflowError, the result is delivered."""
+        cfg = {"view_state_in_session": False, KEY: threading.TIMEOUT_MAX}
+        with override_settings(LIVEVIEW_CONFIG=cfg):
+            view, response, body = _post(Watching, "kick_fast")
+        assert response.status_code == 200, body
+        assert LOG == [("result", "fast", "fast-result", None, "")]
+        _join_workers()
+
+
+class TestAbandonedThreadsAreCapped:
+    def test_the_cap_is_a_documented_constant(self):
+        assert request_mixin._HTTP_BACKGROUND_MAX_ABANDONED == 16
+
+    def test_a_worker_is_not_started_while_the_cap_of_abandoned_ones_are_alive(
+        self, monkeypatch, caplog
+    ):
+        monkeypatch.setattr(request_mixin, "_HTTP_BACKGROUND_MAX_ABANDONED", 2)
+        with SHORT, caplog.at_level(logging.WARNING, logger="djust.mixins.request"):
+            _post(Watching, "kick_sync")
+            _post(Watching, "kick_sync")
+            assert len(_workers()) == 2
+            STARTED.clear()
+            LOG.clear()
+            view, response, body = _post(Watching, "kick_sync")
+            assert response.status_code == 200, body
+            assert not STARTED.is_set(), "a third hanging worker was started past the cap"
+            assert len(_workers()) == 2
+        results = [e for e in LOG if e[0] == "result"]
+        assert [(e[1], e[3]) for e in results] == [("hang", "TimeoutError")]
+        assert "abandoned" in results[0][4] and "not started" in results[0][4], results[0]
+        text = [r.getMessage() for r in caplog.records]
+        assert any("abandoned" in m and "hang" in m and "2" in m for m in text), text
+        assert view.status == "failed:TimeoutError"
+        _join_workers()
+
+    def test_the_cap_lifts_when_the_abandoned_threads_end(self, monkeypatch):
+        monkeypatch.setattr(request_mixin, "_HTTP_BACKGROUND_MAX_ABANDONED", 1)
+        with SHORT:
+            _post(Watching, "kick_sync")
+            _join_workers()  # the abandoned callback finishes
+            STARTED.clear()
+            RELEASE.clear()
+            _post(Watching, "kick_sync")
+            assert STARTED.is_set(), "a finished abandoned thread must not count against the cap"
+        _join_workers()
+
+    def test_a_task_that_finishes_in_time_never_counts(self, monkeypatch):
+        monkeypatch.setattr(request_mixin, "_HTTP_BACKGROUND_MAX_ABANDONED", 1)
+        cfg = {"view_state_in_session": False, KEY: 60}
+        with override_settings(LIVEVIEW_CONFIG=cfg):
+            for _ in range(3):
+                LOG.clear()
+                _post(Watching, "kick_fast")
+                assert LOG == [("result", "fast", "fast-result", None, "")]
+        _join_workers()
+
+
+class TestACancelledErrorFromTheCallbackIsHandedBack:
+    def test_it_reaches_the_request_thread_as_a_cancelled_task(self):
+        """The worker hands ``(Exception, CancelledError)`` back; the request skips it."""
+        cfg = {"view_state_in_session": False, KEY: 60}
+        with override_settings(LIVEVIEW_CONFIG=cfg):
+            view, response, body = _post(Watching, "kick_cancelled")
+        assert response.status_code == 200, body
+        assert LOG == [], "a cancelled task has no result, as on the socket"
+        _join_workers()
+
+    def test_the_worker_catches_only_exception_and_cancelled_error(self):
+        import inspect
+
+        source = inspect.getsource(request_mixin._start_background_run)
+        assert "except BaseException" not in source
+        assert "except (Exception, asyncio.CancelledError)" in source
+
+
+class TestAnAsyncCallbackRunsOnItsOwnLoop:
+    """With the key set an ``async def`` callback leaves the server's event loop.
+
+    Without it, under ASGI, ``async_to_sync`` hands the coroutine back to the
+    loop the view runs under; with it the coroutine runs on a private loop in
+    the worker thread, so a loop-bound object created elsewhere (an async
+    client built at import, the channel layer) is the wrong loop there.
+    """
+
+    def _under_a_server_loop(self, cfg):
+        from asgiref.sync import async_to_sync, sync_to_async
+
+        seen = {}
+
+        async def server():
+            seen["loop"] = asyncio.get_running_loop()
+            return await sync_to_async(_post)(Watching, "kick_loop")
+
+        with override_settings(LIVEVIEW_CONFIG=cfg):
+            async_to_sync(server)()
+        return seen["loop"]
+
+    def test_without_the_key_it_runs_on_the_server_loop(self):
+        server_loop = self._under_a_server_loop({"view_state_in_session": False})
+        assert LOOPS == [server_loop]
+
+    def test_with_the_key_it_runs_on_a_private_loop(self):
+        server_loop = self._under_a_server_loop({"view_state_in_session": False, KEY: 60})
+        assert len(LOOPS) == 1
+        assert LOOPS[0] is not server_loop
+        _join_workers()
 
 
 class TestSystemCheckC028:

@@ -5,7 +5,6 @@ RequestMixin - HTTP GET/POST request handling for LiveView.
 import asyncio
 import contextvars
 import hashlib
-import hmac
 import inspect
 import json
 from types import MappingProxyType
@@ -66,6 +65,29 @@ _HTTP_BACKGROUND_MAX_ROUNDS = 8
 
 #: Name prefix of the worker threads that run background work under a deadline.
 _HTTP_BACKGROUND_THREAD_PREFIX = "djust-http-bg"
+
+#: How many abandoned worker threads (a sync callback the deadline stopped
+#: waiting for cannot be cancelled and keeps running) may be alive in this
+#: process at once. Past it a new task is not started: it is refused with a
+#: warning and a ``TimeoutError`` for ``handle_async_result``, so a callback that
+#: hangs on every POST cannot pile up threads (each holding a database
+#: connection) without limit. Counted per process, and lifted as they end.
+_HTTP_BACKGROUND_MAX_ABANDONED = 16
+
+_ABANDONED_WORKERS: "set[threading.Thread]" = set()
+_ABANDONED_LOCK = threading.Lock()
+
+
+def _note_abandoned_worker(thread: threading.Thread) -> None:
+    with _ABANDONED_LOCK:
+        _ABANDONED_WORKERS.difference_update([t for t in _ABANDONED_WORKERS if not t.is_alive()])
+        _ABANDONED_WORKERS.add(thread)
+
+
+def _abandoned_workers_alive() -> int:
+    with _ABANDONED_LOCK:
+        _ABANDONED_WORKERS.difference_update([t for t in _ABANDONED_WORKERS if not t.is_alive()])
+        return len(_ABANDONED_WORKERS)
 
 
 def _http_url_params(request: Any) -> Dict[str, Any]:
@@ -152,6 +174,7 @@ class _BackgroundRun:
         self.abandoned = False
         self.loop: Optional[asyncio.AbstractEventLoop] = None
         self.task: Optional["asyncio.Future[Any]"] = None
+        self.thread: Optional[threading.Thread] = None
 
     def abandon(self) -> None:
         """Ask the task to stop (an ``async def`` callback honours it) and stop waiting."""
@@ -196,7 +219,9 @@ def _start_background_run(
 
         try:
             run.result = async_to_sync(runner)()
-        except BaseException as exc:  # noqa: BLE001 - handed to the request thread
+        except (Exception, asyncio.CancelledError) as exc:
+            # Handed back to the request thread (a cancelled task as well);
+            # KeyboardInterrupt / SystemExit are not swallowed here.
             run.error = exc
         finally:
             try:
@@ -211,6 +236,7 @@ def _start_background_run(
         name="%s-%s" % (_HTTP_BACKGROUND_THREAD_PREFIX, sanitize_for_log(name)[:32]),
         daemon=True,
     )
+    run.thread = thread
     thread.start()
     return run
 
@@ -269,6 +295,22 @@ def _run_http_background_work(view: Any, budget: Optional[_BackgroundBudget] = N
                         "start_async task %r was not started: the %.4g second budget of "
                         "http_fallback_background_timeout was spent" % (name, budget.timeout)
                     )
+                elif _abandoned_workers_alive() >= _HTTP_BACKGROUND_MAX_ABANDONED:
+                    abandoned_alive = _abandoned_workers_alive()
+                    logger.warning(
+                        "[djust HTTP] start_async task %s on %s was not started: %d abandoned "
+                        "worker threads are still running (limit %d). A callback that hangs on "
+                        "every POST would pile up threads; fix it or guard it off the fallback.",
+                        sanitize_for_log(name),
+                        view.__class__.__name__,
+                        abandoned_alive,
+                        _HTTP_BACKGROUND_MAX_ABANDONED,
+                    )
+                    error = TimeoutError(
+                        "start_async task %r was not started: %d abandoned worker threads are "
+                        "still running (limit %d)"
+                        % (name, abandoned_alive, _HTTP_BACKGROUND_MAX_ABANDONED)
+                    )
                 else:
                     run = _start_background_run(view, name, callback, args, kwargs)
                     if run.done.wait(budget.remaining()):
@@ -277,6 +319,8 @@ def _run_http_background_work(view: Any, budget: Optional[_BackgroundBudget] = N
                         result = run.result
                     else:
                         run.abandon()
+                        if run.thread is not None:
+                            _note_abandoned_worker(run.thread)
                         logger.warning(
                             "[djust HTTP] start_async task %s on %s did not finish within the "
                             "%.4g second budget of http_fallback_background_timeout; the "
@@ -398,7 +442,10 @@ def _mount_work_is_owed(session: Any, view_key: Optional[str]) -> bool:
     recorded = session.get(f"{view_key}{MOUNT_WORK_SUFFIX}")
     if not isinstance(recorded, str):
         return False
-    return hmac.compare_digest(recorded, _saved_state_digest(session, view_key) or "")
+    # Plain equality: the digest is not a secret, and ``hmac.compare_digest``
+    # raises ``TypeError`` on a ``str`` with non-ASCII characters.
+    current = _saved_state_digest(session, view_key)
+    return current is not None and recorded == current
 
 
 def _drain_http_side_channels(view: Any, resp_data: Dict[str, Any]) -> None:

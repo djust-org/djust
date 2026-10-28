@@ -705,7 +705,7 @@ def _check_view_state_in_session(errors: list[CheckMessage]) -> None:
 
 
 def _check_http_fallback_background_timeout(errors: list[CheckMessage]) -> None:
-    """C028 — ``LIVEVIEW_CONFIG['http_fallback_background_timeout']`` is ``None`` or a number > 0.
+    """C028 — ``LIVEVIEW_CONFIG['http_fallback_background_timeout']`` is ``None`` or a number in (0, TIMEOUT_MAX].
 
     Anything else (``"30"``, ``0``, ``True``, ``nan``) is read as no deadline,
     so a typo would silently leave the page-POST fallback waiting on a task that
@@ -718,13 +718,20 @@ def _check_http_fallback_background_timeout(errors: list[CheckMessage]) -> None:
     value = config.get("http_fallback_background_timeout")
     if value is None or valid_http_fallback_background_timeout(value):
         return
+    try:
+        shown = repr(value)[:80]
+    except ValueError:  # an int of more than 4300 digits has no repr
+        shown = "a %s too large to show" % type(value).__name__
     errors.append(
         DjustError(
             "LIVEVIEW_CONFIG['http_fallback_background_timeout'] is %s; it must be None or a "
-            "number of seconds greater than 0." % repr(value)[:80],
+            "number of seconds greater than 0 and at most threading.TIMEOUT_MAX "
+            "(about 9.2e9)." % shown,
             hint=(
                 "With any other value djust applies no deadline: a start_async task that does "
-                "not return holds the HTTP fallback POST open for as long as it runs."
+                "not return holds the HTTP fallback POST open for as long as it runs. A value "
+                "above threading.TIMEOUT_MAX (the longest a thread can wait) is rejected, not "
+                "clamped."
             ),
             id="djust.C028",
             fix_hint=(

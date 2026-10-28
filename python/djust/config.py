@@ -11,7 +11,6 @@ Provides centralized configuration for:
 
 import copy
 import logging
-import math
 import os
 import threading
 from typing import Any, ClassVar, Dict, Optional, Tuple
@@ -269,8 +268,8 @@ class LiveViewConfig:
         # fallback stops waiting, cancels an ``async def`` callback, hands
         # ``handle_async_result`` a ``TimeoutError`` and answers. A sync
         # callback cannot be cancelled: it keeps running, abandoned. Anything
-        # that is not a finite number greater than 0 means no deadline (system
-        # check ``djust.C028``). Does not touch the socket or SSE transports.
+        # that is not a number from above 0 up to ``threading.TIMEOUT_MAX`` means
+        # no deadline (system check ``djust.C028``). Does not touch the socket or SSE transports.
         "http_fallback_background_timeout": None,
         # `[dj-virtual]` keyed splice ops in the VDOM differ (ADR-026, #2017
         # items 2-4). A windowed list holds off-window rows DETACHED, so the
@@ -886,15 +885,21 @@ def view_state_in_session() -> bool:
 def valid_http_fallback_background_timeout(value: Any) -> bool:
     """Whether ``value`` is a usable ``http_fallback_background_timeout``.
 
-    A finite number of seconds greater than 0. A bool is not a number here
-    (``True`` would read as one second).
+    A number of seconds greater than 0 and at most ``threading.TIMEOUT_MAX``
+    (about 9.2e9, nearly three centuries: the longest a thread can wait, so a
+    larger value could never be waited on and is rejected, not clamped). A bool
+    is not a number here (``True`` would read as one second). Total: any value,
+    however odd (a huge int, ``nan``, a container), answers ``False`` instead of
+    raising.
     """
-    return (
-        isinstance(value, (int, float))
-        and not isinstance(value, bool)
-        and math.isfinite(value)
-        and value > 0
-    )
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    try:
+        # An int is compared exactly (no float conversion, so 10**400 is fine);
+        # ``nan`` fails both comparisons.
+        return bool(0 < value <= threading.TIMEOUT_MAX)
+    except (OverflowError, TypeError, ValueError):  # pragma: no cover - defensive
+        return False
 
 
 def http_fallback_background_timeout() -> Optional[float]:
@@ -902,16 +907,16 @@ def http_fallback_background_timeout() -> Optional[float]:
 
     The single reader of ``LIVEVIEW_CONFIG['http_fallback_background_timeout']``
     (also read from ``DJUST_CONFIG``). ``None`` means no deadline, which is also
-    what any value that is not a finite number greater than 0 means; system
-    check ``djust.C028`` reports such a value. A config read that raises means
-    no deadline.
+    what any value that is not a number from above 0 up to
+    ``threading.TIMEOUT_MAX`` means; system check ``djust.C028`` reports such a
+    value. A config read that raises means no deadline.
     """
     try:
         value = get_config().get("http_fallback_background_timeout")
+        return float(value) if valid_http_fallback_background_timeout(value) else None
     except Exception:  # pragma: no cover - defensive
         logger.debug("[djust] http_fallback_background_timeout read failed; no deadline")
         return None
-    return float(value) if valid_http_fallback_background_timeout(value) else None
 
 
 def template_auto_call_enabled() -> bool:
