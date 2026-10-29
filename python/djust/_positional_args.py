@@ -36,7 +36,8 @@ it), so they are left as they were.
 
 Raw ``@register.tag`` tags have no positional parameters: their compile
 functions parse ``key=value`` only, and Django refuses a bare token. A native
-handler for one is left alone, so a stray token is still ignored there.
+handler for one is left alone: a bare literal token is still ignored there, and a
+bare variable is still read as ``key=value`` pairs (tracked separately).
 """
 
 from __future__ import annotations

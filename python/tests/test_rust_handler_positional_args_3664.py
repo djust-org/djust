@@ -493,7 +493,7 @@ class TestTagsWithoutPositionalParameters:
 
     def test_raw_tags_have_no_positional_parameters(self, engines):
         """A raw ``@register.tag`` parses ``key=value`` only; Django refuses a bare
-        token. djust leaves those tags alone (a stray token is still ignored), so the
+        token. djust leaves those tags alone (a bare literal is still ignored, a bare variable still read as key=value), so the
         premise that they have nothing to map is what is pinned here: no raw tag is
         given a positional spec, and none of them accepts a positional token that
         the Rust handler then renders differently."""
