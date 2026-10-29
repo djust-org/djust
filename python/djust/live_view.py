@@ -1018,6 +1018,14 @@ class LiveView(
         #   (PR #1324), self._<user_attr>.
         # Any new framework slot must be assigned BEFORE this line.
         self._defer_lazy_registration = False
+        # Root planning and pending page renders are framework-owned and must
+        # never be serialized as application private state.
+        self._authenticated_partial_root = False
+        self._authenticated_partial_root_origin = None
+        self._authenticated_template_source = None
+        self._named_partial_jit_source = None
+        self._prepared_authenticated_partial_root = False
+        self._pending_authenticated_page = False
         self._http_lazy_containers = {}
         self._http_lazy_validated_html = None
         self._framework_attrs: frozenset = frozenset(self.__dict__.keys())

@@ -215,6 +215,9 @@ pub type SharedValues = std::sync::Arc<AHashMap<String, Value>>;
 /// One lexical binding scope, including the provenance of its values.
 #[derive(Clone, Debug, Default)]
 struct ScopeFrame {
+    /// Names assigned by render-time sibling tags in this lexical frame.
+    /// This is deny-only lazy provenance, not a value or an authority grant.
+    lazy_bindings: Option<std::sync::Arc<AHashSet<String>>>,
     /// Template-literal bindings, independent of HTML safety or registration authority.
     literal_keys: std::sync::Arc<AHashSet<String>>,
     captured_literals: std::sync::Arc<AHashMap<String, LiteralOutput>>,
@@ -429,6 +432,9 @@ impl ScopeFrame {
 #[derive(Debug)]
 pub struct Context {
     stack: Vec<ScopeFrame>,
+    /// Custom tag effects can outlive lexical frames, so this flag is shared
+    /// by the contexts of one render, including `include ... only`.
+    lazy_unknown_effect: std::sync::Arc<std::sync::atomic::AtomicBool>,
     node_identity: Option<(usize, usize)>,
     /// Optional sidecar of raw Python objects keyed by top-level
     /// context name. Used only as a fallback when `get()` misses —
@@ -457,6 +463,8 @@ pub struct Context {
     /// whichever path parsed first decide for both. Mirrors `auto_call`;
     /// `{% include … only %}` builds a fresh `Context` and must copy it.
     emit_dj_if_markers: bool,
+    /// LiveView serialization safety is independent of temporary marker flags.
+    guard_dynamic_recursive_partials: bool,
     /// The per-iteration `{% for %}` path suffix a `<!--dj-if id="…">`
     /// marker appends (#1832) — `-<index>` per enclosing loop, composed
     /// (`-3-2` two loops deep), empty outside any loop.
@@ -599,12 +607,14 @@ impl Clone for Context {
     fn clone(&self) -> Self {
         Self {
             stack: self.stack.clone(),
+            lazy_unknown_effect: self.lazy_unknown_effect.clone(),
             node_identity: self.node_identity,
             // Arc::clone is cheap and does not require the GIL —
             // the contained `Py<PyAny>` refcount is not touched.
             raw_py_objects: self.raw_py_objects.clone(),
             auto_call: self.auto_call,
             emit_dj_if_markers: self.emit_dj_if_markers,
+            guard_dynamic_recursive_partials: self.guard_dynamic_recursive_partials,
             dj_if_loop_path: self.dj_if_loop_path.clone(),
             dj_if_id_namespace: self.dj_if_id_namespace.clone(),
             dj_if_include_path: self.dj_if_include_path.clone(),
@@ -944,10 +954,12 @@ impl Context {
     pub fn new() -> Self {
         Self {
             stack: vec![ScopeFrame::default()],
+            lazy_unknown_effect: std::sync::Arc::default(),
             node_identity: None,
             raw_py_objects: None,
             auto_call: true,
             emit_dj_if_markers: true,
+            guard_dynamic_recursive_partials: false,
             dj_if_loop_path: String::new(),
             dj_if_id_namespace: String::new(),
             dj_if_include_path: String::new(),
@@ -999,10 +1011,12 @@ impl Context {
                 stamp: next_frame_stamp(),
                 ..ScopeFrame::default()
             }],
+            lazy_unknown_effect: std::sync::Arc::default(),
             node_identity: None,
             raw_py_objects: None,
             auto_call: true,
             emit_dj_if_markers: true,
+            guard_dynamic_recursive_partials: false,
             dj_if_loop_path: String::new(),
             dj_if_id_namespace: String::new(),
             dj_if_include_path: String::new(),
@@ -1033,6 +1047,16 @@ impl Context {
     /// Should the renderer emit `<!--dj-if-->` markers under this context?
     pub fn emit_dj_if_markers(&self) -> bool {
         self.emit_dj_if_markers
+    }
+
+    /// Whether this render must reject dynamically selected recursive partials.
+    pub fn guard_dynamic_recursive_partials(&self) -> bool {
+        self.guard_dynamic_recursive_partials
+    }
+
+    /// Configure the LiveView-only dynamic partial serialization guard.
+    pub fn set_guard_dynamic_recursive_partials(&mut self, enabled: bool) {
+        self.guard_dynamic_recursive_partials = enabled;
     }
 
     /// Set the dj-if loop-path suffix for renders under this context
@@ -1665,7 +1689,112 @@ impl Context {
             .iter()
             .rposition(|frame| frame.contains_key(&name))
             .unwrap_or(self.stack.len() - 1);
+        let bindings = self.stack[index]
+            .lazy_bindings
+            .get_or_insert_with(Default::default);
+        std::sync::Arc::make_mut(bindings).insert(name.clone());
         self.bind_at(index, name, value, safe);
+    }
+
+    /// Mark a sibling-tag assignment in the current lexical frame. The mark
+    /// disappears when that frame is popped and is copied on context clones.
+    pub fn note_lazy_sibling_binding(&mut self, name: &str) {
+        if let Some(frame) = self.stack.last_mut() {
+            let bindings = frame.lazy_bindings.get_or_insert_with(Default::default);
+            std::sync::Arc::make_mut(bindings).insert(name.to_owned());
+        }
+    }
+
+    /// Start a distinct tracked render without carrying a prior render's
+    /// deny-only side-effect signals. Nested node renders do not call this.
+    pub fn begin_lazy_render(&mut self) {
+        self.lazy_unknown_effect = std::sync::Arc::default();
+        for frame in &mut self.stack {
+            frame.lazy_bindings = None;
+        }
+    }
+
+    /// Share the deny-only tag-effect signal with a fresh include-only context.
+    pub fn inherit_lazy_unknown_effect(&mut self, parent: &Context) {
+        self.lazy_unknown_effect = parent.lazy_unknown_effect.clone();
+    }
+
+    /// Record an executed application tag's potentially global effects.
+    pub fn note_lazy_unknown_effect(&self) {
+        self.lazy_unknown_effect
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Check render-created binding names without resolving any values.
+    /// Quoted text is ignored; ambiguous names and filters may over-deny.
+    pub fn lazy_selector_is_tainted(&self, expression: &str) -> bool {
+        if !self
+            .lazy_unknown_effect
+            .load(std::sync::atomic::Ordering::Relaxed)
+            && self.stack.iter().all(|frame| frame.lazy_bindings.is_none())
+        {
+            return false;
+        }
+        let trimmed = expression.trim();
+        let simple_name =
+            !trimmed.is_empty() && trimmed.chars().all(|ch| ch.is_alphanumeric() || ch == '_');
+        if simple_name
+            && self
+                .lazy_unknown_effect
+                .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            match self.get(trimmed) {
+                Some(Value::Encoded(_)) => return true,
+                None if self
+                    .raw_py_objects
+                    .as_ref()
+                    .is_some_and(|raw| raw.contains_key(trimmed)) =>
+                {
+                    return true
+                }
+                _ => {}
+            }
+        }
+        let contains = |word: &str| {
+            self.stack.iter().any(|frame| {
+                frame
+                    .lazy_bindings
+                    .as_ref()
+                    .is_some_and(|bindings| bindings.contains(word))
+            })
+        };
+        let mut word = String::new();
+        let mut quote = None;
+        let mut escaped = false;
+        for ch in expression.chars().chain(std::iter::once(' ')) {
+            if let Some(delimiter) = quote {
+                if escaped {
+                    escaped = false;
+                } else if ch == '\\' {
+                    escaped = true;
+                } else if ch == delimiter {
+                    quote = None;
+                }
+            } else if ch == '|' || ch == '.' {
+                // Filters and dotted lookups can execute application code;
+                // after a sibling effect, their independence is unknown.
+                return true;
+            } else if ch == '\'' || ch == '"' {
+                if contains(&word) {
+                    return true;
+                }
+                word.clear();
+                quote = Some(ch);
+            } else if ch.is_alphanumeric() || ch == '_' {
+                word.push(ch);
+            } else {
+                if contains(&word) {
+                    return true;
+                }
+                word.clear();
+            }
+        }
+        false
     }
 
     fn bind_at(&mut self, index: usize, name: String, value: Value, safe: bool) {
@@ -2490,6 +2619,9 @@ impl Context {
         let Some(obj) = raw.get(first) else {
             return Ok(None);
         };
+        if self.provenance_flatten_tracking() {
+            self.note_lazy_unknown_effect();
+        }
 
         Python::attach(|py| -> crate::Result<Option<Value>> {
             let mut current: pyo3::Bound<'_, pyo3::PyAny> = obj.bind(py).clone();
@@ -2804,6 +2936,9 @@ impl Context {
             let Some(handle) = encoded.live.clone() else {
                 continue;
             };
+            if self.provenance_flatten_tracking() {
+                self.note_lazy_unknown_effect();
+            }
             let rest = &parts[consumed..];
             return Python::attach(|py| -> crate::Result<Option<Option<Value>>> {
                 match self.walk_live(py, handle.bind(py).clone(), rest, key)? {
@@ -3426,6 +3561,56 @@ fn warn_once_on_orm_autocall(py: Python<'_>, obj: &pyo3::Bound<'_, pyo3::PyAny>,
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn lazy_upward_binding_taint_is_context_local_and_survives_scope_unwind() {
+        let mut context = super::Context::new();
+        context.bind(
+            "selected".into(),
+            crate::Value::String("plain.html".into()),
+            false,
+        );
+        let failure: Result<(), ()> = context.with_scope(|inner| {
+            inner.bind_upward(
+                "selected".into(),
+                crate::Value::String("lazy.html".into()),
+                false,
+            );
+            Err(())
+        });
+        assert!(failure.is_err());
+        assert!(context.lazy_selector_is_tainted("selected|default:fallback"));
+        assert!(context.lazy_selector_is_tainted("fallback|default:selected"));
+        assert!(!context.lazy_selector_is_tainted("other"));
+        assert!(!context.lazy_selector_is_tainted("'selected'"));
+        assert!(context.clone().lazy_selector_is_tainted("selected"));
+        assert!(!super::Context::new().lazy_selector_is_tainted("selected"));
+        let mut other = context.clone();
+        other.bind_upward("another".into(), crate::Value::None, false);
+        assert!(!context.lazy_selector_is_tainted("another"));
+        context.with_scope(|inner| {
+            inner.note_lazy_sibling_binding("local");
+            assert!(inner.lazy_selector_is_tainted("local"));
+        });
+        assert!(!context.lazy_selector_is_tainted("local"));
+        let mut fresh = super::Context::new();
+        fresh.with_scope(|inner| {
+            inner.note_lazy_unknown_effect();
+            assert!(inner.lazy_selector_is_tainted("chooser.selected"));
+            assert!(inner.lazy_selector_is_tainted("plain|default:fallback"));
+            assert!(!inner.lazy_selector_is_tainted("plain"));
+            assert!(!inner.lazy_selector_is_tainted("'literal.html'"));
+        });
+        assert!(fresh.lazy_selector_is_tainted("chooser.selected"));
+        let mut only = super::Context::new();
+        only.inherit_lazy_unknown_effect(&fresh);
+        assert!(only.lazy_selector_is_tainted("chooser.selected"));
+        assert!(!super::Context::new().lazy_selector_is_tainted("chooser.selected"));
+        let caller = super::Context::new();
+        let mut only = super::Context::new();
+        only.inherit_lazy_unknown_effect(&caller);
+        only.note_lazy_unknown_effect();
+        assert!(caller.lazy_selector_is_tainted("chooser.selected"));
+    }
     use super::*;
     use indexmap::IndexMap;
 

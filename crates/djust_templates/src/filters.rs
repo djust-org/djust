@@ -1179,6 +1179,11 @@ fn apply_resolved_filter(
     // `autoescape and not isinstance(value, SafeData)` could never take its
     // second branch. `filter_registry::mark_input_safety` restores the marker
     // on the way in — for the CONTAINER and, for a sequence, per ITEM.
+    // All builtins have already returned. Mark before the registry lookup:
+    // registration may change concurrently, and unknown filters abort anyway.
+    if let Some(context) = context.filter(|ctx| ctx.provenance_flatten_tracking()) {
+        context.note_lazy_unknown_effect();
+    }
     if let Some(result) = filter_registry::apply_custom_filter(
         filter_name,
         value,

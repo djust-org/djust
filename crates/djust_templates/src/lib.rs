@@ -382,6 +382,9 @@ impl Template {
         loader: &L,
         template_name: Option<&str>,
     ) -> Result<R> {
+        if R::TRACKED {
+            context.begin_lazy_render();
+        }
         let _includes = inheritance::IncludeRenderGuard::new();
         // Use cached resolved nodes if available. Skipped for a RELATIVE
         // `{% extends %}`: that resolution depends on the template's name and

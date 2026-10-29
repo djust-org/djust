@@ -198,6 +198,9 @@ def _needs_provenance(source: str, dirs: tuple = ()) -> bool:
 
 def render_html(rust_view: Any, source: str) -> str:
     """Plan from compiled authored nodes and resolved template dependencies."""
+    if getattr(rust_view, "potential_authenticated_partial_root", lambda: False)():
+        html, spans, origins = rust_view.render_full_provenance()
+        return RenderedHTML(html, tuple(spans), origins=tuple(origins))
     if not _needs_provenance(source):
         return rust_view.render()
     html, spans, origins = rust_view.render_lazy_html()

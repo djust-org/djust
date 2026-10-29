@@ -18,6 +18,7 @@ from typing import (
     List,
     Optional,
     Tuple,
+    cast,
 )
 
 from django.core.exceptions import PermissionDenied
@@ -416,7 +417,7 @@ class RequestMixin:
         def get_template(self) -> str: ...
 
         @staticmethod
-        def _stamp_dj_view(html: str, view_path: str) -> str: ...
+        def _stamp_dj_view(html: str, view_path: str, *, trusted: bool = False) -> str: ...
 
         def handle_params(self, params: Dict[str, Any], uri: str) -> None: ...
 
@@ -435,6 +436,10 @@ class RequestMixin:
         def _inject_client_script(self, html: str) -> str: ...
 
         def _get_all_child_views(self) -> Dict[str, Any]: ...
+
+        def _refresh_cached_rust_view(self) -> None: ...
+
+        def _record_dj_model_fields_from_rust(self, rust_view: Any) -> None: ...
 
         def _assign_component_ids(self) -> None: ...
 
@@ -716,22 +721,22 @@ class RequestMixin:
         t_render_full = (time.perf_counter() - t0) * 1000
         liveview_content = html
 
-        # Establish VDOM baseline for subsequent PATCH responses.
-        t0 = time.perf_counter()
-        self._prepare_child_ids()
-        _, _, _ = render_view_with_diff(self, request)
-        t_render_diff = (time.perf_counter() - t0) * 1000
-        # One authoritative page pass (#3252): discard the baseline render's
-        # lazy thunks before anything drains them.
-        self._lazy_thunks = list(page_lazy_thunks)
+        prepared_page = getattr(self, "_pending_authenticated_page", False)
+        authenticated_root = getattr(self, "_prepared_authenticated_partial_root", False)
+        # Validate the final wrapped page before committing its prepared diff
+        # baseline: a rejected response was never delivered.
+        t_render_diff = 0.0
+        if not prepared_page:
+            t0 = time.perf_counter()
+            self._prepare_child_ids()
+            _, _, _ = render_view_with_diff(self, request)
+            t_render_diff = (time.perf_counter() - t0) * 1000
+            self._lazy_thunks = list(page_lazy_thunks)
+            if not uses_legacy_exposure(self):
+                from .._exposure_child_persistence import save_child_states
 
-        if not uses_legacy_exposure(self):
-            from .._exposure_child_persistence import save_child_states
-
-            save_child_states(self, request)
-
-        # Clear context cache so WebSocket events get fresh data
-        self._cached_context = None
+                save_child_states(self, request)
+            self._cached_context = None
 
         # Wrap in Django template if wrapper_template is specified
         if hasattr(self, "wrapper_template") and self.wrapper_template:
@@ -757,6 +762,19 @@ class RequestMixin:
                 html = liveview_content
         else:
             html = liveview_content
+
+        if authenticated_root and html is not liveview_content:
+            # Django's wrapper produces a plain string. Preserve the exact
+            # original live output's provenance, and treat wrapper bytes as
+            # opaque. A duplicate or changed insertion cannot be authenticated.
+            from django.core.exceptions import ImproperlyConfigured
+            from .._render_provenance import RenderedHTML
+
+            content = str(liveview_content)
+            if not isinstance(liveview_content, RenderedHTML) or html.count(content) != 1:
+                raise ImproperlyConfigured("Unable to authenticate the wrapped LiveView root.")
+            start = html.index(content)
+            html = RenderedHTML(html[:start]) + liveview_content + html[start + len(content) :]
 
         t_total = (time.perf_counter() - t_start) * 1000
         logger.debug(
@@ -787,7 +805,15 @@ class RequestMixin:
         # however it is written (any element, any other attributes), and only
         # where the author did not declare dj-view themselves (#2981).
         view_path = f"{self.__class__.__module__}.{self.__class__.__name__}"
-        html = self._stamp_dj_view(html, view_path)
+        if authenticated_root:
+            # Authenticate before stamping; only the framework-generated view
+            # attribute on this already validated page may gain provenance.
+            from .._rust import authenticated_root_shell
+
+            authenticated_root_shell(html, list(cast("RenderedHTML", html).spans))
+            html = self._stamp_dj_view(html, view_path, trusted=True)
+        else:
+            html = self._stamp_dj_view(html, view_path)
 
         # ADR-036: the page's own owner contracts, for events sent before a
         # socket mounts or over the HTTP fallback. Emitted outside dj-root so
@@ -809,6 +835,32 @@ class RequestMixin:
         from .._lazy_containers import finalize_lazy_containers
 
         html = finalize_lazy_containers(self, html)
+        if authenticated_root:
+            # Recheck after wrapping, stamping and lazy processing: these are
+            # the bytes the browser will actually parse and mount.
+            from django.core.exceptions import ImproperlyConfigured
+            from .._render_provenance import RenderedHTML
+            from .._rust import authenticated_root_shell
+
+            if not isinstance(html, RenderedHTML):
+                raise ImproperlyConfigured(
+                    "LiveView root provenance was lost during page processing."
+                )
+            authenticated_root_shell(html, list(html.spans))
+        if prepared_page:
+            # Commit exactly the VDOM captured with the delivered page; do not
+            # execute stateful template selectors a second time.
+            t0 = time.perf_counter()
+            self._rust_view.commit_authenticated_page()
+            self._pending_authenticated_page = False
+            self._refresh_cached_rust_view()
+            self._record_dj_model_fields_from_rust(self._rust_view)
+            request._djust_timing["vdom_ms"] = round((time.perf_counter() - t0) * 1000, 2)
+            if not uses_legacy_exposure(self):
+                from .._exposure_child_persistence import save_child_states
+
+                save_child_states(self, request)
+            self._cached_context = None
         response: HttpResponse
         if getattr(self, "streaming_render", False):
             response = self._make_streaming_response(html)

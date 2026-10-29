@@ -330,6 +330,16 @@ def collapse_provenance_whitespace(
     """Drop inter-tag whitespace, remapping authored intervals."""
     ...
 
+def template_needs_authenticated_partial_root(
+    source: str, dirs: List[str], template_name: Optional[str] = None
+) -> bool:
+    """Whether a template may render an authenticated partial root."""
+    ...
+
+def authenticated_root_shell(html: str, spans: List[Tuple[int, int]]) -> Tuple[int, int]:
+    """Return the authenticated root's character offsets in rendered HTML."""
+    ...
+
 def template_needs_provenance(source: str, dirs: List[str]) -> bool:
     """Whether a template tree contains an authored lazy container."""
     ...
@@ -741,6 +751,7 @@ def register_library_loader(callable: Callable[[List[str]], None]) -> None:
 def register_raw_block_tag_handler(tag_name: str, end_tag: str, handler: Any) -> None: ...
 def unregister_raw_block_tag_handler(tag_name: str) -> bool: ...
 def has_raw_block_tag_handler(tag_name: str) -> bool: ...
+def raw_block_end_tag(name: str) -> str | None: ...
 def clear_raw_block_tag_handlers() -> None: ...
 def register_translator(
     callable: Callable[[str], str],
@@ -1132,6 +1143,11 @@ class RustLiveView:
         """
         ...
 
+    def set_authenticated_partial_root(self, enabled: bool) -> None: ...
+    def authenticated_partial_root(self) -> bool: ...
+    def potential_authenticated_partial_root(self) -> bool: ...
+    def set_authenticated_view_path(self, path: str) -> None: ...
+    def set_template_origin(self, origin: Optional[str]) -> None: ...
     def set_template_dirs(self, dirs: List[str]) -> None:
         """
         Set template directories for {% include %} tag support.
@@ -1330,6 +1346,16 @@ class RustLiveView:
         """
         ...
 
+    def render_full_provenance(
+        self,
+    ) -> Tuple[str, List[Tuple[int, int]], List[Tuple[int, int, int, str]]]: ...
+    def prepare_authenticated_page(
+        self,
+    ) -> Tuple[
+        str, List[Tuple[int, int]], List[Tuple[int, int, int, str]], Optional[Tuple[int, int]]
+    ]: ...
+    def discard_authenticated_page(self) -> None: ...
+    def commit_authenticated_page(self) -> Tuple[str, Optional[str], int]: ...
     def render_with_provenance(self) -> Tuple[str, List[Tuple[int, int]]]:
         """Render HTML and result-local, disjoint authored UTF-8 intervals."""
         ...
@@ -1531,6 +1557,8 @@ __all__ = [
     "root_element_span",
     "dj_root_stamp_offsets",
     "template_needs_provenance",
+    "template_needs_authenticated_partial_root",
+    "authenticated_root_shell",
     "resolve_template_inheritance",
     "resolve_relative_template_includes",
     # Serialization
@@ -1555,6 +1583,7 @@ __all__ = [
     "register_raw_block_tag_handler",
     "unregister_raw_block_tag_handler",
     "has_raw_block_tag_handler",
+    "raw_block_end_tag",
     "clear_raw_block_tag_handlers",
     "register_translator",
     "clear_translator",

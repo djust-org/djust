@@ -139,6 +139,12 @@ type LazyRenderOutput = (
     Vec<(usize, usize)>,
     Vec<(usize, usize, usize, String)>,
 );
+type PreparedAuthenticatedPageOutput = (
+    String,
+    Vec<(usize, usize)>,
+    Vec<(usize, usize, usize, String)>,
+    Option<(usize, usize)>,
+);
 type CachedTemplate = (Arc<Template>, u64, bool, Vec<LazyDependency>);
 static TEMPLATE_CACHE: Lazy<DashMap<(u64, String), CachedTemplate>> = Lazy::new(DashMap::new);
 
@@ -189,6 +195,17 @@ struct SerializableViewState {
     last_vdom: Option<VNode>,
     version: u64,
     timestamp: f64, // Unix timestamp for session age tracking
+    /// Backward-compatible tail: old snapshots default to ordinary rendering.
+    #[serde(default)]
+    authenticated_partial_root: bool,
+    #[serde(default)]
+    authenticated_model_fields: Vec<String>,
+    #[serde(default)]
+    potential_authenticated_partial_root: bool,
+    #[serde(default)]
+    template_origin: Option<String>,
+    #[serde(default)]
+    authenticated_view_path: Option<String>,
 }
 
 /// `RenderTiming::fast_path` values (#2532). A float so the whole timing
@@ -234,10 +251,118 @@ struct RenderTiming {
     fast_path: f64,
 }
 
+/// Tracks exactly the templates loaded during one render, including the
+/// shared handles used by deferred `block.super` rendering. It never resolves
+/// an include selector separately from the renderer.
+#[derive(Clone)]
+struct PartialRootRecordingLoader {
+    inner: FilesystemTemplateLoader,
+    possible_partial_root: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl PartialRootRecordingLoader {
+    fn observe(&self, nodes: &[djust_templates::parser::Node]) {
+        if partial_def_may_contain_root(nodes) {
+            self.possible_partial_root
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+}
+
+fn nodes_may_contain_root(nodes: &[djust_templates::parser::Node]) -> bool {
+    use djust_templates::parser::Node;
+    nodes.iter().any(|node| match node {
+        Node::Text(text) => {
+            let text = text.to_ascii_lowercase();
+            text.contains("dj-root") || text.contains("dj-view")
+        }
+        _ => node
+            .child_lists()
+            .into_iter()
+            .flatten()
+            .any(|children| nodes_may_contain_root(children)),
+    })
+}
+
+fn partial_def_may_contain_root(nodes: &[djust_templates::parser::Node]) -> bool {
+    use djust_templates::parser::Node;
+    nodes.iter().any(|node| {
+        matches!(node, Node::PartialDef { children, .. } if nodes_may_contain_root(children))
+            || node
+                .child_lists()
+                .into_iter()
+                .flatten()
+                .any(|children| partial_def_may_contain_root(children))
+    })
+}
+
+impl djust_templates::inheritance::TemplateLoader for PartialRootRecordingLoader {
+    fn shared_handle(&self) -> Arc<dyn djust_templates::inheritance::TemplateLoader + Send + Sync> {
+        Arc::new(self.clone())
+    }
+    fn shares_include_nodes(&self, name: &str) -> bool {
+        self.inner.shares_include_nodes(name)
+    }
+    fn template_origin(&self, name: &str) -> Option<String> {
+        self.inner.template_origin(name)
+    }
+    fn load_template(&self, name: &str) -> djust_core::Result<Vec<djust_templates::parser::Node>> {
+        let nodes = self.inner.load_template(name)?;
+        self.observe(&nodes);
+        if name.contains('#') && nodes_may_contain_root(&nodes) {
+            self.possible_partial_root
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        Ok(nodes)
+    }
+    fn load_template_skipping(
+        &self,
+        name: &str,
+        skip: &[String],
+    ) -> djust_core::Result<(Vec<djust_templates::parser::Node>, Option<String>)> {
+        let result = self.inner.load_template_skipping(name, skip)?;
+        self.observe(&result.0);
+        Ok(result)
+    }
+    fn load_template_cached(
+        &self,
+        name: &str,
+    ) -> djust_core::Result<Arc<[djust_templates::parser::Node]>> {
+        let nodes = self.inner.load_template_cached(name)?;
+        self.observe(&nodes);
+        if name.contains('#') && nodes_may_contain_root(&nodes) {
+            self.possible_partial_root
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        Ok(nodes)
+    }
+}
+
+struct PreparedPartialPage {
+    rendered: djust_templates::provenance::Rendered,
+    authenticated: bool,
+    range: Option<(usize, usize)>,
+    fields: Vec<String>,
+    vdom: VNode,
+    namespace: Namespace,
+}
+
 /// A LiveView component that manages state and rendering (Rust backend)
 #[pyclass(name = "RustLiveView")]
 pub struct RustLiveViewBackend {
     template_source: String,
+    /// Render the full template and authenticate its selected LiveView root.
+    authenticated_partial_root: bool,
+    /// Model bindings from the last successfully authenticated live root.
+    authenticated_model_fields: Vec<String>,
+    /// The source may resolve a dynamic include to an authenticated root.
+    potential_authenticated_partial_root: bool,
+    /// Named source origin for relative includes in this view's full template.
+    template_origin: Option<String>,
+    /// Framework-supplied mount identity for an implicitly stamped root.
+    authenticated_view_path: Option<String>,
+    /// A single-render HTTP page awaiting final browser-page validation.
+    pending_partial_page: Option<PreparedPartialPage>,
     /// COPY-ON-WRITE, and that is a performance contract (#2737).
     ///
     /// Held in exactly the shape a `Context`'s base frame wants, so a render
@@ -353,6 +478,12 @@ impl RustLiveViewBackend {
     fn new(template_source: String, template_dirs: Option<Vec<String>>) -> Self {
         Self {
             template_source,
+            authenticated_partial_root: false,
+            authenticated_model_fields: Vec::new(),
+            potential_authenticated_partial_root: false,
+            template_origin: None,
+            authenticated_view_path: None,
+            pending_partial_page: None,
             state: Default::default(),
             last_vdom: None,
             last_root_ns: None,
@@ -380,6 +511,53 @@ impl RustLiveViewBackend {
             // None until Python captures one (ADR-029); a pure-Rust or
             // direct-API backend reads the thread's cells as before.
             render_env: None,
+        }
+    }
+
+    /// Select the full-template, authored-root rendering path.
+    /// Changing the mode invalidates fragment caches while retaining the
+    /// last delivered DOM so dynamic template updates can still be diffed.
+    fn set_authenticated_partial_root(&mut self, enabled: bool) {
+        self.pending_partial_page = None;
+        if self.potential_authenticated_partial_root != enabled {
+            self.potential_authenticated_partial_root = enabled;
+            // Until the first successful resolved render, err on the strict side.
+            self.authenticated_partial_root = enabled;
+            self.authenticated_model_fields.clear();
+            self.last_html = None;
+            self.node_html_cache.clear();
+            self.fragment_text_map = None;
+            self.text_node_index = None;
+            self.loop_render_cache.clear();
+        }
+    }
+
+    fn authenticated_partial_root(&self) -> bool {
+        self.authenticated_partial_root
+    }
+
+    fn potential_authenticated_partial_root(&self) -> bool {
+        self.potential_authenticated_partial_root
+    }
+
+    /// Set the trusted mount identity the framework adds to bare dj-root
+    /// elements. Explicit authored dj-view attributes are never overwritten.
+    fn set_authenticated_view_path(&mut self, path: String) {
+        self.pending_partial_page = None;
+        self.authenticated_view_path = Some(path);
+    }
+
+    fn set_template_origin(&mut self, origin: Option<String>) {
+        self.pending_partial_page = None;
+        if self.template_origin != origin {
+            self.template_origin = origin;
+            // The old page's bindings do not authorize a different origin.
+            self.authenticated_model_fields.clear();
+            self.node_html_cache.clear();
+            self.last_html = None;
+            self.fragment_text_map = None;
+            self.text_node_index = None;
+            self.loop_render_cache.clear();
         }
     }
 
@@ -435,6 +613,7 @@ impl RustLiveViewBackend {
     /// `RenderEnv` value — `RenderEnv.capture()` or one a test built.
     #[pyo3(signature = (env))]
     fn set_render_env(&mut self, env: Option<PyRef<'_, RenderEnvPy>>) {
+        self.pending_partial_page = None;
         self.render_env = env.map(|e| e.inner.clone());
     }
 
@@ -465,6 +644,7 @@ impl RustLiveViewBackend {
     /// HTML comment, and #2529 is the bug where exactly that let `-->` forge
     /// live markup.
     fn set_dj_if_id_namespace(&mut self, namespace: &str) {
+        self.pending_partial_page = None;
         if namespace
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '_')
@@ -505,11 +685,13 @@ impl RustLiveViewBackend {
 
     /// Set template directories for {% include %} tag support
     fn set_template_dirs(&mut self, dirs: Vec<String>) {
+        self.pending_partial_page = None;
         self.template_dirs = dirs.into_iter().map(PathBuf::from).collect();
     }
 
     /// Set a state variable
     fn set_state(&mut self, key: String, value: Value) {
+        self.pending_partial_page = None;
         std::sync::Arc::make_mut(&mut self.state).insert(key, value);
     }
 
@@ -558,6 +740,7 @@ impl RustLiveViewBackend {
     /// a partial render would otherwise serve its region from the node cache
     /// and the OLD text would survive.
     fn retain_state_keys(&mut self, keys: Vec<String>) -> Vec<String> {
+        self.pending_partial_page = None;
         let keep: HashSet<String> = keys.into_iter().collect();
         let removed: Vec<String> = self
             .state
@@ -600,6 +783,7 @@ impl RustLiveViewBackend {
     /// says why; `safe_keys` is the adjacent per-render cache that did not get
     /// it (#1646).
     fn mark_safe_keys(&mut self, keys: Vec<String>) {
+        self.pending_partial_page = None;
         self.safe_keys = keys.into_iter().collect();
     }
 
@@ -611,6 +795,7 @@ impl RustLiveViewBackend {
     /// `{{ user.username }}` cannot be resolved via the normal
     /// value-stack path. An empty dict clears the sidecar.
     fn set_raw_py_values(&mut self, values: HashMap<String, Py<PyAny>>) {
+        self.pending_partial_page = None;
         if values.is_empty() {
             self.raw_py_values = None;
         } else {
@@ -648,6 +833,7 @@ impl RustLiveViewBackend {
     /// Update the template source while preserving VDOM state
     /// This allows dynamic templates to change without losing diffing capability
     fn update_template(&mut self, new_template_source: String) {
+        self.pending_partial_page = None;
         // An unchanged source keeps the previous HTML and text-node index,
         // allowing a text-only VDOM update. Still rerender the full template:
         // custom filters and other external inputs can change even when no
@@ -659,6 +845,10 @@ impl RustLiveViewBackend {
             return;
         }
         self.template_source = new_template_source;
+        // Bindings from the old source cannot authorize the new template.
+        if self.authenticated_partial_root {
+            self.authenticated_model_fields.clear();
+        }
         self.node_html_cache = Vec::new(); // Invalidate partial render cache
         self.last_html = None; // Invalidate text fast path cache
         self.fragment_text_map = None; // Invalidate fragment→VDOM map
@@ -714,6 +904,9 @@ impl RustLiveViewBackend {
     #[pyo3(signature = (cache=false))]
     fn dj_model_fields(&self, cache: bool) -> PyResult<Vec<String>> {
         guard_panic("dj_model_fields", move || {
+            if self.potential_authenticated_partial_root {
+                return Ok(self.authenticated_model_fields.clone());
+            }
             use djust_templates::inheritance::FilesystemTemplateLoader;
             let key = (self.template_source.clone(), self.template_dirs.clone());
             if cache {
@@ -773,8 +966,74 @@ impl RustLiveViewBackend {
         self.render_result(true).map(|r| (r.0, r.1))
     }
 
+    /// Full authored output and stable node addresses, independent of lazy planning.
+    fn render_full_provenance(&mut self) -> PyResult<LazyRenderOutput> {
+        self.render_result(true)
+    }
+
+    /// Prepare one full HTTP render without changing the delivered baseline.
+    /// Python validates the composed page and calls `commit_authenticated_page`
+    /// only after that validation succeeds. This slot is never serialized.
+    fn prepare_authenticated_page(&mut self) -> PyResult<PreparedAuthenticatedPageOutput> {
+        guard_panic("prepare_authenticated_page", || {
+            if !self.potential_authenticated_partial_root {
+                return Err(pyo3::exceptions::PyRuntimeError::new_err(
+                    "authenticated page mode is not enabled",
+                ));
+            }
+            self.pending_partial_page = None;
+            let page = self.prepare_partial_page()?;
+            let html = page.rendered.html.clone();
+            let spans = page
+                .rendered
+                .authored
+                .iter()
+                .map(|r| (r.start, r.end))
+                .collect();
+            let origins = page.rendered.origins.clone();
+            let range = page.range;
+            self.pending_partial_page = Some(page);
+            Ok((html, spans, origins, range))
+        })
+    }
+
+    fn discard_authenticated_page(&mut self) {
+        self.pending_partial_page = None;
+    }
+
+    fn commit_authenticated_page(&mut self) -> PyResult<(String, Option<String>, u64)> {
+        guard_panic("commit_authenticated_page", || {
+            let page = self.pending_partial_page.take().ok_or_else(|| {
+                pyo3::exceptions::PyRuntimeError::new_err("no authenticated page is pending")
+            })?;
+            let (html, patches, version) = self.commit_partial_page(page, false)?;
+            let patches = patches.map(|bytes| String::from_utf8(bytes).expect("JSON is UTF-8"));
+            Ok((html, patches, version))
+        })
+    }
+
+    /// Preserve the existing conservative lazy registration planner while
+    /// a separate authenticated-root render tracks provenance. Match the
+    /// legacy lazy path: do not attach raw Python sidecars or pre-evaluate a
+    /// stateful property merely to decide whether registration is allowed.
+    fn lazy_registration_allowed(&self) -> PyResult<bool> {
+        // Classify immutable source snapshots without resolving any template
+        // operand or application value. A dynamic dependency fails closed.
+        Ok(static_lazy_tree(
+            &self.template_source,
+            &self.template_dirs,
+            self.template_origin.as_deref(),
+            &mut HashSet::new(),
+            0,
+        )?
+        .unwrap_or(false))
+    }
+
     /// Automatic compiled-tree planning plus stable authored node addresses.
     fn render_lazy_html(&mut self) -> PyResult<LazyRenderOutput> {
+        if self.potential_authenticated_partial_root {
+            return self.render_result(true);
+        }
         let context = Context::from_shared(self.state.clone());
         let track = needs_lazy_tree(
             &self.template_source,
@@ -788,7 +1047,41 @@ impl RustLiveViewBackend {
     }
 
     fn render_result(&mut self, track_provenance: bool) -> PyResult<LazyRenderOutput> {
-        guard_panic("render", move || {
+        self.pending_partial_page = None;
+        let authenticate = self.potential_authenticated_partial_root;
+        let result = guard_panic("render", || {
+            if authenticate {
+                let page = self.prepare_partial_page()?;
+                let is_root = page.authenticated;
+                let fields = page.fields;
+                let (start, end) = page.range.unwrap_or((0, page.rendered.html.len()));
+                let rendered = page.rendered;
+                let spans = rendered
+                    .authored
+                    .iter()
+                    .filter(|range| range.start < end && range.end > start)
+                    .map(|range| (range.start.max(start) - start, range.end.min(end) - start))
+                    .collect();
+                let origins = rendered
+                    .origins
+                    .iter()
+                    .filter(|(a, b, _, _)| *a < end && *b > start)
+                    .map(|(a, b, source, identity)| {
+                        (
+                            a.max(&start) - start,
+                            b.min(&end) - start,
+                            source + a.max(&start) - a,
+                            identity.clone(),
+                        )
+                    })
+                    .collect();
+                self.authenticated_partial_root = is_root;
+                self.authenticated_model_fields = fields;
+                self.node_html_cache.clear();
+                self.last_html = None;
+                self.text_node_index = None;
+                return Ok((rendered.html[start..end].to_owned(), spans, origins));
+            }
             // Invalidate partial render cache — render() bypasses the diff pipeline
             // so the cache would be stale for the next render_with_diff() call.
             self.node_html_cache = Vec::new();
@@ -807,6 +1100,7 @@ impl RustLiveViewBackend {
 
             let _bridge_memo = djust_core::context::BridgeFrameCacheGuard;
             let mut context = Context::from_shared(self.state.clone());
+            context.set_guard_dynamic_recursive_partials(true);
             for key in &self.safe_keys {
                 context.mark_safe(key.clone());
             }
@@ -828,17 +1122,32 @@ impl RustLiveViewBackend {
             // Use template loader for {% include %} support
             let loader = FilesystemTemplateLoader::new(self.template_dirs.clone());
             if track_provenance {
-                let result = template_arc.render_with_provenance(&context, &loader)?;
+                let mut result: djust_templates::provenance::Rendered = template_arc
+                    .render_output_named_mut(
+                        &mut context,
+                        &loader,
+                        self.template_origin.as_deref(),
+                    )?;
+                result.retain_live_authority();
                 let spans = result.authored.iter().map(|r| (r.start, r.end)).collect();
                 Ok((result.html, spans, result.origins))
             } else {
                 Ok((
-                    template_arc.render_with_loader(&context, &loader)?,
+                    template_arc.render_with_loader_named(
+                        &context,
+                        &loader,
+                        self.template_origin.as_deref(),
+                    )?,
                     Vec::new(),
                     Vec::new(),
                 ))
             }
-        })
+        });
+        if result.is_ok() && !authenticate {
+            self.authenticated_partial_root = false;
+            self.authenticated_model_fields.clear();
+        }
+        result
     }
 
     /// Render and compute diff from last render
@@ -867,7 +1176,17 @@ impl RustLiveViewBackend {
 
     /// Render and return patches as MessagePack bytes
     fn render_binary_diff(&mut self, py: Python) -> PyResult<(String, Option<Py<PyAny>>, u64)> {
-        guard_panic("render_binary_diff", move || {
+        self.pending_partial_page = None;
+        let authenticate = self.potential_authenticated_partial_root;
+        let result = guard_panic("render_binary_diff", || {
+            if authenticate {
+                let (html, patches, version) = self.render_authenticated_diff(true)?;
+                return Ok((
+                    html,
+                    patches.map(|bytes| PyBytes::new(py, &bytes).into()),
+                    version,
+                ));
+            }
             use std::time::Instant;
 
             let t_start = Instant::now();
@@ -884,6 +1203,7 @@ impl RustLiveViewBackend {
 
             let _bridge_memo = djust_core::context::BridgeFrameCacheGuard;
             let mut context = Context::from_shared(self.state.clone());
+            context.set_guard_dynamic_recursive_partials(true);
             for key in &self.safe_keys {
                 context.mark_safe(key.clone());
             }
@@ -914,7 +1234,15 @@ impl RustLiveViewBackend {
             loop_cache.begin_render();
             let html_result: Result<String, _> = {
                 let _loop_guard = LoopCacheGuard::install(&mut loop_cache);
-                if !self.node_html_cache.is_empty()
+                if self.potential_authenticated_partial_root && self.template_origin.is_some() {
+                    self.changed_keys = None;
+                    self.node_html_cache.clear();
+                    template_arc.render_with_loader_named(
+                        &context,
+                        &loader,
+                        self.template_origin.as_deref(),
+                    )
+                } else if !self.node_html_cache.is_empty()
                     && self.changed_keys.is_some()
                     && !template_arc.uses_extends()
                 {
@@ -1137,7 +1465,12 @@ impl RustLiveViewBackend {
             self.fragment_text_map = None;
 
             Ok((hydrated_html, patches_bytes, self.version))
-        })
+        });
+        if result.is_ok() && !authenticate {
+            self.authenticated_partial_root = false;
+            self.authenticated_model_fields.clear();
+        }
+        result
     }
 
     /// ADR-032 D3 — patch ONE bound component's subtree without a page render.
@@ -1340,6 +1673,11 @@ impl RustLiveViewBackend {
             last_vdom: self.last_vdom.clone(),
             version: self.version,
             timestamp: ts,
+            authenticated_partial_root: self.authenticated_partial_root,
+            authenticated_model_fields: self.authenticated_model_fields.clone(),
+            potential_authenticated_partial_root: self.potential_authenticated_partial_root,
+            template_origin: self.template_origin.clone(),
+            authenticated_view_path: self.authenticated_view_path.clone(),
         };
 
         // Serialize to MessagePack bytes
@@ -1372,6 +1710,12 @@ impl RustLiveViewBackend {
         // Note: template_dirs must be re-set after deserialization via set_template_dirs()
         Ok(Self {
             template_source: serializable.template_source,
+            authenticated_partial_root: serializable.authenticated_partial_root,
+            authenticated_model_fields: serializable.authenticated_model_fields,
+            potential_authenticated_partial_root: serializable.potential_authenticated_partial_root,
+            template_origin: serializable.template_origin,
+            authenticated_view_path: serializable.authenticated_view_path,
+            pending_partial_page: None,
             state: std::sync::Arc::new(serializable.state.into_iter().collect()),
             last_vdom: serializable.last_vdom,
             last_root_ns: None, // Not serialized: the next render parses
@@ -1427,11 +1771,178 @@ impl RustLiveViewBackend {
 
 // Public Rust API (for use by other Rust crates like djust_actors)
 impl RustLiveViewBackend {
+    /// Render once and classify only the output and templates actually loaded.
+    /// In particular, do not evaluate dynamic include expressions in a planner.
+    fn prepare_partial_page(&self) -> PyResult<PreparedPartialPage> {
+        use std::sync::atomic::Ordering;
+        // A globally cached Template can already carry a resolved inheritance
+        // tree, which would bypass our recording loader. Parse this private
+        // handle so every parent selected for this render is observed.
+        let template = Template::new(&self.template_source).map_err(span_aware_pyerr)?;
+        let _render_env = self.render_env.as_ref().map(RenderEnvGuard::install);
+        let _bridge_memo = djust_core::context::BridgeFrameCacheGuard;
+        let mut context = Context::from_shared(self.state.clone());
+        context.set_guard_dynamic_recursive_partials(true);
+        for key in &self.safe_keys {
+            context.mark_safe(key.clone());
+        }
+        context.set_dj_if_id_namespace(self.dj_if_id_namespace.as_str());
+        if let Some(raw) = &self.raw_py_values {
+            let cloned = Python::attach(|py| {
+                raw.iter()
+                    .map(|(k, v)| (k.clone(), v.clone_ref(py)))
+                    .collect()
+            });
+            context.set_raw_py_objects(cloned);
+        }
+        let possible = Arc::new(std::sync::atomic::AtomicBool::new(
+            partial_def_may_contain_root(template.authored_nodes()),
+        ));
+        let loader = PartialRootRecordingLoader {
+            inner: FilesystemTemplateLoader::new(self.template_dirs.clone()),
+            possible_partial_root: possible.clone(),
+        };
+        let mut rendered: djust_templates::provenance::Rendered = template
+            .render_output_named_mut(&mut context, &loader, self.template_origin.as_deref())?;
+        rendered.retain_live_authority();
+        let spans: Vec<_> = rendered
+            .authored
+            .iter()
+            .map(|range| (range.start, range.end))
+            .collect();
+        if let Some(old) = &self.last_vdom {
+            if let Some(max) = djust_vdom::max_djust_id_in(old) {
+                djust_vdom::ensure_id_counter_at_least(max + 1);
+            }
+        } else {
+            reset_id_counter();
+        }
+        match djust_vdom::lazy_provenance::authenticated_live_root(&rendered.html, &spans) {
+            Ok(mut root) => {
+                let range = authenticated_source_range(&rendered.html, &root)?;
+                if root.vdom.attrs.contains_key("dj-root")
+                    && !root.vdom.attrs.contains_key("dj-view")
+                {
+                    if let Some(path) = &self.authenticated_view_path {
+                        root.vdom.attrs.insert("dj-view".to_string(), path.clone());
+                    }
+                }
+                Ok(PreparedPartialPage {
+                    rendered,
+                    authenticated: true,
+                    range: Some(range),
+                    fields: root.model_fields,
+                    vdom: root.vdom,
+                    namespace: root.namespace,
+                })
+            }
+            Err(error) => {
+                // A fragment may be emitted only if the actual HTML5 tree has
+                // no page-root candidate, and no loaded partial could own one.
+                let fields = djust_vdom::lazy_provenance::authenticated_fragment_model_fields(
+                    &rendered.html,
+                    &spans,
+                )
+                .map_err(|_| authenticated_root_error(error))?;
+                // A data-controlled comment or raw-text opener must not
+                // hide an authored root and turn its surrounding page into a
+                // rootless fragment whose shell bindings are authorized.
+                let projected_root =
+                    rendered.literal_blocked
+                        || rendered.literal_only.is_none()
+                        || rendered.blank_only.is_none()
+                        || [&rendered.literal_only, &rendered.blank_only]
+                            .into_iter()
+                            .flatten()
+                            .any(|projection| {
+                                !projection.is_empty()
+                            && djust_vdom::lazy_provenance::authenticated_fragment_model_fields(
+                                projection, &[(0, projection.len())],
+                            ).is_err()
+                            });
+                if possible.load(Ordering::Relaxed) || projected_root {
+                    return Err(authenticated_root_error(
+                        djust_vdom::lazy_provenance::AuthenticatedRootError::MissingOrAmbiguous,
+                    ));
+                }
+                let vdom = if self.last_vdom.is_some() {
+                    parse_html_continue_with_namespace(&rendered.html)
+                } else {
+                    parse_html_with_namespace(&rendered.html)
+                }
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+                Ok(PreparedPartialPage {
+                    rendered,
+                    authenticated: false,
+                    range: None,
+                    fields,
+                    vdom: vdom.0,
+                    namespace: vdom.1,
+                })
+            }
+        }
+    }
+
+    /// Commit the exact prepared VDOM only after all validation and encoding.
+    fn commit_partial_page(
+        &mut self,
+        page: PreparedPartialPage,
+        binary: bool,
+    ) -> PyResult<(String, Option<Vec<u8>>, u64)> {
+        let authenticated = page.authenticated;
+        let (mut vdom, namespace, fields) = (page.vdom, page.namespace, page.fields);
+        if let Some(old) = &self.last_vdom {
+            splice_ignore_subtrees(old, &mut vdom);
+        }
+        let patches = if let Some(old) = &self.last_vdom {
+            let patches = diff_in(old, &vdom, namespace);
+            sync_ids(old, &mut vdom);
+            Some(if binary {
+                rmp_serde::to_vec_named(&patches)
+                    .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?
+            } else {
+                serde_json::to_vec(&patches)
+                    .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?
+            })
+        } else {
+            None
+        };
+        let html = vdom.to_html_in(Some(namespace));
+        cache_ignore_subtree_html_in(&mut vdom, namespace);
+        self.last_vdom = Some(vdom);
+        self.last_root_ns = Some(namespace);
+        self.authenticated_model_fields = fields;
+        self.authenticated_partial_root = authenticated;
+        self.last_html = None;
+        self.node_html_cache.clear();
+        self.fragment_text_map = None;
+        self.text_node_index = None;
+        self.changed_keys = None;
+        self.loop_render_cache.clear();
+        self.version += 1;
+        Ok((html, patches, self.version))
+    }
+
+    fn render_authenticated_diff(
+        &mut self,
+        binary: bool,
+    ) -> PyResult<(String, Option<Vec<u8>>, u64)> {
+        let page = self.prepare_partial_page()?;
+        self.commit_partial_page(page, binary)
+    }
+
     /// Body of [`render_with_diff`](Self::render_with_diff), callable with
     /// or without the interpreter attached (the actor path and the Rust
     /// tests call it directly). Returns (html, patches_json, version).
     fn render_with_diff_detached(&mut self) -> PyResult<(String, Option<String>, u64)> {
-        guard_panic("render_with_diff", move || {
+        self.pending_partial_page = None;
+        let authenticate = self.potential_authenticated_partial_root;
+        let result = guard_panic("render_with_diff", || {
+            if authenticate {
+                let (html, patches, version) = self.render_authenticated_diff(false)?;
+                let patches = patches.map(|bytes| String::from_utf8(bytes).expect("JSON is UTF-8"));
+                return Ok((html, patches, version));
+            }
             use std::time::Instant;
 
             let t_start = Instant::now();
@@ -1448,6 +1959,7 @@ impl RustLiveViewBackend {
 
             let _bridge_memo = djust_core::context::BridgeFrameCacheGuard;
             let mut context = Context::from_shared(self.state.clone());
+            context.set_guard_dynamic_recursive_partials(true);
             for key in &self.safe_keys {
                 context.mark_safe(key.clone());
             }
@@ -1489,7 +2001,17 @@ impl RustLiveViewBackend {
             loop_cache.begin_render();
             let render_result: Result<(String, Vec<usize>), _> = {
                 let _loop_guard = LoopCacheGuard::install(&mut loop_cache);
-                if !self.node_html_cache.is_empty() && self.changed_keys.is_some() {
+                if self.potential_authenticated_partial_root && self.template_origin.is_some() {
+                    self.changed_keys = None;
+                    self.node_html_cache.clear();
+                    template_arc
+                        .render_with_loader_named(
+                            &context,
+                            &loader,
+                            self.template_origin.as_deref(),
+                        )
+                        .map(|html| (html, vec![]))
+                } else if !self.node_html_cache.is_empty() && self.changed_keys.is_some() {
                     // Partial render: only re-render nodes whose deps changed
                     let changed = self.changed_keys.take().unwrap_or_default();
                     template_arc
@@ -1935,7 +2457,12 @@ impl RustLiveViewBackend {
             }
 
             Ok((hydrated_html, patches, self.version))
-        })
+        });
+        if result.is_ok() && !authenticate {
+            self.authenticated_partial_root = false;
+            self.authenticated_model_fields.clear();
+        }
+        result
     }
 
     /// Create a new RustLiveViewBackend (Rust API)
@@ -1957,6 +2484,7 @@ impl RustLiveViewBackend {
     /// path calls this with the environment captured on the Python thread
     /// that mounted the view, so the worker's renders install it.
     pub fn set_render_env_rust(&mut self, env: Option<RenderEnv>) {
+        self.pending_partial_page = None;
         self.render_env = env;
     }
 
@@ -2008,6 +2536,7 @@ impl RustLiveViewBackend {
     /// `update_state` does the safe, snapshot-based Python-dict-to-HashMap
     /// conversion FIRST (#2510, round 4) and then delegates here.
     fn apply_state_update(&mut self, updates: HashMap<String, Value>) {
+        self.pending_partial_page = None;
         // Replacing a value REVOKES the safety granted to the old one (#2300).
         //
         // Relying on the caller to re-send the full safe-key set every render
@@ -2786,7 +3315,7 @@ struct LazyTreePlan {
     context: Option<(Vec<String>, String)>,
     files: Vec<(std::path::PathBuf, LazyFileStamp)>,
 }
-type LazyPlanKey = (u64, String, Vec<std::path::PathBuf>, bool);
+type LazyPlanKey = (u64, String, Vec<std::path::PathBuf>, Option<String>, bool);
 static LAZY_TREE_PLANS: Lazy<DashMap<LazyPlanKey, LazyTreePlan>> = Lazy::new(DashMap::new);
 #[derive(Default)]
 struct LazyPlanMemo {
@@ -2849,6 +3378,86 @@ fn watch_lazy_selector(
     }
     Ok(())
 }
+/// Walk immutable template source snapshots for lazy syntax without invoking
+/// template operands, filters, or Python objects. Unknown and dynamic forms
+/// fail closed. Each dependency's bytes are read once and analyzed directly,
+/// so replacement of a file between two planning phases cannot invoke code.
+fn static_lazy_tree(
+    source: &str,
+    dirs: &[PathBuf],
+    current: Option<&str>,
+    active: &mut HashSet<String>,
+    depth: usize,
+) -> PyResult<Option<bool>> {
+    if depth > 20 {
+        return Ok(None);
+    }
+    let identity = current.unwrap_or(source).to_owned();
+    if !active.insert(identity.clone()) {
+        return Ok(None);
+    }
+    let result = (|| {
+        let template = cached_template(source)?;
+        let mut refs = Vec::new();
+        lazy_dependencies(template.authored_nodes(), &mut refs);
+        let mut found = resolved_lazy_syntax(template.authored_nodes());
+        for dep in refs {
+            let token = dep.operand.trim();
+            if !(token.starts_with(['\'', '"'])
+                && token.ends_with(['\'', '"'])
+                && !djust_templates::filter_lexer::has_unquoted_pipe(token))
+            {
+                return Ok(None);
+            }
+            for (_, expression) in &dep.bindings {
+                let value = expression.trim();
+                let quoted = value.starts_with(['\'', '"'])
+                    && value.ends_with(['\'', '"'])
+                    && !djust_templates::filter_lexer::has_unquoted_pipe(value);
+                if !quoted
+                    && !matches!(value, "True" | "False" | "None")
+                    && value.parse::<f64>().is_err()
+                {
+                    return Ok(None);
+                }
+            }
+            // A quoted literal with no filters is resolved without touching
+            // the render context or invoking application-defined code.
+            let name =
+                match djust_templates::renderer::resolve_template_reference(token, &Context::new())
+                {
+                    Ok(Value::String(name) | Value::SafeString(name)) => name,
+                    _ => return Ok(None),
+                };
+            let Ok(name) = djust_templates::inheritance::construct_relative_path_allow_recursion(
+                dep.origin.as_deref().or(current),
+                &name,
+                true,
+            ) else {
+                return Ok(None);
+            };
+            let base = name.split_once('#').map_or(name.as_str(), |(base, _)| base);
+            let Some(path) = dirs
+                .iter()
+                .map(|dir| dir.join(base))
+                .find(|path| path.is_file())
+            else {
+                return Ok(None);
+            };
+            let Ok(child) = lazy_source_file(&path) else {
+                return Ok(None);
+            };
+            match static_lazy_tree(&child, dirs, Some(base), active, depth + 1)? {
+                Some(child_found) => found |= child_found,
+                None => return Ok(None),
+            }
+        }
+        Ok(Some(found))
+    })();
+    active.remove(&identity);
+    result
+}
+
 fn needs_lazy_tree(
     source: &str,
     dirs: &[std::path::PathBuf],
@@ -2862,6 +3471,7 @@ fn needs_lazy_tree(
         djust_templates::registry_scope::current(),
         source.to_owned(),
         dirs.to_vec(),
+        current_name.map(str::to_owned),
         potential,
     );
     if let Some(plan) = LAZY_TREE_PLANS.get(&key) {
@@ -3182,6 +3792,68 @@ fn needs_lazy_tree_uncached(
     Ok(false)
 }
 
+/// Authenticate a full rendered page before replacing its exact HTML5 node.
+/// Spans must have passed the template renderer's blank/opaque liveness checks.
+#[pyfunction]
+fn authenticated_root_shell(html: &str, spans: Vec<(usize, usize)>) -> PyResult<(usize, usize)> {
+    let root = djust_vdom::lazy_provenance::authenticated_live_root(html, &spans)
+        .map_err(authenticated_root_error)?;
+    authenticated_source_range(html, &root)
+}
+
+fn authenticated_source_range(
+    html: &str,
+    root: &djust_vdom::lazy_provenance::AuthenticatedRoot,
+) -> PyResult<(usize, usize)> {
+    use djust_vdom::lazy_provenance::AuthenticatedRootError;
+    let span = find_root_span(html.as_bytes(), true)
+        .ok_or_else(|| authenticated_root_error(AuthenticatedRootError::UnsafeSourceRange))?;
+    if span.open_start != root.opening.0 {
+        return Err(authenticated_root_error(
+            AuthenticatedRootError::UnsafeSourceRange,
+        ));
+    }
+    let (close_start, end) = span
+        .close
+        .ok_or_else(|| authenticated_root_error(AuthenticatedRootError::UnsafeSourceRange))?;
+    djust_vdom::lazy_provenance::validate_root_fragment(html, root, close_start)
+        .map_err(authenticated_root_error)?;
+    djust_vdom::lazy_provenance::validated_root_range(html, root, end)
+        .map_err(authenticated_root_error)
+}
+
+fn authenticated_root_error(error: djust_vdom::lazy_provenance::AuthenticatedRootError) -> PyErr {
+    let message = format!("Unable to identify the authored LiveView root: {error}");
+    Python::attach(|py| {
+        py.import("django.core.exceptions")
+            .and_then(|module| module.getattr("ImproperlyConfigured"))
+            .and_then(|class| class.call1((message.as_str(),)))
+            .map(PyErr::from_value)
+            .unwrap_or_else(|_| pyo3::exceptions::PyRuntimeError::new_err(message))
+    })
+}
+
+/// Select authored-root mode for any dependency: an included or inherited
+/// template can independently gain a root-bearing partial after this view is
+/// cached. Dynamic selectors are classified from the actual render, never by
+/// resolving them here.
+#[pyfunction]
+#[pyo3(signature = (source, dirs, template_name=None))]
+fn template_needs_authenticated_partial_root(
+    source: &str,
+    dirs: Vec<PathBuf>,
+    template_name: Option<&str>,
+) -> PyResult<bool> {
+    let _ = (dirs, template_name);
+    let template = cached_template(source)?;
+    if partial_def_may_contain_root(template.authored_nodes()) {
+        return Ok(true);
+    }
+    let mut refs = Vec::new();
+    lazy_dependencies(template.authored_nodes(), &mut refs);
+    Ok(!refs.is_empty())
+}
+
 #[pyfunction]
 fn template_needs_provenance(source: &str, dirs: Vec<std::path::PathBuf>) -> PyResult<bool> {
     needs_lazy_tree(source, &dirs, &Context::new(), 0, None, true)
@@ -3266,7 +3938,7 @@ fn release_registry_namespace(namespace: u64) -> PyResult<()> {
     djust_templates::inheritance::release_registry_namespace(namespace);
     TEMPLATE_CACHE.retain(|(scope, _), _| *scope != namespace);
     RESOLVED_LAZY_SYNTAX.retain(|(scope, _, _), _| *scope != namespace);
-    LAZY_TREE_PLANS.retain(|(scope, _, _, _), _| *scope != namespace);
+    LAZY_TREE_PLANS.retain(|(scope, _, _, _, _), _| *scope != namespace);
     Ok(())
 }
 
@@ -6455,6 +7127,12 @@ fn crosses_as_encoded_by_conversion(obj: &Bound<'_, PyAny>) -> PyResult<bool> {
     })
 }
 
+/// Return the registered raw-block closing tag in the active registry scope.
+#[pyfunction]
+fn raw_block_end_tag(name: &str) -> Option<String> {
+    djust_templates::registry::raw_block_handler_exists(name)
+}
+
 // Declared free-threaded-safe (#1432). A full thread-safety audit of every
 // global (`static`/`Lazy`/`OnceLock`), `#[pyclass]`, cross-thread
 // `Py<T>`/`Py<PyAny>`, the Tokio actor system, the template registries, and
@@ -6514,6 +7192,11 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(fold_html_whitespace_edits, m)?)?;
     m.add_function(wrap_pyfunction!(authored_lazy_elements, m)?)?;
     m.add_function(wrap_pyfunction!(template_needs_provenance, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        template_needs_authenticated_partial_root,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(authenticated_root_shell, m)?)?;
     m.add_function(wrap_pyfunction!(
         provenance_edits::normalize_provenance_whitespace,
         m
@@ -6607,6 +7290,7 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
         djust_templates::registry::has_raw_block_tag_handler,
         m
     )?)?;
+    m.add_function(wrap_pyfunction!(raw_block_end_tag, m)?)?;
     m.add_function(wrap_pyfunction!(
         djust_templates::registry::clear_raw_block_tag_handlers,
         m
@@ -8323,6 +9007,11 @@ mod state_is_shared_not_copied_2737 {
             last_vdom: view.last_vdom.clone(),
             version: view.version,
             timestamp: view.timestamp,
+            authenticated_partial_root: view.authenticated_partial_root,
+            authenticated_model_fields: view.authenticated_model_fields.clone(),
+            potential_authenticated_partial_root: view.potential_authenticated_partial_root,
+            template_origin: view.template_origin.clone(),
+            authenticated_view_path: view.authenticated_view_path.clone(),
         };
         let bytes = rmp_serde::to_vec(&serializable).expect("serialize");
 
@@ -8489,6 +9178,7 @@ mod lazy_selector_keys_3428 {
             djust_templates::registry_scope::current(),
             source.to_owned(),
             vec![dir.clone()],
+            None,
             false,
         );
         let plan = LAZY_TREE_PLANS.get(&key).unwrap();
@@ -8496,5 +9186,26 @@ mod lazy_selector_keys_3428 {
         drop(plan);
         LAZY_TREE_PLANS.remove(&key);
         std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod authenticated_partial_root_snapshot_tests {
+    use super::*;
+
+    #[test]
+    fn old_sequence_snapshots_default_to_ordinary_root_mode() {
+        let old_wire = (
+            "<main dj-root>hi</main>".to_owned(),
+            HashMap::<String, Value>::new(),
+            Option::<VNode>::None,
+            7_u64,
+            42.0_f64,
+        );
+        let bytes = rmp_serde::to_vec(&old_wire).unwrap();
+        let view = RustLiveViewBackend::deserialize_msgpack(&bytes).unwrap();
+        assert!(!view.authenticated_partial_root());
+        assert!(view.authenticated_model_fields.is_empty());
+        assert_eq!(view.version, 7);
     }
 }

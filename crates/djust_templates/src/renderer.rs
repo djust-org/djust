@@ -15,6 +15,87 @@ use regex::Regex;
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+// Dynamic include operands are resolved by the renderer, after JIT field
+// extraction. Track their nested include scope on this thread so a literal
+// include inside a dynamically selected template is also checked.
+thread_local! {
+    static DYNAMIC_INCLUDE_DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+struct DynamicIncludeGuard(bool);
+
+impl DynamicIncludeGuard {
+    fn enter(active: bool) -> Self {
+        if active {
+            DYNAMIC_INCLUDE_DEPTH.with(|depth| depth.set(depth.get() + 1));
+        }
+        Self(active)
+    }
+}
+
+impl Drop for DynamicIncludeGuard {
+    fn drop(&mut self) {
+        if self.0 {
+            DYNAMIC_INCLUDE_DEPTH.with(|depth| depth.set(depth.get() - 1));
+        }
+    }
+}
+
+/// Whether executed partial calls can reach a cycle. Uncalled definitions do
+/// not execute. Registry identity distinguishes same-named helpers in files.
+fn contains_recursive_partial(nodes: &[Node]) -> bool {
+    analyze_recursive_partials(nodes).0
+}
+
+fn analyze_recursive_partials(nodes: &[Node]) -> (bool, usize) {
+    fn walk(
+        nodes: &[Node],
+        active: &mut HashSet<(usize, String)>,
+        completed: &mut HashSet<(usize, String)>,
+    ) -> bool {
+        for node in nodes {
+            match node {
+                Node::PartialCall { name, registry, .. } => {
+                    let Some(registry) = registry.as_ref().and_then(|r| r.upgrade()) else {
+                        return true; // Cannot prove that an unbound call is safe.
+                    };
+                    let key = (std::sync::Arc::as_ptr(&registry) as usize, name.clone());
+                    if completed.contains(&key) {
+                        continue;
+                    }
+                    if !active.insert(key.clone()) {
+                        return true;
+                    }
+                    let recursive = registry
+                        .bodies
+                        .get(name)
+                        .is_none_or(|body| walk(body, active, completed));
+                    active.remove(&key);
+                    if recursive {
+                        return true;
+                    }
+                    completed.insert(key);
+                }
+                Node::PartialDef { inline: false, .. } => {}
+                _ => {
+                    if node
+                        .child_lists()
+                        .into_iter()
+                        .flatten()
+                        .any(|child| walk(child, active, completed))
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+    let mut completed = HashSet::new();
+    let found = walk(nodes, &mut HashSet::new(), &mut completed);
+    (found, completed.len())
+}
+
 // Python sets this process-wide flag when loading the extension. Django's
 // installed version is fixed for the process; pure Rust users default to the
 // earlier Django-compatible behavior.
@@ -648,6 +729,14 @@ fn render_effectful_node_output<L: TemplateLoader, R: RenderOutput>(
     {
         let _namespace = crate::registry_scope::NamespaceGuard::enter(*registry_namespace);
         let previous = context.replace_node_identity(Some((source.as_ptr() as usize, span.0)));
+        // Inspect syntax against render-owned mutation names before executing
+        // the include. This does not resolve selectors or call application code.
+        let upward_tainted = R::TRACKED
+            && matches!(nodes.first(),
+                Some(Node::Include { template, with_vars, .. })
+                    if context.lazy_selector_is_tainted(template)
+                        || with_vars.iter().any(|(_, expr)| context.lazy_selector_is_tainted(expr))
+            );
         let mut rendered = if let (Some(metadata), Node::Text(text)) = (lazy_text, &nodes[0]) {
             let mut output = R::source_text(text, metadata);
             if R::TRACKED {
@@ -662,9 +751,25 @@ fn render_effectful_node_output<L: TemplateLoader, R: RenderOutput>(
                 if lazy_text.is_some() {
                     output.identify(lazy_origin.as_deref().unwrap_or("inline"));
                 } else if let Some(site) = lazy_site {
+                    let restricted =
+                        upward_tainted || site & crate::provenance::LAZY_RESTRICTED_SITE != 0;
+                    let scoped = site & crate::provenance::LAZY_SCOPED_SITE != 0;
+                    let dynamic = site & crate::provenance::LAZY_DYNAMIC_SITE != 0;
+                    let site = site
+                        & !(crate::provenance::LAZY_RESTRICTED_SITE
+                            | crate::provenance::LAZY_SCOPED_SITE
+                            | crate::provenance::LAZY_DYNAMIC_SITE);
                     output.identify(&format!(
-                        "{}/site{site}",
-                        lazy_origin.as_deref().unwrap_or("inline")
+                        "{}/{}{}site{site}",
+                        lazy_origin.as_deref().unwrap_or("inline"),
+                        if restricted {
+                            "lazy-denied/"
+                        } else if scoped {
+                            "lazy-scoped/"
+                        } else {
+                            ""
+                        },
+                        if dynamic { "lazy-dynamic/" } else { "" },
                     ));
                 }
             }
@@ -676,6 +781,19 @@ fn render_effectful_node_output<L: TemplateLoader, R: RenderOutput>(
                 .with_template_source(source, origin.as_deref().unwrap_or("<unknown source>"))
         });
     }
+    if R::TRACKED
+        && matches!(
+            node,
+            Node::CustomTag { .. }
+                | Node::BlockCustomTag { .. }
+                | Node::RawBlockCustomTag { .. }
+                | Node::AssignTag { .. }
+        )
+    {
+        // Tags may execute arbitrary application code even without returning
+        // bindings. The deny-only mark persists for this render.
+        context.note_lazy_unknown_effect();
+    }
     let result = match sibling_updates(node, context, loader)? {
         Some(effect) => {
             for binding in effect.bindings {
@@ -686,6 +804,7 @@ fn render_effectful_node_output<L: TemplateLoader, R: RenderOutput>(
                     context.bind(binding.name, binding.value, binding.safe);
                 }
                 if R::TRACKED {
+                    context.note_lazy_sibling_binding(&name);
                     if let Some(capture) = binding.capture {
                         context.mark_captured_literals(&name, capture);
                     }
@@ -1099,6 +1218,18 @@ pub(crate) fn compiled_template_operand(value: &Value) -> Result<Option<Compiled
     Python::attach(|py| {
         py.import("djust.template.operands")?
             .getattr("template_source")?
+            .call1((handle.bind(py),))?
+            .extract()
+    })
+    .map_err(DjangoRustError::PythonException)
+}
+
+/// Python template objects execute their actual nodes and render method, so
+/// source parsing cannot prove they are safe. Accept only verified built-in output nodes.
+fn dynamic_template_object_is_safe(handle: &Py<PyAny>) -> Result<bool> {
+    Python::attach(|py| {
+        py.import("djust.template.operands")?
+            .getattr("is_safe_dynamic_template_object")?
             .call1((handle.bind(py),))?
             .extract()
     })
@@ -4274,6 +4405,8 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
                     })?
                 };
                 let name = name.as_str();
+                let live_dynamic = !literal && context.guard_dynamic_recursive_partials();
+                let _dynamic_guard = DynamicIncludeGuard::enter(live_dynamic);
 
                 // An included template may itself `{% extends %}` — Django
                 // renders it as a template in its own right, so its inheritance
@@ -4312,7 +4445,11 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
                         // here either — pre-existing, tracked in the #2519
                         // follow-up issue.)
                         let mut fresh = Context::new();
+                        fresh.inherit_lazy_unknown_effect(context);
                         fresh.set_emit_dj_if_markers(context.emit_dj_if_markers());
+                        fresh.set_guard_dynamic_recursive_partials(
+                            context.guard_dynamic_recursive_partials(),
+                        );
                         // The included body renders INSIDE the enclosing
                         // iteration, so its `{% if %}` ids must carry the same
                         // per-iteration suffix (#1832, #2529).
@@ -4388,6 +4525,14 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
                     }
                     register_binding_aliases(include_context, pending, &bound);
                     if let Some(object) = &object {
+                        if include_context.guard_dynamic_recursive_partials()
+                            && DYNAMIC_INCLUDE_DEPTH.with(|depth| depth.get() > 0)
+                            && !dynamic_template_object_is_safe(object)?
+                        {
+                            return Err(DjangoRustError::TemplateError(
+                                "Dynamic template object cannot be verified free of recursive partials for LiveViews".to_string(),
+                            ));
+                        }
                         return render_template_object(object, include_context).map(R::from);
                     }
                     // Resolve the parent only after `with` and `only` establish
@@ -4409,6 +4554,14 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
                             nodes
                         };
 
+                    if include_context.guard_dynamic_recursive_partials()
+                        && DYNAMIC_INCLUDE_DEPTH.with(|depth| depth.get() > 0)
+                        && contains_recursive_partial(&nodes)
+                    {
+                        return Err(DjangoRustError::TemplateError(
+                            "Recursive named partials selected by dynamic includes are unsupported for LiveViews".to_string(),
+                        ));
+                    }
                     let mut output =
                         render_nodes_output::<L, R>(&nodes, include_context, Some(loader))?;
                     if R::TRACKED && output.has_origin() {
@@ -4964,7 +5117,9 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
             if *inline {
                 render_nodes_output::<L, R>(children, context, loader)
             } else {
-                Ok(String::new().into())
+                // A definition is known to produce no output, so it must not
+                // introduce an opaque placeholder into source projections.
+                Ok(R::context_neutral(String::new()))
             }
         }
         Node::BlockCustomTag {
@@ -6766,6 +6921,39 @@ mod asvar_standalone_tests {
     }
 
     #[test]
+    fn recursive_partial_analysis_memoizes_shared_acyclic_graph() {
+        use crate::parser::{PartialRegistry, PartialRegistryRef};
+        use std::collections::HashMap;
+        use std::sync::Arc;
+
+        let registry: Arc<PartialRegistry> = Arc::new_cyclic(|weak| {
+            let mut bodies = HashMap::new();
+            for index in 0..40 {
+                let child = || Node::PartialCall {
+                    name: format!("part{}", index + 1),
+                    registry: Some(PartialRegistryRef::Weak(weak.clone())),
+                    site_id: None,
+                };
+                bodies.insert(
+                    format!("part{index}"),
+                    if index == 39 {
+                        vec![]
+                    } else {
+                        vec![child(), child()]
+                    },
+                );
+            }
+            PartialRegistry { bodies }
+        });
+        let root = [Node::PartialCall {
+            name: "part0".into(),
+            registry: Some(PartialRegistryRef::Strong(registry)),
+            site_id: None,
+        }];
+        assert_eq!(analyze_recursive_partials(&root), (false, 40));
+    }
+
+    #[test]
     fn widthratio_with_asvar_renders_nothing_when_rendered_alone() {
         let mut context = Context::new();
         context.set("p".to_string(), Value::Integer(5));
@@ -7137,6 +7325,67 @@ mod tests {
             only: false,
             site_id: None,
         }
+    }
+
+    struct NestedDynamicPanicLoader;
+
+    impl TemplateLoader for NestedDynamicPanicLoader {
+        fn shared_handle(&self) -> std::sync::Arc<dyn TemplateLoader + Send + Sync> {
+            std::sync::Arc::new(NestedDynamicPanicLoader)
+        }
+
+        fn load_template(&self, name: &str) -> Result<Vec<Node>> {
+            match name {
+                "outer.html" => Ok(vec![Node::Include {
+                    origin: None,
+                    template: "inner_target".to_string(),
+                    with_vars: Vec::new(),
+                    only: false,
+                    site_id: None,
+                }]),
+                "inner.html" => Ok(vec![panicking_child()]),
+                _ => panic!(
+                    "nested dynamic include child panicked at depth {}",
+                    DYNAMIC_INCLUDE_DEPTH.with(|depth| depth.get())
+                ),
+            }
+        }
+    }
+
+    #[test]
+    fn nested_dynamic_include_guards_restore_depth_on_unwind() {
+        let mut context = Context::new();
+        context.set_guard_dynamic_recursive_partials(true);
+        context.set(
+            "outer_target".to_owned(),
+            Value::String("outer.html".to_owned()),
+        );
+        context.set(
+            "inner_target".to_owned(),
+            Value::String("inner.html".to_owned()),
+        );
+        let outer = Node::Include {
+            origin: None,
+            template: "outer_target".to_owned(),
+            with_vars: Vec::new(),
+            only: false,
+            site_id: None,
+        };
+        let before = DYNAMIC_INCLUDE_DEPTH.with(|depth| depth.get());
+        assert_eq!(
+            before, 0,
+            "each test thread must begin without an include scope"
+        );
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            render_node_with_loader_mut(&outer, &mut context, Some(&NestedDynamicPanicLoader))
+        }));
+        let payload = panicked.expect_err("the child panic must propagate");
+        assert_eq!(
+            payload.downcast_ref::<String>().map(String::as_str),
+            Some("nested dynamic include child panicked at depth 2"),
+            "both dynamic guards must be active at the panicking child"
+        );
+        assert_eq!(DYNAMIC_INCLUDE_DEPTH.with(|depth| depth.get()), before);
     }
 
     #[test]

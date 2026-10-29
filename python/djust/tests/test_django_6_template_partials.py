@@ -428,7 +428,7 @@ def test_root_extraction_preserves_only_authored_lazy_authority():
 @pytest.mark.django_db
 @pytest.mark.parametrize("invoke", [False, True])
 @pytest.mark.parametrize("separate_root", [False, True])
-def test_liveview_rejects_root_nested_inside_partial(tmp_path, invoke, separate_root):
+def test_liveview_uses_only_one_executed_authored_root(tmp_path, invoke, separate_root):
     from django.core.exceptions import ImproperlyConfigured
     from django.test import override_settings
 
@@ -454,15 +454,22 @@ def test_liveview_rejects_root_nested_inside_partial(tmp_path, invoke, separate_
         template_name = "page.html"
 
     with override_settings(TEMPLATES=templates):
-        with pytest.raises(
-            ImproperlyConfigured, match="LiveView root cannot be inside a Django template partial"
-        ):
-            PartialRootView().get_template()
+        view = PartialRootView()
+        if invoke == separate_root:  # neither, or two competing roots
+            with pytest.raises(ImproperlyConfigured):
+                view.render_with_diff(None)
+        else:
+            html, _, _ = view.render_with_diff(None)
+            assert "outer-header" not in html and "outer-footer" not in html
+            if invoke:
+                assert "hidden-or-called" in html and "legitimate" not in html
+            else:
+                assert "legitimate" in html and "hidden-or-called" not in html
 
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
-async def test_partial_root_websocket_mount_does_not_run_events(tmp_path):
+async def test_uncalled_partial_does_not_hide_websocket_root_or_events(tmp_path):
     from channels.testing import WebsocketCommunicator
     from django.test import override_settings
 
@@ -472,16 +479,18 @@ async def test_partial_root_websocket_mount_does_not_run_events(tmp_path):
 
     (tmp_path / "page.html").write_text(
         "{% partialdef page %}<main dj-root>HIDDEN</main>{% endpartialdef %}"
-        "<main dj-root>LEGITIMATE</main>",
+        "<main dj-root>LEGITIMATE {{ changed }}</main>",
         encoding="utf-8",
     )
     events = []
 
     class PartialRootSocketView(LiveView):
         template_name = "page.html"
+        changed = False
 
         @event_handler()
         def change(self):
+            self.changed = True
             events.append("called")
 
     globals()["PartialRootSocketView"] = PartialRootSocketView
@@ -502,22 +511,22 @@ async def test_partial_root_websocket_mount_does_not_run_events(tmp_path):
                 {"type": "mount", "view": f"{__name__}.PartialRootSocketView", "url": "/"}
             )
             mount = await comm.receive_json_from(timeout=5)
-            assert mount.get("type") != "mount", mount
-            assert "HIDDEN" not in str(mount)
+            assert mount.get("type") == "mount", mount
+            assert "LEGITIMATE" in str(mount) and "HIDDEN" not in str(mount)
+            assert not events
             await comm.send_json_to({"type": "event", "event": "change", "params": {}, "ref": 1})
             reply = await comm.receive_json_from(timeout=5)
-            assert reply.get("type") in {"error", "view_refused", "close"}, reply
-            assert not events
+            assert reply.get("type") not in {"error", "view_refused", "close"}, reply
+            assert events == ["called"]
         finally:
             await comm.disconnect()
             globals().pop("PartialRootSocketView", None)
 
 
 @pytest.mark.django_db
-def test_partial_root_http_mount_rejects_before_rendering(tmp_path):
+def test_uncalled_partial_does_not_hide_http_root(tmp_path):
     from django.contrib.auth.models import AnonymousUser
     from django.contrib.sessions.backends.db import SessionStore
-    from django.core.exceptions import ImproperlyConfigured
     from django.test import RequestFactory, override_settings
 
     from djust import LiveView
@@ -542,10 +551,10 @@ def test_partial_root_http_mount_rejects_before_rendering(tmp_path):
     request.user = AnonymousUser()
     request.session = SessionStore()
     with override_settings(TEMPLATES=templates):
-        with pytest.raises(
-            ImproperlyConfigured, match="LiveView root cannot be inside a Django template partial"
-        ):
-            PartialRootHttpView.as_view()(request)
+        response = PartialRootHttpView.as_view()(request)
+    assert response.status_code == 200
+    html = response.content.decode()
+    assert "LEGITIMATE" in html and "HIDDEN" not in html
 
 
 @pytest.mark.django_db

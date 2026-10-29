@@ -104,6 +104,77 @@ def _jit_serialization_enabled() -> bool:
     return config.get("jit_serialization", True) is not False
 
 
+def _contains_orm_value(value: Any, seen: set[int]) -> bool:
+    """Find ORM inputs without evaluating QuerySets or recursing through cycles."""
+    from django.db.models import QuerySet
+
+    if isinstance(value, (models.Model, QuerySet)):
+        return True
+    if isinstance(value, (dict, list, tuple)):
+        identity = id(value)
+        if identity in seen:
+            return False
+        seen.add(identity)
+        members = value.values() if isinstance(value, dict) else value
+        return any(_contains_orm_value(member, seen) for member in members)
+    return False
+
+
+def _guard_unserialized_recursive_models(
+    view: Any, context: Dict[str, Any], *, nested_only: bool
+) -> None:
+    """Fail closed when recursive ORM inputs bypass scoped JIT serialization."""
+    from django.db.models import QuerySet
+
+    name = getattr(view, "template_name", None)
+    sources = (
+        getattr(view, "_named_partial_jit_source", None),
+        getattr(view, "_full_template", None),
+        getattr(view, "template", None),
+    )
+    available_sources = [source for source in sources if isinstance(source, str)]
+    possible_partial = (isinstance(name, str) and "#" in name) or any(
+        any(word in source for word in ("partial", "#", "include", "extends"))
+        for source in available_sources
+    )
+    if not possible_partial and available_sources:
+        # Known source without partials or dependencies cannot contain a
+        # recursive partial; don't scan its context on this hot path.
+        return
+    if not possible_partial and not isinstance(name, str):
+        return
+    # An as-yet-unloaded file might include or inherit a named partial. Only
+    # resolve it if the context scan below finds an ORM input at risk.
+
+    content = None
+    for key, value in context.items():
+        if nested_only and (isinstance(value, (models.Model, QuerySet)) or is_model_list(value)):
+            continue
+        if not _contains_orm_value(value, set()):
+            continue
+        if content is None:
+            from ..mixins.jit import _jit_template_content
+
+            content = _jit_template_content(view) or ""
+            if "djust:recursive-partial" not in content:
+                return
+        from ..mixins.jit import _recursive_queryset_relation
+
+        try:
+            related = bool(
+                _recursive_queryset_relation(content, key)
+                or _recursive_queryset_relation(content, key, single=True)
+            )
+        except ValueError:
+            # The recognizer detected an unsupported use of this root.
+            related = True
+        if related:
+            raise RuntimeError(
+                "Recursive named partial ORM values require scoped JIT serialization; "
+                "nested contexts, explicit exposure and disabled JIT are unsupported"
+            )
+
+
 def _is_json_serializable(value: Any) -> bool:
     """Return True if *value* can survive a JSON round-trip.
 
@@ -258,7 +329,9 @@ class ContextMixin:
         from .._exposure import uses_legacy_exposure
 
         if not uses_legacy_exposure(self):
-            return self._get_explicit_context_data(**kwargs)
+            explicit_context = self._get_explicit_context_data(**kwargs)
+            _guard_unserialized_recursive_models(self, explicit_context, nested_only=False)
+            return explicit_context
         # Return cached context if available (set during GET request to avoid
         # redundant QuerySet evaluation across sync_state_to_rust/render_with_diff)
         if hasattr(self, "_cached_context") and self._cached_context is not None:
@@ -408,6 +481,12 @@ class ContextMixin:
             context.update(items)
             render_only_keys.update(items)
 
+        # Whole-model fallback cannot correctly represent recursive partials.
+        # Reject only inputs outside the scoped top-level JIT path.
+        _guard_unserialized_recursive_models(
+            self, context, nested_only=_jit_serialization_enabled()
+        )
+
         # JIT auto-serialization for QuerySets and Models
         jit_serialized_keys = set()
         template_content = None
@@ -461,6 +540,16 @@ class ContextMixin:
                             jit_serialized_keys.add(key)
 
                         elif is_model_list(value):
+                            # Recursive partial rows must use the same scoped,
+                            # cycle-checked serializer as QuerySets.
+                            from ..mixins.jit import _recursive_queryset_relation
+
+                            if _recursive_queryset_relation(template_content, key):
+                                context[key] = self._jit_serialize_model_list(
+                                    value, template_content, key
+                                )
+                                jit_serialized_keys.add(key)
+                                continue
                             # Re-fetch with select_related/prefetch_related/annotations
                             # to avoid N+1 queries during serialization
                             from ..optimization.query_optimizer import (
@@ -520,6 +609,10 @@ class ContextMixin:
                                 )
                             jit_serialized_keys.add(key)
             except Exception as e:
+                if template_content and "djust:recursive-partial" in template_content:
+                    # Falling back to whole-model normalization here would
+                    # silently lose recursion and expose unreferenced fields.
+                    raise
                 logger.warning("JIT auto-serialization failed: %s", e, exc_info=True)
 
         # Auto-add count for plain lists

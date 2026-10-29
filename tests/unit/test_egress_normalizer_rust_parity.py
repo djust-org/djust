@@ -524,3 +524,11 @@ def test_a_placeholder_spelled_out_by_a_removed_comment_is_text():
         assert _strip(page) == expected, page
         assert _PY(page) == expected, page
     assert count == len(_LEFT) * len(_RIGHT) * len(_SPLIT) * 3
+
+
+def test_standalone_mixin_normalizes_tracked_html():
+    from djust._render_provenance import RenderedHTML
+
+    source = '<div dj-view="app.Child" dj-lazy>  ok </div>'
+    html = RenderedHTML(source, ((0, len(source)),))
+    assert "ok" in TemplateMixin()._strip_comments_and_whitespace(html)

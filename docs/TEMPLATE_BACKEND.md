@@ -283,13 +283,35 @@ Residues, all of them named tests rather than silent gaps:
 
 ### Django 6 template partials in LiveViews
 
-Django 6 template partials can be used inside LiveView roots, and partial
-definitions may sit outside the root. Keep the `dj-root` element itself outside
-any `{% partialdef %}` block. For named LiveView templates, djust rejects a root
-inside a partial with `ImproperlyConfigured`: extracting that root could render
-an uncalled partial or lose the caller's loop or `{% with %}` context. Move the
-root around the partial invocation instead. This restriction applies to LiveView
-root extraction; ordinary Django-template backend partial rendering is separate.
+Django 6 template partials can be used inside LiveView roots, and a partial can
+also render the root itself. Invocations retain their caller's context, including
+`{% with %}`, conditionals, loops, inheritance, and relative includes. A page
+that renders a root-bearing partial must render exactly one eligible LiveView
+root; missing, competing, or unauthored roots are rejected with
+`ImproperlyConfigured` rather than becoming a diff baseline. Ordinary rootless
+fragments retain their existing behavior when no loaded partial could own a
+root. Model bindings are authorized only when their authored attributes remain
+inside the selected root and their original child-view boundary.
+
+The root must survive HTML5 parsing in a form compatible with the client's
+fragment parser. Markup that would be moved or reconstructed differently, such
+as some table and select contexts, is rejected; put the root on an enclosing
+ordinary container in those cases. Dynamic or otherwise unresolvable lazy
+include plans remain unregistered under the existing fail-closed lazy policy.
+Django 6 templates with includes or inheritance may use the provenance-aware
+rendering path, which does more work than ordinary fragment rendering.
+
+For named partials (`template_name="page.html#name"` or a static include of
+`"page.html#name"`), recursive ORM serialization supports a direct model or
+model-collection root following a self-referential foreign key or one-to-one
+field with `{% if node.child %}` and `{% with node=node.child %}`. Unsupported recursive control flow and nested ORM contexts are rejected
+when detected, rather than silently truncating model data. Dynamically selected
+recursive named partials are rejected; unusual aliasing is not covered by
+this scoped serializer. In LiveViews, dynamic Django template objects are
+accepted only when their render behavior and static content can be verified;
+use a template name for more complex dynamic includes. Recursive ORM values also require JIT
+serialization and the default context-exposure mode. Non-ORM recursive values
+continue to use the normal template behavior.
 
 Partial calls are bounded by the Python interpreter's configured recursion
 limit rather than a fixed 64-call limit; exceeding the djust limit raises

@@ -834,7 +834,7 @@ fn collapse_subtree_to_text(parent_tag: &str, handle: &Handle) -> Vec<VNode> {
     }
 }
 
-fn handle_to_vnode(handle: &Handle, depth: usize) -> Result<VNode> {
+pub(crate) fn handle_to_vnode(handle: &Handle, depth: usize) -> Result<VNode> {
     match &handle.data {
         NodeData::Text { contents } => {
             let text = contents.borrow().to_string();

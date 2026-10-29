@@ -1,4 +1,5 @@
 renderer.rs
+.flatten()
 if !context.is_safe(&format!("{prefix}.{key_text}")) {
 let text = output.to_string();
 Ok(context.record_provenance_flatten(output.into_authored_output(), text))
@@ -124,7 +125,9 @@ pyo3::exceptions::PyTypeError::new_err(format!(
 "No template names provided".to_string()
 let parent_include_path = context.dj_if_include_path().to_string();
 Some(site) => format!("{parent_include_path}-i{site}"),
+"Dynamic template object cannot be verified free of recursive partials for LiveViews".to_string(),
 std::sync::Arc::from(resolved_nodes.as_slice())
+"Recursive named partials selected by dynamic includes are unsupported for LiveViews".to_string(),
 output.identify(&format!("include:{}", name));
 Ok((String::new()).into())
 output.push_str(&format!("<div data-react-component=\"{name}\""));
@@ -182,7 +185,6 @@ DjangoRustError::TemplateError(format!(
 DjangoRustError::TemplateError(format!(
 let parent_path = context.dj_if_include_path().to_string();
 Some(site) => format!("{parent_path}-i{site}"),
-Ok(String::new().into())
 Ok((html).into())
 Ok((String::new()).into())
 Ok((html).into())
@@ -205,6 +207,9 @@ let text = val.to_string();
 return Ok("0".to_string());
 let text = format!("{rounded:.0}");
 Some(if text == "-0" { "0".to_string() } else { text })
+name: format!("part{}", index + 1),
+format!("part{index}"),
+name: "part0".into(),
 context.set("p".to_string(), Value::Integer(5));
 value: "p".into(),
 max_value: "10".into(),
@@ -262,6 +267,14 @@ let year = dt.format("%Y").to_string().parse::<i32>().unwrap_or(2000);
 'N' => result.push_str(&dt.format("%b.").to_string()), // Month abbrev AP style
 context.set("value_arg".into(), Value::String("-->".into()));
 template: "\"boom.html\"".to_string(),
+"outer.html" => Ok(vec![Node::Include {
+template: "inner_target".to_string(),
+"inner.html" => Ok(vec![panicking_child()]),
+"outer_target".to_owned(),
+Value::String("outer.html".to_owned()),
+"inner_target".to_owned(),
+Value::String("inner.html".to_owned()),
+template: "outer_target".to_owned(),
 bodies: std::collections::HashMap::from([
 ("bad".to_owned(), vec![panicking_child()]),
 ("good".to_owned(), vec![Node::Text("OK".to_owned())]),
@@ -569,10 +582,16 @@ djust_live/src/lib.rs
 .map(|s| (*s).to_string())
 .unwrap_or_else(|| "panic with a non-string payload".to_string());
 Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
+.flatten()
+.flatten()
 self.dj_if_id_namespace = namespace.to_string();
 let prefix = format!("{key}.");
 Ok(dict.into())
+let html = page.rendered.html.clone();
+let (start, end) = page.range.unwrap_or((0, page.rendered.html.len()));
+return Ok((rendered.html[start..end].to_owned(), spans, origins));
 Ok((result.html, spans, result.origins))
+patches.map(|bytes| PyBytes::new(py, &bytes).into()),
 return Err(e.into());
 let open = format!("<{sentinel_tag} ");
 reduced_html.clone()
@@ -597,6 +616,19 @@ m.insert("serialize_ms".to_string(), t.serialize_ms);
 m.insert("total_ms".to_string(), t.total_ms);
 m.insert("html_len".to_string(), t.html_len as f64);
 m.insert("fast_path".to_string(), t.fast_path);
+match djust_vdom::lazy_provenance::authenticated_live_root(&rendered.html, &spans) {
+let range = authenticated_source_range(&rendered.html, &root)?;
+root.vdom.attrs.insert("dj-view".to_string(), path.clone());
+&rendered.html,
+|| rendered.literal_only.is_none()
+|| rendered.blank_only.is_none()
+|| [&rendered.literal_only, &rendered.blank_only]
+.flatten()
+parse_html_continue_with_namespace(&rendered.html)
+parse_html_with_namespace(&rendered.html)
+.map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+.map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?
+.map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?
 return Err(e.into());
 let open = format!("<{sentinel_tag} ");
 reduced_html.clone()
@@ -627,6 +659,7 @@ LAZY_SOURCE_FILES.insert(path.to_owned(), (modified, metadata.len(), source.clon
 for list in children.into_iter().flatten() {
 format!("{values:?}")
 keys.insert(operand.to_owned());
+let identity = current.unwrap_or(source).to_owned();
 source.to_owned(),
 let identity = current_name.unwrap_or(source).to_owned();
 source.to_owned(),
@@ -634,6 +667,7 @@ let path = std::path::PathBuf::from(origin);
 for children in node.child_lists().into_iter().flatten() {
 Value::List(values) => values.iter().map(|v| v.to_string()).collect(),
 selectors.insert(format!("{expression}.{suffix}"));
+let message = format!("Unable to identify the authored LiveView root: {error}");
 template_source.to_owned(),
 return Ok(entry.0.clone());
 let py_err: PyErr = err.into();
@@ -795,6 +829,7 @@ assert_eq!(selectors, ["tpl".to_owned()].into_iter().collect());
 let memo = &walk.memo[&(source.to_owned(), 0)][0];
 context.set("rows".into(), Value::List(vec![Value::Integer(2); 5000]));
 source.to_owned(),
+"<main dj-root>hi</main>".to_owned(),
 djust_live/src/actors/view.rs
 .map_err(|e| ActorError::template(e.to_string()));
 .map_err(|e| ActorError::template(e.to_string()))?;
@@ -1138,6 +1173,7 @@ source.render_block_super(self).map(Some)
 type_name: "LazyBlock".to_string(),
 repr: LAZY_BLOCK_REPR.to_string(),
 self.set("block".to_owned(), Value::Object(Default::default()));
+std::sync::Arc::make_mut(bindings).insert(name.to_owned());
 frame.safe_keys_mut().insert(name.to_string());
 frame.unsafe_keys_mut().insert(name.to_string());
 let prefix = format!("{key}.");
@@ -1161,6 +1197,12 @@ key.to_string()
 .map_err(|e| format!("Failed to set context key '{key}': {e}"))?;
 .map_err(|e| format!("Failed to merge frame: {e}"))?;
 if !guard.insert(path.to_string()) {
+"selected".into(),
+crate::Value::String("plain.html".into()),
+"selected".into(),
+crate::Value::String("lazy.html".into()),
+other.bind_upward("another".into(), crate::Value::None, false);
+assert!(!inner.lazy_selector_is_tainted("'literal.html'"));
 ctx.bind("o".into(), Value::String("<!--".into()), true);
 clone.set("o".into(), Value::String("-->".into()));
 inner.bind("o".into(), Value::String("-->".into()), true);
@@ -1299,10 +1341,14 @@ blank_openings: self.blank_offsets,
 openings: self.literal_offsets,
 .literal_only
 .blank_only
+let (root_openings, literal_attributes) = projected_root(&self.literal_only);
+let (blank_root_openings, blank_attributes) = projected_root(&self.blank_only);
 let blank_offsets: std::collections::HashMap<_, _> =
 self.blank_offsets.iter().copied().collect();
 self.literal_offsets.iter().copied().collect();
 || !blank_offsets
+for attr in root_live_attributes(&self.html, &spans) {
+let blank = matches_projection(&blank_offsets, &blank_attributes);
 literal_only: Some("\u{fffd}".to_owned()),
 blank_only: Some(String::new()),
 blank_offsets: Vec::new(),
@@ -1353,6 +1399,29 @@ self.identify(&format!("loop{}", context.dj_if_loop_path()));
 ctx.set("flag".into(), Value::Bool(true));
 "xs".into(),
 ctx.set("extra".into(), Value::String("Δ".into()));
+for children in node.child_lists().into_iter().flatten() {
+"nested.html" => "{% include item %}",
+"nested_static.html" => "{% include \"lazy.html\" %}",
+"sets.html" => "{% cycle \"lazy.html\" as selected silent %}",
+"base.html" => "{% block body %}{% include selected %}{% endblock %}",
+"empty.html" => "plain",
+ctx.set("target".into(), Value::String("lazy.html".into()));
+"items".into(),
+Value::List(vec![Value::String("lazy.html".into())]),
+"items".into(),
+Value::List(vec![Value::String("lazy.html".into())]),
+Template::new("{% for item in items %}{% include \"nested.html\" %}{% endfor %}")
+"{% for item in items %}{% include \"nested_static.html\" %}{% endfor %}",
+for (first, denied) in [("sets.html", true), ("empty.html", false)] {
+ctx.set("selected".into(), Value::String("lazy.html".into()));
+let source = format!("{{% include \"{first}\" %}}{{% include selected %}}");
+ctx.set("selected".into(), Value::String("lazy.html".into()));
+let result = Template::new("{% include \"sets.html\" only %}{% include selected %}")
+ctx.set("selected".into(), Value::String("plain.html".into()));
+ctx.set("chosen".into(), Value::String("lazy.html".into()));
+let source = "{% extends \"base.html\" %}{% block body %}{% firstof chosen as selected %}{{ block.super }}{% endblock %}";
+ctx.set("target".into(), Value::String("lazy.html".into()));
+let result = Template::new("{% include target|default:\"lazy.html\" %}")
 output.append(&Rendered::from("é😀".to_owned()));
 output.append(&Rendered::from(String::new()));
 assert_eq!(output.literal_offsets, vec![(6, 6)]);
@@ -1416,6 +1485,23 @@ format!("{{% block body %}}{parent_source}{{% endblock %}}"),
 let source = format!("{{% extends 'base' %}}{{% block body %}}{body}{{% endblock %}}");
 &output.html,
 live(&output.html),
+ctx.set("left".into(), Value::String("\"".into()));
+ctx.set("right".into(), Value::String("x=\"".into()));
+let attrs = djust_vdom::lazy_provenance::root_live_attributes(&rendered.html, &spans);
+ctx.set("left".into(), Value::String("\"".into()));
+ctx.set("right".into(), Value::String("x=\"".into()));
+ctx.set("field".into(), Value::String("is_admin".into()));
+let attrs = djust_vdom::lazy_provenance::root_live_attributes(&rendered.html, &spans);
+ctx.set("a".into(), Value::String("<textarea>".into()));
+ctx.set("b".into(), Value::String("</textarea>".into()));
+let attrs = djust_vdom::lazy_provenance::root_live_attributes(&rendered.html, &spans);
+ctx.set("a".into(), Value::String("<textarea>".into()));
+ctx.set("b".into(), Value::String("</textarea>".into()));
+let attrs = djust_vdom::lazy_provenance::root_live_attributes(&rendered.html, &spans);
+name: "page".into(),
+assert_eq!(output.html, "");
+assert_eq!(output.literal_only.as_deref(), Some(""));
+assert_eq!(output.blank_only.as_deref(), Some(""));
 assert_eq!(r.literal_only.as_deref(), Some(r.html.as_str()));
 assert!(live.html.starts_with("<!---->"));
 ctx.set("flag".into(), Value::Bool(true));
@@ -1424,8 +1510,10 @@ assert!(!r.literal_only.as_ref().unwrap().contains("dj-if"));
 let text: String = r.authored.iter().map(|s| &r.html[s.clone()]).collect();
 assert!(r.html.is_char_boundary(span.start) && r.html.is_char_boundary(span.end));
 let r = render(&format!(
+for children in node.child_lists().into_iter().flatten() {
+scoped.push("forloop".to_owned());
 for children in node.child_lists_mut().into_iter().flatten() {
 (h ^ u64::from(*b)).wrapping_mul(0x100000001b3)
-(start, end, format!("container{index}:{hash:016x}"))
+(start, end, format!("{kind}{index}:{hash:016x}"))
 for children in node.child_lists_mut().into_iter().flatten() {
 &std::sync::Arc::from(source),

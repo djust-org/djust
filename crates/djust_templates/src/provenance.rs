@@ -143,6 +143,28 @@ impl Rendered {
             .unwrap_or_default();
         #[cfg(not(feature = "liveview"))]
         let blank_starts: std::collections::HashSet<usize> = Default::default();
+        #[cfg(feature = "liveview")]
+        let projected_root = |value: &Option<String>| {
+            value
+                .as_ref()
+                .map(|html| {
+                    djust_vdom::lazy_provenance::root_live_authority(html, &[(0, html.len())])
+                })
+                .unwrap_or_default()
+        };
+        #[cfg(feature = "liveview")]
+        let (root_openings, literal_attributes) = projected_root(&self.literal_only);
+        #[cfg(feature = "liveview")]
+        let (blank_root_openings, blank_attributes) = projected_root(&self.blank_only);
+        #[cfg(feature = "liveview")]
+        let root_starts: std::collections::HashSet<_> = root_openings.into_iter().collect();
+        #[cfg(feature = "liveview")]
+        let blank_root_starts: std::collections::HashSet<_> =
+            blank_root_openings.into_iter().collect();
+        #[cfg(not(feature = "liveview"))]
+        let root_starts: std::collections::HashSet<usize> = Default::default();
+        #[cfg(not(feature = "liveview"))]
+        let blank_root_starts: std::collections::HashSet<usize> = Default::default();
         let blank_offsets: std::collections::HashMap<_, _> =
             self.blank_offsets.iter().copied().collect();
         let offsets: std::collections::HashMap<_, _> =
@@ -150,32 +172,94 @@ impl Rendered {
         let rejected: std::collections::HashSet<_> = self
             .origins
             .iter()
-            .filter(|(a, _, offset, _)| {
+            .filter(|(a, _, offset, identity)| {
+                let is_root = identity
+                    .rsplit('/')
+                    .next()
+                    .is_some_and(|part| part.starts_with("root"));
+                let (live, blank_live) = if is_root {
+                    (&root_starts, &blank_root_starts)
+                } else {
+                    (&starts, &blank_starts)
+                };
                 *offset == 0
-                    && (!offsets.get(a).is_some_and(|offset| starts.contains(offset))
+                    && (!offsets.get(a).is_some_and(|offset| live.contains(offset))
                         || !blank_offsets
                             .get(a)
-                            .is_some_and(|offset| blank_starts.contains(offset)))
+                            .is_some_and(|offset| blank_live.contains(offset)))
             })
             .map(|(a, _, _, _)| *a)
             .collect();
-        if rejected.is_empty() {
+        // Each authority attribute must independently survive both projections.
+        // A live dj-root opening must not lend authority to an inert dj-model
+        // spelling activated by interpolated markup (or a duplicate attribute).
+        let mut denied: Vec<Range<usize>> = rejected.iter().map(|&a| a..a + 1).collect();
+        #[cfg(feature = "liveview")]
+        {
+            use djust_vdom::lazy_provenance::root_live_attributes;
+            let projected =
+                |attributes: Vec<djust_vdom::lazy_provenance::LiveAuthorityAttribute>| {
+                    attributes
+                        .into_iter()
+                        .map(|a| (a.opening, a.name, a.value, a.owner_root, a.owner_child))
+                        .collect::<std::collections::HashSet<_>>()
+                };
+            let literal_attributes = projected(literal_attributes);
+            let blank_attributes = projected(blank_attributes);
+            let spans: Vec<_> = self
+                .authored
+                .iter()
+                .map(|range| (range.start, range.end))
+                .collect();
+            for attr in root_live_attributes(&self.html, &spans) {
+                let matches_projection =
+                    |map: &std::collections::HashMap<usize, usize>,
+                     projected: &std::collections::HashSet<_>| {
+                        let remap = |owner: Option<usize>| match owner {
+                            Some(owner) => map.get(&owner).copied().map(Some),
+                            None => Some(None),
+                        };
+                        map.get(&attr.opening)
+                            .zip(remap(attr.owner_root))
+                            .zip(remap(attr.owner_child))
+                            .is_some_and(|((opening, root), child)| {
+                                projected.contains(&(
+                                    *opening,
+                                    attr.name,
+                                    attr.value.clone(),
+                                    root,
+                                    child,
+                                ))
+                            })
+                    };
+                let literal = matches_projection(&offsets, &literal_attributes);
+                let blank = matches_projection(&blank_offsets, &blank_attributes);
+                if !literal || !blank {
+                    denied.push(attr.range.0..attr.range.1);
+                }
+            }
+        }
+        if denied.is_empty() {
             return;
         }
-        let mut openings: Vec<_> = rejected.iter().copied().collect();
-        openings.sort_unstable();
-        // Removing the opening byte alone prevents both registration and later
-        // composition from recovering a rejected candidate's authority.
+        denied.sort_unstable_by_key(|range| (range.start, range.end));
+        // Remove only the denied bytes; surviving attributes retain their own
+        // provenance. Runs are already ordered, so this remains linear.
         let mut authored = Vec::new();
+        let mut first = 0;
         for span in &self.authored {
+            while first < denied.len() && denied[first].end <= span.start {
+                first += 1;
+            }
             let mut cursor = span.start;
-            let left = openings.partition_point(|a| *a < span.start);
-            let right = openings.partition_point(|a| *a < span.end);
-            for &a in &openings[left..right] {
-                if cursor < a {
-                    authored.push(cursor..a);
+            for range in &denied[first..] {
+                if range.start >= span.end {
+                    break;
                 }
-                cursor = a + 1;
+                if cursor < range.start {
+                    authored.push(cursor..range.start.min(span.end));
+                }
+                cursor = cursor.max(range.end).min(span.end);
             }
             if cursor < span.end {
                 authored.push(cursor..span.end);
@@ -392,6 +476,200 @@ mod tests {
             .render_with_provenance(&ctx, &NoOpTemplateLoader)
             .unwrap()
     }
+    #[test]
+    fn lazy_site_flags_are_classified_without_html5_authority() {
+        fn include_sites(nodes: &[crate::parser::Node], out: &mut Vec<usize>) {
+            use crate::parser::Node;
+            for node in nodes {
+                if let Node::Located {
+                    nodes,
+                    lazy_site: Some(site),
+                    ..
+                } = node
+                {
+                    if matches!(nodes.first(), Some(Node::Include { .. })) {
+                        out.push(*site);
+                    }
+                }
+                for children in node.child_lists().into_iter().flatten() {
+                    include_sites(children, out);
+                }
+            }
+        }
+        let source = concat!(
+            "{% include target %}",
+            "{% for item in items %}{% include item %}{% include target %}{% endfor %}",
+            "{% with local=target %}{% include local %}{% endwith %}",
+        );
+        let template = Template::new(source).unwrap();
+        let mut sites = Vec::new();
+        include_sites(&template.nodes, &mut sites);
+        assert_eq!(sites.len(), 4);
+        assert_eq!(
+            sites[0] & (LAZY_RESTRICTED_SITE | LAZY_SCOPED_SITE | LAZY_DYNAMIC_SITE),
+            LAZY_DYNAMIC_SITE
+        );
+        assert_eq!(
+            sites[1] & (LAZY_RESTRICTED_SITE | LAZY_SCOPED_SITE | LAZY_DYNAMIC_SITE),
+            LAZY_RESTRICTED_SITE | LAZY_DYNAMIC_SITE
+        );
+        assert_eq!(
+            sites[2] & (LAZY_RESTRICTED_SITE | LAZY_SCOPED_SITE | LAZY_DYNAMIC_SITE),
+            LAZY_SCOPED_SITE | LAZY_DYNAMIC_SITE
+        );
+        assert_eq!(
+            sites[3] & (LAZY_RESTRICTED_SITE | LAZY_SCOPED_SITE | LAZY_DYNAMIC_SITE),
+            LAZY_RESTRICTED_SITE | LAZY_DYNAMIC_SITE
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "liveview")]
+    fn lazy_site_labels_follow_lexical_bindings_without_evaluating_selectors() {
+        #[derive(Clone)]
+        struct Loader;
+        impl crate::TemplateLoader for Loader {
+            fn shared_handle(&self) -> std::sync::Arc<dyn crate::TemplateLoader + Send + Sync> {
+                std::sync::Arc::new(self.clone())
+            }
+            fn load_template(&self, name: &str) -> crate::Result<Vec<crate::parser::Node>> {
+                let source = match name {
+                    "nested.html" => "{% include item %}",
+                    "nested_static.html" => "{% include \"lazy.html\" %}",
+                    "sets.html" => "{% cycle \"lazy.html\" as selected silent %}",
+                    "base.html" => "{% block body %}{% include selected %}{% endblock %}",
+                    "empty.html" => "plain",
+                    _ => "<div dj-view=\"app.C\" dj-lazy></div>",
+                };
+                Ok(Template::new(source)?.nodes.clone())
+            }
+        }
+        let cases = [
+            ("{% include target %}", false),
+            ("{% for item in items %}{% firstof item as selected %}{% include selected %}{% endfor %}", true),
+            ("{% for item in items %}{% firstof item as selected %}{% include target %}{% endfor %}", false),
+            ("{% firstof target as selected %}{% include selected %}", true),
+            (
+                "{% for item in items %}{% include item %}{% endfor %}",
+                true,
+            ),
+            (
+                "{% for item in items %}{% include target %}{% endfor %}",
+                false,
+            ),
+            (
+                "{% with item=target %}{% include item %}{% endwith %}",
+                true,
+            ),
+            (
+                "{% with item=target %}{% include target %}{% endwith %}",
+                false,
+            ),
+            (
+                "{% with item=target %}{% include target|default:item %}{% endwith %}",
+                true,
+            ),
+        ];
+        for (source, denied) in cases {
+            let mut ctx = Context::new();
+            ctx.set("target".into(), Value::String("lazy.html".into()));
+            ctx.set(
+                "items".into(),
+                Value::List(vec![Value::String("lazy.html".into())]),
+            );
+            let result = Template::new(source)
+                .unwrap()
+                .render_with_provenance(&ctx, &Loader)
+                .unwrap();
+            assert!(!result.origins.is_empty(), "{source}");
+            let id = &result.origins[0].3;
+            assert_eq!(id.contains("/lazy-denied/"), denied, "{source}");
+            let is_scoped = source.contains("{% for ") || source.contains("{% with ");
+            assert_eq!(
+                id.contains("/lazy-scoped/"),
+                is_scoped && !denied,
+                "{source}"
+            );
+        }
+        let mut ctx = Context::new();
+        ctx.set(
+            "items".into(),
+            Value::List(vec![Value::String("lazy.html".into())]),
+        );
+        let result =
+            Template::new("{% for item in items %}{% include \"nested.html\" %}{% endfor %}")
+                .unwrap()
+                .render_with_provenance(&ctx, &Loader)
+                .unwrap();
+        let id = &result.origins[0].3;
+        let scoped_suffix = id.split("/lazy-scoped/").nth(1).expect("scoped site");
+        assert_eq!(scoped_suffix.matches("/include:").count(), 2);
+        assert!(scoped_suffix
+            .split_once("/include:")
+            .unwrap()
+            .1
+            .contains("/lazy-dynamic/"));
+        let result = Template::new(
+            "{% for item in items %}{% include \"nested_static.html\" %}{% endfor %}",
+        )
+        .unwrap()
+        .render_with_provenance(&ctx, &Loader)
+        .unwrap();
+        let id = &result.origins[0].3;
+        let scoped_suffix = id.split("/lazy-scoped/").nth(1).expect("scoped site");
+        assert_eq!(scoped_suffix.matches("/include:").count(), 2);
+        assert!(!scoped_suffix
+            .split_once("/include:")
+            .unwrap()
+            .1
+            .contains("/lazy-dynamic/"));
+        // A prior include can mutate an existing outer binding through cycle.
+        // The following include is denied only after the write actually occurs.
+        for (first, denied) in [("sets.html", true), ("empty.html", false)] {
+            let mut ctx = Context::new();
+            ctx.set("selected".into(), Value::String("lazy.html".into()));
+            let source = format!("{{% include \"{first}\" %}}{{% include selected %}}");
+            let result = Template::new(&source)
+                .unwrap()
+                .render_with_provenance(&ctx, &Loader)
+                .unwrap();
+            assert_eq!(
+                result.origins[0].3.contains("/lazy-denied/"),
+                denied,
+                "{first}"
+            );
+        }
+        // `only` renders in a fresh context, so its write cannot taint or
+        // mutate the caller's selected template.
+        let mut ctx = Context::new();
+        ctx.set("selected".into(), Value::String("lazy.html".into()));
+        let result = Template::new("{% include \"sets.html\" only %}{% include selected %}")
+            .unwrap()
+            .render_with_provenance(&ctx, &Loader)
+            .unwrap();
+        assert!(!result.origins[0].3.contains("/lazy-denied/"));
+        // A sibling binding can also flow through an inherited block.super.
+        let mut ctx = Context::new();
+        ctx.set("selected".into(), Value::String("plain.html".into()));
+        ctx.set("chosen".into(), Value::String("lazy.html".into()));
+        let source = "{% extends \"base.html\" %}{% block body %}{% firstof chosen as selected %}{{ block.super }}{% endblock %}";
+        let result = Template::new(source)
+            .unwrap()
+            .render_with_provenance(&ctx, &Loader)
+            .unwrap();
+        assert!(result.origins[0].3.contains("/lazy-denied/"));
+        // Reusing a caller's context must not carry a prior render's tag effect.
+        let mut ctx = Context::new();
+        ctx.set("target".into(), Value::String("lazy.html".into()));
+        ctx.note_lazy_unknown_effect();
+        let result = Template::new("{% include target|default:\"lazy.html\" %}")
+            .unwrap()
+            .render_with_provenance(&ctx, &Loader)
+            .unwrap();
+        assert!(!result.origins[0].3.contains("/lazy-denied/"));
+        assert!(ctx.lazy_selector_is_tainted("target|default:fallback"));
+    }
+
     #[test]
     fn opaque_occurrences_keep_utf8_projection_offsets() {
         let mut output = Rendered::default();
@@ -748,6 +1026,119 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "liveview")]
+    #[test]
+    fn live_root_and_model_openings_retain_only_authored_live_origins() {
+        let live = render("<main dj-root><input dj-model=\"user.name\"></main>");
+        assert_eq!(
+            live.origins.len(),
+            2,
+            "root and binding must retain distinct origins"
+        );
+
+        let inert = render(
+            "{{ \"<!--\" }}{{ extra|safe }}<main dj-root><input dj-model=\"user.name\"></main>-->",
+        );
+        assert!(
+            inert.origins.is_empty(),
+            "opaque values cannot reactivate a commented root"
+        );
+    }
+
+    #[cfg(feature = "liveview")]
+    #[test]
+    fn root_attribute_does_not_authorize_inert_model_attribute() {
+        let mut ctx = Context::new();
+        ctx.set("left".into(), Value::String("\"".into()));
+        ctx.set("right".into(), Value::String("x=\"".into()));
+        let rendered = Template::new(
+            "<main dj-root title=\"{{ left|safe }} dj-model='is_admin' {{ right|safe }}\">x</main>",
+        )
+        .unwrap()
+        .render_with_provenance(&ctx, &NoOpTemplateLoader)
+        .unwrap();
+        let spans: Vec<_> = rendered.authored.iter().map(|r| (r.start, r.end)).collect();
+        let attrs = djust_vdom::lazy_provenance::root_live_attributes(&rendered.html, &spans);
+        assert!(attrs.iter().any(|a| a.name == "dj-root"));
+        assert!(!attrs
+            .iter()
+            .any(|a| a.name == "dj-model" && a.value == "is_admin"));
+    }
+
+    #[cfg(feature = "liveview")]
+    #[test]
+    fn duplicate_and_interpolated_model_attributes_cannot_borrow_authority() {
+        let mut ctx = Context::new();
+        ctx.set("left".into(), Value::String("\"".into()));
+        ctx.set("right".into(), Value::String("x=\"".into()));
+        ctx.set("field".into(), Value::String("is_admin".into()));
+        for source in [
+            "<main dj-root title=\"{{ left|safe }} dj-model='is_admin' {{ right|safe }}\" dj-model='safe'>x</main>",
+            "<main dj-root><input dj-model='{{ field }}'></main>",
+        ] {
+            let rendered = Template::new(source).unwrap()
+                .render_with_provenance(&ctx, &NoOpTemplateLoader).unwrap();
+            let spans: Vec<_> = rendered.authored.iter().map(|r| (r.start, r.end)).collect();
+            let attrs = djust_vdom::lazy_provenance::root_live_attributes(&rendered.html, &spans);
+            assert!(attrs.iter().any(|a| a.name == "dj-root"));
+            assert!(!attrs.iter().any(|a| a.name == "dj-model" && a.value == "is_admin"), "{source}");
+        }
+    }
+
+    #[cfg(feature = "liveview")]
+    #[test]
+    fn opaque_html_cannot_move_a_shell_binding_into_the_root() {
+        let mut ctx = Context::new();
+        ctx.set("a".into(), Value::String("<textarea>".into()));
+        ctx.set("b".into(), Value::String("</textarea>".into()));
+        let rendered = Template::new(
+            "<main dj-root>{{ a|safe }}</main>{{ b|safe }}<input dj-model=\"is_admin\"></main>",
+        )
+        .unwrap()
+        .render_with_provenance(&ctx, &NoOpTemplateLoader)
+        .unwrap();
+        let spans: Vec<_> = rendered.authored.iter().map(|r| (r.start, r.end)).collect();
+        let attrs = djust_vdom::lazy_provenance::root_live_attributes(&rendered.html, &spans);
+        assert!(attrs.iter().any(|a| a.name == "dj-root"));
+        assert!(!attrs
+            .iter()
+            .any(|a| a.name == "dj-model" && a.value == "is_admin"));
+    }
+
+    #[cfg(feature = "liveview")]
+    #[test]
+    fn opaque_html_cannot_move_child_bindings_to_parent() {
+        let mut ctx = Context::new();
+        ctx.set("a".into(), Value::String("<textarea>".into()));
+        ctx.set("b".into(), Value::String("</textarea>".into()));
+        let rendered = Template::new("<main dj-root>{{ a|safe }}<div dj-view=\"demo.Child\" data-djust-embedded>{{ b|safe }}<input dj-model=\"is_admin\"></div></main>")
+            .unwrap().render_with_provenance(&ctx, &NoOpTemplateLoader).unwrap();
+        let spans: Vec<_> = rendered.authored.iter().map(|r| (r.start, r.end)).collect();
+        let attrs = djust_vdom::lazy_provenance::root_live_attributes(&rendered.html, &spans);
+        assert!(!attrs
+            .iter()
+            .any(|a| a.name == "dj-model" && a.value == "is_admin"));
+    }
+
+    #[test]
+    fn non_inline_partial_definition_is_context_neutral() {
+        let node = crate::parser::Node::PartialDef {
+            name: "page".into(),
+            inline: false,
+            children: Vec::new(),
+            span: None,
+        };
+        let output = crate::renderer::render_node_output::<NoOpTemplateLoader, Rendered>(
+            &node,
+            &mut Context::new(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(output.html, "");
+        assert_eq!(output.literal_only.as_deref(), Some(""));
+        assert_eq!(output.blank_only.as_deref(), Some(""));
+    }
+
     #[test]
     fn expression_context_never_grants_start_tag_authority() {
         let r = render("{{ \"<div dj-view='app.Child' dj-lazy></div>\"|safe }}");
@@ -816,6 +1207,11 @@ pub struct SourceText {
     pub origins: Vec<(usize, usize, usize, String)>,
 }
 
+/// High-bit site flag used internally as a deny-only lazy registration marker.
+pub(crate) const LAZY_RESTRICTED_SITE: usize = 1usize << (usize::BITS - 1);
+pub(crate) const LAZY_SCOPED_SITE: usize = 1usize << (usize::BITS - 2);
+pub(crate) const LAZY_DYNAMIC_SITE: usize = 1usize << (usize::BITS - 3);
+
 pub fn annotate_source(
     nodes: &mut [crate::parser::Node],
     tokens: &[crate::lexer::Token],
@@ -826,32 +1222,145 @@ pub fn annotate_source(
     if spans.is_empty() {
         return;
     }
-    fn sites(nodes: &mut [crate::parser::Node], index: &mut usize) {
-        use crate::parser::Node;
+    // Bindings created by sibling nodes can reach later includes even across
+    // branches. Collect names conservatively without executing any tag.
+    fn collect_bindings(nodes: &[Node], names: &mut Vec<String>) {
+        for node in nodes {
+            match node {
+                Node::FirstOf {
+                    asvar: Some(name), ..
+                }
+                | Node::WidthRatio {
+                    asvar: Some(name), ..
+                }
+                | Node::Cycle {
+                    name: Some(name), ..
+                } => names.push(name.clone()),
+                _ => {}
+            }
+            for children in node.child_lists().into_iter().flatten() {
+                collect_bindings(children, names);
+            }
+        }
+    }
+    fn literal_selector(expr: &str) -> bool {
+        let expr = expr.trim();
+        expr.starts_with(['\'', '"'])
+            && expr.ends_with(['\'', '"'])
+            && !crate::filter_lexer::has_unquoted_pipe(expr)
+    }
+    // Deny-only labels flow with rendered descendants; no selector is
+    // evaluated or application tag called during this classification.
+    fn sites(
+        nodes: &mut [Node],
+        index: &mut usize,
+        scoped: &mut Vec<String>,
+        lexical_depth: usize,
+    ) {
+        fn safe_in_scope(expr: &str, scoped: &[String]) -> bool {
+            let expr = expr.trim();
+            if scoped.is_empty() {
+                return true;
+            }
+            if literal_selector(expr) {
+                return true;
+            }
+            if matches!(expr, "True" | "False" | "None") || expr.parse::<f64>().is_ok() {
+                return true;
+            }
+            // Simple paths can be checked structurally. Complex expressions
+            // inside a lexical scope fail closed; no custom filters execute.
+            if expr.is_empty()
+                || !expr
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.')
+            {
+                return false;
+            }
+            let root = expr.split('.').next().unwrap_or("");
+            !scoped.iter().any(|name| name == "*" || name == root)
+        }
         for node in nodes {
             if let Node::Located {
                 nodes, lazy_site, ..
             } = node
             {
-                if matches!(
-                    nodes.first(),
-                    Some(Node::Include { .. } | Node::PartialCall { .. })
-                ) || matches!(nodes.first(), Some(Node::Variable(name, _, _)) if name == "block.super")
-                {
-                    *lazy_site = Some(*index);
-                    *index += 1;
+                if let Some(child) = nodes.first() {
+                    if matches!(child, Node::Include { .. } | Node::PartialCall { .. })
+                        || matches!(child, Node::Variable(name, _, _) if name == "block.super")
+                    {
+                        let restricted = match child {
+                            Node::Include {
+                                template,
+                                with_vars,
+                                ..
+                            } => {
+                                !safe_in_scope(template, scoped)
+                                    || with_vars
+                                        .iter()
+                                        .any(|(_, value)| !safe_in_scope(value, scoped))
+                            }
+                            // Partial calls and block.super inherit this scope;
+                            // their bodies can contain selectors for its locals.
+                            Node::PartialCall { .. } | Node::Variable(_, _, _) => lexical_depth > 0,
+                            _ => false,
+                        };
+                        let mut flags = if restricted {
+                            LAZY_RESTRICTED_SITE
+                        } else if !scoped.is_empty() && matches!(child, Node::Include { .. }) {
+                            LAZY_SCOPED_SITE
+                        } else {
+                            0
+                        };
+                        if matches!(child, Node::Include { template, .. } if !literal_selector(template))
+                        {
+                            flags |= LAZY_DYNAMIC_SITE;
+                        }
+                        *lazy_site = Some(*index | flags);
+                        *index += 1;
+                    }
                 }
             }
-            for children in node.child_lists_mut().into_iter().flatten() {
-                sites(children, index);
+            match node {
+                Node::For {
+                    var_names,
+                    nodes,
+                    empty_nodes,
+                    ..
+                } => {
+                    let old_len = scoped.len();
+                    scoped.extend(var_names.iter().cloned());
+                    scoped.push("forloop".to_owned());
+                    sites(nodes, index, scoped, lexical_depth + 1);
+                    scoped.truncate(old_len);
+                    sites(empty_nodes, index, scoped, lexical_depth);
+                }
+                Node::With { assignments, nodes } => {
+                    let old_len = scoped.len();
+                    scoped.extend(assignments.iter().map(|(name, _)| name.clone()));
+                    sites(nodes, index, scoped, lexical_depth + 1);
+                    scoped.truncate(old_len);
+                }
+                _ => {
+                    for children in node.child_lists_mut().into_iter().flatten() {
+                        sites(children, index, scoped, lexical_depth);
+                    }
+                }
             }
         }
     }
-    sites(nodes, &mut 0);
-    if !source.to_ascii_lowercase().contains("dj-lazy") {
+    let mut bindings = Vec::new();
+    collect_bindings(nodes, &mut bindings);
+    sites(nodes, &mut 0, &mut bindings, 0);
+    let lowercase = source.to_ascii_lowercase();
+    if !["dj-lazy", "dj-root", "dj-view", "dj-model"]
+        .iter()
+        .any(|name| lowercase.contains(name))
+    {
         return;
     }
     // Same byte offsets as source; template syntax cannot terminate an HTML context.
+    #[cfg(feature = "liveview")]
     let mut masked = source.as_bytes().to_vec();
     let mut texts = Vec::new();
     let mut comment = false;
@@ -867,10 +1376,12 @@ pub fn annotate_source(
         if !comment && matches!(token, crate::lexer::Token::Text(_)) {
             texts.push((a, b));
         } else {
+            #[cfg(feature = "liveview")]
             masked[a..b].fill(b' ');
         }
     }
     // Only whole lexer byte ranges were replaced; no UTF-8 scalar is split.
+    #[cfg(feature = "liveview")]
     let masked = String::from_utf8(masked).unwrap_or_default();
     // Source annotation locates candidate authority spans only. Liveness is
     // decided once on the rendered literal-only branch, not all static branches.
@@ -878,16 +1389,33 @@ pub fn annotate_source(
     let candidates = djust_vdom::lazy_provenance::authority_spans(&masked, &[(0, masked.len())]);
     #[cfg(not(feature = "liveview"))]
     let candidates: Vec<(usize, usize)> = Vec::new();
-    let containers: Vec<_> = candidates
+    #[cfg(feature = "liveview")]
+    let root_candidates =
+        djust_vdom::lazy_provenance::root_authority_spans(&masked, &[(0, masked.len())]);
+    #[cfg(not(feature = "liveview"))]
+    let root_candidates: Vec<(usize, usize)> = Vec::new();
+    // Preserve the stricter existing lazy check when an opening is both kinds.
+    let lazy_starts: std::collections::HashSet<_> = candidates.iter().map(|span| span.0).collect();
+    let mut classified: Vec<_> = candidates
+        .into_iter()
+        .map(|span| (span, "container"))
+        .collect();
+    for span in root_candidates {
+        if !lazy_starts.contains(&span.0) {
+            classified.push((span, "root"));
+        }
+    }
+    classified.sort_unstable_by_key(|(span, _)| span.0);
+    let containers: Vec<_> = classified
         .iter()
         .enumerate()
-        .map(|(index, &(start, end))| {
+        .map(|(index, &((start, end), kind))| {
             let hash = source.as_bytes()[start..end]
                 .iter()
                 .fold(0xcbf29ce484222325u64, |h, b| {
                     (h ^ u64::from(*b)).wrapping_mul(0x100000001b3)
                 });
-            (start, end, format!("container{index}:{hash:016x}"))
+            (start, end, format!("{kind}{index}:{hash:016x}"))
         })
         .collect();
     fn walk(

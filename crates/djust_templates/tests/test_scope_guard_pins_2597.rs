@@ -144,9 +144,11 @@ fn the_renderer_declares_reviewed_drop_guard_types() {
         .collect();
     // `PartialRecursionGuard` guards partial depth, unrelated to the
     // language/timezone family. It restores depth on return, error, or unwind.
-    // Keep it in this broad inventory so further Drop guards require review.
+    // DynamicIncludeGuard restores the dynamic include scope on unwind. Keep
+    // both in this broad inventory so further Drop guards require review.
     let expected: BTreeSet<&str> = [
         "ActiveTimezoneGuard",
+        "DynamicIncludeGuard",
         "PartialRecursionGuard",
         "ScopeExitGuard",
         "UseL10nGuard",
