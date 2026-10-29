@@ -793,6 +793,15 @@ fn push_text(children: &mut Vec<VNode>, text: String) {
 /// predicate a property of the node, so it does not flip while a patch batch
 /// moves the node's neighbours around.
 fn build_children(parent_tag: &str, raw: &[Handle], parent_depth: usize) -> Result<Vec<VNode>> {
+    build_children_observed(parent_tag, raw, parent_depth, &mut |_, _| {})
+}
+
+fn build_children_observed<F: FnMut(&Handle, &str)>(
+    parent_tag: &str,
+    raw: &[Handle],
+    parent_depth: usize,
+    observer: &mut F,
+) -> Result<Vec<VNode>> {
     // By name, so a foreign `<svg><style>` keeps its whitespace too. That is
     // only a kept text node: the serializer escapes it as foreign text and
     // a re-parse gives the same node.
@@ -865,7 +874,7 @@ fn build_children(parent_tag: &str, raw: &[Handle], parent_depth: usize) -> Resu
                     push_text(&mut children, text);
                 }
             }
-            _ => children.push(handle_to_vnode(child, parent_depth + 1)?),
+            _ => children.push(handle_to_vnode_observed(child, parent_depth + 1, observer)?),
         }
     }
     Ok(children)
@@ -921,6 +930,14 @@ fn collapse_subtree_to_text(parent_tag: &str, handle: &Handle) -> Vec<VNode> {
 }
 
 pub(crate) fn handle_to_vnode(handle: &Handle, depth: usize) -> Result<VNode> {
+    handle_to_vnode_observed(handle, depth, &mut |_, _| {})
+}
+
+pub(crate) fn handle_to_vnode_observed<F: FnMut(&Handle, &str)>(
+    handle: &Handle,
+    depth: usize,
+    observer: &mut F,
+) -> Result<VNode> {
     match &handle.data {
         NodeData::Text { contents } => {
             let text = contents.borrow().to_string();
@@ -939,6 +956,7 @@ pub(crate) fn handle_to_vnode(handle: &Handle, depth: usize) -> Result<VNode> {
 
             // Generate compact unique ID for this element
             let djust_id = next_djust_id();
+            observer(handle, &djust_id);
             parser_trace!("Assigned ID '{}' to <{}>", djust_id, tag);
 
             // Pre-size attributes HashMap: most elements have 1-2 attrs + dj-id
@@ -1006,7 +1024,7 @@ pub(crate) fn handle_to_vnode(handle: &Handle, depth: usize) -> Result<VNode> {
             let children = if depth >= MAX_VDOM_DEPTH {
                 collapse_subtree_to_text(tag_ref, raw_parent)
             } else {
-                build_children(tag_ref, &raw_parent.children.borrow(), depth)?
+                build_children_observed(tag_ref, &raw_parent.children.borrow(), depth, observer)?
             };
             drop(contents);
 
@@ -1024,7 +1042,7 @@ pub(crate) fn handle_to_vnode(handle: &Handle, depth: usize) -> Result<VNode> {
         NodeData::Document => {
             // For document nodes, process children and return first element
             for child in handle.children.borrow().iter() {
-                if let Ok(vnode) = handle_to_vnode(child, depth) {
+                if let Ok(vnode) = handle_to_vnode_observed(child, depth, observer) {
                     if !vnode.is_text() {
                         return Ok(vnode);
                     }

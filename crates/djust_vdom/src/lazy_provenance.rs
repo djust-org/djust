@@ -290,6 +290,7 @@ struct LocatedTree<'a> {
     spans: &'a [(usize, usize)],
     html: &'a str,
     root_mode: bool,
+    issued_openings: Option<&'a HashSet<(usize, usize)>>,
 }
 impl TokenSink for LocatedTree<'_> {
     type Handle = Handle;
@@ -307,12 +308,12 @@ impl TokenSink for LocatedTree<'_> {
                     self.candidates.get(&self.cursor.get()).cloned()
                 };
                 if let Some(raw) = raw {
-                    let common = raw.start == self.tag_start.get()
+                    let correlated = raw.start == self.tag_start.get()
                         && raw.end == self.cursor.get()
                         && raw.valid
                         && self.html[raw.name.start + 1..raw.name.end]
-                            .eq_ignore_ascii_case(tag.name.as_ref())
-                        && covered(&raw.name, self.spans)
+                            .eq_ignore_ascii_case(tag.name.as_ref());
+                    let common = covered(&raw.name, self.spans)
                         && covered(&(raw.end - 1..raw.end), self.spans);
                     let authorized = |name: &str| {
                         raw.attrs.get(name).is_some_and(|r| covered(r, self.spans))
@@ -325,7 +326,10 @@ impl TokenSink for LocatedTree<'_> {
                     } else {
                         authorized("dj-view") && authorized("dj-lazy")
                     };
-                    if common && authority {
+                    let issued = self
+                        .issued_openings
+                        .is_some_and(|ranges| ranges.contains(&(raw.start, raw.end)));
+                    if correlated && ((common && authority) || issued) {
                         tag.attrs.push(Attribute {
                             name: QualName::new(
                                 None,
@@ -414,6 +418,7 @@ fn lazy_elements_impl<const BATCHED: bool>(
         spans,
         html,
         root_mode: false,
+        issued_openings: None,
     };
     let tokenizer = Tokenizer::new(sink, Default::default());
     let input = BufferQueue::default();
@@ -565,6 +570,14 @@ fn root_dom(html: &str, spans: &[(usize, usize)]) -> Option<Handle> {
 }
 
 fn root_dom_impl<const BATCHED: bool>(html: &str, spans: &[(usize, usize)]) -> Option<Handle> {
+    root_dom_with_issued::<BATCHED>(html, spans, None)
+}
+
+fn root_dom_with_issued<'a, const BATCHED: bool>(
+    html: &'a str,
+    spans: &'a [(usize, usize)],
+    issued_openings: Option<&'a HashSet<(usize, usize)>>,
+) -> Option<Handle> {
     let mut previous = 0;
     for &(start, end) in spans {
         if start < previous
@@ -585,6 +598,7 @@ fn root_dom_impl<const BATCHED: bool>(html: &str, spans: &[(usize, usize)]) -> O
         spans,
         html,
         root_mode: true,
+        issued_openings,
     };
     let tokenizer = Tokenizer::new(sink, Default::default());
     let input = BufferQueue::default();
@@ -821,6 +835,9 @@ pub struct AuthenticatedRoot {
     pub placeholder: String,
     pub vdom: crate::VNode,
     pub namespace: crate::Namespace,
+    /// Render-issued child openings, associated with this exact VDOM's IDs.
+    /// The caller must validate the issuance ledger before committing them.
+    pub child_vdom_ids: Vec<(String, String)>,
     pub model_fields: Vec<String>,
     fragment_context: QualName,
     fragment_attrs: Vec<Attribute>,
@@ -977,11 +994,46 @@ pub fn authenticated_live_root(
     html: &str,
     spans: &[(usize, usize)],
 ) -> Result<AuthenticatedRoot, AuthenticatedRootError> {
+    authenticated_live_root_with_children(html, spans, &[])
+}
+
+/// Associate exact render-issued child wrapper openings with generated IDs.
+/// Opening intervals grant location only; root and model authority still require
+/// independently filtered template-source spans. Only direct child wrappers of
+/// the authenticated root are accepted. Markup and slot strings cannot issue one.
+pub fn authenticated_live_root_with_children(
+    html: &str,
+    spans: &[(usize, usize)],
+    children: &[(usize, usize, String)],
+) -> Result<AuthenticatedRoot, AuthenticatedRootError> {
     use html5ever::serialize::TraversalScope;
     use markup5ever_rcdom::Node;
     use std::rc::Rc;
 
-    let document = root_dom(html, spans).ok_or(AuthenticatedRootError::InvalidProvenance)?;
+    let mut ranges = HashSet::new();
+    let mut keys = HashSet::new();
+    let mut previous = 0;
+    for (start, end, key) in children {
+        if *start < previous
+            || *start >= *end
+            || *end > html.len()
+            || !html.is_char_boundary(*start)
+            || !html.is_char_boundary(*end)
+            || key.is_empty()
+            || key.len() > 128
+            || !keys.insert(key.as_str())
+            || !ranges.insert((*start, *end))
+        {
+            return Err(AuthenticatedRootError::InvalidProvenance);
+        }
+        previous = *end;
+    }
+    let document = if children.is_empty() {
+        root_dom(html, spans)
+    } else {
+        root_dom_with_issued::<false>(html, spans, Some(&ranges))
+    }
+    .ok_or(AuthenticatedRootError::InvalidProvenance)?;
     let mut candidates = page_candidates(&document);
     if candidates.len() != 1 || !candidates[0].1 {
         return Err(AuthenticatedRootError::MissingOrAmbiguous);
@@ -1003,6 +1055,58 @@ pub fn authenticated_live_root(
     }
     let opening = source_opening(&root).ok_or(AuthenticatedRootError::Unauthored)?;
     let fields = scoped_model_fields(html, spans, &root);
+    let by_opening: HashMap<_, _> = children.iter().map(|(a, b, key)| ((*a, *b), key)).collect();
+    let mut owners = HashMap::new();
+    if !children.is_empty() {
+        let mut pending = vec![(root.clone(), true)];
+        while let Some((node, is_root)) = pending.pop() {
+            if let NodeData::Element { name, attrs, .. } = &node.data {
+                let attrs = attrs.borrow();
+                if matches!(
+                    &*name.local,
+                    "template"
+                        | "script"
+                        | "style"
+                        | "textarea"
+                        | "title"
+                        | "xmp"
+                        | "iframe"
+                        | "noembed"
+                        | "noscript"
+                ) {
+                    continue;
+                }
+                if let Some(key) = source_opening(&node).and_then(|range| by_opening.get(&range)) {
+                    if is_root
+                        || name.ns != html5ever::ns!(html)
+                        || &*name.local != "div"
+                        || !has_attr(&attrs, "dj-view")
+                        || !has_attr(&attrs, "data-djust-embedded")
+                    {
+                        return Err(AuthenticatedRootError::InvalidProvenance);
+                    }
+                    owners.insert(Rc::as_ptr(&node), (*key).clone());
+                    continue;
+                }
+                if !is_root
+                    && has_attr(&attrs, "dj-view")
+                    && (has_attr(&attrs, "data-djust-embedded") || has_attr(&attrs, "dj-lazy"))
+                {
+                    continue;
+                }
+            }
+            pending.extend(
+                node.children
+                    .borrow()
+                    .iter()
+                    .cloned()
+                    .map(|child| (child, false)),
+            );
+        }
+    }
+    if owners.len() != children.len() {
+        return Err(AuthenticatedRootError::InvalidProvenance);
+    }
     // Parser-private annotations must never reach HTML or VDOM clients.
     let mut nodes = vec![document.clone()];
     while let Some(node) = nodes.pop() {
@@ -1059,8 +1163,20 @@ pub fn authenticated_live_root(
                 NodeData::Text { contents } => contents.borrow().bytes().all(whitespace),
                 _ => true,
             });
-    let vdom = crate::parser::handle_to_vnode(&root, 1)
-        .map_err(|e| AuthenticatedRootError::Vdom(e.to_string()))?;
+    let mut child_vdom_ids = Vec::new();
+    let vdom = if children.is_empty() {
+        crate::parser::handle_to_vnode(&root, 1)
+    } else {
+        crate::parser::handle_to_vnode_observed(&root, 1, &mut |node, id| {
+            if let Some(key) = owners.get(&Rc::as_ptr(node)) {
+                child_vdom_ids.push((key.clone(), id.to_owned()));
+            }
+        })
+    }
+    .map_err(|e| AuthenticatedRootError::Vdom(e.to_string()))?;
+    if child_vdom_ids.len() != children.len() {
+        return Err(AuthenticatedRootError::InvalidProvenance);
+    }
     let root_html = serialize_node(root.clone(), TraversalScope::IncludeNode)?;
 
     let parent = root
@@ -1117,6 +1233,7 @@ pub fn authenticated_live_root(
         return Err(AuthenticatedRootError::Serialize);
     }
     Ok(AuthenticatedRoot {
+        child_vdom_ids,
         opening,
         root_html,
         document_with_placeholder,
