@@ -706,6 +706,15 @@ register_tag_handler("hello", HelloTag())
 {% hello "Alice" %}
 ```
 
+An inline handler may also define two optional methods that the parser calls once, at
+compilation, with the tag's arguments as the template wrote them (before anything is
+resolved): `validate_at_parse(args)` raises to refuse the template, and
+`rewrite_args_at_parse(args) -> list[str]` returns the argument list the tag keeps. Use
+the second when a handler must tell a positional argument from a keyword one: after
+resolution they are both just text, so `{% hello name %}` with `name = "k=v"` would look
+like the keyword `k`. djust's own components use it to name positional arguments after the
+Python tag's parameters (`djust/_positional_args.py`).
+
 Overhead is ~100–500 ns per call (PyO3 boundary). Built-in tags
 (`if`, `for`, `block`, …) stay in pure Rust with zero overhead. See
 ADR-005 in the djust repo for the architecture rationale.

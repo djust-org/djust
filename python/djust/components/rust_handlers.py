@@ -2029,8 +2029,16 @@ def register_with_rust_engine() -> None:
         # Django template engine with {% load djust_components %})
         return
 
+    # Positional arguments (#3664): the Python tags are ``simple_tag`` /
+    # ``inclusion_tag``, so ``{% dj_tag "Python" %}`` is valid; a native handler
+    # reads ``key=value`` strings, so each one is wrapped to name its positional
+    # tokens after the Python tag's own parameters.
+    from djust._positional_args import with_positional_args
+
+    from .templatetags.djust_components import register as _tag_library
+
     for tag_name, handler in INLINE_HANDLERS:
-        register_tag_handler(tag_name, handler)
+        register_tag_handler(tag_name, with_positional_args(tag_name, handler, _tag_library))
 
     for tag_name, end_tag, handler in BLOCK_HANDLERS:
         register_block_tag_handler(tag_name, end_tag, handler)

@@ -799,6 +799,16 @@ def register_tag_handler(tag_name: str, handler: Any) -> None:
     may raise to reject invalid syntax. It must not render application code.
     Django library bridges use this hook to run Django's argument validation.
 
+    An INLINE handler may also implement ``rewrite_args_at_parse(args) ->
+    list[str]`` (#3664). It receives the same original tokens, once, at
+    compilation, and returns the argument list the tag keeps; raising refuses
+    the template. It exists for the one distinction a handler cannot recover
+    after resolution: a positional operand and a keyword one are both just
+    text by then (``{% tag v %}`` with ``v = "k=v"`` looks like the keyword
+    ``k``). djust's own components use it to name positional operands after
+    the Python tag's parameters (``djust._positional_args``). A handler
+    without the method gets its tokens unchanged.
+
     The return value is ESCAPED unless it is already HTML (#2379), mirroring
     Django's ``SimpleNode.render``, which runs ``conditional_escape`` over a
     ``simple_tag``'s return unless it carries ``__html__``. Return a plain
