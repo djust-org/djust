@@ -66,3 +66,27 @@ def test_http_commits_new_document_not_an_ignored_old_subtree(tmp_path):
     baseline, _, _ = view.commit_authenticated_page()
     assert "OLD" not in baseline
     assert 'dj-id="0"' in baseline.split(">", 1)[0]
+
+
+@pytest.mark.parametrize("owned", [False, True])
+def test_incremental_namespace_change_preserves_delivered_baseline(tmp_path, owned):
+    import msgpack
+
+    (tmp_path / "html.html").write_text("<g dj-root><text>body</text></g>")
+    (tmp_path / "svg.html").write_text("<svg><g dj-root><text>body</text></g></svg>")
+    view = RustLiveView("{% include selected %}", [str(tmp_path)])
+    view.set_authenticated_partial_root(True)
+    view.update_state({"selected": "html.html"})
+    view.render_with_diff()
+    before = msgpack.unpackb(view.serialize_msgpack(), raw=False)[2:4]
+    view.update_state({"selected": "svg.html"})
+    with pytest.raises(RuntimeError, match="root namespace changed"):
+        if owned:
+            view.prepare_owned_diff([])
+        else:
+            view.render_with_diff()
+    assert msgpack.unpackb(view.serialize_msgpack(), raw=False)[2:4] == before
+    # A full HTTP document establishes a new browser namespace legitimately.
+    html, _, _, _ = view.prepare_authenticated_page()
+    view.validate_prepared_page(html, view.prepared_page_root_spans())
+    view.commit_authenticated_page()

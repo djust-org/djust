@@ -1,17 +1,8 @@
-"""Default HTML renderer — wraps the existing Django template + Rust VDOM pipeline.
+"""HTML rendering through Django templates and the Rust VDOM pipeline.
 
-This module is the smallest possible refactor of the inline render path
-in :meth:`TemplateMixin.render_with_diff`. It does NOT change ANY
-behavior — it is a structural extraction so the dispatch site has a
-named seam to which future ``NativeRenderer`` etc. can plug in
-(LVN-II onward; ADR-019).
-
-The renderer wraps the view instance (not just template + context)
-because the existing call site does more than render: it caches a
-per-view ``RustLiveView``, syncs Django context into Rust state, and
-tracks ``_sync_done_this_cycle`` to avoid double-sync. Reproducing all
-of that from a renderer that only knows ``(template_name, context)``
-would either duplicate state or break the existing fast paths.
+TemplateMixin prepares the view's context and native backend. Authenticated
+explicit root renders prepare an owned diff; render-scoped reconciliation
+validates and commits it. Ordinary renders use the native differ directly.
 """
 
 from __future__ import annotations
@@ -22,12 +13,10 @@ __all__ = ["HtmlRenderer"]
 
 
 class HtmlRenderer:
-    """Default renderer — emits HTML via the existing Rust VDOM pipeline.
+    """HTML renderer with ownership-aware preparation for authenticated roots.
 
-    Conforms to :class:`djust.renderers.Renderer` Protocol. Behavior is
-    identical to the pre-refactor inline call at
-    ``mixins/template.py:942``: invokes ``self.view._rust_view.render_with_diff()``
-    and returns the result unchanged.
+    Conforms to :class:`djust.renderers.Renderer`; returns HTML, patches and
+    version while the outer render scope commits authenticated child ownership.
     """
 
     output_format: str = "html"

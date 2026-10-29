@@ -1105,6 +1105,7 @@ impl RustLiveViewBackend {
                 ));
             }
             let mut page = self.prepare_partial_page()?;
+            self.require_incremental_root_namespace(page.namespace)?;
             let issued: Vec<_> = page
                 .child_vdom_ids
                 .iter()
@@ -2021,8 +2022,15 @@ impl RustLiveViewBackend {
         };
         let mut output: djust_templates::provenance::DualRendered = template
             .render_output_named_mut(&mut context, &loader, self.template_origin.as_deref())?;
-        let issued_children =
-            deferred_children::materialize(&mut output, possible.load(Ordering::Relaxed))?;
+        let issued_children = deferred_children::materialize(
+            &mut output,
+            possible.load(Ordering::Relaxed),
+            if self.last_vdom.is_some() {
+                self.last_root_ns
+            } else {
+                None
+            },
+        )?;
         output.normal.retain_live_authority();
         let cutoff = output.prefix.literal_blocked;
         let root_spans: Vec<_> = if cutoff || output.root_channel {
@@ -2170,6 +2178,15 @@ impl RustLiveViewBackend {
         }
     }
 
+    /// A namespace change cannot be represented by local-name VDOM patches.
+    /// Fresh HTTP documents bypass this guard and establish their own tree.
+    fn require_incremental_root_namespace(&self, namespace: Namespace) -> PyResult<()> {
+        if self.last_vdom.is_some() && self.last_root_ns.is_some_and(|old| old != namespace) {
+            return Err(root_namespace_change_error());
+        }
+        Ok(())
+    }
+
     /// Commit the exact prepared VDOM only after all validation and encoding.
     fn commit_partial_page(
         &mut self,
@@ -2181,6 +2198,7 @@ impl RustLiveViewBackend {
                 "owned diff requires ownership reconciliation",
             ));
         }
+        self.require_incremental_root_namespace(page.namespace)?;
         let authenticated = page.authenticated;
         let (mut vdom, namespace, fields) = (page.vdom, page.namespace, page.fields);
         if let Some(old) = &self.last_vdom {
@@ -4158,6 +4176,12 @@ fn authenticated_source_range(
         .map_err(authenticated_root_error)?;
     djust_vdom::lazy_provenance::validated_root_range(html, root, end)
         .map_err(authenticated_root_error)
+}
+
+fn root_namespace_change_error() -> PyErr {
+    pyo3::exceptions::PyRuntimeError::new_err(
+        "LiveView root namespace changed; perform a full navigation",
+    )
 }
 
 fn authenticated_root_error(error: djust_vdom::lazy_provenance::AuthenticatedRootError) -> PyErr {

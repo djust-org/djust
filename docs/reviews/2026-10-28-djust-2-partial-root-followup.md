@@ -195,3 +195,14 @@ worker. The combined 53-case ordered run passes, with the downstream database
 blocker unchanged. Source inspection's 54-case selection also passes against
 frozen Python files. Final full Django 6.1 and integration gates run after the
 implementation commit; delivery results are recorded in the session history.
+
+
+Final pre-suite review reproduced a known-baseline namespace transition returning
+an empty patch list despite changing HTML `<g>` into SVG `<g>`. Both incremental
+paths now reject a changed root namespace without advancing the delivered tree
+or version. Deferred rendering rejects it before any new child mount callback.
+Fresh HTTP documents remain able to establish a new namespace. Mounted views
+must keep a stable root namespace and use full navigation for a change. This
+check uses the active baseline; it does not add namespace data to legacy cache
+snapshots or introduce a cross-document restoration protocol. The 36-case
+transaction, child-execution and layout safeguard selection passes.

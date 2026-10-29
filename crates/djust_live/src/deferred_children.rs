@@ -58,6 +58,7 @@ fn apply_to(rendered: &mut Rendered, html: &str, edits: &[(usize, usize, &str)])
 pub fn materialize(
     output: &mut DualRendered,
     possible_partial_root: bool,
+    expected_namespace: Option<djust_vdom::Namespace>,
 ) -> PyResult<Vec<(usize, usize, String)>> {
     if !ENABLED.with(std::cell::Cell::get) {
         return Ok(Vec::new());
@@ -84,7 +85,12 @@ pub fn materialize(
             let root = djust_vdom::lazy_provenance::authenticated_live_root(&proof.html, &spans);
             djust_vdom::set_id_counter(saved);
             let page_root = match root {
-                Ok(_) => true,
+                Ok(root) => {
+                    if expected_namespace.is_some_and(|expected| expected != root.namespace) {
+                        return Err(super::root_namespace_change_error());
+                    }
+                    true
+                }
                 Err(error) => {
                     if djust_vdom::lazy_provenance::authenticated_fragment_model_fields(
                         &proof.html,

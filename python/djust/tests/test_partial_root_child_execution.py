@@ -210,3 +210,38 @@ def test_native_scope_is_restored_on_nested_error():
         assert set_deferred_child_scope(False) is False
     finally:
         set_deferred_child_scope(previous)
+
+
+def test_namespace_switch_is_rejected_before_mounting_new_children(tmp_path):
+    MOUNTS.clear()
+    (tmp_path / "html.html").write_text("<main dj-root>initial</main>")
+    (tmp_path / "svg.html").write_text(
+        "{% load live_tags %}<svg dj-root><foreignObject>"
+        '{% live_render "djust.tests.test_partial_root_child_execution.RootChild" %}'
+        "</foreignObject></svg>"
+    )
+
+    class Page(LiveView):
+        template = "{% include selected %}"
+
+    request = RequestFactory().get("/")
+    request.user = AnonymousUser()
+    request.session = SessionStore()
+    templates = [
+        {
+            "BACKEND": "django.template.backends.django.DjangoTemplates",
+            "DIRS": [str(tmp_path)],
+            "APP_DIRS": True,
+        }
+    ]
+    with override_settings(TEMPLATES=templates, DJUST_LIVE_RENDER_ALLOWED_MODULES=[__name__]):
+        page = Page()
+        page.request = request
+        page.selected = "html.html"
+        page.render_with_diff(request)
+        page.selected = "svg.html"
+        page._cached_context = None
+        page._sync_done_this_cycle = False
+        with pytest.raises(RuntimeError, match="root namespace changed"):
+            page.render_with_diff(request)
+        assert MOUNTS == []
