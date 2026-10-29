@@ -83,6 +83,13 @@ DANGEROUS = (
     ("data-upper", "DATA:text/html,<script>alert(%s)</script>" % MARK),
     ("data-svg", "data:image/svg+xml,<svg onload=alert(%s)>" % MARK),
     ("data-js", "data:application/javascript,alert(%s)" % MARK),
+    # A ``srcset`` is a list, and a parser that nests parentheses (the spec's does not)
+    # reads these as ONE candidate with odd descriptors while a browser reads the second
+    # candidate as ``javascript:`` / ``data:text/html``. Relative URLs anywhere else.
+    ("srcset-parens", "/a.png 10w ((), javascript:alert(%s) 100w" % MARK),
+    ("srcset-parens-data", "/a.png 10w ((), data:text/html,<script>alert(%s)</script> 100w" % MARK),
+    ("srcset-comma", "/a.png 1x,javascript:alert(%s) 2x" % MARK),
+    ("srcset-formfeed", "/a.png 1x,\fjavascript:alert(%s) 2x" % MARK),
 )
 
 #: Values every sink must keep. ``preserved`` is compared between the engines.
@@ -170,6 +177,104 @@ def attributes(markup: str) -> Iterator[Attr]:
             yield Attr(element, m.group(1).lower(), html.unescape(raw))
 
 
+class _Reader:
+    """A cursor over a string: the HTML spec's "position" and its "collect a sequence
+    of code points" helper, nothing else."""
+
+    ASCII_WHITESPACE = frozenset("\t\n\f\r ")
+
+    def __init__(self, text: str) -> None:
+        self.text = text
+        self.position = 0
+
+    def at_end(self) -> bool:
+        return self.position >= len(self.text)
+
+    def current(self) -> Optional[str]:
+        return None if self.at_end() else self.text[self.position]
+
+    def collect(self, keep: Callable[[str], bool]) -> str:
+        start = self.position
+        while not self.at_end() and keep(self.text[self.position]):
+            self.position += 1
+        return self.text[start : self.position]
+
+
+def spec_srcset(text: str) -> list[tuple[str, list[str]]]:
+    """``[(url, descriptors)]`` per the HTML spec's "parse a srcset attribute".
+
+    AN INDEPENDENT PORT, written from the spec text
+    (https://html.spec.whatwg.org/multipage/images.html#parse-a-srcset-attribute)
+    and deliberately sharing no code with ``djust.components.utils._srcset_candidates``:
+    the scanner that decides whether a ``srcset`` is dangerous, and the tests that
+    check production's parser, must not use the parser under test as their oracle (a
+    shared bug would then be invisible to both). ``test_url_scheme_sweep_3665`` fuzzes
+    the two against each other.
+
+    Like production it returns every candidate's URL, including candidates a browser
+    would drop for invalid descriptors: a URL that reaches the browser through a
+    candidate the checker skipped is the bypass to find.
+    """
+    ws = _Reader.ASCII_WHITESPACE
+    reader = _Reader(text)
+    candidates: list[tuple[str, list[str]]] = []
+    while True:
+        # 4. splitting loop
+        reader.collect(lambda ch: ch in ws or ch == ",")
+        if reader.at_end():  # 5.
+            return candidates
+        url = reader.collect(lambda ch: ch not in ws)  # 6.
+        descriptors: list[str] = []  # 7.
+        if url.endswith(","):  # 8.
+            url = url.rstrip(",")
+        else:
+            # 8.1 descriptor tokenizer
+            reader.collect(lambda ch: ch in ws)
+            current = ""
+            state = "in descriptor"
+            while True:
+                c = reader.current()  # None is the spec's EOF
+                if state == "in descriptor":
+                    if c is None:
+                        if current:
+                            descriptors.append(current)
+                        break
+                    elif c in ws:
+                        if current:
+                            descriptors.append(current)
+                            current = ""
+                        state = "after descriptor"
+                    elif c == ",":
+                        reader.position += 1
+                        if current:
+                            descriptors.append(current)
+                        break
+                    elif c == "(":
+                        current += c
+                        state = "in parens"
+                    else:
+                        current += c
+                elif state == "in parens":
+                    if c is None:
+                        descriptors.append(current)
+                        break
+                    elif c == ")":
+                        current += c
+                        state = "in descriptor"
+                    else:
+                        current += c
+                else:  # "after descriptor"
+                    if c is None:
+                        break
+                    elif c in ws:
+                        pass
+                    else:
+                        state = "in descriptor"
+                        reader.position -= 1
+                reader.position += 1
+        candidates.append((url, descriptors))
+
+
 def scheme_of(value: str) -> str:
     """The scheme a browser would act on, ``""`` for none."""
     probe = _STRIP.sub("", value).lower()
@@ -229,12 +334,10 @@ def is_dangerous(attr: Attr) -> bool:
     """
     if attr.name == "srcset":
         # A candidate's URL ends at whitespace, so ``java<TAB>script:`` is the
-        # URL ``java`` and a descriptor here, unlike in an ``href``.
-        from djust.components.utils import _srcset_candidates
-
+        # URL ``java`` and a descriptor here, unlike in an ``href``. Split by the
+        # INDEPENDENT port of the spec (``spec_srcset``), never by production's parser.
         return any(
-            is_dangerous(Attr(attr.element, "src", url))
-            for url, _desc in _srcset_candidates(attr.value)
+            is_dangerous(Attr(attr.element, "src", url)) for url, _desc in spec_srcset(attr.value)
         )
     scheme = scheme_of(attr.value)
     if not scheme or not is_url_attr(attr.name):
@@ -615,8 +718,9 @@ def disagreements(sweep: Sweep) -> list[Cell]:
 # question is asked of them: every constructor parameter, every payload, every
 # shape, the FINAL attributes.
 
-#: Packages of ``djust.components`` that hold ``Component`` subclasses.
-COMPONENT_PACKAGES = ("components", "ui", "data", "layout", "forms")
+#: Packages of ``djust.components`` that hold renderable classes.
+FRAMEWORKS = ("bootstrap5", "tailwind", "plain")
+COMPONENT_PACKAGES = ("components", "ui", "data", "layout", "forms", "descriptors", "gallery")
 #: A value that satisfies a required constructor parameter without being a URL.
 FILLER = {
     "label": "x", "id": "x", "name": "x", "text": "x", "title": "x", "value": "x", "content": "x",
@@ -635,13 +739,16 @@ def filler_for(name: str) -> Any:
     return "x"
 
 
-def component_classes() -> dict[str, type]:
-    """``{"module.Class": cls}`` for every ``Component`` subclass the packages define."""
+def _all_component_classes() -> dict[str, type]:
+    """Every class the packages define that renders markup: a ``Component``, a
+    ``LiveComponent`` or a ``LiveView`` (the gallery's pages), whether or not it
+    can be driven."""
     import importlib
     import inspect
     import pkgutil
 
-    from djust import Component
+    from djust import Component, LiveView
+    from djust.components.base import LiveComponent
 
     found: dict[str, type] = {}
     for sub in COMPONENT_PACKAGES:
@@ -651,17 +758,63 @@ def component_classes() -> dict[str, type]:
             for name, obj in vars(module).items():
                 if (
                     inspect.isclass(obj)
-                    and issubclass(obj, Component)
+                    and issubclass(obj, (Component, LiveComponent, LiveView))
                     and obj.__module__ == module.__name__
                 ):
                     found[f"{obj.__module__}.{name}"] = obj
     return dict(sorted(found.items()))
 
 
+def undriven_reason(cls: type) -> Optional[str]:
+    """Why ``cls`` cannot be driven generically, or ``None`` when it can be.
+
+    Derived from the class, not listed by name, so a new class lands in the
+    driven set by default and is excluded only for one of these reasons."""
+    from djust import LiveView
+    from djust.components.base import LiveComponent
+
+    if issubclass(cls, LiveView):
+        return "a LiveView page: it renders through a request and a template, not a constructor"
+    if issubclass(cls, LiveComponent) and cls.__module__.startswith(
+        "djust.components.descriptors."
+    ):
+        return (
+            "a descriptor component: its markup is the CALLER's template (it will not "
+            "construct without one) and the class prints no URL itself"
+        )
+    return None
+
+
+def component_classes() -> dict[str, type]:
+    """``{"module.Class": cls}`` for every class the sweep can drive."""
+    return {k: c for k, c in _all_component_classes().items() if undriven_reason(c) is None}
+
+
+def undriven_classes() -> dict[str, str]:
+    """``{"module.Class": reason}`` for the classes the sweep cannot drive."""
+    return {
+        k: reason
+        for k, c in _all_component_classes().items()
+        if (reason := undriven_reason(c)) is not None
+    }
+
+
 def component_params(cls: type) -> tuple[list[str], dict[str, Any]]:
-    """``(every constructor parameter, filler for the required ones)``."""
+    """``(every parameter, filler for the required ones)``.
+
+    A ``Component`` takes its parameters in ``__init__``. A ``LiveComponent``
+    takes ``**kwargs`` and reads them in ``mount`` and its helpers, so its
+    parameters are the keys the class source reads (``kwargs.get("brand_href")``,
+    followed through helpers), plus its ``State`` fields."""
     import inspect
 
+    from djust.components.base import LiveComponent
+
+    if issubclass(cls, LiveComponent):
+        keys, params = harness.discover(cls)
+        state = getattr(cls, "State", None)
+        state_names = {n for n in vars(state) if not n.startswith("_")} if state else set()
+        return sorted((keys | params | state_names) - {"self", "kwargs", "args"}), {}
     params = inspect.signature(cls.__init__).parameters  # type: ignore[misc]
     names, required = [], {}
     for n, p in params.items():
@@ -724,14 +877,23 @@ def run_component_sweep(
                     },
                 )
             )
+            # A class that takes ``css_framework`` renders different markup under each
+            # of the three renderers, so each is driven under all of them.
+            frameworks = FRAMEWORKS if "css_framework" in names else (None,)
             for name, shape, kwargs in calls:
-                harness.reset_ids()
-                try:
-                    out = str(cls(**kwargs).render())  # type: ignore[call-arg]
-                except Exception:  # noqa: BLE001 - a call the component rejects tells us nothing
-                    continue
-                any_rendered = True
-                cells.append(ComponentCell(key, name, shape, label, findings(out)))
+                for framework in frameworks:
+                    given = (
+                        kwargs
+                        if framework is None or name == "css_framework"
+                        else {**kwargs, "css_framework": framework}
+                    )
+                    harness.reset_ids()
+                    try:
+                        out = str(cls(**given).render())  # type: ignore[call-arg]
+                    except Exception:  # noqa: BLE001 - a call the component rejects tells us nothing
+                        continue
+                    any_rendered = True
+                    cells.append(ComponentCell(key, name, shape, label, findings(out)))
         if not any_rendered:
             unrendered.append(key)
     return cells, driven, unrendered

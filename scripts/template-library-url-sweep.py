@@ -38,16 +38,17 @@ from scripts.lib.template_library_parity import harness  # noqa: E402
 #: sweep stays inside a test's budget without dropping an encoding class.
 QUICK = (
     "js", "js-upper", "js-embedded-tab", "js-lead-newline", "js-entity-hex", "js-percent-colon",
-    "vbs", "data-html", "data-svg",
+    "vbs", "data-html", "data-svg", "srcset-parens", "srcset-comma",
     "https", "relative", "anchor", "mailto", "data-png",
 )  # fmt: skip
 
 #: What ``python/tests/test_url_scheme_sweep_3665.py`` runs: the plain attack, the
 #: three families of obfuscation (control characters, entities, percent), the
-#: other script schemes, and the values that must survive.
+#: other script schemes, the ``srcset`` list forms, and the values that must survive.
 TEST_CORPUS = (
     "js", "js-embedded-tab", "js-lead-newline", "js-entity-hex", "js-percent-colon", "vbs",
-    "data-html", "https", "relative", "mailto", "data-png",
+    "data-html", "srcset-parens", "srcset-parens-data", "srcset-formfeed", "https", "relative",
+    "mailto", "data-png",
 )  # fmt: skip
 
 

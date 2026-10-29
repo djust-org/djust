@@ -82,7 +82,7 @@ class LiveIndicator(Component):
             avatar = ""
 
         e_name = html.escape(str(name))
-        e_avatar = url_attr(avatar, image=True)
+        e_avatar = url_attr(avatar, image=True, honor_safe=False)
         e_field = html.escape(str(self.field))
         e_action = html.escape(str(self.action))
 

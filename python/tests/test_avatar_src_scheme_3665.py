@@ -28,8 +28,13 @@ ENGINES = ("django", "djust")
 #: Forms whose script scheme is only visible AFTER a decode the browser does not
 #: apply to a scheme (an entity or a percent escape inside ``javascript``). Once
 #: the value is HTML-escaped they are a relative URL with that literal text: inert
-#: and, importantly, not rewritten differently by the two engines.
+#: and, importantly, not rewritten differently by the two engines. The ``srcset-*``
+#: labels are lists of URLs: as one ``src`` they are a single relative URL.
 ENCODED = (
+    "srcset-parens",
+    "srcset-parens-data",
+    "srcset-comma",
+    "srcset-formfeed",
     "js-entity-hex",
     "js-entity-dec",
     "js-entity-nosemi",
@@ -128,3 +133,15 @@ def test_no_src_still_shows_the_initials(engine):
     html = _engine(engine).from_string(LOAD + "{% avatar initials='AB' %}").render({})
     assert "AB" in html
     assert not [a for a in url_sweep.attributes(html) if a.name == "src"]
+
+
+def test_a_marked_safe_src_is_not_escaped_twice_under_django():
+    """The tag returns ``mark_safe(url_attr(...))``; without the ``mark_safe`` the template
+    would escape the already-escaped text again (``&amp;amp;``). Pinned because the fix
+    depends on it and no other case passes a value with an ampersand through."""
+    assert _final_src("django", u="/a.png?x=1&y=2") == ["/a.png?x=1&y=2"]
+    assert _final_src("django", u=mark_safe("/a.png?x=1&amp;y=2")) == ["/a.png?x=1&y=2"]
+    html = (
+        _engine("django").from_string(LOAD + "{% avatar src=u %}").render({"u": "/a.png?x=1&y=2"})
+    )
+    assert "x=1&amp;y=2" in html and "&amp;amp;" not in html

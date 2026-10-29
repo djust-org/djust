@@ -181,7 +181,7 @@ class ImageUploadPreview(Component):
 
         thumbs = []
         for url in self.previews:
-            e_url = url_attr(url, image=True)
+            e_url = url_attr(url, image=True, honor_safe=False)
             thumbs.append(
                 f'<div class="dj-img-upload__thumb">'
                 f'<img src="{e_url}" alt="Preview" '

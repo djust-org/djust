@@ -114,7 +114,7 @@ class MentionsInput(Component):
         for user in self.users:
             uid = html.escape(str(user.get("id", "")))
             uname = html.escape(str(user.get("name", "")))
-            avatar_src = url_attr(user.get("avatar", ""), image=True)
+            avatar_src = url_attr(user.get("avatar", ""), image=True, honor_safe=False)
 
             initials = (
                 html.escape(

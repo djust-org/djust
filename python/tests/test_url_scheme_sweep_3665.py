@@ -81,6 +81,37 @@ KNOWN_AUTHOR_NAMED = {
     ("djust.components.components.card.Card", "data"),
 }
 
+#: Renderable classes the sweep cannot drive generically, and why (the sweep DERIVES the
+#: set from the class; the pin makes a NEW undriven class a visible decision).
+UNDRIVEN = {
+    "djust.components.descriptors.%s" % n: "descriptor"
+    for n in (
+        "accordion.Accordion",
+        "base.LiveComponent",
+        "carousel.Carousel",
+        "collapsible.Collapsible",
+        "dropdown.Dropdown",
+        "modal.Modal",
+        "sheet.Sheet",
+        "tabs.Tabs",
+        "tooltip.Tooltip",
+    )
+} | {
+    "djust.components.gallery.live_views.%s" % n: "page"
+    for n in (
+        "DataGalleryView",
+        "FeedbackGalleryView",
+        "FormGalleryView",
+        "GalleryIndexView",
+        "IndicatorGalleryView",
+        "LayoutGalleryView",
+        "MiscGalleryView",
+        "NavGalleryView",
+        "OverlayGalleryView",
+        "TypographyGalleryView",
+    )
+}
+
 LIBRARIES = url_sweep.SWEPT_LIBRARIES
 
 
@@ -117,6 +148,11 @@ class TestScanner:
             '<img src="javascript:x">',
             '<img src="data:text/html,x">',
             '<img srcset="/a.png 1x, javascript:x 2x">',
+            '<img srcset="/a.png 10w ((), javascript:alert(1) 100w">',  # parens do not nest
+            '<img srcset="/a.png 10w ((), data:text/html,x 100w">',
+            '<img srcset="/a.png 1x,javascript:x 2x">',
+            '<img srcset="/a.png 1x,\fjavascript:x 2x">',
+            '<source srcset="/a.png 1x, vbscript:x 2x">',
             '<div data-url="javascript:x">',
             '<div dj-href="javascript:x">',
             '<link rel="stylesheet" href="javascript:x">',
@@ -140,7 +176,9 @@ class TestScanner:
             '<img src="data:image/png;base64,AAAA">',
             '<img src="data:image/svg+xml,<svg onload=x>">',  # an image URI in an image sink
             '<img srcset="/a.png 1x, data:image/png;base64,AAAA 2x">',
-            '<img srcset="/a.png 1x, java\tscript:x 2x">',  # to a browser: URL "java" + a descriptor
+            '<img srcset="/a.png 1x, java\tscript:x 2x">',
+            '<img srcset="/a.png (javascript:x) 1x">',  # inside parens: a descriptor, not a URL
+            '<img srcset="/a.png (javascript:x) 1x">',  # inside parens: a descriptor, not a URL  # to a browser: URL "java" + a descriptor
             '<span aria-label="javascript:alert(1)">',  # a label, not a link
             '<img alt="javascript:alert(1)">',
             '<input value="javascript:alert(1)" title="vbscript:x" placeholder="data:text/html,x">',
@@ -352,11 +390,35 @@ class TestTheSweep:
             assert (tag, param) in reached, (tag, param)
         assert runs["tags"]["rendered_both"] > runs["tags"]["cells"] // 2
 
-    def test_every_class_component_is_driven(self, runs):
+    def test_every_renderable_class_is_driven_or_pinned_as_undriven(self, runs):
+        """ "Every class component" means every ``Component``, ``LiveComponent`` and
+        ``LiveView`` the packages define. Derived from the code NOW: a class added
+        tomorrow is driven by default, and one that cannot be is a visible decision."""
+        everything = set(url_sweep._all_component_classes())
+        driven = set(runs["components"]["component_driven"])
+        undriven = url_sweep.undriven_classes()
+        assert driven | set(undriven) == everything, sorted(everything ^ (driven | set(undriven)))
+        assert not driven & set(undriven)
+        assert {k: v.split(":")[0].split()[0] for k, v in undriven.items()}.keys() == set(UNDRIVEN)
+        for key, reason in undriven.items():
+            kind = UNDRIVEN[key]
+            assert (kind == "descriptor") == ("descriptor component" in reason), (key, reason)
+            assert (kind == "page") == ("LiveView page" in reason), (key, reason)
+
+    def test_the_live_components_and_the_avatar_are_among_the_driven(self, runs):
         from djust.components.components.avatar import Avatar
 
         driven = runs["components"]["component_driven"]
         assert "src" in driven["%s.Avatar" % Avatar.__module__]
+        for name in (
+            "layout.navbar.NavbarComponent",
+            "ui.card.CardComponent",
+            "data.table.TableComponent",
+            "forms.foreign_key.ForeignKeySelect",
+        ):
+            assert driven["djust.components.%s" % name], name
+        assert "brand_href" in driven["djust.components.layout.navbar.NavbarComponent"]
+        assert "image" in driven["djust.components.ui.card.CardComponent"]
 
 
 class TestGateOffs:

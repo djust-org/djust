@@ -113,9 +113,7 @@ class OrgChart(Component):
 
         avatar_html = ""
         if avatar:
-            avatar_html = (
-                f'<img class="dj-org__avatar" src="{url_attr(avatar, image=True)}" alt="{name}" />'
-            )
+            avatar_html = f'<img class="dj-org__avatar" src="{url_attr(avatar, image=True, honor_safe=False)}" alt="{name}" />'
         else:
             initials = "".join(w[0] for w in name.split()[:2]).upper() if name else "?"
             avatar_html = f'<span class="dj-org__initials">{html.escape(initials)}</span>'

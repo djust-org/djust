@@ -96,8 +96,9 @@ class ResponsiveImage(Component):
         if self.lazy:
             img_attrs.append('loading="lazy"')
 
-        if self.srcset:
-            img_attrs.append(f'srcset="{srcset_attr(self.srcset)}"')
+        e_srcset = srcset_attr(self.srcset, honor_safe=False)
+        if e_srcset:
+            img_attrs.append(f'srcset="{e_srcset}"')
 
         if self.sizes:
             img_attrs.append(f'sizes="{html.escape(self.sizes)}"')

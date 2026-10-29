@@ -5644,8 +5644,9 @@ def responsive_image(
     img_attrs = [f'src="{e_src}"', f'alt="{e_alt}"']
     if lazy:
         img_attrs.append('loading="lazy"')
-    if srcset:
-        img_attrs.append(f'srcset="{srcset_attr(srcset)}"')
+    e_srcset = srcset_attr(srcset)
+    if e_srcset:
+        img_attrs.append(f'srcset="{e_srcset}"')
     if sizes:
         img_attrs.append(f'sizes="{conditional_escape(sizes)}"')
 
