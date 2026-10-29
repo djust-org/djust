@@ -616,7 +616,7 @@ m.insert("serialize_ms".to_string(), t.serialize_ms);
 m.insert("total_ms".to_string(), t.total_ms);
 m.insert("html_len".to_string(), t.html_len as f64);
 m.insert("fast_path".to_string(), t.fast_path);
-match djust_vdom::lazy_provenance::authenticated_live_root(&rendered.html, &spans) {
+djust_vdom::lazy_provenance::authenticated_live_root(&rendered.html, &spans);
 let range = authenticated_source_range(&rendered.html, &root)?;
 root.vdom.attrs.insert("dj-view".to_string(), path.clone());
 &rendered.html,
