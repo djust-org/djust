@@ -69,3 +69,27 @@ directory for future work. It is not ready to apply: its final focused run had
 12 passes and two failures, and 29 of 59 existing child tests failed. It does
 not yet preserve identity through all WebSocket, nested-render, ignored-subtree
 and snapshot paths or prevent shell mount side effects.
+
+## 2026-10-29 investigation
+
+A separately typed root-only prefix prototype restored the catalogue and passed
+866 focused tests, with four skipped, but it did not validate final wrapper
+changes or preserve all model bindings after opaque output. It also measured
+23.75–24.12 ms for the 1,000-row cases, slower than the prior candidate. It
+was not applied. Root/model authority must stay separate from lazy-registration
+spans through page processing. The prototype and red wrapper and binding tests
+are retained in `context/`.
+
+The child-ownership scratch prototype carried direct render occurrences into an
+HTML5 classifier and a pending WebSocket diff, passing four targeted lifecycle
+cases. At its measured state, 44 of 59 existing child tests passed. Nested Django
+rendering can flatten occurrence metadata, and a reconnect can retain an ignored
+DOM subtree while losing its verified child binding. A client-side check showed
+that normal reconnect deliberately preserves ignored subtree state, so silently
+resetting it would change behavior. The prototype also does not prevent shell
+mounts during WebSocket rendering. It was not applied; its status and experiments
+are in `context/scratch/child-ownership-2026-10-29/`.
+
+A separate root-scoping experiment passed 15 control-flow tests but failed to
+preserve full-page root liveness across an HTML comment boundary. It is not a
+production renderer; see `context/scratch/root-slice/`.
