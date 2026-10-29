@@ -997,6 +997,13 @@ impl RustLiveViewBackend {
         })
     }
 
+    /// Whether the pending page selected a page root rather than a rootless fragment.
+    fn prepared_page_has_root(&self) -> bool {
+        self.pending_partial_page.as_ref().is_some_and(|page| {
+            page.vdom.attrs.contains_key("dj-root") || page.vdom.attrs.contains_key("dj-view")
+        })
+    }
+
     fn discard_authenticated_page(&mut self) {
         self.pending_partial_page = None;
     }
@@ -1835,7 +1842,25 @@ impl RustLiveViewBackend {
         } else {
             reset_id_counter();
         }
-        match djust_vdom::lazy_provenance::authenticated_live_root(&rendered.html, &spans) {
+        let candidate =
+            djust_vdom::lazy_provenance::authenticated_live_root(&rendered.html, &spans);
+        // A dependency only makes partial roots *possible*. Once the loader has
+        // seen the selected tree, ordinary page roots retain the established
+        // HTML5 parsing behavior, including tolerated malformed markup. Do not
+        // re-render: dynamic include operands may be stateful.
+        if !possible.load(Ordering::Relaxed) {
+            if let Ok(root) = candidate {
+                return Ok(PreparedPartialPage {
+                    rendered,
+                    authenticated: false,
+                    range: None,
+                    fields: root.model_fields,
+                    vdom: root.vdom,
+                    namespace: root.namespace,
+                });
+            }
+        }
+        match candidate {
             Ok(mut root) => {
                 let range = authenticated_source_range(&rendered.html, &root)?;
                 if root.vdom.attrs.contains_key("dj-root")
@@ -3813,10 +3838,19 @@ fn needs_lazy_tree_uncached(
 /// Authenticate a full rendered page before replacing its exact HTML5 node.
 /// Spans must have passed the template renderer's blank/opaque liveness checks.
 #[pyfunction]
-fn authenticated_root_shell(html: &str, spans: Vec<(usize, usize)>) -> PyResult<(usize, usize)> {
+#[pyo3(signature = (html, spans, exact_range=true))]
+fn authenticated_root_shell(
+    html: &str,
+    spans: Vec<(usize, usize)>,
+    exact_range: bool,
+) -> PyResult<(usize, usize)> {
     let root = djust_vdom::lazy_provenance::authenticated_live_root(html, &spans)
         .map_err(authenticated_root_error)?;
-    authenticated_source_range(html, &root)
+    if exact_range {
+        authenticated_source_range(html, &root)
+    } else {
+        Ok(root.opening)
+    }
 }
 
 fn authenticated_source_range(

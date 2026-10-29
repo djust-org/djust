@@ -723,6 +723,7 @@ class RequestMixin:
 
         prepared_page = getattr(self, "_pending_authenticated_page", False)
         authenticated_root = getattr(self, "_prepared_authenticated_partial_root", False)
+        page_root = authenticated_root or getattr(self, "_prepared_authenticated_page_root", False)
         # Validate the final wrapped page before committing its prepared diff
         # baseline: a rejected response was never delivered.
         t_render_diff = 0.0
@@ -763,7 +764,7 @@ class RequestMixin:
         else:
             html = liveview_content
 
-        if authenticated_root and html is not liveview_content:
+        if page_root and html is not liveview_content:
             # Django's wrapper produces a plain string. Preserve the exact
             # original live output's provenance, and treat wrapper bytes as
             # opaque. A duplicate or changed insertion cannot be authenticated.
@@ -805,12 +806,14 @@ class RequestMixin:
         # however it is written (any element, any other attributes), and only
         # where the author did not declare dj-view themselves (#2981).
         view_path = f"{self.__class__.__module__}.{self.__class__.__name__}"
-        if authenticated_root:
+        if page_root:
             # Authenticate before stamping; only the framework-generated view
             # attribute on this already validated page may gain provenance.
             from .._rust import authenticated_root_shell
 
-            authenticated_root_shell(html, list(cast("RenderedHTML", html).spans))
+            authenticated_root_shell(
+                html, list(cast("RenderedHTML", html).spans), exact_range=authenticated_root
+            )
             html = self._stamp_dj_view(html, view_path, trusted=True)
         else:
             html = self._stamp_dj_view(html, view_path)
@@ -835,7 +838,7 @@ class RequestMixin:
         from .._lazy_containers import finalize_lazy_containers
 
         html = finalize_lazy_containers(self, html)
-        if authenticated_root:
+        if page_root:
             # Recheck after wrapping, stamping and lazy processing: these are
             # the bytes the browser will actually parse and mount.
             from django.core.exceptions import ImproperlyConfigured
@@ -846,7 +849,7 @@ class RequestMixin:
                 raise ImproperlyConfigured(
                     "LiveView root provenance was lost during page processing."
                 )
-            authenticated_root_shell(html, list(html.spans))
+            authenticated_root_shell(html, list(html.spans), exact_range=authenticated_root)
         if prepared_page:
             # Commit exactly the VDOM captured with the delivered page; do not
             # execute stateful template selectors a second time.

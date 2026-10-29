@@ -1025,6 +1025,7 @@ class LiveView(
         self._authenticated_template_source = None
         self._named_partial_jit_source = None
         self._prepared_authenticated_partial_root = False
+        self._prepared_authenticated_page_root = False
         self._pending_authenticated_page = False
         self._http_lazy_containers = {}
         self._http_lazy_validated_html = None

@@ -1075,7 +1075,8 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
             # the smaller lazy-only projection used by this hot path.
             rust_view = getattr(self, "_rust_view", None)
             authenticated = (
-                getattr(self, "_prepared_authenticated_partial_root", False)
+                getattr(self, "_prepared_authenticated_page_root", False)
+                or getattr(self, "_prepared_authenticated_partial_root", False)
                 or getattr(rust_view, "authenticated_partial_root", lambda: False)()
             )
             if not authenticated:
@@ -1860,6 +1861,7 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
 
                 self._pending_authenticated_page = False
                 self._prepared_authenticated_partial_root = False
+                self._prepared_authenticated_page_root = False
                 with library_render_scope():
                     rendered, spans, origins, root_range = (
                         self._rust_view.prepare_authenticated_page()
@@ -1867,6 +1869,7 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                 page = RenderedHTML(rendered, tuple(spans), origins=tuple(origins))
                 self._pending_authenticated_page = True
                 self._prepared_authenticated_partial_root = root_range is not None
+                self._prepared_authenticated_page_root = self._rust_view.prepared_page_has_root()
                 if root_range is not None:
                     start, end = (page.char_offset(offset) for offset in root_range)
                     root = self._hydrate_react_components(page[start:end])
@@ -1874,7 +1877,17 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                     rendered_page = page[:start] + root + page[end:]
                 else:
                     rendered_page = self._hydrate_react_components(page)
-                    self._warn_unmatched_root(rendered_page, found=False)
+                    from .._rust import root_element_span
+
+                    ordinary_span = root_element_span(rendered_page)
+                    if ordinary_span is None:
+                        self._warn_unmatched_root(rendered_page, found=False)
+                    elif ordinary_span[3] is None:
+                        self._warn_unmatched_root(rendered_page, found=True)
+                    else:
+                        start, end = ordinary_span[0], ordinary_span[3]
+                        root = self._strip_comments_and_whitespace(rendered_page[start:end])
+                        rendered_page = rendered_page[:start] + root + rendered_page[end:]
                 rendered_page = register_lazy_containers(self, request, rendered_page)
                 rendered_page = self._inject_handler_metadata(rendered_page, request=request)
                 if request is None:
