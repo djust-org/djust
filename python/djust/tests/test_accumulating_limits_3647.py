@@ -19,6 +19,7 @@ import copy
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
+from typing import Tuple
 
 import pytest
 from django.conf import settings
@@ -432,22 +433,57 @@ def _took(fn) -> float:
     return best
 
 
-class TestTheScanIsBounded:
-    BUDGET = 1.0
+#: A linear scan does about 4x the work on 4x the input; a quadratic one, 16x.
+GROWTH_LIMIT = 8.0
+#: CPU seconds under which the larger scan is bounded whatever the ratio says:
+#: at sub-millisecond timings the ratio is mostly clock noise.
+NOISE_FLOOR = 0.02
 
+
+def _cpu_growth(scan_at) -> Tuple[float, float, float]:
+    """How the scan's cost grows from ``scan_at(1)`` to ``scan_at(4)``.
+
+    CPU time of this thread, not wall-clock time: a loaded machine delays the scan
+    but does not make it do more work, so a fixed wall-clock limit fails under load
+    (#3647 cases measured 2.7-36s at a 5-minute load average of 10-20). The ratio
+    of two runs taken back to back also cancels most of what load does change
+    (clock speed, cache misses). Each size is measured three times, interleaved,
+    keeping the fastest.
+    """
+    small = big = float("inf")
+    for _ in range(3):
+        for factor in (1, 4):
+            start = time.thread_time()
+            scan_at(factor)
+            took = time.thread_time() - start
+            if factor == 1:
+                small = min(small, took)
+            else:
+                big = min(big, took)
+    return big / max(small, 1e-9), small, big
+
+
+def assert_linear(scan_at) -> None:
+    ratio, small, big = _cpu_growth(scan_at)
+    assert big < NOISE_FLOOR or ratio < GROWTH_LIMIT, (
+        f"4x the input cost {ratio:.1f}x the CPU time ({small:.4f}s -> {big:.4f}s)"
+    )
+
+
+class TestTheScanIsBounded:
     @pytest.mark.parametrize(
-        "junk",
+        "unit, count",
         [
-            "{{" * 20000,
-            "{%" * 20000,
-            "{{ x }" * 20000,
-            "{% include " * 5000,
-            "<a " * 20000,
-            "<" * 20000,
-            "<!--" * 20000,
-            "<![CDATA[" * 5000,
-            '<ul id="a" dj-update="append">' * 5000,
-            "{% with a=rows %}" * 5000,
+            ("{{", 20000),
+            ("{%", 20000),
+            ("{{ x }", 20000),
+            ("{% include ", 5000),
+            ("<a ", 20000),
+            ("<", 20000),
+            ("<!--", 20000),
+            ("<![CDATA[", 5000),
+            ('<ul id="a" dj-update="append">', 5000),
+            ("{% with a=rows %}", 5000),
         ],
         ids=[
             "unterminated-var",
@@ -462,14 +498,26 @@ class TestTheScanIsBounded:
             "with-spam",
         ],
     )
-    @pytest.mark.parametrize("where", ["inside a container", "outside any container"])
-    def test_pathological_input_is_scanned_in_bounded_time(self, junk, where):
-        if where == "inside a container":
-            page = container("{{ rows }}" + junk)
-        else:
-            page = container("{{ rows }}") + junk
-        elapsed = _took(lambda: accumulating_container_ids(page, ("rows",)))
-        assert elapsed < self.BUDGET, f"{elapsed:.2f}s"
+    @pytest.mark.parametrize(
+        "where", ["inside a container", "outside any container", "before a stray >"]
+    )
+    def test_pathological_input_is_scanned_in_bounded_time(self, unit, count, where):
+        """The scan's cost grows linearly with the junk: 4x the junk, well under 16x
+        the CPU time. ``before a stray >`` makes the parser read junk that follows
+        every container, which it otherwise leaves out (nothing after the last
+        ``>`` can complete a tag)."""
+
+        def scan_at(factor):
+            junk = unit * (count // 4 * factor)
+            if where == "inside a container":
+                page = container("{{ rows }}" + junk)
+            elif where == "outside any container":
+                page = container("{{ rows }}") + junk
+            else:
+                page = container("{{ rows }}") + junk + ">"
+            accumulating_container_ids(page, ("rows",))
+
+        assert_linear(scan_at)
 
     def test_a_source_over_the_cap_is_not_scanned_and_accumulates_nothing(self, caplog):
         import logging
@@ -504,21 +552,30 @@ class TestTheScanIsBounded:
         assert any("nests more than" in r.getMessage() for r in caplog.records)
 
     def test_many_unmatched_end_tags_over_a_deep_stack_are_bounded(self):
-        page = container("{{ rows }}" + "<b>" * 900 + "</i>" * 60000)
-        assert _took(lambda: accumulating_container_ids(page, ("rows",))) < self.BUDGET
+        def scan_at(factor):
+            page = container("{{ rows }}" + "<b>" * 900 + "</i>" * (15000 * factor))
+            accumulating_container_ids(page, ("rows",))
+
+        assert_linear(scan_at)
 
     def test_a_with_alias_per_container_is_bounded(self):
-        n = 5000
-        page = "".join(
-            f'<ul id="a{i}" dj-update="append">{{% with x{i}=rows %}}' for i in range(n)
-        ) + "".join("</ul>{% endwith %}" for _ in range(n))
-        assert _took(lambda: accumulating_container_ids(page, ("rows",))) < self.BUDGET
+        def scan_at(factor):
+            n = 1250 * factor
+            page = "".join(
+                f'<ul id="a{i}" dj-update="append">{{% with x{i}=rows %}}' for i in range(n)
+            ) + "".join("</ul>{% endwith %}" for _ in range(n))
+            accumulating_container_ids(page, ("rows",))
+
+        assert_linear(scan_at)
 
     def test_a_large_ordinary_page_is_scanned_in_linear_time(self):
-        rows = "".join(f'<li id="r{i}">{{{{ r.v{i} }}}}</li>' for i in range(4000))
-        page = container("{% for r in rows %}" + rows + "{% endfor %}")
-        assert accumulating_container_ids(page, ("rows",)) == ("list",)
-        assert _took(lambda: accumulating_container_ids(page, ("rows",))) < self.BUDGET
+        def page_of(n):
+            rows = "".join(f'<li id="r{i}">{{{{ r.v{i} }}}}</li>' for i in range(n))
+            return container("{% for r in rows %}" + rows + "{% endfor %}")
+
+        assert accumulating_container_ids(page_of(4000), ("rows",)) == ("list",)
+        pages = {factor: page_of(1000 * factor) for factor in (1, 4)}
+        assert_linear(lambda factor: accumulating_container_ids(pages[factor], ("rows",)))
 
 
 class _Page(LiveView):
