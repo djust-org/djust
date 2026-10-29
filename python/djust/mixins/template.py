@@ -2096,6 +2096,11 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                 preloaded_context=None,
             )
         html, patches_json, version = result
+        # ``static_render`` (#3626): keep no diff baseline. Released before the
+        # re-store below, so the backend's snapshot holds no tree and no context.
+        from .._static_render import release_render_baseline
+
+        release_render_baseline(self)
         # The state backend holds a snapshot, not this object; record the
         # render so the next reader of the key starts from it.
         self._refresh_cached_rust_view()

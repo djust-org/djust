@@ -1391,6 +1391,24 @@ impl RustLiveViewBackend {
         reset_id_counter();
     }
 
+    /// Drop the diff baseline (the rendered tree and the render caches built
+    /// from it) but keep the version counter (``static_render``, #3626).
+    ///
+    /// Unlike ``reset`` the version is not restarted: the HTTP fallback and SSE
+    /// stamp this counter on their frames and the client checks it is
+    /// consecutive. The next ``render_with_diff`` has nothing to diff against,
+    /// so it returns full HTML and no patches, as a first render does. The
+    /// state is left alone (``retain_state_keys([])`` clears it).
+    fn release_baseline(&mut self) {
+        self.last_vdom = None;
+        self.last_root_ns = None;
+        self.last_html = None;
+        self.node_html_cache = Vec::new();
+        self.changed_keys = None;
+        self.fragment_text_map = None;
+        self.text_node_index = None;
+    }
+
     /// Serialize the RustLiveView state to MessagePack bytes
     ///
     /// This enables efficient state persistence to Redis or other storage backends.
