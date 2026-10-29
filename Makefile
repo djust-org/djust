@@ -279,6 +279,10 @@ template-library-parity: ## Check djust_components/theme_tags, Django engine vs 
 template-library-parity-baseline: ## Regenerate scripts/template-library-parity-baseline.csv after parity changed (#3663)
 	@$(PYTHON) scripts/template-library-parity.py --write-baseline
 
+.PHONY: template-library-url-sweep
+template-library-url-sweep: ## Drive script-capable URLs through every parameter of every djust tag/component, both engines (#3665)
+	@$(PYTHON) scripts/template-library-url-sweep.py --components --quick
+
 .PHONY: check-lockfile-versions
 check-lockfile-versions: ## Verify Cargo.lock/uv.lock self-entries and the SBOM version match manifests (#1498, #3184)
 	@$(PYTHON) scripts/check-lockfile-versions.py $(if $(VERBOSE),--verbose,)

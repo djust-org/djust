@@ -2,6 +2,7 @@
 
 import html
 from djust.components.utils import url_attr
+from djust.components.utils import srcset_attr
 
 from djust import Component
 from typing import Any
@@ -96,7 +97,7 @@ class ResponsiveImage(Component):
             img_attrs.append('loading="lazy"')
 
         if self.srcset:
-            img_attrs.append(f'srcset="{html.escape(self.srcset)}"')
+            img_attrs.append(f'srcset="{srcset_attr(self.srcset)}"')
 
         if self.sizes:
             img_attrs.append(f'sizes="{html.escape(self.sizes)}"')

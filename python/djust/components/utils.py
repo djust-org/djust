@@ -440,6 +440,65 @@ def url_attr(value: Any, *, image: bool = False) -> str:
     return safe_url(value)
 
 
+def _srcset_candidates(text: str) -> list[tuple[str, str]]:
+    """``[(url, descriptors)]`` of an ``srcset`` value, as the HTML spec splits it.
+
+    A candidate's URL is the run of non-whitespace characters, with trailing
+    commas removed (so a ``data:`` URI's own comma stays in the URL); its
+    descriptors run to the next comma that is not inside parentheses.
+    """
+    out: list[tuple[str, str]] = []
+    i, n = 0, len(text)
+    while i < n:
+        while i < n and (text[i].isspace() or text[i] == ","):
+            i += 1
+        if i >= n:
+            break
+        j = i
+        while j < n and not text[j].isspace():
+            j += 1
+        url, i = text[i:j], j
+        descriptors = ""
+        if url.endswith(","):
+            url = url.rstrip(",")
+        else:
+            depth = 0
+            k = i
+            while k < n:
+                ch = text[k]
+                if ch == "(":
+                    depth += 1
+                elif ch == ")" and depth:
+                    depth -= 1
+                elif ch == "," and not depth:
+                    break
+                k += 1
+            descriptors, i = text[i:k].strip(), k
+        out.append((url, descriptors))
+    return out
+
+
+def srcset_attr(value: Any) -> str:
+    """Return ``value`` ready to place inside a quoted ``srcset``.
+
+    Each comma-separated candidate's URL goes through :func:`url_attr` as an
+    image source (a script scheme becomes ``"#"``, ``data:image/...`` stays) and
+    its descriptor (``2x``, ``480w``) is HTML-escaped. Values the developer
+    marked safe are returned unchanged, as :func:`url_attr` does.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, SafeData):
+        return str(value)
+    parts = []
+    for url, descriptors in _srcset_candidates(str(value)):
+        candidate = url_attr(url, image=True)
+        if descriptors:
+            candidate += " " + str(conditional_escape(descriptors))
+        parts.append(candidate)
+    return ", ".join(parts)
+
+
 def rich_html(value: Any) -> str:
     """HTML for a slot whose content is itself HTML, such as an editor's value.
 

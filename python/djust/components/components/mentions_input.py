@@ -5,6 +5,7 @@ import json
 from typing import Any, List, Optional
 
 from djust import Component
+from djust.components.utils import url_attr
 
 
 class MentionsInput(Component):
@@ -113,7 +114,7 @@ class MentionsInput(Component):
         for user in self.users:
             uid = html.escape(str(user.get("id", "")))
             uname = html.escape(str(user.get("name", "")))
-            avatar_src = html.escape(str(user.get("avatar", "")))
+            avatar_src = url_attr(user.get("avatar", ""), image=True)
 
             initials = (
                 html.escape(
