@@ -171,6 +171,10 @@ class TestACapturedEnvReachesARenderOnAFreshThread:
 
 
 def test_partial_page_preparation_uses_and_restores_the_captured_env():
+    import django
+
+    if django.VERSION < (6, 0):
+        pytest.skip("Django template partials require Django 6")
     _fr_push()
     lv = _rust.RustLiveView(
         "{% partialdef p %}<main dj-root>{{ v }}</main>{% endpartialdef %}{% partial p %}"

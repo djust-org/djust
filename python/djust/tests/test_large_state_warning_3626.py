@@ -191,6 +191,10 @@ class TestDescribeSnapshot:
         assert dict(parts["keys"]) == {k: len(msgpack.packb(v)) for k, v in state.items()}
 
     def test_authenticated_snapshot_retains_an_inspectable_extension(self):
+        import django
+
+        if django.VERSION < (6, 0):
+            pytest.skip("Django template partials require Django 6")
         from djust._rust import RustLiveView
 
         view = RustLiveView(
