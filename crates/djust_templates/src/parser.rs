@@ -2163,10 +2163,14 @@ fn parse_token_inner(
                         Err(crate::registry::library_syntax_error(&message))
                     } else if crate::registry::handler_exists(tag_name) {
                         crate::registry::validate_tag_arguments(tag_name, args, false)?;
+                        // A handler may name its positional operands from the
+                        // ORIGINAL tokens (#3664); after resolution a
+                        // positional value and a keyword are the same text.
+                        let args = crate::registry::rewrite_tag_arguments(tag_name, args)?;
                         // Inline handler exists - create CustomTag node
                         Ok(Some(Node::CustomTag {
                             name: tag_name.clone(),
-                            args: args.clone(),
+                            args,
                         }))
                     } else if crate::registry::assign_handler_exists(tag_name) {
                         // Context-mutating assign tag (register_assign_tag_handler).
