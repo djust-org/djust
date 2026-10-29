@@ -25,7 +25,9 @@ Focused tests exposed genuine compatibility problems:
   HTML5 foster parenting also makes lexical ancestry differ from browser DOM
   ancestry. Existing reconciliation does not carry the specific server-rendered
   child occurrence through postprocessing, so an HTML identifier alone is not
-  sufficient proof of ownership.
+  sufficient proof of ownership. A scratch prototype demonstrated an additional
+  `dj-update=ignore` case: retained DOM must retain the corresponding
+  authenticated child binding across diffs and snapshot restoration.
 
 Two independent fixes are committed locally: `6264e001b` restores the existing
 five-field snapshot layout when no partial metadata is present and updates
@@ -61,3 +63,9 @@ not all applications; the roughly 3.5–3.9x regression needs a safe design fix.
    tree with hooks, run the full Django 6.1 suite with an absolute `PYTHONPATH`,
    and run `make test-integration` on that exact commit. Push only after these
    gates pass and review the measured performance impact.
+
+The child-occurrence prototype is retained in the ignored worktree `context/`
+directory for future work. It is not ready to apply: its final focused run had
+12 passes and two failures, and 29 of 59 existing child tests failed. It does
+not yet preserve identity through all WebSocket, nested-render, ignored-subtree
+and snapshot paths or prevent shell mount side effects.
