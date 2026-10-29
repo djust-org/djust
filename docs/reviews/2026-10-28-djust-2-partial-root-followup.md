@@ -12,15 +12,16 @@ The first full Django 6.1.2 run of the candidate reported 49,520 passed,
 fixing that environment, 94 relevant subprocess and packaging-command tests
 passed. The full suite must be repeated with absolute paths on the final commit.
 
-Focused tests exposed genuine compatibility problems:
+The initial focused runs exposed these compatibility problems:
 
 - Ordinary inherited pages with opaque custom-tag output can lose root
   provenance and fail to render. A fail-closed improvement fixes the malformed
-  ordinary-root cases, but 31 catalogue HTTP and WebSocket tests remain red.
+  ordinary-root cases; 31 catalogue HTTP and WebSocket tests initially remained red.
+  The implemented correction and current evidence are recorded below.
 - Rendering the complete page for a WebSocket can execute a child mount from
   the shell before the selected live root is known. Discarding it afterwards
   cannot undo application side effects.
-- Explicit child reconciliation uses a lexical `div` root scanner. A child in
+- The original explicit child reconciliation used a lexical `div` root scanner. A child in
   a `<main dj-root>` can be classified as a shell child and survive removal;
   HTML5 foster parenting also makes lexical ancestry differ from browser DOM
   ancestry. Existing reconciliation does not carry the specific server-rendered
@@ -93,3 +94,44 @@ are in `context/scratch/child-ownership-2026-10-29/`.
 A separate root-scoping experiment passed 15 control-flow tests but failed to
 preserve full-page root liveness across an HTML comment boundary. It is not a
 production renderer; see `context/scratch/root-slice/`.
+
+## Implemented locally on 2026-10-29
+
+The earlier catalogue and lexical-location failures above are now fixed locally.
+`13946738a` uses the shared HTML5 parser for child regions, including non-div
+roots and foster parenting. `be9a2d301` carries a separately typed root-prefix
+proof through page processing and final binding validation. Unknown output does
+not gain lazy-container authority. Authored bindings after an opaque cutoff are
+explicitly refused when proof is incomplete; general opaque-transform parity
+remains unfinished.
+
+The catalogue/root/lazy selection passed 827 tests on Django 6.1.2, and the
+component CSS selection passed another 76. The later child/root/catalogue/lazy
+selection also passed 827 tests; these are different overlapping selections.
+The default-Django child selection passed 286 tests with 21 skipped. The full
+Rust gate, project lint, strict all-target Clippy and Python typing passed for
+the deferred-child change. These results do not replace the final full Django
+6.1 and integration gates.
+
+Live-root updates now defer child mount callbacks until an authenticated HTML5
+root has been selected. A private per-render ledger rejects duplicate, rewritten
+or consumed occurrences before mounting; shell and inert children are skipped.
+After each replacement, root authentication and sibling classification run again,
+so one child's malformed output cannot cause an inert sibling to mount. Caller
+render context is retained, and native scope state is restored on every exit.
+Explicit and legacy reconnect regressions pass.
+
+Current measurements use eight warmups and 40 samples per case. At 1,000 rows,
+root-mode updates measured 7.50 ms for includes and 9.45 ms for inheritance;
+the corresponding ordinary paths measured 2.79 and 2.74 ms. At 100 rows, root
+mode measured 0.72/0.80 ms versus ordinary 0.28/0.28 ms. The remaining overhead
+needs further work; the earlier measurements above used a different run and
+must not be treated as a controlled before/after comparison.
+
+An additional probe exposed a final-wrapper mismatch: SVG wrapping could alter
+the browser's root namespace while the server retained the earlier baseline.
+The correction and SVG/table regressions passed a 152-test Django 6.1
+selection covering HTTP/WebSocket parity, roots, catalogue and child execution.
+Authenticated child bindings across ignored-subtree reuse and snapshot
+restoration still need completion. The branch remains unpushed until the final
+full suites pass.

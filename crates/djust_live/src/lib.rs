@@ -1040,13 +1040,22 @@ impl RustLiveViewBackend {
     }
 
     /// Validate the final composed page against the prepared binding contract.
-    fn validate_prepared_page(&self, html: &str, spans: Vec<(usize, usize)>) -> PyResult<()> {
-        let page = self.pending_partial_page.as_ref().ok_or_else(|| {
+    fn validate_prepared_page(&mut self, html: &str, spans: Vec<(usize, usize)>) -> PyResult<()> {
+        let page = self.pending_partial_page.as_mut().ok_or_else(|| {
             pyo3::exceptions::PyRuntimeError::new_err("no authenticated page is pending")
         })?;
-        let root = djust_vdom::lazy_provenance::authenticated_live_root(html, &spans)
-            .map_err(authenticated_root_error)?;
-        if root.model_fields != page.fields {
+        let saved_counter = djust_vdom::get_id_counter();
+        if let Some(old) = &self.last_vdom {
+            if let Some(max) = djust_vdom::max_djust_id_in(old) {
+                djust_vdom::ensure_id_counter_at_least(max + 1);
+            }
+        } else {
+            reset_id_counter();
+        }
+        let root = djust_vdom::lazy_provenance::authenticated_live_root(html, &spans);
+        djust_vdom::set_id_counter(saved_counter);
+        let mut root = root.map_err(authenticated_root_error)?;
+        if root.model_fields != page.fields || root.namespace != page.namespace {
             return Err(authenticated_root_error(
                 djust_vdom::lazy_provenance::AuthenticatedRootError::InvalidProvenance,
             ));
@@ -1054,6 +1063,14 @@ impl RustLiveViewBackend {
         if page.authenticated {
             authenticated_source_range(html, &root)?;
         }
+        // Ordinary pages tolerate HTML5 normalization in their wrapper. The
+        // delivered tree is the baseline; no template expression is rerun.
+        // The framework's HTTP-only dj-view stamp remains outside diff state
+        // when the prepared source did not itself own that attribute.
+        if !page.vdom.attrs.contains_key("dj-view") {
+            root.vdom.attrs.remove("dj-view");
+        }
+        page.vdom = root.vdom;
         Ok(())
     }
 

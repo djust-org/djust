@@ -86,3 +86,35 @@ def test_opaque_cutoff_never_silently_drops_authored_bindings(tmp_path, partial,
                 assert view.name == "after"
     finally:
         unregister_block_tag_handler("rootproofwrap")
+
+
+def test_final_wrapper_cannot_change_root_namespace(tmp_path):
+    from django.core.exceptions import ImproperlyConfigured
+    from djust._rust import RustLiveView
+
+    (tmp_path / "root.html").write_text("<main dj-root><b>BODY</b></main>")
+    backend = RustLiveView('{% include "root.html" %}', [str(tmp_path)])
+    backend.set_authenticated_partial_root(True)
+    html, _, _, _ = backend.prepare_authenticated_page()
+    spans = backend.prepared_page_root_spans()
+    with pytest.raises(ImproperlyConfigured, match="invalid template provenance"):
+        backend.validate_prepared_page(
+            "<svg>" + html + "</svg>", [(a + 5, b + 5) for a, b in spans]
+        )
+
+
+def test_final_wrapper_commits_the_delivered_ordinary_tree(tmp_path):
+    from djust._rust import RustLiveView
+
+    (tmp_path / "root.html").write_text("<main dj-root><tr><td>BODY</td></tr></main>")
+    backend = RustLiveView('{% include "root.html" %}', [str(tmp_path)])
+    backend.set_authenticated_partial_root(True)
+    html, _, _, _ = backend.prepare_authenticated_page()
+    spans = backend.prepared_page_root_spans()
+    wrapped = "<table>" + html + "</table>"
+    backend.validate_prepared_page(wrapped, [(a + 7, b + 7) for a, b in spans])
+    baseline, _, _ = backend.commit_authenticated_page()
+    # HTML5 foster-parenting moves the table row outside main. It cannot stay
+    # in the delivered root's baseline merely because no model fields changed.
+    assert "BODY" not in baseline
+    assert "<main" in baseline

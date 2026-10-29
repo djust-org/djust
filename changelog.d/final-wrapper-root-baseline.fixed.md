@@ -1,0 +1,1 @@
+- Reject wrappers that change the authenticated root namespace and commit the validated delivered HTML5 root as the HTTP diff baseline.
