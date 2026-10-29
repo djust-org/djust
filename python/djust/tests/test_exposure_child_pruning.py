@@ -337,8 +337,35 @@ def test_failed_prune_flush_restores_local_entries_and_modified_flag(rf, monkeyp
     assert SessionStore(request.session.session_key).load() == before
 
 
+@pytest.fixture
+async def close_pruning_worker_connections(transactional_db):
+    """Release connections opened by routed-event session storage on the async worker."""
+    from asgiref.sync import sync_to_async
+    from django.db import connections
+    from django.db.backends.base.base import BaseDatabaseWrapper
+
+    def snapshot():
+        return {
+            id(conn): conn.connection is not None for conn in connections.all(initialized_only=True)
+        }
+
+    def close_new_connections(before):
+        for conn in connections.all(initialized_only=True):
+            if conn.connection is None or before.get(id(conn), False):
+                continue
+            if conn.vendor == "sqlite" and conn.is_in_memory_db():
+                BaseDatabaseWrapper.close(conn)
+            else:
+                conn.close()
+
+    before = await sync_to_async(snapshot)()
+    yield
+    await sync_to_async(close_new_connections)(before)
+
+
 @pytest.mark.asyncio
 @pytest.mark.django_db(transaction=True)
+@pytest.mark.usefixtures("close_pruning_worker_connections")
 async def test_child_routed_event_prunes_nested_storage_before_success(rf, monkeypatch):
     from asgiref.sync import sync_to_async
     from django.test import override_settings
@@ -394,3 +421,29 @@ def test_a_late_pool_save_of_the_child_tree_after_a_logout_is_dropped(rf):
         detached(lambda: save_child_states(page, request))()
     assert not SessionStore().exists(key)
     assert request.session.session_key == key
+
+
+@pytest.mark.parametrize("root_tag", ["main", "section"])
+def test_non_div_page_root_prunes_child_after_removal(rf, tmp_path, root_tag):
+    (tmp_path / "child_prune_page.html").write_text(
+        '{% extends "child_prune_base.html" %}{% load live_tags %}{% block main %}'
+        f"<{root_tag} dj-root>"
+        "{% if show_root %}{% live_render "
+        f'"{__name__}.RootChild" sticky=True %}}'
+        f"{{% endif %}}</{root_tag}>{{% endblock %}}"
+    )
+    page = Page()
+    request = make_request(rf, SessionStore())
+    page.request = request
+    page.get_template()
+    html = page.render_full_template(request)
+    assert "Root=1" in html
+    child = page._get_child_view("root")
+    assert child is not None
+    assert page._explicit_child_render_regions["root"][1] == "root"
+    page.show_root = False
+    page._cached_context = None
+    page._sync_done_this_cycle = False
+    page.render_with_diff(request)
+    assert page._get_child_view("root") is None
+    assert child._djust_child_disposed

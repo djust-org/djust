@@ -10,7 +10,6 @@ from collections.abc import Callable
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from functools import wraps
-from html.parser import HTMLParser
 from inspect import signature
 from typing import Any, ParamSpec, Protocol, TypeVar
 
@@ -26,98 +25,6 @@ class _ViewRenderer(Protocol):
     def render_full_template(self, *args: Any, **kwargs: Any) -> str: ...
 
 
-_VOID = frozenset(
-    {
-        "area",
-        "base",
-        "br",
-        "col",
-        "embed",
-        "hr",
-        "img",
-        "input",
-        "link",
-        "meta",
-        "param",
-        "source",
-        "track",
-        "wbr",
-    }
-)
-
-
-class _Slots(HTMLParser):
-    CDATA_CONTENT_ELEMENTS = (
-        *HTMLParser.CDATA_CONTENT_ELEMENTS,
-        "textarea",
-        "title",
-        "xmp",
-        "iframe",
-        "noembed",
-        "noscript",
-    )
-
-    def __init__(
-        self, *, candidates: set[str], whole_page: bool, owner_wrapper: bool, root_attribute: str
-    ) -> None:
-        super().__init__(convert_charrefs=True)
-        self.candidates = candidates
-        self.whole_page = whole_page
-        self.owner_wrapper = owner_wrapper
-        self.root_attribute = root_attribute
-        self.stack: list[tuple[str, bool, bool]] = []
-        self.slots: dict[str, str] = {}
-        self.root_found = False
-        self.first = True
-
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        values: dict[str, str | None] = {}
-        for name, value in attrs:
-            values.setdefault(name, value)  # HTML keeps the first duplicate attribute.
-        is_owner = self.first and self.owner_wrapper
-        self.first = False
-        slot = values.get("dj-sticky-slot")
-        if "dj-view" in values:
-            slot = values.get("data-djust-embedded", slot)
-        inert = (
-            tag == "template"
-            or tag in self.CDATA_CONTENT_ELEMENTS
-            or any(entry[0] == "template" for entry in self.stack)
-        )
-        embedded = slot in self.candidates and not is_owner and not inert
-        is_root = (
-            tag == "div"
-            and self.root_attribute in values
-            and not self.root_found
-            and not embedded
-            and not inert
-            and not any(entry[1] for entry in self.stack)
-        )
-        self.root_found = self.root_found or is_root
-        if embedded and not any(entry[1] for entry in self.stack):
-            assert slot is not None
-            if slot in self.slots:
-                raise ExposureError("Duplicate rendered child slot")
-            self.slots[slot] = (
-                "root"
-                if not self.whole_page or is_root or any(entry[2] for entry in self.stack)
-                else "shell"
-            )
-        if tag not in _VOID:
-            self.stack.append((tag, embedded, is_root))
-
-    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        self.handle_starttag(tag, attrs)
-        if tag not in _VOID:
-            self.handle_endtag(tag)
-
-    def handle_endtag(self, tag: str) -> None:
-        for index in range(len(self.stack) - 1, -1, -1):
-            if self.stack[index][0] == tag:
-                del self.stack[index:]
-                break
-
-
 @dataclass
 class _Render:
     owner: Any
@@ -130,33 +37,15 @@ class _Render:
     def finish(self, html: str) -> None:
         if not self.candidates:
             return
-        parser = _Slots(
-            candidates=set(self.candidates),
-            whole_page=self.whole_page,
-            owner_wrapper=self.owner_wrapper,
-            root_attribute="dj-root",
-        )
+        from ._rust import child_render_regions
+
         try:
-            parser.feed(html)
-            parser.close()
-            if self.whole_page and not parser.root_found:
-                parser = _Slots(
-                    candidates=set(self.candidates),
-                    whole_page=True,
-                    owner_wrapper=self.owner_wrapper,
-                    root_attribute="dj-view",
-                )
-                parser.feed(html)
-                parser.close()
-        except (AssertionError, ValueError):
-            # No complete ownership graph: do not retain partially seen slots.
-            self.regions = {}
-            return
-        self.regions = {
-            slot: (self.candidates[slot], region)
-            for slot, region in parser.slots.items()
-            if slot in self.candidates
-        }
+            regions = child_render_regions(
+                html, list(self.candidates), self.whole_page, self.owner_wrapper
+            )
+        except ValueError:
+            raise ExposureError("Invalid rendered child ownership") from None
+        self.regions = {slot: (self.candidates[slot], region) for slot, region in regions.items()}
 
     def release(self) -> None:
         """Drop the view and its children once the render is over (#3116).

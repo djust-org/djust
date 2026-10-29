@@ -3835,6 +3835,19 @@ fn needs_lazy_tree_uncached(
     Ok(false)
 }
 
+/// Locate server-registered child candidates in the browser's HTML5 tree.
+#[pyfunction]
+fn child_render_regions(
+    html: &str,
+    candidates: Vec<String>,
+    whole_page: bool,
+    owner_wrapper: bool,
+) -> PyResult<HashMap<String, String>> {
+    let slots = candidates.into_iter().collect();
+    djust_vdom::parser::child_render_regions(html, &slots, whole_page, owner_wrapper)
+        .map_err(pyo3::exceptions::PyValueError::new_err)
+}
+
 /// Authenticate a full rendered page before replacing its exact HTML5 node.
 /// Spans must have passed the template renderer's blank/opaque liveness checks.
 #[pyfunction]
@@ -7248,6 +7261,7 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
         template_needs_authenticated_partial_root,
         m
     )?)?;
+    m.add_function(wrap_pyfunction!(child_render_regions, m)?)?;
     m.add_function(wrap_pyfunction!(authenticated_root_shell, m)?)?;
     m.add_function(wrap_pyfunction!(
         provenance_edits::normalize_provenance_whitespace,

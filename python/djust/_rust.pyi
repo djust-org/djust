@@ -336,6 +336,9 @@ def template_needs_authenticated_partial_root(
     """Whether a template may render an authenticated partial root."""
     ...
 
+def child_render_regions(
+    html: str, candidates: List[str], whole_page: bool, owner_wrapper: bool
+) -> Dict[str, str]: ...
 def authenticated_root_shell(
     html: str, spans: List[Tuple[int, int]], exact_range: bool = True
 ) -> Tuple[int, int]:
@@ -1561,6 +1564,7 @@ __all__ = [
     "dj_root_stamp_offsets",
     "template_needs_provenance",
     "template_needs_authenticated_partial_root",
+    "child_render_regions",
     "authenticated_root_shell",
     "resolve_template_inheritance",
     "resolve_relative_template_includes",

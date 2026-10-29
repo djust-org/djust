@@ -520,6 +520,92 @@ fn find_root(handle: &Handle) -> Handle {
     handle.clone()
 }
 
+/// Classify registered child slots using the browser tree and the VDOM root rule.
+/// This determines location only; the caller must supply server-registered candidates.
+pub fn child_render_regions(
+    html: &str,
+    candidates: &std::collections::HashSet<String>,
+    whole_page: bool,
+    owner_wrapper: bool,
+) -> std::result::Result<std::collections::HashMap<String, String>, String> {
+    use std::rc::Rc;
+    let dom = parse_document(RcDom::default(), Default::default()).one(html);
+    let body = find_body(&dom.document);
+    let root = body.as_ref().and_then(find_liveview_root);
+    let owner = body.as_ref().filter(|_| owner_wrapper).and_then(|body| {
+        body.children
+            .borrow()
+            .iter()
+            .find(|node| matches!(node.data, NodeData::Element { .. }))
+            .cloned()
+    });
+    let mut found = std::collections::HashMap::new();
+    let mut stack = vec![(dom.document.clone(), false)];
+    while let Some((node, inside_root)) = stack.pop() {
+        let inside_root = inside_root || root.as_ref().is_some_and(|r| Rc::ptr_eq(r, &node));
+        let is_owner = owner.as_ref().is_some_and(|r| Rc::ptr_eq(r, &node));
+        if let NodeData::Element {
+            ref name,
+            ref attrs,
+            ..
+        } = node.data
+        {
+            if matches!(
+                &*name.local,
+                "template"
+                    | "script"
+                    | "style"
+                    | "textarea"
+                    | "title"
+                    | "xmp"
+                    | "iframe"
+                    | "noembed"
+                    | "noscript"
+            ) {
+                continue;
+            }
+            let attrs = attrs.borrow();
+            let get = |key: &str| {
+                attrs
+                    .iter()
+                    .find(|a| a.name.ns.is_empty() && &*a.name.local == key)
+            };
+            let view = get("dj-view").is_some();
+            let slot = if view {
+                get("data-djust-embedded").or_else(|| get("dj-sticky-slot"))
+            } else {
+                get("dj-sticky-slot")
+            };
+            if let Some(slot) = slot.filter(|a| !is_owner && candidates.contains(a.value.as_ref()))
+            {
+                let region = if !whole_page || inside_root {
+                    "root"
+                } else {
+                    "shell"
+                };
+                if found
+                    .insert(slot.value.to_string(), region.to_owned())
+                    .is_some()
+                {
+                    return Err("Duplicate rendered child slot".to_owned());
+                }
+                continue;
+            }
+            if !is_owner && is_embedded_child_wrapper(&attrs) {
+                continue;
+            }
+        }
+        stack.extend(
+            node.children
+                .borrow()
+                .iter()
+                .rev()
+                .map(|child| (child.clone(), inside_root)),
+        );
+    }
+    Ok(found)
+}
+
 /// Find the <body> element inside the document.
 fn find_body(handle: &Handle) -> Option<Handle> {
     for child in handle.children.borrow().iter() {
