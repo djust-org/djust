@@ -150,6 +150,14 @@ MUTATIONS: list[tuple[str, pathlib.Path, str, str, str, str]] = [
         "",
     ),
     (
+        "srcset parser NESTS parentheses: the FUZZ against the independent port alone must catch it",
+        UTILS,
+        '                    current += c\n                    if c == ")":\n                        state = "descriptor"',
+        '                    current += c\n                    if c == ")" and current.count("(") <= current.count(")"):\n                        state = "descriptor"',
+        SINKS,
+        "random_srcsets or token_fuzz or no_random_srcset",
+    ),
+    (
         "srcset parser splits on Unicode whitespace and VT, not ASCII whitespace only",
         UTILS,
         r'_ASCII_WS = "\t\n\f\r "',
