@@ -24,6 +24,14 @@ WORK_SENTINEL = "QUEUED_WORK_RESULT_SENTINEL"
 
 
 @pytest.fixture(autouse=True)
+async def release_owned_worker_connections(transactional_db):
+    from djust.tests._worker_database import owned_worker_database_connections
+
+    async with owned_worker_database_connections():
+        yield
+
+
+@pytest.fixture(autouse=True)
 def staged(monkeypatch, settings):
     monkeypatch.setattr(LiveView, "_validate_exposure_configuration", lambda self: None)
     settings.DJUST_LIVE_RENDER_ALLOWED_MODULES = [
