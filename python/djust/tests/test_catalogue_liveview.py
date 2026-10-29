@@ -39,6 +39,32 @@ _BASE = override_settings(
 )
 
 
+@pytest.fixture
+async def close_catalogue_http_worker_connections(transactional_db):
+    """Release connections opened by the HTTP parity request on the async worker."""
+    from asgiref.sync import sync_to_async
+    from django.db import connections
+    from django.db.backends.base.base import BaseDatabaseWrapper
+
+    def snapshot():
+        return {
+            id(conn): conn.connection is not None for conn in connections.all(initialized_only=True)
+        }
+
+    def close_new_connections(before):
+        for conn in connections.all(initialized_only=True):
+            if conn.connection is None or before.get(id(conn), False):
+                continue
+            if conn.vendor == "sqlite" and conn.is_in_memory_db():
+                BaseDatabaseWrapper.close(conn)
+            else:
+                conn.close()
+
+    before = await sync_to_async(snapshot)()
+    yield
+    await sync_to_async(close_new_connections)(before)
+
+
 async def _mount(component_name: str):
     """Mount the catalogue LiveView over a real WebSocket."""
     pytest.importorskip("channels")
@@ -176,6 +202,7 @@ def _tag_sequence(html: str) -> list[str]:
 @_BASE
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("close_catalogue_http_worker_connections")
 async def test_http_render_and_ws_mount_agree_structurally():
     """A patch path computed server-side must resolve against the client's DOM.
 

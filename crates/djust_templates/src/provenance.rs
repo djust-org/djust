@@ -458,11 +458,209 @@ impl RenderOutput for Rendered {
     }
 }
 
+/// Keep the established lazy proof separate from an authenticated root prefix.
+/// Unknown transforms permanently stop the prefix, but cannot erase previously
+/// proven root openings. Final HTML5 validation still checks the actual tree.
+/// `observed` is deny-only: it detects authored bindings lost at a cutoff and
+/// must never be exposed as authorization.
+#[derive(Debug, Clone, Default)]
+pub struct DualRendered {
+    pub normal: Rendered,
+    pub prefix: Rendered,
+    pub observed: Vec<Range<usize>>,
+}
+impl From<String> for DualRendered {
+    fn from(text: String) -> Self {
+        Self {
+            normal: text.clone().into(),
+            prefix: text.into(),
+            observed: Vec::new(),
+        }
+    }
+}
+impl std::ops::Deref for DualRendered {
+    type Target = str;
+    fn deref(&self) -> &str {
+        &self.normal.html
+    }
+}
+impl std::fmt::Display for DualRendered {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.normal.html)
+    }
+}
+impl DualRendered {
+    fn pair(a: Rendered, mut b: Rendered) -> Self {
+        b.html.clear();
+        Self {
+            observed: a.authored.clone(),
+            normal: a,
+            prefix: b,
+        }
+    }
+    fn append_prefix(&mut self, child: &Self, offset: usize) {
+        let out = &mut self.prefix;
+        let child = &child.prefix;
+        if out.literal_blocked {
+        } else if out.literal_only.is_none()
+            || child.literal_only.is_none()
+            || out.blank_only.is_none()
+            || child.blank_only.is_none()
+        {
+            out.literal_blocked = true;
+        } else {
+            if let (Some(target), Some(source)) = (&mut out.literal_only, &child.literal_only) {
+                let shift = target.len();
+                out.literal_offsets.extend(
+                    child
+                        .literal_offsets
+                        .iter()
+                        .map(|(a, b)| (a + offset, b + shift)),
+                );
+                target.push_str(source);
+            }
+            if let (Some(target), Some(source)) = (&mut out.blank_only, &child.blank_only) {
+                let shift = target.len();
+                out.blank_offsets.extend(
+                    child
+                        .blank_offsets
+                        .iter()
+                        .map(|(a, b)| (a + offset, b + shift)),
+                );
+                target.push_str(source);
+            }
+            out.authored.extend(
+                child
+                    .authored
+                    .iter()
+                    .map(|r| r.start + offset..r.end + offset),
+            );
+            out.origins.extend(
+                child
+                    .origins
+                    .iter()
+                    .map(|(a, b, c, id)| (a + offset, b + offset, *c, id.clone())),
+            );
+            out.literal_blocked = child.literal_blocked;
+        }
+    }
+}
+impl RenderOutput for DualRendered {
+    const TRACKED: bool = true;
+    fn authored(t: &str) -> Self {
+        Self::pair(Rendered::authored(t), Rendered::authored(t))
+    }
+    fn context_literal(t: String) -> Self {
+        Self::pair(
+            Rendered::context_literal(t.clone()),
+            Rendered::context_literal(t),
+        )
+    }
+    fn captured(t: String, l: Option<String>) -> Self {
+        Self::pair(
+            Rendered::captured(t.clone(), l.clone()),
+            Rendered::captured(t, l),
+        )
+    }
+    fn captured_projection(t: String, l: LiteralOutput) -> Self {
+        Self::pair(
+            Rendered::captured_projection(t.clone(), l.clone()),
+            Rendered::captured_projection(t, l),
+        )
+    }
+    fn context_neutral(t: String) -> Self {
+        Self::pair(
+            Rendered::context_neutral(t.clone()),
+            Rendered::context_neutral(t),
+        )
+    }
+    fn source_text(t: &str, s: &SourceText) -> Self {
+        Self::pair(Rendered::source_text(t, s), Rendered::source_text(t, s))
+    }
+    fn flatten(mut self, t: String) -> Self {
+        self.prefix.html = self.normal.html.clone();
+        Self::pair(self.normal.flatten(t.clone()), self.prefix.flatten(t))
+    }
+    fn flattened_literals(&mut self, literals: Vec<LiteralOutput>) {
+        for literal in literals {
+            self.append(&Self::captured_projection(String::new(), literal));
+        }
+    }
+    fn into_authored_output(self) -> djust_core::context::AuthoredOutput {
+        self.normal.into_authored_output()
+    }
+    fn from_authored_output(o: djust_core::context::AuthoredOutput) -> Self {
+        Self::pair(
+            Rendered::from_authored_output(o.clone()),
+            Rendered::from_authored_output(o),
+        )
+    }
+    fn append(&mut self, child: &Self) {
+        let offset = self.normal.html.len();
+        self.observed.extend(
+            child
+                .observed
+                .iter()
+                .map(|r| r.start + offset..r.end + offset),
+        );
+        self.normal.append(&child.normal);
+        self.append_prefix(child, offset);
+    }
+    fn push_str(&mut self, text: &str) {
+        self.append(&Self::from(text.to_owned()));
+    }
+    fn has_origin(&self) -> bool {
+        self.normal.has_origin() || self.prefix.has_origin()
+    }
+    fn identify(&mut self, identity: &str) {
+        self.normal.identify(identity);
+        self.prefix.identify(identity);
+    }
+    fn loop_identity(&mut self, context: &djust_core::Context) {
+        self.normal.loop_identity(context);
+        self.prefix.loop_identity(context);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{NoOpTemplateLoader, Template};
     use djust_core::{Context, Value};
+    #[test]
+    fn root_prefix_survives_an_unknown_capture_without_granting_lazy_authority() {
+        let mut out = DualRendered::authored("<main dj-root>");
+        out.append(&DualRendered::captured("opaque".to_owned(), None));
+        out.append(&DualRendered::authored(
+            "<div dj-view=child.View dj-lazy></div></main>",
+        ));
+        assert_eq!(
+            out.normal.html,
+            "<main dj-root>opaque<div dj-view=child.View dj-lazy></div></main>"
+        );
+        assert!(out.normal.literal_only.is_none());
+        assert_eq!(out.prefix.literal_only.as_deref(), Some("<main dj-root>"));
+        assert!(out.prefix.literal_blocked);
+        assert_eq!(out.prefix.authored.len(), 1);
+        assert_eq!(out.prefix.authored[0], 0..14);
+        assert_eq!(out.observed.len(), 2);
+    }
+
+    #[test]
+    fn resolver_cutoffs_use_the_same_root_prefix_rule() {
+        let mut out = DualRendered::authored("<main dj-root>");
+        out.flattened_literals(vec![LiteralOutput {
+            blocked: false,
+            html: None,
+            blank_html: None,
+            blank_openings: Vec::new(),
+            openings: Vec::new(),
+        }]);
+        assert!(out.normal.literal_only.is_none());
+        assert_eq!(out.prefix.literal_only.as_deref(), Some("<main dj-root>"));
+        assert!(out.prefix.literal_blocked);
+    }
+
     fn render(source: &str) -> Rendered {
         let mut ctx = Context::new();
         ctx.set("flag".into(), Value::Bool(true));

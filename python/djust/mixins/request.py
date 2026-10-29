@@ -812,7 +812,7 @@ class RequestMixin:
             from .._rust import authenticated_root_shell
 
             authenticated_root_shell(
-                html, list(cast("RenderedHTML", html).spans), exact_range=authenticated_root
+                html, list(cast("RenderedHTML", html).root_spans), exact_range=authenticated_root
             )
             html = self._stamp_dj_view(html, view_path, trusted=True)
         else:
@@ -843,13 +843,12 @@ class RequestMixin:
             # the bytes the browser will actually parse and mount.
             from django.core.exceptions import ImproperlyConfigured
             from .._render_provenance import RenderedHTML
-            from .._rust import authenticated_root_shell
 
             if not isinstance(html, RenderedHTML):
                 raise ImproperlyConfigured(
                     "LiveView root provenance was lost during page processing."
                 )
-            authenticated_root_shell(html, list(html.spans), exact_range=authenticated_root)
+            self._rust_view.validate_prepared_page(html, list(html.root_spans))
         if prepared_page:
             # Commit exactly the VDOM captured with the delivered page; do not
             # execute stateful template selectors a second time.

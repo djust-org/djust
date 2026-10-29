@@ -1314,15 +1314,16 @@ mod tests {
             assert_eq!(found, lazy_elements_impl::<false>(&html, &spans));
         }
     }
-    fn root_dom_snapshot<const BATCHED: bool>(
-        html: &str,
-        spans: &[(usize, usize)],
-    ) -> (
+    type RootDomSnapshot = (
         Vec<usize>,
         Vec<LiveAuthorityAttribute>,
         Vec<(Option<(usize, usize)>, bool)>,
         String,
-    ) {
+    );
+    fn root_dom_snapshot<const BATCHED: bool>(
+        html: &str,
+        spans: &[(usize, usize)],
+    ) -> RootDomSnapshot {
         let document = root_dom_impl::<BATCHED>(html, spans).unwrap();
         let openings = live_openings_from_dom(&document);
         let attrs = live_attributes_from_dom(html, spans, &document);

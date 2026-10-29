@@ -139,6 +139,12 @@ type LazyRenderOutput = (
     Vec<(usize, usize)>,
     Vec<(usize, usize, usize, String)>,
 );
+type RootRenderOutput = (
+    String,
+    Vec<(usize, usize)>,
+    Vec<(usize, usize, usize, String)>,
+    Vec<(usize, usize)>,
+);
 type PreparedAuthenticatedPageOutput = (
     String,
     Vec<(usize, usize)>,
@@ -339,6 +345,7 @@ impl djust_templates::inheritance::TemplateLoader for PartialRootRecordingLoader
 }
 
 struct PreparedPartialPage {
+    root_spans: Vec<(usize, usize)>,
     rendered: djust_templates::provenance::Rendered,
     authenticated: bool,
     range: Option<(usize, usize)>,
@@ -971,6 +978,23 @@ impl RustLiveViewBackend {
         self.render_result(true)
     }
 
+    /// Full-page root proof and lazy proof remain independently typed.
+    fn render_full_root_provenance(&self) -> PyResult<RootRenderOutput> {
+        let page = self.prepare_partial_page()?;
+        let spans = page
+            .rendered
+            .authored
+            .iter()
+            .map(|r| (r.start, r.end))
+            .collect();
+        Ok((
+            page.rendered.html,
+            spans,
+            page.rendered.origins,
+            page.root_spans,
+        ))
+    }
+
     /// Prepare one full HTTP render without changing the delivered baseline.
     /// Python validates the composed page and calls `commit_authenticated_page`
     /// only after that validation succeeds. This slot is never serialized.
@@ -1002,6 +1026,34 @@ impl RustLiveViewBackend {
         self.pending_partial_page.as_ref().is_some_and(|page| {
             page.vdom.attrs.contains_key("dj-root") || page.vdom.attrs.contains_key("dj-view")
         })
+    }
+
+    /// Root/model proof is separate from lazy-container authorization.
+    fn prepared_page_root_spans(&self) -> PyResult<Vec<(usize, usize)>> {
+        self.pending_partial_page
+            .as_ref()
+            .map(|page| page.root_spans.clone())
+            .ok_or_else(|| {
+                pyo3::exceptions::PyRuntimeError::new_err("no authenticated page is pending")
+            })
+    }
+
+    /// Validate the final composed page against the prepared binding contract.
+    fn validate_prepared_page(&self, html: &str, spans: Vec<(usize, usize)>) -> PyResult<()> {
+        let page = self.pending_partial_page.as_ref().ok_or_else(|| {
+            pyo3::exceptions::PyRuntimeError::new_err("no authenticated page is pending")
+        })?;
+        let root = djust_vdom::lazy_provenance::authenticated_live_root(html, &spans)
+            .map_err(authenticated_root_error)?;
+        if root.model_fields != page.fields {
+            return Err(authenticated_root_error(
+                djust_vdom::lazy_provenance::AuthenticatedRootError::InvalidProvenance,
+            ));
+        }
+        if page.authenticated {
+            authenticated_source_range(html, &root)?;
+        }
+        Ok(())
     }
 
     fn discard_authenticated_page(&mut self) {
@@ -1827,9 +1879,31 @@ impl RustLiveViewBackend {
             inner: FilesystemTemplateLoader::new(self.template_dirs.clone()),
             possible_partial_root: possible.clone(),
         };
-        let mut rendered: djust_templates::provenance::Rendered = template
+        let mut output: djust_templates::provenance::DualRendered = template
             .render_output_named_mut(&mut context, &loader, self.template_origin.as_deref())?;
-        rendered.retain_live_authority();
+        output.normal.retain_live_authority();
+        let cutoff = output.prefix.literal_blocked;
+        let root_spans: Vec<_> = if cutoff {
+            output.prefix.html = output.normal.html.clone();
+            output.prefix.retain_live_authority();
+            output
+                .prefix
+                .authored
+                .iter()
+                .map(|r| (r.start, r.end))
+                .collect()
+        } else {
+            // Both channels are identical before an unknown transform. Reuse
+            // the liveness check instead of parsing the same projections twice.
+            output
+                .normal
+                .authored
+                .iter()
+                .map(|r| (r.start, r.end))
+                .collect()
+        };
+        let observed: Vec<_> = output.observed.iter().map(|r| (r.start, r.end)).collect();
+        let rendered = output.normal;
         let spans: Vec<_> = rendered
             .authored
             .iter()
@@ -1843,7 +1917,20 @@ impl RustLiveViewBackend {
             reset_id_counter();
         }
         let candidate =
-            djust_vdom::lazy_provenance::authenticated_live_root(&rendered.html, &spans);
+            djust_vdom::lazy_provenance::authenticated_live_root(&rendered.html, &root_spans);
+        if let Some(root) = candidate.as_ref().ok().filter(|_| cutoff) {
+            // Observed source bytes can deny incomplete binding metadata, but
+            // never grant it. In particular an opaque cutoff cannot silently
+            // discard a later authored dj-model field.
+            let actual =
+                djust_vdom::lazy_provenance::authenticated_live_root(&rendered.html, &observed)
+                    .map_err(authenticated_root_error)?;
+            if actual.model_fields != root.model_fields {
+                return Err(authenticated_root_error(
+                    djust_vdom::lazy_provenance::AuthenticatedRootError::InvalidProvenance,
+                ));
+            }
+        }
         // A dependency only makes partial roots *possible*. Once the loader has
         // seen the selected tree, ordinary page roots retain the established
         // HTML5 parsing behavior, including tolerated malformed markup. Do not
@@ -1851,6 +1938,7 @@ impl RustLiveViewBackend {
         if !possible.load(Ordering::Relaxed) {
             if let Ok(root) = candidate {
                 return Ok(PreparedPartialPage {
+                    root_spans,
                     rendered,
                     authenticated: false,
                     range: None,
@@ -1871,6 +1959,7 @@ impl RustLiveViewBackend {
                     }
                 }
                 Ok(PreparedPartialPage {
+                    root_spans,
                     rendered,
                     authenticated: true,
                     range: Some(range),
@@ -1915,6 +2004,7 @@ impl RustLiveViewBackend {
                 }
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
                 Ok(PreparedPartialPage {
+                    root_spans,
                     rendered,
                     authenticated: false,
                     range: None,

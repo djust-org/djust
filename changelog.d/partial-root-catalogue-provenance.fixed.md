@@ -1,0 +1,1 @@
+- Preserve authenticated page roots across opaque output later in the render without granting lazy-container authority. Carry root proof through page edits and validate final model bindings before advancing the delivered baseline.

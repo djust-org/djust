@@ -587,6 +587,7 @@ Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
 self.dj_if_id_namespace = namespace.to_string();
 let prefix = format!("{key}.");
 Ok(dict.into())
+page.rendered.html,
 let html = page.rendered.html.clone();
 let (start, end) = page.range.unwrap_or((0, page.rendered.html.len()));
 return Ok((rendered.html[start..end].to_owned(), spans, origins));
@@ -616,7 +617,9 @@ m.insert("serialize_ms".to_string(), t.serialize_ms);
 m.insert("total_ms".to_string(), t.total_ms);
 m.insert("html_len".to_string(), t.html_len as f64);
 m.insert("fast_path".to_string(), t.fast_path);
-djust_vdom::lazy_provenance::authenticated_live_root(&rendered.html, &spans);
+output.prefix.html = output.normal.html.clone();
+djust_vdom::lazy_provenance::authenticated_live_root(&rendered.html, &root_spans);
+djust_vdom::lazy_provenance::authenticated_live_root(&rendered.html, &observed)
 let range = authenticated_source_range(&rendered.html, &root)?;
 root.vdom.attrs.insert("dj-view".to_string(), path.clone());
 &rendered.html,
@@ -1396,6 +1399,35 @@ self.html.push_str(&child.html);
 self.append(&Self::from(text.to_owned()));
 *id = format!("{identity}/{id}");
 self.identify(&format!("loop{}", context.dj_if_loop_path()));
+normal: text.clone().into(),
+prefix: text.into(),
+&self.normal.html
+f.write_str(&self.normal.html)
+b.html.clear();
+} else if out.literal_only.is_none()
+|| child.literal_only.is_none()
+|| out.blank_only.is_none()
+|| child.blank_only.is_none()
+if let (Some(target), Some(source)) = (&mut out.literal_only, &child.literal_only) {
+out.literal_offsets.extend(
+.literal_offsets
+if let (Some(target), Some(source)) = (&mut out.blank_only, &child.blank_only) {
+out.blank_offsets.extend(
+.blank_offsets
+self.prefix.html = self.normal.html.clone();
+Self::pair(self.normal.flatten(t.clone()), self.prefix.flatten(t))
+fn into_authored_output(self) -> djust_core::context::AuthoredOutput {
+self.normal.into_authored_output()
+let offset = self.normal.html.len();
+self.append(&Self::from(text.to_owned()));
+out.append(&DualRendered::captured("opaque".to_owned(), None));
+out.normal.html,
+assert!(out.normal.literal_only.is_none());
+assert_eq!(out.prefix.literal_only.as_deref(), Some("<main dj-root>"));
+blank_html: None,
+blank_openings: Vec::new(),
+assert!(out.normal.literal_only.is_none());
+assert_eq!(out.prefix.literal_only.as_deref(), Some("<main dj-root>"));
 ctx.set("flag".into(), Value::Bool(true));
 "xs".into(),
 ctx.set("extra".into(), Value::String("Δ".into()));

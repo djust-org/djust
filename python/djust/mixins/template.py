@@ -1866,7 +1866,12 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                     rendered, spans, origins, root_range = (
                         self._rust_view.prepare_authenticated_page()
                     )
-                page = RenderedHTML(rendered, tuple(spans), origins=tuple(origins))
+                page = RenderedHTML(
+                    rendered,
+                    tuple(spans),
+                    origins=tuple(origins),
+                    root_spans=tuple(self._rust_view.prepared_page_root_spans()),
+                )
                 self._pending_authenticated_page = True
                 self._prepared_authenticated_partial_root = root_range is not None
                 self._prepared_authenticated_page_root = self._rust_view.prepared_page_has_root()
@@ -2020,8 +2025,10 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                 if self._rust_view.authenticated_partial_root():
                     from .._render_provenance import RenderedHTML
 
-                    rendered, spans, origins = temp_rust.render_full_provenance()
-                    shell_html = RenderedHTML(rendered, tuple(spans), origins=tuple(origins))
+                    rendered, spans, origins, root_spans = temp_rust.render_full_root_provenance()
+                    shell_html = RenderedHTML(
+                        rendered, tuple(spans), origins=tuple(origins), root_spans=tuple(root_spans)
+                    )
                 else:
                     shell_html = render_html(temp_rust, self._full_template)
 
@@ -2056,7 +2063,7 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
 
                 authenticated_shell = cast("RenderedHTML", shell_html)
                 start_byte, end_byte = authenticated_root_shell(
-                    authenticated_shell, list(authenticated_shell.spans)
+                    authenticated_shell, list(authenticated_shell.root_spans)
                 )
                 tag_start = authenticated_shell.char_offset(start_byte)
                 close_end = authenticated_shell.char_offset(end_byte)
@@ -2116,7 +2123,7 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         # A generated attribute is authoritative only after the caller has
         # authenticated the page root. Other output retains its own provenance.
         if trusted:
-            attr = RenderedHTML(attr, ((0, len(attr.encode("utf-8"))),))
+            attr = RenderedHTML(attr, root_spans=((0, len(attr.encode("utf-8"))),))
         parts: list[str] = []
         last = 0
         for insert_at in dj_root_stamp_offsets(html):
