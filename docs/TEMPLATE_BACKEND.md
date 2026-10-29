@@ -304,14 +304,22 @@ rendering path, which does more work than ordinary fragment rendering.
 For named partials (`template_name="page.html#name"` or a static include of
 `"page.html#name"`), recursive ORM serialization supports a direct model or
 model-collection root following a self-referential foreign key or one-to-one
-field with `{% if node.child %}` and `{% with node=node.child %}`. Unsupported recursive control flow and nested ORM contexts are rejected
+field with `{% if node.child %}` and `{% with node=node.child %}`. Unsupported
+recursive control flow and nested ORM contexts are rejected
 when detected, rather than silently truncating model data. Dynamically selected
 recursive named partials are rejected; unusual aliasing is not covered by
 this scoped serializer. In LiveViews, dynamic Django template objects are
 accepted only when their render behavior and static content can be verified;
-use a template name for more complex dynamic includes. Recursive ORM values also require JIT
+use a template name for more complex dynamic includes. Recursive ORM values
+also require JIT
 serialization and the default context-exposure mode. Non-ORM recursive values
 continue to use the normal template behavior.
+
+LiveViews that may resolve partial roots, including some templates with
+includes or inheritance, store additional snapshot metadata. During a rolling
+upgrade, older djust workers cannot resume those snapshots; upgrade all workers
+before serving those views, or keep them on upgraded workers until the rollout
+is complete.
 
 Partial calls are bounded by the Python interpreter's configured recursion
 limit rather than a fixed 64-call limit; exceeding the djust limit raises
