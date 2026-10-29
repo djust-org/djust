@@ -341,7 +341,8 @@ async function handleServerResponse(data, eventName, triggerElement, transport =
             // When no dj-update elements exist, applyDjUpdateElements falls back
             // to morphChildren internally, which preserves JS state (canvas contexts,
             // event listeners, hook properties) better than innerHTML replacement.
-            applyDjUpdateElements(liveviewRoot, newRoot);
+            _withOwnedChildMount(data.owned_children,
+                () => applyDjUpdateElements(liveviewRoot, newRoot));
 
             clearOptimisticPending();
 

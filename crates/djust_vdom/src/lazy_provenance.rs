@@ -198,6 +198,42 @@ fn raw_tag(html: &str, start: usize) -> Option<RawTag> {
         attrs.entry(attr).or_insert(attr_start..i);
     }
 }
+
+/// Locate a directly returned library child wrapper without conferring authority.
+/// Attribute values are checked against HTML5 decoding, including escaped slots.
+pub fn child_wrapper_opening_end(html: &str, slot: &str) -> Option<usize> {
+    let raw = raw_tag(html, 0)?;
+    if !raw.valid || !html[1..raw.name.end].eq_ignore_ascii_case("div") {
+        return None;
+    }
+    // This is attribute decoding, not source authorization. Parse the one
+    // lexical wrapper probe with the ordinary HTML5 parser; source authority
+    // is checked separately when this exact issued opening enters the page.
+    use html5ever::tendril::TendrilSink;
+    let probe = format!("{}</div>", &html[..raw.end]);
+    let document = html5ever::parse_document(RcDom::default(), Default::default()).one(probe);
+    // Keep the owning document alive: RcDom's iterative Node::drop drains
+    // descendant child lists even while traversal handles still exist.
+    let mut pending = vec![document.document.clone()];
+    while let Some(node) = pending.pop() {
+        if let NodeData::Element { name, attrs, .. } = &node.data {
+            if name.ns == html5ever::ns!(html) && &*name.local == "div" {
+                let attrs = attrs.borrow();
+                let matches = |name: &str| {
+                    attrs.iter().any(|a| {
+                        a.name.ns.is_empty() && &*a.name.local == name && a.value.as_ref() == slot
+                    })
+                };
+                return ((has_attr(&attrs, "dj-view") && matches("data-djust-embedded"))
+                    || (!has_attr(&attrs, "dj-view") && matches("dj-sticky-slot")))
+                .then_some(raw.end);
+            }
+        }
+        pending.extend(node.children.borrow().iter().cloned());
+    }
+    None
+}
+
 fn authority_value<'a>(html: &'a str, raw: &RawTag, name: &str) -> Option<&'a str> {
     let range = raw.attrs.get(name)?;
     let attr = &html[range.clone()];
@@ -320,7 +356,7 @@ impl TokenSink for LocatedTree<'_> {
                             && authority_matches(self.html, &raw, tag, name)
                     };
                     let authority = if self.root_mode {
-                        ["dj-root", "dj-view", "dj-model"]
+                        ["dj-root", "dj-view", "dj-model", "dj-update"]
                             .iter()
                             .any(|name| authorized(name))
                     } else {
@@ -548,7 +584,7 @@ pub fn root_authority_spans(html: &str, spans: &[(usize, usize)]) -> Vec<(usize,
         }
         if let Some(raw) = raw_tag(html, start) {
             previous = raw.end;
-            if ["dj-root", "dj-view", "dj-model"]
+            if ["dj-root", "dj-view", "dj-model", "dj-update"]
                 .iter()
                 .any(|name| raw.attrs.contains_key(*name))
             {
@@ -611,7 +647,7 @@ fn root_dom_with_issued<'a, const BATCHED: bool>(
     // tags with arbitrarily many '<' characters or unterminated quotes.
     let last_authority = if BATCHED {
         let bytes = html.as_bytes();
-        [b"dj-root".as_slice(), b"dj-view", b"dj-model"]
+        [b"dj-root".as_slice(), b"dj-view", b"dj-model", b"dj-update"]
             .into_iter()
             .filter_map(|needle| {
                 bytes
@@ -778,7 +814,7 @@ fn live_attributes_from_dom(
         }
         if let Some((start, end)) = source_opening(&node) {
             if let Some(raw) = raw_tag(html, start).filter(|raw| raw.end == end) {
-                for name in ["dj-root", "dj-view", "dj-model"] {
+                for name in ["dj-root", "dj-view", "dj-model", "dj-update"] {
                     if dom_attr_authorized(html, spans, &node, name) {
                         if let Some(range) = raw.attrs.get(name) {
                             if let Some(value) = authority_value(html, &raw, name) {
@@ -838,6 +874,8 @@ pub struct AuthenticatedRoot {
     /// Render-issued child openings, associated with this exact VDOM's IDs.
     /// The caller must validate the issuance ledger before committing them.
     pub child_vdom_ids: Vec<(String, String)>,
+    /// Independently authored, live ignore boundaries in this view.
+    pub ignore_vdom_ids: HashSet<String>,
     pub model_fields: Vec<String>,
     fragment_context: QualName,
     fragment_attrs: Vec<Attribute>,
@@ -1057,7 +1095,8 @@ pub fn authenticated_live_root_with_children(
     let fields = scoped_model_fields(html, spans, &root);
     let by_opening: HashMap<_, _> = children.iter().map(|(a, b, key)| ((*a, *b), key)).collect();
     let mut owners = HashMap::new();
-    if !children.is_empty() {
+    let mut ignore_owners = HashSet::new();
+    {
         let mut pending = vec![(root.clone(), true)];
         while let Some((node, is_root)) = pending.pop() {
             if let NodeData::Element { name, attrs, .. } = &node.data {
@@ -1076,12 +1115,18 @@ pub fn authenticated_live_root_with_children(
                 ) {
                     continue;
                 }
+                if attrs.iter().any(|a| {
+                    a.name.ns.is_empty() && &*a.name.local == "dj-update" && &*a.value == "ignore"
+                }) && dom_attr_authorized(html, spans, &node, "dj-update")
+                {
+                    ignore_owners.insert(Rc::as_ptr(&node));
+                }
                 if let Some(key) = source_opening(&node).and_then(|range| by_opening.get(&range)) {
                     if is_root
                         || name.ns != html5ever::ns!(html)
                         || &*name.local != "div"
-                        || !has_attr(&attrs, "dj-view")
-                        || !has_attr(&attrs, "data-djust-embedded")
+                        || !(has_attr(&attrs, "dj-view") && has_attr(&attrs, "data-djust-embedded")
+                            || !has_attr(&attrs, "dj-view") && has_attr(&attrs, "dj-sticky-slot"))
                     {
                         return Err(AuthenticatedRootError::InvalidProvenance);
                     }
@@ -1164,10 +1209,14 @@ pub fn authenticated_live_root_with_children(
                 _ => true,
             });
     let mut child_vdom_ids = Vec::new();
-    let vdom = if children.is_empty() {
+    let mut ignore_vdom_ids = HashSet::new();
+    let vdom = if children.is_empty() && ignore_owners.is_empty() {
         crate::parser::handle_to_vnode(&root, 1)
     } else {
         crate::parser::handle_to_vnode_observed(&root, 1, &mut |node, id| {
+            if ignore_owners.contains(&Rc::as_ptr(node)) {
+                ignore_vdom_ids.insert(id.to_owned());
+            }
             if let Some(key) = owners.get(&Rc::as_ptr(node)) {
                 child_vdom_ids.push((key.clone(), id.to_owned()));
             }
@@ -1234,6 +1283,7 @@ pub fn authenticated_live_root_with_children(
     }
     Ok(AuthenticatedRoot {
         child_vdom_ids,
+        ignore_vdom_ids,
         opening,
         root_html,
         document_with_placeholder,
@@ -1437,6 +1487,20 @@ mod tests {
         Vec<(Option<(usize, usize)>, bool)>,
         String,
     );
+    #[test]
+    fn direct_child_wrapper_opening_handles_complete_and_escaped_slots() {
+        for (html, slot) in [
+            ("<div dj-sticky-slot=\"root\"></div>", "root"),
+            ("<div dj-view data-djust-embedded=\"root\">Root=1</div>", "root"),
+            ("<div dj-view dj-sticky-view=\"root\" dj-sticky-root data-djust-embedded=\"root\">Root=1</div>", "root"),
+            ("<div dj-view data-djust-embedded=\"a&amp;&gt;b\">Root=1</div>", "a&>b"),
+        ] {
+            let end = raw_tag(html, 0).unwrap().end;
+            assert_eq!(child_wrapper_opening_end(html, slot), Some(end));
+            assert_eq!(child_wrapper_opening_end(html, "other"), None);
+        }
+    }
+
     fn root_dom_snapshot<const BATCHED: bool>(
         html: &str,
         spans: &[(usize, usize)],

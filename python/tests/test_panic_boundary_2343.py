@@ -188,6 +188,8 @@ class TestGuardCoversTheRenderSurface:
             "crosses_as_encoded_by_conversion",
             "render",
             "prepare_authenticated_page",
+            "prepare_owned_diff",
+            "commit_owned_diff",
             "commit_authenticated_page",
             "render_with_diff",
             "render_binary_diff",

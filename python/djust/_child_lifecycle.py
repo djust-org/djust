@@ -39,6 +39,11 @@ def dispose_child_subtree(child: Any, *, navigation: bool = False) -> None:
         slot = getattr(current, "_view_id", None)
         owner_registry = getattr(owner, "_child_views", None)
         owner_regions = getattr(owner, "_explicit_child_render_regions", None)
+        owner_bindings = getattr(owner, "_explicit_child_vdom_bindings", None)
+        if type(owner_bindings) is dict:
+            for node_id, bound in list(owner_bindings.items()):
+                if bound is current:
+                    owner_bindings.pop(node_id)
         if type(owner_regions) is dict:
             region = owner_regions.get(slot)
             if type(region) is tuple and len(region) == 2 and region[0] is current:
@@ -61,6 +66,7 @@ def dispose_child_subtree(child: Any, *, navigation: bool = False) -> None:
         # child must not retain that hidden ownership reference or be reusable.
         current._explicit_child_reuse_identity = None
         current._explicit_child_render_regions = {}
+        current._explicit_child_vdom_bindings = {}
         current._deferred_callbacks = []
         ordered.append(current)
 

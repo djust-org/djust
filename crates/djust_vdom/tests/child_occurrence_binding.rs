@@ -118,3 +118,30 @@ fn a_child_below_the_vdom_depth_limit_cannot_claim_a_missing_id() {
     )
     .is_err());
 }
+
+#[test]
+fn issued_sticky_slot_binds_without_granting_source_authority() {
+    let slot = "<div dj-sticky-slot=child>";
+    let html = format!("<main dj-root>{slot}</div></main>");
+    let child = opening(&html, slot);
+    let proof = [(0, child.0), (child.1, html.len())];
+    let root = authenticated_live_root_with_children(&html, &proof, &[child]).unwrap();
+    assert_eq!(root.child_vdom_ids[0].0, "issued");
+    assert_eq!(
+        root.child_vdom_ids[0].1,
+        root.vdom.children[0].djust_id.clone().unwrap()
+    );
+    assert!(root.model_fields.is_empty());
+}
+
+#[test]
+fn ignore_authority_requires_its_own_authored_attribute() {
+    let html = "<main dj-root><section dj-update=ignore></section></main>";
+    let full = authenticated_live_root_with_children(html, &[(0, html.len())], &[]).unwrap();
+    assert_eq!(full.ignore_vdom_ids.len(), 1);
+    let start = html.find("dj-update").unwrap();
+    let end = html[start..].find('>').unwrap() + start;
+    let root =
+        authenticated_live_root_with_children(html, &[(0, start), (end, html.len())], &[]).unwrap();
+    assert!(root.ignore_vdom_ids.is_empty());
+}

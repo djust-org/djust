@@ -2,6 +2,8 @@
 use djust_templates::provenance::{DualRendered, Rendered};
 use pyo3::prelude::*;
 
+type DeferredEdit = (usize, usize, String, Option<(String, usize)>);
+
 thread_local! {
     static ENABLED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
@@ -53,11 +55,15 @@ fn apply_to(rendered: &mut Rendered, html: &str, edits: &[(usize, usize, &str)])
     rendered.origins = origins;
 }
 
-pub fn materialize(output: &mut DualRendered, possible_partial_root: bool) -> PyResult<()> {
+pub fn materialize(
+    output: &mut DualRendered,
+    possible_partial_root: bool,
+) -> PyResult<Vec<(usize, usize, String)>> {
     if !ENABLED.with(std::cell::Cell::get) {
-        return Ok(());
+        return Ok(Vec::new());
     }
     Python::attach(|py| {
+        let mut issued: Vec<(usize, usize, String)> = Vec::new();
         let module = py.import("djust._deferred_children")?;
         while module
             .getattr("deferred_children_pending")?
@@ -110,7 +116,7 @@ pub fn materialize(output: &mut DualRendered, possible_partial_root: bool) -> Py
             };
             // The Python ledger validates every private occurrence before invoking
             // a mount. It returns replacements only; it cannot grant source proof.
-            let edits: Vec<(usize, usize, String)> = module
+            let edits: Vec<DeferredEdit> = module
                 .getattr("materialize_deferred_children")?
                 .call1((&output.normal.html, page_root))?
                 .extract()?;
@@ -121,7 +127,7 @@ pub fn materialize(output: &mut DualRendered, possible_partial_root: bool) -> Py
             }
             let html = output.normal.html.clone();
             let mut cursor = 0;
-            for (start, end, _) in &edits {
+            for (start, end, _, _) in &edits {
                 if *start < cursor
                     || *start > *end
                     || *end > html.len()
@@ -134,9 +140,33 @@ pub fn materialize(output: &mut DualRendered, possible_partial_root: bool) -> Py
                 }
                 cursor = *end;
             }
+            let (start, end, text, child) = &edits[0];
+            for (a, b, _) in &mut issued {
+                if *b <= *start {
+                    continue;
+                }
+                if *a < *end {
+                    return Err(pyo3::exceptions::PyValueError::new_err(
+                        "overlapping issued child opening",
+                    ));
+                }
+                *a = *a - (end - start) + text.len();
+                *b = *b - (end - start) + text.len();
+            }
+            if let Some((key, opening_end)) = child {
+                if *opening_end == 0
+                    || *opening_end > text.len()
+                    || !text.is_char_boundary(*opening_end)
+                {
+                    return Err(pyo3::exceptions::PyValueError::new_err(
+                        "invalid issued child opening",
+                    ));
+                }
+                issued.push((*start, start + opening_end, key.clone()));
+            }
             let edits: Vec<_> = edits
                 .iter()
-                .map(|(a, b, text)| (*a, *b, text.as_str()))
+                .map(|(a, b, text, _)| (*a, *b, text.as_str()))
                 .collect();
             let observed: Vec<_> = output.observed.iter().map(|r| (r.start, r.end)).collect();
             let (_, observed, _) =
@@ -145,7 +175,8 @@ pub fn materialize(output: &mut DualRendered, possible_partial_root: bool) -> Py
             apply_to(&mut output.normal, &html, &edits);
             apply_to(&mut output.prefix, &html, &edits);
         }
-        Ok(())
+        issued.sort_unstable_by_key(|(a, b, _)| (*a, *b));
+        Ok(issued)
     })
 }
 

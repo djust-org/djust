@@ -118,6 +118,8 @@ _FRAMEWORK_INTERNAL_ATTRS: frozenset = frozenset(
         "_explicit_child_schema",
         "_explicit_child_reuse_identity",
         "_explicit_child_render_regions",
+        "_explicit_child_vdom_bindings",
+        "_explicit_child_vdom_tracking",
         "_explicit_child_render_scope",
         "_explicit_child_rendered_full",
         "_explicit_child_state_tracked",
@@ -1027,6 +1029,8 @@ class LiveView(
         self._prepared_authenticated_partial_root = False
         self._prepared_authenticated_page_root = False
         self._pending_authenticated_page = False
+        self._explicit_child_vdom_bindings: dict[str, Any] = {}
+        self._explicit_child_vdom_tracking = False
         self._http_lazy_containers = {}
         self._http_lazy_validated_html = None
         self._framework_attrs: frozenset = frozenset(self.__dict__.keys())

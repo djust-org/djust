@@ -56,4 +56,10 @@ class HtmlRenderer:
         across renderers (LVN-II's ``NativeRenderer`` will need
         ``request`` for per-platform variant resolution).
         """
+        from .._child_rendering import owned_diff_active, prepare_owned_child_diff
+
+        if getattr(
+            self.view._rust_view, "potential_authenticated_partial_root", lambda: False
+        )() and owned_diff_active(self.view):
+            return prepare_owned_child_diff(self.view)
         return self.view._rust_view.render_with_diff()

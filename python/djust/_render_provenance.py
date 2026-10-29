@@ -8,6 +8,28 @@ from itertools import accumulate
 from typing import Any
 
 
+class RenderedDiffHTML(str):
+    """A pending native diff and its immutable, server-only ownership proof."""
+
+    fresh_child_ids: tuple
+    retained_child_ids: tuple
+    issued_children: tuple
+    diff_version: int
+
+    def __new__(
+        cls, html: str, fresh: tuple, retained: tuple, issued: tuple, version: int
+    ) -> RenderedDiffHTML:
+        obj = super().__new__(cls, html)
+        object.__setattr__(obj, "fresh_child_ids", tuple(fresh))
+        object.__setattr__(obj, "retained_child_ids", tuple(retained))
+        object.__setattr__(obj, "issued_children", tuple(issued))
+        object.__setattr__(obj, "diff_version", version)
+        return obj
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        raise AttributeError("Pending diff proof is immutable")
+
+
 class RenderedHTML(str):
     spans: tuple
     root_spans: tuple

@@ -2311,7 +2311,7 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
 
         defer_children = (
             isinstance(renderer, HtmlRenderer)
-            and self._rust_view.potential_authenticated_partial_root()
+            and getattr(self._rust_view, "potential_authenticated_partial_root", lambda: False)()
         )
         with (
             active_parent_view(self),
@@ -2326,7 +2326,11 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         html, patches_json, version = result
         # The state backend holds a snapshot, not this object; record the
         # render so the next reader of the key starts from it.
-        self._refresh_cached_rust_view()
+        from .._render_provenance import RenderedDiffHTML
+
+        pending_owned = isinstance(html, RenderedDiffHTML)
+        if not pending_owned:
+            self._refresh_cached_rust_view()
 
         # Record dj-model auto-allowlist from the TEMPLATE SOURCE (CWE-915
         # mass-assignment guard). This is the dominant render path — HTTP-GET
@@ -2336,7 +2340,8 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         # (Text-node literals only via ``dj_model_fields()``), which reflects any
         # ``update_template`` done above for dynamic templates; immune to
         # rendered-output poisoning (text nodes, interpolated attrs, ``|safe``).
-        self._record_dj_model_fields_from_rust(self._rust_view)
+        if not pending_owned:
+            self._record_dj_model_fields_from_rust(self._rust_view)
 
         # Capture per-phase Rust timing (render, parse, diff, serialize)
         self._rust_render_timing = self._rust_view.get_render_timing()

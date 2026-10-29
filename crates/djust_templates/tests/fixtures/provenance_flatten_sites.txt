@@ -589,6 +589,20 @@ let root_projection = rendered.literal_offsets.last().map(|(_, p)| *p);
 assert!(rendered.html.starts_with("é<div>保全</div><main"));
 assert_eq!(rendered.literal_only, original);
 rendered.literal_offsets.last().copied(),
+djust_live/src/child_bindings.rs
+result.djust_id = Some(id.into());
+result.attrs.insert("dj-update".into(), "ignore".into());
+let fresh = HashMap::from([
+("6".into(), "discarded".into()),
+("7".into(), "fresh".into()),
+let previous = HashSet::from(["2".into(), "3".into()]);
+&HashSet::from(["5".into()]),
+vec![("fresh".into(), "3".into())]
+vec![("2".into(), "2".into())]
+&HashSet::from(["1".into()]),
+new.tag = "article".into();
+&HashSet::from(["1".into()]),
+&HashMap::from([("1".into(), "key".into())]),
 djust_live/src/model_serializer.rs
 .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
 return Ok(JsonValue::Number(i.into()));
@@ -609,6 +623,7 @@ let prefix = format!("{key}.");
 Ok(dict.into())
 page.rendered.html,
 let html = page.rendered.html.clone();
+.map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?,
 let (start, end) = page.range.unwrap_or((0, page.rendered.html.len()));
 return Ok((rendered.html[start..end].to_owned(), spans, origins));
 Ok((result.html, spans, result.origins))
@@ -638,7 +653,7 @@ m.insert("total_ms".to_string(), t.total_ms);
 m.insert("html_len".to_string(), t.html_len as f64);
 m.insert("fast_path".to_string(), t.fast_path);
 output.prefix.html = output.normal.html.clone();
-djust_vdom::lazy_provenance::authenticated_live_root(&rendered.html, &root_spans);
+&rendered.html,
 djust_vdom::lazy_provenance::authenticated_live_root(&rendered.html, &observed)
 let range = authenticated_source_range(&rendered.html, &root)?;
 root.vdom.attrs.insert("dj-view".to_string(), path.clone());

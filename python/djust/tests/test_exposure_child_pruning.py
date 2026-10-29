@@ -2,6 +2,8 @@
 
 import copy
 
+import django
+
 import pytest
 from django.contrib.sessions.backends.db import SessionStore
 
@@ -447,3 +449,121 @@ def test_non_div_page_root_prunes_child_after_removal(rf, tmp_path, root_tag):
     page.render_with_diff(request)
     assert page._get_child_view("root") is None
     assert child._djust_child_disposed
+
+
+@pytest.mark.skipif(django.VERSION < (6, 0), reason="Django 6 authenticated page-graph rendering")
+def test_ignored_root_dom_retains_its_registered_child(rf, tmp_path):
+    (tmp_path / "child_prune_page.html").write_text(
+        '{% extends "child_prune_base.html" %}{% load live_tags %}{% block main %}'
+        '<main dj-root>{% if show_shell %}<div dj-update="ignore">{% if show_root %}'
+        '{% live_render "djust.tests.test_exposure_child_pruning.RootChild" sticky=True %}'
+        "{% endif %}</div>{% endif %}</main>{% endblock %}"
+    )
+    page, request = mounted(rf)
+    child = page._get_child_view("root")
+    assert child is not None
+    page.show_root = False
+    html, _, _ = page.render_with_diff(request)
+    assert "Root=1" in html
+    assert page._get_child_view("root") is child
+    assert not getattr(child, "_djust_child_disposed", False)
+    # Removing the ignore container removes the copied node and its proof too.
+    page.show_shell = False
+    html, _, _ = page.render_with_diff(request)
+    assert "Root=1" not in html
+    assert page._get_child_view("root") is None
+    assert getattr(child, "_djust_child_disposed", False)
+
+
+@pytest.mark.skipif(django.VERSION < (6, 0), reason="Django 6 authenticated page-graph rendering")
+def test_lost_owned_diff_proof_does_not_advance_baseline(rf, monkeypatch):
+    import msgpack
+    from djust._child_rendering import render_view_with_diff
+
+    page, request = mounted(rf)
+    before = msgpack.unpackb(page._rust_view.serialize_msgpack(), raw=False)[2:4]
+    original = Page.render_with_diff
+
+    def lost(self, *args, **kwargs):
+        html, patches, version = original(self, *args, **kwargs)
+        return str(html), patches, version
+
+    monkeypatch.setattr(Page, "render_with_diff", lost)
+    with pytest.raises(ExposureError, match="proof was lost"):
+        render_view_with_diff(page, request)
+    assert msgpack.unpackb(page._rust_view.serialize_msgpack(), raw=False)[2:4] == before
+    assert page._get_child_view("root") is not None
+
+
+@pytest.mark.skipif(django.VERSION < (6, 0), reason="Django 6 authenticated page-graph rendering")
+def test_an_unrendered_replacement_cannot_receive_a_child_event(rf):
+    from django.template import Context
+    from djust._exposure_children import child_event_adapter
+    from djust.templatetags.live_tags import live_render
+
+    page, request = mounted(rf)
+    child = page._get_child_view("root")
+    assert child_event_adapter(child, page, request, require_delivered=True) is not None
+    page._unregister_child("root")
+    live_render(
+        Context({"view": page, "request": request}),
+        "djust.tests.test_exposure_child_pruning.RootChild",
+        sticky=True,
+    )
+    replacement = page._get_child_view("root")
+    assert replacement is not None and replacement is not child
+    # It is an authorized server-mounted instance, but was not delivered.
+    assert child_event_adapter(replacement, page, request) is not None
+    with pytest.raises(ExposureError, match="Child event state unavailable"):
+        child_event_adapter(replacement, page, request, require_delivered=True)
+
+
+@pytest.mark.parametrize(
+    "opening",
+    [
+        '<div dj-update="{{ mode }}">',
+        "{{ opening|safe }}",
+    ],
+)
+@pytest.mark.skipif(django.VERSION < (6, 0), reason="Django 6 authenticated page-graph rendering")
+def test_unauthored_ignore_cannot_retain_child_handlers(rf, tmp_path, monkeypatch, opening):
+    import msgpack
+
+    (tmp_path / "child_prune_page.html").write_text(
+        '{% extends "child_prune_base.html" %}{% load live_tags %}{% block main %}'
+        "<main dj-root>" + opening + "{% if show_root %}"
+        '{% live_render "djust.tests.test_exposure_child_pruning.RootChild" sticky=True %}'
+        "{% endif %}</div></main>{% endblock %}"
+    )
+    original = Page.get_context_data
+
+    def context(self, **kwargs):
+        return original(self, mode="ignore", opening='<div dj-update="ignore">', **kwargs)
+
+    monkeypatch.setattr(Page, "get_context_data", context)
+    page, request = mounted(rf)
+    child = page._get_child_view("root")
+    before = msgpack.unpackb(page._rust_view.serialize_msgpack(), raw=False)[2:4]
+    page.show_root = False
+    with pytest.raises(ValueError, match="unauthored ignore boundary"):
+        page.render_with_diff(request)
+    assert msgpack.unpackb(page._rust_view.serialize_msgpack(), raw=False)[2:4] == before
+    assert page._get_child_view("root") is child
+
+
+@pytest.mark.skipif(django.VERSION < (6, 0), reason="Django 6 authenticated page-graph rendering")
+def test_preserved_sticky_slot_keeps_its_issued_child_binding(rf):
+    from types import SimpleNamespace
+    from djust._exposure_children import child_event_adapter
+
+    old, request = mounted(rf)
+    child = old._get_child_view("root")
+    page = Page()
+    page.request = request
+    page._ws_consumer = SimpleNamespace(_sticky_preserved={"root": child})
+    page.get_template()
+    html, _, _ = page.render_with_diff(request)
+    assert 'dj-sticky-slot="root"' in html
+    assert page._get_child_view("root") is child
+    assert child in page._explicit_child_vdom_bindings.values()
+    assert child_event_adapter(child, page, request, require_delivered=True) is not None

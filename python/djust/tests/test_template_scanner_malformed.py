@@ -75,14 +75,28 @@ def test_page_shell_scanner_does_not_abort(monkeypatch, malformed):
     assert shell_fingerprint(source) is None
 
 
-def test_child_slot_scanner_discards_partial_ownership_graph(monkeypatch):
+def test_child_slot_scanner_accepts_html5_recoverable_declarations():
     from djust._child_rendering import _Render
-
-    _marked_sections_raise(monkeypatch)
 
     render = _Render(object(), whole_page=True, owner_wrapper=False)
     render.candidates["child"] = object()
     render.finish('<div dj-root><div dj-sticky-slot="child"></div><![\ue000CDATA[ >')
+    assert render.regions == {"child": (render.candidates["child"], "root")}
+
+
+def test_child_slot_parser_failure_rejects_entire_render(monkeypatch):
+    from djust import _rust
+    from djust._child_rendering import _Render
+    from djust._exposure import ExposureError
+
+    def fail(*args):
+        raise ValueError("invalid HTML5 child tree")
+
+    monkeypatch.setattr(_rust, "child_render_regions", fail)
+    render = _Render(object(), whole_page=True, owner_wrapper=False)
+    render.candidates["child"] = object()
+    with pytest.raises(ExposureError, match="Invalid rendered child ownership"):
+        render.finish('<main dj-root><div dj-sticky-slot="child"></div></main>')
     assert render.regions == {}
 
 
@@ -113,7 +127,7 @@ def test_new_lazy_test_views_are_excluded_from_global_binding_discovery():
 
 @pytest.mark.parametrize("error", [AssertionError, ValueError])
 @pytest.mark.parametrize("method", ["feed", "close"])
-@pytest.mark.parametrize("scanner", ["shell", "slots", "recovery"])
+@pytest.mark.parametrize("scanner", ["shell", "recovery"])
 def test_other_scanners_handle_parser_failures(monkeypatch, error, method, scanner):
     from html.parser import HTMLParser
 
@@ -125,13 +139,6 @@ def test_other_scanners_handle_parser_failures(monkeypatch, error, method, scann
         from djust._page_shell import _entries
 
         assert _entries("<div dj-root></div>") is None
-    elif scanner == "slots":
-        from djust._child_rendering import _Render
-
-        render = _Render(object(), whole_page=True, owner_wrapper=False)
-        render.candidates["child"] = object()
-        render.finish('<div dj-root><div dj-sticky-slot="child"></div></div>')
-        assert render.regions == {}
     else:
         from djust import validation
 

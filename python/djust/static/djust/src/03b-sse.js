@@ -296,7 +296,7 @@ class LiveViewSSE {
                             // against the mount HTML, as the WebSocket mount
                             // does (#1610), so mount-time state such as
                             // ADR-034 component identities reaches the DOM.
-                            _morphPrerenderedMount(container, data.html, null);
+                            _morphPrerenderedMount(container, data.html, null, undefined, data.owned_children);
                         } else {
                             // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
                             replaceContainerHtml(container, data.html);

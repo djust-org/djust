@@ -931,6 +931,10 @@ mod tests {
                 include_str!("../../djust_live/src/deferred_children.rs"),
             ),
             (
+                "djust_live/src/child_bindings.rs",
+                include_str!("../../djust_live/src/child_bindings.rs"),
+            ),
+            (
                 "djust_live/src/model_serializer.rs",
                 include_str!("../../djust_live/src/model_serializer.rs"),
             ),
@@ -1555,7 +1559,7 @@ pub fn annotate_source(
     collect_bindings(nodes, &mut bindings);
     sites(nodes, &mut 0, &mut bindings, 0);
     let lowercase = source.to_ascii_lowercase();
-    if !["dj-lazy", "dj-root", "dj-view", "dj-model"]
+    if !["dj-lazy", "dj-root", "dj-view", "dj-model", "dj-update"]
         .iter()
         .any(|name| lowercase.contains(name))
     {

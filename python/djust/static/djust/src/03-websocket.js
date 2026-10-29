@@ -280,7 +280,7 @@ function storeSignedSnapshot(data, primaryViewPath) {
 // mount-context state (per-connection values, and ADR-034's per-instance
 // component identities) reaches the page. Shared by the WebSocket and SSE
 // mount paths (#1646: one path, not two).
-function _morphPrerenderedMount(container, html, formRecoverySnapshot, restoreDraft) {
+function _morphPrerenderedMount(container, html, formRecoverySnapshot, restoreDraft, ownedChildren) {
     // Parsed as the page parses the container's children: an SVG / MathML
     // root keeps its children SVG / MathML (_parseRootHtmlLive).
     const temp = _parseRootHtmlLive(html, container);
@@ -288,7 +288,7 @@ function _morphPrerenderedMount(container, html, formRecoverySnapshot, restoreDr
     // alone cannot distinguish parser-executed scripts from inert ones.
     const retainedBefore = (container === document.body && pageRootIsBody())
         ? new Set(_containerScripts(container)) : null;
-    morphChildren(container, temp);
+    _withOwnedChildMount(ownedChildren, () => morphChildren(container, temp));
     if (retainedBefore) markBodyStamped();
     // The morph resets form fields to the server's values; put a saved draft
     // back into this container before form recovery, which restores what the
@@ -806,7 +806,7 @@ class LiveViewWebSocket {
                         const _morphContainer = findPageViewContainer()
                                             || document.querySelector('[dj-root]:not(html):not(head)');
                         if (_morphContainer) {
-                            _morphPrerenderedMount(_morphContainer, data.html, formRecoverySnapshot);
+                            _morphPrerenderedMount(_morphContainer, data.html, formRecoverySnapshot, undefined, data.owned_children);
                             if (globalThis.djustDebug) console.log('[LiveView] Morphed pre-rendered DOM against WS-mount HTML (#1610)');
                         } else {
                             // Fallback: no [dj-view]/[dj-root] container found

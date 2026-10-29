@@ -4313,6 +4313,13 @@ class ViewRuntime(RuntimeTurnPort):
             "view": view_path,
             "version": version,
         }
+        if getattr(view_instance, "_explicit_child_vdom_tracking", False):
+            # Only committed render-issued locations enter the mount protocol.
+            # This contains no state, mount inputs, or restoration authority.
+            mount_msg["owned_children"] = [
+                [child._view_id, node_id]
+                for node_id, child in view_instance._explicit_child_vdom_bindings.items()
+            ]
         if page_shell_fingerprint:
             mount_msg["page_shell"] = page_shell_fingerprint
         if root_poll is not None and html:
@@ -6070,7 +6077,7 @@ class ViewRuntime(RuntimeTurnPort):
                 or request_binding(event_request) != self._explicit_mount_binding
             ):
                 raise ExposureError("Missing current child event authorization")
-            adapter = child_event_adapter(target_view, view, event_request)
+            adapter = child_event_adapter(target_view, view, event_request, require_delivered=True)
             target_view.request = event_request
             if check_view_auth(target_view, event_request, event=True) is not None:
                 raise ExposureError("Child event authorization denied")

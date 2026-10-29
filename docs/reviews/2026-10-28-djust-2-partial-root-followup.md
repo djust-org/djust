@@ -135,3 +135,31 @@ selection covering HTTP/WebSocket parity, roots, catalogue and child execution.
 Authenticated child bindings across ignored-subtree reuse and snapshot
 restoration still need completion. The branch remains unpushed until the final
 full suites pass.
+
+
+## Child ownership transactions and reconnect policy
+
+Owned root diffs now prepare without advancing the delivered VDOM or version.
+Python validates the exact render-issued child ledger and current registration
+before committing. Bindings follow the actual ignored-subtree splice and ID
+synchronization. Only independently authored ignore boundaries retain prior
+child handlers; dynamic and injected ignore attributes cannot do so. A fresh
+HTTP document installs its final validated tree without copying an old ignored
+subtree. Sticky survivor placeholders also carry exact issuance receipts.
+
+The selected cold reconnect policy is to remove stale child UI rather than
+restore an absent child's previous mount. WebSocket, SSE, view-slot and cold
+HTTP fallback paths carry only committed child slot/node locations. The client
+reconciles framework-owned child wrappers while keeping the surrounding ignored
+widget's nodes, input values and JavaScript references. Legacy mounts keep their
+existing behavior. No render context, private mount inputs or full Rust snapshot
+is persisted to reconstruct explicit children.
+
+The focused transaction/parser/differential selection passed 140 tests on Django
+6.1; the actual WebSocket reconnect test and seven real-client WebSocket/SSE/HTTP
+reconciliation cases passed. The exploratory full Django 6.1 run passed 49,674
+and failed 48 tests. It ran while further work was being edited and is not final
+integration evidence. Its failures include scaffold layout root provenance,
+outdated parser/entry-point test contracts, worker-connection cleanup, and source
+inspection against changing files. The branch remains unpushed pending fixes
+and full checks on the frozen final commit.

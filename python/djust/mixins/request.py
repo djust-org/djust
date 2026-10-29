@@ -393,6 +393,7 @@ class RequestMixin:
         wrapper_template: Optional[str]
         _cached_context: Optional[Dict[str, Any]]
         _child_views: Dict[str, Any]
+        _explicit_child_vdom_bindings: Dict[str, Any]
 
         def _apply_context_processors(
             self, context: Dict[str, Any], request: Any
@@ -1948,7 +1949,13 @@ class RequestMixin:
 
                 t0_render = time.perf_counter()
                 self._prepare_child_ids()
+                cold_children = not getattr(self, "_explicit_child_vdom_tracking", False)
                 html, patches_json, version = render_view_with_diff(self, request)
+                if cold_children and getattr(self, "_explicit_child_vdom_tracking", False):
+                    snapshot_fields["owned_children"] = [
+                        [child._view_id, node_id]
+                        for node_id, child in self._explicit_child_vdom_bindings.items()
+                    ]
                 t_render_ms = (time.perf_counter() - t0_render) * 1000
 
             # ADR-036: the rendered tree's owner contracts travel with the DOM

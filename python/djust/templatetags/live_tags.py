@@ -28,7 +28,11 @@ from typing import TYPE_CHECKING, Any, Dict, Optional
 if TYPE_CHECKING:
     from ..live_view import LiveView
 
-from .._child_rendering import reconcile_child_render, record_rendered_child
+from .._child_rendering import (
+    reconcile_child_render,
+    record_rendered_child,
+    record_direct_child_result,
+)
 
 from django import template
 from django.conf import settings
@@ -2220,7 +2224,9 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
                     view_path,
                 )
                 record_rendered_child(survivor)
-                return mark_safe('<div dj-sticky-slot="' + escape(sticky_id_value) + '"></div>')
+                result = format_html('<div dj-sticky-slot="{}"></div>', sticky_id_value)
+                record_direct_child_result(survivor, result)
+                return result
 
     # PR-B (ADR-015): ``lazy=True`` opt-in. Defer the child mount +
     # render to a thunk that runs after the parent shell has flushed.

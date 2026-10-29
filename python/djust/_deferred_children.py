@@ -80,7 +80,9 @@ def deferred_children_pending() -> bool:
     return scope is not None and not scope.materializing and bool(scope.entries)
 
 
-def materialize_deferred_children(html: str, page_root: bool) -> list[tuple[int, int, str]]:
+def materialize_deferred_children(
+    html: str, page_root: bool
+) -> list[tuple[int, int, str, tuple[str, int] | None]]:
     scope = _active.get()
     if scope is None or scope.materializing:
         raise ExposureError("Deferred child render scope is unavailable")
@@ -113,7 +115,10 @@ def materialize_deferred_children(html: str, page_root: bool) -> list[tuple[int,
         replacement = callback() if regions.get(key) == "root" else ""
         if not isinstance(replacement, str):
             raise ExposureError("Deferred child renderer did not return HTML")
+        from ._child_rendering import consume_direct_child_result
+
+        issued = consume_direct_child_result(scope.owner, replacement) if replacement else None
         del scope.entries[key]
-        return [(offsets.byte_offset(start), offsets.byte_offset(end), str(replacement))]
+        return [(offsets.byte_offset(start), offsets.byte_offset(end), str(replacement), issued)]
     finally:
         scope.materializing = False

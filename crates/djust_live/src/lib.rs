@@ -17,6 +17,7 @@ pub mod actors;
 // Fast model serialization for N+1 query prevention
 pub mod model_serializer;
 
+mod child_bindings;
 mod deferred_children;
 mod provenance_edits;
 use actors::{ActorSupervisor, SessionActorHandle};
@@ -145,6 +146,12 @@ type RootRenderOutput = (
     Vec<(usize, usize)>,
     Vec<(usize, usize, usize, String)>,
     Vec<(usize, usize)>,
+);
+type PreparedOwnedDiffOutput = (
+    String,
+    Option<String>,
+    u64,
+    (Vec<(String, String)>, Vec<(String, String)>, Vec<String>),
 );
 type PreparedAuthenticatedPageOutput = (
     String,
@@ -346,6 +353,9 @@ impl djust_templates::inheritance::TemplateLoader for PartialRootRecordingLoader
 }
 
 struct PreparedPartialPage {
+    owned_diff_version: Option<u64>,
+    child_vdom_ids: Vec<(String, String)>,
+    ignore_vdom_ids: HashSet<String>,
     root_spans: Vec<(usize, usize)>,
     rendered: djust_templates::provenance::Rendered,
     authenticated: bool,
@@ -1044,14 +1054,15 @@ impl RustLiveViewBackend {
         let page = self.pending_partial_page.as_mut().ok_or_else(|| {
             pyo3::exceptions::PyRuntimeError::new_err("no authenticated page is pending")
         })?;
-        let saved_counter = djust_vdom::get_id_counter();
-        if let Some(old) = &self.last_vdom {
-            if let Some(max) = djust_vdom::max_djust_id_in(old) {
-                djust_vdom::ensure_id_counter_at_least(max + 1);
-            }
-        } else {
-            reset_id_counter();
+        if page.owned_diff_version.is_some() {
+            return Err(pyo3::exceptions::PyRuntimeError::new_err(
+                "owned diff cannot be validated as an HTTP page",
+            ));
         }
+        let saved_counter = djust_vdom::get_id_counter();
+        // A full HTTP response creates a fresh client document. Its root
+        // starts at zero even when an older page of this session was cached.
+        reset_id_counter();
         let root = djust_vdom::lazy_provenance::authenticated_live_root(html, &spans);
         djust_vdom::set_id_counter(saved_counter);
         let mut root = root.map_err(authenticated_root_error)?;
@@ -1074,6 +1085,99 @@ impl RustLiveViewBackend {
         Ok(())
     }
 
+    /// Prepare a root diff without advancing the delivered baseline. Fresh
+    /// keys and retained IDs are proof outputs, never component constructors.
+    fn prepare_owned_diff(
+        &mut self,
+        previous_owned_ids: Vec<String>,
+    ) -> PyResult<PreparedOwnedDiffOutput> {
+        guard_panic("prepare_owned_diff", || {
+            self.pending_partial_page = None;
+            if !self.potential_authenticated_partial_root {
+                return Err(pyo3::exceptions::PyRuntimeError::new_err(
+                    "owned diff requires authenticated root mode",
+                ));
+            }
+            let previous: HashSet<_> = previous_owned_ids.iter().cloned().collect();
+            if previous.len() != previous_owned_ids.len() {
+                return Err(pyo3::exceptions::PyValueError::new_err(
+                    "duplicate previous child ID",
+                ));
+            }
+            let mut page = self.prepare_partial_page()?;
+            let issued: Vec<_> = page
+                .child_vdom_ids
+                .iter()
+                .map(|(key, _)| key.clone())
+                .collect();
+            let new_by_id: HashMap<_, _> = page
+                .child_vdom_ids
+                .iter()
+                .map(|(key, id)| (id.clone(), key.clone()))
+                .collect();
+            if new_by_id.len() != page.child_vdom_ids.len() {
+                return Err(pyo3::exceptions::PyValueError::new_err(
+                    "duplicate child VDOM ID",
+                ));
+            }
+            let (fresh, retained) = child_bindings::plan(
+                self.last_vdom.as_ref(),
+                &page.vdom,
+                &new_by_id,
+                &previous,
+                &page.ignore_vdom_ids,
+            )
+            .map_err(pyo3::exceptions::PyValueError::new_err)?;
+            if let Some(old) = &self.last_vdom {
+                splice_ignore_subtrees(old, &mut page.vdom);
+            }
+            let patches = if let Some(old) = &self.last_vdom {
+                let patches = diff_in(old, &page.vdom, page.namespace);
+                sync_ids(old, &mut page.vdom);
+                Some(
+                    serde_json::to_string(&patches)
+                        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?,
+                )
+            } else {
+                None
+            };
+            let fresh = child_bindings::rekey(&page.vdom, fresh)
+                .map_err(pyo3::exceptions::PyValueError::new_err)?;
+            let retained = child_bindings::rekey(&page.vdom, retained)
+                .map_err(pyo3::exceptions::PyValueError::new_err)?;
+            let html = page.vdom.to_html_in(Some(page.namespace));
+            cache_ignore_subtree_html_in(&mut page.vdom, page.namespace);
+            let version = self.version + 1;
+            page.owned_diff_version = Some(version);
+            self.pending_partial_page = Some(page);
+            Ok((html, patches, version, (fresh, retained, issued)))
+        })
+    }
+
+    /// Commit only the exact prepared version after ownership reconciliation.
+    fn commit_owned_diff(&mut self, expected_version: u64) -> PyResult<()> {
+        guard_panic("commit_owned_diff", || {
+            let page = self.pending_partial_page.take().ok_or_else(|| {
+                pyo3::exceptions::PyRuntimeError::new_err("no owned diff is pending")
+            })?;
+            if page.owned_diff_version != Some(expected_version)
+                || expected_version != self.version + 1
+            {
+                return Err(pyo3::exceptions::PyRuntimeError::new_err(
+                    "owned diff version changed",
+                ));
+            }
+            self.install_committed_page(
+                page.vdom,
+                page.namespace,
+                page.fields,
+                page.authenticated,
+                expected_version,
+            );
+            Ok(())
+        })
+    }
+
     fn discard_authenticated_page(&mut self) {
         self.pending_partial_page = None;
     }
@@ -1083,9 +1187,26 @@ impl RustLiveViewBackend {
             let page = self.pending_partial_page.take().ok_or_else(|| {
                 pyo3::exceptions::PyRuntimeError::new_err("no authenticated page is pending")
             })?;
-            let (html, patches, version) = self.commit_partial_page(page, false)?;
-            let patches = patches.map(|bytes| String::from_utf8(bytes).expect("JSON is UTF-8"));
-            Ok((html, patches, version))
+            if page.owned_diff_version.is_some() {
+                return Err(pyo3::exceptions::PyRuntimeError::new_err(
+                    "owned diff requires ownership reconciliation",
+                ));
+            }
+            // This is a new HTTP document, not a patch applied to the prior
+            // browser DOM. Copying an old ignored subtree would contradict the
+            // HTML just validated and delivered to that new document.
+            let mut vdom = page.vdom;
+            let html = vdom.to_html_in(Some(page.namespace));
+            cache_ignore_subtree_html_in(&mut vdom, page.namespace);
+            let version = self.version + 1;
+            self.install_committed_page(
+                vdom,
+                page.namespace,
+                page.fields,
+                page.authenticated,
+                version,
+            );
+            Ok((html, None, version))
         })
     }
 
@@ -1711,6 +1832,7 @@ impl RustLiveViewBackend {
 
     /// Reset the view state
     fn reset(&mut self) {
+        self.pending_partial_page = None;
         self.last_vdom = None;
         self.last_root_ns = None;
         self.last_html = None;
@@ -1899,7 +2021,8 @@ impl RustLiveViewBackend {
         };
         let mut output: djust_templates::provenance::DualRendered = template
             .render_output_named_mut(&mut context, &loader, self.template_origin.as_deref())?;
-        deferred_children::materialize(&mut output, possible.load(Ordering::Relaxed))?;
+        let issued_children =
+            deferred_children::materialize(&mut output, possible.load(Ordering::Relaxed))?;
         output.normal.retain_live_authority();
         let cutoff = output.prefix.literal_blocked;
         let root_spans: Vec<_> = if cutoff {
@@ -1935,8 +2058,11 @@ impl RustLiveViewBackend {
         } else {
             reset_id_counter();
         }
-        let candidate =
-            djust_vdom::lazy_provenance::authenticated_live_root(&rendered.html, &root_spans);
+        let candidate = djust_vdom::lazy_provenance::authenticated_live_root_with_children(
+            &rendered.html,
+            &root_spans,
+            &issued_children,
+        );
         if let Some(root) = candidate.as_ref().ok().filter(|_| cutoff) {
             // Observed source bytes can deny incomplete binding metadata, but
             // never grant it. In particular an opaque cutoff cannot silently
@@ -1957,6 +2083,9 @@ impl RustLiveViewBackend {
         if !possible.load(Ordering::Relaxed) {
             if let Ok(root) = candidate {
                 return Ok(PreparedPartialPage {
+                    owned_diff_version: None,
+                    child_vdom_ids: root.child_vdom_ids,
+                    ignore_vdom_ids: root.ignore_vdom_ids,
                     root_spans,
                     rendered,
                     authenticated: false,
@@ -1978,6 +2107,9 @@ impl RustLiveViewBackend {
                     }
                 }
                 Ok(PreparedPartialPage {
+                    owned_diff_version: None,
+                    child_vdom_ids: root.child_vdom_ids,
+                    ignore_vdom_ids: root.ignore_vdom_ids,
                     root_spans,
                     rendered,
                     authenticated: true,
@@ -2023,6 +2155,9 @@ impl RustLiveViewBackend {
                 }
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
                 Ok(PreparedPartialPage {
+                    owned_diff_version: None,
+                    child_vdom_ids: Vec::new(),
+                    ignore_vdom_ids: HashSet::new(),
                     root_spans,
                     rendered,
                     authenticated: false,
@@ -2041,6 +2176,11 @@ impl RustLiveViewBackend {
         page: PreparedPartialPage,
         binary: bool,
     ) -> PyResult<(String, Option<Vec<u8>>, u64)> {
+        if page.owned_diff_version.is_some() {
+            return Err(pyo3::exceptions::PyRuntimeError::new_err(
+                "owned diff requires ownership reconciliation",
+            ));
+        }
         let authenticated = page.authenticated;
         let (mut vdom, namespace, fields) = (page.vdom, page.namespace, page.fields);
         if let Some(old) = &self.last_vdom {
@@ -2061,6 +2201,18 @@ impl RustLiveViewBackend {
         };
         let html = vdom.to_html_in(Some(namespace));
         cache_ignore_subtree_html_in(&mut vdom, namespace);
+        self.install_committed_page(vdom, namespace, fields, authenticated, self.version + 1);
+        Ok((html, patches, self.version))
+    }
+
+    fn install_committed_page(
+        &mut self,
+        vdom: VNode,
+        namespace: Namespace,
+        fields: Vec<String>,
+        authenticated: bool,
+        version: u64,
+    ) {
         self.last_vdom = Some(vdom);
         self.last_root_ns = Some(namespace);
         self.authenticated_model_fields = fields;
@@ -2071,8 +2223,7 @@ impl RustLiveViewBackend {
         self.text_node_index = None;
         self.changed_keys = None;
         self.loop_render_cache.clear();
-        self.version += 1;
-        Ok((html, patches, self.version))
+        self.version = version;
     }
 
     fn render_authenticated_diff(
@@ -3942,6 +4093,13 @@ fn needs_lazy_tree_uncached(
         }
     }
     Ok(false)
+}
+
+/// Check the direct library wrapper before issuing an out-of-band location.
+#[pyfunction]
+fn child_wrapper_opening_end(html: &str, slot: &str) -> PyResult<usize> {
+    djust_vdom::lazy_provenance::child_wrapper_opening_end(html, slot)
+        .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("invalid child wrapper"))
 }
 
 /// Enter or restore the synchronous render's private deferred-child scope.
@@ -7376,6 +7534,7 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
         template_needs_authenticated_partial_root,
         m
     )?)?;
+    m.add_function(wrap_pyfunction!(child_wrapper_opening_end, m)?)?;
     m.add_function(wrap_pyfunction!(set_deferred_child_scope, m)?)?;
     m.add_function(wrap_pyfunction!(child_render_regions, m)?)?;
     m.add_function(wrap_pyfunction!(authenticated_root_shell, m)?)?;

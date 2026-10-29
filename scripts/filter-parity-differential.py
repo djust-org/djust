@@ -3616,6 +3616,11 @@ def _swept_name_positions() -> set[str]:
 #:
 #: An unexercised entry point needs a reason here.
 ENTRY_POINTS_NOT_SWEPT = {
+    "set_deferred_child_scope": (
+        "render-local scalar scope switch; it stores a bool and returns the previous bool, "
+        "never enters the template engine. Scope restoration and actual mount selection "
+        "are covered by test_partial_root_child_execution.py"
+    ),
     "set_number_format": (
         "the localization channel (#2221). Every cell renders under the default "
         "English format; a localized sweep is a second corpus, not a spelling"
