@@ -428,3 +428,19 @@ def test_a_srcset_with_no_candidate_is_omitted_in_both_engines(engine, empty):
 @pytest.mark.parametrize("empty", ["", "   ", " , , "])
 def test_the_responsive_image_class_omits_an_empty_srcset(empty):
     assert "srcset" not in _attr_names(str(ResponsiveImage(src="/a.png", srcset=empty).render()))
+
+
+@pytest.mark.parametrize("blank", [" ", " ", "　", " "])
+def test_a_candidate_whose_url_strips_to_nothing_is_dropped_not_kept_as_its_descriptor(blank):
+    """The spec reads ``<blank> 2x`` as a candidate: URL ``<blank>`` (not ASCII whitespace, so
+    part of the URL) with descriptor ``2x``. ``url_attr`` strips the URL to ``""``. Keeping the
+    empty candidate would print `` 2x``, which a browser reads as a candidate whose URL is
+    ``2x``: a descriptor turned into a relative URL. So the candidate is dropped."""
+    value = "/ok.png 1x, %s 2x" % blank
+    assert url_sweep.spec_srcset(value) == [("/ok.png", ["1x"]), (blank, ["2x"])]
+    assert _srcset_candidates(value) == [("/ok.png", ["1x"]), (blank, ["2x"])]
+    out = srcset_attr(value)
+    assert out == "/ok.png 1x"
+    assert [u for u, _ in url_sweep.spec_srcset(out)] == ["/ok.png"]  # no "2x" candidate
+    assert srcset_attr("%s 2x" % blank) == ""
+    assert srcset_attr(" , %s 2x, %s 1x ," % (blank, blank)) == ""

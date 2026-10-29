@@ -158,6 +158,14 @@ MUTATIONS: list[tuple[str, pathlib.Path, str, str, str, str]] = [
         "random_srcsets or token_fuzz or no_random_srcset",
     ),
     (
+        "srcset_attr: an empty (stripped-to-nothing) candidate is not skipped",
+        UTILS,
+        "        if not candidate:\n            continue\n",
+        "        if False:\n            continue\n",
+        SINKS,
+        "",
+    ),
+    (
         "srcset parser splits on Unicode whitespace and VT, not ASCII whitespace only",
         UTILS,
         r'_ASCII_WS = "\t\n\f\r "',
