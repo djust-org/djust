@@ -1018,6 +1018,7 @@ Ok(_) => Err(pyo3::exceptions::PyTypeError::new_err(format!(
 .map_err(|e| DjangoRustError::TemplateError(e.to_string()))?;
 .map_err(|e| DjangoRustError::TemplateError(e.to_string()))?;
 .map_err(|e| DjangoRustError::TemplateError(e.to_string()))?;
+.map_err(|e| DjangoRustError::TemplateError(e.to_string()))?;
 return Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(format!(
 PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
 PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
