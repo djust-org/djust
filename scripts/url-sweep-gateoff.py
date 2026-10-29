@@ -217,7 +217,7 @@ MUTATIONS: list[tuple[str, pathlib.Path, str, str, str, str]] = [
         "avatar tag hands the template plain text (double escaping)",
         TAGS,
         '        "src": url_attr(src, image=True),',
-        '        "src": "%s" % url_attr(src, image=True),',
+        '        "src": "".join([url_attr(src, image=True)]),',
         AVATAR,
         "",
     ),
