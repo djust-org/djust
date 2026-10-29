@@ -2246,7 +2246,7 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                 self._rust_view.set_authenticated_partial_root(needs_root)
                 if needs_root:
                     self._rust_view.set_authenticated_view_path(
-                        f"{type(self).__module__}.{type(self).__name__}"
+                        f"{getattr(type(self), '__module__', '<unknown>')}.{type(self).__name__}"
                     )
                 self._rust_view.set_template_origin(
                     getattr(self, "_authenticated_partial_root_origin", None)

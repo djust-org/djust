@@ -226,7 +226,38 @@ def test_child_namespace_cannot_consume_parent_envelope(setup):
         child.load()
 
 
+@pytest.fixture
+async def close_session_worker_connections(transactional_db):
+    """Close only worker connections opened by this test before DB teardown."""
+    from asgiref.sync import sync_to_async
+    from django.db import connections
+    from django.db.backends.base.base import BaseDatabaseWrapper
+
+    def snapshot():
+        return {
+            id(conn): conn.connection is not None for conn in connections.all(initialized_only=True)
+        }
+
+    def close_new_connections(before):
+        for conn in connections.all(initialized_only=True):
+            if conn.connection is None or before.get(id(conn), False):
+                continue
+            if conn.vendor == "sqlite" and conn.is_in_memory_db():
+                # SQLite's backend close deliberately leaves in-memory DBs open.
+                # The main test connection owns the database until teardown.
+                BaseDatabaseWrapper.close(conn)
+            else:
+                conn.close()
+
+    before = await sync_to_async(snapshot)()
+    try:
+        yield
+    finally:
+        await sync_to_async(close_new_connections)(before)
+
+
 @pytest.mark.django_db(transaction=True)
+@pytest.mark.usefixtures("close_session_worker_connections")
 async def test_async_and_sync_storage_have_identical_envelopes():
     session = SessionStore()
     await session.acreate()

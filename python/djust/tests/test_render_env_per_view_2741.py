@@ -170,6 +170,25 @@ class TestACapturedEnvReachesARenderOnAFreshThread:
         assert _on_fresh_thread(lv.render) == DEFAULT
 
 
+def test_partial_page_preparation_uses_and_restores_the_captured_env():
+    _fr_push()
+    lv = _rust.RustLiveView(
+        "{% partialdef p %}<main dj-root>{{ v }}</main>{% endpartialdef %}{% partial p %}"
+    )
+    lv.update_state(dict(PROBE_STATE))
+    lv.capture_render_env()
+    lv.set_authenticated_partial_root(True)
+
+    def worker():
+        before = _rust.active_number_format()
+        html, _, _, _ = lv.prepare_authenticated_page()
+        return before, html, _rust.active_number_format()
+
+    before, html, after = _on_fresh_thread(worker)
+    assert before is None and after is None
+    assert FR in html
+
+
 # ---------------------------------------------------------------------------
 # The guard: a render leaves the cells as it found them.
 # ---------------------------------------------------------------------------
@@ -269,7 +288,7 @@ def test_the_component_entry_captures_too():
 
 # ---------------------------------------------------------------------------
 # Structural pin (#2727 / #1125): the set of backend entries that apply the
-# env is DERIVED from the source and must be exactly the three render bodies.
+# env is DERIVED from the source and must be exactly the render bodies.
 # ---------------------------------------------------------------------------
 
 
@@ -297,6 +316,7 @@ def test_every_backend_render_entry_applies_the_env():
         "render_result",
         "render_with_diff_detached",
         "render_binary_diff",
+        "prepare_partial_page",
     }, f"env entries {sorted(env)}"
 
 

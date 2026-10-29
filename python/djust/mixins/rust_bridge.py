@@ -371,7 +371,7 @@ class RustBridgeMixin:
                 if getattr(self, "_authenticated_partial_root", False):
                     self._rust_view.set_authenticated_partial_root(True)
                     self._rust_view.set_authenticated_view_path(
-                        f"{type(self).__module__}.{type(self).__name__}"
+                        f"{getattr(type(self), '__module__', '<unknown>')}.{type(self).__name__}"
                     )
                     self._rust_view.set_template_origin(
                         getattr(self, "_authenticated_partial_root_origin", None)
@@ -473,7 +473,7 @@ class RustBridgeMixin:
                         self._rust_view, "potential_authenticated_partial_root", lambda: False
                     )():
                         self._rust_view.set_authenticated_view_path(
-                            f"{type(self).__module__}.{type(self).__name__}"
+                            f"{getattr(type(self), '__module__', '<unknown>')}.{type(self).__name__}"
                         )
                     # loop_render_cache flag is transient (not serialized);
                     # re-apply it from config after a cache hit (#1967).
@@ -516,7 +516,7 @@ class RustBridgeMixin:
                         self._rust_view, "potential_authenticated_partial_root", lambda: False
                     )():
                         self._rust_view.set_authenticated_view_path(
-                            f"{type(self).__module__}.{type(self).__name__}"
+                            f"{getattr(type(self), '__module__', '<unknown>')}.{type(self).__name__}"
                         )
                     # loop_render_cache flag is transient (not serialized);
                     # re-apply it from config after a cache hit (#1967).
@@ -550,7 +550,7 @@ class RustBridgeMixin:
             if getattr(self, "_authenticated_partial_root", False):
                 self._rust_view.set_authenticated_partial_root(True)
                 self._rust_view.set_authenticated_view_path(
-                    f"{type(self).__module__}.{type(self).__name__}"
+                    f"{getattr(type(self), '__module__', '<unknown>')}.{type(self).__name__}"
                 )
                 self._rust_view.set_template_origin(
                     getattr(self, "_authenticated_partial_root_origin", None)
@@ -1282,6 +1282,17 @@ class RustBridgeMixin:
                     if isinstance(_raw_val, forms.BaseForm):
                         continue
                     sidecar[_raw_key] = _raw_val
+                # Authenticated partial-root mode renders the page shell with
+                # the same Rust view. Its bridged Django tags need the actual
+                # request just as the separate shell renderer does (#2589).
+                # Keep it in the transient sidecar, never in persisted state.
+                if (
+                    request is not None
+                    and getattr(
+                        self._rust_view, "potential_authenticated_partial_root", lambda: False
+                    )()
+                ):
+                    sidecar["request"] = request
                 # ADR-024: models captured before the normalize loop replaced
                 # them with dicts. The eager dict wins every direct hit; the
                 # raw model serves only nested paths the dict lacks (reverse
