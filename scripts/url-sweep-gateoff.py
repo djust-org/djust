@@ -55,7 +55,7 @@ MUTATIONS: list[tuple[str, pathlib.Path, str, str, str, str]] = [
     (
         "avatar tag: src printed as given (the issue)",
         TAGS,
-        '        "src": mark_safe(url_attr(src, image=True)),',
+        '        "src": url_attr(src, image=True),',
         '        "src": src,',
         AVATAR,
         "",
@@ -214,10 +214,10 @@ MUTATIONS: list[tuple[str, pathlib.Path, str, str, str, str]] = [
         "",
     ),
     (
-        "avatar tag loses mark_safe (double escaping)",
+        "avatar tag hands the template plain text (double escaping)",
         TAGS,
-        '        "src": mark_safe(url_attr(src, image=True)),',
         '        "src": url_attr(src, image=True),',
+        '        "src": "%s" % url_attr(src, image=True),',
         AVATAR,
         "",
     ),
@@ -233,7 +233,7 @@ MUTATIONS: list[tuple[str, pathlib.Path, str, str, str, str]] = [
     (
         "sweep (tags): the avatar fix reverted, the SWEEP must go red",
         TAGS,
-        '        "src": mark_safe(url_attr(src, image=True)),',
+        '        "src": url_attr(src, image=True),',
         '        "src": src,',
         SWEEPTEST,
         SWEEP_K,
@@ -340,6 +340,7 @@ def main(argv: list[str]) -> int:
         SWEEPTEST,
         "scripts/template-library-url-sweep.py",
         "scripts/url-sweep-gateoff.py",
+        "python/tests/test_theming_url_denylist_3665.py",
     )
     real = [m[1] for m in MUTATIONS]
     before = base.tree_digest(real)

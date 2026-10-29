@@ -1093,9 +1093,10 @@ def avatar(
     return {
         # The same sanitiser the native handler uses, so both engines agree: a
         # script-capable scheme becomes "#", an inline data:image/ URI is kept
-        # (#3665). ``url_attr`` returns HTML-escaped (safe) text, so the
-        # template must not escape it a second time.
-        "src": mark_safe(url_attr(src, image=True)),
+        # (#3665). ``url_attr`` returns HTML-escaped text marked safe, so the
+        # template does not escape it a second time (pinned by
+        # ``test_a_marked_safe_src_is_not_escaped_twice_under_django``).
+        "src": url_attr(src, image=True),
         "alt": alt,
         "initials": initials or (alt[:2].upper() if alt else ""),
         "size": size,

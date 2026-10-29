@@ -136,9 +136,10 @@ def test_no_src_still_shows_the_initials(engine):
 
 
 def test_a_marked_safe_src_is_not_escaped_twice_under_django():
-    """The tag returns ``mark_safe(url_attr(...))``; without the ``mark_safe`` the template
-    would escape the already-escaped text again (``&amp;amp;``). Pinned because the fix
-    depends on it and no other case passes a value with an ampersand through."""
+    """``url_attr`` returns escaped text marked safe, and the tag hands exactly that to the
+    template; if it ever handed plain text instead, autoescape would escape it a second time
+    (``&amp;amp;``). Pinned because the fix depends on it and no other case passes a value
+    with an ampersand through."""
     assert _final_src("django", u="/a.png?x=1&y=2") == ["/a.png?x=1&y=2"]
     assert _final_src("django", u=mark_safe("/a.png?x=1&amp;y=2")) == ["/a.png?x=1&y=2"]
     html = (
