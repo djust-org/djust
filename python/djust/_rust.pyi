@@ -336,6 +336,7 @@ def template_needs_authenticated_partial_root(
     """Whether a template may render an authenticated partial root."""
     ...
 
+def set_deferred_child_scope(enabled: bool) -> bool: ...
 def child_render_regions(
     html: str, candidates: List[str], whole_page: bool, owner_wrapper: bool
 ) -> Dict[str, str]: ...
@@ -1571,6 +1572,7 @@ __all__ = [
     "dj_root_stamp_offsets",
     "template_needs_provenance",
     "template_needs_authenticated_partial_root",
+    "set_deferred_child_scope",
     "child_render_regions",
     "authenticated_root_shell",
     "resolve_template_inheritance",

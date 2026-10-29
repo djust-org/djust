@@ -927,6 +927,10 @@ mod tests {
                 include_str!("../../djust_live/src/provenance_edits.rs"),
             ),
             (
+                "djust_live/src/deferred_children.rs",
+                include_str!("../../djust_live/src/deferred_children.rs"),
+            ),
+            (
                 "djust_live/src/model_serializer.rs",
                 include_str!("../../djust_live/src/model_serializer.rs"),
             ),

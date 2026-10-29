@@ -2307,7 +2307,17 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         from ..templatetags.live_tags import active_parent_view
 
         renderer = getattr(self, "_djust_renderer", None) or HtmlRenderer(self)
-        with active_parent_view(self), library_render_scope():
+        from .._deferred_children import defer_root_children
+
+        defer_children = (
+            isinstance(renderer, HtmlRenderer)
+            and self._rust_view.potential_authenticated_partial_root()
+        )
+        with (
+            active_parent_view(self),
+            library_render_scope(),
+            defer_root_children(self, defer_children),
+        ):
             result = renderer.render_with_diff(
                 request=None,
                 extract_liveview_root=False,

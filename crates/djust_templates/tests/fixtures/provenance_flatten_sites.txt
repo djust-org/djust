@@ -569,6 +569,26 @@ context.set("dynamic".to_string(), Value::String("v2".to_string()));
 let changed_keys: HashSet<String> = ["dynamic".to_string()].into_iter().collect();
 Template::new("{% extends \"base.html\" %}{% block content %}X{% endblock %}").unwrap();
 djust_live/src/provenance_edits.rs
+djust_live/src/deferred_children.rs
+.literal_offsets
+.blank_offsets
+rendered.html = value;
+proof.html = output.normal.html.clone();
+let root = djust_vdom::lazy_provenance::authenticated_live_root(&proof.html, &spans);
+&proof.html,
+|| proof.literal_only.is_none()
+|| proof.blank_only.is_none()
+|| [&proof.literal_only, &proof.blank_only]
+.flatten()
+.call1((&output.normal.html, page_root))?
+let html = output.normal.html.clone();
+rendered.append(&Rendered::from("TOKEN".to_owned()));
+let html = rendered.html.clone();
+let original = rendered.literal_only.clone();
+let root_projection = rendered.literal_offsets.last().map(|(_, p)| *p);
+assert!(rendered.html.starts_with("é<div>保全</div><main"));
+assert_eq!(rendered.literal_only, original);
+rendered.literal_offsets.last().copied(),
 djust_live/src/model_serializer.rs
 .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
 return Ok(JsonValue::Number(i.into()));

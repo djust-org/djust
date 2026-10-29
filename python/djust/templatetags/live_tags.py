@@ -2070,6 +2070,12 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
             "no parent view in the current render context"
         )
 
+    from .._deferred_children import defer_child_render
+
+    deferred = defer_child_render(parent, context, view_path, kwargs)
+    if deferred is not None:
+        return deferred
+
     # 4. Instantiate + mount the child.
     #
     # On the initial HTTP GET shell render (#1784) the context flows through

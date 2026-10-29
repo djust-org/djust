@@ -17,6 +17,7 @@ pub mod actors;
 // Fast model serialization for N+1 query prevention
 pub mod model_serializer;
 
+mod deferred_children;
 mod provenance_edits;
 use actors::{ActorSupervisor, SessionActorHandle};
 use dashmap::DashMap;
@@ -1881,6 +1882,7 @@ impl RustLiveViewBackend {
         };
         let mut output: djust_templates::provenance::DualRendered = template
             .render_output_named_mut(&mut context, &loader, self.template_origin.as_deref())?;
+        deferred_children::materialize(&mut output, possible.load(Ordering::Relaxed))?;
         output.normal.retain_live_authority();
         let cutoff = output.prefix.literal_blocked;
         let root_spans: Vec<_> = if cutoff {
@@ -3923,6 +3925,12 @@ fn needs_lazy_tree_uncached(
         }
     }
     Ok(false)
+}
+
+/// Enter or restore the synchronous render's private deferred-child scope.
+#[pyfunction]
+fn set_deferred_child_scope(enabled: bool) -> bool {
+    deferred_children::set_scope(enabled)
 }
 
 /// Locate server-registered child candidates in the browser's HTML5 tree.
@@ -7351,6 +7359,7 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
         template_needs_authenticated_partial_root,
         m
     )?)?;
+    m.add_function(wrap_pyfunction!(set_deferred_child_scope, m)?)?;
     m.add_function(wrap_pyfunction!(child_render_regions, m)?)?;
     m.add_function(wrap_pyfunction!(authenticated_root_shell, m)?)?;
     m.add_function(wrap_pyfunction!(
