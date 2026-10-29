@@ -70,7 +70,7 @@ pub fn materialize(
             .call0()?
             .extract::<bool>()?
         {
-            let mut proof = if output.prefix.literal_blocked {
+            let mut proof = if output.prefix.literal_blocked || output.root_channel {
                 let mut proof = output.prefix.clone();
                 proof.html = output.normal.html.clone();
                 proof

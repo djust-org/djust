@@ -747,6 +747,7 @@ pub struct LiveAuthorityAttribute {
     pub opening: usize,
     pub name: &'static str,
     pub value: String,
+    pub namespace: String,
     pub range: (usize, usize),
     /// Authored page-root opening which owns this attribute in this tree.
     /// None means outside any eligible page root; a merged/untracked root
@@ -822,6 +823,10 @@ fn live_attributes_from_dom(
                                     opening: start,
                                     name,
                                     value: value.to_owned(),
+                                    namespace: match &node.data {
+                                        NodeData::Element { name, .. } => name.ns.to_string(),
+                                        _ => String::new(),
+                                    },
                                     range: (range.start, range.end),
                                     owner_root,
                                     owner_child,

@@ -185,6 +185,10 @@ DjangoRustError::TemplateError(format!(
 DjangoRustError::TemplateError(format!(
 let parent_path = context.dj_if_include_path().to_string();
 Some(site) => format!("{parent_path}-i{site}"),
+if R::TRACKED && crate::registry::is_core_root_layout(name)? {
+let (html, copies) = crate::registry::call_core_root_layout(
+&body.to_string(),
+return Ok(body.core_root_layout(html, &copies));
 Ok((html).into())
 Ok((String::new()).into())
 Ok((html).into())
@@ -573,6 +577,7 @@ djust_live/src/deferred_children.rs
 .literal_offsets
 .blank_offsets
 rendered.html = value;
+let mut proof = if output.prefix.literal_blocked || output.root_channel {
 proof.html = output.normal.html.clone();
 let root = djust_vdom::lazy_provenance::authenticated_live_root(&proof.html, &spans);
 &proof.html,
@@ -652,6 +657,7 @@ m.insert("serialize_ms".to_string(), t.serialize_ms);
 m.insert("total_ms".to_string(), t.total_ms);
 m.insert("html_len".to_string(), t.html_len as f64);
 m.insert("fast_path".to_string(), t.fast_path);
+let root_spans: Vec<_> = if cutoff || output.root_channel {
 output.prefix.html = output.normal.html.clone();
 &rendered.html,
 djust_vdom::lazy_provenance::authenticated_live_root(&rendered.html, &observed)
@@ -1179,6 +1185,19 @@ arm_scope_tags(vec!["language".to_string()]).unwrap();
 assert!(!TagArg::plain("x".to_string()).safe);
 assert!(TagArg::marked("x".to_string()).safe);
 assert_eq!(TagArg::plain("x".to_string()).text, "x");
+pub fn is_core_root_layout(name: &str) -> Result<bool, DjangoRustError> {
+.map_err(|e| DjangoRustError::TemplateError(format!("Registry lock error: {e}")))?;
+core_root_layout_object(py, handler.bind(py)).map_err(handler_exception)
+fn core_root_layout_object(py: Python<'_>, handler: &Bound<'_, PyAny>) -> PyResult<bool> {
+pub fn call_core_root_layout(
+.map_err(|e| DjangoRustError::TemplateError(format!("Registry lock error: {e}")))?;
+DjangoRustError::TemplateError("Missing core layout handler".into())
+if !core_root_layout_object(py, handler.bind(py)).map_err(handler_exception)? {
+"Core layout registration changed".into(),
+"Too many core layout parts".into(),
+"Invalid core layout body slice".into(),
+"Core layout lost or duplicated body bytes".into(),
+"Core layout lost body bytes".into(),
 context.rs
 fn render_block_super(&self, ctx: &Context) -> crate::Result<String>;
 self.render_block_super(ctx).map(|html| {
@@ -1360,6 +1379,8 @@ text.into()
 text.into()
 Self::captured(text, literal.html)
 text.into()
+fn core_root_layout(self, html: String, _copies: &[(usize, usize, usize)]) -> Self {
+html.into()
 text.into()
 fn into_authored_output(self) -> djust_core::context::AuthoredOutput;
 text.to_owned()
@@ -1403,6 +1424,7 @@ result.blank_only = literal.clone();
 result.literal_only = literal;
 let mut result = Self::captured(text, literal.html);
 result.blank_only = literal.blank_html;
+fn core_root_layout(self, html: String, _copies: &[(usize, usize, usize)]) -> Self {
 let mut result = Self::from(text);
 result.literal_only = Some(result.html.clone());
 result.blank_only = Some(result.html.clone());
@@ -1434,11 +1456,14 @@ self.html.push_str(&child.html);
 self.append(&Self::from(text.to_owned()));
 *id = format!("{identity}/{id}");
 self.identify(&format!("loop{}", context.dj_if_loop_path()));
+pub root_channel: bool,
+root_channel: false,
 normal: text.clone().into(),
 prefix: text.into(),
 &self.normal.html
 f.write_str(&self.normal.html)
 b.html.clear();
+root_channel: false,
 } else if out.literal_only.is_none()
 || child.literal_only.is_none()
 || out.blank_only.is_none()
@@ -1450,9 +1475,15 @@ if let (Some(target), Some(source)) = (&mut out.blank_only, &child.blank_only) {
 out.blank_offsets.extend(
 .blank_offsets
 self.prefix.html = self.normal.html.clone();
-Self::pair(self.normal.flatten(t.clone()), self.prefix.flatten(t))
+let channel = self.root_channel;
+let mut result = Self::pair(self.normal.flatten(t.clone()), self.prefix.flatten(t));
+result.root_channel = channel;
+fn core_root_layout(self, html: String, copies: &[(usize, usize, usize)]) -> Self {
+for offsets in [&mut prefix.literal_offsets, &mut prefix.blank_offsets] {
+result.root_channel = true;
 fn into_authored_output(self) -> djust_core::context::AuthoredOutput {
 self.normal.into_authored_output()
+self.root_channel |= child.root_channel;
 let offset = self.normal.html.len();
 self.append(&Self::from(text.to_owned()));
 out.append(&DualRendered::captured("opaque".to_owned(), None));
@@ -1513,6 +1544,8 @@ flattened.literal_only.as_deref(),
 ".flatten(",
 "into_authored_output(",
 "flatten_authored_output(",
+"core_root_layout",
+"root_channel",
 "render_nodes_with_loader_mut(",
 "render_block_super(",
 "record_provenance_flatten(",

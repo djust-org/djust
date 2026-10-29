@@ -20,6 +20,11 @@ pub trait RenderOutput: Default + From<String> + Deref<Target = str> + std::fmt:
     fn context_neutral(text: String) -> Self {
         text.into()
     }
+    /// Exact source copies from a verified core layout; new wrapper bytes
+    /// grant no authority. Other output implementations keep opaque behavior.
+    fn core_root_layout(self, html: String, _copies: &[(usize, usize, usize)]) -> Self {
+        html.into()
+    }
     /// Drop start-tag authority; unknown byte changes invalidate context.
     fn flatten(self, text: String) -> Self {
         text.into()
@@ -201,7 +206,16 @@ impl Rendered {
                 |attributes: Vec<djust_vdom::lazy_provenance::LiveAuthorityAttribute>| {
                     attributes
                         .into_iter()
-                        .map(|a| (a.opening, a.name, a.value, a.owner_root, a.owner_child))
+                        .map(|a| {
+                            (
+                                a.opening,
+                                a.name,
+                                a.value,
+                                a.namespace,
+                                a.owner_root,
+                                a.owner_child,
+                            )
+                        })
                         .collect::<std::collections::HashSet<_>>()
                 };
             let literal_attributes = projected(literal_attributes);
@@ -227,6 +241,7 @@ impl Rendered {
                                     *opening,
                                     attr.name,
                                     attr.value.clone(),
+                                    attr.namespace.clone(),
                                     root,
                                     child,
                                 ))
@@ -334,6 +349,9 @@ impl RenderOutput for Rendered {
     }
     fn context_neutral(text: String) -> Self {
         Self::captured(text, Some(String::new()))
+    }
+    fn core_root_layout(self, html: String, _copies: &[(usize, usize, usize)]) -> Self {
+        Self::captured(html, None)
     }
     fn context_literal(text: String) -> Self {
         let mut result = Self::from(text);
@@ -465,6 +483,7 @@ impl RenderOutput for Rendered {
 /// must never be exposed as authorization.
 #[derive(Debug, Clone, Default)]
 pub struct DualRendered {
+    pub root_channel: bool,
     pub normal: Rendered,
     pub prefix: Rendered,
     pub observed: Vec<Range<usize>>,
@@ -472,6 +491,7 @@ pub struct DualRendered {
 impl From<String> for DualRendered {
     fn from(text: String) -> Self {
         Self {
+            root_channel: false,
             normal: text.clone().into(),
             prefix: text.into(),
             observed: Vec::new(),
@@ -493,6 +513,7 @@ impl DualRendered {
     fn pair(a: Rendered, mut b: Rendered) -> Self {
         b.html.clear();
         Self {
+            root_channel: false,
             observed: a.authored.clone(),
             normal: a,
             prefix: b,
@@ -579,7 +600,68 @@ impl RenderOutput for DualRendered {
     }
     fn flatten(mut self, t: String) -> Self {
         self.prefix.html = self.normal.html.clone();
-        Self::pair(self.normal.flatten(t.clone()), self.prefix.flatten(t))
+        let channel = self.root_channel;
+        let mut result = Self::pair(self.normal.flatten(t.clone()), self.prefix.flatten(t));
+        result.root_channel = channel;
+        result
+    }
+    fn core_root_layout(self, html: String, copies: &[(usize, usize, usize)]) -> Self {
+        let remap_spans = |spans: &[Range<usize>]| {
+            let mut result = Vec::new();
+            for &(start, end, target) in copies {
+                for span in spans {
+                    let a = span.start.max(start);
+                    let b = span.end.min(end);
+                    if a < b {
+                        result.push(target + a - start..target + b - start);
+                    }
+                }
+            }
+            result.sort_by_key(|span| span.start);
+            result
+        };
+        let map = |position: usize| {
+            copies.iter().find_map(|&(a, b, target)| {
+                (a <= position && position < b).then(|| target + position - a)
+            })
+        };
+        let mut prefix = self.prefix;
+        prefix.authored = remap_spans(&prefix.authored);
+        let mut origins = Vec::new();
+        for &(start, end, target) in copies {
+            for (a, b, source, identity) in &prefix.origins {
+                let left = (*a).max(start);
+                let right = (*b).min(end);
+                if left < right {
+                    origins.push((
+                        target + left - start,
+                        target + right - start,
+                        source + left - a,
+                        identity.clone(),
+                    ));
+                }
+            }
+        }
+        origins.sort_by_key(|entry| entry.0);
+        prefix.origins = origins;
+        for offsets in [&mut prefix.literal_offsets, &mut prefix.blank_offsets] {
+            offsets.retain_mut(|(output, _)| match map(*output) {
+                Some(mapped) => {
+                    *output = mapped;
+                    true
+                }
+                None => false,
+            });
+            offsets.sort_unstable();
+        }
+        // Keep both original source-liveness projections. The bounded core
+        // layouts only move body slices and add neutral HTML wrappers; a
+        // source-inert opening still cannot acquire authority from a wrapper.
+        let observed = remap_spans(&self.observed);
+        let mut result = Self::pair(Rendered::captured(html, None), prefix);
+        result.observed = observed;
+        result.root_channel = true;
+        result
     }
     fn flattened_literals(&mut self, literals: Vec<LiteralOutput>) {
         for literal in literals {
@@ -596,6 +678,7 @@ impl RenderOutput for DualRendered {
         )
     }
     fn append(&mut self, child: &Self) {
+        self.root_channel |= child.root_channel;
         let offset = self.normal.html.len();
         self.observed.extend(
             child
@@ -996,6 +1079,8 @@ mod tests {
                         ".flatten(",
                         "into_authored_output(",
                         "flatten_authored_output(",
+                        "core_root_layout",
+                        "root_channel",
                         "render_nodes_with_loader_mut(",
                         "render_block_super(",
                         "record_provenance_flatten(",

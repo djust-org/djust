@@ -5127,6 +5127,22 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
             args,
             children,
         } => {
+            if R::TRACKED && crate::registry::is_core_root_layout(name)? {
+                let body = render_nodes_output::<L, R>(children, context, loader)?;
+                context.take_provenance_flatten();
+                let resolved = resolve_block_tag_args(name, args, context);
+                context.take_provenance_flatten();
+                let values = bridged_context_map(context)?;
+                let raw = context.render_raw_py_objects();
+                let (html, copies) = crate::registry::call_core_root_layout(
+                    name,
+                    &resolved,
+                    &body.to_string(),
+                    &values,
+                    raw.as_deref(),
+                )?;
+                return Ok(body.core_root_layout(html, &copies));
+            }
             // Body render + arg resolution + the registry call live in ONE
             // helper shared with `sibling_updates` (#2547). Arg resolution
             // goes through the SAME shared `resolve_tag_arg` as

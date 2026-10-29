@@ -132,8 +132,8 @@ An additional probe exposed a final-wrapper mismatch: SVG wrapping could alter
 the browser's root namespace while the server retained the earlier baseline.
 The correction and SVG/table regressions passed a 152-test Django 6.1
 selection covering HTTP/WebSocket parity, roots, catalogue and child execution.
-Authenticated child bindings across ignored-subtree reuse and snapshot
-restoration still need completion. The branch remains unpushed until the final
+At that checkpoint, authenticated child bindings across ignored-subtree reuse
+and restoration were still incomplete; the implementation below supersedes it. The branch remains unpushed until the final
 full suites pass.
 
 
@@ -163,3 +163,35 @@ integration evidence. Its failures include scaffold layout root provenance,
 outdated parser/entry-point test contracts, worker-connection cleanup, and source
 inspection against changing files. The branch remains unpushed pending fixes
 and full checks on the frozen final commit.
+
+
+## Core layout provenance and source-scoped test cleanup
+
+The scaffold failure was reproduced with nested `app_shell`, `app_header` and
+`app_content` handlers around an included root. Their opaque string conversion
+lost the body's source proof. The four exact built-in layout classes now supply
+a bounded composition of literal wrappers and explicit UTF-8 body slices. Native
+validation requires every non-whitespace body byte exactly once, checks slice
+boundaries, and rejects lost or duplicated body data. Root metadata follows the
+copies; wrapper bytes gain no authority. Registered replacements and subclasses
+cannot acquire this capability by sharing a tag or method name.
+
+This is a separate root channel. The established lazy-registration cutoff is
+preserved, including for source following a layout. Namespace equality now also
+participates in each authority attribute's source-liveness comparison. An
+HTML5 SVG-breaking layout wrapper cannot authenticate a root in a different
+namespace. Unknown transforms still cannot recover lost root or model proof.
+
+All 93 initial layout/scaffold cases passed. The completed safeguard cases passed
+11 tests on Django 6.1; the affected root/catalogue/HTTP/WebSocket selection passed
+169. The default Django 5.2 layout and byte-parity selection passed 31 tests.
+The native provenance selection passed 20, and strict all-target native lint,
+Python lint and typing passed. These are focused results, not final full gates.
+
+Two independent ordered runs reproduced worker-database leaks from async child
+and queued child work tests into the named-partial WebSocket disconnect tests.
+Their source fixtures now close only connections they opened on the asgiref
+worker. The combined 53-case ordered run passes, with the downstream database
+blocker unchanged. Source inspection's 54-case selection also passes against
+frozen Python files. Final full Django 6.1 and integration gates run after the
+implementation commit; delivery results are recorded in the session history.

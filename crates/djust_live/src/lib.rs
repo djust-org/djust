@@ -2025,7 +2025,7 @@ impl RustLiveViewBackend {
             deferred_children::materialize(&mut output, possible.load(Ordering::Relaxed))?;
         output.normal.retain_live_authority();
         let cutoff = output.prefix.literal_blocked;
-        let root_spans: Vec<_> = if cutoff {
+        let root_spans: Vec<_> = if cutoff || output.root_channel {
             output.prefix.html = output.normal.html.clone();
             output.prefix.retain_live_authority();
             output
