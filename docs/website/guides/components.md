@@ -1016,6 +1016,21 @@ The `{% theme_alert %}` / `{% theme_progress %}` / `{% theme_avatar %}` tags
 from `djust.theming` render the same components with the theming package's
 own class names.
 
+### URLs in component attributes
+
+Every URL a built-in component prints into an attribute -- `<a href>`, `<form action>`, `<img src>`, `srcset`, a poster -- is checked before it is written, by the same rule in both rendering engines (the Python tag under Django's engine and the native handler under `DjustTemplateBackend`) and in the class-based components:
+
+| the value | what is printed |
+| --- | --- |
+| relative (`/x`, `../x`, `#frag`, `?q=1`), `http`, `https`, `ftp`, `ftps`, `mailto`, `tel`, `//host/x` | the value, HTML-escaped |
+| `javascript:`, `vbscript:`, `data:text/html`, any other non-navigation scheme, including the case-folded, whitespace/control-character-obfuscated forms (`JaVa<TAB>Script:`) | `#` |
+| `data:image/...` | kept, but only on an image source (`<img src>`, a `srcset` candidate) |
+| a `mark_safe` value | unchanged: that is the author's explicit statement that they vouch for it. (Only Django's engine sees the marker; the Rust engine receives plain text and neutralises the same value, the stricter side.) |
+
+An entity or percent escape inside the scheme (`jav&#x61;script:`, `javascript%3A`) is printed as the literal text, which a browser reads as a relative URL, not as a script URL.
+
+The implementation is `djust.components.utils.url_attr` (one URL), `safe_url` (navigation sinks, no `data:` images) and `srcset_attr` (a `srcset` is a comma-separated list of URLs, so each candidate is checked as an image source). A new component that prints a caller-supplied URL must use one of them. Run `make template-library-url-sweep` (see [the template backend reference](../../TEMPLATE_BACKEND.md)) and `python/tests/test_url_scheme_sweep_3665.py` fails a PR that adds a sink without the check, because it derives the tags and parameters from the code.
+
 ## djust-theming
 
 `djust.theming` is a production-ready theming system inspired by shadcn/ui, shipped in core. It provides CSS custom properties-based theming with light/dark mode, 12 design systems × 68 color presets, and reactive theme switching via djust LiveViews.
