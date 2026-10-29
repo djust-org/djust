@@ -187,6 +187,8 @@ class TestGuardCoversTheRenderSurface:
             "crosses_as_encoded",
             "crosses_as_encoded_by_conversion",
             "render",
+            "prepare_authenticated_page",
+            "commit_authenticated_page",
             "render_with_diff",
             "render_binary_diff",
             # ADR-032 (#2917): parses a component's HTML and diffs it into the
@@ -228,15 +230,21 @@ class TestGuardCoversTheRenderSurface:
     def test_each_guard_names_its_own_function(self) -> None:
         """The label is the diagnostic, so a copy-pasted one is a real defect."""
         source = self._production_source()
+
+        def body(name: str) -> str:
+            start = re.search(r"^([ \t]*)(?:pub )?fn %s\s*\(" % re.escape(name), source, re.M)
+            assert start is not None, f"no fn {name} found"
+            end = re.search(r"^" + re.escape(start.group(1)) + r"\}", source[start.start() :], re.M)
+            assert end is not None, f"no closing brace for fn {name}"
+            return source[start.start() : start.start() + end.end()]
+
+        # The public render() entry delegates to a shared implementation whose
+        # guard labels the externally visible operation as `render`.
+        assert "self.render_result(false)" in body("render")
         for name in sorted(self._GUARDED):
-            fn = re.search(
-                r"^\s*(?:pub )?fn %s\s*\(.*?^(\s*)guard_panic\(\s*\"([a-z_0-9]+)\""
-                % re.escape(name),
-                source,
-                re.S | re.M,
-            )
-            assert fn is not None, f"no guard_panic call found in fn {name}"
-            assert fn.group(2) == name, f"fn {name} passes the label {fn.group(2)!r} to guard_panic"
+            guarded_body = body("render_result" if name == "render" else name)
+            labels = re.findall(r'guard_panic\(\s*"([a-z_0-9]+)"', guarded_body)
+            assert labels == [name], f"fn {name} has guard labels {labels!r}"
 
     def test_guard_converts_to_a_python_exception_subclass(self) -> None:
         """``PyRuntimeError`` is the conversion target, and it IS containable."""

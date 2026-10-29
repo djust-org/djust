@@ -49,9 +49,11 @@ class SnapshotBreakdown(TypedDict):
 def describe_snapshot(snapshot: bytes, top: int = 3) -> Optional[SnapshotBreakdown]:
     """Split a ``RustLiveView.serialize_msgpack()`` blob into its three parts (#3626).
 
-    The blob is one positional MessagePack array,
-    ``[template_source, state, last_vdom, version, timestamp]``
-    (``SerializableViewState`` in ``crates/djust_live``): the template text, the
+    Ordinary blobs are positional MessagePack arrays,
+    ``[template_source, state, last_vdom, version, timestamp]``. A view with
+    authenticated partial-root state appends five metadata fields. Both layouts
+    keep the same first three parts (``SerializableViewState`` in ``djust_live``):
+    the template text, the
     context the Rust renderer holds (every key the render used, whether it came
     from a public attribute, a render-only value or a stream), and the rendered
     tree the next turn diffs against. The sizes are exact byte spans of the blob
@@ -66,7 +68,8 @@ def describe_snapshot(snapshot: bytes, top: int = 3) -> Optional[SnapshotBreakdo
     try:
         unpacker = msgpack.Unpacker(raw=False, strict_map_key=False)
         unpacker.feed(snapshot)
-        if unpacker.read_array_header() != 5:
+        layout = unpacker.read_array_header()
+        if layout not in (5, 10):
             return None
         start = unpacker.tell()
         unpacker.skip()
@@ -87,6 +90,25 @@ def describe_snapshot(snapshot: bytes, top: int = 3) -> Optional[SnapshotBreakdo
         start = unpacker.tell()
         unpacker.skip()
         tree = unpacker.tell() - start
+
+        # Validate the complete recognized layout so a truncated or unrelated
+        # array cannot be mistaken for a valid state breakdown.
+        version, timestamp = unpacker.unpack(), unpacker.unpack()
+        if type(version) is not int or type(timestamp) not in (int, float):
+            return None
+        if layout == 10:
+            active, fields, potential, origin, view_path = (unpacker.unpack() for _ in range(5))
+            if (
+                type(active) is not bool
+                or type(fields) is not list
+                or not all(type(field) is str for field in fields)
+                or type(potential) is not bool
+                or (origin is not None and type(origin) is not str)
+                or (view_path is not None and type(view_path) is not str)
+            ):
+                return None
+        if unpacker.tell() != len(snapshot):
+            return None
     except (msgpack.exceptions.UnpackException, ValueError, TypeError, StopIteration):
         # Not a snapshot this reader understands (a future layout): report the
         # total only. Nothing here is the caller's data, so there is no

@@ -190,6 +190,31 @@ class TestDescribeSnapshot:
         assert parts["tree"] == len(msgpack.packb(tree))
         assert dict(parts["keys"]) == {k: len(msgpack.packb(v)) for k, v in state.items()}
 
+    def test_authenticated_snapshot_retains_an_inspectable_extension(self):
+        from djust._rust import RustLiveView
+
+        view = RustLiveView(
+            "{% partialdef root %}<main dj-root>{{ a }}</main>{% endpartialdef %}"
+            "{% partial root %}",
+            [],
+        )
+        view.set_authenticated_partial_root(True)
+        view.set_template_origin("page.html")
+        view.set_authenticated_view_path("example.View")
+        view.update_state({"a": "kept"})
+        view.render_with_diff()
+        blob = view.serialize_msgpack()
+        unpacked = msgpack.unpackb(blob, raw=False, strict_map_key=False)
+        assert len(unpacked) == 10
+        parts = describe_snapshot(blob, top=10)
+        assert parts is not None
+        assert parts["template"] == len(msgpack.packb(unpacked[0]))
+        assert parts["state"] == len(msgpack.packb(unpacked[1]))
+        assert parts["tree"] == len(msgpack.packb(unpacked[2]))
+        restored = RustLiveView.deserialize_msgpack(blob)
+        assert restored.authenticated_partial_root()
+        assert restored.get_state()["a"] == "kept"
+
     def test_the_keys_are_largest_first_and_capped(self):
         from djust._rust import RustLiveView
 
@@ -217,6 +242,20 @@ class TestDescribeSnapshot:
         assert describe_snapshot(b"\xc1\xc1\xc1") is None
         assert describe_snapshot(b"") is None
         assert describe_snapshot(msgpack.packb([1, {1: 2}, 3, 4, 5])) is None  # non-str state key
+        assert describe_snapshot(msgpack.packb(["template", {}, None, 1, 1.0, True])) is None
+        assert (
+            describe_snapshot(
+                msgpack.packb(["template", {}, None, 1, 1.0, "yes", [], False, None, None])
+            )
+            is None
+        )
+        assert (
+            describe_snapshot(
+                msgpack.packb(["template", {}, None, 1, 1.0, True, [123], False, None, None])
+            )
+            is None
+        )
+        assert describe_snapshot(msgpack.packb(["template", {}, None, 1, 1.0])[:-1]) is None
 
 
 # --------------------------------------------------------------------------

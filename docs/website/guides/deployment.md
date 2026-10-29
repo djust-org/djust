@@ -99,6 +99,16 @@ pip install redis
 
 ### Deploy-time state invalidation
 
+**Mixed-version deployments:** The 2.0 partial-root renderer may store an
+extended Rust view snapshot when a template contains partials, includes, or
+inheritance. A 2.0 worker can read the earlier five-field snapshot, but an
+older worker must not consume an extended snapshot from a newer worker. During
+a rolling upgrade or rollback, use different `REDIS_KEY_PREFIX` values for
+incompatible versions and drain existing connections as needed. The versioned
+prefix gives each release a separate render-baseline cache; reconnects that miss
+their version's cache build a fresh baseline. This separation does not itself
+migrate application session data.
+
 Each session's `RustLiveView` is cached in Redis (default TTL 1 hour) and used as the diff baseline on WebSocket reconnect. When you deploy a new release that changes a template's structure, attributes, or whitespace, a reconnecting client's cached pre-deploy view will not match the new render — the resulting patches target text-node positions that no longer exist, the patch fails, recovery HTML may be unavailable on a fresh consumer, and the user is forced through a `window.location.reload()`.
 
 **Since v0.9.4 this is handled automatically.** Per PR [#1367](https://github.com/johnrtipton/djust/pull/1367), the Redis cache key includes an 8-hex template-source hash:

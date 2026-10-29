@@ -1680,8 +1680,26 @@ impl RustLiveViewBackend {
             authenticated_view_path: self.authenticated_view_path.clone(),
         };
 
-        // Serialize to MessagePack bytes
-        let bytes = rmp_serde::to_vec(&serializable).map_err(|e| {
+        // Preserve the established five-element wire layout when there is no
+        // partial-root metadata. Conservatively planned include/inheritance
+        // views can also carry metadata even if no partial ultimately renders.
+        let extended = serializable.authenticated_partial_root
+            || !serializable.authenticated_model_fields.is_empty()
+            || serializable.potential_authenticated_partial_root
+            || serializable.template_origin.is_some()
+            || serializable.authenticated_view_path.is_some();
+        let bytes = if extended {
+            rmp_serde::to_vec(&serializable)
+        } else {
+            rmp_serde::to_vec(&(
+                &serializable.template_source,
+                &serializable.state,
+                &serializable.last_vdom,
+                serializable.version,
+                serializable.timestamp,
+            ))
+        }
+        .map_err(|e| {
             PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
                 "MessagePack serialization error: {e}"
             ))
