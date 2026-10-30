@@ -2111,16 +2111,16 @@
       "version": "0.0.4"
     },
     {
-      "bom-ref": "rust:pkg:cargo/uuid@1.28.0",
+      "bom-ref": "rust:pkg:cargo/uuid@1.29.0",
       "licenses": [
         {
           "expression": "Apache-2.0 OR MIT"
         }
       ],
       "name": "uuid",
-      "purl": "pkg:cargo/uuid@1.28.0",
+      "purl": "pkg:cargo/uuid@1.29.0",
       "type": "library",
-      "version": "1.28.0"
+      "version": "1.29.0"
     },
     {
       "bom-ref": "rust:pkg:cargo/valuable@0.1.1",
