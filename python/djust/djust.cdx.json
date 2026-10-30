@@ -1823,16 +1823,16 @@
       "version": "0.4.12"
     },
     {
-      "bom-ref": "rust:pkg:cargo/smallvec@1.16.3",
+      "bom-ref": "rust:pkg:cargo/smallvec@1.16.4",
       "licenses": [
         {
           "expression": "MIT OR Apache-2.0"
         }
       ],
       "name": "smallvec",
-      "purl": "pkg:cargo/smallvec@1.16.3",
+      "purl": "pkg:cargo/smallvec@1.16.4",
       "type": "library",
-      "version": "1.16.3"
+      "version": "1.16.4"
     },
     {
       "bom-ref": "rust:pkg:cargo/socket2@0.6.3",
