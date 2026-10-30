@@ -404,3 +404,59 @@ def test_liveview_reaches_the_new_async_names():
 
     assert inspect.iscoroutinefunction(LiveView.astream_insert)
     assert inspect.iscoroutinefunction(LiveView.astream_delete)
+
+
+# --- docstring markers ------------------------------------------------------------
+
+
+def _marked_objects():
+    from djust import _view_resolution, simple_live_view, sse, streaming
+    from djust import rust_components
+    from djust.components import mixins
+
+    objs = [
+        rust_components.Button,
+        streaming.StreamingMixin.stream_insert,
+        streaming.StreamingMixin.stream_delete,
+        simple_live_view.__getattr__,
+        _view_resolution.is_view_import_allowed,
+        sse.DjustSSEEventView,
+    ]
+    objs += [getattr(mixins, name) for name, _ in MIXINS]
+    return objs
+
+
+@pytest.mark.parametrize("index", range(6 + len(MIXINS)))
+def test_a_deprecated_symbol_carries_the_policy_docstring_marker(index):
+    """API_STABILITY item 2: a ``.. deprecated:: X.Y`` marker naming the version."""
+    obj = _marked_objects()[index]
+    assert ".. deprecated:: 1.4" in (obj.__doc__ or ""), obj
+
+
+@pytest.mark.parametrize("mixin_name,replacement", MIXINS)
+def test_a_mixin_docstring_names_the_real_replacement_module(mixin_name, replacement):
+    from djust.components import mixins
+
+    doc = getattr(mixins, mixin_name).__doc__
+    assert "djust.components.descriptors.%s" % replacement in doc, doc
+    assert "djust_components.descriptors" not in doc
+
+
+# --- C301-C303 name the live settings ------------------------------------------
+
+
+def test_the_service_worker_checks_name_the_nested_settings():
+    from djust.checks.integrations import check_service_worker_advanced
+
+    sw = {"vdom_cache_ttl_seconds": 0, "vdom_cache_max_entries": 0, "vdom_cache_enabled": False}
+    with override_settings(LIVEVIEW_CONFIG={"service_worker": sw}):
+        found = {m.id: m for m in check_service_worker_advanced(None)}
+    for check_id, key in (
+        ("djust.C301", "vdom_cache_ttl_seconds"),
+        ("djust.C302", "vdom_cache_max_entries"),
+        ("djust.C303", "vdom_cache_enabled"),
+    ):
+        message = found[check_id]
+        assert "LIVEVIEW_CONFIG['service_worker']['%s']" % key in message.msg, message.msg
+        assert "LIVEVIEW_CONFIG['service_worker']" in (message.fix_hint or ""), message.fix_hint
+        assert not message.msg.startswith("DJUST_VDOM_CACHE_"), message.msg

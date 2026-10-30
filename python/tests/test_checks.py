@@ -4464,7 +4464,9 @@ class TestT027RustJsxTags:
 
     def test_does_not_flag_look_alike_markup(self, tmp_path, settings):
         found = self._run(
-            tmp_path, settings, "<Rusty>a</Rusty><Rust>b</Rust><rustButton/><div>Rust</div>"
+            tmp_path,
+            settings,
+            "<Rusty>a</Rusty><Rust>b</Rust><rustButton/><div>Rust</div><RustButton-like>x</RustButton-like>",
         )
         assert found == []
 
