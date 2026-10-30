@@ -381,6 +381,12 @@ def _groups_of_other_views(consumer: Any) -> set:
 def _presence_probe(view: Any, need_key: bool, need_count: bool) -> tuple:
     """Runs on the session's thread: the view's presence key (application code
     that may touch the database) and whether its ``online_count`` is stale."""
+    from .sync_turn import run_sync_step
+
+    return run_sync_step(view, "hook", _probe_presence, view, need_key, need_count)
+
+
+def _probe_presence(view: Any, need_key: bool, need_count: bool) -> tuple:
     key = view.get_presence_key() if need_key else None
     stale = False
     if need_count:

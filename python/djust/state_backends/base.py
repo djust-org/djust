@@ -2,9 +2,10 @@
 Base state backend ABC and shared constants.
 """
 
+import hashlib
 import logging
 from abc import ABC, abstractmethod
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any, List, Tuple, TypedDict
 from djust._rust import RustLiveView
 
 logger = logging.getLogger(__name__)
@@ -34,6 +35,124 @@ class DjustPerformanceWarning(UserWarning):
     """Warning for potential performance issues in djust LiveViews."""
 
     pass
+
+
+class SnapshotBreakdown(TypedDict):
+    """Where the bytes of a stored view snapshot are (see :func:`describe_snapshot`)."""
+
+    template: int
+    state: int
+    tree: int
+    #: ``(context key, bytes)`` for the largest state entries, biggest first.
+    keys: List[Tuple[str, int]]
+
+
+def state_key_label(key: str) -> str:
+    """A short, stable, non-reversible label for a state-backend cache key.
+
+    The cache key is ``{tenant}{session_key}_{view_key}_t<hash>``: the Django
+    session key is a bearer credential and the view key can carry a request path
+    (ids, PII), so neither may reach a warning, which goes to stderr and error
+    trackers. The label lets one warning be told from another, and the same key
+    always gives the same label; it does not name the view (the breakdown of
+    largest context keys in the message does that in practice).
+    """
+    return "state-" + hashlib.sha256(key.encode("utf-8", "replace")).hexdigest()[:8]
+
+
+def describe_snapshot(snapshot: bytes, top: int = 3) -> Optional[SnapshotBreakdown]:
+    """Split a ``RustLiveView.serialize_msgpack()`` blob into its three parts (#3626).
+
+    The blob is one positional MessagePack array,
+    ``[template_source, state, last_vdom, version, timestamp]``
+    (``SerializableViewState`` in ``crates/djust_live``): the template text, the
+    context the Rust renderer holds (every key the render used, whether it came
+    from a public attribute, a render-only value or a stream), and the rendered
+    tree the next turn diffs against. The sizes are exact byte spans of the blob
+    itself, read with the unpacker's ``skip``/``tell`` so nothing is decoded or
+    re-encoded.
+
+    Returns ``None`` when the blob is not that shape, so a caller falls back to
+    the total alone rather than reporting a wrong split.
+    """
+    import msgpack
+
+    try:
+        unpacker = msgpack.Unpacker(raw=False, strict_map_key=False)
+        unpacker.feed(snapshot)
+        if unpacker.read_array_header() != 5:
+            return None
+        start = unpacker.tell()
+        unpacker.skip()
+        template = unpacker.tell() - start
+
+        start = unpacker.tell()
+        entries = unpacker.read_map_header()
+        keys: List[Tuple[str, int]] = []
+        for _ in range(entries):
+            name = unpacker.unpack()
+            value_start = unpacker.tell()
+            unpacker.skip()
+            if not isinstance(name, str):
+                return None
+            keys.append((name, unpacker.tell() - value_start))
+        state = unpacker.tell() - start
+
+        start = unpacker.tell()
+        unpacker.skip()
+        tree = unpacker.tell() - start
+    except (msgpack.exceptions.UnpackException, ValueError, TypeError, StopIteration):
+        # Not a snapshot this reader understands (a future layout): report the
+        # total only. Nothing here is the caller's data, so there is no
+        # exception worth logging.
+        logger.debug("describe_snapshot: unrecognised snapshot layout")
+        return None
+    keys.sort(key=lambda item: item[1], reverse=True)
+    return {"template": template, "state": state, "tree": tree, "keys": keys[:top]}
+
+
+def large_state_warning_message(
+    key: str, total: int, threshold_kb: int, snapshot: Optional[bytes] = None
+) -> str:
+    """The text of the ``Large LiveView state`` warning (#3626).
+
+    What is measured is the whole stored snapshot, so the message says what is
+    in it and which advice moves which part. Each claim below is pinned by
+    ``test_large_state_warning_3626.py`` against a real view, because the
+    previous advice ("use temporary_assigns or streams") did not lower this
+    number for the case it was shown for.
+    """
+    head = "Large LiveView state detected for %s: %.1fKB (threshold: %sKB)." % (
+        state_key_label(key),
+        total / 1024,
+        threshold_kb,
+    )
+    parts = describe_snapshot(snapshot) if snapshot is not None else None
+    if parts is None:
+        breakdown = ""
+    else:
+        biggest = ", ".join("%s %.1fKB" % (name, size / 1024) for name, size in parts["keys"])
+        breakdown = (
+            " The stored snapshot holds the context the template used (%.1fKB; largest: %s), "
+            "the rendered tree the next turn diffs against (%.1fKB) and the template (%.1fKB)."
+            % (
+                parts["state"] / 1024,
+                biggest or "none",
+                parts["tree"] / 1024,
+                parts["template"] / 1024,
+            )
+        )
+    advice = (
+        " Both of the first two grow with the rows you render, so render fewer and "
+        "leaner ones (paginate, or pass only the fields the template prints). "
+        "temporary_assigns empties the context copy after the next render but leaves the "
+        "tree; streams and get_render_only_context() do not shrink this snapshot (the latter "
+        'only keeps values out of the session save). A dj-update="append" container keeps every '
+        "row it was given in the tree, so it grows that part with each row added. "
+        "See the Best Practices guide, "
+        "'Large LiveView state'."
+    )
+    return head + breakdown + advice
 
 
 class StateBackend(ABC):
@@ -90,7 +209,7 @@ class StateBackend(ABC):
         """
         pass
 
-    def refresh(self, key: str, view: RustLiveView) -> None:
+    def refresh(self, key: str, view: RustLiveView, warn_on_large_state: bool = True) -> None:
         """Record ``view``'s state after its owner rendered it.
 
         Called on the owner's thread after every render of a view whose state
@@ -98,7 +217,9 @@ class StateBackend(ABC):
         in-memory backend) re-stores its snapshot, so the next reader of the
         key (an HTTP page-POST request, a reconnect, another tab) starts from
         the last render. The default does nothing: a remote backend keeps the
-        state written by :meth:`set`, as it always has.
+        state written by :meth:`set`, as it always has. (So the large-state
+        warning raised from here is an in-memory-backend behaviour; the Redis
+        backend has none.) ``warn_on_large_state=False`` turns the warning off.
         """
 
     @abstractmethod

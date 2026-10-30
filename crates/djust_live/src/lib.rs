@@ -28,8 +28,9 @@ use djust_templates::render_env::RenderEnvGuard;
 use djust_templates::{CompiledTemplate, Template};
 use djust_vdom::{
     cache_ignore_subtree_html_in, diff_in, find_paths_by_attr, parse_html_continue_with_namespace,
-    parse_html_fragment, parse_html_with_namespace, reset_id_counter, splice_ignore_subtrees,
-    sync_ids, try_text_only_vdom_update_inplace, Namespace, SourceOpenElements, VNode,
+    parse_html_fragment, parse_html_with_namespace, reset_id_counter, splice_accumulating_subtrees,
+    splice_ignore_subtrees, sync_ids, try_text_only_vdom_update_inplace, Namespace,
+    SourceOpenElements, VNode,
 };
 use once_cell::sync::Lazy;
 use pyo3::prelude::*;
@@ -141,6 +142,20 @@ type LazyRenderOutput = (
 );
 type CachedTemplate = (Arc<Template>, u64, bool, Vec<LazyDependency>);
 static TEMPLATE_CACHE: Lazy<DashMap<(u64, String), CachedTemplate>> = Lazy::new(DashMap::new);
+
+/// `RustLiveView.dj_model_fields(cache=True)` results, keyed by the exact
+/// template source and template directories (N-39). Bounded: cleared when full.
+type DjModelFieldsKey = (String, Vec<PathBuf>);
+static DJ_MODEL_FIELDS_CACHE: Lazy<DashMap<DjModelFieldsKey, Vec<String>>> =
+    Lazy::new(DashMap::new);
+const DJ_MODEL_FIELDS_CACHE_MAX: usize = 512;
+
+/// Forget every cached `dj_model_fields(cache=True)` result (hot reload, a
+/// settings change, test isolation).
+#[pyfunction]
+fn clear_dj_model_fields_cache() {
+    DJ_MODEL_FIELDS_CACHE.clear();
+}
 /// Global supervisor for managing actor lifecycle
 /// Created once with 1-hour TTL
 static SUPERVISOR: Lazy<Arc<ActorSupervisor>> =
@@ -220,6 +235,24 @@ struct RenderTiming {
     fast_path: f64,
 }
 
+/// Whether `node` is a `dj-update="append"` / `"prepend"` container named in `ids`.
+fn is_accumulating_container(node: &VNode, ids: &HashSet<String>) -> bool {
+    matches!(
+        node.attrs.get("dj-update").map(String::as_str),
+        Some("append" | "prepend")
+    ) && node.attrs.get("id").is_some_and(|id| ids.contains(id))
+}
+
+/// Whether `node` or anything under it is such a container.
+fn holds_accumulating_container(node: &VNode, ids: &HashSet<String>) -> bool {
+    !ids.is_empty()
+        && (is_accumulating_container(node, ids)
+            || node
+                .children
+                .iter()
+                .any(|child| holds_accumulating_container(child, ids)))
+}
+
 /// A LiveView component that manages state and rendering (Rust backend)
 #[pyclass(name = "RustLiveView")]
 pub struct RustLiveViewBackend {
@@ -278,6 +311,15 @@ pub struct RustLiveViewBackend {
     /// renders don't modify the index because they only change text
     /// content, not text-node positions or count.
     text_node_index: Option<Vec<TextNodeEntry>>,
+    /// The `id`s of the `dj-update="append"` / `"prepend"` containers that
+    /// accumulate children across renders (#3639): those whose rows come from a
+    /// `temporary_assigns` key, which a render lists only for the rows just
+    /// assigned. Set from Python on every sync, from the template; not
+    /// persisted.
+    accumulate_ids: HashSet<String>,
+    /// Rows without an `id` that an accumulating container dropped since Python
+    /// last asked (`take_accumulate_dropped`), so it can say so once.
+    accumulate_dropped: usize,
     /// Sidecar map of raw Python objects keyed by top-level context
     /// name. Populated by Python's `set_raw_py_values` so the Rust
     /// template engine can fall back to `getattr` for attributes
@@ -364,6 +406,8 @@ impl RustLiveViewBackend {
             changed_keys: None,
             fragment_text_map: None,
             text_node_index: None,
+            accumulate_ids: HashSet::new(),
+            accumulate_dropped: 0,
             raw_py_values: None,
             // Default-OFF (#1967 / split-foundation #1122); flipped by
             // set_loop_render_cache_enabled from the Python config flag.
@@ -396,6 +440,20 @@ impl RustLiveViewBackend {
                 self.changed_keys = Some(keys.into_iter().collect());
             }
         }
+    }
+
+    /// Name the `dj-update="append"` / `"prepend"` containers (by `id`) that
+    /// accumulate children across renders instead of being diffed as an
+    /// ordinary list (#3639). Python works them out from the template: the
+    /// containers whose rows come from a `temporary_assigns` key.
+    fn set_accumulate_containers(&mut self, ids: Vec<String>) {
+        self.accumulate_ids = ids.into_iter().collect();
+    }
+
+    /// How many rows without an `id` an accumulating container dropped since
+    /// the last call. The client drops them too (it adds a child only by `id`).
+    fn take_accumulate_dropped(&mut self) -> usize {
+        std::mem::take(&mut self.accumulate_dropped)
     }
 
     /// Enable or disable the per-item loop render cache (#1967).
@@ -705,17 +763,40 @@ impl RustLiveViewBackend {
     /// `dj-model="{{ field }}"` is NOT captured (fail-closed; opt in via
     /// `allowed_model_fields`). An unresolvable include or a parse error yields
     /// no fields for that branch (fail-closed) — it never widens the allowlist.
-    fn dj_model_fields(&self) -> PyResult<Vec<String>> {
+    ///
+    /// With `cache=True` the result is kept process-wide, keyed by the exact
+    /// template source and template directories (never by a short hash: this
+    /// is a security allowlist), so an unchanged template is walked once
+    /// instead of on every render (Point Guard N-39: a third of a page's server CPU).
+    /// Only a successful walk is kept. The Python caller passes `cache=True`
+    /// only while templates are cached (DEBUG off), since an `{% include %}`d
+    /// file can change on disk without the source changing.
+    #[pyo3(signature = (cache=false))]
+    fn dj_model_fields(&self, cache: bool) -> PyResult<Vec<String>> {
         guard_panic("dj_model_fields", move || {
             use djust_templates::inheritance::FilesystemTemplateLoader;
+            let key = (self.template_source.clone(), self.template_dirs.clone());
+            if cache {
+                if let Some(hit) = DJ_MODEL_FIELDS_CACHE.get(&key) {
+                    return Ok(hit.value().clone());
+                }
+            }
             let loader = FilesystemTemplateLoader::new(self.template_dirs.clone());
             // Fail-closed: any error (parse failure, etc.) leaves the auto-allowlist
             // empty rather than over-allowing. The explicit `allowed_model_fields`
             // path on the Python side still applies.
-            Ok(
-                djust_templates::extract_dj_model_fields(&self.template_source, Some(&loader))
-                    .unwrap_or_default(),
-            )
+            match djust_templates::extract_dj_model_fields(&self.template_source, Some(&loader)) {
+                Ok(fields) => {
+                    if cache {
+                        if DJ_MODEL_FIELDS_CACHE.len() >= DJ_MODEL_FIELDS_CACHE_MAX {
+                            DJ_MODEL_FIELDS_CACHE.clear();
+                        }
+                        DJ_MODEL_FIELDS_CACHE.insert(key, fields.clone());
+                    }
+                    Ok(fields)
+                }
+                Err(_) => Ok(Vec::new()),
+            }
         })
     }
 
@@ -1060,6 +1141,11 @@ impl RustLiveViewBackend {
             if let Some(old_vdom) = &self.last_vdom {
                 splice_ignore_subtrees(old_vdom, &mut new_vdom);
             }
+            self.accumulate_dropped += splice_accumulating_subtrees(
+                self.last_vdom.as_ref(),
+                &mut new_vdom,
+                &self.accumulate_ids,
+            );
 
             // Phase 3: VDOM diff
             let t_diff_start = Instant::now();
@@ -1154,6 +1240,7 @@ impl RustLiveViewBackend {
             use std::time::Instant;
             let t_start = Instant::now();
 
+            let accumulate_ids = self.accumulate_ids.clone();
             let (Some(vdom), Some(root_ns)) = (self.last_vdom.as_mut(), self.last_root_ns) else {
                 return Ok(None);
             };
@@ -1185,6 +1272,7 @@ impl RustLiveViewBackend {
                 if ancestors.iter().any(|n| {
                     n.attrs.get("dj-update").map(String::as_str) == Some("ignore")
                         || n.attrs.contains_key("dj-virtual")
+                        || is_accumulating_container(n, &accumulate_ids)
                 }) {
                     return Ok(None);
                 }
@@ -1212,6 +1300,11 @@ impl RustLiveViewBackend {
             }
             let mut new_node = roots.pop().expect("one root");
             if new_node.attrs.get("data-component-id") != Some(&component_id) {
+                return Ok(None);
+            }
+            // The full path accumulates a `dj-update` container's rows (they are
+            // spliced from the whole tree); a fragment holding one is left to it.
+            if holds_accumulating_container(&new_node, &accumulate_ids) {
                 return Ok(None);
             }
             // The fragment was parsed on its own, so it may be as deep as a
@@ -1370,6 +1463,9 @@ impl RustLiveViewBackend {
             changed_keys: None,
             fragment_text_map: None,
             text_node_index: None,
+            // Transient (#3639): Python re-sets it on every sync.
+            accumulate_ids: HashSet::new(),
+            accumulate_dropped: 0,
             raw_py_values: None,
             // Transient cache — not deserialized; rebuilt fresh, default-OFF
             // until the Python flag re-enables it post-restore (#1967).
@@ -1838,6 +1934,11 @@ impl RustLiveViewBackend {
                 if let Some(old_vdom) = &self.last_vdom {
                     splice_ignore_subtrees(old_vdom, &mut new_vdom);
                 }
+                self.accumulate_dropped += splice_accumulating_subtrees(
+                    self.last_vdom.as_ref(),
+                    &mut new_vdom,
+                    &self.accumulate_ids,
+                );
 
                 // VDOM diff
                 let t_diff_start = Instant::now();
@@ -6563,6 +6664,7 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(active_unlocalized_number_format, m)?)?;
     m.add_function(wrap_pyfunction!(virtual_keyed_ops_enabled, m)?)?;
     m.add_function(wrap_pyfunction!(dj_model_fields_from_template, m)?)?;
+    m.add_function(wrap_pyfunction!(clear_dj_model_fields_cache, m)?)?;
 
     // Actor system exports
     m.add_class::<SessionActorHandlePy>()?;

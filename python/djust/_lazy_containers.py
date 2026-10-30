@@ -201,7 +201,7 @@ def save_http_lazy(parent: Any, request: Any, view_id: str, child: Any) -> None:
     if entry is None:
         return
     from .components.base import is_component_collection, LiveComponent
-    from .mixins.context import legacy_render_only_keys
+    from .mixins.context import legacy_unsaved_keys
     from .serialization import normalize_django_value
     from ._tenant_state import refresh_other_views_state
 
@@ -210,7 +210,7 @@ def save_http_lazy(parent: Any, request: Any, view_id: str, child: Any) -> None:
 
     gcd = child.get_context_data
     context = async_to_sync(gcd)() if inspect.iscoroutinefunction(gcd) else gcd()
-    excluded = legacy_render_only_keys(child) | {"streams"}
+    excluded = legacy_unsaved_keys(child, context) | {"streams"}
     public = {
         k: v
         for k, v in context.items()

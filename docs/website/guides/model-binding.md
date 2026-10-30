@@ -178,7 +178,10 @@ The ModelBindingMixin enforces these rules:
   appears as plain `dj-model="<field>"` in the rendered template source, or is
   listed here. The modifier spellings (`dj-model.lazy=…`, `dj-model.debounce-N=…`)
   are not auto-detected, so list those fields here.
-  Leaving it as `None` means "template-derived only" — never "everything"
+  Leaving it as `None` means "template-derived only" — never "everything".
+  The template-derived set is found by walking the template and its includes;
+  with `DEBUG` off the walk runs once per template source and template
+  directories, and with `DEBUG` on (hot reload) on every render
 - The blocked set is explicit, not a heuristic: `template_name`, `request`,
   `session`, `kwargs`, `args`, `use_actors` and `temporary_assigns`
 

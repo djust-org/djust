@@ -1016,6 +1016,27 @@ The `{% theme_alert %}` / `{% theme_progress %}` / `{% theme_avatar %}` tags
 from `djust.theming` render the same components with the theming package's
 own class names.
 
+### URLs in component attributes
+
+What a built-in component prints into a URL attribute (`<a href>`, `<form action>`, `<img src>`, `srcset`, a poster) depends on which library prints it. The two are NOT the same rule.
+
+**`djust_components`: the template tags (in both rendering engines, the Python tag under Django's engine and the native handler under `DjustTemplateBackend`) and the class-based components.** An allowlist:
+
+| the value | what is printed |
+| --- | --- |
+| relative (`/x`, `../x`, `#frag`, `?q=1`), `http`, `https`, `ftp`, `ftps`, `mailto`, `tel`, `//host/x` | the value, HTML-escaped |
+| any other scheme: `javascript:`, `vbscript:`, `data:text/html`, `blob:`, `file:`, custom schemes, including the case-folded, whitespace/control-character-obfuscated forms (`JaVa<TAB>Script:`) | `#` |
+| `data:image/...` | kept, but only on an image source (`<img src>`, a `srcset` candidate) |
+| a `mark_safe` value | **tags:** unchanged, the author's explicit statement that they vouch for it (only Django's engine sees the marker; the Rust engine receives plain text and neutralises the same value, the stricter side). **Class-based components:** the six sinks that always escaped with `html.escape` (`ImageCropper`, `ImageUploadPreview`, `LiveIndicator`, `MentionsInput`, `OrgChart` and `ResponsiveImage`'s `srcset`) do NOT honour the marker: a `SafeString` is checked and escaped like any other string, as they always escaped it (an already-escaped `&amp;` becomes `&amp;amp;`). The other class components (`Avatar`, `Carousel`, `NavMenu`, `Breadcrumb`, `ResponsiveImage`'s `src`, the `LiveComponent`s such as `NavbarComponent`, and others) already honoured it before and still do: for them a `mark_safe` URL is the author's opt-out too, and one that breaks out of the attribute is emitted as written. |
+
+An entity or percent escape inside the scheme (`jav&#x61;script:`, `javascript%3A`) is printed as literal text, which a browser reads as a relative URL, not as a script URL. A `srcset` is a comma-separated list, so each candidate URL is checked as an image source; candidates are split exactly as the HTML specification's "parse a srcset attribute" splits them (parentheses in a descriptor do not nest, and only ASCII whitespace separates).
+
+The implementation is `djust.components.utils.url_attr` (one URL; `honor_safe=False` for the class components), `safe_url` (navigation sinks, no `data:` images) and `srcset_attr`. A new component that prints a caller-supplied URL must use one of them.
+
+**`djust_theming` (`theme_*` tags and pages) is different.** It refuses by DENYLIST: `javascript:`, `vbscript:`, `data:` and the obsolete `livescript:` and `mhtml:` become `#` (or raise, for a literal). It passes every other scheme the components allowlist would reject, among them `blob:`, `file:`, `view-source:`, `jar:`, `intent:`, `feed:`, `ws:`, `git:`, `ms-word:` and custom application schemes. None of those is a script scheme; whether the theming tags should move to the shared allowlist (which would break a legitimate custom scheme) is an open decision, so it is documented here rather than changed.
+
+`make template-library-url-sweep` (see [the template backend reference](../../TEMPLATE_BACKEND.md)) drives script-capable URLs through every parameter of every tag and driveable class component and `python/tests/test_url_scheme_sweep_3665.py` fails a PR that adds a sink without the check, because it derives the tags, parameters and classes from the code. It does not drive the descriptor components (their markup is the caller's template) or the gallery pages.
+
 ## djust-theming
 
 `djust.theming` is a production-ready theming system inspired by shadcn/ui, shipped in core. It provides CSS custom properties-based theming with light/dark mode, 12 design systems × 68 color presets, and reactive theme switching via djust LiveViews.
@@ -1109,6 +1130,19 @@ page that uses only the `{% theme_X %}` tags pays for none of them. The settings
 variables (`theme_preset`, `theme_mode`, `theme_resolved_mode`, `theme_pack`,
 `theme_presets`, `components_gallery_url`) are plain values computed up front.
 A template that reads an HTML variable gets the same text it always did.
+
+`theme_presets` is about 12 KB of dicts, and djust copies every JSON-serialisable
+context-processor value into a LiveView's stored state, so it used to be stored
+in the snapshot of every view in an app that installs the processor (a
+one-counter view stored 12,182 bytes, 11,684 of them this list). It is now a
+`RequestScopedList`: a real `list`, so `isinstance(..., list)`, `json.dumps`,
+`{{ theme_presets|json_script:"presets" }}`, `len`, indexing, `in` and
+`{% for %}` all work in both template engines, but a LiveView sends it to the
+renderer without storing it (the same view stores 510 bytes). The one check
+that tells it from a plain list is `type(theme_presets) is list`. A processor of
+your own can opt a large, request-derived list out of the stored state the same
+way: return `RequestScopedList(items)` from `djust.request_scoped` (public API). A plain list
+from your processor is stored as before.
 
 The HTML variables are not `str` instances: they are lazy trusted-HTML objects
 (`isinstance(theme_head, str)` is `False`). `{{ ... }}`, `|safe`, `|length`,
@@ -1452,11 +1486,46 @@ class DashboardView(ThemeMixin, LiveView):
 
     def mount(self, request, **kwargs):
         super().mount(request, **kwargs)
-        # theme_head, theme_switcher, theme_preset, theme_mode
-        # are automatically available in the template context
+        # theme_head, theme_css, theme_switcher, theme_presets, theme_preset
+        # and theme_mode are available in the template context
 ```
 
 Theme changes happen instantly over WebSocket -- no page reload.
+
+`theme_preset`, `theme_mode` and `theme_resolved_mode` are ordinary attributes
+of the view: a few bytes each, and a template that branches on them re-renders
+when they change. `theme_head`, `theme_css`, `theme_switcher` and
+`theme_presets` are **not** attributes: together they are about 80 KB, and every
+public attribute is stored in the view's state. The mixin supplies them to the
+template lazily, next to the context processors' output, so they render when a
+template reads them, are never stored, and cost nothing on a page that prints
+only the `{% theme_head %}` tag. `view.theme_head` (and the other three) still
+works in Python: it renders on each read and caches nothing. Assigning one in a
+subclass (`self.theme_head = ...`) still takes precedence, and, like any
+assignment, makes it state. The mixin does not need `theme_context` in
+`context_processors`; when both are present, the mixin's values win, as they did
+when they were attributes. This holds for a view that skipped `mount()` as well
+(a reconnect that restores state, a restored sticky child): the values resolve
+their manager from the request.
+
+What changed for code that reached the old attributes through the context:
+
+- `get_context_data()` no longer returns `theme_head`, `theme_css`,
+  `theme_switcher` or `theme_presets`. A subclass that read
+  `ctx["theme_head"]` there must read `self.theme_head` instead. The names are
+  supplied when the template is rendered, from the view's request; a view with no
+  request renders them empty (every framework path sets one, a view driven by
+  hand in a test may not).
+- `theme_presets_count` is still available to templates, as before. In the
+  template and in `view.theme_presets`, `theme_presets` is a real `list`
+  (`json_script` and `json.dumps` work, #3631).
+- After `set_theme_mode`, `set_theme_preset`, `toggle_theme_mode` or
+  `cycle_theme_preset` the next render re-sends all four, so a `dj-root` template
+  that reads `{{ theme_head|length }}` or the switcher shows the new theme.
+
+A page that only uses the `{% theme_head %}` and `{% theme_switcher %}` tags
+needs none of this, and a plain `LiveView` does not need `ThemeMixin` for the
+tags.
 
 ### shadcn/ui Compatibility
 

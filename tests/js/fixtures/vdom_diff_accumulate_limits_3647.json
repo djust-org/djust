@@ -1,0 +1,991 @@
+{
+  "scenario": "accumulate_limits_3647",
+  "description": "Duplicate ids and unkeyed stored rows in a prepend container, rows reaching an append container through an alias or a renamed key, and nested containers.",
+  "root_selector": ".ws-root",
+  "shapes": {
+    "duplicate_ids": {
+      "initial_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\" dj-update=\"prepend\" id=\"list\"><li data-pk=\"a\" dj-id=\"2\" id=\"rows-0\">first</li><li data-pk=\"b\" dj-id=\"3\" id=\"rows-0\">second</li><li data-pk=\"c\" dj-id=\"4\" id=\"rows-1\">third</li></ul><p dj-id=\"5\">count 0</p></div>",
+      "steps": [
+        {
+          "label": "row next to another change",
+          "patches": [
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 0,
+              "node": {
+                "tag": "li",
+                "attrs": {
+                  "data-pk": "n1",
+                  "dj-id": "8",
+                  "id": "rows-101"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "new 1",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": "rows-101",
+                "djust_id": "8"
+              }
+            },
+            {
+              "type": "SetText",
+              "path": [
+                1,
+                0
+              ],
+              "text": "count 1"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\" dj-update=\"prepend\" id=\"list\"><li data-pk=\"n1\" dj-id=\"8\" id=\"rows-101\">new 1</li><li data-pk=\"a\" dj-id=\"2\" id=\"rows-0\">first</li><li data-pk=\"b\" dj-id=\"3\" id=\"rows-0\">second</li><li data-pk=\"c\" dj-id=\"4\" id=\"rows-1\">third</li></ul><p dj-id=\"5\">count 1</p></div>"
+        },
+        {
+          "label": "a batch that repeats an id",
+          "patches": [
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 0,
+              "node": {
+                "tag": "li",
+                "attrs": {
+                  "data-pk": "p2a",
+                  "dj-id": "c",
+                  "id": "rows-520"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "pair one",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": "rows-520\u001f0",
+                "djust_id": "c"
+              }
+            },
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 1,
+              "node": {
+                "tag": "li",
+                "attrs": {
+                  "data-pk": "p2b",
+                  "dj-id": "d",
+                  "id": "rows-520"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "pair two",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": "rows-520\u001f1",
+                "djust_id": "d"
+              }
+            },
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 2,
+              "node": {
+                "tag": "li",
+                "attrs": {
+                  "data-pk": "p2c",
+                  "dj-id": "e",
+                  "id": "rows-521"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "pair three",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": "rows-521",
+                "djust_id": "e"
+              }
+            },
+            {
+              "type": "SetText",
+              "path": [
+                1,
+                0
+              ],
+              "text": "count 2"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\" dj-update=\"prepend\" id=\"list\"><li data-pk=\"p2a\" dj-id=\"c\" id=\"rows-520\">pair one</li><li data-pk=\"p2b\" dj-id=\"d\" id=\"rows-520\">pair two</li><li data-pk=\"p2c\" dj-id=\"e\" id=\"rows-521\">pair three</li><li data-pk=\"n1\" dj-id=\"8\" id=\"rows-101\">new 1</li><li data-pk=\"a\" dj-id=\"2\" id=\"rows-0\">first</li><li data-pk=\"b\" dj-id=\"3\" id=\"rows-0\">second</li><li data-pk=\"c\" dj-id=\"4\" id=\"rows-1\">third</li></ul><p dj-id=\"5\">count 2</p></div>"
+        },
+        {
+          "label": "unrelated event",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                1,
+                0
+              ],
+              "text": "count 3"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\" dj-update=\"prepend\" id=\"list\"><li data-pk=\"p2a\" dj-id=\"c\" id=\"rows-520\">pair one</li><li data-pk=\"p2b\" dj-id=\"d\" id=\"rows-520\">pair two</li><li data-pk=\"p2c\" dj-id=\"e\" id=\"rows-521\">pair three</li><li data-pk=\"n1\" dj-id=\"8\" id=\"rows-101\">new 1</li><li data-pk=\"a\" dj-id=\"2\" id=\"rows-0\">first</li><li data-pk=\"b\" dj-id=\"3\" id=\"rows-0\">second</li><li data-pk=\"c\" dj-id=\"4\" id=\"rows-1\">third</li></ul><p dj-id=\"5\">count 3</p></div>"
+        },
+        {
+          "label": "another row",
+          "patches": [
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 0,
+              "node": {
+                "tag": "li",
+                "attrs": {
+                  "data-pk": "n4",
+                  "dj-id": "o",
+                  "id": "rows-104"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "new 4",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": "rows-104",
+                "djust_id": "o"
+              }
+            },
+            {
+              "type": "SetText",
+              "path": [
+                1,
+                0
+              ],
+              "text": "count 4"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\" dj-update=\"prepend\" id=\"list\"><li data-pk=\"n4\" dj-id=\"o\" id=\"rows-104\">new 4</li><li data-pk=\"p2a\" dj-id=\"c\" id=\"rows-520\">pair one</li><li data-pk=\"p2b\" dj-id=\"d\" id=\"rows-520\">pair two</li><li data-pk=\"p2c\" dj-id=\"e\" id=\"rows-521\">pair three</li><li data-pk=\"n1\" dj-id=\"8\" id=\"rows-101\">new 1</li><li data-pk=\"a\" dj-id=\"2\" id=\"rows-0\">first</li><li data-pk=\"b\" dj-id=\"3\" id=\"rows-0\">second</li><li data-pk=\"c\" dj-id=\"4\" id=\"rows-1\">third</li></ul><p dj-id=\"5\">count 4</p></div>"
+        },
+        {
+          "label": "another batch that repeats an id",
+          "patches": [
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 0,
+              "node": {
+                "tag": "li",
+                "attrs": {
+                  "data-pk": "p5a",
+                  "dj-id": "s",
+                  "id": "rows-550"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "pair one",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": "rows-550\u001f0",
+                "djust_id": "s"
+              }
+            },
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 1,
+              "node": {
+                "tag": "li",
+                "attrs": {
+                  "data-pk": "p5b",
+                  "dj-id": "t",
+                  "id": "rows-550"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "pair two",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": "rows-550\u001f1",
+                "djust_id": "t"
+              }
+            },
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 2,
+              "node": {
+                "tag": "li",
+                "attrs": {
+                  "data-pk": "p5c",
+                  "dj-id": "u",
+                  "id": "rows-551"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "pair three",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": "rows-551",
+                "djust_id": "u"
+              }
+            },
+            {
+              "type": "SetText",
+              "path": [
+                1,
+                0
+              ],
+              "text": "count 5"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\" dj-update=\"prepend\" id=\"list\"><li data-pk=\"p5a\" dj-id=\"s\" id=\"rows-550\">pair one</li><li data-pk=\"p5b\" dj-id=\"t\" id=\"rows-550\">pair two</li><li data-pk=\"p5c\" dj-id=\"u\" id=\"rows-551\">pair three</li><li data-pk=\"n4\" dj-id=\"o\" id=\"rows-104\">new 4</li><li data-pk=\"p2a\" dj-id=\"c\" id=\"rows-520\">pair one</li><li data-pk=\"p2b\" dj-id=\"d\" id=\"rows-520\">pair two</li><li data-pk=\"p2c\" dj-id=\"e\" id=\"rows-521\">pair three</li><li data-pk=\"n1\" dj-id=\"8\" id=\"rows-101\">new 1</li><li data-pk=\"a\" dj-id=\"2\" id=\"rows-0\">first</li><li data-pk=\"b\" dj-id=\"3\" id=\"rows-0\">second</li><li data-pk=\"c\" dj-id=\"4\" id=\"rows-1\">third</li></ul><p dj-id=\"5\">count 5</p></div>"
+        }
+      ]
+    },
+    "unkeyed_stored": {
+      "initial_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\" dj-update=\"prepend\" id=\"list\"><li data-pk=\"0\" dj-id=\"2\" id=\"rows-0\">row 0</li><li data-pk=\"10\" dj-id=\"3\" id=\"rows-1\">row 1</li><li data-pk=\"20\" dj-id=\"4\" id=\"rows-2\">row 2</li></ul><p dj-id=\"5\">count 0</p></div>",
+      "steps": [
+        {
+          "label": "first row after the container joined the set",
+          "patches": [
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 2,
+              "child_d": "4"
+            },
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 1,
+              "child_d": "3"
+            },
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 0,
+              "child_d": "2"
+            },
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 0,
+              "node": {
+                "tag": "li",
+                "attrs": {
+                  "data-pk": "1010",
+                  "dj-id": "8",
+                  "id": "rows-101"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "new 1",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": "rows-101",
+                "djust_id": "8"
+              }
+            },
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 1,
+              "node": {
+                "tag": "li",
+                "attrs": {
+                  "data-pk": "0",
+                  "dj-id": "2",
+                  "id": "rows-0"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "row 0",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": "rows-0",
+                "djust_id": "2"
+              }
+            },
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 2,
+              "node": {
+                "tag": "li",
+                "attrs": {
+                  "data-pk": "10",
+                  "dj-id": "3",
+                  "id": "rows-1"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "row 1",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": "rows-1",
+                "djust_id": "3"
+              }
+            },
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 3,
+              "node": {
+                "tag": "li",
+                "attrs": {
+                  "data-pk": "20",
+                  "dj-id": "4",
+                  "id": "rows-2"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "row 2",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": "rows-2",
+                "djust_id": "4"
+              }
+            },
+            {
+              "type": "SetText",
+              "path": [
+                1,
+                0
+              ],
+              "text": "count 1"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\" dj-update=\"prepend\" id=\"list\"><li data-pk=\"1010\" dj-id=\"8\" id=\"rows-101\">new 1</li><li data-pk=\"0\" dj-id=\"2\" id=\"rows-0\">row 0</li><li data-pk=\"10\" dj-id=\"3\" id=\"rows-1\">row 1</li><li data-pk=\"20\" dj-id=\"4\" id=\"rows-2\">row 2</li></ul><p dj-id=\"5\">count 1</p></div>"
+        },
+        {
+          "label": "another row",
+          "patches": [
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 0,
+              "node": {
+                "tag": "li",
+                "attrs": {
+                  "data-pk": "1020",
+                  "dj-id": "c",
+                  "id": "rows-102"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "new 2",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": "rows-102",
+                "djust_id": "c"
+              }
+            },
+            {
+              "type": "SetText",
+              "path": [
+                1,
+                0
+              ],
+              "text": "count 2"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\" dj-update=\"prepend\" id=\"list\"><li data-pk=\"1020\" dj-id=\"c\" id=\"rows-102\">new 2</li><li data-pk=\"1010\" dj-id=\"8\" id=\"rows-101\">new 1</li><li data-pk=\"0\" dj-id=\"2\" id=\"rows-0\">row 0</li><li data-pk=\"10\" dj-id=\"3\" id=\"rows-1\">row 1</li><li data-pk=\"20\" dj-id=\"4\" id=\"rows-2\">row 2</li></ul><p dj-id=\"5\">count 2</p></div>"
+        },
+        {
+          "label": "two rows",
+          "patches": [
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 0,
+              "node": {
+                "tag": "li",
+                "attrs": {
+                  "data-pk": "3010",
+                  "dj-id": "g",
+                  "id": "rows-301"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "two a",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": "rows-301",
+                "djust_id": "g"
+              }
+            },
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 1,
+              "node": {
+                "tag": "li",
+                "attrs": {
+                  "data-pk": "3020",
+                  "dj-id": "h",
+                  "id": "rows-302"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "two b",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": "rows-302",
+                "djust_id": "h"
+              }
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\" dj-update=\"prepend\" id=\"list\"><li data-pk=\"3010\" dj-id=\"g\" id=\"rows-301\">two a</li><li data-pk=\"3020\" dj-id=\"h\" id=\"rows-302\">two b</li><li data-pk=\"1020\" dj-id=\"c\" id=\"rows-102\">new 2</li><li data-pk=\"1010\" dj-id=\"8\" id=\"rows-101\">new 1</li><li data-pk=\"0\" dj-id=\"2\" id=\"rows-0\">row 0</li><li data-pk=\"10\" dj-id=\"3\" id=\"rows-1\">row 1</li><li data-pk=\"20\" dj-id=\"4\" id=\"rows-2\">row 2</li></ul><p dj-id=\"5\">count 2</p></div>"
+        },
+        {
+          "label": "unrelated event",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                1,
+                0
+              ],
+              "text": "count 3"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\" dj-update=\"prepend\" id=\"list\"><li data-pk=\"3010\" dj-id=\"g\" id=\"rows-301\">two a</li><li data-pk=\"3020\" dj-id=\"h\" id=\"rows-302\">two b</li><li data-pk=\"1020\" dj-id=\"c\" id=\"rows-102\">new 2</li><li data-pk=\"1010\" dj-id=\"8\" id=\"rows-101\">new 1</li><li data-pk=\"0\" dj-id=\"2\" id=\"rows-0\">row 0</li><li data-pk=\"10\" dj-id=\"3\" id=\"rows-1\">row 1</li><li data-pk=\"20\" dj-id=\"4\" id=\"rows-2\">row 2</li></ul><p dj-id=\"5\">count 3</p></div>"
+        }
+      ]
+    },
+    "alias": {
+      "initial_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\" dj-update=\"append\" id=\"list\"><li data-pk=\"0\" dj-id=\"2\" id=\"rows-0\">row 0</li><li data-pk=\"10\" dj-id=\"3\" id=\"rows-1\">row 1</li><li data-pk=\"20\" dj-id=\"4\" id=\"rows-2\">row 2</li></ul><p dj-id=\"5\">count 0</p></div>",
+      "steps": [
+        {
+          "label": "row",
+          "patches": [
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 3,
+              "node": {
+                "tag": "li",
+                "attrs": {
+                  "data-pk": "1010",
+                  "dj-id": "8",
+                  "id": "rows-101"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "new 1",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": null,
+                "djust_id": "8"
+              }
+            },
+            {
+              "type": "SetText",
+              "path": [
+                1,
+                0
+              ],
+              "text": "count 1"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\" dj-update=\"append\" id=\"list\"><li data-pk=\"0\" dj-id=\"2\" id=\"rows-0\">row 0</li><li data-pk=\"10\" dj-id=\"3\" id=\"rows-1\">row 1</li><li data-pk=\"20\" dj-id=\"4\" id=\"rows-2\">row 2</li><li data-pk=\"1010\" dj-id=\"8\" id=\"rows-101\">new 1</li></ul><p dj-id=\"5\">count 1</p></div>"
+        },
+        {
+          "label": "row as the only change",
+          "patches": [
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 4,
+              "node": {
+                "tag": "li",
+                "attrs": {
+                  "data-pk": "2000",
+                  "dj-id": "c",
+                  "id": "rows-200"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "only",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": null,
+                "djust_id": "c"
+              }
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\" dj-update=\"append\" id=\"list\"><li data-pk=\"0\" dj-id=\"2\" id=\"rows-0\">row 0</li><li data-pk=\"10\" dj-id=\"3\" id=\"rows-1\">row 1</li><li data-pk=\"20\" dj-id=\"4\" id=\"rows-2\">row 2</li><li data-pk=\"1010\" dj-id=\"8\" id=\"rows-101\">new 1</li><li data-pk=\"2000\" dj-id=\"c\" id=\"rows-200\">only</li></ul><p dj-id=\"5\">count 1</p></div>"
+        },
+        {
+          "label": "two rows",
+          "patches": [
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 5,
+              "node": {
+                "tag": "li",
+                "attrs": {
+                  "data-pk": "3010",
+                  "dj-id": "g",
+                  "id": "rows-301"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "two a",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": null,
+                "djust_id": "g"
+              }
+            },
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 6,
+              "node": {
+                "tag": "li",
+                "attrs": {
+                  "data-pk": "3020",
+                  "dj-id": "h",
+                  "id": "rows-302"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "two b",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": null,
+                "djust_id": "h"
+              }
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\" dj-update=\"append\" id=\"list\"><li data-pk=\"0\" dj-id=\"2\" id=\"rows-0\">row 0</li><li data-pk=\"10\" dj-id=\"3\" id=\"rows-1\">row 1</li><li data-pk=\"20\" dj-id=\"4\" id=\"rows-2\">row 2</li><li data-pk=\"1010\" dj-id=\"8\" id=\"rows-101\">new 1</li><li data-pk=\"2000\" dj-id=\"c\" id=\"rows-200\">only</li><li data-pk=\"3010\" dj-id=\"g\" id=\"rows-301\">two a</li><li data-pk=\"3020\" dj-id=\"h\" id=\"rows-302\">two b</li></ul><p dj-id=\"5\">count 1</p></div>"
+        }
+      ]
+    },
+    "renamed": {
+      "initial_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\" dj-update=\"append\" id=\"list\"><li data-pk=\"0\" dj-id=\"2\" id=\"rows-0\">row 0</li><li data-pk=\"10\" dj-id=\"3\" id=\"rows-1\">row 1</li><li data-pk=\"20\" dj-id=\"4\" id=\"rows-2\">row 2</li></ul><p dj-id=\"5\">count 0</p></div>",
+      "steps": [
+        {
+          "label": "row",
+          "patches": [
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 3,
+              "node": {
+                "tag": "li",
+                "attrs": {
+                  "data-pk": "1010",
+                  "dj-id": "8",
+                  "id": "rows-101"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "new 1",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": null,
+                "djust_id": "8"
+              }
+            },
+            {
+              "type": "SetText",
+              "path": [
+                1,
+                0
+              ],
+              "text": "count 1"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\" dj-update=\"append\" id=\"list\"><li data-pk=\"0\" dj-id=\"2\" id=\"rows-0\">row 0</li><li data-pk=\"10\" dj-id=\"3\" id=\"rows-1\">row 1</li><li data-pk=\"20\" dj-id=\"4\" id=\"rows-2\">row 2</li><li data-pk=\"1010\" dj-id=\"8\" id=\"rows-101\">new 1</li></ul><p dj-id=\"5\">count 1</p></div>"
+        },
+        {
+          "label": "row as the only change",
+          "patches": [
+            {
+              "type": "InsertChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 4,
+              "node": {
+                "tag": "li",
+                "attrs": {
+                  "data-pk": "2000",
+                  "dj-id": "c",
+                  "id": "rows-200"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "only",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": null,
+                "djust_id": "c"
+              }
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\" dj-update=\"append\" id=\"list\"><li data-pk=\"0\" dj-id=\"2\" id=\"rows-0\">row 0</li><li data-pk=\"10\" dj-id=\"3\" id=\"rows-1\">row 1</li><li data-pk=\"20\" dj-id=\"4\" id=\"rows-2\">row 2</li><li data-pk=\"1010\" dj-id=\"8\" id=\"rows-101\">new 1</li><li data-pk=\"2000\" dj-id=\"c\" id=\"rows-200\">only</li></ul><p dj-id=\"5\">count 1</p></div>"
+        },
+        {
+          "label": "unrelated event",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                1,
+                0
+              ],
+              "text": "count 2"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\" dj-update=\"append\" id=\"list\"><li data-pk=\"0\" dj-id=\"2\" id=\"rows-0\">row 0</li><li data-pk=\"10\" dj-id=\"3\" id=\"rows-1\">row 1</li><li data-pk=\"20\" dj-id=\"4\" id=\"rows-2\">row 2</li><li data-pk=\"1010\" dj-id=\"8\" id=\"rows-101\">new 1</li><li data-pk=\"2000\" dj-id=\"c\" id=\"rows-200\">only</li></ul><p dj-id=\"5\">count 2</p></div>"
+        }
+      ]
+    },
+    "nested": {
+      "initial_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\" dj-update=\"append\" id=\"outer\"><ul dj-id=\"2\" dj-update=\"append\" id=\"inner\"><li data-pk=\"0\" dj-id=\"3\" id=\"rows-0\">row 0</li><li data-pk=\"10\" dj-id=\"4\" id=\"rows-1\">row 1</li><li data-pk=\"20\" dj-id=\"5\" id=\"rows-2\">row 2</li></ul><p data-pk=\"0\" dj-id=\"6\" id=\"items-0\">row 0</p><p data-pk=\"10\" dj-id=\"7\" id=\"items-1\">row 1</p><p data-pk=\"20\" dj-id=\"8\" id=\"items-2\">row 2</p></div><p dj-id=\"9\">count 0</p></div>",
+      "steps": [
+        {
+          "label": "row in the inner list",
+          "patches": [
+            {
+              "type": "InsertChild",
+              "path": [
+                0,
+                0
+              ],
+              "d": "2",
+              "index": 3,
+              "node": {
+                "tag": "li",
+                "attrs": {
+                  "data-pk": "1010",
+                  "dj-id": "d",
+                  "id": "rows-101"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "new 1",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": null,
+                "djust_id": "d"
+              }
+            },
+            {
+              "type": "SetText",
+              "path": [
+                1,
+                0
+              ],
+              "text": "count 1"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\" dj-update=\"append\" id=\"outer\"><ul dj-id=\"2\" dj-update=\"append\" id=\"inner\"><li data-pk=\"0\" dj-id=\"3\" id=\"rows-0\">row 0</li><li data-pk=\"10\" dj-id=\"4\" id=\"rows-1\">row 1</li><li data-pk=\"20\" dj-id=\"5\" id=\"rows-2\">row 2</li><li data-pk=\"1010\" dj-id=\"d\" id=\"rows-101\">new 1</li></ul><p data-pk=\"0\" dj-id=\"6\" id=\"items-0\">row 0</p><p data-pk=\"10\" dj-id=\"7\" id=\"items-1\">row 1</p><p data-pk=\"20\" dj-id=\"8\" id=\"items-2\">row 2</p></div><p dj-id=\"9\">count 1</p></div>"
+        },
+        {
+          "label": "remove an outer item",
+          "patches": [
+            {
+              "type": "SetAttr",
+              "path": [
+                0,
+                1
+              ],
+              "d": "6",
+              "key": "data-pk",
+              "value": "10"
+            },
+            {
+              "type": "SetAttr",
+              "path": [
+                0,
+                1
+              ],
+              "d": "6",
+              "key": "id",
+              "value": "items-1"
+            },
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                1,
+                0
+              ],
+              "text": "row 1"
+            },
+            {
+              "type": "SetAttr",
+              "path": [
+                0,
+                2
+              ],
+              "d": "7",
+              "key": "data-pk",
+              "value": "20"
+            },
+            {
+              "type": "SetAttr",
+              "path": [
+                0,
+                2
+              ],
+              "d": "7",
+              "key": "id",
+              "value": "items-2"
+            },
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                2,
+                0
+              ],
+              "text": "row 2"
+            },
+            {
+              "type": "RemoveChild",
+              "path": [
+                0
+              ],
+              "d": "1",
+              "index": 3,
+              "child_d": "8"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\" dj-update=\"append\" id=\"outer\"><ul dj-id=\"2\" dj-update=\"append\" id=\"inner\"><li data-pk=\"0\" dj-id=\"3\" id=\"rows-0\">row 0</li><li data-pk=\"10\" dj-id=\"4\" id=\"rows-1\">row 1</li><li data-pk=\"20\" dj-id=\"5\" id=\"rows-2\">row 2</li><li data-pk=\"1010\" dj-id=\"d\" id=\"rows-101\">new 1</li></ul><p data-pk=\"10\" dj-id=\"6\" id=\"items-1\">row 1</p><p data-pk=\"20\" dj-id=\"7\" id=\"items-2\">row 2</p></div><p dj-id=\"9\">count 1</p></div>"
+        },
+        {
+          "label": "edit an outer item",
+          "patches": [
+            {
+              "type": "SetText",
+              "path": [
+                0,
+                1,
+                0
+              ],
+              "text": "edited"
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\" dj-update=\"append\" id=\"outer\"><ul dj-id=\"2\" dj-update=\"append\" id=\"inner\"><li data-pk=\"0\" dj-id=\"3\" id=\"rows-0\">row 0</li><li data-pk=\"10\" dj-id=\"4\" id=\"rows-1\">row 1</li><li data-pk=\"20\" dj-id=\"5\" id=\"rows-2\">row 2</li><li data-pk=\"1010\" dj-id=\"d\" id=\"rows-101\">new 1</li></ul><p data-pk=\"10\" dj-id=\"6\" id=\"items-1\">edited</p><p data-pk=\"20\" dj-id=\"7\" id=\"items-2\">row 2</p></div><p dj-id=\"9\">count 1</p></div>"
+        },
+        {
+          "label": "row in the inner list",
+          "patches": [
+            {
+              "type": "InsertChild",
+              "path": [
+                0,
+                0
+              ],
+              "d": "2",
+              "index": 4,
+              "node": {
+                "tag": "li",
+                "attrs": {
+                  "data-pk": "2000",
+                  "dj-id": "z",
+                  "id": "rows-200"
+                },
+                "children": [
+                  {
+                    "tag": "#text",
+                    "attrs": {},
+                    "children": [],
+                    "text": "only",
+                    "key": null
+                  }
+                ],
+                "text": null,
+                "key": null,
+                "djust_id": "z"
+              }
+            }
+          ],
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\" dj-update=\"append\" id=\"outer\"><ul dj-id=\"2\" dj-update=\"append\" id=\"inner\"><li data-pk=\"0\" dj-id=\"3\" id=\"rows-0\">row 0</li><li data-pk=\"10\" dj-id=\"4\" id=\"rows-1\">row 1</li><li data-pk=\"20\" dj-id=\"5\" id=\"rows-2\">row 2</li><li data-pk=\"1010\" dj-id=\"d\" id=\"rows-101\">new 1</li><li data-pk=\"2000\" dj-id=\"z\" id=\"rows-200\">only</li></ul><p data-pk=\"10\" dj-id=\"6\" id=\"items-1\">edited</p><p data-pk=\"20\" dj-id=\"7\" id=\"items-2\">row 2</p></div><p dj-id=\"9\">count 1</p></div>"
+        }
+      ]
+    }
+  }
+}

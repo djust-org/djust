@@ -271,6 +271,18 @@ security-audit-deps: ## Run the release audit's dependency gates locally: pip-au
 django-template-suite: ## Run Django's own template_tests against DjustTemplateBackend (scoreboard, closes #2517)
 	@$(PYTHON) scripts/run-django-template-suite.py --parsed-output .django-src/last-run.txt --json .django-src/last-run.json $(if $(VERBOSE),,--quiet)
 
+.PHONY: template-library-parity
+template-library-parity: ## Check djust_components/theme_tags, Django engine vs Rust engine, against the parity baseline (#3663)
+	@$(PYTHON) scripts/template-library-parity.py
+
+.PHONY: template-library-parity-baseline
+template-library-parity-baseline: ## Regenerate scripts/template-library-parity-baseline.csv after parity changed (#3663)
+	@$(PYTHON) scripts/template-library-parity.py --write-baseline
+
+.PHONY: template-library-url-sweep
+template-library-url-sweep: ## Drive script-capable URLs through every parameter of every djust tag/component, both engines (#3665)
+	@$(PYTHON) scripts/template-library-url-sweep.py --components --quick
+
 .PHONY: check-lockfile-versions
 check-lockfile-versions: ## Verify Cargo.lock/uv.lock self-entries and the SBOM version match manifests (#1498, #3184)
 	@$(PYTHON) scripts/check-lockfile-versions.py $(if $(VERBOSE),--verbose,)

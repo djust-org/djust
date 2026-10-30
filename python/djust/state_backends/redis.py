@@ -15,6 +15,7 @@ from .base import (
     COMPRESSION_MARKER,
     NO_COMPRESSION_MARKER,
     ZSTD_AVAILABLE,
+    state_key_label,
 )
 
 # Import zstd if available (already checked in base)
@@ -279,7 +280,7 @@ class RedisStateBackend(StateBackend):
                 return (view, timestamp)
 
             except Exception as e:
-                logger.error("Failed to deserialize from Redis key '%s': %s", key, e)
+                logger.error("Failed to deserialize from Redis %s: %s", state_key_label(key), e)
                 return None
 
     def set(self, key: str, view: RustLiveView, ttl: Optional[int] = None) -> None:
@@ -312,7 +313,7 @@ class RedisStateBackend(StateBackend):
                 self._client.setex(redis_key, ttl, data)
 
             except Exception as e:
-                logger.error("Failed to serialize to Redis key '%s': %s", key, e)
+                logger.error("Failed to serialize to Redis %s: %s", state_key_label(key), e)
                 raise
 
     def delete(self, key: str) -> bool:

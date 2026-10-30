@@ -394,7 +394,9 @@ class StreamingMixin:
         from asgiref.sync import sync_to_async
         from django.template.loader import render_to_string
 
-        context = await sync_to_async(self.get_context_data)()
+        from .sync_turn import sync_step
+
+        context = await sync_to_async(sync_step(self, "render", self.get_context_data))()
 
         if self.template_name:
             html = await sync_to_async(render_to_string)(self.template_name, context)

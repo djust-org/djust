@@ -266,7 +266,9 @@ async def save_sticky_child_state(child: Any, save_session: Any, parent_path: st
     if inspect.iscoroutinefunction(gcd):
         context = await gcd()
     else:
-        context = await sync_to_async(gcd)()
+        from ..sync_turn import sync_step
+
+        context = await sync_to_async(sync_step(child, "render", gcd))()
 
     state = _collect_sticky_child_state(child, context)
     await save_session.aset(key, _normalize(state, state_roundtrip=True))
@@ -297,7 +299,12 @@ def save_sticky_child_state_sync(child: Any, session: Any, parent_path: str) -> 
     # Coroutine-aware like the async variant: the runtime's event save also
     # runs this in a Django thread (#3212).
     gcd = child.get_context_data
-    context = async_to_sync(gcd)() if inspect.iscoroutinefunction(gcd) else gcd()
+    if inspect.iscoroutinefunction(gcd):
+        context = async_to_sync(gcd)()
+    else:
+        from ..sync_turn import run_sync_step
+
+        context = run_sync_step(child, "render", gcd)
     state = _collect_sticky_child_state(child, context)
     session[key] = _normalize(state, state_roundtrip=True)
 
@@ -621,7 +628,9 @@ class StickyChildRegistry:
         cleanup = getattr(child, "_cleanup_on_unregister", None)
         if callable(cleanup):
             try:
-                cleanup()
+                from .._child_lifecycle import call_teardown_hook
+
+                call_teardown_hook(child, cleanup)
             except Exception:  # noqa: BLE001 — defensive: never break disconnect
                 logger.exception("child view %s _cleanup_on_unregister raised", view_id)
 

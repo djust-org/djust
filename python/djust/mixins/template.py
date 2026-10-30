@@ -1781,7 +1781,9 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                 for key, value in json_compatible_context.items():
                     safe_keys.extend(_collect_safe_keys(value, key))
             else:
-                context = self.get_context_data()
+                from ..sync_turn import run_sync_step
+
+                context = run_sync_step(self, "render", self.get_context_data)
                 context = self._apply_context_processors(context, request)
 
                 from django.http import HttpRequest
