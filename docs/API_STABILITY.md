@@ -211,8 +211,8 @@ This is the core stability promise:
 ## Currently Deprecated Symbols
 
 Three symbols deprecated during `0.x` carry the 0.x carve-out removal floor of
-**`>= 1.1.0`**. Symbols deprecated during the `1.x` series carry the standard floor of
-**`2.0.0`**.
+**`>= 1.1.0`**. One access pattern deprecated during the `1.x` series carries the
+standard floor of **`2.0.0`**.
 
 | Symbol | Deprecated since | Removed no earlier than | Replacement |
 | --- | --- | --- | --- |
