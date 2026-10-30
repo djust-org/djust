@@ -220,6 +220,7 @@ standard floor of **`2.0.0`**.
 | `LiveViewForm` | 0.3 | **1.1.0** | `django.forms.Form` |
 | `_legacy` theming module (`THEMES`, `get_theme()`, `list_themes()`) | 0.5 | **1.1.0** | `DESIGN_SYSTEMS` / `get_design_system` / `get_all_design_systems` from `djust.theming.theme_packs` |
 | Dict-style reads of `block` in a Python-bridged tag (`block["super"]`, `block.get("super")`, `block.values()`, `block.items()`, `dict(block)`) | 1.3 | **2.0.0** | `context["block"].super()` |
+| JSX-style Rust component template tags (`<RustButton …/>`, `<RustInput …/>` and the other `<Rust…/>` tags) | 1.4 | **2.0.0** | a `djust.components.ui` component |
 | Defining `_drain_announcements` or `_drain_focus` on a `LiveView` (duck-typed accessibility hooks the WebSocket and SSE transports drain; nothing in djust defines them) | 1.4 | **2.0.0** | A `role="status"` live region the view renders, and `JS.focus()` through `push_commands()` |
 
 ### `@event` → `@event_handler`
@@ -284,6 +285,24 @@ theme = get_theme("dark")
 from djust.theming.theme_packs import get_design_system
 
 theme = get_design_system("dark")
+```
+
+### JSX-style `<Rust…/>` template tags → `djust.components.ui`
+
+A template tag such as `<RustButton id="save" label="Save" />` renders through a
+Rust component path that djust 2.0.0 removes. Each render of one emits a
+`DeprecationWarning` (deprecated since 1.4, removed no earlier than 2.0.0). In
+2.0 the tag is a template error. Render the matching `djust.components.ui`
+component instead:
+
+```python
+# Before (template)
+# <RustButton id="save" label="Save" variant="primary" />
+
+# After (view)
+from djust.components.ui import Button
+
+save_button = Button("Save", variant="primary")  # template: {{ save_button }}
 ```
 
 ### Dict-style `block.super` reads in a bridged tag → `block.super()`
