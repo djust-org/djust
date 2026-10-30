@@ -222,6 +222,9 @@ standard floor of **`2.0.0`**.
 | Dict-style reads of `block` in a Python-bridged tag (`block["super"]`, `block.get("super")`, `block.values()`, `block.items()`, `dict(block)`) | 1.3 | **2.0.0** | `context["block"].super()` |
 | JSX-style Rust component template tags (`<RustButton …/>`, `<RustInput …/>` and the other `<Rust…/>` tags) | 1.4 | **2.0.0** | a `djust.components.ui` component |
 | Defining `_drain_announcements` or `_drain_focus` on a `LiveView` (duck-typed accessibility hooks the WebSocket and SSE transports drain; nothing in djust defines them) | 1.4 | **2.0.0** | A `role="status"` live region the view renders, and `JS.focus()` through `push_commands()` |
+| Client: the `dj-params` JSON attribute (warns once per page in the browser console) | 1.4 | **2.0.0** | `dj-value-*` attributes |
+| Client: the `data-djust-root` marker in a `dj-layout` swap (warns once per page) | 1.4 | **2.0.0** | `dj-root` |
+| Client: `window.LiveViewWebSocket`, `window.setCacheConfig`, `window.globalLoadingManager` (each warns once, on first read) | 1.4 | **2.0.0** | `window.djust.LiveViewWebSocket`, `window.djust.setCacheConfig`, `window.djust.globalLoadingManager` |
 
 ### `@event` → `@event_handler`
 
