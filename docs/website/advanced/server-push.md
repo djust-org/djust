@@ -152,6 +152,18 @@ class SharedNoteView(LiveView):
 
 The receiver is named `handle_broadcast` because pushed handlers must start with `handle_` (or be `@event_handler`-decorated or `@push_handler`-marked). The sender skips its own broadcast, and peers receive it and update their state normally.
 
+The skip covers pushes sent while the handler's turn runs. Work the handler starts that pushes later, after the turn is over (a `start_async` task, a pump or follower that a service it awaited launched), is news to the originating page too, so its pushes reach that page like anyone else's. (An asyncio task copies its context when it is created, so such a task used to keep the handler's tag, and its later pushes were skipped on the page that started it.)
+
+### Async push handlers
+
+A push handler may be `async def`. djust awaits it on the event loop, so it can use the async ORM or an async service directly; a sync handler runs off the loop through `sync_to_async`, as before. The same holds for `handle_info()`.
+
+```python
+class RunView(LiveView):
+    async def handle_run_changed(self, run_id: str = "", **kwargs):
+        self.run = await Run.objects.aget(pk=run_id)
+```
+
 ## Scoped Push: One Room, Not Every Room
 
 `push_to_view(view_path, ...)` reaches **every** session of the view class. For a view that serves many independent rooms (a game room, a document, a chat channel), a room's broadcast would then reach every session in every room. Each of those sessions runs the handler only to find the message is for another room, and sends a no-op frame back. The work grows with rooms × sessions.
@@ -196,6 +208,39 @@ Server pushes, ticks, and async completions are all treated as *background* upda
 On the server side, `server_push` acquires a render lock and yields to in-progress user events. A push that arrives while the session is busy (a user event or background result in progress, or the render lock held) is queued. As soon as the lock frees, every queued push is applied in order and the view renders once. So the last push of a change always reaches every viewer.
 
 This is automatic and requires no developer action.
+
+### A push is a message, not a call
+
+`push_to_view()` and `apush_to_view()` return once the message is handed to the channel layer. The handler runs later, in each receiving session, possibly in another process, and later still in a session that was busy when the push arrived (it is queued, as above). So code after `await apush_to_view(...)` cannot read back state the pushed handler sets, even in the same process. Decide in the code that pushes, and give the handler finished values to copy into public state:
+
+```python
+from djust import apush_to_view
+
+
+async def finish(run):
+    """A background task: decide here, then push the result."""
+    outcome = await decide(run)
+    await apush_to_view(
+        "runs.views.RunView",
+        handler="handle_outcome",
+        payload={"outcome": outcome},
+        scope=run.owner_id,
+    )
+    if outcome == "send":
+        await send(run)  # not: read back a flag the pushed handler sets
+```
+
+There is no awaitable for "the handler ran": a push reaches any number of sessions, or none.
+
+### Reacting to a pushed render on the client
+
+The client dispatches `djust:patched` on `window` after every frame that changed the page, whatever caused it: a server push, a tick, an async result or the page's own event. `event.detail` has `view` (the view path), `target_id` (the embedded view the frame updated, or `null`) and `source` (`"broadcast"` for a push, `"tick"`, `"async"`, or `"event"`). The DOM is already updated when it fires, so client code that re-syncs state it owns (a character counter, an `aria-describedby`, a control that a pushed render enables) listens to it instead of watching the DOM:
+
+```javascript
+window.addEventListener('djust:patched', () => syncComposer());
+```
+
+`djust:rendered` is different: it confirms that a view's own state rendered, and is not dispatched for a push (see [Error overlay](../guides/error-overlay.md#deferred-state-saves)).
 
 ## How It Works
 

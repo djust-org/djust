@@ -39,9 +39,22 @@ Schema
 Per-view keys:
 
 * ``public: bool`` — view is intentionally accessible without auth. Mutually
-  exclusive with ``login_required`` / ``permissions``.
+  exclusive with ``login_required`` / ``permissions`` / ``permissions_any``.
 * ``login_required: bool`` — matches ``cls.login_required = True``.
-* ``permissions: [str, ...]`` — matches ``cls.permission_required``.
+* ``permissions: [str, ...]`` — matches ``cls.permission_required`` (all of
+  them).
+* ``permissions_any: [[str, ...], ...]`` — the ``AnyOf(...)`` groups of
+  ``cls.permission_required``: at least one permission of each group. A flat
+  list of strings is a single group::
+
+      permission_required = AnyOf("runs.agent_run", "chat.chat_general")
+      # permissions.yaml
+      permissions_any: ["runs.agent_run", "chat.chat_general"]
+
+      permission_required = ["runs.view_run", AnyOf("runs.review", "runs.approve")]
+      # permissions.yaml
+      permissions: ["runs.view_run"]
+      permissions_any: [["runs.review", "runs.approve"]]
 * ``roles: [str, ...]`` — documentation only. djust cannot verify Django
   group membership via static analysis; this key exists so reviewers can
   see the intended role model in one place.
@@ -64,7 +77,8 @@ P001   ERROR     View in document but not in code (stale declaration)
 P002   ERROR     View in code but not declared in document (strict mode only)
 P003   ERROR     Document says ``public: true`` but code has auth configured
 P004   ERROR     Document says auth required but code has none
-P005   ERROR     Permission list mismatch between document and code
+P005   ERROR     Permission list (``permissions`` or ``permissions_any``)
+                 mismatch between document and code
 P006   WARN      ``object_scoping`` field not referenced in ``get_object``
                  (stretch — currently unimplemented, stored as informational)
 P007   INFO      ``roles`` declaration (djust cannot verify at static-analysis
@@ -155,6 +169,8 @@ class ViewDeclaration:
     public: bool = False
     login_required: bool = False
     permissions: List[str] = field(default_factory=list)
+    #: Any-of groups, each sorted, the list sorted (``AnyOf`` in code).
+    permissions_any: List[List[str]] = field(default_factory=list)
     roles: List[str] = field(default_factory=list)
     object_scoping_fields: List[str] = field(default_factory=list)
     notes: Optional[str] = None
@@ -308,6 +324,7 @@ class PermissionsDocument:
         has_auth = bool(
             actual_auth.get("login_required")
             or actual_auth.get("permission_required")
+            or actual_auth.get("permission_required_any")
             or actual_auth.get("custom_check")
             or actual_auth.get("dispatch_mixin")
         )
@@ -324,21 +341,25 @@ class PermissionsDocument:
             )
 
         # P004 — declared auth-required but code has none
-        if not decl.public and (decl.login_required or decl.permissions) and not has_auth:
+        if (
+            not decl.public
+            and (decl.login_required or decl.permissions or decl.permissions_any)
+            and not has_auth
+        ):
             findings.append(
                 PermissionsFinding.make(
                     "P004",
                     dotted,
                     "declared auth-required in permissions.yaml but code has none",
-                    details="expected: "
-                    + (", ".join(decl.permissions) if decl.permissions else "login_required"),
+                    details="expected: " + _describe_declaration(decl),
                 )
             )
 
-        # P005 — permission list mismatch
-        if decl.permissions:
+        # P005 — permission list mismatch (all-of list and any-of groups)
+        if decl.permissions or decl.permissions_any:
             actual_perms = set(actual_auth.get("permission_required") or [])
             declared_perms = set(decl.permissions)
+            actual_any = _normalize_groups(actual_auth.get("permission_required_any") or [])
             if actual_perms != declared_perms:
                 findings.append(
                     PermissionsFinding.make(
@@ -348,6 +369,18 @@ class PermissionsDocument:
                         details=(
                             f"expected {sorted(declared_perms)}, "
                             f"found {sorted(actual_perms) or '[] (none)'}"
+                        ),
+                    )
+                )
+            elif actual_any != decl.permissions_any:
+                findings.append(
+                    PermissionsFinding.make(
+                        "P005",
+                        dotted,
+                        "permissions_any in permissions.yaml does not match code",
+                        details=(
+                            f"expected {decl.permissions_any or '[] (none)'}, "
+                            f"found {actual_any or '[] (none)'}"
                         ),
                     )
                 )
@@ -380,6 +413,7 @@ def _parse_view_entry(dotted: str, entry: Any, source: str) -> ViewDeclaration:
     public = bool(entry.get("public", False))
     login_required = bool(entry.get("login_required", False))
     permissions = entry.get("permissions", []) or []
+    permissions_any_raw = entry.get("permissions_any", []) or []
     roles = entry.get("roles", []) or []
     notes = entry.get("notes")
 
@@ -387,6 +421,7 @@ def _parse_view_entry(dotted: str, entry: Any, source: str) -> ViewDeclaration:
         raise PermissionsDocumentError(
             f"{source}: view '{dotted}' — 'permissions' must be a list of strings"
         )
+    permissions_any = _parse_permissions_any(permissions_any_raw, dotted, source)
     if not isinstance(roles, list) or not all(isinstance(r, str) for r in roles):
         raise PermissionsDocumentError(
             f"{source}: view '{dotted}' — 'roles' must be a list of strings"
@@ -407,15 +442,15 @@ def _parse_view_entry(dotted: str, entry: Any, source: str) -> ViewDeclaration:
         object_scoping_fields = fields
 
     # Mutual-exclusion sanity check
-    if public and (login_required or permissions):
+    if public and (login_required or permissions or permissions_any):
         raise PermissionsDocumentError(
             f"{source}: view '{dotted}' — 'public: true' is mutually exclusive with "
-            f"'login_required' / 'permissions'"
+            f"'login_required' / 'permissions' / 'permissions_any'"
         )
-    if not public and not login_required and not permissions:
+    if not public and not login_required and not permissions and not permissions_any:
         raise PermissionsDocumentError(
             f"{source}: view '{dotted}' — must specify either 'public: true' or "
-            f"'login_required: true' / 'permissions'"
+            f"'login_required: true' / 'permissions' / 'permissions_any'"
         )
 
     return ViewDeclaration(
@@ -423,10 +458,42 @@ def _parse_view_entry(dotted: str, entry: Any, source: str) -> ViewDeclaration:
         public=public,
         login_required=login_required,
         permissions=list(permissions),
+        permissions_any=permissions_any,
         roles=list(roles),
         object_scoping_fields=object_scoping_fields,
         notes=notes,
     )
+
+
+def _normalize_groups(groups: Any) -> List[List[str]]:
+    """Any-of groups in a comparable form: each group sorted, then the list."""
+    return sorted(sorted(group) for group in groups)
+
+
+def _parse_permissions_any(raw: Any, dotted: str, source: str) -> List[List[str]]:
+    """Validate ``permissions_any``: a list of string lists, or one flat list."""
+    error = PermissionsDocumentError(
+        f"{source}: view '{dotted}' — 'permissions_any' must be a list of strings "
+        f"(one group) or a list of non-empty lists of strings (one per group)"
+    )
+    if not isinstance(raw, list):
+        raise error
+    if not raw:
+        return []
+    if all(isinstance(p, str) for p in raw):
+        return _normalize_groups([raw])
+    if not all(
+        isinstance(group, list) and group and all(isinstance(p, str) for p in group)
+        for group in raw
+    ):
+        raise error
+    return _normalize_groups(raw)
+
+
+def _describe_declaration(decl: ViewDeclaration) -> str:
+    parts = list(decl.permissions)
+    parts.extend("any of (%s)" % " | ".join(group) for group in decl.permissions_any)
+    return ", ".join(parts) if parts else "login_required"
 
 
 def _summarize_auth(auth: Dict[str, Any]) -> str:
@@ -436,6 +503,8 @@ def _summarize_auth(auth: Dict[str, Any]) -> str:
         parts.append("login_required")
     if auth.get("permission_required"):
         parts.append(f"permissions={auth['permission_required']}")
+    if auth.get("permission_required_any"):
+        parts.append(f"permissions_any={auth['permission_required_any']}")
     if auth.get("custom_check"):
         parts.append("custom check_permissions()")
     if auth.get("dispatch_mixin"):
@@ -475,9 +544,14 @@ def dump_starter_document(audits: List[Dict[str, Any]]) -> str:
             continue
         auth = audit.get("auth") or {}
         entry: Dict[str, Any] = {}
-        if auth.get("permission_required"):
+        if auth.get("permission_required") or auth.get("permission_required_any"):
             entry["login_required"] = True
-            entry["permissions"] = list(auth["permission_required"])
+            if auth.get("permission_required"):
+                entry["permissions"] = list(auth["permission_required"])
+            if auth.get("permission_required_any"):
+                entry["permissions_any"] = [
+                    list(group) for group in auth["permission_required_any"]
+                ]
         elif auth.get("login_required"):
             entry["login_required"] = True
             entry["notes"] = "TODO: confirm roles/permissions — login_required alone"

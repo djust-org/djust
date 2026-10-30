@@ -404,6 +404,11 @@ Or let users reset manually. `reset_form` is an `@event_handler`, so a template 
 <button type="button" dj-click="reset_form">Clear</button>
 ```
 
+In the browser, the reset clears the form the event came from: the submitted
+form, or the form holding the button. A button outside every form resets the
+page's form only when the page has just one; with several forms, put the
+button inside the form it clears.
+
 ## Confirmation Dialogs
 
 Add `dj-confirm` to show a browser confirmation before the action fires:

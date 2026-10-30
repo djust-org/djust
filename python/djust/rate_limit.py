@@ -194,6 +194,11 @@ class IPConnectionTracker:
             else:
                 self._connections[ip] = count - 1
 
+    def in_cooldown(self, ip: str) -> bool:
+        """Whether ``ip`` is barred by a reconnect cooldown right now."""
+        with self._lock:
+            return time.monotonic() < self._cooldowns.get(ip, 0)
+
     def add_cooldown(self, ip: str, seconds: float) -> None:
         with self._lock:
             self._cooldowns[ip] = time.monotonic() + seconds

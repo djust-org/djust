@@ -166,7 +166,9 @@ class NativeRenderer:
         if preloaded_context is not None:
             context = preloaded_context
         else:
-            context = self.view.get_context_data()
+            from ..sync_turn import run_sync_step
+
+            context = run_sync_step(self.view, "render", self.view.get_context_data)
 
         # Hoisted-import call site so tests can patch
         # djust.renderers.native.render_to_string.

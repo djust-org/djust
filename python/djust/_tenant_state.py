@@ -80,8 +80,18 @@ def session_view_key(view: Any, path: str) -> Optional[str]:
     return None if scoped is None else f"liveview_{scoped}"
 
 
-#: What a view stores beside its state key: its private state and its components.
-_OWN_KEY_SUFFIXES = ("", "__private", "_components")
+#: Beside the state key: the private attributes the session could not hold
+#: (not JSON), which the HTTP fallback rebuilds with ``mount()``.
+UNSAVED_PRIVATE_SUFFIX = "__private_unsaved"
+
+#: Beside the state key: a digest of the state a GET saved while the work
+#: ``mount()`` queued had not run (#3635). The page-POST fallback runs that work
+#: on the first POST that still finds the saved state unchanged.
+MOUNT_WORK_SUFFIX = "__mount_work"
+
+#: What a view stores beside its state key: its private state, its components
+#: and the loading-state marker.
+_OWN_KEY_SUFFIXES = ("", "__private", UNSAVED_PRIVATE_SUFFIX, "_components", MOUNT_WORK_SUFFIX)
 
 
 def _is_own(key: str, own_key: str) -> bool:

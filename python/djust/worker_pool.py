@@ -19,6 +19,25 @@ consistent for the session. Different sessions can then run their sync code
 at the same time on different threads. The session's render lock still
 serialises its own work, so per-session ordering is unchanged.
 
+"Session" here is one WebSocket connection, not a Django session: two tabs of
+one browser are two sessions, each with its own render lock and slot.
+
+``LIVEVIEW_CONFIG["worker_pinning"] = False`` (opt-in; the default ``True``
+keeps the pinning above) gives each connection a *lane* instead of a thread.
+A lane runs the connection's thread-sensitive calls one at a time and in the
+order they were made, as the pinned thread did. Each call runs on the lane's
+home thread (chosen as a pinned thread is) when that thread is free, and on
+any idle thread of the pool when it is not. Pinned, a slow hop of one
+connection (a long handler, a heavy mount, a ``start_async`` callback) holds
+up every connection pinned to its thread while other threads may be idle; in
+a lane it holds up only its own connection. See :class:`_LanePool`.
+
+Nothing djust keeps relies on the thread between two hops: the render
+environment's thread-locals are pushed on every render, and the thread's
+database connection is shared with every other session pinned to it, so no
+hop may leave state on it for a later one. What changes is only which thread
+runs a hop when the lane's home thread is busy.
+
 The mechanism is asgiref's own: ``SyncToAsync.thread_sensitive_context``
 selects the executor that thread-sensitive calls run on (Django's ASGI
 handler uses it to give each HTTP request its own thread). The consumer sets
@@ -38,12 +57,14 @@ exits: 256 concurrent page GETs took a snake-arena process from 81 MB to
 
 from __future__ import annotations
 
+import collections
 import contextvars
 import logging
 import os
 import threading
-from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Dict, List, Optional, Union
+import weakref
+from concurrent.futures import Executor, Future, ThreadPoolExecutor
+from typing import Any, Deque, Dict, List, Optional, Tuple, Union
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +82,15 @@ class _Slot:
     """
 
     __slots__ = ("index", "sessions", "db_check_due", "checks_on_run", "__weakref__")
+
+    #: asgiref 3.13's ``SyncToAsync.__call__`` reads ``_exited`` on the
+    #: thread-sensitive context before it picks the executor (an exited
+    #: ``ThreadSensitiveContext(executor=...)`` refuses calls). A pool slot
+    #: never exits while the pool lives, so this is always False. A class
+    #: attribute, not a slot: asgiref only ever writes ``_exited`` on its own
+    #: ``ThreadSensitiveContext``. Harmless on asgiref 3.11 and 3.12, which do
+    #: not read it.
+    _exited = False
 
     def __init__(self, index: int) -> None:
         self.index = index
@@ -86,6 +116,10 @@ class _HTTPSlot:
     """
 
     __slots__ = ("index", "sessions", "__weakref__")
+
+    #: See ``_Slot._exited``: asgiref 3.13 reads it on every thread-sensitive
+    #: call this slot routes.
+    _exited = False
 
     def __init__(self, index: int) -> None:
         self.index = index
@@ -140,6 +174,256 @@ class _SlotExecutor(ThreadPoolExecutor):
 
     def submit(self, fn: Any, /, *args: Any, **kwargs: Any) -> Any:  # type: ignore[override]
         return super().submit(_run_checked, self._slot, fn, args, kwargs)
+
+
+class _Lane(_Slot):
+    """One connection's place in the lane pool (``worker_pinning = False``).
+
+    A :class:`_Slot` to everything that reads the binding
+    (:func:`offload_enabled`, :func:`mark_db_check_due`, ``db_check_due`` in
+    :func:`_run_checked`), so the pool's other behaviour is the same in both
+    modes. One per connection, created by :func:`bind_session`; asgiref maps
+    it to its :class:`_LaneExecutor` in a ``WeakKeyDictionary``, so the entry
+    goes when the last task context holding the binding does.
+
+    ``index`` is the lane's HOME thread: the least-loaded one when it was
+    bound, as a pinned session's thread is chosen.
+    """
+
+    __slots__ = ("pool",)
+
+    def __repr__(self) -> str:
+        return f"<djust worker lane home={self.index}>"
+
+
+#: One queued call of a lane: its future and the call.
+_Call = Tuple[Future, Any, Any, Any]
+
+
+class _LaneExecutor(Executor):
+    """The executor asgiref gives a lane's thread-sensitive calls.
+
+    ``submit`` queues the call on the lane; the :class:`_LanePool` runs the
+    lane's calls one at a time and in submission order. It keeps only a weak
+    reference to its lane: asgiref keys the executor by the lane in a
+    ``WeakKeyDictionary``, and a strong one from the value would keep the key,
+    and the entry, alive for good.
+    """
+
+    def __init__(self, lane: _Lane, pool: "_LanePool") -> None:
+        self._lane = weakref.ref(lane)
+        self._home = lane.index
+        self._pool = pool
+        # Guarded by the pool's lock.
+        self.calls: Deque[_Call] = collections.deque()
+        self.scheduled = False  # queued on the pool, or running
+
+    @property
+    def home(self) -> int:
+        return self._home
+
+    def lane(self) -> Optional[_Lane]:
+        return self._lane()
+
+    def submit(self, fn: Any, /, *args: Any, **kwargs: Any) -> Future:  # type: ignore[override]
+        future: Future = Future()
+        self._pool.put(self, (future, fn, args, kwargs))
+        return future
+
+    def shutdown(self, wait: bool = True, *, cancel_futures: bool = False) -> None:
+        """The pool outlives every lane; there is nothing of the lane's own to stop."""
+        if cancel_futures:
+            self._pool.cancel_queued(self)
+
+
+class _LanePool:
+    """K threads that run lanes, each lane on its home thread when it can.
+
+    A lane is READY when it has a call and none running. A ready lane waits in
+    its home thread's queue, so a session's calls keep running on one thread,
+    with its objects, while that thread is free: on free-threaded CPython an
+    object's reference counts and memory are cheaper on the thread that made
+    it. When the home thread is busy, an idle thread takes the lane instead
+    (steals it), so a slow call of one session never leaves another session
+    waiting while a thread is idle. A lane runs ONE call per turn and then
+    goes to the back of its home queue, so sessions take turns.
+
+    One lock guards every queue; each thread waits on a condition of its own,
+    and a new ready lane wakes its home thread if that is idle, else one idle
+    thread.
+    """
+
+    def __init__(self, size: int) -> None:
+        self.size = size
+        self._lock = threading.Lock()
+        self._wake = [threading.Condition(self._lock) for _ in range(size)]
+        self._ready: List[Deque[_LaneExecutor]] = [collections.deque() for _ in range(size)]
+        self._busy = [False] * size
+        self._idle: List[int] = []  # threads waiting, most recent last
+        self.bound = [0] * size  # lanes bound per home thread (guarded by worker_pool._lock)
+        self._closed = False
+        self._threads: List[threading.Thread] = []
+        # Stop before the interpreter joins its threads, as concurrent.futures
+        # does, so a waiting thread never holds exit up and a running call
+        # finishes. Without the hook the threads are daemons.
+        register = getattr(threading, "_register_atexit", None)
+        empty = contextvars.Context()
+        for index in range(size):
+            thread = threading.Thread(
+                target=self._work,
+                args=(index,),
+                name=f"djust-worker-{index}",
+                daemon=register is None,
+            )
+            # Started from an EMPTY context, for the reason _build_slots gives:
+            # on 3.14+ a thread copies its starter's context, and these live
+            # as long as the process.
+            empty.run(thread.start)
+            self._threads.append(thread)
+        if register is not None:
+            register(self.close)
+
+    # -- the lane side -------------------------------------------------------
+
+    def put(self, lane: _LaneExecutor, call: _Call) -> None:
+        with self._lock:
+            if self._closed:
+                closed = True
+            else:
+                closed = False
+                lane.calls.append(call)
+                if not lane.scheduled:
+                    lane.scheduled = True
+                    self._make_ready(lane)
+        if closed:
+            _fail([call])
+
+    def cancel_queued(self, lane: _LaneExecutor) -> None:
+        with self._lock:
+            pending = [call[0] for call in lane.calls]
+        for future in pending:
+            future.cancel()
+
+    def _make_ready(self, lane: _LaneExecutor) -> None:
+        """Queue a ready lane at its home and wake a thread for it. Holds the lock."""
+        home = lane.home
+        self._ready[home].append(lane)
+        if not self._busy[home] and home in self._idle:
+            self._idle.remove(home)
+            self._wake[home].notify()
+        elif self._busy[home] and self._idle:
+            self._wake[self._idle.pop()].notify()
+
+    # -- the thread side -----------------------------------------------------
+
+    def _take(self, index: int) -> Optional[_LaneExecutor]:
+        """The next lane for thread ``index``: its own queue first, else the
+        oldest ready lane whose home thread is busy. Holds the lock."""
+        if self._ready[index]:
+            return self._ready[index].popleft()
+        victim = None
+        for other in range(self.size):
+            queue = self._ready[other]
+            if queue and self._busy[other] and (victim is None or len(queue) > len(victim)):
+                victim = queue
+        return victim.popleft() if victim is not None else None
+
+    def _work(self, index: int) -> None:
+        while True:
+            with self._lock:
+                lane = None if self._closed else self._take(index)
+                while lane is None:
+                    if self._closed:
+                        return
+                    self._idle.append(index)
+                    self._wake[index].wait()
+                    if index in self._idle:  # a close() or a spurious wake-up
+                        self._idle.remove(index)
+                    lane = None if self._closed else self._take(index)
+                self._busy[index] = True
+                call = lane.calls.popleft()
+            stranded: List[_Call] = []
+            try:
+                self._run(lane, call)
+            finally:
+                with self._lock:
+                    self._busy[index] = False
+                    if self._closed:
+                        stranded = list(lane.calls)
+                        lane.calls.clear()
+                        lane.scheduled = False
+                    elif lane.calls:
+                        self._make_ready(lane)  # to the back of its home queue
+                    else:
+                        lane.scheduled = False
+                _fail(stranded)
+
+    @staticmethod
+    def _run(lane: _LaneExecutor, call: _Call) -> None:
+        future, fn, args, kwargs = call
+        # False when asyncio cancelled the call before it started (the awaiting
+        # task was cancelled): skip it, as a thread pool would.
+        if not future.set_running_or_notify_cancel():
+            return
+        owner = lane.lane()
+        try:
+            result = (
+                _run_checked(owner, fn, args, kwargs) if owner is not None else fn(*args, **kwargs)
+            )
+        except BaseException as exc:  # noqa: BLE001 - handed to the awaiting task
+            future.set_exception(exc)
+        else:
+            future.set_result(result)
+
+    def close(self) -> None:
+        """Stop the threads once they finish their current call; later calls fail."""
+        with self._lock:
+            self._closed = True
+            stranded = [call for queue in self._ready for lane in queue for call in lane.calls]
+            for queue in self._ready:
+                for lane in queue:
+                    lane.calls.clear()
+                    lane.scheduled = False
+                queue.clear()
+            for wake in self._wake:
+                wake.notify_all()
+        _fail(stranded)
+
+
+def _fail(calls: List[_Call]) -> None:
+    """Fail calls that a closed pool will never run (as a shut-down executor refuses)."""
+    for future, *_ in calls:
+        if future.set_running_or_notify_cancel():
+            future.set_exception(RuntimeError("the djust worker pool has shut down"))
+
+
+#: Lane pools, by size (``worker_pinning = False``).
+_lane_pools: Dict[int, _LanePool] = {}
+
+
+def _ensure_lane_pool(size: int) -> _LanePool:
+    """The lane pool of ``size`` threads, created on first use. The caller holds ``_lock``."""
+    pool = _lane_pools.get(size)
+    if pool is None:
+        pool = _lane_pools[size] = _LanePool(size)
+    return pool
+
+
+def configured_pinning() -> bool:
+    """``LIVEVIEW_CONFIG["worker_pinning"]``: True (the default) pins each
+    connection to one thread; False gives it a lane. A value that is not a
+    bool is logged and treated as True (the system check reports it)."""
+    from .config import config
+
+    value = config.get("worker_pinning", True)
+    if value is True or value is False:
+        return value
+    logger.warning(
+        "LIVEVIEW_CONFIG['worker_pinning'] = %r is not True or False; pinning each "
+        "session to one thread (see djust.C021)",
+        value,
+    )
+    return True
 
 
 def _available_cpus() -> int:
@@ -284,6 +568,8 @@ class SessionBinding:
                 logger.debug("djust worker pool: binding released from another context")
         with _lock:
             self.slot.sessions -= 1
+            if isinstance(self.slot, _Lane):
+                self.slot.pool.bound[self.slot.index] -= 1
 
 
 def bind_session() -> Optional[SessionBinding]:
@@ -311,6 +597,8 @@ def bind_session() -> Optional[SessionBinding]:
             "connection; the session keeps it"
         )
         return None
+    if not configured_pinning():
+        return _bind_lane(size, var)
     with _lock:
         pool = _ensure_pool(size)
         slot = min(pool, key=lambda s: (s.sessions, s.index))
@@ -318,10 +606,45 @@ def bind_session() -> Optional[SessionBinding]:
     return SessionBinding(slot, var.set(slot))
 
 
-def pool_stats() -> List[dict]:
-    """Per-thread session counts, for diagnostics and tests."""
+def _bind_lane(size: int, var: "contextvars.ContextVar[Any]") -> Optional[SessionBinding]:
+    """Give the calling connection a lane of the lane pool (``worker_pinning = False``)."""
+    from asgiref.sync import SyncToAsync
+
+    executors = getattr(SyncToAsync, "context_to_thread_executor", None)
+    if executors is None:  # pragma: no cover - every asgiref with the contextvar has it
+        logger.warning(
+            "this asgiref has no SyncToAsync.context_to_thread_executor; "
+            "LIVEVIEW_CONFIG['worker_pinning'] = False is ignored"
+        )
+        return None
     with _lock:
-        return [{"index": s.index, "sessions": s.sessions} for s in _pool]
+        pool = _ensure_lane_pool(size)
+        home = min(range(pool.size), key=lambda i: (pool.bound[i], i))
+        pool.bound[home] += 1
+        lane = _Lane(home)
+        lane.pool = pool
+        # Its executor honours db_check_due (mark_db_check_due, #3095).
+        lane.checks_on_run = True
+        lane.sessions = 1
+    executors[lane] = _LaneExecutor(lane, pool)
+    return SessionBinding(lane, var.set(lane))
+
+
+def pool_stats() -> List[dict]:
+    """Per-thread session counts, for diagnostics and tests.
+
+    With ``worker_pinning = False`` the entries count the sessions whose HOME
+    is each thread (``"lanes": True``); a session's call may run on another.
+    """
+    with _lock:
+        stats = [{"index": s.index, "sessions": s.sessions} for s in _pool]
+        stats += [
+            {"index": i, "sessions": pool.bound[i], "lanes": True}
+            for size in sorted(_lane_pools)
+            for pool in (_lane_pools[size],)
+            for i in range(pool.size)
+        ]
+        return stats
 
 
 def _parent_sync_thread() -> bool:

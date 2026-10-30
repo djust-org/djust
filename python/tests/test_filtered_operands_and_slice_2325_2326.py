@@ -1101,6 +1101,24 @@ class TestTheCorpusGapThatHidThisFromTheDifferential:
         assert "LIVE (an unescaped tag opener)              : 0" in r.stdout, r.stdout
         assert r.returncode == 0, r.stdout
 
+    def test_the_totals_count_live_leaks_only(self, tmp_path) -> None:
+        """An escaped-text cell present on BOTH builds is counted on its own
+        line, not in the BEFORE / AFTER headline; a live one is counted there."""
+        payload = "<img src=x onerror=alert(1)>"
+        escaped = "&lt;img src=x onerror=alert(1)&gt;"
+        base = {
+            "f\ts-img": ["", escaped],
+            "g\ts-img": ["", payload],
+            "h\ts-img": ["A", "B"],
+        }
+        after = dict(base, **{"g\ts-img": ["", "x"], "h\ts-img": ["A", "A"]})
+        r = self._compare(tmp_path, base, after)
+        assert "live-payload leaks BEFORE : 1 " in r.stdout, r.stdout
+        assert "live-payload leaks AFTER  : 0\n" in r.stdout, r.stdout
+        assert "(not live), BEFORE -> AFTER: 1 -> 1" in r.stdout, r.stdout
+        assert "closed                  : 1" in r.stdout, r.stdout
+        assert r.returncode == 0, r.stdout
+
 
 class TestAdjacentDivergencesNotFixedHere:
     """Scope discipline (CLAUDE.md #1079): found, filed, pinned — not fixed.

@@ -163,6 +163,35 @@ Two name shapes appear in this roadmap, with distinct meanings:
 | ~~**P1**~~ | ~~#3462 — `djust ai inventory`: compare the Windows owner SID/DACL of a discovered `manage.py`~~ ✅ (#3474) | v1.3.0 |
 | ~~**P2**~~ | ~~#3470 — carry the unfinished #3129 review items forward into the 1.3.0 final audit checklist~~ ✅ (#3474) | v1.3.0 |
 
+### v1.3.0-13 — HTTP fallback parity, sync-turn-wrapper coverage, theme state weight (drain bucket → ships in 1.3)
+
+*Kind:* transport parity and state weight, all reported by a downstream app on 1.3.0rc13. Four PRs, one per row group: the stateless HTTP fallback (#3624, #3503), the sync-turn wrapper (#3625), `ThemeMixin` state (#3626), and the silent release-audit failure (#3482). #3607 (tokio advisory) was already fixed on `main` (#3619) and is closed.
+
+| Priority | Task | Milestone |
+|---|---|---|
+| ~~**P1**~~ | ~~#3624 — The stateless HTTP fallback POST calls `mount()` but not `handle_params()`, so a page that reads its URL meets the event with defaults; also documents the dropped `start_async` work and the hidden-field rule for forms~~ ✅ (#3630) | v1.3.0 |
+| ~~**P2**~~ | ~~#3503 — Check whether the HTTP POST fallback drops `push_event` / deferred work / layout side effects the WebSocket and SSE paths flush (repro first)~~ ✅ (closed without code: not reproducible; pinned by #3630, accessibility/focus gap #3629) | v1.3.0 |
+| ~~**P2**~~ | ~~#3625 — `sync_turn_wrapper` is entered around `handle_tick()` and `handle_async_result()`, and around the test client's `send_event()`, `send_push()` and `render_async()`~~ ✅ (#3636; unwrapped hops #3637) | v1.3.0 |
+| **P2** | #3626 — `ThemeMixin` stops putting ~60KB of rendered HTML in every view's state (part 1); the `Large LiveView state` warning reports what it measures and gives advice that matches (part 2) Part 1 and the warning text shipped in #3633; the stored-tree and `theme_presets` remainder is #3632 / #3631 (issue stays open). | v1.3.0 |
+| ~~**P3**~~ | ~~#3482 — A release run blocked by the pre-release audit opens or updates an issue naming the tag, the failing job and the run URL~~ ✅ (#3638) | v1.3.0 |
+
+### v1.3.0-14 — follow-ups of the v1.3.0-13 drain (drain bucket → ships in 1.3)
+
+*Kind:* follow-ups filed by the v1.3.0-13 PR reviews: transport parity, the remaining sync hops of `sync_turn_wrapper`, `dj-update` accumulation, and the pins that guard them. #3500 (the 2.0 tracking issue) and the design half of #3632 are not drain items.
+
+| Priority | Task | Milestone |
+|---|---|---|
+| ~~**P1**~~ | ~~Main red after #3630 + #3636 merged (the HTTP fallback's `handle_async_result` was not in the pin; it ran as a `hook` step, not `async`)~~ ✅ (#3642) | v1.3.0 |
+| ~~**P2**~~ | ~~#3629 — The duck-typed `_drain_announcements` / `_drain_focus` hooks are deprecated (the client never implemented the frames; 2.0 already deleted the flush)~~ ✅ (#3644) | v1.3.0 |
+| ~~**P2**~~ | ~~#3631 — `theme_context` returns `theme_presets` as a request-scoped list that stays out of the stored snapshot (about 12 KB per view)~~ ✅ (#3640) | v1.3.0 |
+| **P2** | #3632 — Stream and temporary-assign rows in the stored snapshot: the refresh warning is fixed (#3640); keeping rows out of the stored tree is a design decision (clearing stream items breaks the page; accumulated rows now stay in the baseline, documented in `large-lists.md`) | v1.3.0 |
+| ~~**P2**~~ | ~~#3634 — A deadline (`http_fallback_background_timeout`) and a cap on abandoned workers for `start_async` work in the HTTP fallback~~ ✅ (#3641) | v1.3.0 |
+| ~~**P2**~~ | ~~#3635 — A page the GET left loading is loaded by the first fallback POST on the default session policy~~ ✅ (#3641) | v1.3.0 |
+| ~~**P1**~~ | ~~#3637 — `sync_turn_wrapper` also covers the object-permission and view-level auth checks, `on_mount`, `connected()`/`disconnected()`, cursor/presence hooks, replay and snapshot restore (new `auth` and `lifecycle` steps, fail-closed)~~ ✅ (#3643) | v1.3.0 |
+| ~~**P1**~~ | ~~#3639 — Stream-only handlers and `temporary_assigns` rows reach the page over patches (Rust differ accumulates `dj-update` append/prepend containers)~~ ✅ (#3645) | v1.3.0 |
+| ~~**P3**~~ | ~~#3647 — `dj-update` accumulation: included templates, aliases, duplicate ids, nesting, scanner bounds~~ ✅ (#3648) | v1.3.0 |
+| **P3** | #3646 — Harden the `sync_turn_wrapper` pin: allowlist keyed by file and function, every override point has a checked disposition, teardown and template-time hook wording corrected | v1.3.0 |
+
 ## Next: v1.2.1 — non-breaking fixes (drain)
 
 > Planned 2026-09-24 from a triage of every open issue. **Policy:** non-breaking bug fixes ship in 1.2.1; anything breaking, new features, and parser/dependency upgrades go to 1.3. Issues split into a 1.2.1 part and a 1.3 part are marked. The ADR-034–038 stack (#2944, #2954) merges after 1.2.1 is cut. Already shipped toward 1.2.1 on `main`: #3009 (inline whitespace, #2999/#3010), the CSRF resolver (#2978), SerializerCache removal (#2992), the audit gate (#2989).
@@ -5476,7 +5505,7 @@ Items below expand Rust's footprint beyond the existing template-engine / VDOM /
   - WebSocket subscription pulls from the cache, then takes over for live patches.
   - Win: TTI on marketing pages drops from "WebSocket connect + initial render" to "static HTML + WebSocket upgrade." Real meaningful for SEO / first-paint perception.
 
-- **Rust + WASM client patcher (post-1.0, v1.x or v2.x ambitious bet)** — The biggest single Rust opportunity djust hasn't taken yet: replace the shipped client (`client.min.js.gz`, ~77 KB gz — run `make sizes`) with a Rust-compiled WASM patcher. Wire protocol unchanged — just a different patcher implementation on the client side. ~2-3 month project. Wins:
+- **Rust + WASM client patcher (post-1.0, v1.x or v2.x ambitious bet)** — The biggest single Rust opportunity djust hasn't taken yet: replace the shipped client (`client.min.js.gz`, ~80 KB gz — run `make sizes`) with a Rust-compiled WASM patcher. Wire protocol unchanged — just a different patcher implementation on the client side. ~2-3 month project. Wins:
   - **Bundle size**: ~50% reduction (target ~30-40 KB gzipped).
   - **Apply perf**: VDOM apply in Rust > VDOM apply in JS, especially for large diffs (1000+ node tables).
   - **Code sharing**: client and server share the same VDOM types from `crates/djust_vdom` — eliminates "the JS patcher and Rust differ on edge case X" failure class.

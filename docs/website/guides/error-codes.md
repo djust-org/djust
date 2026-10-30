@@ -300,7 +300,7 @@ In development, pages render without Tailwind utilities until you compile the CS
 
 **Severity**: Error
 
-**What causes it**: `LIVEVIEW_CONFIG['worker_threads']` is set to something other than `None`, `False`, `True`, `"auto"` or an integer `>= 0` (for example `"8"` or `2.5`). The setting opts the WebSocket path into a pinned worker pool (#3074). At runtime an invalid value is logged and treated as off, so every session keeps sharing one thread.
+**What causes it**: `LIVEVIEW_CONFIG['worker_threads']` is set to something other than `None`, `False`, `True`, `"auto"` or an integer `>= 0` (for example `"8"` or `2.5`). The setting opts the WebSocket path into a pinned worker pool (#3074). At runtime an invalid value is logged and treated as off, so every session keeps sharing one thread. The same check reports a `LIVEVIEW_CONFIG['worker_pinning']` that is not `True` or `False`; at runtime such a value keeps each session pinned to one thread.
 
 **Fix**: Use `True` (one thread per CPU, up to 32), an integer thread count such as `8`, or remove the key. See [More than one core per process](deployment.md#more-than-one-core-per-process-worker_threads). Suppress with `DJUST_CONFIG = {"suppress_checks": ["C021"]}`.
 
@@ -343,6 +343,36 @@ In development, pages render without Tailwind utilities until you compile the CS
 **What causes it**: `DJUST_WS_PATH` is set to something other than a path starting with a single `/`, such as `"ws/live/"` or `"wss://host/ws/"`. The client honors only a root-relative WebSocket path, so it ignores the value (with a `console.warn`) and connects to `/ws/live/`.
 
 **Fix**: Set it to a path such as `"/ws/live/"`, or remove it to use the script prefix plus `ws/live/`. See [Serving the app under a path prefix](deployment.md#serving-the-app-under-a-path-prefix). Suppress with `DJUST_CONFIG = {"suppress_checks": ["C025"]}`.
+
+---
+
+### C026: Invalid LIVEVIEW_MIDDLEWARE
+
+**Severity**: Error
+
+**What causes it**: `LIVEVIEW_MIDDLEWARE` is not a list of dotted paths, an entry cannot be imported, or an entry is a sync function. Turn middleware must be `async def mw(turn, next)`.
+
+**Fix**: Point each entry at an importable `async def mw(turn, next)` that returns `await next(turn)` or a `djust.turns.Refuse` refusal. See [Turn middleware](turn-middleware.md). Suppress with `DJUST_CONFIG = {"suppress_checks": ["C026"]}`.
+
+---
+
+### C027: Invalid view_state_in_session
+
+**Severity**: Error
+
+**What causes it**: `LIVEVIEW_CONFIG['view_state_in_session']` is set to something other than `True` or `False`, such as the string `"false"`. Only `False` turns the session copy of view state off, so with any other value djust keeps saving each view's state in the session.
+
+**Fix**: Set it to `False` (stateless) or `True`, or remove it. See [Keeping view state out of the session](http-only-mode.md#keeping-view-state-out-of-the-session). Suppress with `DJUST_CONFIG = {"suppress_checks": ["C027"]}`.
+
+---
+
+### C028: Invalid http_fallback_background_timeout
+
+**Severity**: Error
+
+**What causes it**: `LIVEVIEW_CONFIG['http_fallback_background_timeout']` is set to something other than `None` or a number of seconds greater than 0 and at most `threading.TIMEOUT_MAX` (about 9.2e9, the longest a thread can wait), such as `"30"`, `0`, `True` or `1e10`. A value above the maximum is rejected, not clamped. Any other value is read as no deadline, so the page-POST fallback keeps waiting for a `start_async` task that never returns.
+
+**Fix**: Set it to a number of seconds such as `30`, or remove it. See [Deadline](http-only-mode.md#what-the-page-post-fallback-keeps-between-events). Suppress with `DJUST_CONFIG = {"suppress_checks": ["C028"]}`.
 
 ---
 
@@ -752,6 +782,16 @@ V008 is broader than V006 and will flag any custom class instantiation, not just
 **What causes it**: A subclass (or a class that shadows a mixin's method) defines a method whose name a base defines with `@push_handler`, without re-applying the marker. The marker is inherited by method name, so the override is still refused to browsers in every `event_security` mode and server push still reaches it. Message: "<view>.<name>() overrides a @push_handler method without the marker; it is still push-only (the marker is inherited by name)." If the override has `@event_handler` the message says browsers are still refused: the decorator cannot make the name browser-callable.
 
 **Fix**: Add `@push_handler` to the override. For the `@event_handler` case, remove the decorator, or rename the method if a browser should be able to call it.
+
+---
+
+### V022: View assigns an attribute djust keeps its own state under
+
+**Severity**: Warning
+
+**What causes it**: A method of a LiveView, or of a mixin it uses, assigns `self.<name>` where `<name>` is one of the attributes `LiveView.__init__` sets for djust's own state (`_streams`, `_components`, `_pending_navigation`, `_child_views`, ...). The assignment replaces that state, and the failure appears somewhere else: a view that kept its own lists in `self._streams = {"runs": {...}}` failed every render with `TypeError: 'builtin_function_or_method' object is not iterable`. `request` and `_object` (the `get_object()` cache) are not reported. Message: "<view> <method>() assigns self.<name>, an attribute djust's LiveView uses for its own state."
+
+**Fix**: Rename the attribute, for example `self._lists`. To keep items in a stream, call `self.stream(name, items)`. Assigning a reserved stream attribute also fails at render time with a `TypeError` that names `_streams`.
 
 ---
 
@@ -1314,6 +1354,28 @@ the page content, such as `<div dj-root>`. See
 
 ---
 
+### T026: Two loaded template libraries register one tag or filter name
+
+**Severity**: Warning
+
+**What causes it**: Two template libraries that the project's templates
+`{% load %}` both register a tag or filter with the same name (one module
+installed under two labels counts once). Django scopes `{% load %}` to the
+template; djust's Rust engine keeps one registry for the process. Each
+`{% load %}` of either library takes the name from the other, which drops and
+re-parses every cached template on the next render, and a template renders
+whichever version loaded last.
+Message: "Template libraries '<a>', '<b>' all register the <tag|filter>
+'<name>'. ..."
+
+**Fix**: Register the name in one library and load that one where it is used;
+rename the other copy. Only libraries a template under the project's template
+directories loads are compared, so a library only Django's own engine renders
+(the admin's) does not count. Suppress with
+`DJUST_CONFIG = {"suppress_checks": ["T026"]}`.
+
+---
+
 ## Code Quality (Q0xx)
 
 ### Q001: print() statement
@@ -1409,11 +1471,11 @@ if (globalThis.djustDebug) {
 
 These checks were added as follow-ups to the 2026-04-10 a downstream consumer penetration test. They extend `djust_audit` / `djust_check` with configuration-level security checks that catch misconfigurations Django's own `check --deploy` cannot see. All A0xx checks fire during `manage.py check --tag djust` and appear alongside the C0xx/S0xx findings.
 
-### A001: WebSocket router missing AllowedHostsOriginValidator
+### A001: WebSocket router missing an Origin validator
 
 **Severity**: Error
 
-**What causes it**: The `"websocket"` entry in your `ProtocolTypeRouter` is not wrapped in `channels.security.websocket.AllowedHostsOriginValidator`. Any cross-origin page on the internet can open a WebSocket to your app, mount any LiveView, and dispatch events from a victim's browser (CSWSH — see [#653](https://github.com/djust-org/djust/issues/653)).
+**What causes it**: The `"websocket"` entry in your `ProtocolTypeRouter` is not wrapped in an Origin validator such as `djust.routing.DjustOriginValidator`. Any cross-origin page on the internet can open a WebSocket to your app, mount any LiveView, and dispatch events from a victim's browser (CSWSH — see [#653](https://github.com/djust-org/djust/issues/653)).
 
 **What you see**: No runtime symptom until a pentester or attacker finds it. An `A001` warning from `manage.py check` at startup.
 
@@ -1422,7 +1484,7 @@ These checks were added as follow-ups to the 2026-04-10 a downstream consumer pe
 ```python
 # asgi.py
 from channels.routing import ProtocolTypeRouter, URLRouter
-from djust.routing import DjustMiddlewareStack   # Wraps in AllowedHostsOriginValidator by default since 0.4.1
+from djust.routing import DjustMiddlewareStack   # Wraps in DjustOriginValidator by default
 
 application = ProtocolTypeRouter({
     "http": get_asgi_application(),
@@ -1437,10 +1499,10 @@ Or wrap manually if you're using `channels.auth.AuthMiddlewareStack`:
 ```python
 from channels.auth import AuthMiddlewareStack
 from channels.routing import ProtocolTypeRouter, URLRouter
-from channels.security.websocket import AllowedHostsOriginValidator
+from djust.routing import DjustOriginValidator
 
 application = ProtocolTypeRouter({
-    "websocket": AllowedHostsOriginValidator(
+    "websocket": DjustOriginValidator(
         AuthMiddlewareStack(URLRouter(websocket_urlpatterns))
     ),
 })
@@ -1454,7 +1516,7 @@ application = ProtocolTypeRouter({
 
 **Severity**: Error
 
-**What causes it**: `settings.ALLOWED_HOSTS == ["*"]` with `DEBUG=False`. The wildcard disables Django's Host header defense entirely, and re-opens CSWSH because `AllowedHostsOriginValidator` reads the same setting.
+**What causes it**: `settings.ALLOWED_HOSTS == ["*"]` with `DEBUG=False`. The wildcard disables Django's Host header defense entirely, and lets any `Host` header through, which the Origin check's same-origin rule relies on.
 
 Not raised when `DEBUG=True`, or when both `SECURE_PROXY_SSL_HEADER` and `DJUST_TRUSTED_PROXIES` are set (you are asserting a trusted L7 proxy).
 
@@ -2387,7 +2449,7 @@ server_tokens off;
 
 **Severity**: Error
 
-**What causes it**: A `GET /.git/config` request returns 2xx. The entire git history of your repository is exposed, including potentially-leaked credentials in commits.
+**What causes it**: A `GET /.git/config` request returns 2xx itself (the probe does not follow redirects, so a path that redirects to a sign-in page is not reported). The entire git history of your repository is exposed, including potentially-leaked credentials in commits.
 
 **Fix**: Configure your reverse proxy to deny access to `/.git/`:
 
@@ -2402,7 +2464,7 @@ location ~ /\.git { deny all; return 404; }
 
 **Severity**: Error
 
-**What causes it**: A `GET /.env` request returns 2xx. Environment variable files typically contain secrets (database passwords, API keys).
+**What causes it**: A `GET /.env` request returns 2xx itself (the probe does not follow redirects, so a path that redirects to a sign-in page is not reported). Environment variable files typically contain secrets (database passwords, API keys).
 
 **Fix**: Never serve `.env` files from your web root. Store them outside the static root, and configure your reverse proxy to 404 the path.
 
@@ -2412,7 +2474,7 @@ location ~ /\.git { deny all; return 404; }
 
 **Severity**: Error
 
-**What causes it**: A `GET /__debug__/` request returns 2xx in production. The Django Debug Toolbar is installed and accessible.
+**What causes it**: A `GET /__debug__/` request returns 2xx itself (the probe does not follow redirects, so a path that redirects to a sign-in page is not reported) in production. The Django Debug Toolbar is installed and accessible.
 
 **Fix**: Guard the debug toolbar with `DEBUG=True` and `INTERNAL_IPS`:
 

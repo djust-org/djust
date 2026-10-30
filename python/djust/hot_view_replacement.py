@@ -19,6 +19,7 @@ on ``DEBUG=False`` so none of these code paths are reachable in production.
 from __future__ import annotations
 
 import importlib
+import importlib.util
 import inspect
 import logging
 import os
@@ -46,14 +47,18 @@ class ReloadResult:
         module_name: Fully-qualified dotted name of the reloaded module
             (e.g. ``"app.views.dashboard"``).
         class_pairs: List of ``(old_cls, new_cls)`` tuples for every
-            LiveView subclass defined directly in the module.
+            LiveView subclass the reload rebuilt: those defined in the module
+            and those of the dependent modules reloaded with it.
         reload_id: UUID-hex string that consumers use to dedupe
             broadcasts within a rapid-save burst.
+        modules: ``{module_name: [class names]}`` for every module reloaded,
+            the saved one first.
     """
 
     module_name: str
     class_pairs: List[Tuple[type, type]] = field(default_factory=list)
     reload_id: str = ""
+    modules: Dict[str, List[str]] = field(default_factory=dict)
 
 
 def _find_module_for_path(path: str) -> Optional[ModuleType]:
@@ -346,17 +351,130 @@ def apply_class_swap(
     return True, ""
 
 
+def _local_liveviews(module: ModuleType) -> Dict[str, type]:
+    from djust.live_view import LiveView
+
+    return {
+        name: attr
+        for name, attr in module.__dict__.items()
+        if isinstance(attr, type)
+        and issubclass(attr, LiveView)
+        and attr is not LiveView
+        and getattr(attr, "__module__", None) == module.__name__
+    }
+
+
+def _current_liveview_classes() -> List[type]:
+    """Every LiveView subclass that is still its module's attribute.
+
+    ``__subclasses__()`` also returns the classes earlier reloads replaced
+    (alive while something references them); only the class a module holds
+    now is current.
+    """
+    from djust.live_view import LiveView
+
+    found: List[type] = []
+    seen: set = set()
+    stack = list(LiveView.__subclasses__())
+    while stack:
+        cls = stack.pop()
+        if id(cls) in seen:
+            continue
+        seen.add(id(cls))
+        stack.extend(cls.__subclasses__())
+        module = sys.modules.get(getattr(cls, "__module__", ""))
+        if module is not None and module.__dict__.get(cls.__name__) is cls:
+            found.append(cls)
+    return found
+
+
+def _dependent_modules(module: ModuleType) -> List[ModuleType]:
+    """Modules to reload after ``module``, bases before subclasses.
+
+    A module is dependent when it defines a current LiveView whose MRO holds
+    a class defined in ``module``: a mixin or base class the save changed, or
+    a view of ``module`` subclassed elsewhere. The MRO is complete, so a
+    subclass of a subclass is found directly. Only modules with a source file
+    count; ``djust`` itself and ``__main__`` never reload.
+    """
+    owned = {
+        id(attr)
+        for attr in module.__dict__.values()
+        if isinstance(attr, type) and getattr(attr, "__module__", None) == module.__name__
+    }
+    if not owned:
+        return []
+    candidates: Dict[str, List[type]] = {}
+    for cls in _current_liveview_classes():
+        name = cls.__module__
+        if name == module.__name__ or name == "__main__" or name.split(".")[0] == "djust":
+            continue
+        if any(id(base) in owned for base in cls.__mro__):
+            candidates.setdefault(name, []).append(cls)
+    modules = {
+        name: sys.modules[name]
+        for name in candidates
+        if getattr(sys.modules.get(name), "__file__", None)
+    }
+    # Reload a module only after every candidate module its classes inherit
+    # from (Kahn's order; a cycle keeps the remaining modules in name order).
+    needs = {
+        name: {
+            base.__module__
+            for cls in candidates[name]
+            for base in cls.__mro__[1:]
+            if base.__module__ in modules and base.__module__ != name
+        }
+        for name in modules
+    }
+    order: List[str] = []
+    while needs:
+        ready = sorted(name for name, deps in needs.items() if not deps) or sorted(needs)[:1]
+        for name in ready:
+            order.append(name)
+            needs.pop(name)
+        for deps in needs.values():
+            deps.difference_update(ready)
+    return [modules[name] for name in order]
+
+
+def _drop_cached_bytecode(module: ModuleType) -> None:
+    """Remove ``module``'s ``.pyc`` so the reload compiles the saved source.
+
+    A ``.pyc`` stays valid while the source's whole-second mtime and size are
+    unchanged, so a second save within the same second that keeps the size
+    (``v1`` -> ``v2``) would otherwise reload the previous save's bytecode.
+    """
+    source = getattr(module, "__file__", None)
+    if not source or not source.endswith(".py"):
+        return
+    try:
+        cached = importlib.util.cache_from_source(source)
+    except (NotImplementedError, ValueError):
+        return
+    try:
+        os.remove(cached)
+    except FileNotFoundError:
+        return
+    except OSError:
+        logger.debug("HVR: could not remove %s; the reload may reuse it", cached)
+
+
 def reload_module_if_liveview(path: str) -> Optional[ReloadResult]:
-    """Reload the module for ``path`` if it defines a LiveView subclass.
+    """Reload the module for ``path``, and the views built on its classes.
 
     Resolves ``path`` → module via :data:`sys.modules` (already-imported
-    only). If the module doesn't exist in ``sys.modules`` or defines no
-    LiveView subclasses locally, returns ``None`` and the caller falls
-    back to the legacy template-refresh path.
+    only). The module is reloaded when it defines a LiveView subclass or a
+    class (a mixin, a base view) that a LiveView in another module inherits
+    from. Each such dependent module is then reloaded too, bases before
+    subclasses, so its classes are rebuilt on the new code: otherwise they
+    would keep inheriting from the class objects they were created with. A
+    module with neither returns ``None`` and the caller falls back to the
+    legacy template-refresh path.
 
     Captures old class refs, calls :func:`importlib.reload`, then builds
     a ``(old, new)`` pair for every surviving class. A class that was
-    *removed* from the new module triggers a full-reload fallback
+    *removed* from a reloaded module triggers a full-reload fallback
     (``None`` return) — existing instances would be orphaned and HVR
     has no safe recovery.
 
@@ -375,63 +493,202 @@ def reload_module_if_liveview(path: str) -> Optional[ReloadResult]:
 
     Returns:
         :class:`ReloadResult` with a fresh ``reload_id`` on success,
-        or ``None`` if HVR doesn't apply (not a LiveView module, not
-        already imported, import error, or a class was removed).
+        or ``None`` if HVR doesn't apply (no LiveView depends on the module,
+        not already imported, import error, or a class was removed).
     """
     module = _find_module_for_path(path)
     if module is None:
         return None
-    if not _module_has_liveview(module):
-        return None
 
     with _hvr_lock:
-        from djust.live_view import LiveView
-
-        old_classes: Dict[str, type] = {
-            name: attr
-            for name, attr in module.__dict__.items()
-            if isinstance(attr, type)
-            and issubclass(attr, LiveView)
-            and attr is not LiveView
-            and getattr(attr, "__module__", None) == module.__name__
-        }
-        try:
-            importlib.reload(module)
-        except Exception:  # noqa: BLE001 — dev-only; log + fall through
-            logger.exception("HVR: importlib.reload failed for %s", path)
+        dependents = _dependent_modules(module)
+        if not dependents and not _module_has_liveview(module):
             return None
+
+        class_pairs: List[Tuple[type, type]] = []
+        modules: Dict[str, List[str]] = {}
+        for target in [module, *dependents]:
+            old_classes = _local_liveviews(target)
+            _drop_cached_bytecode(target)
+            try:
+                importlib.reload(target)
+            except Exception:  # noqa: BLE001 — dev-only; log + fall through
+                logger.exception("HVR: importlib.reload failed for %s", target.__name__)
+                return None
+            new_classes = _local_liveviews(target)
+            for name in old_classes:
+                if name not in new_classes:
+                    logger.warning(
+                        "HVR: class %s removed from %s; full reload needed",
+                        name,
+                        target.__name__,
+                    )
+                    return None
+            class_pairs.extend((old_classes[name], new_classes[name]) for name in old_classes)
+            modules[target.__name__] = list(old_classes)
 
         # The reloaded classes are new objects: let the live auth check
         # re-read what the URLconf routes wrap them in.
         from djust.auth.core import invalidate_url_auth_cache
 
         invalidate_url_auth_cache()
-
-        new_classes: Dict[str, type] = {
-            name: attr
-            for name, attr in module.__dict__.items()
-            if isinstance(attr, type)
-            and issubclass(attr, LiveView)
-            and attr is not LiveView
-            and getattr(attr, "__module__", None) == module.__name__
-        }
-
-        for name in old_classes:
-            if name not in new_classes:
-                logger.warning(
-                    "HVR: class %s removed from %s; full reload needed",
-                    name,
-                    module.__name__,
-                )
-                return None
-
-        class_pairs = [(old_classes[name], new_classes[name]) for name in old_classes]
+        _repoint_http_entries(class_pairs)
 
     return ReloadResult(
         module_name=module.__name__,
         class_pairs=class_pairs,
         reload_id=uuid.uuid4().hex,
+        modules=modules,
     )
+
+
+#: How deep :func:`_repoint_callable` follows closures and ``__wrapped__``
+#: from a URLconf callback (decorators around ``as_view()`` nest a few deep).
+_REPOINT_MAX_DEPTH = 16
+
+
+def _repoint_callable(func: Any, replacements: Dict[int, type], seen: set, depth: int = 0) -> int:
+    """Point ``func`` (and what it closes over) at the reloaded classes.
+
+    ``as_view()`` returns a function closing over ``cls``; decorators applied
+    to it close over that function. Each closure cell or ``view_class``
+    holding a replaced class is rewritten in place, so the callable already in
+    the URLconf builds the new class. Returns how many references changed.
+    """
+    if depth > _REPOINT_MAX_DEPTH or id(func) in seen or not callable(func):
+        return 0
+    seen.add(id(func))
+    changed = 0
+    view_class = getattr(func, "view_class", None)
+    if isinstance(view_class, type) and id(view_class) in replacements:
+        try:
+            func.view_class = replacements[id(view_class)]
+            changed += 1
+        except (AttributeError, TypeError):
+            # A read-only attribute (a builtin or C callable): the closure
+            # walk below still repoints what the callable builds.
+            logger.debug("HVR: view_class on %r is read-only", func)
+    for cell in getattr(func, "__closure__", None) or ():
+        try:
+            value = cell.cell_contents
+        except ValueError:  # an empty cell
+            continue
+        if isinstance(value, type) and id(value) in replacements:
+            cell.cell_contents = replacements[id(value)]
+            changed += 1
+        elif callable(value) and not isinstance(value, type):
+            changed += _repoint_callable(value, replacements, seen, depth + 1)
+    wrapped = getattr(func, "__wrapped__", None)
+    if wrapped is not None:
+        changed += _repoint_callable(wrapped, replacements, seen, depth + 1)
+    return changed
+
+
+def _iter_url_callbacks(patterns: Any, depth: int = 0) -> Any:
+    if depth > _REPOINT_MAX_DEPTH:
+        return
+    for pattern in patterns:
+        nested = getattr(pattern, "url_patterns", None)
+        if nested is not None:
+            yield from _iter_url_callbacks(nested, depth + 1)
+            continue
+        callback = getattr(pattern, "callback", None)
+        if callback is not None:
+            yield callback
+
+
+def _repoint_http_entries(class_pairs: List[Tuple[type, type]]) -> int:
+    """Make the URLconf's ``as_view()`` callables build the reloaded classes.
+
+    The live instances are swapped by :func:`apply_class_swap`; a new page
+    load goes through the callable Django resolved at import, which kept the
+    pre-reload class. A class whose ``exposure_policy`` changed is left as it
+    is (its HTTP entry was wrapped for the old policy): a restart picks it up.
+    Covers ``settings.ROOT_URLCONF``; a per-request ``request.urlconf`` is not
+    walked. Returns how many references changed.
+    """
+    replacements: Dict[int, type] = {}
+    for old_cls, new_cls in class_pairs:
+        if old_cls is new_cls:
+            continue
+        if getattr(old_cls, "exposure_policy", None) != getattr(new_cls, "exposure_policy", None):
+            logger.warning(
+                "HVR: %s changed exposure_policy; restart the server to serve it over HTTP",
+                new_cls.__qualname__,
+            )
+            continue
+        replacements[id(old_cls)] = new_cls
+    if not replacements:
+        return 0
+    try:
+        from django.urls import get_resolver
+
+        patterns = get_resolver().url_patterns
+    except Exception:  # noqa: BLE001 — dev-only; a broken URLconf has its own error
+        logger.warning("HVR: could not read the URLconf; new page loads keep the old class")
+        return 0
+    seen: set = set()
+    changed = 0
+    for callback in _iter_url_callbacks(patterns):
+        changed += _repoint_callable(callback, replacements, seen)
+    return changed
+
+
+#: Per-class facts worked out from a view's template source, dropped when a
+#: template changes: the hash that keys the saved renderer, and the
+#: ``dj-update`` containers that accumulate rows (which also read the files the
+#: template includes, so ANY template edit can change them).
+_TEMPLATE_DERIVED_CLASS_CACHES = (
+    "_djust_template_hash_slot",
+    "_djust_accumulating_ids",
+    "_djust_accumulating_warned",
+    "_djust_accumulating_timeouts",
+)
+
+
+def note_template_change(path: str) -> int:
+    """Forget what every LiveView class derived from its template, after a file change.
+
+    The state backend keys a view's saved Rust renderer by the hash of its
+    template (``_initialize_rust_view``), and that hash is cached on the class
+    for its lifetime (``_get_cached_template_hash_slot``). A ``.py`` reload
+    makes a new class; a template-only edit does not, so the same session kept
+    getting the renderer compiled from the old template. Dropping the cached
+    hash makes the next render hash the edited source and miss that entry.
+
+    The same goes for the ``dj-update`` containers found by reading the template
+    (``_accumulating_containers``, #3647): cached per class, they kept the ids of
+    the template as it was until a restart. They are dropped here too, for every
+    class, because an edit of an included file changes them without touching the
+    view's own template.
+
+    Dev-only (the file watcher); returns how many classes were reset.
+    """
+    from djust.live_view import LiveView
+
+    reset = 0
+    stack = [LiveView]
+    seen: set = set()
+    while stack:
+        cls = stack.pop()
+        if id(cls) in seen:
+            continue
+        seen.add(id(cls))
+        dropped = False
+        for name in _TEMPLATE_DERIVED_CLASS_CACHES:
+            if name in cls.__dict__:
+                try:
+                    delattr(cls, name)
+                    dropped = True
+                except (AttributeError, TypeError):
+                    # An immutable class keeps its cache; its next page load may
+                    # still use what was derived from the old template until a
+                    # restart.
+                    logger.debug("HVR: could not reset %s of %s", name, cls.__qualname__)
+        reset += dropped
+        stack.extend(cls.__subclasses__())
+    logger.debug("HVR: %s changed; reset the template caches of %d view classes", path, reset)
+    return reset
 
 
 def _resolve_class_pairs(
@@ -468,6 +725,26 @@ def _resolve_class_pairs(
     return pairs
 
 
+def resolve_reload_pairs(hvr_meta: Dict[str, Any]) -> Optional[List[Tuple[type, type]]]:
+    """Post-reload class pairs for every module a broadcast names.
+
+    ``hvr_meta["modules"]`` (``{module: [class names]}``) covers the saved
+    module and the dependent modules reloaded with it; a broadcast without it
+    names one ``module`` and its ``class_names``. ``None`` when any module or
+    class is missing (see :func:`_resolve_class_pairs`).
+    """
+    modules = hvr_meta.get("modules") or {
+        hvr_meta.get("module", ""): hvr_meta.get("class_names", []) or []
+    }
+    pairs: List[Tuple[type, type]] = []
+    for module_name, class_names in modules.items():
+        resolved = _resolve_class_pairs(module_name, list(class_names or []))
+        if resolved is None:
+            return None
+        pairs.extend(resolved)
+    return pairs
+
+
 async def broadcast_hvr_event(result: ReloadResult, file_path: str) -> None:
     """Broadcast a hotreload event with HVR metadata to all connected clients.
 
@@ -493,7 +770,12 @@ async def broadcast_hvr_event(result: ReloadResult, file_path: str) -> None:
             "file": file_path,
             "hvr_meta": {
                 "module": result.module_name,
-                "class_names": [new.__name__ for _, new in result.class_pairs],
+                "class_names": [
+                    new.__name__
+                    for _, new in result.class_pairs
+                    if new.__module__ == result.module_name
+                ],
+                "modules": result.modules,
                 "reload_id": result.reload_id,
             },
         },
@@ -504,5 +786,7 @@ __all__ = [
     "ReloadResult",
     "apply_class_swap",
     "broadcast_hvr_event",
+    "note_template_change",
+    "resolve_reload_pairs",
     "reload_module_if_liveview",
 ]

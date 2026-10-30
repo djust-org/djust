@@ -303,7 +303,7 @@ def cmd_analyze(args: argparse.Namespace) -> None:
                             "file": filepath,
                             "line": i,
                             "issue": "Large collection without temporary_assigns",
-                            "suggestion": "Consider using temporary_assigns for collections to free memory after render",
+                            "suggestion": "Consider paginating or passing fewer fields; temporary_assigns empties the context copy after render (not the rendered tree)",
                         }
                     )
 

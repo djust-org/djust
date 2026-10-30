@@ -4,7 +4,7 @@ RustBridgeMixin - Rust backend integration for LiveView.
 
 import hashlib
 import logging
-from typing import TYPE_CHECKING, Any, ClassVar, Dict, Iterable, List, Optional, Set, Union
+from typing import TYPE_CHECKING, Any, ClassVar, Dict, Iterable, List, Optional, Set, Tuple, Union
 from urllib.parse import parse_qs, urlencode
 
 from django.utils.datastructures import MultiValueDict
@@ -15,13 +15,16 @@ from .._exposure_providers import (
     ExplicitRenderContext,
     require_no_provider_keys,
 )
+from .._accumulating_containers import view_accumulating_container_ids
 from ..change_detection import deep_fingerprint, fingerprints_by_content, warn_fingerprint_truncated
 from ..security import sanitize_for_log
 from ..serialization import normalize_django_value
+from ..state_pass import convert_for_render, fingerprint_and_convert
 from ..template_filters import _ensure_custom_filters_bridged
 from ..utils import get_template_dirs
 from ..render_env import apply_render_env
-from .context import _is_json_serializable
+from ..request_scoped import is_request_scoped_data
+from .context import _keeps_out_of_state
 from .context import _request_scoped_keys as request_scoped_keys
 
 logger = logging.getLogger(__name__)
@@ -235,6 +238,84 @@ def _collect_sub_ids(
     elif isinstance(value, (list, tuple)):
         for v in value:
             _collect_sub_ids(v, collected, visited, depth + 1)
+
+
+def _unassigned_temporary_keys(view: Any) -> Set[str]:
+    """The ``temporary_assigns`` keys that hold their reset default (#3639).
+
+    After a render each such key is reset to a fresh copy of its default, so on
+    the next sync it always looks changed (a new object whose fingerprint differs
+    from the rows it held). That is why they were left out of the changed keys:
+    treating the reset as a change would re-render the container with no rows.
+    But a handler that ASSIGNS rows (``self.rows = [new_row]``) is a change, and
+    leaving the key out as well meant the node reading it was not re-rendered
+    and the new row never reached the page. So only a key still equal to its
+    default is left out; a key holding anything else was assigned this turn.
+    """
+    out: Set[str] = set()
+    for key, default in (getattr(view, "temporary_assigns", None) or {}).items():
+        value = getattr(view, key, default)
+        if isinstance(default, (list, dict, set, tuple)):
+            same = type(value) is type(default) and len(value) == len(default) and value == default
+        else:
+            same = value is default or (type(value) is type(default) and value == default)
+        if same:
+            out.add(key)
+    return out
+
+
+def _temporary_key_aliases(view: Any, context: Any) -> Tuple[str, ...]:
+    """Context keys that hold a ``temporary_assigns`` attribute's very object (#3647).
+
+    ``get_context_data`` may hand the rows to the template under another name
+    (``context["feed"] = self.rows``). A ``dj-update`` container reading ``feed``
+    is fed by the temporary key just as one reading ``rows`` is, but nothing in the
+    template says so. The two are the same object, so identity finds them; a value
+    derived from the attribute (``list(self.rows)``, a slice, a filter) is a
+    different object and is NOT found, which is a documented limit rather than a
+    guess. Only mutable containers are compared: ``None``, ``0`` and ``""`` are
+    shared by unrelated names.
+    """
+    declared = getattr(view, "temporary_assigns", None)
+    if not declared or not isinstance(context, dict):
+        return ()
+    held = {}
+    for key in declared:
+        value = getattr(view, key, None)
+        if isinstance(value, (list, dict, set)):
+            held[id(value)] = key
+    if not held:
+        return ()
+    return tuple(
+        sorted(
+            name for name, value in context.items() if name not in declared and id(value) in held
+        )
+    )
+
+
+def _warn_rows_without_id(view: Any) -> None:
+    """Say, once per view class and in DEBUG only, that rows without an ``id`` were dropped.
+
+    An accumulating container adds a row only by its ``id`` (as the client does),
+    so a row without one never reaches the page; without a word that reads as
+    a lost update. The count comes from the render before this sync.
+    """
+    take = getattr(view._rust_view, "take_accumulate_dropped", None)
+    dropped = take() if take is not None else 0
+    cls = type(view)
+    if not dropped or "_djust_warned_rows_without_id" in cls.__dict__:
+        return
+    from django.conf import settings
+
+    if getattr(settings, "DEBUG", False):
+        cls._djust_warned_rows_without_id = True  # type: ignore[attr-defined]
+        logger.warning(
+            "%s: %d row(s) in a dj-update container fed by temporary_assigns have no id "
+            "attribute and were not added to the page. An appended or prepended row is "
+            'added only by its id; give each row one (for example id="row-{{ r.pk }}").',
+            cls.__name__,
+            dropped,
+        )
 
 
 class RustBridgeMixin:
@@ -561,6 +642,25 @@ class RustBridgeMixin:
                 backend = get_backend()
                 backend.set(self._cache_key, self._rust_view)
 
+    def _refresh_cached_rust_view(self) -> None:
+        """Re-store the cached snapshot of this view's Rust view after a render.
+
+        The state backend keeps a snapshot of the view stored under
+        ``_cache_key``, never the object itself (which this view goes on
+        rendering and tearing down, possibly on a pool thread while another
+        socket of the session reads the key). A no-op for a view with no
+        cache key and for a backend that keeps the state :meth:`set` wrote.
+        """
+        cache_key = getattr(self, "_cache_key", None)
+        rust_view = getattr(self, "_rust_view", None)
+        if not cache_key or rust_view is None:
+            return
+        from ..state_backends import get_backend
+
+        refresh = getattr(get_backend(), "refresh", None)
+        if callable(refresh):
+            refresh(cache_key, rust_view)
+
     def _saved_state_key(
         self, session_key: str, view_key: str, template_hash_slot: str
     ) -> Optional[str]:
@@ -807,9 +907,17 @@ class RustBridgeMixin:
             # Per-render, before anything is formatted (#2209, #2221).
             self._apply_render_env()
 
+            from ..sync_turn import run_sync_step
+
             full_context = (
-                preloaded_context if preloaded_context is not None else self.get_context_data()
+                preloaded_context
+                if preloaded_context is not None
+                else run_sync_step(self, "render", self.get_context_data)
             )
+
+            # Context keys that are a temporary attribute under another name (#3647);
+            # before the normalize pass below, which copies what it converts.
+            _context_aliases = _temporary_key_aliases(self, full_context)
 
             # Defensive normalize pass for DB values added after super() (#1205, #1207).
             # When a user overrides ``get_context_data`` and sets a raw DB
@@ -892,7 +1000,9 @@ class RustBridgeMixin:
             # The non-serializable ones still reach the Rust renderer through
             # the raw-value sidecar (``set_raw_py_values`` below); serializable
             # processor outputs (e.g. theming's ``{{ theme_head }}`` SafeString)
-            # stay in ``update_state`` and are unaffected.
+            # stay in ``update_state`` and are unaffected, except plain data a
+            # processor marked ``RequestScopedList`` (``theme_presets``, #3631),
+            # which rides the sidecar like the non-serializable ones.
             _request_scoped_keys = request_scoped_keys(self)
 
             # Ensure csrf_token is available for {% csrf_token %} tag (#696).
@@ -939,6 +1049,11 @@ class RustBridgeMixin:
             # (#2664). Computed at most once per key per sync (compare + store).
             prev_fps = getattr(self, "_prev_context_fingerprints", {})
             new_fps: Dict[str, Any] = {}
+            # Safe-key paths + rendered value of a key whose fingerprint was
+            # taken in the same walk (``state_pass``): the key is being sent,
+            # so the walk below that finds its SafeStrings and converts it for
+            # Rust need not run again.
+            converted_by_fp: Dict[str, Tuple[List[str], Any]] = {}
 
             # ADR-031 / #2900: a class-level component is an opaque wrapper
             # whose State is the thing that changes. ``fingerprints_by_content``
@@ -949,10 +1064,15 @@ class RustBridgeMixin:
             def _is_structural(value: Any) -> bool:
                 return isinstance(value, (dict, list, tuple)) or fingerprints_by_content(value)
 
-            def _fp_of(key: str, value: Any) -> Any:
+            def _fp_of(key: str, value: Any, convert: bool = False) -> Any:
                 fp = new_fps.get(key, _MISSING)
                 if fp is _MISSING:
-                    fp, truncated = deep_fingerprint(value)
+                    if convert:
+                        fp, truncated, converted = fingerprint_and_convert(value, key)
+                        if converted is not None:
+                            converted_by_fp[key] = converted
+                    else:
+                        fp, truncated = deep_fingerprint(value)
                     new_fps[key] = fp
                     if truncated:
                         warn_fingerprint_truncated(type(self), key, value)
@@ -1069,8 +1189,11 @@ class RustBridgeMixin:
                 for k, v in full_context.items()
                 if k not in _request_scoped_keys and isinstance(v, _IMMUTABLE_TYPES_FOR_SYNC)
             }
+            # A key already known to be sent (first render, a new key, a
+            # changed name, ...) has not been fingerprinted yet: take the
+            # fingerprint, the SafeString paths and the Rust value in one walk.
             self._prev_context_fingerprints = {
-                k: _fp_of(k, v)
+                k: _fp_of(k, v, convert=context.get(k, _MISSING) is v)
                 for k, v in full_context.items()
                 if k not in _request_scoped_keys and _is_structural(v)
             }
@@ -1089,6 +1212,9 @@ class RustBridgeMixin:
             safe_keys: List[str] = []
             sidecar_only_keys: Set[str] = set()
             rendered_context: Dict[str, Any] = {}
+            # Rust values already produced by ``state_pass``; every other key
+            # goes through ``normalize_django_value`` below as before.
+            converted_values: Dict[str, Any] = {}
             needs_normalize = False
             for key, value in context.items():
                 # #1786: request-scoped, framework-provided context values
@@ -1103,7 +1229,7 @@ class RustBridgeMixin:
                 # rendering. Serializable processor outputs (e.g. theming's
                 # ``{{ theme_head }}`` SafeString) are NOT skipped — they fall
                 # through to the normal handling below.
-                if key in _request_scoped_keys and not _is_json_serializable(value):
+                if key in _request_scoped_keys and _keeps_out_of_state(value):
                     # A lazily rendered trusted-HTML value (theming's
                     # ``theme_head`` & co., #3028) is SafeData that is not a
                     # ``str``. It must NOT keep a stale state entry under the
@@ -1111,8 +1237,11 @@ class RustBridgeMixin:
                     # build whose processor stored the rendered string; the
                     # state entry would win over the sidecar and was never
                     # re-marked safe), so it is left out of the retained keys
-                    # below. That does not render it.
-                    if isinstance(value, SafeData):
+                    # below. That does not render it. The same holds for a
+                    # processor's ``RequestScopedList`` (theming's
+                    # ``theme_presets``, #3631): a snapshot stored by a build that
+                    # copied the list into the state must not keep that copy.
+                    if isinstance(value, SafeData) or is_request_scoped_data(value):
                         sidecar_only_keys.add(key)
                     continue
                 if isinstance(value, forms.BaseForm):
@@ -1133,14 +1262,30 @@ class RustBridgeMixin:
                         safe_keys.append(key)
                     rendered_context[key] = value
                 else:
-                    # Complex types (dict, list, etc.): full scan
-                    safe_keys.extend(_collect_safe_keys(value, key))
+                    # Complex types (dict, list, etc.): full scan. One walk
+                    # finds the SafeStrings and converts the value
+                    # (``state_pass``); a shape it does not handle returns
+                    # None and takes the original two passes.
+                    converted = converted_by_fp.get(key)
+                    if converted is None:
+                        converted = convert_for_render(value, key)
+                    if converted is None:
+                        safe_keys.extend(_collect_safe_keys(value, key))
+                    else:
+                        safe_keys.extend(converted[0])
+                        converted_values[key] = converted[1]
                     rendered_context[key] = value
                     needs_normalize = True
 
             # Skip normalize_django_value when context only has JSON-native types
             if needs_normalize:
-                json_compatible_context = normalize_django_value(rendered_context)
+                # ``normalize_django_value`` of a plain dict is its values
+                # normalized one by one; the keys ``state_pass`` already
+                # converted are taken as they are.
+                json_compatible_context = {
+                    k: (converted_values[k] if k in converted_values else normalize_django_value(v))
+                    for k, v in rendered_context.items()
+                }
             else:
                 json_compatible_context = rendered_context
 
@@ -1178,8 +1323,16 @@ class RustBridgeMixin:
                     # `{% querystring my_qd a=2 %}` needs, so it rides the
                     # sidecar the way `build_render_sidecar` already carries
                     # it on the non-LiveView paths (#2556, #1646).
-                    if isinstance(_raw_val, _JSON_FRIENDLY) and not isinstance(
-                        _raw_val, MultiValueDict
+                    #
+                    # A ``RequestScopedList`` is a ``list`` but is NOT in the
+                    # state (#3631), so the sidecar is the only way it reaches
+                    # the renderer: it must not be skipped as "JSON friendly".
+                    if (
+                        isinstance(_raw_val, _JSON_FRIENDLY)
+                        and not isinstance(_raw_val, MultiValueDict)
+                        and not (
+                            _raw_key in _request_scoped_keys and is_request_scoped_data(_raw_val)
+                        )
                     ):
                         continue
                     # A `Component`/`LiveComponent` used to be excluded here
@@ -1253,7 +1406,7 @@ class RustBridgeMixin:
             # previous set_changed_keys call with meaningful keys.
             # Also exclude temporary_assigns keys — they're reset to new
             # objects after each render, always getting new id().
-            _temp_assigns = set(getattr(self, "temporary_assigns", {}).keys())
+            _temp_assigns = _unassigned_temporary_keys(self)
             # #1786: request-scoped keys are excluded from the change-detection
             # fingerprint above, so on every render they look "new" and would
             # otherwise be reported as changed keys — triggering spurious
@@ -1277,6 +1430,17 @@ class RustBridgeMixin:
                 _candidate = [k for k in context if k not in _skip_keys]
                 if _candidate:
                     user_changed = _candidate
+
+            # Values the view supplies lazily and keeps out of state (ThemeMixin's
+            # rendered HTML, #3626) are request-scoped, so the detector above never
+            # reports them. After a theme switch the view names them here, once, so
+            # a template that reads them re-renders that node. (Measured: on a view
+            # that has not rendered yet, naming changed keys still renders in full.)
+            forced = self.__dict__.pop("_djust_forced_changed_keys", None)
+            if forced:
+                user_changed = sorted(
+                    {*(user_changed or ()), *(k for k in forced if k in full_context)}
+                )
 
             # Full-context truth (#2564): drop every Rust state key the context
             # no longer carries, BEFORE the merge. ``update_state`` only ever
@@ -1327,6 +1491,18 @@ class RustBridgeMixin:
 
             if user_changed is not None:
                 self._rust_view.set_changed_keys(user_changed)
+
+            # The ``dj-update="append"|"prepend"`` containers whose rows come from
+            # a ``temporary_assigns`` key must ACCUMULATE in the differ, as the
+            # client does for a full html frame; otherwise the rows a render lists
+            # (only the ones just assigned) replace the stored ones (#3639). Set
+            # on every sync: a restored Rust view starts with none, and
+            # ``hasattr`` covers an extension built before the method existed.
+            if hasattr(self._rust_view, "set_accumulate_containers"):
+                _warn_rows_without_id(self)
+                self._rust_view.set_accumulate_containers(
+                    list(view_accumulating_container_ids(self, _context_aliases))
+                )
 
             # Mark static assigns as sent — subsequent syncs will skip them
             if getattr(self, "static_assigns", None) and not getattr(

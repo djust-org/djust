@@ -332,7 +332,7 @@ def test_the_mount_path_syncs_explicitly_between_init_and_its_first_render() -> 
     from djust import runtime
     from djust._child_rendering import render_view_with_diff
 
-    src = inspect.getsource(runtime.ViewRuntime.dispatch_mount)
+    src = inspect.getsource(runtime.ViewRuntime._dispatch_mount_body)
     init = src.index("view_instance._initialize_rust_view)(request)")
     sync = src.index("view_instance._sync_state_to_rust)()")
     render = src.index("await sync_to_async(render_view_with_diff)(")
@@ -352,7 +352,7 @@ def test_the_snapshot_restore_twin_forces_a_full_html_render() -> None:
     from djust import runtime
     from djust.mixins import rust_bridge
 
-    mount_src = inspect.getsource(runtime.ViewRuntime.dispatch_mount)
+    mount_src = inspect.getsource(runtime.ViewRuntime._dispatch_mount_body)
     assert re.search(
         r"if mounted_from_restore:\s*\n\s*view_instance\._force_full_html = True", mount_src
     ), "dispatch_mount must set _force_full_html on a restore mount"

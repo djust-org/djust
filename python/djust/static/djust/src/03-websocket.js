@@ -730,6 +730,9 @@ class LiveViewWebSocket {
         switch (data.type) {
             case 'connect':
                 this.sessionId = data.session_id;
+                // The server refuses a frame over this size; 0 = no limit.
+                this.maxMessageSize = typeof data.max_message_size === 'number'
+                    ? data.max_message_size : 0;
                 if (globalThis.djustDebug) console.log('[LiveView] Session ID:', this.sessionId);
                 this.autoMount();
                 // The views hydrated beside the page view lived on the socket
@@ -776,6 +779,21 @@ class LiveViewWebSocket {
                 // two are `undefined` and this is the page mount.
                 if (data.view === this.primaryViewPath) installMountEventConfig(data);
                 else installAdditionalMountEventConfig(data);
+
+                // A live_redirect to another view class mounts that class here;
+                // the page container's dj-view must follow it, as the SSE branch
+                // does (03b-sse.js), or a reconnect (autoMount reads dj-view)
+                // mounts the old view at the new URL.
+                if (typeof data.view === 'string' && data.view === this.primaryViewPath) {
+                    const pageContainer = findPageViewContainer();
+                    if (pageContainer && pageContainer.getAttribute('dj-view') !== data.view) {
+                        pageContainer.setAttribute('dj-view', data.view);
+                    }
+                    // ...and so must its own dj-poll: the content swap below
+                    // leaves the root's attributes as they were.
+                    applyRootPoll(pageContainer || document.querySelector('[dj-root]:not(html):not(head)'),
+                        data.root_poll);
+                }
 
                 // Initialize upload configurations from mount response
                 if (data.upload_configs && window.djust.uploads) {
@@ -993,6 +1011,7 @@ class LiveViewWebSocket {
                     }
                     if (typeof entry.html === 'string') {
                         // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
+                        teardownPollsIn(container, true);
                         container.innerHTML = entry.html;
                         // #2058: unlike the single-view mount branches above,
                         // mount_batch does NOT call _runInsertedScripts() —
@@ -1612,6 +1631,10 @@ class LiveViewWebSocket {
         // container it fills: the server adds it to the socket instead of
         // replacing the page view, and addresses its frames with this id.
         if (options.targetId) frame.target_id = options.targetId;
+        // ADR-044: the server runs this mount as a `reconnect` turn. A hint
+        // only (turn middleware sees `turn.kind`); nothing security-relevant
+        // depends on it.
+        if (window.djust && window.djust._isReconnect) frame.reconnect = true;
         // #2966: a reconnecting page view asks whether its tracked assets
         // are stale (dj-track-static). Shared with the SSE mount (#1646).
         const trackStatic = globalThis.djust.djTrackStatic;
@@ -1641,6 +1664,27 @@ class LiveViewWebSocket {
     sendMessage(data) {
         const message = JSON.stringify(data);
         const messageBytes = message.length;
+
+        // A frame over the server's max_message_size would be refused; report
+        // it here, through the same path as the server's refusal.
+        const limit = this.maxMessageSize || 0;
+        if (limit && messageBytes * 3 > limit) {
+            const size = new TextEncoder().encode(message).length;
+            if (size > limit) {
+                this.handleMessage({
+                    type: 'error',
+                    code: 'message_too_large',
+                    // Same text as the server's refusal, whose "Message too
+                    // large (N bytes)" prefix clients parse (signature-pad.js).
+                    error: `Message too large (${size} bytes); the server's max_message_size is ${limit}. ` +
+                        'Not sent. Send files with UploadMixin, or raise ' +
+                        "LIVEVIEW_CONFIG['max_message_size'].",
+                    event: data.event || null,
+                    ref: data.ref ?? null,
+                });
+                return;
+            }
+        }
 
         // Track sent message
         this.stats.sent++;

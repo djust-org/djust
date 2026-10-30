@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Real WS/SSE recovery after a 250ms save exceeds its 150ms storage deadline.
+"""Real WS/SSE recovery after a 1.1s save exceeds its 1s storage deadline.
 
 Standalone browser guard. Starts an isolated demo process with a test-only
 save delay, then checks the error event, nonblocking status, catch-up render
@@ -22,6 +22,15 @@ import urllib.request
 
 ROOT = Path(__file__).resolve().parents[2]
 
+# The deadline is far above any real save, so the only save that misses it is
+# the one this test delays. At 150 ms a slow CI runner missed it on an ordinary
+# page-1 save too (166 ms measured), and the extra transient error failed the
+# exactly-one assertion on PRs that did not touch this path. The delay stays
+# 100 ms past the deadline, as before: the next save waits that long for this
+# one, well inside its own deadline.
+SAVE_DEADLINE_S = 1.0
+INJECTED_SAVE_S = SAVE_DEADLINE_S + 0.1
+
 
 def serve(port):
     os.environ.setdefault("DJANGO_SETTINGS_MODULE", "demo_project.settings")
@@ -30,7 +39,7 @@ def serve(port):
     from djust.runtime import ViewRuntime
     import uvicorn
 
-    settings.DJUST_EXPLICIT_STATE_SAVE_TIMEOUT = 0.150
+    settings.DJUST_EXPLICIT_STATE_SAVE_TIMEOUT = SAVE_DEADLINE_S
     original = ViewRuntime._save_explicit_root
 
     def delayed(runtime, view, request):
@@ -40,7 +49,7 @@ def serve(port):
             and not getattr(runtime, "_test_save_delayed", False)
         ):
             runtime._test_save_delayed = True
-            time.sleep(0.250)
+            time.sleep(INJECTED_SAVE_S)
         return original(runtime, view, request)
 
     ViewRuntime._save_explicit_root = delayed

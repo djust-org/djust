@@ -259,11 +259,32 @@ def render_markdown(
     """
     ...
 
+def fold_html_whitespace(html: str) -> str:
+    """Fold whitespace runs in markup and whitespace-only text to one space.
+
+    Text that has content keeps its whitespace. ``pre``/``code``/``textarea``/
+    ``script``/``style`` blocks are expected as ``__PRESERVED_BLOCK_<i>__``
+    placeholders already.
+    """
+    ...
+
+def strip_html_comments_and_whitespace(html: str) -> Optional[str]:
+    """The egress normalizer for a plain render, run without the GIL.
+
+    Byte-identical to ``TemplateMixin._strip_comments_and_whitespace_py``;
+    ``None`` for an input it does not model (the caller then runs Python).
+    """
+    ...
+
+def fold_html_whitespace_edits(html: str) -> List[Tuple[int, int]]:
+    """UTF-8 byte ranges ``fold_html_whitespace`` replaces with one space."""
+    ...
+
 def collapse_inter_tag_whitespace(html: str, block_tags: List[str]) -> str:
     """
     The egress normalizer's inter-tag whitespace pass (#2999).
 
-    ``html`` has every whitespace run collapsed to one space and its
+    ``html`` has been through ``fold_html_whitespace`` and has its
     pre/code/textarea/script/style blocks replaced by
     ``__PRESERVED_BLOCK_<i>__`` placeholders (tag ``block_tags[i]``). Drops a
     space between two tags unless its nearest sibling on each side is text or
@@ -285,7 +306,7 @@ def authored_lazy_elements(
 def normalize_provenance_whitespace(
     html: str, spans: List[Tuple[int, int]], origins: List[Tuple[int, int, int, str]]
 ) -> Tuple[str, List[Tuple[int, int]], List[Tuple[int, int, int, str]]]:
-    """Collapse whitespace runs to one space, remapping authored intervals."""
+    """``fold_html_whitespace``, remapping authored intervals."""
     ...
 
 def collapse_provenance_whitespace(
@@ -303,6 +324,27 @@ def template_needs_provenance(source: str, dirs: List[str]) -> bool:
 
 def lazy_authority_spans(html: str, spans: List[Tuple[int, int]]) -> List[Tuple[int, int]]:
     """Authored intervals that carry a live lazy container's authority bytes."""
+    ...
+
+def root_content_range(html: str) -> Optional[Tuple[int, int]]:
+    """``(start, end)`` character offsets of the LiveView root's content in
+    rendered ``html`` (the #3031 root rule), or ``None`` with no root or no
+    complete close tag."""
+    ...
+
+def root_element_span(
+    html: str, with_view: bool = True
+) -> Optional[Tuple[int, int, Optional[int], Optional[int]]]:
+    """``(open_start, open_end, close_start, close_end)`` character offsets of
+    the LiveView root element in rendered ``html``; the close offsets are
+    ``None`` without a complete close tag. ``None`` with no root.
+    ``with_view=False`` looks for ``dj-root`` only."""
+    ...
+
+def dj_root_stamp_offsets(html: str) -> List[int]:
+    """Character offsets in rendered ``html`` where ``dj-view="…"`` is
+    inserted: after the first ``dj-root`` attribute of every ``dj-root`` tag
+    without ``dj-view``, outside other views' containers (#2981, #3155)."""
     ...
 
 def diff_html(old_html: str, new_html: str) -> str:
@@ -554,6 +596,9 @@ def active_unlocalized_number_format() -> Optional[Tuple[str, str, List[int], bo
     rather than assume it (#2017). Its `use_grouping` is always False.
     """
 
+def clear_dj_model_fields_cache() -> None:
+    """Forget every cached ``RustLiveView.dj_model_fields(cache=True)`` result."""
+
 def dj_model_fields_from_template(
     template_source: str,
     template_dirs: Optional[List[str]] = None,
@@ -753,6 +798,16 @@ def register_tag_handler(tag_name: str, handler: Any) -> None:
     template compilation, before any context resolution or rendering, and
     may raise to reject invalid syntax. It must not render application code.
     Django library bridges use this hook to run Django's argument validation.
+
+    An INLINE handler may also implement ``rewrite_args_at_parse(args) ->
+    list[str]`` (#3664). It receives the same original tokens, once, at
+    compilation, and returns the argument list the tag keeps; raising refuses
+    the template. It exists for the one distinction a handler cannot recover
+    after resolution: a positional operand and a keyword one are both just
+    text by then (``{% tag v %}`` with ``v = "k=v"`` looks like the keyword
+    ``k``). djust's own components use it to name positional operands after
+    the Python tag's parameters (``djust._positional_args``). A handler
+    without the method gets its tokens unchanged.
 
     The return value is ESCAPED unless it is already HTML (#2379), mirroring
     Django's ``SimpleNode.render``, which runs ``conditional_escape`` over a
@@ -1243,10 +1298,15 @@ class RustLiveView:
         """
         ...
 
-    def dj_model_fields(self) -> List[str]:
+    def dj_model_fields(self, cache: bool = False) -> List[str]:
         """
         Return the fields bound via static ``dj-model="<field>"`` in this
         view's CURRENT template source (and any ``{% include %}``d templates).
+
+        With ``cache=True`` a successful walk is kept process-wide, keyed by
+        the exact template source and directories; pass it only while
+        templates are cached (DEBUG off). :func:`clear_dj_model_fields_cache`
+        forgets every entry.
 
         The immune source for the dj-model mass-assignment allowlist
         (CWE-915): values come from the parsed template AST's ``Node::Text``
@@ -1483,8 +1543,14 @@ __all__ = [
     "inter_tag_whitespace_edits",
     "authored_lazy_elements",
     "normalize_provenance_whitespace",
+    "fold_html_whitespace",
+    "fold_html_whitespace_edits",
+    "strip_html_comments_and_whitespace",
     "collapse_provenance_whitespace",
     "lazy_authority_spans",
+    "root_content_range",
+    "root_element_span",
+    "dj_root_stamp_offsets",
     "template_needs_provenance",
     "resolve_template_inheritance",
     # Serialization
@@ -1496,6 +1562,7 @@ __all__ = [
     "MAX_CONVERSION_DEPTH",
     "MAX_MD_NESTING",
     "dj_model_fields_from_template",
+    "clear_dj_model_fields_cache",
     "serialize_queryset",
     "serialize_context",
     "serialize_models_fast",

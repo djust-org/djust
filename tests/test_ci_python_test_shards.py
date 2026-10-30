@@ -39,6 +39,18 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/test.yml"
 DURATIONS = ROOT / ".test_durations"
 
+# Read ONCE, at import (i.e. collection), and validate this copy — never the
+# live file during a test. The CI step runs `--store-durations
+# --clean-durations` under xdist, and pytest-split's cache plugin is registered
+# in every worker: each worker rewrites `.test_durations` with only ITS OWN
+# tests at its sessionfinish, and xdist shuts idle workers down while others
+# are still running. A read from inside a test can therefore see a ~1/N subset
+# — which is how py3.14/3.15 shard 2 reported "88% of collected tests have no
+# recorded duration" on every main run while the committed file covered 96%.
+# Every worker finishes collecting before any test runs, so this snapshot is
+# always the committed content.
+DURATIONS_TEXT = DURATIONS.read_text() if DURATIONS.is_file() else None
+
 
 def _jobs() -> dict:
     return yaml.safe_load(WORKFLOW.read_text())["jobs"]
@@ -145,13 +157,46 @@ def test_per_checkout_merge_gates_run_on_exactly_one_shard() -> None:
         assert steps[name].get("if"), f"{name!r} would run on every shard"
 
 
-def test_rust_cache_is_shared_across_shards_and_saved_by_one() -> None:
-    steps = [s for s in _python_tests()["steps"] if "rust-cache" in str(s.get("uses"))]
+def test_shards_install_the_shared_build_instead_of_compiling() -> None:
+    """The extension is built once per interpreter, not once per shard.
+
+    Each shard used to `maturin develop --release` the identical extension —
+    4x per interpreter, 16x on push, 71-157s each. python-build compiles it
+    once and the shards install that wheel; a Rust toolchain or rust-cache
+    step creeping back into the shard job is that duplicated build returning.
+    """
+    job = _python_tests()
+    assert "python-build" in str(job.get("needs")), job.get("needs")
+    steps = job["steps"]
+    rust = [s for s in steps if re.search(r"rust-toolchain|rust-cache", str(s.get("uses")))]
+    assert not rust, rust
+    runs = "\n".join(str(s.get("run", "")) for s in steps)
+    assert "maturin develop" not in runs and "maturin build" not in runs
+    download = next(s for s in steps if "download-artifact" in str(s.get("uses")))
+    assert "matrix.python-version" in str(download["with"]["name"]), download
+
+
+def test_the_build_matrix_is_the_shard_matrix_minus_the_group() -> None:
+    """Every shard cell's wheel exists, and 3.15 can fail the build too."""
+    build = _jobs()["python-build"]
+    assert (
+        build["strategy"]["matrix"]["python-version"]
+        == (_python_tests()["strategy"]["matrix"]["python-version"])
+    )
+    assert "group" not in build["strategy"]["matrix"]
+    assert build.get("continue-on-error") == _python_tests().get("continue-on-error")
+    upload = next(s for s in build["steps"] if "upload-artifact" in str(s.get("uses")))
+    download = next(
+        s for s in _python_tests()["steps"] if "download-artifact" in str(s.get("uses"))
+    )
+    assert upload["with"]["name"] == download["with"]["name"]
+
+
+def test_rust_cache_is_keyed_per_interpreter_in_the_build_job() -> None:
+    steps = [s for s in _jobs()["python-build"]["steps"] if "rust-cache" in str(s.get("uses"))]
     assert len(steps) == 1, steps
     with_ = steps[0].get("with") or {}
     assert "matrix.python-version" in str(with_.get("shared-key")), with_
-    m = re.search(r"matrix\.group\s*==\s*(\d+)", str(with_.get("save-if")))
-    assert m and int(m.group(1)) in set(_matrix_groups()), with_
 
 
 def _splitting_algorithm() -> str:
@@ -225,12 +270,12 @@ def test_durations_file_is_committed_and_the_invocation_points_at_it() -> None:
     m = re.search(r"--durations-path\s+(\S+)", cmd)
     assert m, f"no --durations-path in {cmd}"
     assert (ROOT / m.group(1)) == DURATIONS, m.group(1)
-    assert DURATIONS.is_file(), (
+    assert DURATIONS_TEXT is not None, (
         ".test_durations is missing — CI would still pass (pytest-split "
         "balances by count without it) but every shard would be unbalanced. "
         "Run `make test-durations` and commit the file."
     )
-    data = json.loads(DURATIONS.read_text())
+    data = json.loads(DURATIONS_TEXT)
     assert isinstance(data, dict) and data, "expected a non-empty {nodeid: seconds} map"
     bad = [(k, v) for k, v in data.items() if not isinstance(v, (int, float)) or v < 0]
     assert not bad, bad[:5]
@@ -335,6 +380,9 @@ def test_shards_cover_current_collection_with_balanced_durations(tmp_path: Path)
     against normal --splits/--group CLI invocations.
     """
     output = tmp_path / "shards.json"
+    assert DURATIONS_TEXT is not None, ".test_durations is missing"
+    durations = tmp_path / "test_durations.json"
+    durations.write_text(DURATIONS_TEXT)
     n = len(_matrix_groups())
     proc = subprocess.run(
         [
@@ -347,7 +395,7 @@ def test_shards_cover_current_collection_with_balanced_durations(tmp_path: Path)
             "--splitting-algorithm",
             _splitting_algorithm(),
             "--durations-path",
-            str(DURATIONS),
+            str(durations),
             "tests/",
             "python/tests/",
             "python/djust/tests/",
@@ -375,4 +423,4 @@ def test_shards_cover_current_collection_with_balanced_durations(tmp_path: Path)
     )
     snapshot = json.loads(output.read_text())
     assert snapshot.get("shared_corpus"), "full sweep fixture was not recognized during collection"
-    _validate_snapshot(snapshot, json.loads(DURATIONS.read_text()), n)
+    _validate_snapshot(snapshot, json.loads(DURATIONS_TEXT), n)

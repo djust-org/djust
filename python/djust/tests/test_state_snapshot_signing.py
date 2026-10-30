@@ -339,7 +339,7 @@ def test_restore_path_calls_unsign_and_does_not_trust_raw_state_json():
     role injected)."""
     import djust.runtime as rt_mod
 
-    source = inspect.getsource(rt_mod.ViewRuntime.dispatch_mount)
+    source = inspect.getsource(rt_mod.ViewRuntime._dispatch_mount_body)
     assert "unsign_snapshot" in source, (
         "dispatch_mount restore path must verify the signed snapshot via "
         "unsign_snapshot before applying any state."
@@ -352,7 +352,7 @@ def test_emit_path_signs_snapshot():
     moved into the runtime (#1913, Phase 3.1)."""
     import djust.runtime as rt_mod
 
-    source = inspect.getsource(rt_mod.ViewRuntime.dispatch_mount)
+    source = inspect.getsource(rt_mod.ViewRuntime._dispatch_mount_body)
     assert "sign_snapshot" in source, (
         "Emit path must sign the public_state snapshot before sending to client."
     )

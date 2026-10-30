@@ -308,8 +308,31 @@ def _unload(module: types.ModuleType) -> None:
     gc.collect()
 
 
+def _is_other_test_module(name: str) -> bool:
+    parts = name.split(".")
+    return name != MODULE and any(
+        p.startswith("test_") or p in ("tests", "conftest") for p in parts
+    )
+
+
 @pytest.fixture
-def fixture(tmp_path):
+def fixture(tmp_path, monkeypatch):
+    # The binding scan walks every LiveView/LiveComponent subclass in the
+    # PROCESS. Under the full suite a worker has imported thousands of views
+    # from other test modules, so each scan here cost ~20x the standalone run
+    # (84.8s vs 4.3s for the slowest test; 409s vs 14.5s for the file). A real
+    # project's check never sees test classes, and every assertion below is
+    # about this module's owners, so skip other test modules' classes.
+    from djust.checks import bindings
+
+    all_owners = bindings._owners
+    monkeypatch.setattr(
+        bindings,
+        "_owners",
+        lambda: [
+            (cls, kind) for cls, kind in all_owners() if not _is_other_test_module(cls.__module__)
+        ],
+    )
     templates = tmp_path / "templates"
     for name, text in TEMPLATES.items():
         target = templates / name
@@ -568,12 +591,11 @@ def test_managed_objects_and_authorized_querysets_are_not_flagged(fixture):
     """ADR-037 D5: rendering authorized ORM values is not a persistence risk."""
     from django.core.checks import run_checks
 
+    messages = run_checks(tags=["djust"])  # once: nothing changes between owners
     for owner in ("EditUser", "UserList"):
         label = "%s.%s" % (MODULE, owner)
         flagged = [
-            m.id
-            for m in run_checks(tags=["djust"])
-            if label in str(m.msg) or label == getattr(m, "owner", "")
+            m.id for m in messages if label in str(m.msg) or label == getattr(m, "owner", "")
         ]
         # Only the fixture module's placement is reported: it is not in
         # LIVEVIEW_ALLOWED_MODULES (V005), and EditUser declares no login (S005).

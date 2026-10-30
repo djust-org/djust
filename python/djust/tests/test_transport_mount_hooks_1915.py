@@ -451,7 +451,7 @@ def test_protocol_defaults_are_behavior_preserving():
 def _dispatch_mount_source() -> str:
     from djust.runtime import ViewRuntime
 
-    return inspect.getsource(ViewRuntime.dispatch_mount)
+    return inspect.getsource(ViewRuntime._dispatch_mount_body)
 
 
 @pytest.mark.parametrize(

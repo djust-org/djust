@@ -81,16 +81,15 @@ class DjustModelAdmin:
 
         A widget with no ``permission_required`` attribute is always
         visible. A string value is treated as a single perm; an
-        iterable is treated as a set of perms that are ALL required.
+        iterable is treated as a set of perms that are ALL required;
+        ``AnyOf(...)`` requires any one of them.
         """
         perm = getattr(widget_cls, "permission_required", None)
         if perm is None:
             return True
-        perms = (perm,) if isinstance(perm, str) else tuple(perm)
-        user = getattr(request, "user", None)
-        if user is None:
-            return False
-        return bool(user.has_perms(perms))
+        from djust.auth.any_of import user_has_permission_spec
+
+        return user_has_permission_spec(getattr(request, "user", None), perm)
 
     # Permissions
     #

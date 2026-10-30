@@ -20,7 +20,7 @@ Every LiveView template needs these two things:
 <!DOCTYPE html>
 <html>
 <head>
-    {% djust_client_config %}   {# Emits client config meta tags; auto-injects ~77 KB gz client JavaScript #}
+    {% djust_client_config %}   {# Emits client config meta tags; auto-injects ~80 KB gz client JavaScript #}
 </head>
 <body>
     <div dj-root>                    {# Reactive region — only this is diffed/patched #}
@@ -34,7 +34,7 @@ Every LiveView template needs these two things:
 | Attribute / Tag | Required | Description |
 |---|---|---|
 | `{% load live_tags %}` | Yes | Load djust template tag library |
-| `{% djust_client_config %}` | Yes | Emits client config meta tags; djust auto-injects the client JavaScript (~77 KB gz) into every LiveView response |
+| `{% djust_client_config %}` | Yes | Emits client config meta tags; djust auto-injects the client JavaScript (~80 KB gz) into every LiveView response |
 | `dj-view="myapp.views.CounterView"` | No | Injected automatically onto `<div dj-root>` for LiveView pages; set it by hand only for non-LiveView pages that embed a view |
 | `dj-root` | Yes | Marks the reactive subtree — only HTML inside is diffed |
 
@@ -230,6 +230,11 @@ dedupe semantics.
 <!-- Poll every 10 seconds -->
 <div dj-poll="refresh" dj-poll-interval="10000"></div>
 ```
+
+The poll can sit on the view's root element itself (`<div dj-root dj-poll="refresh">`); a
+live navigation gives the root the destination view's poll, or none. A poll inside a
+`{% live_render %}` child calls the child's handler; a poll inside a component calls the
+host view's. A poll stops when its element leaves the page.
 
 ### Submit Protection
 
@@ -700,6 +705,15 @@ register_tag_handler("hello", HelloTag())
 ```django
 {% hello "Alice" %}
 ```
+
+An inline handler may also define two optional methods that the parser calls once, at
+compilation, with the tag's arguments as the template wrote them (before anything is
+resolved): `validate_at_parse(args)` raises to refuse the template, and
+`rewrite_args_at_parse(args) -> list[str]` returns the argument list the tag keeps. Use
+the second when a handler must tell a positional argument from a keyword one: after
+resolution they are both just text, so `{% hello name %}` with `name = "k=v"` would look
+like the keyword `k`. djust's own components use it to name positional arguments after the
+Python tag's parameters (`djust/_positional_args.py`).
 
 Overhead is ~100–500 ns per call (PyO3 boundary). Built-in tags
 (`if`, `for`, `block`, …) stay in pure Rust with zero overhead. See

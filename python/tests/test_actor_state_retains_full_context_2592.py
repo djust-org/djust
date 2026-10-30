@@ -119,7 +119,11 @@ class TestActorMergeSitesAreDecided2592:
         runtime = (_PKG / "runtime.py").read_text()
         mount = runtime.index("result = await consumer.actor_handle.mount(")
         context = runtime.rindex(
-            "context_data = await sync_to_async(view.get_context_data)()", 0, mount
+            # Through the sync_turn_wrapper step (djust.sync_turn), still the
+            # full get_context_data().
+            'context_data = await sync_to_async(sync_step(view, "render", view.get_context_data))()',
+            0,
+            mount,
         )
         assert mount - context < 200, "the context is rendered right before the actor mount"
         assert "actor_handle.event(event_name, params)" in runtime

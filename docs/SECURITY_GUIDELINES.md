@@ -396,6 +396,7 @@ When reviewing PRs, check for these security issues:
 - [ ] New endpoints have CSRF protection (no unjustified `@csrf_exempt`)
 - [ ] No `|safe` filter used on user-controlled template variables
 - [ ] Components pass through SafeString detection (pre-rendered HTML not double-escaped)
+- [ ] A caller-supplied URL printed into `href`, `action`, `src` or `srcset` goes through `url_attr` / `safe_url` / `srcset_attr` in the Python tag AND the native handler AND any class-based twin; `make template-library-url-sweep` drives script-capable URLs through every parameter of every tag and component, in both engines
 
 ### JavaScript
 - [ ] innerHTML assignments reviewed for XSS

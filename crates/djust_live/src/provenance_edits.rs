@@ -66,22 +66,10 @@ pub fn normalize_provenance_whitespace(
     spans: Vec<(usize, usize)>,
     origins: Origins,
 ) -> Output {
-    let bytes = html.as_bytes();
-    let mut edits = Vec::new();
-    let mut i = 0;
-    while i < bytes.len() {
-        if matches!(bytes[i], b' ' | b'\t' | b'\n' | b'\r' | 12) {
-            let start = i;
-            while i < bytes.len() && matches!(bytes[i], b' ' | b'\t' | b'\n' | b'\r' | 12) {
-                i += 1;
-            }
-            if &html[start..i] != " " {
-                edits.push((start, i, " "));
-            }
-        } else {
-            i += 1;
-        }
-    }
+    let edits: Vec<_> = djust_core::html_whitespace::fold_whitespace_edits(html)
+        .into_iter()
+        .map(|(a, b)| (a, b, " "))
+        .collect();
     apply(html, &spans, &origins, &edits)
 }
 #[pyfunction]

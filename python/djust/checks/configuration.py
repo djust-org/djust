@@ -565,6 +565,7 @@ def _check_worker_threads(errors: list[CheckMessage]) -> None:
     ``None`` / ``False`` / ``0`` (stock), ``True`` / ``"auto"`` (one thread per
     CPU) or an ``int`` thread count (#3074). Anything else is treated as "off"
     at runtime, so a typo would silently keep the single shared thread.
+    ``LIVEVIEW_CONFIG['worker_pinning']`` must be ``True`` or ``False``.
     """
     from ..config import config
     from ..worker_pool import resolve_pool_size
@@ -587,6 +588,21 @@ def _check_worker_threads(errors: list[CheckMessage]) -> None:
                     "Set `LIVEVIEW_CONFIG['worker_threads']` to `True` (one thread per CPU), "
                     "an integer thread count, or remove it."
                 ),
+            )
+        )
+    pinning = config.get("worker_pinning", True)
+    if pinning is not True and pinning is not False:
+        errors.append(
+            DjustError(
+                "LIVEVIEW_CONFIG['worker_pinning'] must be True or False; got %s"
+                % repr(pinning)[:80],
+                hint=(
+                    "worker_pinning=False gives each WebSocket session a lane of the "
+                    "worker pool instead of a thread of its own. With an invalid value "
+                    "djust keeps the default: each session pinned to one thread."
+                ),
+                id="djust.C021",
+                fix_hint="Set `LIVEVIEW_CONFIG['worker_pinning']` to `True` or `False`, or remove it.",
             )
         )
 
@@ -655,6 +671,110 @@ def _check_ws_path(errors: list[CheckMessage]) -> None:
             fix_hint="Set `DJUST_WS_PATH` to a path such as `'/ws/live/'`, or remove it.",
         )
     )
+
+
+def _check_view_state_in_session(errors: list[CheckMessage]) -> None:
+    """C027 — ``LIVEVIEW_CONFIG['view_state_in_session']`` must be a bool.
+
+    Only ``False`` turns the session copy of view state off. Any other value
+    (``"false"``, ``0``, ``None``) keeps the default, so a typo would silently
+    keep writing view state into ``django_session``.
+    """
+    from ..config import config
+
+    if _is_check_suppressed("djust.C027"):
+        return
+    value = config.get("view_state_in_session", True)
+    if type(value) is bool:
+        return
+    errors.append(
+        DjustError(
+            "LIVEVIEW_CONFIG['view_state_in_session'] is %s; it must be True or False."
+            % repr(value)[:80],
+            hint=(
+                "Only False keeps view state out of the Django session. With any other "
+                "value djust keeps the default and saves each view's state in the session."
+            ),
+            id="djust.C027",
+            fix_hint=(
+                "Set `LIVEVIEW_CONFIG['view_state_in_session']` to `False` (stateless) "
+                "or `True`, or remove it."
+            ),
+        )
+    )
+
+
+def _check_http_fallback_background_timeout(errors: list[CheckMessage]) -> None:
+    """C028 — ``LIVEVIEW_CONFIG['http_fallback_background_timeout']`` is ``None`` or a number in (0, TIMEOUT_MAX].
+
+    Anything else (``"30"``, ``0``, ``True``, ``nan``) is read as no deadline,
+    so a typo would silently leave the page-POST fallback waiting on a task that
+    never returns (#3634).
+    """
+    from ..config import config, valid_http_fallback_background_timeout
+
+    if _is_check_suppressed("djust.C028"):
+        return
+    value = config.get("http_fallback_background_timeout")
+    if value is None or valid_http_fallback_background_timeout(value):
+        return
+    try:
+        shown = repr(value)[:80]
+    except ValueError:  # an int of more than 4300 digits has no repr
+        shown = "an integer with too many digits to show"
+    errors.append(
+        DjustError(
+            "LIVEVIEW_CONFIG['http_fallback_background_timeout'] is %s; it must be None or a "
+            "number of seconds greater than 0 and at most threading.TIMEOUT_MAX "
+            "(about 9.2e9)." % shown,
+            hint=(
+                "With any other value djust applies no deadline: a start_async task that does "
+                "not return holds the HTTP fallback POST open for as long as it runs. A value "
+                "above threading.TIMEOUT_MAX (the longest a thread can wait) is rejected, not "
+                "clamped."
+            ),
+            id="djust.C028",
+            fix_hint=(
+                "Set `LIVEVIEW_CONFIG['http_fallback_background_timeout']` to a number of "
+                "seconds such as `30`, or remove it."
+            ),
+        )
+    )
+
+
+def _check_liveview_middleware(errors: list[CheckMessage]) -> None:
+    """C026 — every ``LIVEVIEW_MIDDLEWARE`` entry is an importable ``async def`` (ADR-044).
+
+    The turn-middleware chain is built on the first turn; a bad entry would
+    otherwise fail every turn at runtime (each one raising
+    ``ImproperlyConfigured``). Sync middleware is not supported: it would
+    cost a thread hop on every turn.
+    """
+    from django.conf import settings
+    from django.core.exceptions import ImproperlyConfigured
+
+    from ..turns import resolve_middleware
+
+    if _is_check_suppressed("djust.C026"):
+        return
+    try:
+        resolve_middleware(getattr(settings, "LIVEVIEW_MIDDLEWARE", None))
+    except ImproperlyConfigured as exc:
+        errors.append(
+            DjustError(
+                str(exc),
+                hint=(
+                    "LIVEVIEW_MIDDLEWARE is a list of dotted paths to "
+                    "`async def mw(turn, next)` callables; every LiveView turn runs them."
+                ),
+                id="djust.C026",
+                fix_hint=(
+                    "Point each `LIVEVIEW_MIDDLEWARE` entry at an importable `async def "
+                    "mw(turn, next)` function that returns `await next(turn)` or a "
+                    "`djust.turns.Refuse` refusal."
+                ),
+            )
+        )
 
 
 def _check_unknown_extensions(errors: list) -> None:
@@ -1260,6 +1380,13 @@ def check_configuration(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
 
     # C025 -- DJUST_WS_PATH is not a root-relative path (#3186)
     _check_ws_path(errors)
+    _check_liveview_middleware(errors)
+
+    # C027 -- LIVEVIEW_CONFIG['view_state_in_session'] is not a bool
+    _check_view_state_in_session(errors)
+
+    # C028 -- LIVEVIEW_CONFIG['http_fallback_background_timeout'] is not None or a number > 0
+    _check_http_fallback_background_timeout(errors)
 
     # C005 -- WebSocket routes missing AuthMiddlewareStack
     # A001 -- WebSocket routes missing AllowedHostsOriginValidator (#659)
@@ -1320,20 +1447,20 @@ def check_configuration(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
                 if not has_origin_validator:
                     errors.append(
                         DjustError(
-                            "WebSocket routes are not wrapped in AllowedHostsOriginValidator; "
+                            "WebSocket routes are not wrapped in an Origin validator; "
                             "the app is vulnerable to Cross-Site WebSocket Hijacking (CSWSH).",
                             hint=(
                                 "Any cross-origin page on the internet can open a WebSocket "
                                 "connection to your app, mount any LiveView, and dispatch events "
                                 "from a victim browser. Wrap the WebSocket router in "
-                                "channels.security.websocket.AllowedHostsOriginValidator "
-                                "(DjustMiddlewareStack does this by default since #653). "
+                                "djust.routing.DjustOriginValidator, which compares the full "
+                                "origin (DjustMiddlewareStack does this by default). "
                                 "Prerequisite: settings.ALLOWED_HOSTS must not contain '*'."
                             ),
                             id="djust.A001",
                             fix_hint=(
                                 "Wrap your WebSocket router: "
-                                '"websocket": AllowedHostsOriginValidator(DjustMiddlewareStack(URLRouter(...))). '
+                                '"websocket": DjustOriginValidator(AuthMiddlewareStack(URLRouter(...))). '
                                 "Or update DjustMiddlewareStack — since djust 0.4.1 it wraps "
                                 "the origin validator by default."
                             ),

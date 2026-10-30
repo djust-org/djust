@@ -207,17 +207,6 @@ def render_html(rust_view: Any, source: str) -> str:
 def sub(pattern: Any, replacement: Any, html: str, flags: int = 0) -> str:
     if not isinstance(html, RenderedHTML):
         return re.sub(pattern, replacement, html, flags=flags)
-    if (
-        getattr(pattern, "pattern", pattern) == r"[ \t\n\r\f]+"
-        and replacement == " "
-        and not html.held
-    ):
-        from ._rust import normalize_provenance_whitespace
-
-        value, spans, origins = normalize_provenance_whitespace(
-            html, list(html.spans), list(html.origins)
-        )
-        return RenderedHTML(value, tuple(spans), origins=tuple(origins))
     parts, cursor = [], 0
     for match in re.finditer(pattern, html, flags):
         value = replacement(match) if callable(replacement) else match.expand(replacement)
@@ -228,6 +217,37 @@ def sub(pattern: Any, replacement: Any, html: str, flags: int = 0) -> str:
     if not parts:
         return html
     parts.append(html[cursor:])
+    return join(parts)
+
+
+def fold(html: str) -> str:
+    """Fold white space in markup and whitespace-only text to one space.
+
+    Text that has content keeps its white space, as Django renders it and as
+    the VDOM parser keeps it. The rule is
+    ``djust_core::html_whitespace::fold_whitespace_edits``, applied here on all
+    three shapes of page so they cannot fold different bytes.
+    """
+    from ._rust import fold_html_whitespace
+
+    if not isinstance(html, RenderedHTML):
+        return fold_html_whitespace(html)
+    if not html.held:
+        from ._rust import normalize_provenance_whitespace
+
+        value, spans, origins = normalize_provenance_whitespace(
+            html, list(html.spans), list(html.origins)
+        )
+        return RenderedHTML(value, tuple(spans), origins=tuple(origins))
+    from ._rust import fold_html_whitespace_edits
+
+    parts, cursor = [], 0
+    for start, end in fold_html_whitespace_edits(html):
+        parts.extend((html[html.char_offset(cursor) : html.char_offset(start)], " "))
+        cursor = end
+    if not parts:
+        return html
+    parts.append(html[html.char_offset(cursor) :])
     return join(parts)
 
 

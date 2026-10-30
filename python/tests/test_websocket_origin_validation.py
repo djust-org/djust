@@ -1,10 +1,13 @@
 """
 Tests for WebSocket Origin header validation (CSWSH defense, #653).
 
-`LiveViewConsumer.connect()` validates the ``Origin`` header against
-``settings.ALLOWED_HOSTS`` before accepting the handshake. Missing Origin is
-allowed (non-browser clients); disallowed origins are rejected with close
-code 4403.
+`LiveViewConsumer.connect()` refuses the handshake (close code 4403) unless
+the ``Origin`` is the socket's own origin — scheme from the handshake, host
+and port from its ``Host`` header, the host validated against
+``settings.ALLOWED_HOSTS`` — or a trusted one (``DJUST_ALLOWED_ORIGINS`` /
+``CSRF_TRUSTED_ORIGINS``). A missing Origin is refused unless
+``DJUST_ALLOW_MISSING_ORIGIN`` is True (the suite's conftest sets it). See
+``test_websocket_full_origin.py`` for the scheme/port/trusted-origin cases.
 """
 
 import pytest
@@ -12,6 +15,11 @@ from channels.testing import WebsocketCommunicator
 from django.test import override_settings
 
 from djust.websocket import LiveViewConsumer, _is_allowed_origin
+
+
+def _scope(host, secure=True):
+    """The handshake scope of a socket opened to ``host``."""
+    return {"scheme": "wss" if secure else "ws", "headers": [(b"host", host.encode("ascii"))]}
 
 
 # ---------------------------------------------------------------------------
@@ -22,118 +30,120 @@ from djust.websocket import LiveViewConsumer, _is_allowed_origin
 class TestIsAllowedOriginUnit:
     """Unit tests for ``djust.websocket._is_allowed_origin``."""
 
-    @override_settings(ALLOWED_HOSTS=["example.com"])
-    def test_missing_origin_allowed(self):
-        """Non-browser clients (no Origin header) are allowed."""
-        assert _is_allowed_origin(None) is True
-        assert _is_allowed_origin(b"") is True
+    @override_settings(ALLOWED_HOSTS=["example.com"], DJUST_ALLOW_MISSING_ORIGIN=False)
+    def test_missing_origin_rejected_by_default(self):
+        assert _is_allowed_origin(None, _scope("example.com")) is False
+        assert _is_allowed_origin(b"", _scope("example.com")) is False
+
+    @override_settings(ALLOWED_HOSTS=["example.com"], DJUST_ALLOW_MISSING_ORIGIN=True)
+    def test_missing_origin_allowed_with_opt_out(self):
+        assert _is_allowed_origin(None, _scope("example.com")) is True
+        assert _is_allowed_origin(b"", _scope("example.com")) is True
 
     @override_settings(ALLOWED_HOSTS=["example.com"])
     def test_matching_origin_allowed(self):
-        """Origin matching ALLOWED_HOSTS exactly is accepted."""
-        assert _is_allowed_origin(b"https://example.com") is True
-        assert _is_allowed_origin(b"http://example.com") is True
+        """The socket's own origin is accepted, over either scheme."""
+        assert _is_allowed_origin(b"https://example.com", _scope("example.com")) is True
+        assert _is_allowed_origin(b"http://example.com", _scope("example.com", False)) is True
 
     @override_settings(ALLOWED_HOSTS=["example.com"])
-    def test_matching_origin_with_port_allowed(self):
-        """Port is stripped from Origin before matching."""
-        assert _is_allowed_origin(b"https://example.com:8443") is True
-        assert _is_allowed_origin(b"http://example.com:8080") is True
+    def test_port_is_compared(self):
+        """The port is part of the origin; it is no longer stripped."""
+        assert _is_allowed_origin(b"https://example.com:8443", _scope("example.com:8443")) is True
+        assert _is_allowed_origin(b"https://example.com:8443", _scope("example.com")) is False
+        assert _is_allowed_origin(b"http://example.com:8080", _scope("example.com", False)) is False
+
+    @override_settings(ALLOWED_HOSTS=["example.com"])
+    def test_scheme_is_compared(self):
+        assert _is_allowed_origin(b"http://example.com", _scope("example.com")) is False
+        assert _is_allowed_origin(b"https://example.com", _scope("example.com", False)) is False
+
+    @override_settings(ALLOWED_HOSTS=["example.com"])
+    def test_no_scope_only_trusted_origins_match(self):
+        assert _is_allowed_origin(b"https://example.com") is False
 
     @override_settings(ALLOWED_HOSTS=["example.com"])
     def test_disallowed_origin_rejected(self):
         """Origin not in ALLOWED_HOSTS is rejected."""
-        assert _is_allowed_origin(b"https://evil.example") is False
-        assert _is_allowed_origin(b"https://attacker.com") is False
+        assert _is_allowed_origin(b"https://evil.example", _scope("example.com")) is False
+        assert _is_allowed_origin(b"https://attacker.com", _scope("example.com")) is False
 
     @override_settings(ALLOWED_HOSTS=["example.com"])
     def test_non_ascii_origin_rejected(self):
         """Binary / non-ASCII Origin bytes are rejected."""
-        assert _is_allowed_origin(b"\xff\xfe\xfd") is False
+        assert _is_allowed_origin(b"\xff\xfe\xfd", _scope("example.com")) is False
 
     @override_settings(ALLOWED_HOSTS=["example.com"])
     def test_null_origin_rejected(self):
         """`Origin: null` (sandboxed iframe, file://) is rejected."""
-        assert _is_allowed_origin(b"null") is False
+        assert _is_allowed_origin(b"null", _scope("example.com")) is False
 
     @override_settings(ALLOWED_HOSTS=["example.com"])
     def test_unparseable_origin_rejected(self):
-        """Garbage that urlparse can't resolve to a hostname is rejected."""
-        # No scheme, no host — urlparse returns hostname=None.
-        assert _is_allowed_origin(b"just-a-string") is False
+        assert _is_allowed_origin(b"just-a-string", _scope("example.com")) is False
 
     @override_settings(ALLOWED_HOSTS=["example.com"])
     def test_scheme_only_origin_rejected(self):
         """``https://`` with no host (scheme only) is rejected."""
-        # urlparse("https://").hostname is None, so we fall through to False.
-        assert _is_allowed_origin(b"https://") is False
-        assert _is_allowed_origin(b"http://") is False
+        assert _is_allowed_origin(b"https://", _scope("example.com")) is False
+        assert _is_allowed_origin(b"http://", _scope("example.com")) is False
 
     @override_settings(ALLOWED_HOSTS=["target.com"])
-    def test_userinfo_in_origin_not_exploitable(self):
-        """Userinfo in Origin does not smuggle a different host.
-
-        RFC 6454 §7 forbids browsers from serializing userinfo in the
-        ``Origin`` header, so a real browser never sends this. Even if an
-        attacker hand-crafts such an Origin outside a browser, urlparse
-        extracts the host portion ("target.com") — the userinfo
-        ("evil.example") is ignored, so the attacker's "claim" is still
-        "I am on target.com", which is what we check against ALLOWED_HOSTS.
-        Either way there is no cross-host authority gain.
-        """
-        # userinfo "evil.example" + host "target.com" -> host is target.com
-        assert _is_allowed_origin(b"https://evil.example@target.com/") is True
-        # userinfo "target.com" + host "evil.example" -> host is evil.example
-        assert _is_allowed_origin(b"https://target.com@evil.example/") is False
+    def test_userinfo_in_origin_rejected(self):
+        """RFC 6454 §7: a serialized origin carries no userinfo, so one that
+        does is not an origin at all."""
+        assert _is_allowed_origin(b"https://evil.example@target.com", _scope("target.com")) is False
+        assert _is_allowed_origin(b"https://target.com@evil.example", _scope("target.com")) is False
 
     @override_settings(ALLOWED_HOSTS=["target.com"])
     def test_subdomain_confusion_rejected(self):
         """``target.com.evil.com`` is NOT treated as ``target.com``."""
-        assert _is_allowed_origin(b"https://target.com.evil.com/") is False
-        assert _is_allowed_origin(b"https://evil.com.target.com/") is False
+        assert _is_allowed_origin(b"https://target.com.evil.com", _scope("target.com")) is False
+        assert _is_allowed_origin(b"https://evil.com.target.com", _scope("target.com")) is False
 
     @override_settings(ALLOWED_HOSTS=["*"])
-    def test_wildcard_allows_anything(self):
-        """`*` in ALLOWED_HOSTS allows any origin (matches Django HTTP semantics)."""
-        assert _is_allowed_origin(b"https://anywhere.evil") is True
-        assert _is_allowed_origin(b"https://literally-anything.test") is True
+    def test_wildcard_allowed_hosts_does_not_admit_other_origins(self):
+        """`*` admits any Host, so any same-origin socket, but a page on one
+        host still cannot open a socket to another."""
+        assert _is_allowed_origin(b"https://anywhere.test", _scope("anywhere.test")) is True
+        assert _is_allowed_origin(b"https://anywhere.evil", _scope("app.test")) is False
 
     @override_settings(ALLOWED_HOSTS=[".example.com"])
-    def test_subdomain_wildcard(self):
-        """`.example.com` allows example.com and any subdomain (Django semantics)."""
-        assert _is_allowed_origin(b"https://app.example.com") is True
-        assert _is_allowed_origin(b"https://api.example.com") is True
-        assert _is_allowed_origin(b"https://example.com") is True
-        assert _is_allowed_origin(b"https://evil.com") is False
+    def test_subdomain_allowed_hosts(self):
+        """`.example.com` admits the subdomains as hosts; each is its own origin."""
+        assert _is_allowed_origin(b"https://app.example.com", _scope("app.example.com")) is True
+        assert _is_allowed_origin(b"https://example.com", _scope("example.com")) is True
+        assert _is_allowed_origin(b"https://api.example.com", _scope("app.example.com")) is False
+        assert _is_allowed_origin(b"https://evil.com", _scope("evil.com")) is False
 
     @override_settings(ALLOWED_HOSTS=["example.com"])
     def test_case_insensitive_hostname(self):
         """Hostname matching is case-insensitive."""
-        assert _is_allowed_origin(b"https://EXAMPLE.com") is True
-        assert _is_allowed_origin(b"https://Example.COM") is True
+        assert _is_allowed_origin(b"https://EXAMPLE.com", _scope("example.com")) is True
+        assert _is_allowed_origin(b"https://example.com", _scope("Example.COM")) is True
 
     @override_settings(ALLOWED_HOSTS=["[::1]"])
     def test_ipv6_origin(self):
         """IPv6 origin with brackets matches an ipv6 entry in ALLOWED_HOSTS."""
-        assert _is_allowed_origin(b"https://[::1]:8080") is True
+        assert _is_allowed_origin(b"https://[::1]:8080", _scope("[::1]:8080")) is True
 
     @override_settings(ALLOWED_HOSTS=[], DEBUG=True)
     def test_empty_allowed_hosts_debug_mode_accepts_localhost(self):
         """In DEBUG with empty ALLOWED_HOSTS, fall back to localhost variants."""
-        assert _is_allowed_origin(b"https://localhost:8000") is True
-        assert _is_allowed_origin(b"http://127.0.0.1:8000") is True
-        assert _is_allowed_origin(b"https://evil.example") is False
+        assert _is_allowed_origin(b"https://localhost:8000", _scope("localhost:8000")) is True
+        assert _is_allowed_origin(b"http://127.0.0.1:8000", _scope("127.0.0.1:8000", False))
+        assert _is_allowed_origin(b"https://evil.example", _scope("evil.example")) is False
 
     @override_settings(ALLOWED_HOSTS=[], DEBUG=False)
     def test_empty_allowed_hosts_production_fails_closed(self):
         """In production with empty ALLOWED_HOSTS, reject any Origin."""
-        assert _is_allowed_origin(b"https://localhost") is False
-        assert _is_allowed_origin(b"https://example.com") is False
+        assert _is_allowed_origin(b"https://localhost", _scope("localhost")) is False
+        assert _is_allowed_origin(b"https://example.com", _scope("example.com")) is False
 
     @override_settings(ALLOWED_HOSTS=["example.com"])
-    def test_origin_with_path_stripped(self):
-        """URL path component is stripped before hostname comparison."""
-        assert _is_allowed_origin(b"https://example.com/some/path") is True
+    def test_origin_with_path_rejected(self):
+        """A serialized origin has no path."""
+        assert _is_allowed_origin(b"https://example.com/some/path", _scope("example.com")) is False
 
 
 # ---------------------------------------------------------------------------
@@ -160,9 +170,15 @@ class TestConnectOriginValidation:
     ``disconnect()`` and therefore do not trigger the cleanup path.
     """
 
-    async def _communicator(self, origin):
-        """Build a WebsocketCommunicator with (or without) an Origin header."""
-        headers = [(b"origin", origin)] if origin is not None else []
+    async def _communicator(self, origin, host=b"example.com"):
+        """A communicator opened to ``host`` with (or without) an Origin header.
+
+        The Channels test scope carries no scheme, so the socket's own origin
+        is ``http://<host>``.
+        """
+        headers = [(b"host", host)]
+        if origin is not None:
+            headers.append((b"origin", origin))
         return WebsocketCommunicator(
             LiveViewConsumer.as_asgi(),
             "/ws/",
@@ -170,9 +186,11 @@ class TestConnectOriginValidation:
         )
 
     @pytest.mark.django_db
-    @override_settings(ALLOWED_HOSTS=["example.com"])
-    async def test_connect_accepts_missing_origin(self):
-        """Non-browser clients (no Origin header) continue to work."""
+    # Not pytest-django's ``settings`` fixture: mixed with ``override_settings``
+    # its teardown restores the decorator's settings, leaking ALLOWED_HOSTS.
+    @override_settings(ALLOWED_HOSTS=["example.com"], DJUST_ALLOW_MISSING_ORIGIN=True)
+    async def test_connect_accepts_missing_origin_with_opt_out(self):
+        """Non-browser clients (no Origin header) work with the opt-out."""
         communicator = await self._communicator(None)
         connected, _ = await communicator.connect()
         assert connected is True
@@ -181,8 +199,8 @@ class TestConnectOriginValidation:
     @pytest.mark.django_db
     @override_settings(ALLOWED_HOSTS=["example.com"])
     async def test_connect_accepts_allowed_origin(self):
-        """Browser with Origin in ALLOWED_HOSTS is accepted."""
-        communicator = await self._communicator(b"https://example.com")
+        """A browser on the socket's own origin is accepted."""
+        communicator = await self._communicator(b"http://example.com")
         connected, _ = await communicator.connect()
         assert connected is True
         await communicator.disconnect()
@@ -190,8 +208,8 @@ class TestConnectOriginValidation:
     @pytest.mark.django_db
     @override_settings(ALLOWED_HOSTS=["example.com"])
     async def test_connect_accepts_allowed_origin_with_port(self):
-        """Origin with port matches ALLOWED_HOSTS host-only entry."""
-        communicator = await self._communicator(b"https://example.com:8443")
+        """The Origin's port must match the Host header's port."""
+        communicator = await self._communicator(b"http://example.com:8443", b"example.com:8443")
         connected, _ = await communicator.connect()
         assert connected is True
         await communicator.disconnect()
@@ -223,8 +241,8 @@ class TestConnectOriginValidation:
     @pytest.mark.django_db
     @override_settings(ALLOWED_HOSTS=["*"])
     async def test_connect_allows_wildcard_allowed_hosts(self):
-        """`*` in ALLOWED_HOSTS opens the door to any origin."""
-        communicator = await self._communicator(b"https://whatever.example")
+        """`*` in ALLOWED_HOSTS admits any host's own origin."""
+        communicator = await self._communicator(b"http://whatever.example", b"whatever.example")
         connected, _ = await communicator.connect()
         assert connected is True
         await communicator.disconnect()

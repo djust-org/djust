@@ -353,7 +353,10 @@ class TestRedisBackend:
         try:
             # Get worker ID for parallel test isolation
             worker_id = getattr(request.config, "workerinput", {}).get("workerid", "master")
-            key_prefix = f"djust:test:{worker_id}:"
+            # + pid: two pytest runs on one machine (a pre-push hook and a
+            # manual run) both have a `gw0` and share DB 15; without the pid,
+            # one run's cleanup deletes the other's keys.
+            key_prefix = f"djust:test:{worker_id}:{os.getpid()}:"
 
             backend = RedisStateBackend(
                 redis_url="redis://localhost:6379/15",  # Use DB 15 for testing
@@ -444,18 +447,23 @@ class TestRedisBackend:
         client = redis.from_url("redis://localhost:6379/15")
 
         view = RustLiveView("<div>test</div>")
-        redis_backend.set("ttl_key", view, ttl=1)  # 1 second TTL
+        redis_backend.set("ttl_key", view, ttl=2)
 
         # Key should exist immediately
         assert redis_backend.get("ttl_key") is not None
 
-        # Check Redis TTL (use worker-specific key prefix for parallel safety)
+        # Check the TTL in MILLISECONDS. `TTL` rounds to whole seconds, so a
+        # 1s key read back as 0 once ~500ms had passed — which a loaded
+        # `-n auto` run hit (`assert (0 > 0)`). PTTL has no rounding cliff.
         redis_key = f"{redis_backend.key_prefix}ttl_key"
-        ttl = client.ttl(redis_key)
-        assert ttl > 0 and ttl <= 1
+        pttl = client.pttl(redis_key)
+        assert 0 < pttl <= 2000, pttl
 
-        # Wait for expiration
-        time.sleep(1.5)
+        # Wait for expiration: poll instead of a fixed sleep, so a busy
+        # machine gets headroom and an idle one doesn't wait longer than needed.
+        deadline = time.monotonic() + 6
+        while redis_backend.get("ttl_key") is not None and time.monotonic() < deadline:
+            time.sleep(0.1)
 
         # Key should be gone
         assert redis_backend.get("ttl_key") is None

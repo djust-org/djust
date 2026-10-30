@@ -1,45 +1,51 @@
 name: 'djust Playwright server'
 description: >-
-  Set up Python + uv, build the djust Rust extension, install Playwright
-  (chromium), run Django migrations, and start the demo project's dev server
-  on :8002, waiting until it answers. Shared by the playwright-tests and
-  nav-hooks-guard jobs (#1752). The caller must `actions/checkout` first
-  (this is a local action) and is responsible for running its own test step,
-  uploading server.log on failure, and stopping the server.
+  Set up Python + uv, install the djust Rust extension the python-build job
+  compiled (no Rust build here), install Playwright (chromium), run Django
+  migrations, and start the demo project's dev server on :8002, waiting until
+  it answers. Shared by the playwright-tests, browser-smoke, nav-hooks-guard
+  and exposure-matrix jobs (#1752). The caller must `actions/checkout` first
+  (this is a local action), must `needs: python-build` so the wheel artifact
+  exists, and is responsible for running its own test step, uploading
+  server.log on failure, and stopping the server.
+
+inputs:
+  python-version:
+    description: Interpreter to run the demo under; python-build must have built a wheel for it.
+    default: '3.12'
 
 runs:
   using: composite
   steps:
     - name: Set up Python
+      id: python
       uses: actions/setup-python@v6
       with:
-        python-version: '3.12'
+        python-version: ${{ inputs.python-version }}
 
     - name: Install uv
       uses: astral-sh/setup-uv@v7
 
-    - name: Cache Python dependencies
-      uses: actions/cache@v5
+    # No .venv cache: virtualenvs hold interpreter-specific binaries, and the
+    # old restore-keys fallback (`python-`) could hand this job another job's
+    # venv. setup-uv caches the downloads, which is what made the sync fast.
+    - name: Download the prebuilt extension
+      uses: actions/download-artifact@v8
       with:
-        path: |
-          ~/.cache/uv
-          .venv
-        key: ${{ runner.os }}-python-playwright-${{ hashFiles('**/pyproject.toml', '**/uv.lock') }}
-        restore-keys: |
-          ${{ runner.os }}-python-playwright-
-          ${{ runner.os }}-python-
+        name: djust-wheel-py${{ inputs.python-version }}
+        path: ${{ runner.temp }}/djust-wheel
 
-    - name: Install Python dependencies
+    # `--no-install-project`: syncing the project itself compiles djust from
+    # source with no Rust cache (~2m), which is what this step used to do
+    # before `maturin develop` compiled it a second time. The wheel is built
+    # from this exact commit by python-build, so render-behavior guards still
+    # never test a stale extension (#1752).
+    - name: Install Python dependencies and prebuilt extension
       shell: bash
-      run: uv sync --extra dev
-
-    - name: Build package
-      # Force a fresh Rust-extension build so render-behavior guards never test a
-      # stale cached extension. The uv/.venv cache key is keyed on
-      # pyproject.toml/uv.lock only, so a crates/*.rs-only change would otherwise
-      # restore a previously-built djust. (#1752)
-      shell: bash
-      run: uv run maturin develop --release
+      run: |
+        # --python: .python-version says 3.12, which must not override the input.
+        uv sync --frozen --extra dev --no-install-project --python "${{ steps.python.outputs.python-path }}"
+        scripts/ci-install-prebuilt-djust.sh "$RUNNER_TEMP/djust-wheel"
 
     - name: Install Playwright
       shell: bash
@@ -51,7 +57,7 @@ runs:
       shell: bash
       run: |
         cd examples/demo_project
-        uv run python manage.py migrate --noinput
+        uv run --no-sync python manage.py migrate --noinput
         cd ../..
 
     - name: Start development server
@@ -60,7 +66,7 @@ runs:
         PYTHONPATH: .
       run: |
         cd examples/demo_project
-        nohup uv run python -m uvicorn demo_project.asgi:application \
+        nohup uv run --no-sync python -m uvicorn demo_project.asgi:application \
           --host 0.0.0.0 \
           --port 8002 \
           --log-level info \

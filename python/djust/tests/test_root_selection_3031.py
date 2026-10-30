@@ -26,6 +26,15 @@ declare an inner root, so Python/scanner now agree with browser/html5ever semant
 This file checks the Python locator and the Rust VDOM against it; the Rust text
 scanner is checked against the same file by ``cargo test -p djust_live``
 (``dj_root_selection_3031``).
+
+Since the rendered-HTML root is located by the Rust scanner alone
+(``djust._rust.root_content_range`` / ``root_element_span``), the Python
+locator (``_search_dj_root_open``) reads template SOURCE only. Where rendered
+bytes could be read two ways the corpus follows html5ever: ``{% if %}`` text is
+text, a ``<body>`` tag anywhere adds its attributes to the one body element,
+and a ``<`` or quote inside a tag is part of the name or value. ``diverges``
+lists ``python`` for those, as the template-source locator still reads
+``{% %}`` as branches and masks parse errors.
 """
 
 from __future__ import annotations
@@ -38,8 +47,8 @@ import pytest
 from django.test import override_settings
 
 from djust import LiveView
-from djust._rust import RustLiveView
-from djust.mixins.template import _DJ_ROOT_RE, _DJ_VIEW_RE, _find_root_close, _search_dj_root_open
+from djust._rust import RustLiveView, root_content_range, root_element_span
+from djust.mixins.template import _DJ_ROOT_RE, _DJ_VIEW_RE, _search_dj_root_open
 
 _CORPUS = json.loads(
     (Path(__file__).resolve().parents[2] / "tests/fixtures/root_selection_3031.json").read_text()
@@ -51,6 +60,11 @@ _MARK = "data-expect-root"
 def _python_root(html: str):
     m = _search_dj_root_open(html, _DJ_ROOT_RE, _DJ_VIEW_RE)
     return None if m is None else html[m.start() : m.end()]
+
+
+def _scanner_root(html: str):
+    span = root_element_span(html)
+    return None if span is None else html[span[0] : span[1]]
 
 
 def _vdom_root_open_tag(html: str):
@@ -70,6 +84,16 @@ def test_python_locator_picks_the_corpus_root(case):
     tag = _python_root(case["html"])
     if "python" in case.get("diverges", ()):
         # A known leftover that predates #3031: pinned so a change is noticed.
+        assert not _picks_expected(tag, case), (case["why"], tag)
+    else:
+        assert _picks_expected(tag, case), (case["why"], tag)
+
+
+@pytest.mark.parametrize("case", _CORPUS, ids=_IDS)
+def test_rendered_html_locator_picks_the_corpus_root(case):
+    """The Rust scanner, as Python calls it for rendered HTML."""
+    tag = _scanner_root(case["html"])
+    if "scanner" in case.get("diverges", ()):
         assert not _picks_expected(tag, case), (case["why"], tag)
     else:
         assert _picks_expected(tag, case), (case["why"], tag)
@@ -104,15 +128,18 @@ def test_python_and_rust_agree_on_every_corpus_page(case):
 
 
 @pytest.mark.parametrize("case", [c for c in _CORPUS if "content" in c], ids=lambda c: c["name"])
-def test_corpus_root_content_requires_a_complete_end_token(case):
+def test_corpus_root_content(case):
+    """The rendered-HTML root's content, as ``_extract_liveview_content`` sends
+    it; ``None`` without a complete close tag (the whole page is kept)."""
     html = case["html"]
-    opening = _search_dj_root_open(html, _DJ_ROOT_RE, _DJ_VIEW_RE)
-    assert opening is not None
-    start, end = _find_root_close(html, opening)
+    span = root_content_range(html)
     if case["content"] is None:
-        assert (start, end) == (None, None)
+        assert span is None
+        assert LiveView()._extract_liveview_content(html) == html
     else:
-        assert html[opening.end() : start] == case["content"]
+        assert span is not None
+        assert html[span[0] : span[1]] == case["content"]
+        assert LiveView()._extract_liveview_content(html) == case["content"]
 
 
 class TestIssue3031Scenario:

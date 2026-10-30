@@ -21,7 +21,7 @@ JavaScript to write, no bundler, and no build step in your project.
 from djust import LiveView, event_handler
 
 class CounterView(LiveView):
-    template_string = """
+    template = """
     <div dj-root>
         <h1>Count: {{ count }}</h1>
         <button dj-click="increment">+</button>
@@ -46,7 +46,7 @@ class CounterView(LiveView):
 - **One codebase.** Views, state and event handlers are Python. No API layer, no frontend build.
 - **Small wire traffic.** A Rust virtual DOM diffs each render and sends only the changed patches.
 - **Fast templates.** A Rust template engine renders Django templates 7–11x faster on variable- and filter-heavy pages ([Performance](#performance)).
-- **Tiny client.** ~77 KB gzipped runtime, injected automatically. Nothing to bundle.
+- **Tiny client.** ~80 KB gzipped runtime, injected automatically. Nothing to bundle.
 - **Django all the way down.** Your templates, forms, auth, permissions and ORM work as they are, with CSRF, escaping and per-view authorization built in.
 - **Resilient transport.** WebSocket with automatic reconnection and an HTTP fallback.
 
@@ -80,15 +80,20 @@ CHANNEL_LAYERS = {"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}
 ```python
 import os
 from django.core.asgi import get_asgi_application
+
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "myproject.settings")
+django_asgi_app = get_asgi_application()  # sets Django up before the imports below
+
+from django.contrib.staticfiles.handlers import ASGIStaticFilesHandler
+from django.urls import path
 from channels.routing import ProtocolTypeRouter, URLRouter
 from channels.auth import AuthMiddlewareStack
 from djust.websocket import LiveViewConsumer
-from django.urls import path
-
-os.environ.setdefault("DJANGO_SETTINGS_MODULE", "myproject.settings")
 
 application = ProtocolTypeRouter({
-    "http": get_asgi_application(),
+    # ASGIStaticFilesHandler serves /static/ (djust's client.js included)
+    # under uvicorn or daphne in development, as runserver would.
+    "http": ASGIStaticFilesHandler(django_asgi_app),
     "websocket": AuthMiddlewareStack(
         URLRouter([path("ws/live/", LiveViewConsumer.as_asgi())])
     ),
@@ -233,7 +238,7 @@ examples live in [examples/demo_project](examples/demo_project).
 ## Architecture
 
 ```
-Browser        client runtime (~77 KB gz) ── events up, patches down
+Browser        client runtime (~80 KB gz) ── events up, patches down
    ↕ WebSocket (or HTTP fallback)
 Django         LiveView classes, event handlers, state (Python, Channels)
    ↕ PyO3

@@ -124,8 +124,12 @@ class ModelBindingMixin:
         if rust_view is None:
             self._dj_model_fields = frozenset()
             return
+        from .._render_caches import render_caches_enabled
+
         try:
-            fields = rust_view.dj_model_fields()
+            # Kept per template source while templates are cached (N-39): the
+            # walk covers every include and was a third of a page's CPU.
+            fields = rust_view.dj_model_fields(cache=render_caches_enabled())
         except Exception:  # noqa: BLE001 — never let allowlist collection break a render
             # Fail closed: leave no auto-allowed fields (explicit
             # allowed_model_fields still applies).

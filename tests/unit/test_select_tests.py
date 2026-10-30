@@ -122,12 +122,59 @@ def test_a_manual_only_test_dirs_are_never_selected():
     # `tests/playwright/` file in the "existing tests" set — the realistic
     # shape (unlike a test that force-injects the path into `tests=`, which
     # would make rule (b) select it via its own basename trivially matching
-    # its own stem). Changing ONLY such a file, with no other test file
-    # depending on it, safely falls back to the full suite (the existing
-    # "empty selection" invariant) rather than ever naming the manual file.
+    # its own stem). Changing ONLY such a file, with no pytest test naming it,
+    # selects NO pytest tests (NONE) — never the manual file itself, and no
+    # longer the whole suite: its own CI job is what runs it.
     path = "tests/playwright/test_table_select.py"
     sel = _select([path])
     assert path not in sel.tests
+    assert not sel.full and sel.tests == [], sel.reason
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "tests/playwright/test_combobox_escape_blur.py",
+        "tests/playwright/conftest_helpers.py",
+        "tests/js/dj_flip.test.js",
+        "changelog.d/3590.fixed.md",
+    ],
+)
+def test_no_pytest_consumer_paths_do_not_force_full(path):
+    # A Playwright/JS test or a changelog fragment changed alongside a module
+    # must not escalate the push to all ~49k tests ("shared package/test
+    # support" fired for tests/playwright/*.py because is_test_file excludes
+    # that dir). The module's own tests are still selected.
+    sel = _select(["python/djust/forms.py", path])
+    assert not sel.full, sel.reason
+    assert sel.tests == ["tests/unit/test_forms.py"]
+
+
+def test_only_no_pytest_consumer_paths_select_none():
+    sel = _select(["tests/playwright/test_transient_save_recovery.py", "changelog.d/3590.fixed.md"])
+    assert not sel.full, sel.reason
+    assert sel.tests == []
+    assert "no pytest consumer" in sel.reason
+
+
+def test_a_pytest_test_naming_a_no_consumer_path_is_still_selected():
+    # Rule (c) still applies: a pytest pin that reads a Playwright file by name
+    # must run when that file changes.
+    pin = "tests/unit/test_playwright_inventory.py"
+    sel = _select(
+        ["tests/playwright/test_table_select.py"],
+        tests=[*TESTS, pin],
+        texts={**TEXTS, pin: 'PATHS = ["tests/playwright/test_table_select.py"]\n'},
+    )
+    assert not sel.full, sel.reason
+    assert sel.tests == [pin]
+
+
+def test_no_consumer_paths_do_not_mask_an_unmapped_change():
+    # Only the no-consumer paths are exempt: an unmapped doc change next to one
+    # still means "cannot tell" -> FULL.
+    sel = _select(["changelog.d/3590.fixed.md", "docs/website/guides/loading-states.md"])
+    assert sel.full
 
 
 # --------------------------------------------------------------------------
@@ -467,3 +514,106 @@ def test_shared_dependency_and_demo_settings_require_full_even_with_a_pin(path):
     sel = _select([path], tests=[test], texts={test: repr(path)})
     assert sel.full
     assert path in sel.reason
+
+
+# --------------------------------------------------------------------------
+# DJUST_PREPUSH_TARGETED=1: direct selection instead of a blast-radius FULL
+# --------------------------------------------------------------------------
+
+
+def test_targeted_trades_transitive_impact_for_the_direct_selection():
+    texts = {**TEXTS, "python/djust/consumer.py": "from djust.forms import FormMixin"}
+    kwargs = dict(all_modules=["python/djust/consumer.py"])
+    default = st.select_tests(["python/djust/forms.py"], TESTS, texts.__getitem__, **kwargs)
+    targeted = st.select_tests(
+        ["python/djust/forms.py"], TESTS, texts.__getitem__, targeted=True, **kwargs
+    )
+    assert default.full and "transitive impact" in default.reason
+    assert not targeted.full
+    assert targeted.tests == ["tests/unit/test_forms.py"]
+    assert "DJUST_PREPUSH_TARGETED=1" in targeted.reason
+    assert "consumer.py imports djust.forms (transitive impact)" in targeted.reason
+
+
+@pytest.mark.parametrize(
+    "path, test, text",
+    [
+        (
+            "python/djust/live_view.py",
+            "tests/unit/test_pin.py",
+            "from djust.live_view import LiveView",
+        ),
+        ("python/djust/websocket.py", "python/djust/tests/test_websocket_mount.py", None),
+        ("crates/djust_templates/src/renderer.rs", "python/tests/test_renderer_pins.py", None),
+        ("python/djust/mixins/__init__.py", "tests/unit/test_pin.py", "import djust.mixins"),
+        ("python/djust/state_backends/base.py", "tests/unit/test_pin.py", "'base.py'"),
+    ],
+)
+def test_targeted_trades_a_blast_radius_path_for_its_direct_consumers(path, test, text):
+    tests, texts = TESTS, TEXTS
+    if text is not None:
+        tests, texts = [test], {test: text}
+    assert _select([path], tests=tests, texts=texts).full
+    sel = st.select_tests([path], tests, texts.__getitem__, "feat/x", targeted=True)
+    assert not sel.full, sel.reason
+    assert test in sel.tests
+    assert "direct selection instead of FULL for: %s changed" % path in sel.reason
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "pyproject.toml",
+        "scripts/pre-push-pytest.sh",
+        "scripts/select-tests.py",
+        "python/tests/conftest.py",
+        "tests/corpus_shards.py",
+        ".github/workflows/test.yml",
+    ],
+)
+def test_targeted_keeps_full_for_the_harness(path):
+    test = "tests/unit/test_pin.py"
+    sel = st.select_tests([path], [test], {test: repr(path)}.__getitem__, "feat/x", targeted=True)
+    assert sel.full
+    assert path in sel.reason
+
+
+def test_targeted_keeps_full_for_the_branch_rule_and_unclassified_paths():
+    sel = st.select_tests(
+        ["python/djust/live_view.py"], TESTS, TEXTS.__getitem__, "feat/routing-flip", targeted=True
+    )
+    assert sel.full and "branch name" in sel.reason
+    sel = st.select_tests(
+        ["python/djust/websocket.py", "docs/unknown.md"],
+        TESTS,
+        TEXTS.__getitem__,
+        "feat/x",
+        targeted=True,
+    )
+    assert sel.full and "unclassified" in sel.reason and "docs/unknown.md" in sel.reason
+
+
+def test_targeted_with_an_empty_direct_selection_is_still_full():
+    sel = st.select_tests(
+        ["crates/djust_core/src/value.rs"], TESTS, TEXTS.__getitem__, "feat/x", targeted=True
+    )
+    assert sel.full
+    assert "selection is empty" in sel.reason
+
+
+def test_targeted_cli_reads_the_environment_and_prints_the_reason(monkeypatch, capsys):
+    monkeypatch.setenv("DJUST_PREPUSH_TARGETED", "1")
+    seen = {}
+
+    def fake_select(*args, **kwargs):
+        seen.update(kwargs)
+        return st.Selection(False, "1 test file(s) selected; DJUST_PREPUSH_TARGETED=1: x", ["t.py"])
+
+    monkeypatch.setattr(st, "select_tests", fake_select)
+    monkeypatch.setattr(st, "_range", lambda a, b: ("origin/main", "HEAD"))
+    monkeypatch.setattr(st, "_changed_files", lambda a, b: ["python/djust/live_view.py"])
+    assert st.main(["--branch", "feat/x"]) == 0
+    out = capsys.readouterr()
+    assert seen["targeted"] is True
+    assert out.out.strip() == "t.py"
+    assert "DJUST_PREPUSH_TARGETED=1" in out.err

@@ -61,8 +61,9 @@ class ChatView(LiveView):
         self.is_streaming = False
 ```
 
-`mount()` must be a plain `def`. djust calls it synchronously, so an
-`async def mount` never runs its body (HTTP) or raises `TypeError` (WebSocket).
+`mount()` may be a plain `def` or an `async def`. An `async def mount` is
+awaited on the event loop over the socket and run to completion on the HTTP
+render; see [`mount()`](../api-reference/liveview.md#mountrequest-kwargs).
 
 ### 2. Add Stream Targets in Your Template
 

@@ -165,14 +165,16 @@ def mount_http_lazy(parent: Any, request: Any, view_id: str) -> Any:
         return None
     from .hooks import run_on_mount_hooks
     from .serialization import decode_state_roundtrip
-    from .security import safe_setattr
+    from ._state_restore import restore_public_state
 
     child = entry.child_class()
     mark_embedded(child)
     child.request = request
     if run_pre_mount_auth(child, request) is not None or run_on_mount_hooks(child, request):
         raise PermissionDenied("Lazy view refused")
-    child.mount(request)
+    from ._view_hooks import call_hook_sync
+
+    call_hook_sync(child.mount, request)
     child._snapshot_user_private_attrs()
     child._djust_slot_target = view_id
     enforce_object_permission(child, request)
@@ -184,8 +186,7 @@ def mount_http_lazy(parent: Any, request: Any, view_id: str) -> Any:
     ):
         raise PermissionDenied("Lazy view has no resolved tenant")
     saved = request.session.get(entry.state_key, {})
-    for key, value in decode_state_roundtrip(saved.get("public", {})).items():
-        safe_setattr(child, key, value, allow_private=False)
+    restore_public_state(child, decode_state_roundtrip(saved.get("public", {})))
     child._restore_private_state(decode_state_roundtrip(saved.get("private", {})))
     if snapshot_tenant_scope(child) != entry.child_tenant:
         raise PermissionDenied("Lazy view changed tenant")
@@ -200,7 +201,7 @@ def save_http_lazy(parent: Any, request: Any, view_id: str, child: Any) -> None:
     if entry is None:
         return
     from .components.base import is_component_collection, LiveComponent
-    from .mixins.context import legacy_render_only_keys
+    from .mixins.context import legacy_unsaved_keys
     from .serialization import normalize_django_value
     from ._tenant_state import refresh_other_views_state
 
@@ -209,7 +210,7 @@ def save_http_lazy(parent: Any, request: Any, view_id: str, child: Any) -> None:
 
     gcd = child.get_context_data
     context = async_to_sync(gcd)() if inspect.iscoroutinefunction(gcd) else gcd()
-    excluded = legacy_render_only_keys(child) | {"streams"}
+    excluded = legacy_unsaved_keys(child, context) | {"streams"}
     public = {
         k: v
         for k, v in context.items()

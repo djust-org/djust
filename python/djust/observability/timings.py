@@ -1,9 +1,12 @@
 """
-Per-handler timing samples + aggregation.
+Per-handler and per-turn timing samples + aggregation.
 
-Populated by LiveViewConsumer at every handler invocation (sync or
-async, view-level or component-level). The MCP reads aggregated
-percentiles via /_djust/observability/handler_timings/.
+Handler samples are populated by LiveViewConsumer at every handler
+invocation (sync or async, view-level or component-level). Turn samples
+are populated by ``djust.turns.run_turn`` for every turn (ADR-044 D9): one
+sample per (kind, source, transport, view class). The MCP reads aggregated
+percentiles via /_djust/observability/handler_timings/ and
+/_djust/observability/turn_timings/.
 """
 
 from __future__ import annotations
@@ -29,6 +32,23 @@ def record_handler_timing(view_class: str, handler_name: str, duration_ms: float
     ts = int(time.time() * 1000)
     with _lock:
         _samples[(view_class, handler_name)].append((ts, float(duration_ms)))
+
+
+# Map (kind, source, transport, view_class) -> deque of (timestamp_ms, duration_ms).
+_turn_samples: "defaultdict[Tuple[str, str, str, str], deque[Tuple[int, float]]]" = defaultdict(
+    lambda: deque(maxlen=_MAX_SAMPLES_PER_HANDLER)
+)
+
+
+def record_turn_timing(
+    kind: str, source: str, transport: str, view_class: str, duration_ms: float
+) -> None:
+    """Push one turn's duration (middleware + turn body) onto the rolling window."""
+    import time
+
+    ts = int(time.time() * 1000)
+    with _lock:
+        _turn_samples[(kind, source, transport, view_class)].append((ts, float(duration_ms)))
 
 
 def _percentile(values: List[float], pct: float) -> float:
@@ -88,6 +108,45 @@ def get_timing_stats(
     return rows
 
 
+def get_turn_timing_stats(
+    kind: Optional[str] = None,
+    since_ms: Optional[int] = None,
+) -> List[Dict[str, Any]]:
+    """Aggregate turn samples into one row per (kind, source, transport, view class).
+
+    Args:
+        kind: If set, only rows for this turn kind (``"event"``, ``"push"``, ...).
+        since_ms: If set, only include samples with timestamp > since_ms.
+    """
+    with _lock:
+        snapshot = {k: list(v) for k, v in _turn_samples.items()}
+
+    rows: List[Dict[str, Any]] = []
+    for (t_kind, source, transport, view_class), sample_list in snapshot.items():
+        if kind and t_kind != kind:
+            continue
+        durations = [d for (ts, d) in sample_list if since_ms is None or ts > since_ms]
+        if not durations:
+            continue
+        rows.append(
+            {
+                "kind": t_kind,
+                "source": source,
+                "transport": transport,
+                "view_class": view_class,
+                "count": len(durations),
+                "min_ms": +round(min(durations), 3),
+                "max_ms": +round(max(durations), 3),
+                "avg_ms": +round(statistics.fmean(durations), 3),
+                "p50_ms": +round(_percentile(durations, 50), 3),
+                "p90_ms": +round(_percentile(durations, 90), 3),
+                "p99_ms": +round(_percentile(durations, 99), 3),
+            }
+        )
+    rows.sort(key=lambda r: r["p90_ms"], reverse=True)
+    return rows
+
+
 def get_sample_total() -> int:
     """Total samples across all handlers. Diagnostic helper."""
     with _lock:
@@ -98,3 +157,4 @@ def _clear_timings() -> None:
     """Test-only reset."""
     with _lock:
         _samples.clear()
+        _turn_samples.clear()

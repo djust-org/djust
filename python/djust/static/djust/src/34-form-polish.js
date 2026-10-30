@@ -83,9 +83,10 @@ function _installFormPolishListeners() {
         // ``dj-trigger-action`` attribute is the explicit author opt-in that
         // limits the blast radius. Do NOT simplify this check away.
         if (!form.hasAttribute('dj-trigger-action')) {
-            if (globalThis.djustDebug) {
-                djLog('[form-polish] refusing to submit form without dj-trigger-action:', form);
-            }
+            // Said outside debug too: the server asked for this submit, so a
+            // missing opt-in is an author error that otherwise fails silently
+            // (a sign-out menu item that does nothing).
+            console.warn('[djust] trigger_submit(%s): the form lacks dj-trigger-action, so it was not submitted.', selector);
             return;
         }
         // Native submit — triggers the browser's normal POST flow, bypassing

@@ -103,6 +103,17 @@ class LiveViewConfig:
         # "auto" = one thread per available CPU (max 32); an int = that many
         # threads. Each session stays on one thread. See djust.worker_pool.
         "worker_threads": None,
+        # A context manager factory ``wrapper(view, step, turn)`` (or its
+        # dotted path) entered on the thread around each sync step djust runs
+        # for a view: handler, mount, handle_params, start_async callback,
+        # get_context_data. None (default) = no wrapper. See djust.sync_turn.
+        "sync_turn_wrapper": None,
+        # With worker_threads on: True (default) pins each WebSocket session to
+        # one pool thread; False gives it a lane, its calls one at a time and
+        # in order on any free thread of the pool, so a slow hop of one session
+        # no longer holds up the sessions sharing its thread. See
+        # djust.worker_pool._Lane.
+        "worker_pinning": True,
         # Maximum incoming WebSocket message size in bytes (0 = no limit)
         "max_message_size": 65536,  # 64KB
         # How many views one WebSocket may host besides the page view: the
@@ -234,6 +245,32 @@ class LiveViewConfig:
         # after a streak of low-hit renders (#3071; see
         # RustBridgeMixin._LOOP_CACHE_BYPASS_AFTER).
         "loop_render_cache_enabled": True,
+        # Whether a view on the default (legacy) state policy keeps its state
+        # in the Django session between requests: the ``liveview_<path>`` key
+        # and its ``__private`` / ``__private_unsaved`` / ``_components``
+        # siblings. ``True`` (default) is the long-standing behaviour. ``False``
+        # makes djust stateless on that path: the first GET, every HTTP
+        # fallback POST and every WebSocket / SSE turn neither write nor read
+        # those keys, so each fallback POST runs ``mount()`` again before it
+        # applies the event, and a socket mount never restores from the
+        # session (the signed client ``state_snapshot`` of a view with
+        # ``enable_state_snapshot`` is not in the session and still works).
+        # State that only lives on the
+        # view (a "load more" offset, a form draft) resets on each fallback
+        # POST. Must be a bool (system check ``djust.C027``).
+        "view_state_in_session": True,
+        # Seconds one page-POST fallback request waits, in total, for the
+        # ``start_async`` / ``@background`` work it runs before answering
+        # (#3634). ``None`` (default) = no deadline: a task that does not return
+        # holds the POST open for as long as it runs, and a sync callback runs
+        # on the request thread. A positive number runs each task on a worker
+        # thread the request does not join; when the budget is spent the
+        # fallback stops waiting, cancels an ``async def`` callback, hands
+        # ``handle_async_result`` a ``TimeoutError`` and answers. A sync
+        # callback cannot be cancelled: it keeps running, abandoned. Anything
+        # that is not a number from above 0 up to ``threading.TIMEOUT_MAX`` means
+        # no deadline (system check ``djust.C028``). Does not touch the socket or SSE transports.
+        "http_fallback_background_timeout": None,
         # `[dj-virtual]` keyed splice ops in the VDOM differ (ADR-026, #2017
         # items 2-4). A windowed list holds off-window rows DETACHED, so the
         # index-addressed ops the differ normally emits are meaningless for it:
@@ -828,6 +865,58 @@ def get_djust_config() -> Dict[str, Any]:
         return result
     except Exception:
         return {}
+
+
+def view_state_in_session() -> bool:
+    """Whether legacy view state is kept in the Django session.
+
+    The single reader of ``LIVEVIEW_CONFIG['view_state_in_session']`` (also
+    read from ``DJUST_CONFIG``). Only ``False`` turns it off; any other value
+    keeps the default, and system check ``djust.C027`` reports a value that is
+    not a bool. A config read that raises keeps the default.
+    """
+    try:
+        return get_config().get("view_state_in_session", True) is not False
+    except Exception:  # pragma: no cover - defensive
+        logger.debug("[djust] view_state_in_session read failed; keeping the default")
+        return True
+
+
+def valid_http_fallback_background_timeout(value: Any) -> bool:
+    """Whether ``value`` is a usable ``http_fallback_background_timeout``.
+
+    A number of seconds greater than 0 and at most ``threading.TIMEOUT_MAX``
+    (about 9.2e9, nearly three centuries: the longest a thread can wait, so a
+    larger value could never be waited on and is rejected, not clamped). A bool
+    is not a number here (``True`` would read as one second). Total: any value,
+    however odd (a huge int, ``nan``, a container), answers ``False`` instead of
+    raising.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    try:
+        # An int is compared exactly (no float conversion, so 10**400 is fine);
+        # ``nan`` fails both comparisons.
+        return bool(0 < value <= threading.TIMEOUT_MAX)
+    except (OverflowError, TypeError, ValueError):  # pragma: no cover - defensive
+        return False
+
+
+def http_fallback_background_timeout() -> Optional[float]:
+    """The deadline, in seconds, for background work on the page-POST fallback.
+
+    The single reader of ``LIVEVIEW_CONFIG['http_fallback_background_timeout']``
+    (also read from ``DJUST_CONFIG``). ``None`` means no deadline, which is also
+    what any value that is not a number from above 0 up to
+    ``threading.TIMEOUT_MAX`` means; system check ``djust.C028`` reports such a
+    value. A config read that raises means no deadline.
+    """
+    try:
+        value = get_config().get("http_fallback_background_timeout")
+        return float(value) if valid_http_fallback_background_timeout(value) else None
+    except Exception:  # pragma: no cover - defensive
+        logger.debug("[djust] http_fallback_background_timeout read failed; no deadline")
+        return None
 
 
 def template_auto_call_enabled() -> bool:

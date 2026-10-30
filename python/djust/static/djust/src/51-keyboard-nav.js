@@ -9,7 +9,15 @@
 //   - Modal / dialog  — focus trap (Tab / Shift+Tab wrap) + Esc-to-close.
 //   - Tablist         — ArrowLeft/Right roving tabindex + Home/End.
 //   - Accordion       — ArrowUp/Down focus movement + Home/End.
-//   - Dropdown menu   — ArrowUp/Down roving + Home/End + Esc-to-close.
+//   - Dropdown menu   — ArrowUp/Down roving + Home/End + type-ahead +
+//                       Esc-to-close, for both `{% dropdown %}` (.dj-dropdown)
+//                       and `{% dropdown_menu %}` (.dj-dropdown-menu), over
+//                       menuitem / menuitemradio / menuitemcheckbox items.
+//
+// A native `<dialog>` modal (`{% modal native=True %}`) opened with
+// showModal() keeps the browser's own Escape (cancel → close, which
+// 35-dj-dialog.js reports to the server); the focus trap and return focus
+// apply to it as to the <div> modal.
 //
 // CSP-strict (Action #183): one delegated `keydown` listener on `document`
 // — no inline <script>, no inline handlers. Delegation survives morphdom
@@ -36,9 +44,19 @@
     // Each entry: { el: <dialog element>, returnFocus: <element|null> }.
     const _dialogStack = [];
 
+    // The last element focused outside any dialog. A native <dialog> may
+    // already hold focus when the presence observer sees it (showModal()
+    // moves focus in), so this, not activeElement, is where focus returns.
+    let _lastOutsideFocus = null;
+
     // -----------------------------------------------------------------------
     // Helpers
     // -----------------------------------------------------------------------
+
+    // An open native <dialog> shown with showModal(): the browser owns Escape.
+    function _isNativeModal(el) {
+        return !!el && el.tagName === 'DIALOG' && el.open === true;
+    }
 
     function _isDialog(el) {
         if (!el || el.nodeType !== 1) return false;
@@ -215,6 +233,30 @@
         return false;
     }
 
+    // WAI-ARIA tabs: focus entering a tab list lands on the SELECTED tab.
+    // The arrow keys move the Tab stop to the tab they focus; once focus
+    // leaves the list, give the stop back to the selected tab, so Tab and
+    // Shift+Tab into the list find it again. A list with no selected tab keeps
+    // whatever stop it has.
+    function _onTablistFocusOut(e) {
+        const tab = e.target && e.target.closest && e.target.closest('[role="tab"]');
+        if (!tab) return;
+        const tablist = tab.closest('[role="tablist"]');
+        if (!tablist) return;
+        const next = e.relatedTarget;
+        if (next && tablist.contains(next)) return;
+        const tabs = Array.prototype.slice.call(
+            tablist.querySelectorAll('[role="tab"]')
+        );
+        const selected = tabs.filter(function (el) {
+            return el.getAttribute('aria-selected') === 'true';
+        })[0];
+        if (!selected) return;
+        tabs.forEach(function (el) {
+            el.setAttribute('tabindex', el === selected ? '0' : '-1');
+        });
+    }
+
     function _handleAccordion(accordion, target, e) {
         const triggers = Array.prototype.slice.call(
             accordion.querySelectorAll('.dj-accordion__trigger')
@@ -239,12 +281,29 @@
         return !!dropdown && dropdown.hasAttribute('data-open');
     }
 
+    const _DROPDOWN_SELECTOR = '.dj-dropdown, .dj-dropdown-menu';
     const _MENUITEM_SELECTOR =
-        '[role="menuitem"], a[href], button:not([disabled])';
+        '[role="menuitem"], [role="menuitemradio"], [role="menuitemcheckbox"], ' +
+        'a[href], button:not([disabled])';
+    const _CURRENT_ITEM_SELECTOR =
+        '[role="menuitem"], [role="menuitemradio"], [role="menuitemcheckbox"], a[href], button';
+
+    // Type-ahead: a printable key moves to the next item whose label starts
+    // with it, wrapping, starting after the current item.
+    function _typeAhead(menuitems, current, key) {
+        if (key.length !== 1 || !/\S/.test(key)) return null;
+        const ch = key.toLowerCase();
+        const start = menuitems.indexOf(current);
+        for (let step = 1; step <= menuitems.length; step++) {
+            const item = _at(menuitems, start + step);
+            if ((item.textContent || '').trim().toLowerCase().indexOf(ch) === 0) return item;
+        }
+        return null;
+    }
 
     function _handleDropdown(dropdown, target, e) {
         const menu = dropdown.querySelector('[role="menu"]');
-        const trigger = dropdown.querySelector('.dj-dropdown__trigger');
+        const trigger = dropdown.querySelector('.dj-dropdown__trigger, .dj-dropdown-menu__trigger');
         if (e.key === 'Escape') {
             e.preventDefault();
             _dispatchFrom(trigger);
@@ -254,10 +313,12 @@
         if (!menu) return false;
         const menuitems = Array.prototype.slice.call(
             menu.querySelectorAll(_MENUITEM_SELECTOR)
-        );
+        ).filter(function (item) {
+            return item.getAttribute('aria-disabled') !== 'true';
+        });
         if (menuitems.length === 0) return false;
         // First Arrow/Home/End from the trigger focuses an item.
-        const current = target.closest('[role="menuitem"], a[href], button');
+        const current = target.closest(_CURRENT_ITEM_SELECTOR);
         if (!current || menuitems.indexOf(current) === -1) {
             if (e.key === 'ArrowDown' || e.key === 'ArrowUp' ||
                 e.key === 'Home' || e.key === 'End') {
@@ -273,6 +334,14 @@
             ['ArrowDown'], ['ArrowUp'], false)) {
             e.preventDefault();
             return true;
+        }
+        if (!e.ctrlKey && !e.metaKey && !e.altKey) {
+            const match = _typeAhead(menuitems, current, e.key);
+            if (match) {
+                e.preventDefault();
+                match.focus();
+                return true;
+            }
         }
         return false;
     }
@@ -294,7 +363,7 @@
             // and Esc-to-close (#1533). `closest` matches a dropdown that is
             // a descendant of the dialog; `dialog.contains` makes the intent
             // explicit (and guards a dropdown outside the dialog subtree).
-            const innerDropdown = target.closest('.dj-dropdown');
+            const innerDropdown = target.closest(_DROPDOWN_SELECTOR);
             const dropdownInDialog =
                 innerDropdown && dialog.contains(innerDropdown);
             // A handler closer to the target already took Tab or Escape (a
@@ -318,6 +387,9 @@
                     _handleDropdown(innerDropdown, target, e);
                     return;
                 }
+                // A native modal closes itself (cancel → close); its close
+                // event reaches the server through dj-dialog-close-event.
+                if (_isNativeModal(top)) return;
                 e.preventDefault();
                 _closeModal(top);
                 return;
@@ -332,7 +404,7 @@
         }
 
         // 2. Dropdown — Arrow roving + Esc.
-        const dropdown = target.closest('.dj-dropdown');
+        const dropdown = target.closest(_DROPDOWN_SELECTOR);
         if (dropdown && _handleDropdown(dropdown, target, e)) return;
 
         // 3. Tablist — Arrow roving.
@@ -354,7 +426,8 @@
         });
         if (tracked) return;
         const doc = dialog.ownerDocument;
-        const returnFocus = doc.activeElement;
+        let returnFocus = doc.activeElement;
+        if (returnFocus && dialog.contains(returnFocus)) returnFocus = _lastOutsideFocus;
         _dialogStack.push({ el: dialog, returnFocus: returnFocus });
         const focusables = _focusable(dialog);
         if (focusables.length > 0) {
@@ -431,6 +504,13 @@
 
     function _init() {
         document.addEventListener('keydown', _handleKeydown, false);
+        document.addEventListener('focusout', _onTablistFocusOut, false);
+        document.addEventListener('focusin', function (e) {
+            const el = e.target;
+            if (el && el.closest && !el.closest('[role="dialog"], .dj-modal')) {
+                _lastOutsideFocus = el;
+            }
+        }, true);
         _installObserver();
     }
 
@@ -446,6 +526,7 @@
     globalThis.djust = globalThis.djust || {};
     globalThis.djust.keyboardNav = {
         _handleKeydown: _handleKeydown,
+        _onTablistFocusOut: _onTablistFocusOut,
         _focusable: _focusable,
         _wrapIndex: _wrapIndex,
         _dialogStack: _dialogStack,

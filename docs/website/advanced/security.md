@@ -87,6 +87,10 @@ class MyView(LiveView):
         ...
 ```
 
+`max_message_size` is the largest frame, in bytes, a client may send (`0` = no limit; keep a limit in production, since every frame is held in memory before it is parsed). The server announces it in its `connect` frame, and the client does not send a larger frame: it reports an error with code `message_too_large` (logged, and dispatched as a `djust:error` event whose message starts with `Message too large (N bytes)`) and settles the event's loading state. The server answers a larger frame that arrives anyway with the same error. Send files and other large payloads with [`UploadMixin`](../guides/uploads.md), which splits them into chunks under the limit, rather than raising the limit for every socket.
+
+`max_connections_per_ip` counts the sockets one client address holds open on one server process. Behind a load balancer or reverse proxy, set `DJUST_TRUSTED_PROXY_COUNT` to the number of proxies in front of the app so the client address is read from `X-Forwarded-For`; until then every client behind the proxy shares the proxy's address, so with the default of 10 the eleventh socket on a process is refused with close code `4429`, whoever opened it. The refusal log says which limit applied and flags an untrusted `X-Forwarded-For`. Never trust `X-Forwarded-For` without a proxy that sets it. Size the limit for the most tabs one real user or office NAT opens.
+
 After `max_warnings` violations, the connection is closed with code `4429`. A per-IP connection tracker rejects new connections from the same IP during the cooldown period. A handler decorated with `@rate_limit(..., on_exceed="drop")` drops its extra events without counting them as violations; the global per-message limit still applies.
 
 ## XSS Prevention
@@ -197,7 +201,14 @@ Stack traces are included only when `DEBUG = True`. User parameters are never in
 
 ## CSRF Protection
 
-Cross-site WebSocket hijacking is blocked by an `Origin` check: before accepting the handshake, the WebSocket consumer verifies that the `Origin` header matches `ALLOWED_HOSTS`, and closes the connection with code 4403 otherwise. The connection carries the Django session cookie, and view-level authentication (`LoginRequiredMixin`, `login_required`, auth mixins) is enforced when the view mounts.
+Cross-site WebSocket hijacking is blocked by an `Origin` check. Before accepting the handshake, the WebSocket consumer (and `DjustOriginValidator`, which `DjustMiddlewareStack` adds) closes the connection with code 4403 unless the `Origin` is:
+
+- the socket's own origin: the same scheme (`https` for `wss`, or when `SECURE_PROXY_SSL_HEADER` matches), host and port as the handshake's `Host` header, with that host in `ALLOWED_HOSTS`; or
+- listed in `DJUST_ALLOWED_ORIGINS` (full origins such as `"https://app.example.com"`, or `"https://*.example.com"` for subdomains). When that setting is unset, `CSRF_TRUSTED_ORIGINS` is used, the list Django's CSRF check already trusts.
+
+Scheme and port count: a page on `http://localhost:9999` cannot open a socket to an app on `http://localhost:8001`. A handshake without an `Origin` header is refused too. Browsers always send one, so only non-browser clients (a native app, a script, a Channels `WebsocketCommunicator` in tests) are affected; set `DJUST_ALLOW_MISSING_ORIGIN = True` to accept them. The SSE event endpoints apply the same rule to a present `Origin`; they accept a missing one because a browser leaves it off a same-origin `GET` such as the `EventSource` request.
+
+If you wrap the router in channels' `AllowedHostsOriginValidator` as well, note that it compares the host alone and always refuses a missing `Origin`, so `DJUST_ALLOW_MISSING_ORIGIN` has no effect behind it; use `djust.routing.DjustOriginValidator` instead. The connection carries the Django session cookie, and view-level authentication (`LoginRequiredMixin`, `login_required`, auth mixins) is enforced when the view mounts.
 
 For any HTTP endpoints in your djust application, standard Django CSRF protection applies. Never use `@csrf_exempt` without documented justification.
 
@@ -403,6 +414,15 @@ attribute, so apps can switch to strict nonce-based CSP.
   fresh `<script>` or `<style>` blocks via VDOM patches — uncommon, since
   most dynamic content is attribute and text updates — those will still
   need `'unsafe-inline'`. This is tracked as a follow-up to #655.
+- **Component tags** (`djust.components`) emit no inline event handlers or
+  inline scripts: behaviour such as opening a `rich_select` or a `popover`,
+  dropping files on a `file_dropzone`, dragging `kanban_board` cards or
+  switching `theme_toggle`'s mode runs from delegated listeners in the client
+  bundle, and `code_block` highlights through a static script. The `Button`
+  component's `onclick=` argument is the exception: it is an inline handler
+  you write, and needs `'unsafe-inline'`. `{% colocated_hook %}` carries the request nonce and the
+  client registers its body through a script element with that nonce, so it
+  needs no `'unsafe-eval'`; without a nonce it falls back to `new Function`.
 - **Third-party JS that djust doesn't emit** (Google Analytics, Stripe,
   etc.) is outside djust's scope. Add their domains or hashes to your
   CSP directly.

@@ -304,7 +304,12 @@ def legacy_snapshot_fields(
         return {}
     fields: Dict[str, Any] = {"view": view_path, "state_snapshot_signed": None}
     try:
-        public_state = snapshot_fn(strict=True)
+        from ..sync_turn import run_sync_step
+
+        # ``_capture_snapshot_state`` is a documented override that runs on a worker
+        # thread here, as at the mount: the same ``"lifecycle"`` step (#3646). The mount
+        # twin was stepped in #3637; this per-event refresh (#3098) was missed.
+        public_state = run_sync_step(view, "lifecycle", snapshot_fn, strict=True)
         if isinstance(public_state, dict) and public_state:
             state_json = json.dumps(public_state, sort_keys=True, separators=(",", ":"))
             scope = snapshot_tenant_scope(view)

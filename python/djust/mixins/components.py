@@ -176,8 +176,12 @@ class ComponentMixin:
 
         from .._tenant_state import session_view_key
 
+        from ..config import view_state_in_session
+
         view_key = session_view_key(self, request.path)
         if view_key is None:  # tenant view, no tenant resolved: save nothing (#2973)
+            return
+        if not view_state_in_session():  # stateless view-state mode
             return
         component_state: Dict[str, Any] = {}
 

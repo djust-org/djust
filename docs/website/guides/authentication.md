@@ -35,7 +35,7 @@ That's it. Unauthenticated users are automatically redirected to `settings.LOGIN
 | Attribute | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `login_required` | `bool` | `None` | `True` = must be authenticated |
-| `permission_required` | `str \| list[str]` | `None` | Django permission string(s) |
+| `permission_required` | `str \| list \| AnyOf` | `None` | Django permission string(s): a list needs all of them, `AnyOf(...)` any one |
 | `login_url` | `str` | `None` | Override `settings.LOGIN_URL` |
 
 ```python
@@ -56,6 +56,30 @@ class BillingView(LiveView):
     login_required = True
     permission_required = ["billing.view_invoices", "billing.manage_payments"]
 ```
+
+Any one of several permissions:
+
+```python
+from djust.auth import AnyOf
+
+class ActivityView(LiveView):
+    login_required = True
+    permission_required = AnyOf("runs.agent_run", "chat.chat_general")
+```
+
+A list may mix strings and `AnyOf` groups: every string, and at least one
+permission from every group.
+
+```python
+class RunRequestView(LiveView):
+    permission_required = ["runs.view_run", AnyOf("runs.review", "runs.approve")]
+```
+
+`AnyOf` works everywhere `permission_required` does: the HTTP GET, the
+WebSocket and SSE mounts, `reauth_on_event`, the `@permission_required` handler
+decorator, the client route map, and `djust_audit` (inventory,
+`--dump-permissions` and `--permissions`, where it is `permissions_any`; see
+[Permissions document](permissions-document.md)).
 
 ### Mixins (Django-Familiar Convenience)
 
@@ -87,6 +111,55 @@ class ProjectView(LiveView):
 ```
 
 The method is only called if the subclass defines it — the base `LiveView` class does not invoke it by default.
+
+A refusal is handled the way Django's `AccessMixin` handles one: a signed-in
+user gets a 403 (`PermissionDenied`, so your `handler403` page on the HTTP
+GET), and only an anonymous user is sent to `login_url`.
+
+#### Async checks
+
+When the check does I/O, declare it `async def`:
+
+```python
+class ProjectView(LiveView):
+    login_required = True
+
+    async def check_permissions(self, request):
+        session = await backend_sessions.aget(request.session.session_key)
+        return session is not None and session.is_valid
+```
+
+Over WebSocket and SSE djust awaits it on the event loop. On a mount it runs
+inside the turn, so context variables your [turn middleware](turn-middleware.md)
+sets are visible; the `reauth_on_event` re-check runs in the `reauth` built-in,
+which is outside app middleware (it refuses before your middleware runs), so
+read what the check needs from `request`, not from middleware context. A sync check runs in asgiref's shared sync thread, the one thread
+that runs every sync handler and render for every connection, so a sync check
+that waits on I/O (for instance one that wraps an async call in
+`async_to_sync`) holds up every other user's events for as long as it waits.
+An async check waits on the loop and holds up no one. Do not wrap async code
+in `async_to_sync` inside a sync `check_permissions`; make the method
+`async def` instead.
+
+The contract is the same as the sync form: return `False` or raise
+`PermissionDenied` to refuse; any other return value allows. A refusal
+behaves exactly as above (403 / `permission_denied` / close 4403 for a
+signed-in user, the login redirect for an anonymous one), and any other
+exception refuses the mount or event (fails closed). The check runs at the
+same points as a sync one: before `mount()` on every transport, and, when
+`reauth_on_event` is on and the view sets `login_required` or
+`permission_required`, before every event and URL change (server turns at
+most every `reauth_server_turn_interval` seconds). The steps around it (`login_required`, `permission_required`, Django's access
+mixins) still run first and in the same order.
+
+The synchronous paths (the HTTP GET, the page-POST fallback, the API,
+embedded `{% live_render %}` children) await the same method from the
+request thread. Inside an explicit-exposure child view (ADR-038) the per-event
+check is awaited from a worker thread. Async code that calls djust's auth
+helpers itself should use `acheck_view_auth()` / `arun_pre_mount_auth()`
+from `djust.auth`: calling the sync `check_view_auth()` on the event loop's
+own thread with an async check refuses with an error instead of blocking the
+loop.
 
 ### Django Auth Mixins, Custom Access Mixins and Method Decorators
 
@@ -213,6 +286,12 @@ class ProjectView(LiveView):
     def delete_project(self, project_id: int, **kwargs):
         # Only users with delete permission
         Project.objects.get(pk=project_id).delete()
+
+    @permission_required(AnyOf("projects.archive_project", "projects.delete_project"))
+    @event_handler()
+    def archive_project(self, project_id: int, **kwargs):
+        # Users with either permission
+        ...
 ```
 
 When permission is denied, the client receives a `"Permission denied"` error message. The handler never executes.
@@ -226,14 +305,16 @@ Client sends "mount" message
     → WebSocket consumer creates view instance
     → check_view_auth() runs:
         1. login_required? → check request.user.is_authenticated
-        2. permission_required? → check request.user.has_perms()
-        3. check_permissions()? → call custom hook (if overridden)
+        2. permission_required? → all of its strings, one of each AnyOf group
+        3. check_permissions()? → call custom hook (if overridden; an
+           async def check is awaited on the event loop)
     → If unauthenticated: send {"type": "navigate", "to": "/login/"}
       (a view mounted beside the page view, such as a `dj-lazy` view, gets a
       `view_refused` frame for its own container instead: nothing navigates)
     → If authenticated but lacking permission_required perms: close with 4403 (PermissionDenied)
     → If check_permissions() returns False or raises PermissionDenied:
-      navigate to login_url (not a 403), even for a logged-in user
+      the same: 4403 (PermissionDenied) for a signed-in user, navigate to
+      login_url for an anonymous one
     → If passed: call view.mount(request, **kwargs)
 ```
 
@@ -359,7 +440,7 @@ This is a conscious trade-off shared by all LiveView-style frameworks (Phoenix, 
 **Mitigations:**
 - Use handler-level `@permission_required` for sensitive operations (checked per event)
 - WebSocket heartbeats will eventually detect stale sessions
-- Set `LIVEVIEW_CONFIG = {"reauth_on_event": True}` to re-run view-level auth (`login_required` / `permission_required`) on every event, at the cost of one session read per event. On failure the client is sent to the login URL and the socket closes with 4403.
+- Set `LIVEVIEW_CONFIG = {"reauth_on_event": True}` to re-run view-level auth (`login_required` / `permission_required`) on every event, at the cost of one session read per event. On failure the client is sent to the login URL and the socket closes with 4403. It runs on the [turn middleware](turn-middleware.md) chain, so it also covers URL changes, server pushes, ticks and background results (those re-check at most every `reauth_server_turn_interval` seconds). For your own per-turn checks, add `LIVEVIEW_MIDDLEWARE`.
 
 WebSocket close codes **4401** and **4403** stop automatic reconnects and transport
 fallback. Pending debounced/throttled edits are cancelled instead of replayed over

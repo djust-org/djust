@@ -299,6 +299,43 @@ def dispatch_api(request: HttpRequest, view_slug: str, handler_name: str) -> Htt
         if csrf_resp is not None:
             return csrf_resp
 
+    # Everything after authentication is one ``event``/``api`` turn (ADR-044):
+    # turn middleware sees the API-authenticated ``request.user``.
+    return _api_turn(
+        request,
+        view_cls,
+        handler_name,
+        "api",
+        lambda: _dispatch_api_authenticated(request, view_slug, handler_name, view_cls),
+    )
+
+
+def _api_turn(
+    request: HttpRequest, view_cls: type, name: str, source: str, body: Any
+) -> HttpResponseBase:
+    """Run an authenticated API call as one turn when app middleware is configured."""
+    from ..turns import app_chain_configured
+
+    if not app_chain_configured():
+        return body()
+    from .._turn_ports import run_http_turn
+
+    return run_http_turn(
+        request,
+        body,
+        kind="event",
+        source=source,
+        transport="api",
+        view_class=view_cls,
+        event=name if isinstance(name, str) else None,
+        json_body=True,
+    )
+
+
+def _dispatch_api_authenticated(
+    request: HttpRequest, view_slug: str, handler_name: str, view_cls: type
+) -> HttpResponseBase:
+    """``dispatch_api`` after authentication and CSRF (the body of its turn)."""
     # 4. Parse JSON body.
     body: Dict[str, Any]
     if not request.body:
@@ -541,6 +578,20 @@ def dispatch_server_function(
     if csrf_resp is not None:
         return csrf_resp
 
+    # Everything after CSRF is one ``event``/``server_function`` turn (ADR-044).
+    return _api_turn(
+        request,
+        view_cls,
+        function_name,
+        "server_function",
+        lambda: _dispatch_server_function_checked(request, view_slug, function_name, view_cls),
+    )
+
+
+def _dispatch_server_function_checked(
+    request: HttpRequest, view_slug: str, function_name: str, view_cls: type
+) -> HttpResponseBase:
+    """``dispatch_server_function`` after CSRF (the body of its turn)."""
     # 3. Parse JSON body. Only the wrapped shape ``{"params": {...}}`` is
     # accepted — the JS client helper at
     # ``static/djust/src/48-server-functions.js`` always sends this form.

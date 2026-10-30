@@ -686,6 +686,10 @@ function _setFormPending(form, pending) {
 const _inputRateLimitState = new WeakMap();
 const _changeRateLimitState = new WeakMap();
 const _clickRateLimitState = new WeakMap();
+// The rate-limit wrappers of field edits (dj-input, dj-change): what a click
+// or submit sends ahead of itself (_flushPendingEdits). A debounced CLICK is
+// not an edit and keeps its own timer.
+const _editRateLimitWrappers = new WeakSet();
 const _keydownRateLimitState = new WeakMap();
 const _keyupRateLimitState = new WeakMap();
 // dj-mouseenter / dj-mouseleave (#2869) — same (element, matched-attribute)
@@ -826,6 +830,12 @@ async function _handleDjClick(element, e) {
         return; // User cancelled
     }
 
+    // An edit made before this click reaches the server before it: a
+    // debounced dj-input still pending would otherwise arrive after the
+    // click, carrying text typed before it (and undoing what the click's
+    // handler did with the current value).
+    _flushPendingEdits(true);
+
     // JS Commands: synchronously check whether the attribute is a
     // JSON command chain. If so, fire-and-forget the chain (push
     // ops still round-trip, but we don't block the rest of this
@@ -951,20 +961,16 @@ async function _handleDjSubmit(element, e) {
         return; // User cancelled
     }
 
-    // Closes #1278 — flush pending debounced dj-input handlers in this form
-    // BEFORE dispatching submit. Without this, a user who types a field then
-    // immediately clicks submit (within the 300 ms debounce window) hits a
-    // race: submit fires while per-field dj-input events are still pending,
-    // so the server-side state populated by those handlers is empty when the
-    // submit handler reads it. FormData on the form element captures the
-    // typed values, but views that depend on dj-input updating server state
-    // per-keystroke (e.g., WizardMixin's wizard_step_data) see stale data.
-    _flushPendingDebouncesInForm(element);
-    // #2656 — same race, other timer set: `_flushPendingDebouncesInForm`
-    // only flushes the element-level `dj-debounce` wrappers. A handler
-    // carrying `@debounce` / `@throttle` has its pending send parked in the
-    // handler-level gate, which this drains.
-    flushHandlerRateLimit();
+    // Closes #1278 — send pending debounced edits BEFORE dispatching submit.
+    // Without this, a user who types a field then immediately clicks submit
+    // (within the 300 ms debounce window) hits a race: submit fires while
+    // per-field dj-input events are still pending, so the server-side state
+    // populated by those handlers is empty when the submit handler reads it.
+    // FormData on the form element captures the typed values, but views that
+    // depend on dj-input updating server state per-keystroke (e.g.,
+    // WizardMixin's wizard_step_data) see stale data. The field need not be
+    // in this form (a dialog's note beside its confirm form).
+    _flushPendingEdits();
 
     // Read attribute at fire time so morphElement attribute updates take effect
     const submitHandler = element.getAttribute('dj-submit');
@@ -1389,6 +1395,7 @@ function installDelegatedListeners(root) {
             // Rate-limit per element using WeakMap
             const rawHandler = function(ev) { return _handleDjChange(changeEl, ev); };
             const wrapped = _getOrCreateRateLimitedHandler(_changeRateLimitState, changeEl, 'change', rawHandler);
+            _editRateLimitWrappers.add(wrapped);
             wrapped(e);
         }
     });
@@ -1453,6 +1460,7 @@ function installDelegatedListeners(root) {
 
                 state = { wrapped: wrapped };
                 _inputRateLimitState.set(inputEl, state);
+                _editRateLimitWrappers.add(wrapped);
             }
             state.wrapped(e);
         }
@@ -1654,9 +1662,14 @@ function bindLiveViewEvents(scope) {
 
     // === Per-element scanning section (only for non-delegable events) ===
 
-    // dj-poll needs per-element interval setup
+    // dj-poll needs per-element interval setup. Stop the polls a removal
+    // path missed (or whose attribute was dropped) before binding new ones.
+    _sweepOrphanedPolls();
     const pollSelector = '[dj-poll]';
-    const pollElements = root.querySelectorAll(pollSelector);
+    // The scan root itself can carry the poll (`<div dj-root dj-poll="...">`):
+    // querySelectorAll sees only its descendants.
+    const pollElements = Array.from(root.querySelectorAll(pollSelector));
+    if (typeof root.matches === 'function' && root.matches(pollSelector)) pollElements.unshift(root);
     pollElements.forEach(element => {
         const pollHandler = element.getAttribute('dj-poll');
         if (!pollHandler) return;
@@ -1669,22 +1682,13 @@ function bindLiveViewEvents(scope) {
         // not: an unchanged pair must NOT restart the poll phase — the bind
         // loop runs on every patch, and restarting would reset the interval
         // timer on every morph, so a poll would never fire on schedule. A
-        // changed pair evicts the old phase (clearInterval + visibilitychange
-        // teardown — the same teardown the element-removal paths in
-        // 01-dom-helpers-turbo.js / 12-vdom-patch.js perform) and rebuilds.
+        // changed pair evicts the old phase (_teardownPoll — the same teardown
+        // every element-removal path performs) and rebuilds.
         const interval = parseInt(element.getAttribute('dj-poll-interval'), 10) || 5000;
         const boundKey = pollHandler + '\u0000' + interval;
         if (_isHandlerBound(element, 'poll')) {
             if (element._djustPollBoundKey === boundKey) return;
-            if (element._djustPollIntervalId) {
-                clearInterval(element._djustPollIntervalId);
-                element._djustPollIntervalId = null;
-            }
-            if (element._djustPollVisibilityHandler) {
-                document.removeEventListener('visibilitychange', element._djustPollVisibilityHandler);
-                element._djustPollVisibilityHandler = null;
-            }
-            _unmarkHandlerBound(element, 'poll');
+            _teardownPoll(element);
         }
         _markHandlerBound(element, 'poll');
         element._djustPollBoundKey = boundKey;
@@ -1696,6 +1700,12 @@ function bindLiveViewEvents(scope) {
         // attributes can change under a surviving element too, and a
         // bind-time snapshot would keep dispatching the old ones (#2858).
         const firePoll = () => {
+            // Defensive: a removal path that skipped teardownPollsIn must not
+            // leave a detached element firing a handler the page no longer has.
+            if (!element.isConnected) {
+                _teardownPoll(element);
+                return;
+            }
             if (document.hidden) return;
             // Strict: routing context lets the owner that resolved the contract receive it.
             const strictParams = _strictBinding(element, parsed.name, {}, [], element);
@@ -1704,7 +1714,13 @@ function bindLiveViewEvents(scope) {
                 handleEvent(parsed.name, markSlotOf(Object.assign(strictParams, { _skipLoading: true }), element));
                 return;
             }
-            handleEvent(parsed.name, markSlotOf(Object.assign(extractTypedParams(element), { _skipLoading: true }), element));
+            // A poll inside an embedded child view (`{% live_render %}`) is
+            // that child's: it carries the child's view_id, as the strict
+            // path above does. A component's poll still reaches its host.
+            const params = Object.assign(extractTypedParams(element), { _skipLoading: true });
+            const embeddedViewId = getEmbeddedViewId(element);
+            if (embeddedViewId) params.view_id = embeddedViewId;
+            handleEvent(parsed.name, markSlotOf(params, element));
         };
 
         const intervalId = setInterval(firePoll, interval);
@@ -1716,6 +1732,7 @@ function bindLiveViewEvents(scope) {
         };
         document.addEventListener('visibilitychange', visHandler);
         element._djustPollVisibilityHandler = visHandler;
+        _pollElements.add(element);
     });
 
     // ================================================================
@@ -2190,34 +2207,28 @@ function _applyRateLimitAttrs(element, handler) {
 }
 
 /**
- * Flush all pending debounced dj-input handlers on inputs inside a form.
+ * Send every pending debounced field edit now, before another event is sent.
  *
- * Iterates the form's [dj-input] descendants; for each, looks up the
- * cached rate-limit state in `_inputRateLimitState` and calls
- * `wrapped.flush()` if the wrapped handler exposes one (only the
- * `debounce` rate-limit type does; throttle / passthrough / blur don't
- * need flushing here).
- *
- * Closes #1278 — see `_handleDjSubmit` for context.
- *
- * @param {HTMLFormElement} form
+ * The element-level `dj-debounce` wrappers of `dj-input` / `dj-change` first
+ * (each `.flush()` fires its pending call, which reaches `handleEvent`; other
+ * debounced bindings, such as a debounced click, keep their timers), then the
+ * handler-level gate (#2656), which may now hold the call just flushed. A
+ * submit (#1278) also drains the throttle gate, as it always has; a click
+ * (`debounceOnly`) keeps throttle windows: a throttled handler's trailing
+ * call is a stream, not an edit.
  */
-function _flushPendingDebouncesInForm(form) {
-    const inputs = form.querySelectorAll('[dj-input]');
-    for (let i = 0; i < inputs.length; i++) {
-        // eslint-disable-next-line security/detect-object-injection
-        const state = _inputRateLimitState.get(inputs[i]);
-        if (state && state.wrapped && typeof state.wrapped.flush === 'function') {
-            state.wrapped.flush();
-        }
-    }
+function _flushPendingEdits(debounceOnly = false) {
+    Array.from(pendingElementRateLimits).forEach((wrapper) => {
+        if (wrapper._djustDebounced && _editRateLimitWrappers.has(wrapper)) wrapper.flush();
+    });
+    flushHandlerRateLimit(debounceOnly);
 }
 
 // Helper: Debounce function with .flush() method.
 //
 // flush() fires the pending invocation immediately and clears the timer.
-// No-op if no invocation is pending. Used by _handleDjSubmit to ensure
-// debounced dj-input events fire before form submission, otherwise
+// No-op if no invocation is pending. Used by _flushPendingEdits to ensure
+// debounced dj-input events fire before a click or form submission, otherwise
 // per-field server-state updates (set by dj-input handlers) would race
 // the submit handler that reads them. Closes #1278.
 function debounce(func, wait) {
@@ -2253,6 +2264,8 @@ function debounce(func, wait) {
         pendingThis = null;
         func.apply(t, a);
     };
+
+    debounced._djustDebounced = true;
 
     debounced.cancel = function () {
         clearTimeout(timeout);

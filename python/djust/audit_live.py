@@ -26,6 +26,8 @@ from __future__ import annotations
 
 import logging
 import re
+import urllib.error
+import urllib.request
 from dataclasses import dataclass, field
 from http.client import HTTPResponse
 from typing import Any, Dict, List, Optional, Tuple
@@ -138,13 +140,24 @@ class FetchResult:
         return self.headers.get(name.lower())
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Turn every 3xx into an ``HTTPError`` carrying the redirect itself."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[no-untyped-def]
+        return None
+
+
 def fetch(
     url: str,
     extra_headers: Optional[Dict[str, str]] = None,
     timeout: float = 10.0,
     method: str = "GET",
+    follow_redirects: bool = True,
 ) -> FetchResult:
     """Fetch a URL using stdlib urllib. Returns headers + status.
+
+    With ``follow_redirects=False`` a 3xx is returned as it is (its status
+    and ``Location``) instead of the page it points at.
 
     Only ``http://`` and ``https://`` schemes are permitted. Other schemes
     (``file://``, ``ftp://``, ``jar:``, etc.) are rejected with ``ValueError``
@@ -170,7 +183,12 @@ def fetch(
 
     try:
         # Scheme validated above to http/https only — safe to urlopen.
-        resp: HTTPResponse = urllib.request.urlopen(req, timeout=timeout)  # nosec B310
+        if follow_redirects:
+            resp: HTTPResponse = urllib.request.urlopen(req, timeout=timeout)  # nosec B310
+        else:
+            # Scheme validated above; the redirect is reported, never followed.
+            opener = urllib.request.build_opener(_NoRedirect)
+            resp = opener.open(req, timeout=timeout)  # nosec B310
         status = resp.status
         raw_headers = resp.getheaders()
         body = resp.read(2048).decode("utf-8", errors="replace")
@@ -468,6 +486,9 @@ def probe_paths(
 ) -> List[LiveFinding]:
     """Check common information-disclosure paths.
 
+    A path counts as exposed only when it answers 2xx itself; a redirect
+    (to a sign-in page, say), 401, 403 or 404 is not exposed.
+
     ``base_url`` is expected to be a scheme://host[:port] (the path is
     replaced for each probe).
     """
@@ -478,7 +499,9 @@ def probe_paths(
     for path, code, _ in PATH_PROBES:
         url = urljoin(root, path)
         try:
-            r = fetch(url, extra_headers=extra_headers, timeout=timeout)
+            # Not followed: a path that redirects (typically to a sign-in
+            # page, which answers 200) is not exposed. Only a direct 2xx is.
+            r = fetch(url, extra_headers=extra_headers, timeout=timeout, follow_redirects=False)
         except Exception as exc:
             logger.debug("path probe failed for %s: %s", url, exc)
             continue
@@ -568,8 +591,8 @@ def probe_websocket_origin(
                 "Expected: HTTP 403 at handshake or close code 4403 from the consumer. "
                 "Actual: connection opened with Origin: https://evil.example. "
                 "Wrap the WebSocket router in "
-                "channels.security.websocket.AllowedHostsOriginValidator "
-                "(DjustMiddlewareStack does this by default since djust 0.4.1). "
+                "djust.routing.DjustOriginValidator "
+                "(DjustMiddlewareStack does this by default). "
                 "See djust-org/djust#653."
             ),
         )

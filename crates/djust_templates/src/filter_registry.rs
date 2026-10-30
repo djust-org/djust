@@ -522,9 +522,13 @@ pub fn apply_custom_filter(
     let result = Python::attach(|py| -> Result<(Value, bool), String> {
         use pyo3::IntoPyObject;
 
-        let py_value = value
-            .clone()
-            .into_pyobject(py)
+        // The live object, not its `str()`: a Django filter receives the
+        // object the context holds, so `{{ row|f }}` must hand `f` the row.
+        // `value_into_handler_pyobject` is the one conversion every Python
+        // consumer of a render `Value` uses -- the tag bridge (#2731) and the
+        // handler-argument path -- including the sidecar floor that keeps a
+        // model's protected fields out of Python code (#1646).
+        let py_value = djust_core::value_into_handler_pyobject(py, value.clone())
             .map_err(|e| format!("Failed to convert filter input value: {e}"))?;
         // #2290: `Value` is safety-blind, so restore the `SafeData` markers the
         // renderer tracked before the filter ever sees the value.
@@ -572,10 +576,9 @@ pub fn apply_custom_filter(
                         .map_err(|e| format!("Failed to resolve filter arg '{s}': {e}"))?
                     {
                         Some(
-                            resolved
-                                .into_pyobject(py)
-                                .map_err(|e| format!("Failed to convert resolved filter arg: {e}"))?
-                                .into_any(),
+                            djust_core::value_into_handler_pyobject(py, resolved).map_err(|e| {
+                                format!("Failed to convert resolved filter arg: {e}")
+                            })?,
                         )
                     } else {
                         // No binding — pass the raw identifier as a string,

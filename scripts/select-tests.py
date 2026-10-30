@@ -26,6 +26,15 @@ Selection, from ``git diff --name-only <from>...<to>``:
     the branch name matches ``flip|routing|convergence`` (the routing-flip
     rule in CLAUDE.md: those PRs must run every test root).
 
+``DJUST_PREPUSH_TARGETED=1`` (the hook passes the environment through): when
+the answer would be FULL ONLY because of transitive impact or a blast-radius
+path (the package roots, ``live_view.py`` / ``websocket.py``, a package
+``__init__.py``, ``state_backends/`` and the engine crates' ``src/``), print the
+direct selection (a)-(c) instead; the waived reasons go to stderr. Every other
+FULL stands: harness files, the branch-name rule, unreadable or unclassified
+paths, and an empty selection (which the hook runs as the full fast tier). CI
+remains the authoritative full run.
+
 Rust: ``--cargo`` prints the ``cargo test`` package arguments — ``-p`` for each
 crate whose files changed plus every workspace crate that depends on it, or
 ``--workspace`` when ``Cargo.toml`` / ``Cargo.lock`` / ``djust_core`` changed.
@@ -39,8 +48,10 @@ Usage::
     scripts/select-tests.py [--from REF] [--to REF] [--branch NAME]
     scripts/select-tests.py --cargo [...]
 
-stdout is the selection, one path per line, or the single word ``FULL``
-(``--workspace`` in cargo mode); the reason goes to stderr. Exit 0 always —
+stdout is the selection, one path per line, the single word ``FULL``, or the
+single word ``NONE`` when every changed path has no pytest consumer by design
+(``NO_PYTEST_CONSUMER_PREFIXES``) (``--workspace`` in cargo mode); the reason
+goes to stderr. Exit 0 always —
 the caller falls back to the full suite when this script cannot run.
 """
 
@@ -69,6 +80,15 @@ TEST_ROOTS = ("tests/", "python/tests/", "python/djust/tests/")
 # jobs, not the pytest pre-push/CI run.
 MANUAL_ONLY_TEST_DIRS = ("tests/playwright/", "tests/js/")
 
+# Paths no pytest test consumes BY DESIGN: the manual-only test dirs above
+# (their own CI jobs / the `npm test` hook) and changelog fragments (validated
+# by their own pre-commit hooks). A change here is classified without forcing
+# FULL — before this, every push that touched a Playwright test ran all ~49k
+# pytest tests via the "shared package/test support" rule. Rule (c) still runs
+# for them, so a pytest test that names one is still selected. A range made of
+# nothing but these selects no pytest tests at all (CLI prints NONE).
+NO_PYTEST_CONSUMER_PREFIXES = MANUAL_ONLY_TEST_DIRS + ("changelog.d/",)
+
 # Any change here means the harness itself changed: nothing narrower is safe.
 FULL_SUITE_FILES = frozenset(
     {
@@ -77,10 +97,6 @@ FULL_SUITE_FILES = frozenset(
         ".pre-commit-config.yaml",
         "scripts/pre-push-pytest.sh",
         "scripts/select-tests.py",
-        "python/djust/__init__.py",
-        "python/djust/apps.py",
-        "python/djust/live_view.py",
-        "python/djust/websocket.py",
         "uv.lock",
         "Cargo.toml",
         "Cargo.lock",
@@ -94,16 +110,33 @@ FULL_SUITE_FILES = frozenset(
         "examples/demo_project/demo_project/settings.py",
     }
 )
+# Whole-suite blast radius: the package roots and the hot shared modules every
+# view goes through. Unlike the harness files above, ``DJUST_PREPUSH_TARGETED=1``
+# trades these for the direct selection (see ``select_tests``).
+BLAST_RADIUS_FILES = frozenset(
+    {
+        "python/djust/__init__.py",
+        "python/djust/apps.py",
+        "python/djust/live_view.py",
+        "python/djust/websocket.py",
+    }
+)
 # The whole engine: a change under any of these is exercised by every test that
 # renders a template, not only by the tests that name the file (the #2575 review
 # measured `filters.rs` selecting 11 of 27 floatformat tests by name/import alone).
-FULL_SUITE_PREFIXES = (
+# Blast radius too: ``DJUST_PREPUSH_TARGETED=1`` trades them for the direct
+# selection.
+BLAST_RADIUS_PREFIXES = (
     "crates/djust_core/src/",
     "crates/djust_templates/src/",
     "crates/djust_vdom/src/",
-    ".github/workflows/",
     "python/djust/state_backends/",
 )
+# Harness: always FULL.
+FULL_SUITE_PREFIXES = (".github/workflows/",)
+
+#: The environment switch for the targeted pre-push run.
+TARGETED_ENV = "DJUST_PREPUSH_TARGETED"
 FULL_SUITE_BRANCH_RE = re.compile(r"flip|routing|convergence", re.IGNORECASE)
 
 # Workspace-wide cargo run when these change.
@@ -155,13 +188,38 @@ def _import_patterns(dotted: str) -> list[re.Pattern[str]]:
     return pats
 
 
-def full_suite_trigger(changed: Iterable[str], branch: str | None) -> str | None:
-    """The reason the whole suite must run, or None."""
+def blast_radius_reason(path: str) -> str | None:
+    """Why ``path`` has whole-suite blast radius, or None (see TARGETED_ENV)."""
+    if path in BLAST_RADIUS_FILES:
+        return "%s changed" % path
+    if path.startswith("python/djust/") and path.endswith("/__init__.py"):
+        return "%s changed (shared package)" % path
+    if path.startswith(BLAST_RADIUS_PREFIXES):
+        return "%s changed (shared runtime/engine)" % path
+    return None
+
+
+def full_suite_trigger(
+    changed: Iterable[str], branch: str | None, *, targeted: bool = False
+) -> str | None:
+    """The reason the whole suite must run, or None.
+
+    With ``targeted``, a blast-radius path (``blast_radius_reason``) is not a
+    reason: the caller selects its direct consumers instead. Harness changes,
+    the branch-name rule and shared test support always are.
+    """
     if branch and FULL_SUITE_BRANCH_RE.search(branch):
         return "branch name %r matches /flip|routing|convergence/" % branch
     for path in changed:
+        if path.startswith(NO_PYTEST_CONSUMER_PREFIXES):
+            continue
         if path in FULL_SUITE_FILES:
             return "%s changed" % path
+        blast = blast_radius_reason(path)
+        if blast:
+            if targeted:
+                continue
+            return blast
         if PurePosixPath(path).name == "conftest.py":
             return "%s changed" % path
         name = PurePosixPath(path).name
@@ -209,18 +267,26 @@ def select_tests(
     branch: str | None = None,
     *,
     all_modules: Iterable[str] = (),
+    targeted: bool = False,
 ) -> Selection:
     """Select files only when every change maps to an existing test.
 
     The CLI supplies all production modules for the transitive-impact guard.
     If another production module imports a changed one, full coverage is safer
     than trying to infer all indirect test consumers from names/source pins.
+
+    ``targeted`` (``DJUST_PREPUSH_TARGETED=1``): when the answer would be FULL
+    ONLY because of transitive impact or a blast-radius path, return the direct
+    selection (rules a to c) instead, with the waived reasons in ``reason``.
+    Every other FULL (harness, branch name, unreadable or unclassified paths,
+    an empty selection) stands. CI remains the authoritative full run.
     """
     changed = sorted(set(changed))
     all_tests = sorted(set(all_tests))
-    trigger = full_suite_trigger(changed, branch)
+    trigger = full_suite_trigger(changed, branch, targeted=targeted)
     if trigger:
         return Selection(True, trigger)
+    waived = [r for r in (blast_radius_reason(p) for p in changed) if r] if targeted else []
     if not changed:
         return Selection(True, "no changed files in the range")
 
@@ -232,6 +298,7 @@ def select_tests(
         if dotted
     }
     if changed_modules:
+        transitive: str | None = None
         for module in sorted(set(all_modules)):
             try:
                 imports = imported_modules(module, read_text(module))
@@ -242,9 +309,14 @@ def select_tests(
                 if own_name != changed_name and any(
                     name == changed_name or name.startswith(changed_name + ".") for name in imports
                 ):
-                    return Selection(
-                        True, "%s imports %s (transitive impact)" % (module, changed_name)
+                    transitive = transitive or "%s imports %s (transitive impact)" % (
+                        module,
+                        changed_name,
                     )
+            if transitive and not targeted:
+                return Selection(True, transitive)
+        if transitive:
+            waived.append(transitive)
 
     chosen: dict[str, str] = {}
     existing = set(all_tests)
@@ -293,13 +365,26 @@ def select_tests(
                 chosen[t] = "imports %s" % dotted
                 classified.add(path)
 
+    no_consumer = {p for p in changed if p.startswith(NO_PYTEST_CONSUMER_PREFIXES)}
+    classified |= no_consumer
     if not chosen:
+        if no_consumer == set(changed):
+            return Selection(
+                False,
+                "no pytest consumer for %d changed file(s) "
+                "(manual-only tests / changelog fragments)" % len(changed),
+            )
         return Selection(True, "selection is empty for %d changed file(s)" % len(changed))
     unclassified = sorted(set(changed) - classified)
     if unclassified:
         return Selection(True, "unclassified changed file(s): " + ", ".join(unclassified))
     tests = sorted(chosen)
     reason = "%d test file(s) selected for %d changed file(s)" % (len(tests), len(changed))
+    if waived:
+        reason += "; %s=1: direct selection instead of FULL for: %s" % (
+            TARGETED_ENV,
+            "; ".join(waived),
+        )
     return Selection(False, reason, tests)
 
 
@@ -445,10 +530,14 @@ def main(argv: list[str] | None = None) -> int:
             for path in (root / "python/djust").rglob("*.py")
             if not path.relative_to(root).as_posix().startswith("python/djust/tests/")
         ],
+        targeted=os.environ.get(TARGETED_ENV) == "1",
     )
     if sel.full:
         print("select-tests: FULL suite — %s" % sel.reason, file=sys.stderr)
         print("FULL")
+    elif not sel.tests:
+        print("select-tests: NONE — %s" % sel.reason, file=sys.stderr)
+        print("NONE")
     else:
         print("select-tests: %s" % sel.reason, file=sys.stderr)
         for t in sel.tests:

@@ -25,11 +25,13 @@ and sends updated patches to the client.
 import asyncio
 import inspect
 import logging
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple, TypeVar
 
 from asgiref.sync import iscoroutinefunction, sync_to_async
 
 logger = logging.getLogger(__name__)
+
+_TaskT = TypeVar("_TaskT", bound="asyncio.Future[Any]")
 
 
 def cancel_on_owner_loop(future: asyncio.Future[Any]) -> None:
@@ -104,7 +106,11 @@ async def run_async_callback(
         if iscoroutinefunction(callback):
             result = await callback(*args, **(kwargs or {}))
         else:
-            result = await sync_to_async(callback)(*args, **(kwargs or {}))
+            from ..sync_turn import sync_step
+
+            result = await sync_to_async(sync_step(owner, "async", callback))(
+                *args, **(kwargs or {})
+            )
             if inspect.iscoroutine(result):
                 result = await result
     except Exception:
@@ -176,7 +182,19 @@ class AsyncWorkMixin:
 
     Supports multiple concurrent async tasks with optional naming for
     tracking and cancellation.
+
+    When the socket closes, an explicit-exposure root's ``start_async`` work
+    is cancelled with the view. A legacy (default-exposure) root's work runs
+    to completion and its late result is discarded (#3234); a view whose work
+    only serves the open page (a follower, a live feed) sets
+    ``cancel_async_on_disconnect = True`` to have it cancelled
+    (:meth:`cancel_async_all`) instead.
     """
+
+    #: Cancel this legacy root's ``start_async`` work when its socket or SSE
+    #: stream closes, instead of letting it run to completion. An
+    #: explicit-exposure root is always disposed with its work.
+    cancel_async_on_disconnect: bool = False
 
     def start_async(
         self,
@@ -280,6 +298,49 @@ class AsyncWorkMixin:
             self._async_cancelled = set()
         self._async_cancelled.add(name)
 
+    def create_task(self, coro: Any, *, name: Optional[str] = None) -> "asyncio.Task[Any]":
+        """Start ``coro`` as an asyncio task that lives as long as this view's work.
+
+        For a task the view's own async code starts (a follower launched
+        from an ``async def mount``, an async handler or a push handler)
+        rather than through :meth:`start_async`. It is cancelled wherever
+        ``start_async`` work is: :meth:`cancel_async_all`, an explicit root's
+        disposal (disconnect, navigation), a legacy root's close with
+        ``cancel_async_on_disconnect = True``, a discarded sticky child. Unlike
+        ``start_async`` work, its result does not re-render the view; assign
+        state and push, or call ``handle_async_result`` yourself.
+
+        Must be called from the event loop (an ``async def`` hook); a sync
+        handler runs on a worker thread and has no loop, so it raises
+        ``RuntimeError`` there (use :meth:`start_async`).
+        """
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            if inspect.iscoroutine(coro):
+                coro.close()  # never awaited: don't warn about it at GC
+            raise RuntimeError(
+                "create_task() needs a running event loop: call it from an "
+                "async def hook, or use start_async() from sync code"
+            ) from None
+        return self.track_task(loop.create_task(coro, name=name))
+
+    def track_task(self, task: _TaskT) -> _TaskT:
+        """Register a task the view's code created, so it is cancelled with
+        this view's ``start_async`` work (see :meth:`create_task`). Returns
+        ``task``. A finished task is forgotten.
+        """
+        if getattr(self, "_djust_child_disposed", False):
+            cancel_on_owner_loop(task)
+            return task
+        tracked: Optional[Set["asyncio.Future[Any]"]] = self.__dict__.get("_tracked_tasks")
+        if tracked is None:
+            tracked = set()
+            self._tracked_tasks = tracked
+        tracked.add(task)
+        task.add_done_callback(tracked.discard)
+        return task
+
     def cancel_async_all(self) -> None:
         """
         Cancel every scheduled and running ``start_async`` task on this view.
@@ -293,9 +354,12 @@ class AsyncWorkMixin:
         skipped when they finish; a task started later under the same name is
         not cancelled in advance.
 
+        Tasks registered with :meth:`create_task` / :meth:`track_task` are
+        cancelled too.
+
         Like :meth:`cancel_async`, this cannot interrupt a synchronous callback
         mid-run, does not roll back application side effects, and does not
-        cancel tasks the application created itself.
+        cancel tasks the application created itself without registering them.
 
         The default ``StickyMixin._on_sticky_unmount()`` calls this when a
         sticky child is discarded (#2969).
@@ -317,6 +381,10 @@ class AsyncWorkMixin:
             pending = tuple(handles)
             handles.clear()
             for task in pending:
+                cancel_on_owner_loop(task)
+        tracked = self.__dict__.get("_tracked_tasks")
+        if tracked:
+            for task in tuple(tracked):
                 cancel_on_owner_loop(task)
 
     def defer(self, callback: Callable[..., Any], *args: Any, **kwargs: Any) -> None:
