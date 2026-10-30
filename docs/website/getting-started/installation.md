@@ -428,6 +428,10 @@ extra:
 uv add "djust[daphne]"    # or: pip install "djust[daphne]"
 ```
 
+Channels' own test helpers need it too: `channels.testing` (for example
+`WebsocketCommunicator`) imports `daphne.testing`, so a test suite that uses
+it must install the extra as well. djust's own test client does not.
+
 ## Troubleshooting
 
 ### A project from an older CLI
