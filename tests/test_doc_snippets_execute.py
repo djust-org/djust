@@ -12,7 +12,7 @@ For each block that defines a ``LiveView`` or ``LiveComponent`` subclass the
 test:
 
 1. executes the block as a throwaway module (a ``<!-- doc-snippet-check: skip -->``
-   marker before the fence excludes it, as for the checker);
+   (or ``anti-pattern``) marker before the fence excludes it, as for the checker);
 2. for every ``LiveView`` subclass, mounts it through
    ``djust.testing.LiveViewTestClient``, renders it, checks that each mounted
    ``{{ var }}`` the inline template names reaches the HTML, and fires every
@@ -42,6 +42,7 @@ block (used to regenerate that inventory).
 from __future__ import annotations
 
 import ast
+import hashlib
 import importlib.util
 import inspect
 import json
@@ -67,42 +68,59 @@ DOC_FILES: list[pathlib.Path] = sorted(
     ]
 )
 
-# Block id (``<path relative to repo>:L<fence line>``) -> reason it fails today.
-# Each entry is a documented example a reader cannot run as written. Remove
-# the entry when the doc is fixed; the strict xfail flips red until you do.
+# Block key (``<path relative to repo>@<first 8 hex of the sha1 of the block's
+# code>``) -> reason it fails today. Each entry is a documented example a reader
+# cannot run as written. Remove the entry when the doc is fixed; the strict
+# xfail flips red until you do.
+#
+# Keyed by content, not by fence line: guides are edited in almost every PR, and
+# a line-number key goes stale whenever anything above the block changes. A docs
+# only PR does not run this suite in CI (``paths-ignore`` in test.yml), so a
+# stale key would land on main unseen and turn an unrelated code PR red. A
+# content key goes stale only when the block itself changes, which is exactly
+# when the entry should be looked at again. ``Block.key`` computes it; the
+# comment above each entry gives the line it had when it was recorded.
 KNOWN_FAILURES: dict[str, str] = {
     # --- phantom attribute: the class reads something it never sets/defines ---
-    "docs/website/guides/declarative-ux-attrs.md:L710": (
+    # was docs/website/guides/declarative-ux-attrs.md line 710
+    "docs/website/guides/declarative-ux-attrs.md@f5710695": (
         "ChatView.send calls self._post(value); the block defines no _post (elided helper)"
     ),
-    "docs/website/guides/error-codes.md:L533": (
+    # was docs/website/guides/error-codes.md line 533
+    "docs/website/guides/error-codes.md@6bf612fb": (
         "V004 'Fix' block: MyView.toggle_sidebar reads self.sidebar_open, which no mount() sets"
     ),
-    "docs/website/guides/hooks.md:L468": (
+    # was docs/website/guides/hooks.md line 468
+    "docs/website/guides/hooks.md@31c5e48b": (
         "DashboardView.mount calls self.fetch_sales(); the block defines no fetch_sales (elided helper)"
     ),
-    "docs/website/guides/http-api.md:L416": (
+    # was docs/website/guides/http-api.md line 416
+    "docs/website/guides/http-api.md@f2ab03ab": (
         "MyView.mount calls self.subscribe_presence() and self._seed(); neither exists on LiveView "
         "nor in the block (subscribe_presence reads like an API but djust has no such method)"
     ),
-    "docs/website/guides/tutorial-multi-step-wizard.md:L117": (
+    # was docs/website/guides/tutorial-multi-step-wizard.md line 117
+    "docs/website/guides/tutorial-multi-step-wizard.md@572ee429": (
         "SignupWizardView.back_step reads self.step; the block says '# ... state as above ...' "
         "and the earlier block's state() declarations are not carried"
     ),
     # --- template contract ---
-    "docs/website/guides/time-travel-debugging.md:L25": (
+    # was docs/website/guides/time-travel-debugging.md line 25
+    "docs/website/guides/time-travel-debugging.md@bd19ed38": (
         "CounterView.template = '<div>{{ count }}</div>' has no dj-root / dj-view root; "
         "template-requirements.md says the client attaches to one"
     ),
     # --- public-API collision ---
-    "docs/website/guides/tutorial-streaming-ai.md:L78": (
+    # was docs/website/guides/tutorial-streaming-ai.md line 78
+    "docs/website/guides/tutorial-streaming-ai.md@9c911c22": (
         "`from djust import rate_limit` resolves to the djust.rate_limit MODULE once that submodule "
         "is imported (runtime.py:81 imports it; djust/__init__.py re-binds only live_view), so "
         "`@rate_limit(rate=0.1, burst=3)` raises TypeError: 'module' object is not callable. "
         "Import it from djust.decorators"
     ),
     # --- deliberate ---
-    "docs/website/guides/error-overlay.md:L44": (
+    # was docs/website/guides/error-overlay.md line 44
+    "docs/website/guides/error-overlay.md@7a3e8f4c": (
         "deliberate: OrderView.charge raises ValueError('amount must be positive') to show what "
         "the overlay displays; fired with no args, amount=0 takes that branch"
     ),
@@ -160,21 +178,34 @@ class Block:
         return f"{self.path.relative_to(REPO_ROOT)}:L{self.lineno}"
 
     @property
+    def key(self) -> str:
+        digest = hashlib.sha1(self.code.encode("utf-8")).hexdigest()[:8]
+        return f"{self.path.relative_to(REPO_ROOT).as_posix()}@{digest}"
+
+    @property
     def module_name(self) -> str:
         stem = re.sub(r"[^0-9a-zA-Z]+", "_", str(self.path.relative_to(REPO_ROOT)))
         return f"doc_snippet_{stem}_L{self.lineno}"
 
 
-def _candidate_blocks() -> list[Block]:
+def _blocks_in(paths) -> list[Block]:
     extract = _load_extractor()
     blocks: list[Block] = []
-    for path in DOC_FILES:
+    for path in paths:
         if not path.exists():
             continue
-        for lineno, code, _marker in extract(path):
+        for lineno, code, marker in extract(path):
+            # ``<!-- doc-snippet-check: anti-pattern -->`` marks code the guide
+            # shows as WRONG; executing it would report the lesson as a defect.
+            if marker == "anti-pattern":
+                continue
             if _defines_live_class(code):
                 blocks.append(Block(path, lineno, code))
     return blocks
+
+
+def _candidate_blocks() -> list[Block]:
+    return _blocks_in(DOC_FILES)
 
 
 # --------------------------------------------------------------------------
@@ -685,21 +716,99 @@ def test_doc_files_define_liveview_snippets():
 
 
 def test_known_failures_are_current_blocks():
-    ids = {b.id for b in _BLOCKS}
-    stale = sorted(set(KNOWN_FAILURES) - ids)
-    assert not stale, f"KNOWN_FAILURES names blocks that no longer exist: {stale}"
+    keys = {b.key for b in _BLOCKS}
+    stale = sorted(set(KNOWN_FAILURES) - keys)
+    assert not stale, (
+        f"KNOWN_FAILURES names blocks that no longer exist or whose code changed: {stale}. "
+        "If the block was fixed, delete the entry; if it still fails, re-key it with Block.key."
+    )
 
 
 def _param(block: Block):
     marks = []
-    if block.id in KNOWN_FAILURES:
-        marks.append(pytest.mark.xfail(reason=KNOWN_FAILURES[block.id], strict=True))
+    if block.key in KNOWN_FAILURES:
+        marks.append(pytest.mark.xfail(reason=KNOWN_FAILURES[block.key], strict=True))
     return pytest.param(block, id=block.id, marks=marks)
+
+
+_LOOPBACK = {"localhost", "127.0.0.1", "::1", "", None}
+
+
+def _is_ip_literal(host) -> bool:
+    import ipaddress
+
+    try:
+        ipaddress.ip_address(host)
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
+@pytest.fixture
+def no_network(monkeypatch):
+    """A guide block that fetches ``https://api.example.com`` must fail the same
+    way on every machine: ``ConnectError``, which the harness records as "performs
+    a network call". Left alone it resolves a real name, so a resolver that
+    answers for unknown hosts (a captive portal, an ISP) turns the same block
+    into a ``JSONDecodeError`` failure, and a slow DNS makes the test slow."""
+    import socket
+
+    real_getaddrinfo = socket.getaddrinfo
+    real_connect = socket.socket.connect
+
+    def getaddrinfo(host, *args, **kwargs):
+        if host in _LOOPBACK or _is_ip_literal(host):
+            return real_getaddrinfo(host, *args, **kwargs)
+        raise socket.gaierror(socket.EAI_NONAME, "Name or service not known")
+
+    def connect(self, address):
+        host = address[0] if isinstance(address, tuple) else None
+        if self.family == socket.AF_UNIX or host in _LOOPBACK:
+            return real_connect(self, address)
+        raise ConnectionRefusedError(f"doc snippets run offline: {address!r}")
+
+    monkeypatch.setattr(socket, "getaddrinfo", getaddrinfo)
+    monkeypatch.setattr(socket.socket, "connect", connect)
+
+
+def test_the_offline_guard_blocks_names_and_addresses_but_not_loopback(no_network):
+    import socket
+
+    with pytest.raises(socket.gaierror):
+        socket.getaddrinfo("api.example.com", 443)
+    with pytest.raises(ConnectionRefusedError):
+        socket.create_connection(("93.184.216.34", 80), timeout=1)
+    assert socket.getaddrinfo("localhost", 80)  # in-process transports still resolve
+
+
+def test_an_anti_pattern_block_is_not_executed(tmp_path, monkeypatch):
+    doc = tmp_path / "doc.md"
+    fence = "```"
+    body = "from djust import LiveView\n\nclass Wrong(LiveView):\n    template = '<div>no root</div>'\n"
+    doc.write_text(
+        f"<!-- doc-snippet-check: anti-pattern -->\n{fence}python\n{body}{fence}\n\n"
+        f"{fence}python\n{body}{fence}\n"
+    )
+    monkeypatch.setattr(sys.modules[__name__], "REPO_ROOT", tmp_path)
+    found = _blocks_in([doc])
+    assert [b.lineno for b in found] == [9]  # only the unmarked copy
+
+
+def test_known_failure_keys_follow_the_block_not_its_line(tmp_path, monkeypatch):
+    doc = tmp_path / "doc.md"
+    monkeypatch.setattr(sys.modules[__name__], "REPO_ROOT", tmp_path)
+    fence = "```"
+    code = "from djust import LiveView\n\nclass A(LiveView):\n    pass\n"
+    doc.write_text(f"{fence}python\n{code}{fence}\n")
+    (before,) = _blocks_in([doc])
+    doc.write_text(f"intro line\nanother\n{fence}python\n{code}{fence}\n")
+    (after,) = _blocks_in([doc])
+    assert before.lineno != after.lineno and before.key == after.key
 
 
 @pytest.mark.django_db
 @pytest.mark.parametrize("block", [_param(b) for b in _BLOCKS])
-def test_doc_snippet_executes(block: Block, settings):
+def test_doc_snippet_executes(block: Block, settings, no_network):
     """The block executes, mounts, renders and handles events as documented."""
     settings.LIVEVIEW_ALLOWED_MODULES = [block.module_name]
     outcome = run_block(block)
