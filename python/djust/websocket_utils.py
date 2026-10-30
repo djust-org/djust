@@ -482,5 +482,7 @@ async def _call_handler(
         # is installed there too while a capture scope is active (#2961).
         from .observability.sql import run_in_capture_scope
 
-        call = run_in_capture_scope(handler)
+        from .sync_turn import sync_step
+
+        call = sync_step(getattr(handler, "__self__", None), "event", run_in_capture_scope(handler))
         return await sync_to_async(call)(*positional_args, **(params or {}))

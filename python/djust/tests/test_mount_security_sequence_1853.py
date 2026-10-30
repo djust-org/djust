@@ -323,6 +323,7 @@ class TestRunPreMountAuthHelper:
                 self._tenant = _FakeTenant()
 
         import djust.auth.core as core
+        from djust.tenants.middleware import get_current_tenant, tenant_context
 
         seen_bind = {}
         real_bind = core._bind_current_tenant
@@ -336,9 +337,15 @@ class TestRunPreMountAuthHelper:
         try:
             request = RequestFactory().get("/")
             request.user = _AuthedUser()
-            assert run_pre_mount_auth(_TenantView(), request) is None
+            # The helper binds unscoped (its transport callers scope it), so
+            # scope it here: a bare call left tenant 42 bound for every later
+            # test on the worker, and test_server_push saw its tenant_scope.
+            with tenant_context(None):
+                assert run_pre_mount_auth(_TenantView(), request) is None
+                assert isinstance(get_current_tenant(), _FakeTenant)
         finally:
             core._bind_current_tenant = real_bind
+        assert get_current_tenant() is None, "the tenant bound here leaked out of the test"
 
         assert order == ["resolve", "bind"], (
             f"pre-mount sequence ran out of order: {order!r} (must resolve tenant "

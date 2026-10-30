@@ -300,6 +300,7 @@ class LiveViewSSE {
                     if (!container) container = document.querySelector('[dj-root]:not(html):not(head)');
                     if (container) {
                         if (typeof data.view === 'string') container.setAttribute('dj-view', data.view);
+                        applyRootPoll(container, data.root_poll);
                         const hasDataDjAttrs = data.has_ids === true;
                         if (hasDataDjAttrs && !this._replacingView) {
                             // The page was prerendered over HTTP: morph it

@@ -32,6 +32,50 @@ logger = logging.getLogger(__name__)
 MIN_STREAM_INTERVAL_S = 1.0 / 60  # ~16ms
 
 
+def _overwrites_target(op: dict) -> bool:
+    """True if ``op`` replaces its target's whole content on the client."""
+    return op["op"] == "replace" or (op["op"] == "text" and op.get("mode") == "replace")
+
+
+def _queue_stream_op(queued: Optional[List[dict]], op: dict) -> List[dict]:
+    """Add ``op`` to a stream's queued ops so the client ends in the same state.
+
+    A queued op used to be replaced by the next one ("only latest matters"),
+    which is right for a replace and drops text for an append: five appends
+    inside one rate window reached the client as the first and the last.
+
+    - An op that overwrites its target (``replace``, ``text`` in replace mode)
+      makes every queued op for that target moot, so they are dropped.
+    - A text append or prepend is merged into the target's last queued text
+      op when the result is one op: append onto an append or a replace,
+      prepend onto a prepend or a replace. Otherwise it is queued after it.
+
+    Ops for different targets don't affect each other, so only the target's
+    own last op matters; the queue stays one or two ops per target.
+    """
+    ops = list(queued or ())
+    target = op["target"]
+    if _overwrites_target(op):
+        return [q for q in ops if q["target"] != target] + [op]
+    if op["op"] == "text":
+        mode = op.get("mode")
+        for i in range(len(ops) - 1, -1, -1):
+            last = ops[i]
+            if last["target"] != target:
+                continue
+            if last["op"] == "text":
+                last_mode = last.get("mode")
+                if mode == "append" and last_mode in ("append", "replace"):
+                    ops[i] = dict(last, text=last["text"] + op["text"])
+                    return ops
+                if mode == "prepend" and last_mode in ("prepend", "replace"):
+                    ops[i] = dict(last, text=op["text"] + last["text"])
+                    return ops
+            break
+    ops.append(op)
+    return ops
+
+
 class StreamingMixin:
     """
     Mixin that provides streaming capabilities for LiveView.
@@ -350,7 +394,9 @@ class StreamingMixin:
         from asgiref.sync import sync_to_async
         from django.template.loader import render_to_string
 
-        context = await sync_to_async(self.get_context_data)()
+        from .sync_turn import sync_step
+
+        context = await sync_to_async(sync_step(self, "render", self.get_context_data))()
 
         if self.template_name:
             html = await sync_to_async(render_to_string)(self.template_name, context)
@@ -420,15 +466,16 @@ class StreamingMixin:
         coroutine did synchronous work without yielding), or it is still
         sending a batch it already took. So an immediate send first sends the
         stream's queued ops, and while the flush is sending the new op is
-        queued instead; the flush schedules a successor for it. Only the
-        latest op of a stream is kept in the queue, as before.
+        queued instead; the flush schedules a successor for it. Queued ops
+        are merged by ``_queue_stream_op``: a replace supersedes the target's
+        queued ops, text appends and prepends accumulate.
         """
         if elapsed >= MIN_STREAM_INTERVAL_S and not getattr(self, "_stream_flush_sending", False):
             queued = self._stream_batch.pop(stream_name, None) or []
             await self._send_stream_ops(stream_name, queued + [op])
             self._last_stream_time = now
             return
-        self._stream_batch[stream_name] = [op]  # Replace: only latest matters
+        self._stream_batch[stream_name] = _queue_stream_op(self._stream_batch.get(stream_name), op)
         if not self._stream_flush_task or self._stream_flush_task.done():
             delay = max(MIN_STREAM_INTERVAL_S - elapsed, 0.0)
             self._stream_flush_task = asyncio.ensure_future(self._flush_stream_batch(delay))

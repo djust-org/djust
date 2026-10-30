@@ -640,8 +640,8 @@ class TestTheRealHTTPPostRoundTrip:
         assert fresh.huge == HUGE
 
     def test_the_private_decimal_survives_too(self) -> None:
-        """`_restore_private_state` is the shared decode point for all three
-        of its callers."""
+        """`_restore_private_state` (its body, `_apply_private_state`) is the shared
+        decode point for all three of its callers."""
         factory, get_request = self._seed()
         fresh = _PriceView()
         post = factory.post(
@@ -705,8 +705,10 @@ class TestTheSignedSnapshotRoundTrip:
         decodes at the CALLER. Pinned structurally, because the caller is deep
         in an async mount."""
         src = (_PKG / "runtime.py").read_text()
-        block = src[src.index("_should_restore_snapshot\n") :]
-        block = block[: block.index("_restore_snapshot)(state_dict)")]
+        # The override is entered as a "lifecycle" step (#3637), so the call reads
+        # ``guarded_step(view_instance, "lifecycle", view_instance._restore_snapshot)``.
+        call = src.index('"lifecycle", view_instance._restore_snapshot')
+        block = src[src.rindex("_should_restore_snapshot", 0, call) : call]
         assert "decode_state_roundtrip(state_dict)" in block, (
             "runtime.py must decode BEFORE calling the user-overridable "
             "_restore_snapshot — see the docstring on LiveView._restore_snapshot"
@@ -832,11 +834,12 @@ EXPECTED_DECODE_SITES = {
     # #3252: restore the lazy child's server-held public/private session state,
     # tagged at save_http_lazy's encoder-less JSON boundary.
     ("_lazy_containers.py", "mount_http_lazy"),
-    ("live_view.py", "_restore_private_state"),
+    # The body of `_restore_private_state`, which enters its `lifecycle` step around it (#3646).
+    ("live_view.py", "_apply_private_state"),
     ("mixins/components.py", "_restore_component_state"),
-    ("mixins/request.py", "post"),
+    ("mixins/request.py", "_post_turn_body"),  # ADR-044: inside the POST turn
     ("mixins/sticky.py", "restore_sticky_child_state"),
-    ("runtime.py", "dispatch_mount"),
+    ("runtime.py", "_dispatch_mount_body"),  # ADR-044: inside the mount turn
     ("time_travel.py", "restore_snapshot"),
     ("time_travel.py", "restore_component_snapshot"),
     ("time_travel.py", "to_dict"),
@@ -920,10 +923,20 @@ class TestTheDecodeSiteInventory:
             if "tests" in path.parts:
                 continue
             src = path.read_text()
+            rel = path.relative_to(_PKG).as_posix()
+            # ``_state_restore.restore_public_state`` is the shared sink: it
+            # applies what its caller passes, so the CALLER must decode.
+            if rel != "_state_restore.py" and "restore_public_state(" in src:
+                restoring.add(rel)
+                continue
             if "safe_setattr(" not in src:
                 continue
-            rel = path.relative_to(_PKG).as_posix()
-            if rel in ("security/attribute_guard.py", "security/__init__.py", "websocket.py"):
+            if rel in (
+                "security/attribute_guard.py",
+                "security/__init__.py",
+                "websocket.py",
+                "_state_restore.py",
+            ):
                 continue
             if rel == "templatetags/live_tags.py":
                 # ADR-038's explicit codec accepts JSON primitives only. Running

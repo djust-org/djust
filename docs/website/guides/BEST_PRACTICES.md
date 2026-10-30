@@ -538,7 +538,7 @@ no bandwidth. Use it only if you call those helpers yourself.
 
 ### 4. Temporary assigns for append-only lists
 
-For collections that grow over time (chat messages, logs), use `temporary_assigns` to clear state after each render. Only new items are sent over the wire.
+For collections that grow over time (chat messages, logs), use `temporary_assigns` to clear state after each render. Only new items are sent over the wire. (This empties the context copy the server keeps, not the rendered tree it diffs against; see [Large LiveView state](#6-large-liveview-state).)
 
 ```python
 class ChatView(LiveView):
@@ -563,6 +563,89 @@ The template must use `dj-update="append"`:
 </ul>
 ```
 
+How the rows reach the page: the server renders only the rows you just assigned
+and adds them to the container's stored children, so the update is one insert
+per new row and the rows already on the page are left alone. The same rule
+applies to a full HTML update, which the client handles itself. Details:
+
+- The container needs a static `id` on its tag, and every row needs an `id`. A
+  row whose `id` is already in the container is left as it is (it is not updated
+  or added twice); a row with no `id` is not added (DEBUG logs a warning naming
+  the view).
+- Which containers accumulate is worked out from the template source: a
+  `dj-update` container whose **own body** reads a `temporary_assigns` key (or
+  `streams`) does. Any other `dj-update` list in the same view is re-rendered
+  whole every time, so a removed or edited row there still reaches the page. The
+  same goes for every list in a view that declares no `temporary_assigns`.
+  "Reads" means the key by name, **or** under another name that is certain to be
+  the same rows:
+  - an alias made with `{% with items=rows %}` or `{% with rows as items %}`,
+    including one that wraps the container from outside. A `{% with rows=other %}`
+    that wraps the container and reuses the key's name for something else hides
+    the key there (`{% with rows=rows %}` keeps it). Only a `with` around the
+    container is followed: one inside the container does not hide anything;
+  - a context key that holds the very same object, such as
+    `context["feed"] = self.rows` in `get_context_data` (checked by identity on
+    every render).
+- A nested `dj-update` container's body belongs to that container, not to its
+  parent: an outer list that is an ordinary attribute stays authoritative even
+  when the list inside it is fed by a `temporary_assigns` key.
+- An `{% include %}` in a container is read too: a static name is found the way
+  the renderer finds it (the template directories, then Django's loaders) and
+  scanned, including the includes inside it. In your view's own template `./x` is
+  `x` at the root of the template directories and `../x` is not followed (the
+  renderer has no file name to be relative to there); inside an included file
+  `./` and `../` are relative to that file. An include with `only` sees nothing
+  but its `with` values, so only those count. A name that is a variable, a
+  filtered name, a file that cannot be found, an include cycle, a chain more than
+  8 levels deep, a file that uses `{% extends %}` or more than 64 included files
+  are NOT seen through: the include is assumed to read a temporary key, and the
+  container accumulates.
+- **Unsupported shapes: a `dj-update` container the scan cannot attribute to a
+  temporary key is re-rendered whole, and on a `temporary_assigns` view that
+  empties it.** The page then shows only the rows of the *latest* render (each
+  `self.rows = [new]` replaces the previous row instead of adding to it), and an
+  *unrelated* event, one that assigns no rows, renders the container with no rows:
+  the list goes blank. Measured: after two `add` events the page shows one row,
+  after a following unrelated event it shows none. The shapes are:
+  - a value **derived** from the attribute, such as
+    `context["feed"] = list(self.rows)` (a copy, a slice or a filter is a different
+    object from `self.rows`);
+  - a container whose **tag lives inside an included file** (the scan reads the
+    `dj-update` tags of the view's own template; that container is never seen);
+  - a template tag or component that reads the view without the key being named
+    in the container.
+
+  The rule that avoids all of them: keep the `dj-update` container tag and its
+  rows in the same template, and read the temporary key (or a `{% with %}` alias,
+  or an unchanged `get_context_data` entry of it) by name inside the container.
+  Putting the *rows* in an included file is fine, as above.
+- The scan runs once per view class and is kept: edit a template (or a file it
+  includes) with the dev file watcher running and the next render reads it again;
+  without the watcher a change is read after a restart. It is bounded: a template
+  of more than 1,000,000 characters, one nesting more than 1,000 elements or one
+  that takes more than 2 seconds to scan accumulates nothing (every `dj-update`
+  list is re-rendered whole) and logs a warning. A timeout is not remembered (a
+  stall should not degrade the view for good), so the next render scans again;
+  after 3 timeouts in a row the scan stops retrying and the lists stay re-rendered
+  whole until a template changes or the process restarts. Aliases are followed through
+  at most 64 nested `{% with %}` tags; with more than 64 `{% with %}` aliases of
+  the key open at once, the later ones are not recognised.
+- `dj-update="prepend"` puts each new row first, as one insert at the front.
+  Rows may repeat an `id` (in the render that mounts the page, or within one
+  batch of new rows): they are all kept, as the client's full HTML update keeps
+  them, and each new row is still one insert at the front. A row repeating the
+  `id` of a row already in the container is left alone, as for any other row.
+- **The rows stay in the server's copy of the page.** The server keeps the whole
+  container so it can tell what is new, and the stored tree it diffs against
+  grows with every row you add; `temporary_assigns` empties the context copy,
+  not that tree (see [Large LiveView state](#6-large-liveview-state)). Measured,
+  each event also pays for the rows already there: about 1 ms with 200 rows,
+  4 ms with 2,000 and 15 ms with 8,000, and the stored snapshot grows to about
+  11 KB, 105 KB and 429 KB. For a feed that grows without end, cap it yourself
+  (render a bounded window, or paginate) rather than relying on
+  `temporary_assigns` to bound memory.
+
 ### 5. Loading states
 
 Use `dj-loading.*` attributes for zero-JS loading indicators:
@@ -580,6 +663,58 @@ Use `dj-loading.*` attributes for zero-JS loading indicators:
 <!-- Add CSS class during load -->
 <div dj-loading.class="opacity-50">Content</div>
 ```
+
+### 6. Large LiveView state
+
+The `Large LiveView state detected ... (threshold: 100KB)` warning measures the
+whole snapshot the state backend stores for a view, not just the attributes you
+assign. The snapshot holds three things, and the warning prints each one's size:
+
+| Part | What it is | Grows with |
+| --- | --- | --- |
+| context ("state") | every context key the template used, including render-only values and stream items | the rows and fields you pass to the template |
+| rendered tree | the page as last rendered, which the next turn diffs against | the HTML you render |
+| template | the template source | the template |
+
+What reduces each part, measured on the demo project with a 30-row page of about 2 KB of markup per row:
+
+- **Render fewer and leaner rows.** Paginate, filter in the query, and pass only
+  the fields the template prints. Five rows stored about a fifth of 30; rows
+  reduced to an id stored about a twelfth. This is the only change that
+  lowers both the context and the tree.
+- **`temporary_assigns`** empties the context copy after the next render (the
+  context part fell to about an eighth after the first event) but the tree keeps
+  the rows, because it is what the page looks like. It does not lower a snapshot
+  taken right after the first render.
+- **Streams** and **`get_render_only_context()`** do not lower the snapshot: the
+  rows stay in the context and in the tree. `get_render_only_context()` keeps a
+  value out of the *session* save, which is a different store.
+
+A view that mixes in `ThemeMixin` no longer adds the theme HTML to this
+snapshot; see [Reactive Theme Switching](components.md#reactive-theme-switching-with-liveview).
+Nor does an app that installs the `theme_context` processor: its `theme_presets`
+list (about 12 KB) used to be copied into every view's snapshot, and is now kept
+out of it.
+
+Two more things the warning does and does not tell you:
+
+- **A context processor's plain data is stored.** djust copies every
+  JSON-serialisable value a processor returns into the stored state. For a large
+  list that no template needs stored, return it as
+  `djust.request_scoped.RequestScopedList(items)`: it stays a real `list`
+  (`json_script`, `json.dumps` and `isinstance` work) and rides to the renderer
+  without being stored.
+- **It also fires from the post-render store.** A view that is small at mount and
+  grows past the threshold during its life is reported on the render that crosses
+  it, once per view until it drops back under, not only on the next reload. This
+  is a property of the in-memory state backend only: the Redis backend has no
+  large-state warning. The warning names the view's state by a short hash
+  (`state-1a2b3c4d`), never the session key or the request path, which the cache
+  key contains.
+
+Stream rows are the one big part with no cheap remedy yet: they stay in the
+stored state, and the obvious fix (clearing the stream after each render) removes
+every row from the page on the next event, so it is not available. See #3632.
 
 ---
 
@@ -1180,10 +1315,10 @@ os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'myproject.settings')
 
 application = ProtocolTypeRouter({
     "http": get_asgi_application(),
-    # DjustMiddlewareStack wraps in channels.security.websocket.AllowedHostsOriginValidator
-    # by default (CSWSH defense, #653). Make sure settings.ALLOWED_HOSTS does NOT contain
+    # DjustMiddlewareStack wraps in djust.routing.DjustOriginValidator by default
+    # (CSWSH defense, #653). Make sure settings.ALLOWED_HOSTS does NOT contain
     # '*' in production. If you use channels.auth, substitute AuthMiddlewareStack wrapped
-    # in AllowedHostsOriginValidator(...).
+    # in DjustOriginValidator(...).
     "websocket": DjustMiddlewareStack(
         URLRouter(websocket_urlpatterns)
     ),
@@ -1191,9 +1326,12 @@ application = ProtocolTypeRouter({
 ```
 
 **Security note:** As of #653, `DjustMiddlewareStack` wraps its inner application in
-`channels.security.websocket.AllowedHostsOriginValidator` by default, preventing
-Cross-Site WebSocket Hijacking (CSWSH). `LiveViewConsumer.connect()` also enforces
-the same check at the consumer level (defense in depth). Make sure
+`djust.routing.DjustOriginValidator` by default, preventing Cross-Site WebSocket
+Hijacking (CSWSH): the `Origin` must be the site's own origin (scheme, host and
+port) or listed in `DJUST_ALLOWED_ORIGINS` (default: `CSRF_TRUSTED_ORIGINS`), and a
+missing `Origin` is refused unless `DJUST_ALLOW_MISSING_ORIGIN = True`.
+`LiveViewConsumer.connect()` also enforces the same check at the consumer level
+(defense in depth). Make sure
 `settings.ALLOWED_HOSTS` does NOT contain `*` in production.
 
 **Related:**

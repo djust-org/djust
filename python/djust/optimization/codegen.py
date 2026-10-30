@@ -118,6 +118,67 @@ def _empty_file(value: Any) -> bool:
     return isinstance(value, FieldFile) and not value
 
 
+#: Methods the generated code calls at a leaf (``_generate_nested_access``).
+_CALLED_LEAF_NAMES = ("all", "count", "exists")
+
+
+def _is_sequence(value: Any) -> bool:
+    """A list-like value whose items the template iterates."""
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return True
+    from django.db.models import QuerySet
+
+    return isinstance(value, QuerySet)
+
+
+def take_by_tree(value: Any, tree: Dict[str, Any]) -> Any:
+    """``value`` reduced to the path ``tree`` (``_build_path_tree``'s shape).
+
+    The generated code's answer for a value that is a list (or tuple, set,
+    QuerySet) where the template reads INSIDE its items:
+    ``{% for tool in agent.tools %}{{ tool.name }}``, with ``tools`` a property
+    returning a list of dicts. Attribute access on the list itself found
+    nothing, so ``tools`` serialized as ``{}`` (Point Guard N-32). Each item is
+    taken by the same tree, with the same rules the generated code applies to
+    an object: a dict is kept whole, a ``None`` attribute is omitted, the
+    serialization gate (``emittable_names``) decides which names ship, and
+    ``get_*`` / ``all`` / ``count`` / ``exists`` are called unless
+    ``alters_data`` or ``do_not_call_in_templates`` says not to.
+    """
+    if not tree or value is None:
+        return value
+    if isinstance(value, dict) or isinstance(value, (str, bytes, int, float, bool)):
+        return value
+    if _is_sequence(value):
+        return [take_by_tree(item, tree) for item in value]
+    if _empty_file(value):
+        return {}
+    names = [name for name in tree if name != "__list_item__"]
+    permitted = emittable_names(value, names)
+    taken: Dict[str, Any] = {}
+    for name in names:
+        if name not in permitted:
+            continue
+        try:
+            found = getattr(value, name)
+        except Exception:  # noqa: BLE001 — a template lookup that fails is empty
+            continue
+        if found is None:
+            continue
+        if callable(found) and (name.startswith("get_") or name in _CALLED_LEAF_NAMES):
+            if getattr(found, "alters_data", False) or getattr(
+                found, "do_not_call_in_templates", False
+            ):
+                continue
+            try:
+                found = found()
+            except Exception:  # noqa: BLE001 — as the generated code does
+                logger.debug("Method %s() failed during serialization", name)
+                continue
+        taken[name] = take_by_tree(found, tree[name])
+    return taken
+
+
 def _gate_line(indent: int, gate_var: str, obj_expr: str, names: List[str]) -> str:
     """The per-object prologue line the generated code runs before emitting."""
     tup = ", ".join(f"'{n}'" for n in names)
@@ -330,6 +391,12 @@ def _generate_nested_access(
             # would fail. Otherwise, create empty dict and recurse for models.
             lines.append(f"{ind}    if isinstance({obj_access}, dict):")
             lines.append(f"{ind}        {result_var}['{root_attr}'] = {obj_access}")
+            # A list (a property returning a list of dicts or objects): take
+            # each item by the subtree (N-32).
+            lines.append(f"{ind}    elif _djust_is_sequence({obj_access}):")
+            lines.append(
+                f"{ind}        {result_var}['{root_attr}'] = _djust_take({obj_access}, {tree!r})"
+            )
             lines.append(f"{ind}    else:")
             lines.append(f"{ind}        {result_var}['{root_attr}'] = {{}}")
             _generate_nested_access(
@@ -495,6 +562,10 @@ def _generate_nested_access(
                 dict_path = _build_dict_path(result_var, current_path)
                 lines.append(f"{ind}    if isinstance({obj_access}, dict):")
                 lines.append(f"{ind}        {dict_path}['{attr_name}'] = {obj_access}")
+                lines.append(f"{ind}    elif _djust_is_sequence({obj_access}):")
+                lines.append(
+                    f"{ind}        {dict_path}['{attr_name}'] = _djust_take({obj_access}, {subtree!r})"
+                )
                 lines.append(f"{ind}    else:")
                 lines.append(f"{ind}        {dict_path}['{attr_name}'] = {{}}")
 
@@ -575,6 +646,8 @@ def compile_serializer(code: str, func_name: str) -> Callable:
         # serializer can never run without it.
         "_djust_gate": emittable_names,
         "_djust_empty_file": _empty_file,
+        "_djust_is_sequence": _is_sequence,
+        "_djust_take": take_by_tree,
     }
 
     try:

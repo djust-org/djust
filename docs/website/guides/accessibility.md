@@ -54,7 +54,7 @@ component emits as of 1.0 — these are *guarantees*, each backed by a test in
 | Component | Roles / ARIA emitted |
 |-----------|----------------------|
 | **`{% modal %}`** | Dialog gets `role="dialog"` + `aria-modal="true"`; when a title is set, `aria-labelledby` points at the `<h3>` title's derived `id`; the close button carries `aria-label="Close"`. |
-| **`{% tabs %}`** | Nav is `role="tablist"`; each tab button is `role="tab"` with `aria-selected="true"`/`"false"` and `aria-controls` pointing at its panel; the active pane is `role="tabpanel"` with `aria-labelledby` pointing back at its tab; decorative tab icons are `aria-hidden="true"`. Tab and panel `id`s are derived deterministically from the `id` kwarg so they stay VDOM-stable. |
+| **`{% tabs %}`** | Nav is `role="tablist"`; each tab button is `role="tab"` with `aria-selected="true"`/`"false"` and `aria-controls` pointing at its panel; the active pane is `role="tabpanel"` with `aria-labelledby` pointing back at its tab; decorative tab icons are `aria-hidden="true"`. Only the selected tab has `tabindex="0"`. `label="…"` names the tab list (`aria-label`); `labelledby="heading-id"` names it from an element on the page (`aria-labelledby`). Tab and panel `id`s are derived deterministically from the `id` kwarg so they stay VDOM-stable. |
 | **`{% accordion %}`** | Each trigger button carries `aria-expanded` (reflecting open/closed) and `aria-controls` pointing at its panel; the open panel is `role="region"` with an `id` and `aria-labelledby` pointing back at its trigger; the chevron glyph is `aria-hidden="true"`. |
 | **`{% dropdown %}`** | Trigger button carries `aria-haspopup="menu"`, `aria-expanded` (reflecting open state), and `aria-controls` pointing at the menu; the open menu `<div>` is `role="menu"`. |
 | **`{% alert %}`** | Container gets `role="alert"` for `error`/`danger`/`warning` types (assertive) or `role="status"` for `info`/`success` (polite); the type icon is `aria-hidden="true"`; the dismiss button carries `aria-label="Dismiss"`. |
@@ -287,14 +287,17 @@ While a `role="dialog"` modal is on the page:
 
 ### `{% tabs %}` — arrow-key roving navigation
 
-Once you use the arrow keys, a `role="tablist"` behaves as a **roving
-`tabindex`** widget: the focused tab is `tabindex="0"` and the others are
-`-1`. On first render (and after a server re-render replaces the buttons),
-every tab button is in the natural Tab order.
+The tab list is a **roving `tabindex`** widget, as the WAI-ARIA tabs pattern
+describes. The server renders the selected tab with `tabindex="0"` and the
+others with `tabindex="-1"`, so the tab list is one Tab stop and Tab lands on
+the selected tab. When no tab is selected, the first tab is the Tab stop.
 
 - **ArrowRight / ArrowLeft** move focus to the next / previous tab and wrap
-  around at the ends.
+  around at the ends. The focused tab becomes the Tab stop while focus stays
+  in the list.
 - **Home / End** jump to the first / last tab.
+- When focus **leaves** the tab list, the Tab stop goes back to the selected
+  tab.
 - Activation is **manual** — arrows move focus only; Enter or Space activates
   the focused tab. (Manual activation is the safer choice because activating a
   tab triggers a server round-trip.)
@@ -457,7 +460,8 @@ and saturation kept, to the nearest lightness that reads: usually to dark ink on
 fill. No fill, background or border token moved: only the label tokens and `link` / `link_hover` changed. `--muted-foreground` is also drawn as dots, switch tracks and scrollbar thumbs, which follow its move (away from the page). A label is only painted on the fill it belongs to; a test scans every rule that sets `color` from a `--*-foreground` token and requires the same rule's background to be that fill. A move must also not make its label read worse where else it is painted (a solid button's hover fill, the `--code` surface behind syntax comments): the solver keeps those, and a move that cannot is held and documented.
 Some pairs are documented exemptions in `djust.theming.a11y_exemptions` on purpose:
 tokens whose source documents a brand hex that the palette keeps (monokai and stripe
-`link`, github and stripe muted text), and the `--input` border, which is a non-text UI
+`link`, github and stripe muted text), and the `--input` border (the outline of every djust
+form field; a field's fill is `--input-background`, the page background by default), which is a non-text UI
 component whose 3:1 (WCAG 1.4.11) is not applied to the shipped presets (revisit on
 request). User-authored presets are still measured on all of them. `accent_foreground`
 is the one label still open, because `.status-badge-accent` paints it as a background.
@@ -506,6 +510,74 @@ component markup, which is what the `Y` checks and the built-in component ARIA
 cover. The two are complementary: theming validation answers "is this theme's
 contrast accessible?" and the `Y` checks answer "is this template's markup
 accessible?".
+
+## Announcing a change and moving focus from the server
+
+Two things a screen-reader or keyboard user needs after a server event are an
+announcement ("Saved") and focus in the right place. Both are ordinary djust
+features, and both work on every transport, including the
+[HTTP-only fallback](http-only-mode.md):
+
+- **Announce** by rendering the message into a live region the page already
+  contains. The region must be in the DOM before its text changes, so keep the
+  element in the template and change only its content.
+- **Move focus** with `JS.focus(selector)` through
+  [`push_commands()`](server-driven-ui.md).
+
+```python
+from djust import LiveView, event_handler
+from djust.js import JS
+
+
+class OrderView(LiveView):
+    template_name = "order.html"
+
+    def mount(self, request, **kwargs):
+        self.status = ""
+
+    @event_handler()
+    def save(self, **kwargs):
+        self.status = "Order saved"
+        self.push_commands(JS.focus("#order-summary"))
+```
+
+```html
+<p role="status" aria-live="polite">{{ status }}</p>
+<section id="order-summary" tabindex="-1">...</section>
+```
+
+Use `role="alert"` (assertive) only for an error the user must hear at once.
+
+A live region announces when its **text changes**, which is not the same as the
+old hook announcing every queued message:
+
+- **The same message twice in a row is announced once.** A second `save` that
+  renders the identical text produces a `noop` (no DOM change, so nothing is
+  announced), although the `JS.focus()` push still arrives. To announce a repeat,
+  make the text differ between turns, for example by alternating a no-break-space
+  suffix (`self._flip = not self._flip; self.status = "Order saved" + ("\u00a0" if self._flip else "")`).
+  Over the WebSocket this produces a text patch every turn; that is the DOM
+  mutation a live region needs. Whether a given screen reader then repeats the
+  text is up to the screen reader, and was not tested with one.
+- **Several messages in one turn** must be rendered together (a list in the
+  region), not queued one by one.
+
+### The `_drain_announcements` / `_drain_focus` hooks are deprecated
+
+The WebSocket and SSE transports also drain two duck-typed methods on the view,
+`_drain_announcements()` (sends an `accessibility` frame) and `_drain_focus()`
+(sends a `focus` frame). No 1.x release has defined either, so no built-in API
+queues an announcement or a focus command, the shipped client has no
+`window.djust.accessibility` object to receive the frames unless your own script
+assigns one, and the HTTP fallback never drained them: a view that defined the
+hooks lost them there silently.
+
+Defining either method on a `LiveView` subclass now raises a
+`DeprecationWarning` at the class statement, naming the hook. A hook added after
+the class exists (`setattr`, a decorator, an instance attribute) is not detected
+and does not warn. Both keep working on the WebSocket and SSE transports until
+2.0.0, where the flush is removed. To migrate, use a live region and `JS.focus()`
+as above, keeping the differences in mind.
 
 ## Known limitations / not yet covered
 

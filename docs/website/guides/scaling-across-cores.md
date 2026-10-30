@@ -17,7 +17,7 @@ The other way past one core is more processes, with Redis for everything shared;
 
 Three things cap a stock process:
 
-1. **All WebSocket sessions share one sync thread.** Every `mount`, event handler, hook and render goes through asgiref's `sync_to_async` with `thread_sensitive=True`, which runs them all, for all sessions, on a single thread.
+1. **All WebSocket sessions share one sync thread.** Every sync `mount`, event handler, hook and render goes through asgiref's `sync_to_async` with `thread_sensitive=True`, which runs them all, for all sessions, on a single thread. An `async def` `mount`, `handle_params`, event handler or push handler runs on the event loop instead, so the time it spends awaiting (an async ORM query, an HTTP call) does not hold that thread.
 2. **The GIL.** On standard CPython only one thread runs Python at a time, so extra threads help only while they wait on I/O or run code that releases the GIL.
 3. **The asyncio event loop.** Every frame for every session is decoded, dispatched and encoded on one loop thread. Once the sync work moves elsewhere, the loop becomes the next ceiling; see [More than one event loop per process](#more-than-one-event-loop-per-process).
 
@@ -102,10 +102,21 @@ What to know before turning it on:
 - **Which thread.** A session goes to the least-loaded pool thread when it connects, and stays there.
 - **Shared state needs locks.** Sync handlers now run concurrently with other sessions' handlers, so module-level state they mutate needs a `threading.Lock`. State on the view instance (`self.…`) is per session and needs nothing.
 - **Database connections.** Each pool thread holds its own database connection, so budget up to `worker_threads` extra connections per process (see [Database Connection Pooling](deployment.md#database-connection-pooling)).
-- **Sessions on one thread wait on each other**, though no longer on the whole process. A slow handler or a long `start_async` callback holds up the other sessions pinned to its thread.
+- **Sessions on one thread wait on each other**, though no longer on the whole process. A slow handler or a long `start_async` callback holds up the other sessions pinned to its thread. `"worker_pinning": False` removes that wait (below).
+- **A session is one WebSocket.** Two tabs of one browser are two sessions, each with its own thread (or lane) and its own render lock; nothing in the pool is shared by the tabs of one Django session.
 - **Pool size.** Start at about the core count. On 3.14t, pools of 8–12 threads on a 12-core machine cost 2.2–2.7 MB per session. One thread per session cost 5.4 MB and gave lower tail latency: about 80–120 ms less p95 at the load knee in the [#3074](https://github.com/djust-org/djust/issues/3074) experiment.
 - **Standard CPython.** On 3.12 and 3.13 the GIL still limits Python work to about one core. The pool overlaps waiting (database queries, HTTP calls) and djust's Rust render, which releases the GIL; for a CPU-bound app it measured no gain.
 - **Invalid values** are reported by the system check `djust.C021`.
+
+#### Lanes instead of pinned threads: `"worker_pinning": False`
+
+```python
+LIVEVIEW_CONFIG = {"worker_threads": 8, "worker_pinning": False}
+```
+
+Each session gets a *lane* instead of a thread of its own. Its calls still run one at a time and in order, on its home thread (picked as a pinned thread is) while that thread is free. When the home thread is busy, an idle pool thread runs the call, so a slow hop of one session no longer holds up the sessions that share its thread. Between two hops a session may change threads; nothing djust keeps depends on the thread, and app code must not either (it already shares the thread with other sessions).
+
+Measured in a Django app on 3.14t with 8 threads: two tabs, the second placed on the first's thread, the first running a 1.5 s handler. Pinned, the second tab's event waited 1.69 s; with lanes it took 0.07 s. On a 40-tab load, events were as fast or faster with lanes and server CPU was the same, and 98% of calls ran on their home thread.
 
 ### 3. Scoped push
 

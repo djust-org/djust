@@ -485,6 +485,9 @@ fn read_lazy_body(handler: &Bound<'_, PyAny>) -> PyResult<bool> {
 /// has resolved them, and only the un-resolved path can tell them apart.
 struct TagHandlerEntry {
     validator: Option<Py<PyAny>>,
+    /// The optional `rewrite_args_at_parse` hook (#3664): see
+    /// [`rewrite_tag_arguments`].
+    arg_rewriter: Option<Py<PyAny>>,
     handler: Py<PyAny>,
     resolve_positions: Option<HashSet<usize>>,
     /// See [`read_returns_bindings`] (#2547).
@@ -551,6 +554,45 @@ pub fn validate_tag_arguments(name: &str, args: &[String], block: bool) -> djust
             .map_err(DjangoRustError::PythonException)?;
     }
     Ok(())
+}
+
+/// Let an inline handler REWRITE the original argument tokens once, at
+/// template compilation (#3664).
+///
+/// A handler that defines `rewrite_args_at_parse(args) -> list[str]` gets the
+/// tokens exactly as the template wrote them and returns the list the node
+/// keeps. It exists for the one thing a handler cannot do after the engine has
+/// resolved the operands: tell a POSITIONAL operand from a KEYWORD one. A
+/// resolved `{% dj_tag name %}` with `name = "variant=primary"` arrives as the
+/// text `variant=primary`, indistinguishable from `{% dj_tag variant=primary
+/// %}`, so a handler that reads `key=value` strings both dropped every
+/// positional argument and let a positional VALUE inject a keyword. Decided
+/// here, from the tokens, the handler can name each positional operand
+/// (`label="Python"`) before anything is resolved, and the engine then treats
+/// it exactly like the keyword it stands for.
+///
+/// Runs outside the registry lock (a handler may itself touch the registry),
+/// like [`validate_tag_arguments`]. A handler without the hook gets its tokens
+/// back unchanged. Raising from the hook refuses the template at compile time,
+/// with the handler's own exception.
+pub fn rewrite_tag_arguments(name: &str, args: &[String]) -> djust_core::Result<Vec<String>> {
+    // Attach BEFORE taking the read lock (see "Lock order" above).
+    let rewriter = Python::attach(|py| -> djust_core::Result<Option<Py<PyAny>>> {
+        let registry = TAG_HANDLERS
+            .read()
+            .map_err(|e| DjangoRustError::TemplateError(e.to_string()))?;
+        Ok(registry
+            .get(name)
+            .and_then(|entry| entry.arg_rewriter.as_ref())
+            .map(|method| method.clone_ref(py)))
+    })?;
+    match rewriter {
+        None => Ok(args.to_vec()),
+        Some(rewriter) => Python::attach(|py| -> PyResult<Vec<String>> {
+            rewriter.call1(py, (args.to_vec(),))?.extract(py)
+        })
+        .map_err(DjangoRustError::PythonException),
+    }
 }
 
 /// Run the optional second stage only after the block body parsed successfully.
@@ -660,6 +702,7 @@ pub fn register_tag_handler(py: Python<'_>, name: String, handler: Py<PyAny>) ->
     let parse_refusal = read_parse_refusal(handler_ref)?;
 
     let validator = read_parse_validator(handler_ref)?;
+    let arg_rewriter = read_named_parse_validator(handler_ref, "rewrite_args_at_parse")?;
 
     let mut registry = TAG_HANDLERS.write().map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
@@ -670,6 +713,7 @@ pub fn register_tag_handler(py: Python<'_>, name: String, handler: Py<PyAny>) ->
         TagHandlerEntry {
             handler,
             validator,
+            arg_rewriter,
             resolve_positions,
             returns_bindings,
             accepts_as_var,

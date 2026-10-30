@@ -94,6 +94,7 @@ function _applyStreamOp(op, streamName) {
     switch (op.op) {
         case 'replace':
             // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
+            teardownPollsIn(el, true);
             el.innerHTML = op.html || '';
             // #2058: streaming HTML ops (LLM chat / live feeds) go through
             // innerHTML — a classic <script> in the streamed HTML is
@@ -133,6 +134,7 @@ function _applyStreamOp(op, streamName) {
 
         case 'delete':
             _dispatchStreamEvent(el, 'stream:remove', { stream: streamName });
+            teardownPollsIn(el);
             el.remove();
             break;
 
@@ -152,6 +154,7 @@ function _applyStreamOp(op, streamName) {
                 while (kids.length > limit) {
                     const victim = edge === 'top' ? kids.shift() : kids.pop();
                     if (!victim) break;
+                    teardownPollsIn(victim);
                     victim.remove();
                 }
             }

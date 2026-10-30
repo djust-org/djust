@@ -7,26 +7,47 @@ from typing import Any, Callable, Dict, Optional
 from ..session_utils import Stream
 
 
-def _prune_items(stream_obj: Stream, limit: int, edge: str) -> None:
+def _prune_items(stream_obj: Stream, limit: int, edge: str) -> int:
     """Apply a ``stream_prune`` to the server-side items (#2964).
 
     Every render lists the stream's items, and the VDOM diff turns that list
     into DOM changes, so dropping pruned items here is what removes their rows
     from the page. (The ``stream_prune`` op is also still queued for the
     test client, but nothing ships ops to the browser.) ``"top"`` drops from
-    the start, ``"bottom"`` from the end.
+    the start, ``"bottom"`` from the end. Returns how many items were dropped.
     """
     surplus = len(stream_obj.items) - limit
     if surplus <= 0:
-        return
+        return 0
     if edge == "bottom":
         del stream_obj.items[limit:]
     else:
         del stream_obj.items[:surplus]
+    return surplus
 
 
 class StreamsMixin:
     """Methods for managing streams: stream, stream_insert, stream_delete, stream_reset."""
+
+    def _record_stream_op(self, op: Dict[str, Any], *, changed: bool = True) -> None:
+        """Queue one stream operation and, when it changed a stream, note that.
+
+        The single place a mutation is recorded, so ``stream``, ``stream_insert``,
+        ``stream_delete``, ``stream_prune`` and ``stream_reset`` cannot disagree
+        about it (#1646). ``_stream_epoch`` is what ``websocket._snapshot_assigns``
+        reads to tell that a handler whose only effect was a stream mutation
+        changed something: ``_streams`` is a framework attribute, which that walk
+        leaves out, so before the epoch such a handler was answered ``noop`` and
+        its row waited for the next unrelated render (#3639).
+
+        ``changed=False`` queues the op without bumping the epoch, for an op
+        that removed nothing (a prune above the current size, a delete that
+        matched no row, a reset of an empty stream): a handler that changed
+        nothing must still be answered ``noop``.
+        """
+        self._stream_operations.append(op)
+        if changed:
+            self._stream_epoch = getattr(self, "_stream_epoch", 0) + 1
 
     def stream(
         self,
@@ -72,13 +93,15 @@ class StreamsMixin:
             dom_id = Stream.default_dom_id
 
         if name not in self._streams or reset:
+            replaced = self._streams.get(name)
             self._streams[name] = Stream(name, dom_id)
             if reset:
-                self._stream_operations.append(
+                self._record_stream_op(
                     {
                         "type": "stream_reset",
                         "stream": name,
-                    }
+                    },
+                    changed=bool(replaced is not None and replaced.items),
                 )
 
         stream_obj = self._streams[name]
@@ -120,7 +143,7 @@ class StreamsMixin:
 
         for item in items_list:
             stream_obj.insert(item, at=at)
-            self._stream_operations.append(
+            self._record_stream_op(
                 {
                     "type": "stream_insert",
                     "stream": name,
@@ -133,14 +156,15 @@ class StreamsMixin:
             # Prune from the opposite edge of the insert direction so the
             # newly added items are preserved.
             edge = "bottom" if at == 0 else "top"
-            _prune_items(stream_obj, int(limit), edge)
-            self._stream_operations.append(
+            removed = _prune_items(stream_obj, int(limit), edge)
+            self._record_stream_op(
                 {
                     "type": "stream_prune",
                     "stream": name,
                     "limit": int(limit),
                     "edge": edge,
-                }
+                },
+                changed=removed > 0,
             )
 
         return stream_obj
@@ -163,14 +187,15 @@ class StreamsMixin:
             raise ValueError("limit must be >= 0")
         if edge not in ("top", "bottom"):
             raise ValueError("edge must be 'top' or 'bottom'")
-        _prune_items(self._streams[name], int(limit), edge)
-        self._stream_operations.append(
+        removed = _prune_items(self._streams[name], int(limit), edge)
+        self._record_stream_op(
             {
                 "type": "stream_prune",
                 "stream": name,
                 "limit": int(limit),
                 "edge": edge,
-            }
+            },
+            changed=removed > 0,
         )
 
     def stream_insert(self, name: str, item: Any, at: int = -1) -> None:
@@ -181,7 +206,7 @@ class StreamsMixin:
         stream_obj = self._streams[name]
 
         stream_obj.insert(item, at=at)
-        self._stream_operations.append(
+        self._record_stream_op(
             {
                 "type": "stream_insert",
                 "stream": name,
@@ -201,25 +226,29 @@ class StreamsMixin:
         # cannot make them disagree (#2121, #1646).
         dom_id_val = stream_obj.dom_id_for(item_or_id, allow_factory_fallback=True)
 
+        before = len(stream_obj.items)
         stream_obj.delete(item_or_id)
-        self._stream_operations.append(
+        self._record_stream_op(
             {
                 "type": "stream_delete",
                 "stream": name,
                 "dom_id": dom_id_val,
-            }
+            },
+            changed=len(stream_obj.items) < before,
         )
 
     def stream_reset(self, name: str, items: Any = None) -> None:
         """Reset a stream, clearing all items and optionally adding new ones."""
+        had_items = bool(name in self._streams and self._streams[name].items)
         if name in self._streams:
             self._streams[name].clear()
 
-        self._stream_operations.append(
+        self._record_stream_op(
             {
                 "type": "stream_reset",
                 "stream": name,
-            }
+            },
+            changed=had_items,
         )
 
         if items is not None:
@@ -238,7 +267,17 @@ class StreamsMixin:
         The copy is shallow: the ITEMS are shared, which is correct — they are
         the caller's own objects. Only the list container is independent.
         """
-        return {name: list(stream_obj.items) for name, stream_obj in self._streams.items()}
+        streams = self._streams
+        if not isinstance(streams, dict) or not all(
+            isinstance(stream_obj, Stream) for stream_obj in streams.values()
+        ):
+            raise TypeError(
+                "%s._streams is reserved by djust's StreamsMixin, which keeps its "
+                "Stream objects there; this view replaced it with a %s. Rename its own "
+                "attribute (check djust.V022 reports such assignments), or use "
+                "self.stream(name, items)." % (type(self).__name__, type(streams).__name__)
+            )
+        return {name: list(stream_obj.items) for name, stream_obj in streams.items()}
 
     def _get_stream_operations(self) -> list:
         """Get and clear pending stream operations."""

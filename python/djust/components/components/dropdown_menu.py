@@ -30,7 +30,8 @@ class DropdownMenu(Component):
 
     Args:
         label: Trigger button label
-        items: List of menu item dicts
+        items: List of menu item dicts (see ``render_menu_item`` for the keys:
+            links, checkbox/radio items, headings, dividers)
         open: Whether the menu is expanded
         toggle_event: djust event for toggling open/close
         align: Menu alignment (left, right)
@@ -74,45 +75,21 @@ class DropdownMenu(Component):
         e_label = html.escape(self.label)
 
         trigger = (
-            f'<button class="dj-dropdown-menu__trigger" '
+            f'<button type="button" class="dj-dropdown-menu__trigger" '
             f"{self.event_attrs(self.toggle_event)} "
             f'aria-expanded="{"true" if self.open else "false"}" '
-            f'aria-haspopup="true">{e_label}</button>'
+            f'aria-haspopup="menu">{e_label}</button>'
         )
 
         if not self.open:
             return f'<div class="{class_str}">{trigger}</div>'
 
-        menu_items = []
-        for item in self.items:
-            if item.get("divider"):
-                menu_items.append('<hr class="dj-dropdown-menu__divider" role="separator">')
-                continue
+        from djust.components.templatetags.djust_components import render_menu_item
 
-            item_cls = "dj-dropdown-menu__item"
-            if item.get("danger"):
-                item_cls += " dj-dropdown-menu__item--danger"
-            if item.get("disabled"):
-                item_cls += " dj-dropdown-menu__item--disabled"
+        def _event_attrs(event: str, value: Any) -> str:
+            return self.event_attrs(event, value=value)
 
-            e_item_label = html.escape(str(item.get("label", "")))
-            item_event = str(item.get("event", ""))
-
-            disabled_attr = " disabled" if item.get("disabled") else ""
-            ea = self.event_attrs(item_event)
-            event_attr = f" {ea}" if ea else ""
-
-            icon_html = ""
-            if item.get("icon"):
-                icon_html = (
-                    f'<span class="dj-dropdown-menu__icon">{html.escape(str(item["icon"]))}</span>'
-                )
-
-            menu_items.append(
-                f'<button class="{item_cls}" role="menuitem"'
-                f"{event_attr}{disabled_attr}>"
-                f"{icon_html}{e_item_label}</button>"
-            )
+        menu_items = [render_menu_item(item, event_attrs=_event_attrs) for item in self.items]
 
         menu = (
             f'<div class="dj-dropdown-menu__content dj-dropdown-menu--{conditional_escape(self.align)}" '

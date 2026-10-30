@@ -202,6 +202,7 @@ a:hover {
   color: hsl(var(--muted-foreground));
   transition: all var(--duration-fast) var(--ease-out);
   cursor: pointer;
+  font-family: inherit;
   position: relative;
 }
 
@@ -286,6 +287,7 @@ a:hover {
   font-weight: var(--font-medium);
   font-size: var(--text-sm);
   cursor: pointer;
+  font-family: inherit;
   transition: transform var(--duration-fast) var(--ease-out),
     box-shadow var(--duration-fast),
     background var(--duration-fast),
@@ -671,6 +673,7 @@ a:hover {
   border: none;
   color: inherit;
   cursor: pointer;
+  font-family: inherit;
 }
 
 
@@ -735,6 +738,7 @@ a:hover {
   color: hsl(var(--muted-foreground));
   transition: all var(--duration-fast);
   cursor: pointer;
+  font-family: inherit;
   background: transparent;
   border: none;
 }

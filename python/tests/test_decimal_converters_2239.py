@@ -561,8 +561,9 @@ EXPECTED_ROUNDTRIP_SITES = {
     # session and restored onto the child by mount_http_lazy.
     ("_lazy_containers.py", "save_http_lazy"),
     ("mixins/components.py", "_save_components_to_session"),
-    ("mixins/request.py", "get"),
-    ("mixins/request.py", "post"),
+    # ADR-044: the GET / POST bodies run inside their turn wrappers.
+    ("mixins/request.py", "_get_turn_body"),
+    ("mixins/request.py", "_post_turn_body"),
     ("mixins/sticky.py", "save_sticky_child_state"),
     ("mixins/sticky.py", "save_sticky_child_state_sync"),
     # The inner `_save` closure of `_persist_state_after_event`.

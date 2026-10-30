@@ -805,9 +805,13 @@ fn collapse_subtree_to_text(parent_tag: &str, handle: &Handle) -> Vec<VNode> {
     while let Some(node) = stack.pop() {
         match &node.data {
             NodeData::Text { contents } => text.push_str(&contents.borrow()),
-            NodeData::Element { .. } => {
+            NodeData::Element {
+                template_contents, ..
+            } => {
                 collapsed_elements = true;
-                stack.extend(node.children.borrow().iter().rev().cloned());
+                let contents = template_contents.borrow();
+                let raw = contents.as_ref().unwrap_or(&node);
+                stack.extend(raw.children.borrow().iter().rev().cloned());
             }
             _ => {}
         }
@@ -837,7 +841,12 @@ fn handle_to_vnode(handle: &Handle, depth: usize) -> Result<VNode> {
             Ok(VNode::text(text))
         }
 
-        NodeData::Element { name, attrs, .. } => {
+        NodeData::Element {
+            name,
+            attrs,
+            template_contents,
+            ..
+        } => {
             let tag_ref = &*name.local;
             let tag = tag_ref.to_string();
             let is_svg = is_svg_element(tag_ref);
@@ -903,11 +912,17 @@ fn handle_to_vnode(handle: &Handle, depth: usize) -> Result<VNode> {
 
             // Convert children (whitespace rules: see `build_children`). At
             // MAX_VDOM_DEPTH the subtree below is flattened instead of nested.
+            // A `<template>`'s parsed children are in its contents fragment,
+            // not its child list; they are its VDOM children, as its
+            // serialization (`<template>…</template>`) shows them.
+            let contents = template_contents.borrow();
+            let raw_parent = contents.as_ref().unwrap_or(handle);
             let children = if depth >= MAX_VDOM_DEPTH {
-                collapse_subtree_to_text(tag_ref, handle)
+                collapse_subtree_to_text(tag_ref, raw_parent)
             } else {
-                build_children(tag_ref, &handle.children.borrow(), depth)?
+                build_children(tag_ref, &raw_parent.children.borrow(), depth)?
             };
+            drop(contents);
 
             Ok(VNode {
                 tag,

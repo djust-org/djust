@@ -9,6 +9,7 @@ from ._async_batch import AsyncBatch
 from ._exposure import ExposureError
 from ._exposure_auth import authorize_event, fresh_socket_request
 from ._exposure_children import child_event_adapter
+from ._view_hooks import call_async_result
 from .auth.core import check_view_auth, enforce_object_permission
 from .mixins.async_work import run_async_callback
 
@@ -66,6 +67,28 @@ async def _execute(
     # A child's background task also outlives the turn that queued it, and on
     # SSE that turn's request executors die with the POST (#3097).
     _detach_from_finished_request()
+    # One ``async``/``start`` turn for the root's socket (ADR-044).
+    await runtime._run_async_start_turn(
+        root,
+        name,
+        lambda: _execute_body(
+            runtime, root, child, generation, name, callback, args, kwargs, event_name, batch_token
+        ),
+    )
+
+
+async def _execute_body(
+    runtime: Any,
+    root: Any,
+    child: Any,
+    generation: int,
+    name: str,
+    callback: Any,
+    args: Any,
+    kwargs: Any,
+    event_name: str | None,
+    batch_token: str | None,
+) -> None:
     try:
         async with runtime._explicit_event_lock, runtime.transport.event_context(root):
             await sync_to_async(_authorize)(runtime, root, child, generation)
@@ -76,33 +99,37 @@ async def _execute(
         except Exception as exc:  # noqa: BLE001 — only the owning application sees this error
             error = exc
         async with runtime._explicit_event_lock, runtime.transport.event_context(root):
-            await sync_to_async(_authorize)(runtime, root, child, generation)
-            handler = getattr(child, "handle_async_result", None)
-            if callable(handler):
-                await sync_to_async(handler)(name, result=result, error=error)
-            elif error is not None:
-                raise ExposureError("Child background callback failed")
-            await sync_to_async(_authorize)(runtime, root, child, generation)
-            from .websocket import render_embedded_child_html
 
-            html = await sync_to_async(render_embedded_child_html)(child)
-            request = await sync_to_async(_authorize)(runtime, root, child, generation)
-            if not await runtime._persist_explicit_children_after_event(
-                root, request=request, async_batch=batch_token
-            ):
-                return
-            _check_owner(runtime, root, child, generation)
-            await runtime._send_render_frame(
-                {
-                    "type": "embedded_update",
-                    "view_id": child._view_id,
-                    "html": html,
-                    "event_name": event_name,
-                    "source": "async",
-                }
-            )
-            await runtime._flush_all_pending()
-            runtime._flush_push_events(child)
+            async def complete() -> None:
+                await sync_to_async(_authorize)(runtime, root, child, generation)
+                handler = getattr(child, "handle_async_result", None)
+                if callable(handler):
+                    await call_async_result(child, handler, name, result=result, error=error)
+                elif error is not None:
+                    raise ExposureError("Child background callback failed")
+                await sync_to_async(_authorize)(runtime, root, child, generation)
+                from .websocket import render_embedded_child_html
+
+                html = await sync_to_async(render_embedded_child_html)(child)
+                request = await sync_to_async(_authorize)(runtime, root, child, generation)
+                if not await runtime._persist_explicit_children_after_event(
+                    root, request=request, async_batch=batch_token
+                ):
+                    return
+                _check_owner(runtime, root, child, generation)
+                await runtime._send_render_frame(
+                    {
+                        "type": "embedded_update",
+                        "view_id": child._view_id,
+                        "html": html,
+                        "event_name": event_name,
+                        "source": "async",
+                    }
+                )
+                await runtime._flush_all_pending()
+                runtime._flush_push_events(child)
+
+            await runtime._run_async_result_turn(root, name, complete)
     except Exception:  # noqa: BLE001 — no provider/callback exception values on the wire/log
         await runtime.transport.send_error(
             "Child background work unavailable. Please reload the page.",
@@ -146,6 +173,12 @@ def dispatch_legacy_child_work(
             raise asyncio.CancelledError
 
     async def run(name: str, callback: Any, args: Any, kwargs: Any) -> None:
+        # One ``async``/``start`` turn for the root's socket (ADR-044).
+        await runtime._run_async_start_turn(
+            root, name, lambda: run_body(name, callback, args, kwargs)
+        )
+
+    async def run_body(name: str, callback: Any, args: Any, kwargs: Any) -> None:
         try:
             check_owner()
             result = None
@@ -155,31 +188,35 @@ def dispatch_legacy_child_work(
             except Exception as exc:  # noqa: BLE001 — forwarded only to the owner
                 error = exc
             async with runtime.transport.event_context(root):
-                check_owner()
-                handler = getattr(child, "handle_async_result", None)
-                if callable(handler):
-                    await sync_to_async(handler)(name, result=result, error=error)
-                elif error is not None:
-                    raise error
-                check_owner()
-                from .mixins.sticky import sticky_child_should_persist
-                from .websocket import render_embedded_child_html
 
-                html = await sync_to_async(render_embedded_child_html)(child)
-                check_owner()
-                if sticky_child_should_persist(child, root):
-                    await runtime._persist_sticky_child_after_event(child, event_name)
-                check_owner()
-                await runtime._send_render_frame(
-                    {
-                        "type": "embedded_update",
-                        "view_id": view_id,
-                        "html": html,
-                        "event_name": event_name,
-                        "source": "async",
-                    }
-                )
-                runtime._flush_push_events(child)
+                async def complete() -> None:
+                    check_owner()
+                    handler = getattr(child, "handle_async_result", None)
+                    if callable(handler):
+                        await call_async_result(child, handler, name, result=result, error=error)
+                    elif error is not None:
+                        raise error
+                    check_owner()
+                    from .mixins.sticky import sticky_child_should_persist
+                    from .websocket import render_embedded_child_html
+
+                    html = await sync_to_async(render_embedded_child_html)(child)
+                    check_owner()
+                    if sticky_child_should_persist(child, root):
+                        await runtime._persist_sticky_child_after_event(child, event_name)
+                    check_owner()
+                    await runtime._send_render_frame(
+                        {
+                            "type": "embedded_update",
+                            "view_id": view_id,
+                            "html": html,
+                            "event_name": event_name,
+                            "source": "async",
+                        }
+                    )
+                    runtime._flush_push_events(child)
+
+                await runtime._run_async_result_turn(root, name, complete)
         except Exception:  # noqa: BLE001 — no callback data in client errors
             await runtime.transport.send_error(
                 "Child background work unavailable. Please reload the page.",

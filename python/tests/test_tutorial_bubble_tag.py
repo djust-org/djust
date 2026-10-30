@@ -56,8 +56,10 @@ class TestTutorialBubbleTag:
         out = render("{% load djust_tutorials %}{% tutorial_bubble %}")
         assert "dj-tutorial-bubble__skip" in out
         assert "dj-tutorial-bubble__cancel" in out
-        # Buttons use onclick to dispatch tour:hide (works outside dj-root)
-        assert "tour:hide" in out
+        # A delegated client listener dispatches tour:hide for these buttons
+        # (tests/js/component_behaviors.test.js); no inline handler, which a
+        # strict CSP would refuse.
+        assert "onclick" not in out
 
     def test_includes_text_and_progress_elements(self, render):
         out = render("{% load djust_tutorials %}{% tutorial_bubble %}")

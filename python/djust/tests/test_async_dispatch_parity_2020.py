@@ -73,8 +73,8 @@ class TestTransportDispatchParity:
         from djust.websocket import LiveViewConsumer
 
         return (
-            inspect.getsource(LiveViewConsumer._run_async_work),
-            inspect.getsource(ViewRuntime._execute_async_task),
+            inspect.getsource(LiveViewConsumer._run_async_work_body),
+            inspect.getsource(ViewRuntime._execute_async_task_body),
         )
 
     def test_both_paths_delegate_to_the_shared_helper(self):

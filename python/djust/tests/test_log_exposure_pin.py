@@ -89,7 +89,7 @@ RUNTIME_LEGACY_GATED = {
     ("_flush_deferred_activity_events", "dj_activity: runtime deferred-event flush raised"): (
         "inside `if diagnostics_allowed()` after restricting to both owners"
     ),
-    ("_dispatch_single_event", "Runtime deferred-activity event %r on %s raised "): (
+    ("_dispatch_single_event_body", "Runtime deferred-activity event %r on %s raised "): (
         "inside `if diagnostics_allowed()` after restricting to the target view"
     ),
     ("_notify_waiters_safely", "<Name>"): (
@@ -98,10 +98,10 @@ RUNTIME_LEGACY_GATED = {
     ("_push_tt_event", "Runtime: time_travel on_event_recorded hook fail"): (
         "inside `if diagnostics_allowed()` after restricting to both owners"
     ),
-    ("_execute_async_task", "Runtime: error in start_async callback '%s' on %"): (
+    ("_execute_async_task_body", "Runtime: error in start_async callback '%s' on %"): (
         "inside `if legacy_diagnostics and uses_legacy_exposure(view)`"
     ),
-    ("_execute_async_task", "Runtime: error in handle_async_result for task '"): (
+    ("_execute_async_task_body", "Runtime: error in handle_async_result for task '"): (
         "inside `if legacy_diagnostics and uses_legacy_exposure(view)`"
     ),
     ("_settle_cancelled_async", "Runtime: error settling cancelled async task for"): (
@@ -110,10 +110,10 @@ RUNTIME_LEGACY_GATED = {
     ("dispatch_actor_event", "dj_activity: deferred-event flush raised (actor "): (
         "actor events are refused for nonlegacy views before this transport hook"
     ),
-    ("dispatch_mount", "state_snapshot _restore_snapshot failed for %s; "): (
+    ("_dispatch_mount_body", "state_snapshot _restore_snapshot failed for %s; "): (
         "restore runs only when `opt_in and legacy_exposure`"
     ),
-    ("dispatch_mount", "Failed to emit state_snapshot_signed for %s; pro"): (
+    ("_dispatch_mount_body", "Failed to emit state_snapshot_signed for %s; pro"): (
         "a nonlegacy view reaches only the explicit branch, wrapped in its own value-free catch"
     ),
 }
@@ -231,9 +231,12 @@ MIXIN_TABLES = {
     "api/dispatch.py": (
         {},
         {
-            ("dispatch_api", "djust API: malformed JSON body for %s"): "request body parse",
             (
-                "dispatch_server_function",
+                "_dispatch_api_authenticated",
+                "djust API: malformed JSON body for %s",
+            ): "request body parse",
+            (
+                "_dispatch_server_function_checked",
                 "djust API: malformed JSON body for %s",
             ): "request body parse",
         },
@@ -503,10 +506,10 @@ MIXIN_TABLES = {
     ),
     "state_backends/redis.py": (
         {
-            ("get", "Failed to deserialize from Redis key '%s': %s"): (
+            ("get", "Failed to deserialize from Redis %s: %s"): (
                 "legacy view-cache (de)serialization; explicit initialization bypasses the backend"
             ),
-            ("set", "Failed to serialize to Redis key '%s': %s"): (
+            ("set", "Failed to serialize to Redis %s: %s"): (
                 "legacy view-cache (de)serialization; explicit initialization bypasses the backend"
             ),
         },
@@ -642,6 +645,10 @@ MIXIN_TABLES = {
             (
                 "on_file_change",
                 "[HotReload] template-library cache invalidation ",
+            ): "dev hot-reload server",
+            (
+                "on_file_change",
+                "[HotReload] template hash reset failed",
             ): "dev hot-reload server",
         },
     ),
@@ -1109,7 +1116,7 @@ MIXIN_TABLES = {
     ),
     "mixins/request.py": (
         {
-            ("post", "<Name>"): (
+            ("_post_turn_body", "<Name>"): (
                 "legacy or DEBUG only (D-a revised): in production a nonlegacy view "
                 "returns the generic response first"
             ),
@@ -1152,6 +1159,24 @@ MIXIN_TABLES = {
         {
             ("bind_csrf_cookie", "Could not bind the browser CSRF secret to a rebu"): (
                 "Django CSRF middleware on a rebuilt socket request, before any view mounts"
+            ),
+        },
+    ),
+    # ADR-044 turn middleware.
+    "turns.py": (
+        {},
+        {
+            ("_record_timing", "turn timing could not be recorded"): (
+                "framework telemetry (the timing store); no view or application value"
+            ),
+        },
+    ),
+    "_turn_ports.py": (
+        {},
+        {
+            ("reauth_live_turn", "reauth_on_event re-check raised %s on view %s; d"): (
+                "value-free: the exception type and view class only (the reauth "
+                "re-check fails closed)"
             ),
         },
     ),

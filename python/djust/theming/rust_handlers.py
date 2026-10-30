@@ -17,8 +17,11 @@ This module registers a thin :class:`~djust.template_tags.TagHandler` bridge
 for each documented theme tag so the ``{% theme_X %}`` form works in the Rust
 engine. Each handler:
 
-- receives the Rust engine's ``args`` (a list of ``"key=value"`` strings and
-  positional values, already variable-resolved) plus the render ``context``;
+- receives the Rust engine's ``args`` (a list of ``"key=value"`` strings,
+  already variable-resolved; a positional token such as the ``"btn"`` of
+  ``{% theme_mode_toggle "btn" %}`` has been renamed to ``button_class="btn"``
+  at template compile time, from the simple_tag's own signature, #3664) plus
+  the render ``context``;
 - parses the args into kwargs matching the simple_tag's signature;
 - builds a ``{"request": request}`` context (``request`` pulled from the
   render context; ``None`` is fine — the theme manager falls back to
@@ -106,8 +109,11 @@ def _parse_kwargs(args: List[str], context: Dict[str, Any]) -> Dict[str, Any]:
 
     Only ``key=value`` args are kept — the documented theme tags take
     keyword-only customization params (``show_packs=False``,
-    ``layout="grid"``, etc.). Positional args are ignored (none of the
-    documented theme tags take positional args).
+    ``layout="grid"``, etc.). By the time args reach here every positional
+    token has already been given its parameter name at template compile time
+    (``{% theme_mode_toggle "btn" %}`` arrives as ``button_class="btn"``, see
+    :mod:`djust._positional_args`, #3664), so a bare value with no ``=`` is an
+    ``as <var>`` tail or a stray token and is ignored.
     """
     kwargs: Dict[str, Any] = {}
     for arg in args:
@@ -179,8 +185,17 @@ def register_with_rust_engine() -> None:
         )
         return
 
+    from djust._positional_args import with_positional_args
+
+    from .templatetags.theme_tags import register as _tag_library
+
     for tag_name in _THEME_TAG_NAMES:
         if has_tag_handler(tag_name):
             continue
-        register_tag_handler(tag_name, ThemeTagHandler(tag_name))
+        # The theme tags are ``simple_tag``s, so ``{% theme_mode_toggle "btn" %}``
+        # is valid Django; name the positional tokens after the tag's own
+        # parameters (#3664).
+        register_tag_handler(
+            tag_name, with_positional_args(tag_name, ThemeTagHandler(tag_name), _tag_library)
+        )
         logger.debug("Registered Rust theme tag handler: %s", tag_name)

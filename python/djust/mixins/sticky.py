@@ -266,7 +266,9 @@ async def save_sticky_child_state(child: Any, save_session: Any, parent_path: st
     if inspect.iscoroutinefunction(gcd):
         context = await gcd()
     else:
-        context = await sync_to_async(gcd)()
+        from ..sync_turn import sync_step
+
+        context = await sync_to_async(sync_step(child, "render", gcd))()
 
     state = _collect_sticky_child_state(child, context)
     await save_session.aset(key, _normalize(state, state_roundtrip=True))
@@ -297,7 +299,12 @@ def save_sticky_child_state_sync(child: Any, session: Any, parent_path: str) -> 
     # Coroutine-aware like the async variant: the runtime's event save also
     # runs this in a Django thread (#3212).
     gcd = child.get_context_data
-    context = async_to_sync(gcd)() if inspect.iscoroutinefunction(gcd) else gcd()
+    if inspect.iscoroutinefunction(gcd):
+        context = async_to_sync(gcd)()
+    else:
+        from ..sync_turn import run_sync_step
+
+        context = run_sync_step(child, "render", gcd)
     state = _collect_sticky_child_state(child, context)
     session[key] = _normalize(state, state_roundtrip=True)
 
@@ -395,7 +402,8 @@ def restore_sticky_child_state(child: Any, parent: Any, session: Any, parent_pat
        tree-consistent.
     2. ``session.get`` the public state under the stable key; absent → fresh
        ``mount()``.
-    3. ``safe_setattr`` each public attr (``allow_private=False``).
+    3. ``restore_public_state`` each public attr (``safe_setattr``, never over a
+       method of the class).
     4. ``_restore_private_state`` for the ``__private`` sibling key.
     5. ``_restore_*`` side-effect replay (Decision 6), each ``hasattr``-guarded:
        ``_restore_upload_configs`` / ``_restore_presence`` /
@@ -431,13 +439,13 @@ def restore_sticky_child_state(child: Any, parent: Any, session: Any, parent_pat
         return False
 
     # Lazy import to avoid a circular import (security -> live_view -> mixins).
-    from ..security import safe_setattr
+    from .._state_restore import restore_public_state
     from ..serialization import decode_state_roundtrip
 
     # #2252: ``save_sticky_child_state`` tagged every Decimal on the way out
     # (``_normalize(..., state_roundtrip=True)``); un-tag before applying.
-    for attr, value in decode_state_roundtrip(saved).items():
-        safe_setattr(child, attr, value, allow_private=False)
+    # Never over a method of the child's class (same rule as the HTTP path).
+    restore_public_state(child, decode_state_roundtrip(saved))
 
     private = session.get(f"{key}__private")
     if private and hasattr(child, "_restore_private_state"):
@@ -620,7 +628,9 @@ class StickyChildRegistry:
         cleanup = getattr(child, "_cleanup_on_unregister", None)
         if callable(cleanup):
             try:
-                cleanup()
+                from .._child_lifecycle import call_teardown_hook
+
+                call_teardown_hook(child, cleanup)
             except Exception:  # noqa: BLE001 — defensive: never break disconnect
                 logger.exception("child view %s _cleanup_on_unregister raised", view_id)
 

@@ -2012,11 +2012,30 @@ fn apply_builtin_filter(
             // key. `arg_was_quoted` is the only thing that separates them, and
             // `{{ p|dictsort:0 }}` vs `{{ p|dictsort:"1" }}` on the same list
             // of strings is the cell that proves it.
-            let index = if arg_was_quoted {
-                None
-            } else {
-                sort_key.parse::<usize>().ok()
+            //
+            // A VARIABLE argument is typed by what it resolved to, not by its
+            // spelling: `_property_resolver` tries `float(arg)` on the object,
+            // so a context string `"3"` builds `itemgetter("3")`, a KEY
+            // lookup, and an `int` indexes. Reading the resolved text as an
+            // unquoted literal sorted a list of strings by its fourth
+            // character where Django's `str["3"]` raises and renders `""`.
+            let index = match resolved_arg {
+                Some(Value::Integer(n)) => usize::try_from(*n).ok(),
+                Some(Value::Bool(b)) => Some(usize::from(*b)),
+                Some(Value::String(_) | Value::SafeString(_)) => None,
+                // `itemgetter(2.5)` / `itemgetter(Decimal("0"))`: no sequence
+                // item accepts a non-integer index, so Django's
+                // `except TypeError` returns `""`.
+                Some(Value::Float(_) | Value::Decimal(_)) => {
+                    return Some(Ok(Value::String(String::new())));
+                }
+                _ if arg_was_quoted => None,
+                _ => sort_key.parse::<usize>().ok(),
             };
+            // `sorted(..., reverse=True)` keeps EQUAL keys in their input
+            // order. Reversing an ascending sort reversed them as well, so a
+            // tie came out backwards.
+            let reverse = filter_name == "dictsortreversed";
             let sorted = match value {
                 // A dict VIEW sorts (#2340). Django's `dictsort` is
                 // `sorted(value, key=…)` and `sorted()` takes ANY iterable, so
@@ -2036,8 +2055,8 @@ fn apply_builtin_filter(
                 | Value::Tuple(items)
                 | Value::NamedTuple { items, .. }
                 | Value::DictView { items, .. } => match index {
-                    Some(n) => dictsort_by_index(items, n),
-                    None => dictsort_by_key(items, sort_key),
+                    Some(n) => dictsort_by_index(items, n, reverse),
+                    None => dictsort_by_key(items, sort_key, reverse),
                 },
                 // A CARRIED collection, through the same `iter_values` sink
                 // `{% for %}` / `|join` / `in` use (#2693, link N+1 of
@@ -2049,8 +2068,8 @@ fn apply_builtin_filter(
                 // reaches it first, with the same cap semantics.
                 Value::Encoded(_) => match iter_values(value) {
                     Ok(Some(items)) => match index {
-                        Some(n) => dictsort_by_index(&items, n),
-                        None => dictsort_by_key(&items, sort_key),
+                        Some(n) => dictsort_by_index(&items, n, reverse),
+                        None => dictsort_by_key(&items, sort_key, reverse),
                     },
                     // Not iterable — `sorted()` raises `TypeError`, which
                     // Django's own `except TypeError: return ""` catches.
@@ -2066,12 +2085,7 @@ fn apply_builtin_filter(
                 _ => None,
             };
             match sorted {
-                Some(mut items) => {
-                    if filter_name == "dictsortreversed" {
-                        items.reverse();
-                    }
-                    Ok(Value::List(items))
-                }
+                Some(items) => Ok(Value::List(items)),
                 None => Ok(Value::String(String::new())),
             }
         }
@@ -4805,7 +4819,7 @@ fn compare_sort_values(a_val: &Value, b_val: &Value) -> std::cmp::Ordering {
 /// `None` here where Django would sort. That is the fail-CLOSED direction (the
 /// value is discarded rather than emitted), and it is the same answer djust
 /// already gave for the security-relevant shapes.
-fn dictsort_by_key(items: &[Value], key: &str) -> Option<Vec<Value>> {
+fn dictsort_by_key(items: &[Value], key: &str, reverse: bool) -> Option<Vec<Value>> {
     // Django's `_property_resolver` refuses private access before touching any
     // item, so it raises even for an empty sequence.
     if key.starts_with('_') || key.contains("._") {
@@ -4818,7 +4832,25 @@ fn dictsort_by_key(items: &[Value], key: &str) -> Option<Vec<Value>> {
             return None;
         }
     }
-    Some(sort_dicts_by_key(items, key))
+    Some(stable_reverse(items, reverse, |items| {
+        sort_dicts_by_key(items, key)
+    }))
+}
+
+/// Python's `reverse=True`: equal elements keep their input order. Sorting
+/// the reversed input ascending and reversing the result gives exactly that.
+fn stable_reverse(
+    items: &[Value],
+    reverse: bool,
+    sort: impl FnOnce(&[Value]) -> Vec<Value>,
+) -> Vec<Value> {
+    if !reverse {
+        return sort(items);
+    }
+    let backwards: Vec<Value> = items.iter().rev().cloned().collect();
+    let mut out = sort(&backwards);
+    out.reverse();
+    out
 }
 
 /// `operator.itemgetter(n)` — an UNQUOTED integer argument INDEXES.
@@ -4828,9 +4860,14 @@ fn dictsort_by_key(items: &[Value], key: &str) -> Option<Vec<Value>> {
 /// `Missing` for every non-`Object` and so compared every pair Equal.
 /// `{{ ['ba','ab']|dictsort:0 }}` is `['ab', 'ba']` in Django and was
 /// `['ba', 'ab']` here.
-fn dictsort_by_index(items: &[Value], n: usize) -> Option<Vec<Value>> {
+fn dictsort_by_index(items: &[Value], n: usize, reverse: bool) -> Option<Vec<Value>> {
     let mut keyed: Vec<(Value, Value)> = Vec::with_capacity(items.len());
-    for item in items {
+    let ordered: Vec<&Value> = if reverse {
+        items.iter().rev().collect()
+    } else {
+        items.iter().collect()
+    };
+    for item in ordered {
         let k = match item {
             Value::String(s) | Value::SafeString(s) => {
                 s.chars().nth(n).map(|c| Value::String(c.to_string()))
@@ -4845,7 +4882,11 @@ fn dictsort_by_index(items: &[Value], n: usize) -> Option<Vec<Value>> {
         keyed.push((k, item.clone()));
     }
     keyed.sort_by(|a, b| compare_sort_values(&a.0, &b.0));
-    Some(keyed.into_iter().map(|(_, item)| item).collect())
+    let mut out: Vec<Value> = keyed.into_iter().map(|(_, item)| item).collect();
+    if reverse {
+        out.reverse();
+    }
+    Some(out)
 }
 
 fn get_dict_value(value: &Value, key: &str) -> Value {

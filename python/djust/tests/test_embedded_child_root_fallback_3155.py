@@ -205,12 +205,12 @@ class TestMaskingCost:
         calls = self._count_masks(monkeypatch)
         out = LiveView._stamp_dj_view(html, "app.Page")
         assert out.count('dj-view="app.Page"') == 1
-        # The stamp's own raw-text mask, plus one root-search mask for the spans.
-        assert calls["n"] <= 2, calls
+        # The Rust scanner reads the page (#3031): no Python mask at all.
+        assert calls["n"] == 0, calls
 
     def test_a_page_without_children_pays_no_extra_mask(self, monkeypatch):
         html = "<div dj-root><p>page</p></div>"
         calls = self._count_masks(monkeypatch)
         LiveView._stamp_dj_view(html, "app.Page")
-        # Only the stamp's own raw-text mask, as before #3155.
-        assert calls["n"] == 1, calls
+        # The Rust scanner reads the page (#3031): no Python mask at all.
+        assert calls["n"] == 0, calls

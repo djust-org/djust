@@ -339,11 +339,10 @@ function reinitLiveViewForTurboNav() {
         if (globalThis.djustDebug) console.log('[LiveView:TurboNav] No LiveView containers found, skipping WebSocket');
     }
 
-    // Clean up existing poll intervals before re-binding
-    document.querySelectorAll('[dj-poll]').forEach(el => {
-        if (el._djustPollIntervalId) clearInterval(el._djustPollIntervalId);
-        if (el._djustPollVisibilityHandler) document.removeEventListener('visibilitychange', el._djustPollVisibilityHandler);
-    });
+    // Stop every poll before re-binding — including the ones on elements the
+    // swap already detached, which a document query cannot see.
+    teardownPollsIn(document);
+    _sweepOrphanedPolls();
 
     // Clean up scoped (window/document) listeners before re-binding
     for (const el of _scopedListenerElements) {
@@ -510,6 +509,33 @@ function applyHttpSideChannels(data) {
  * @param {Object|null} transport - Connection/local operation owning this response
  * @returns {boolean} - True if handled successfully, false otherwise
  */
+/**
+ * The `<form>` a server `reset_form` applies to.
+ *
+ * The form the event came from: the triggering form itself (a `dj-submit`) or
+ * the form that contains the triggering element (a reset button, a field).
+ * With no such form (a button outside any form, a URL change), the root's form
+ * only when it has exactly one: on a page with several forms there is no way
+ * to tell which one the server reset, and resetting the first one cleared an
+ * unrelated draft (a chat composer above the form that was opened).
+ *
+ * @param {Element|null} triggerElement element that sent the event
+ * @param {Element|null} root the view's root (a view slot), else `[dj-root]`
+ * @returns {HTMLFormElement|null}
+ */
+function formToReset(triggerElement, root) {
+    if (triggerElement && triggerElement.isConnected && triggerElement.closest) {
+        const own = triggerElement.closest('form');
+        if (own) return own;
+    }
+    const scope = root || document.querySelector('[dj-root]');
+    if (!scope) return null;
+    const forms = scope.querySelectorAll('form');
+    return forms.length === 1 ? forms[0] : null;
+}
+
+window.djust.formToReset = formToReset;
+
 async function handleServerResponse(data, eventName, triggerElement, transport = null) {
     try {
         // Handle cache storage (from @cache decorator)
@@ -690,18 +716,30 @@ async function handleServerResponse(data, eventName, triggerElement, transport =
         // A deferred save's catch-up (or a later committed turn) has reached
         // this owner's DOM. Do not clear saving status for rejected, malformed
         // or broadcast frames, which do not confirm this owner's state.
-        if (!data.broadcast && data.source !== 'broadcast' &&
-            ((Array.isArray(data.patches)) || data.html)) {
+        const appliedFrame = Array.isArray(data.patches) || !!data.html;
+        const renderedView = typeof data.view === 'string' ? data.view : (transport?.primaryViewPath || null);
+        const renderedTarget = typeof data.target_id === 'string' ? data.target_id : null;
+        if (!data.broadcast && data.source !== 'broadcast' && appliedFrame) {
             window.dispatchEvent(new CustomEvent('djust:rendered', {detail: {
-                view: typeof data.view === 'string' ? data.view : (transport?.primaryViewPath || null),
-                target_id: typeof data.target_id === 'string' ? data.target_id : null,
+                view: renderedView,
+                target_id: renderedTarget,
+            }}));
+        }
+        // Every applied frame, whoever caused it (a server push, a tick, an
+        // async result, this page's own event), after the DOM is updated: for
+        // client code that re-syncs after any patch. ``source`` says which.
+        if (appliedFrame) {
+            window.dispatchEvent(new CustomEvent('djust:patched', {detail: {
+                view: renderedView,
+                target_id: renderedTarget,
+                source: typeof data.source === 'string' && data.source ? data.source : 'event',
             }}));
         }
 
         // Handle form reset
         if (data.reset_form) {
-            if (globalThis.djustDebug) console.log('[LiveView] Resetting form');
-            const form = _activeSlot ? _activeSlot.root.querySelector('form') : document.querySelector('[dj-root] form');
+            const form = formToReset(triggerElement, _activeSlot ? _activeSlot.root : null);
+            if (globalThis.djustDebug) console.log('[LiveView] Resetting form', form);
             if (form) form.reset();
         }
 
@@ -1649,6 +1687,9 @@ class LiveViewWebSocket {
         switch (data.type) {
             case 'connect':
                 this.sessionId = data.session_id;
+                // The server refuses a frame over this size; 0 = no limit.
+                this.maxMessageSize = typeof data.max_message_size === 'number'
+                    ? data.max_message_size : 0;
                 if (globalThis.djustDebug) console.log('[LiveView] Session ID:', this.sessionId);
                 this.autoMount();
                 // The views hydrated beside the page view lived on the socket
@@ -1695,6 +1736,21 @@ class LiveViewWebSocket {
                 // two are `undefined` and this is the page mount.
                 if (data.view === this.primaryViewPath) installMountEventConfig(data);
                 else installAdditionalMountEventConfig(data);
+
+                // A live_redirect to another view class mounts that class here;
+                // the page container's dj-view must follow it, as the SSE branch
+                // does (03b-sse.js), or a reconnect (autoMount reads dj-view)
+                // mounts the old view at the new URL.
+                if (typeof data.view === 'string' && data.view === this.primaryViewPath) {
+                    const pageContainer = findPageViewContainer();
+                    if (pageContainer && pageContainer.getAttribute('dj-view') !== data.view) {
+                        pageContainer.setAttribute('dj-view', data.view);
+                    }
+                    // ...and so must its own dj-poll: the content swap below
+                    // leaves the root's attributes as they were.
+                    applyRootPoll(pageContainer || document.querySelector('[dj-root]:not(html):not(head)'),
+                        data.root_poll);
+                }
 
                 // Initialize upload configurations from mount response
                 if (data.upload_configs && window.djust.uploads) {
@@ -1912,6 +1968,7 @@ class LiveViewWebSocket {
                     }
                     if (typeof entry.html === 'string') {
                         // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
+                        teardownPollsIn(container, true);
                         container.innerHTML = entry.html;
                         // #2058: unlike the single-view mount branches above,
                         // mount_batch does NOT call _runInsertedScripts() —
@@ -2531,6 +2588,10 @@ class LiveViewWebSocket {
         // container it fills: the server adds it to the socket instead of
         // replacing the page view, and addresses its frames with this id.
         if (options.targetId) frame.target_id = options.targetId;
+        // ADR-044: the server runs this mount as a `reconnect` turn. A hint
+        // only (turn middleware sees `turn.kind`); nothing security-relevant
+        // depends on it.
+        if (window.djust && window.djust._isReconnect) frame.reconnect = true;
         // #2966: a reconnecting page view asks whether its tracked assets
         // are stale (dj-track-static). Shared with the SSE mount (#1646).
         const trackStatic = globalThis.djust.djTrackStatic;
@@ -2560,6 +2621,27 @@ class LiveViewWebSocket {
     sendMessage(data) {
         const message = JSON.stringify(data);
         const messageBytes = message.length;
+
+        // A frame over the server's max_message_size would be refused; report
+        // it here, through the same path as the server's refusal.
+        const limit = this.maxMessageSize || 0;
+        if (limit && messageBytes * 3 > limit) {
+            const size = new TextEncoder().encode(message).length;
+            if (size > limit) {
+                this.handleMessage({
+                    type: 'error',
+                    code: 'message_too_large',
+                    // Same text as the server's refusal, whose "Message too
+                    // large (N bytes)" prefix clients parse (signature-pad.js).
+                    error: `Message too large (${size} bytes); the server's max_message_size is ${limit}. ` +
+                        'Not sent. Send files with UploadMixin, or raise ' +
+                        "LIVEVIEW_CONFIG['max_message_size'].",
+                    event: data.event || null,
+                    ref: data.ref ?? null,
+                });
+                return;
+            }
+        }
 
         // Track sent message
         this.stats.sent++;
@@ -3151,6 +3233,7 @@ class LiveViewSSE {
                     if (!container) container = document.querySelector('[dj-root]:not(html):not(head)');
                     if (container) {
                         if (typeof data.view === 'string') container.setAttribute('dj-view', data.view);
+                        applyRootPoll(container, data.root_poll);
                         const hasDataDjAttrs = data.has_ids === true;
                         if (hasDataDjAttrs && !this._replacingView) {
                             // The page was prerendered over HTTP: morph it
@@ -4255,14 +4338,18 @@ window.djust.applyHandlerRateLimit = applyHandlerRateLimit;
 /**
  * Immediately send every pending debounced / throttled event.
  *
- * Called from the `dj-submit` path in 09-event-binding.js for the same
- * reason `_flushPendingDebouncesInForm` is (#1278): a user who edits a
- * debounced field and immediately submits must not lose the last change.
- * `_flushPendingDebouncesInForm` flushes the ELEMENT-level `dj-debounce`
+ * Called from `_flushPendingEdits` in 09-event-binding.js (dj-click and
+ * dj-submit, #1278): a user who edits a debounced field and immediately
+ * clicks or submits must not lose the last change. That helper first
+ * flushes the ELEMENT-level `dj-debounce`
  * wrappers; this flushes the HANDLER-level `@debounce` / `@throttle` gate,
  * which is a separate timer set and would otherwise still be pending.
+ *
+ * `debounceOnly` (a click) leaves the throttle gate alone: a throttled
+ * handler's trailing call is a rate-limited stream, not an edit, and its
+ * window must survive the click.
  */
-function flushHandlerRateLimit() {
+function flushHandlerRateLimit(debounceOnly = false) {
     // Validate BEFORE destroying anything (#2700 review). The clears below are
     // irreversible: bailing out after them would drop every pending event
     // instead of flushing it. Unreachable in the shipped bundle —
@@ -4280,11 +4367,13 @@ function flushHandlerRateLimit() {
     debounceTimers.clear();
 
     const throttlePending = [];
-    throttleState.forEach((state, eventName) => {
-        if (state.timeoutId) clearTimeout(state.timeoutId);
-        if (state.pendingData) throttlePending.push([eventName, state.pendingData]);
-    });
-    throttleState.clear();
+    if (!debounceOnly) {
+        throttleState.forEach((state, eventName) => {
+            if (state.timeoutId) clearTimeout(state.timeoutId);
+            if (state.pendingData) throttlePending.push([eventName, state.pendingData]);
+        });
+        throttleState.clear();
+    }
 
     debouncePending.concat(throttlePending).forEach(([eventName, pending]) => {
         window.djust.handleEvent(eventName, pending, true);
@@ -6112,6 +6201,10 @@ function _setFormPending(form, pending) {
 const _inputRateLimitState = new WeakMap();
 const _changeRateLimitState = new WeakMap();
 const _clickRateLimitState = new WeakMap();
+// The rate-limit wrappers of field edits (dj-input, dj-change): what a click
+// or submit sends ahead of itself (_flushPendingEdits). A debounced CLICK is
+// not an edit and keeps its own timer.
+const _editRateLimitWrappers = new WeakSet();
 const _keydownRateLimitState = new WeakMap();
 const _keyupRateLimitState = new WeakMap();
 // dj-mouseenter / dj-mouseleave (#2869) — same (element, matched-attribute)
@@ -6252,6 +6345,12 @@ async function _handleDjClick(element, e) {
         return; // User cancelled
     }
 
+    // An edit made before this click reaches the server before it: a
+    // debounced dj-input still pending would otherwise arrive after the
+    // click, carrying text typed before it (and undoing what the click's
+    // handler did with the current value).
+    _flushPendingEdits(true);
+
     // JS Commands: synchronously check whether the attribute is a
     // JSON command chain. If so, fire-and-forget the chain (push
     // ops still round-trip, but we don't block the rest of this
@@ -6377,20 +6476,16 @@ async function _handleDjSubmit(element, e) {
         return; // User cancelled
     }
 
-    // Closes #1278 — flush pending debounced dj-input handlers in this form
-    // BEFORE dispatching submit. Without this, a user who types a field then
-    // immediately clicks submit (within the 300 ms debounce window) hits a
-    // race: submit fires while per-field dj-input events are still pending,
-    // so the server-side state populated by those handlers is empty when the
-    // submit handler reads it. FormData on the form element captures the
-    // typed values, but views that depend on dj-input updating server state
-    // per-keystroke (e.g., WizardMixin's wizard_step_data) see stale data.
-    _flushPendingDebouncesInForm(element);
-    // #2656 — same race, other timer set: `_flushPendingDebouncesInForm`
-    // only flushes the element-level `dj-debounce` wrappers. A handler
-    // carrying `@debounce` / `@throttle` has its pending send parked in the
-    // handler-level gate, which this drains.
-    flushHandlerRateLimit();
+    // Closes #1278 — send pending debounced edits BEFORE dispatching submit.
+    // Without this, a user who types a field then immediately clicks submit
+    // (within the 300 ms debounce window) hits a race: submit fires while
+    // per-field dj-input events are still pending, so the server-side state
+    // populated by those handlers is empty when the submit handler reads it.
+    // FormData on the form element captures the typed values, but views that
+    // depend on dj-input updating server state per-keystroke (e.g.,
+    // WizardMixin's wizard_step_data) see stale data. The field need not be
+    // in this form (a dialog's note beside its confirm form).
+    _flushPendingEdits();
 
     // Read attribute at fire time so morphElement attribute updates take effect
     const submitHandler = element.getAttribute('dj-submit');
@@ -6815,6 +6910,7 @@ function installDelegatedListeners(root) {
             // Rate-limit per element using WeakMap
             const rawHandler = function(ev) { return _handleDjChange(changeEl, ev); };
             const wrapped = _getOrCreateRateLimitedHandler(_changeRateLimitState, changeEl, 'change', rawHandler);
+            _editRateLimitWrappers.add(wrapped);
             wrapped(e);
         }
     });
@@ -6879,6 +6975,7 @@ function installDelegatedListeners(root) {
 
                 state = { wrapped: wrapped };
                 _inputRateLimitState.set(inputEl, state);
+                _editRateLimitWrappers.add(wrapped);
             }
             state.wrapped(e);
         }
@@ -7080,9 +7177,14 @@ function bindLiveViewEvents(scope) {
 
     // === Per-element scanning section (only for non-delegable events) ===
 
-    // dj-poll needs per-element interval setup
+    // dj-poll needs per-element interval setup. Stop the polls a removal
+    // path missed (or whose attribute was dropped) before binding new ones.
+    _sweepOrphanedPolls();
     const pollSelector = '[dj-poll]';
-    const pollElements = root.querySelectorAll(pollSelector);
+    // The scan root itself can carry the poll (`<div dj-root dj-poll="...">`):
+    // querySelectorAll sees only its descendants.
+    const pollElements = Array.from(root.querySelectorAll(pollSelector));
+    if (typeof root.matches === 'function' && root.matches(pollSelector)) pollElements.unshift(root);
     pollElements.forEach(element => {
         const pollHandler = element.getAttribute('dj-poll');
         if (!pollHandler) return;
@@ -7095,22 +7197,13 @@ function bindLiveViewEvents(scope) {
         // not: an unchanged pair must NOT restart the poll phase — the bind
         // loop runs on every patch, and restarting would reset the interval
         // timer on every morph, so a poll would never fire on schedule. A
-        // changed pair evicts the old phase (clearInterval + visibilitychange
-        // teardown — the same teardown the element-removal paths in
-        // 01-dom-helpers-turbo.js / 12-vdom-patch.js perform) and rebuilds.
+        // changed pair evicts the old phase (_teardownPoll — the same teardown
+        // every element-removal path performs) and rebuilds.
         const interval = parseInt(element.getAttribute('dj-poll-interval'), 10) || 5000;
         const boundKey = pollHandler + '\u0000' + interval;
         if (_isHandlerBound(element, 'poll')) {
             if (element._djustPollBoundKey === boundKey) return;
-            if (element._djustPollIntervalId) {
-                clearInterval(element._djustPollIntervalId);
-                element._djustPollIntervalId = null;
-            }
-            if (element._djustPollVisibilityHandler) {
-                document.removeEventListener('visibilitychange', element._djustPollVisibilityHandler);
-                element._djustPollVisibilityHandler = null;
-            }
-            _unmarkHandlerBound(element, 'poll');
+            _teardownPoll(element);
         }
         _markHandlerBound(element, 'poll');
         element._djustPollBoundKey = boundKey;
@@ -7122,6 +7215,12 @@ function bindLiveViewEvents(scope) {
         // attributes can change under a surviving element too, and a
         // bind-time snapshot would keep dispatching the old ones (#2858).
         const firePoll = () => {
+            // Defensive: a removal path that skipped teardownPollsIn must not
+            // leave a detached element firing a handler the page no longer has.
+            if (!element.isConnected) {
+                _teardownPoll(element);
+                return;
+            }
             if (document.hidden) return;
             // Strict: routing context lets the owner that resolved the contract receive it.
             const strictParams = _strictBinding(element, parsed.name, {}, [], element);
@@ -7130,7 +7229,13 @@ function bindLiveViewEvents(scope) {
                 handleEvent(parsed.name, markSlotOf(Object.assign(strictParams, { _skipLoading: true }), element));
                 return;
             }
-            handleEvent(parsed.name, markSlotOf(Object.assign(extractTypedParams(element), { _skipLoading: true }), element));
+            // A poll inside an embedded child view (`{% live_render %}`) is
+            // that child's: it carries the child's view_id, as the strict
+            // path above does. A component's poll still reaches its host.
+            const params = Object.assign(extractTypedParams(element), { _skipLoading: true });
+            const embeddedViewId = getEmbeddedViewId(element);
+            if (embeddedViewId) params.view_id = embeddedViewId;
+            handleEvent(parsed.name, markSlotOf(params, element));
         };
 
         const intervalId = setInterval(firePoll, interval);
@@ -7142,6 +7247,7 @@ function bindLiveViewEvents(scope) {
         };
         document.addEventListener('visibilitychange', visHandler);
         element._djustPollVisibilityHandler = visHandler;
+        _pollElements.add(element);
     });
 
     // ================================================================
@@ -7616,34 +7722,28 @@ function _applyRateLimitAttrs(element, handler) {
 }
 
 /**
- * Flush all pending debounced dj-input handlers on inputs inside a form.
+ * Send every pending debounced field edit now, before another event is sent.
  *
- * Iterates the form's [dj-input] descendants; for each, looks up the
- * cached rate-limit state in `_inputRateLimitState` and calls
- * `wrapped.flush()` if the wrapped handler exposes one (only the
- * `debounce` rate-limit type does; throttle / passthrough / blur don't
- * need flushing here).
- *
- * Closes #1278 — see `_handleDjSubmit` for context.
- *
- * @param {HTMLFormElement} form
+ * The element-level `dj-debounce` wrappers of `dj-input` / `dj-change` first
+ * (each `.flush()` fires its pending call, which reaches `handleEvent`; other
+ * debounced bindings, such as a debounced click, keep their timers), then the
+ * handler-level gate (#2656), which may now hold the call just flushed. A
+ * submit (#1278) also drains the throttle gate, as it always has; a click
+ * (`debounceOnly`) keeps throttle windows: a throttled handler's trailing
+ * call is a stream, not an edit.
  */
-function _flushPendingDebouncesInForm(form) {
-    const inputs = form.querySelectorAll('[dj-input]');
-    for (let i = 0; i < inputs.length; i++) {
-        // eslint-disable-next-line security/detect-object-injection
-        const state = _inputRateLimitState.get(inputs[i]);
-        if (state && state.wrapped && typeof state.wrapped.flush === 'function') {
-            state.wrapped.flush();
-        }
-    }
+function _flushPendingEdits(debounceOnly = false) {
+    Array.from(pendingElementRateLimits).forEach((wrapper) => {
+        if (wrapper._djustDebounced && _editRateLimitWrappers.has(wrapper)) wrapper.flush();
+    });
+    flushHandlerRateLimit(debounceOnly);
 }
 
 // Helper: Debounce function with .flush() method.
 //
 // flush() fires the pending invocation immediately and clears the timer.
-// No-op if no invocation is pending. Used by _handleDjSubmit to ensure
-// debounced dj-input events fire before form submission, otherwise
+// No-op if no invocation is pending. Used by _flushPendingEdits to ensure
+// debounced dj-input events fire before a click or form submission, otherwise
 // per-field server-state updates (set by dj-input handlers) would race
 // the submit handler that reads them. Closes #1278.
 function debounce(func, wait) {
@@ -7679,6 +7779,8 @@ function debounce(func, wait) {
         pendingThis = null;
         func.apply(t, a);
     };
+
+    debounced._djustDebounced = true;
 
     debounced.cancel = function () {
         clearTimeout(timeout);
@@ -8940,6 +9042,88 @@ function markBodyStamped() {
     if (window.djust) window.djust._bodyStamped = true;
 }
 
+// ============================================================================
+// dj-poll teardown
+// ============================================================================
+
+// Every element that currently owns a poll interval. A removal path tears
+// down by CONTAINMENT against this set rather than by `[dj-poll]` query, so a
+// poll whose element lost its attribute is still found. Kept in this module
+// (not 09-event-binding.js, which binds polls) because every removal path
+// lives here, and some tests evaluate this file on its own.
+const _pollElements = new Set();
+
+/**
+ * Stop one element's poll: clear its interval and visibilitychange handler
+ * and forget its bound key. The bind pass skips an element only when its
+ * stored key matches, so one that comes back (a sticky subtree re-attached
+ * after navigation, say) is re-bound.
+ * @param {Element} element
+ */
+function _teardownPoll(element) {
+    if (element._djustPollIntervalId) clearInterval(element._djustPollIntervalId);
+    if (element._djustPollVisibilityHandler) {
+        document.removeEventListener('visibilitychange', element._djustPollVisibilityHandler);
+    }
+    element._djustPollIntervalId = null;
+    element._djustPollVisibilityHandler = null;
+    element._djustPollBoundKey = null;
+    _pollElements.delete(element);
+}
+
+/**
+ * Stop the poll of `root` AND of every poll element inside it. Every path
+ * that removes or replaces DOM calls this on what it removes: clearing only
+ * the replaced node left a nested poll's interval running on the detached
+ * element after a live_redirect mount, firing a handler the next view does
+ * not have.
+ * @param {Node} root - an element, fragment, or document
+ * @param {boolean} [childrenOnly=false] - keep `root`'s own poll: for a
+ *   container whose CONTENT is replaced while the container survives.
+ */
+function teardownPollsIn(root, childrenOnly) {
+    if (!root || _pollElements.size === 0) return;
+    for (const element of Array.from(_pollElements)) {
+        if (element === root) {
+            if (!childrenOnly) _teardownPoll(element);
+        } else if (typeof root.contains === 'function' && root.contains(element)) {
+            _teardownPoll(element);
+        }
+    }
+}
+
+/**
+ * Give the page root the destination view's own `dj-poll` attributes.
+ *
+ * A mount replaces only the root's content, so after a live_redirect the root
+ * element still carries the departing view's attributes, and a root poll
+ * would keep calling a handler the new view does not have. The mount frame
+ * names the root's poll attributes (`root_poll`, `{}` for none); a frame
+ * without it (an older server) leaves the root alone. The next bind pass
+ * stops a dropped poll and rebuilds a changed one; an unchanged one keeps its
+ * phase (#2858).
+ */
+function applyRootPoll(container, rootPoll) {
+    if (!container || !rootPoll || typeof rootPoll !== 'object') return;
+    for (const name of ['dj-poll', 'dj-poll-interval']) {
+        // eslint-disable-next-line security/detect-object-injection
+        const value = rootPoll[name];
+        if (typeof value === 'string') {
+            if (container.getAttribute(name) !== value) container.setAttribute(name, value);
+        } else if (container.hasAttribute(name)) {
+            container.removeAttribute(name);
+        }
+    }
+    if (!container.getAttribute('dj-poll')) teardownPollsIn(container, false);
+}
+
+/** Stop the polls whose element left the document or dropped `dj-poll`. */
+function _sweepOrphanedPolls() {
+    for (const element of Array.from(_pollElements)) {
+        if (!element.isConnected || !element.getAttribute('dj-poll')) _teardownPoll(element);
+    }
+}
+
 /**
  * Replace a container's content with server HTML (`innerHTML` semantics: the
  * inserted scripts stay inert). For `<body>` the foreign children survive, in
@@ -8947,6 +9131,7 @@ function markBodyStamped() {
  */
 function replaceContainerHtml(container, html) {
     if (container !== document.body || !pageRootIsBody()) {
+        teardownPollsIn(container, true);
         container.innerHTML = html;
         return;
     }
@@ -8954,7 +9139,7 @@ function replaceContainerHtml(container, html) {
     const owned = all.filter((n) => !isForeignBodyChild(n));
     const lastOwned = owned.length ? all.indexOf(owned[owned.length - 1]) : -1;
     const anchor = all.slice(lastOwned + 1).find((n) => isForeignBodyChild(n)) || null;
-    owned.forEach((n) => container.removeChild(n));
+    owned.forEach((n) => { teardownPollsIn(n); container.removeChild(n); });
     const tpl = document.createElement('template');
     tpl.innerHTML = html;
     container.insertBefore(tpl.content, anchor);
@@ -9133,6 +9318,22 @@ function restoreFocusState(state, rootEl = null) {
  *   so a child's dj-id doesn't match the parent's.
  * @returns {Node|null} - Found node or null
  */
+/**
+ * The node that holds `node`'s children: a `<template>`'s parsed children are
+ * in its `.content` fragment, which DOM child lists don't show; the server
+ * VDOM counts them as the template's children (crates/djust_vdom parser).
+ */
+function childHost(node) {
+    return node && node.nodeType === 1 && node.tagName === 'TEMPLATE' && node.content
+        ? node.content : node;
+}
+
+/** `host`'s element child with dj-id `id`; `:scope` is not used on a fragment. */
+function _childByDjId(node, host, id) {
+    if (host === node) return node.querySelector(`:scope > [dj-id="${CSS.escape(id)}"]`);
+    return Array.from(host.children).find((c) => c.getAttribute('dj-id') === id) || null;
+}
+
 function getNodeByPath(path, djustId = null, rootEl = null) {
     // Strategy 1: ID-based resolution (fast, reliable)
     if (djustId) {
@@ -9166,7 +9367,7 @@ function getNodeByPath(path, djustId = null, rootEl = null) {
         // server counts every text node, whitespace-only ones included, so the
         // walk must too, or a path through one resolves the wrong node (#3012).
         const preserveWhitespace = isWhitespacePreserving(node);
-        const children = Array.from(node.childNodes).filter((child) =>
+        const children = Array.from(childHost(node).childNodes).filter((child) =>
             isSignificantChild(child, preserveWhitespace)
         );
 
@@ -9544,6 +9745,8 @@ function _foreignPlaceholderContext(namespace) {
  * "inside SVG" flag) keeps the name-based choice.
  */
 function createNodeFromVNode(vnode, context = false) {
+    // A template's contents fragment is an HTML context of its own.
+    if (context && typeof context === 'object' && context.nodeType === 11) context = false;
     const parentEl = context && typeof context === 'object' ? context : null;
     const inSvgContext = parentEl ? isInSvgContext(parentEl) : !!context;
     if (vnode.tag === '#text') {
@@ -9659,8 +9862,9 @@ function createNodeFromVNode(vnode, context = false) {
         const childContext = placeholderNamespace
             ? _foreignPlaceholderContext(placeholderNamespace)
             : (parentEl ? elem : useSvgNamespace);
+        const host = childHost(elem);
         for (const child of vnode.children) {
-            elem.appendChild(createNodeFromVNode(child, childContext));
+            host.appendChild(createNodeFromVNode(child, childContext));
         }
     }
 
@@ -10027,6 +10231,7 @@ function _morphChildrenInner(existing, desired) {
                 && globalThis.djust.maybeDeferRemoval(node)) {
                 continue;
             }
+            teardownPollsIn(node);
             existing.removeChild(node);
         }
     }
@@ -10047,13 +10252,8 @@ function morphElement(existing, desired) {
 function _morphElementInner(existing, desired) {
     // Tag mismatch — replace entirely
     if (existing.tagName !== desired.tagName) {
-        // Clean up poll timers before replacing (prevents orphaned intervals)
-        if (existing._djustPollIntervalId) {
-            clearInterval(existing._djustPollIntervalId);
-            if (existing._djustPollVisibilityHandler) {
-                document.removeEventListener('visibilitychange', existing._djustPollVisibilityHandler);
-            }
-        }
+        // Stop the polls of the replaced subtree (prevents orphaned intervals)
+        teardownPollsIn(existing);
         // Clean up scoped (window/document) listeners before replacing
         _cleanupScopedListeners(existing);
         if (globalThis.djust && typeof globalThis.djust.maybeDeferRemoval === 'function'
@@ -10157,7 +10357,8 @@ function _morphElementInner(existing, desired) {
         return;
     }
 
-    morphChildren(existing, desired);
+    // A template's children are its `.content` (both sides parsed as HTML).
+    morphChildren(childHost(existing), childHost(desired));
 
     // Sync textarea .value from textContent after children are morphed
     // (.value and .textContent diverge after initial render)
@@ -10309,6 +10510,7 @@ function _applyDjUpdateElementsInner(existingRoot, newRoot) {
                     && globalThis.djust.maybeDeferRemoval(existing)) {
                     continue;
                 }
+                teardownPollsIn(existing);
                 existing.remove();
             }
         }
@@ -10380,7 +10582,7 @@ function getSignificantChildren(node) {
 
     // Shared significant-child predicate (#1655) — see getNodeByPath; passing
     // preserveWhitespace keeps the pre/code/textarea behavior.
-    return Array.from(node.childNodes).filter((child) =>
+    return Array.from(childHost(node).childNodes).filter((child) =>
         isSignificantChild(child, preserveWhitespace)
     );
 }
@@ -10579,6 +10781,7 @@ function _removeDjIfBracketedRange(openMarker, closeMarker) {
     }
     for (const node of toRemove) {
         if (node.parentNode === parent) {
+            teardownPollsIn(node);
             parent.removeChild(node);
         }
     }
@@ -11156,7 +11359,8 @@ function _removeChildNode(parent, child) {
         && globalThis.djust.maybeDeferRemoval(child)) {
         return;
     }
-    parent.removeChild(child);
+    teardownPollsIn(child);
+    childHost(parent).removeChild(child);
     if (wasTextNode && parent.tagName === 'TEXTAREA' && document.activeElement !== parent) {
         parent.value = '';
     }
@@ -11189,6 +11393,8 @@ function _djIfSpanNodes(id, rootEl) {
 function _placeChildren(parent, ops, movedChildOf, rootEl, tally) {
     const preserve = isWhitespacePreserving(parent);
     const isSig = (n) => isSignificantChild(n, preserve);
+    // Where `parent`'s children live (a template's `.content`).
+    const host = childHost(parent);
 
     // Claim the nodes each move carries: moved children first, then spans
     // from the smallest up.
@@ -11196,28 +11402,28 @@ function _placeChildren(parent, ops, movedChildOf, rootEl, tally) {
     for (const op of ops) {
         if (op.type !== 'MoveChild') continue;
         const child = movedChildOf.get(op);
-        if (child && child.parentNode === parent && !owner.has(child)) owner.set(child, op);
+        if (child && child.parentNode === host && !owner.has(child)) owner.set(child, op);
     }
     const spans = [];
     for (const op of ops) {
         if (op.type !== 'MoveSubtree') continue;
         const nodes = _djIfSpanNodes(op.id, rootEl);
-        if (nodes && nodes[0].parentNode === parent) spans.push({ op, nodes });
+        if (nodes && nodes[0].parentNode === host) spans.push({ op, nodes });
     }
     spans.sort((a, b) => a.nodes.length - b.nodes.length);
     for (const { op, nodes } of spans) {
         for (const n of nodes) if (!owner.has(n)) owner.set(n, op);
     }
     const carried = new Map();
-    for (const n of Array.from(parent.childNodes)) {
+    for (const n of Array.from(host.childNodes)) {
         const op = owner.get(n);
         if (!op) continue;
         if (!carried.has(op)) carried.set(op, []);
         carried.get(op).push(n);
-        parent.removeChild(n);
+        host.removeChild(n);
     }
 
-    const sig = Array.from(parent.childNodes).filter(isSig);
+    const sig = Array.from(host.childNodes).filter(isSig);
     const sorted = ops.slice().sort((a, b) => _placementIndex(a) - _placementIndex(b));
     for (const op of sorted) {
         let nodes;
@@ -11261,7 +11467,7 @@ function _placeChildren(parent, ops, movedChildOf, rootEl, tally) {
         const ref = sig[at] || null;
         const frag = document.createDocumentFragment();
         for (const n of nodes) frag.appendChild(n);
-        parent.insertBefore(frag, ref);
+        host.insertBefore(frag, ref);
         sig.splice(at, 0, ...nodes.filter(isSig));
         if (op.type === 'InsertChild' && nodes[0].nodeType === Node.TEXT_NODE &&
                 parent.tagName === 'TEXTAREA' && document.activeElement !== parent) {
@@ -11337,8 +11543,7 @@ function _applyPatchBatchInner(patches, rootEl) {
     };
     const childOf = (parent, childD, index) => {
         if (childD) {
-            const escaped = CSS.escape(childD);
-            const byId = parent.querySelector(`:scope > [dj-id="${escaped}"]`);
+            const byId = _childByDjId(parent, childHost(parent), String(childD));
             if (byId) return byId;
         }
         // eslint-disable-next-line security/detect-object-injection -- server-provided integer index
@@ -11368,7 +11573,7 @@ function _applyPatchBatchInner(patches, rootEl) {
     // 2. Removals.
     for (const p of removeSubtrees) tally(applyRemoveSubtree(p, rootEl), p);
     for (const [parent, child] of toRemove) {
-        if (child.parentNode === parent) _removeChildNode(parent, child);
+        if (child.parentNode === childHost(parent)) _removeChildNode(parent, child);
     }
 
     // 3. Placements, per parent in first-seen order.
@@ -11510,13 +11715,8 @@ function applySinglePatch(patch, rootEl = null) {
     try {
         switch (patch.type) {
             case 'Replace':
-                // Clean up poll timers before replacing (prevents orphaned intervals)
-                if (node._djustPollIntervalId) {
-                    clearInterval(node._djustPollIntervalId);
-                    if (node._djustPollVisibilityHandler) {
-                        document.removeEventListener('visibilitychange', node._djustPollVisibilityHandler);
-                    }
-                }
+                // Stop the polls of the replaced subtree (prevents orphaned intervals)
+                teardownPollsIn(node);
                 const newNode = createNodeFromVNode(patch.node, node.parentNode);
                 if (node.nodeType === Node.ELEMENT_NODE
                     && globalThis.djust
@@ -11633,7 +11833,8 @@ function applySinglePatch(patch, rootEl = null) {
                 // container, causing new sibling nodes to be inserted inside the
                 // <select>.  Detect this mismatch and redirect the insert to the
                 // correct parent so the new node becomes a sibling of <select>.
-                let insertTarget = node;
+                const host = childHost(node);
+                let insertTarget = host;
                 let insertRefChild = null;
                 const isSelectNode = node.nodeType === Node.ELEMENT_NODE && node.tagName === 'SELECT';
                 const newChildIsOption = newChild.nodeType === Node.ELEMENT_NODE &&
@@ -11648,8 +11849,7 @@ function applySinglePatch(patch, rootEl = null) {
                 } else {
                     if (patch.ref_d) {
                         // ID-based resolution: find sibling by dj-id (resilient to index shifts)
-                        const escaped = CSS.escape(patch.ref_d);
-                        insertRefChild = node.querySelector(`:scope > [dj-id="${escaped}"]`);
+                        insertRefChild = _childByDjId(node, host, String(patch.ref_d));
                     }
                     if (!insertRefChild) {
                         // Fallback: index-based
@@ -11677,11 +11877,11 @@ function applySinglePatch(patch, rootEl = null) {
                     if (globalThis.djustDebug) console.log('[LiveView] Patch %s targets non-element (nodeType=%d), skipping', patch.type, node.nodeType);
                     return false;
                 }
+                const host = childHost(node);
                 let child = null;
                 if (patch.child_d) {
                     // ID-based resolution: find child by dj-id (resilient to index shifts)
-                    const escaped = CSS.escape(patch.child_d);
-                    child = node.querySelector(`:scope > [dj-id="${escaped}"]`);
+                    child = _childByDjId(node, host, String(patch.child_d));
                 }
                 if (!child) {
                     // Fallback: index-based
@@ -11698,7 +11898,8 @@ function applySinglePatch(patch, rootEl = null) {
                         && globalThis.djust.maybeDeferRemoval(child)) {
                         break;
                     }
-                    node.removeChild(child);
+                    teardownPollsIn(child);
+                    host.removeChild(child);
                     // If removing a text node from a textarea, also clear its .value
                     // (removing textContent alone doesn't update what's displayed)
                     if (wasTextNode && parentTag === 'TEXTAREA' && document.activeElement !== node) {
@@ -11714,11 +11915,11 @@ function applySinglePatch(patch, rootEl = null) {
                     if (globalThis.djustDebug) console.log('[LiveView] Patch %s targets non-element (nodeType=%d), skipping', patch.type, node.nodeType);
                     return false;
                 }
+                const host = childHost(node);
                 let child;
                 if (patch.child_d) {
                     // ID-based resolution: find direct child by dj-id (resilient to index shifts)
-                    const escaped = CSS.escape(patch.child_d);
-                    child = node.querySelector(`:scope > [dj-id="${escaped}"]`);
+                    child = _childByDjId(node, host, String(patch.child_d));
                 }
                 if (!child) {
                     // Fallback: index-based
@@ -11731,9 +11932,9 @@ function applySinglePatch(patch, rootEl = null) {
                     const children = getSignificantChildren(node).filter((c) => c !== child);
                     const refChild = children[patch.to];
                     if (refChild) {
-                        node.insertBefore(child, refChild);
+                        host.insertBefore(child, refChild);
                     } else {
-                        node.appendChild(child);
+                        host.appendChild(child);
                     }
                 }
                 break;
@@ -12661,6 +12862,7 @@ function applySlotMount(transport, data, options = {}) {
             _morphPrerenderedMount(container, data.html, undefined, !mountedBefore);
         } else {
             // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
+            teardownPollsIn(container, true);
             container.innerHTML = data.html;
             _runInsertedScripts(container);
             _warnDeadScripts(container);
@@ -14307,6 +14509,7 @@ function _applyStreamOp(op, streamName) {
     switch (op.op) {
         case 'replace':
             // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
+            teardownPollsIn(el, true);
             el.innerHTML = op.html || '';
             // #2058: streaming HTML ops (LLM chat / live feeds) go through
             // innerHTML — a classic <script> in the streamed HTML is
@@ -14346,6 +14549,7 @@ function _applyStreamOp(op, streamName) {
 
         case 'delete':
             _dispatchStreamEvent(el, 'stream:remove', { stream: streamName });
+            teardownPollsIn(el);
             el.remove();
             break;
 
@@ -14365,6 +14569,7 @@ function _applyStreamOp(op, streamName) {
                 while (kids.length > limit) {
                     const victim = edge === 'top' ? kids.shift() : kids.pop();
                     if (!victim) break;
+                    teardownPollsIn(victim);
                     victim.remove();
                 }
             }
@@ -17328,6 +17533,14 @@ window.djust.bindModelElements = bindModelElements;
         if (bubble) hideBubble(bubble);
     });
 
+    // The bubble's Skip / Close buttons end the tour. A delegated listener
+    // rather than an inline onclick, so a strict CSP does not block them.
+    document.addEventListener('click', function(e) {
+        const btn = e.target && e.target.closest &&
+            e.target.closest('.dj-tutorial-bubble__skip, .dj-tutorial-bubble__cancel');
+        if (btn) document.dispatchEvent(new CustomEvent('tour:hide'));
+    });
+
     // Expose for tests
     if (!window.djust) window.djust = {};
     window.djust._tutorialBubble = {
@@ -18604,13 +18817,15 @@ window.djust.bindModelElements = bindModelElements;
 //
 // SECURITY BOUNDARY
 // -----------------
-// The script body is evaluated via `new Function(...)`. This is safe at the
-// same trust level as any other JS inside a Django template: the body is
-// template-author-controlled, not user-supplied. The {% colocated_hook %} tag
-// escapes `</script>` in the body to prevent premature tag close. Users on
-// strict CSP without 'unsafe-eval' should not use this feature — register
-// hooks via a nonce-bearing <script>window.djust.hooks.X = {...}</script>
-// instead.
+// The script body is template-author-controlled, not user-supplied, so
+// running it is at the same trust level as any other JS inside a Django
+// template. The {% colocated_hook %} tag escapes `</script>` in the body to
+// prevent premature tag close.
+//
+// When the request has a CSP nonce the tag carries it, and the body runs in a
+// script element created with that nonce: a strict nonce CSP allows it with
+// neither 'unsafe-eval' nor 'unsafe-inline'. Without a nonce the body is
+// evaluated with `new Function(...)`.
 // ============================================================================
 
 (function initColocatedHooks() {
@@ -18632,6 +18847,11 @@ window.djust.bindModelElements = bindModelElements;
             if (!hookName) {
                 // Mark as processed so we don't keep scanning it.
                 scriptEl.dataset.djustHookRegistered = '1';
+                continue;
+            }
+            const nonce = scriptEl.nonce || scriptEl.getAttribute('nonce');
+            if (nonce) {
+                _registerWithNonce(scriptEl, hookName, nonce);
                 continue;
             }
             try {
@@ -18671,6 +18891,30 @@ window.djust.bindModelElements = bindModelElements;
                 }
                 scriptEl.dataset.djustHookRegistered = 'error';
             }
+        }
+    }
+
+    /**
+     * Run a hook body under a strict CSP: a script element carrying the
+     * page's nonce is allowed where `new Function` ('unsafe-eval') is not.
+     * The inserted script runs synchronously and assigns the hook itself.
+     */
+    function _registerWithNonce(scriptEl, hookName, nonce) {
+        const runner = document.createElement('script');
+        runner.setAttribute('nonce', nonce);
+        runner.nonce = nonce;
+        runner.textContent =
+            '(function(){const hook={};' + scriptEl.textContent +
+            '\n;(globalThis.djust.hooks=globalThis.djust.hooks||{})[' +
+            JSON.stringify(hookName) + ']=hook;})();';
+        (document.head || document.documentElement).appendChild(runner);
+        runner.remove();
+        // eslint-disable-next-line security/detect-object-injection
+        const registered = !!(globalThis.djust.hooks && globalThis.djust.hooks[hookName]);
+        scriptEl.dataset.djustHookRegistered = registered ? '1' : 'error';
+        if (globalThis.djustDebug) {
+            console.debug('[colocated-hook] %s %s with the page nonce',
+                registered ? 'Registered' : 'Could not register', hookName);
         }
     }
 
@@ -19319,9 +19563,10 @@ function _installFormPolishListeners() {
         // ``dj-trigger-action`` attribute is the explicit author opt-in that
         // limits the blast radius. Do NOT simplify this check away.
         if (!form.hasAttribute('dj-trigger-action')) {
-            if (globalThis.djustDebug) {
-                djLog('[form-polish] refusing to submit form without dj-trigger-action:', form);
-            }
+            // Said outside debug too: the server asked for this submit, so a
+            // missing opt-in is an author error that otherwise fails silently
+            // (a sign-out menu item that does nothing).
+            console.warn('[djust] trigger_submit(%s): the form lacks dj-trigger-action, so it was not submitted.', selector);
             return;
         }
         // Native submit — triggers the browser's normal POST flow, bypassing
@@ -19479,6 +19724,19 @@ if (typeof document !== 'undefined') {
     } else {
         _installDjDialogObserver();
     }
+}
+
+// {% modal native=True %} has no scrim element: a click on the backdrop lands
+// on the <dialog> itself (its content fills it), and closes it like the
+// <div> modal's scrim. close() fires `close`, which reports to the server.
+if (typeof document !== 'undefined') {
+    document.addEventListener('click', function (e) {
+        const el = e.target;
+        if (el instanceof HTMLDialogElement && el.open &&
+            el.classList.contains('dj-modal--native')) {
+            el.close();
+        }
+    });
 }
 
 globalThis.djust = globalThis.djust || {};
@@ -22341,7 +22599,15 @@ globalThis.djust.djTransitionGroup = {
 //   - Modal / dialog  — focus trap (Tab / Shift+Tab wrap) + Esc-to-close.
 //   - Tablist         — ArrowLeft/Right roving tabindex + Home/End.
 //   - Accordion       — ArrowUp/Down focus movement + Home/End.
-//   - Dropdown menu   — ArrowUp/Down roving + Home/End + Esc-to-close.
+//   - Dropdown menu   — ArrowUp/Down roving + Home/End + type-ahead +
+//                       Esc-to-close, for both `{% dropdown %}` (.dj-dropdown)
+//                       and `{% dropdown_menu %}` (.dj-dropdown-menu), over
+//                       menuitem / menuitemradio / menuitemcheckbox items.
+//
+// A native `<dialog>` modal (`{% modal native=True %}`) opened with
+// showModal() keeps the browser's own Escape (cancel → close, which
+// 35-dj-dialog.js reports to the server); the focus trap and return focus
+// apply to it as to the <div> modal.
 //
 // CSP-strict (Action #183): one delegated `keydown` listener on `document`
 // — no inline <script>, no inline handlers. Delegation survives morphdom
@@ -22368,9 +22634,19 @@ globalThis.djust.djTransitionGroup = {
     // Each entry: { el: <dialog element>, returnFocus: <element|null> }.
     const _dialogStack = [];
 
+    // The last element focused outside any dialog. A native <dialog> may
+    // already hold focus when the presence observer sees it (showModal()
+    // moves focus in), so this, not activeElement, is where focus returns.
+    let _lastOutsideFocus = null;
+
     // -----------------------------------------------------------------------
     // Helpers
     // -----------------------------------------------------------------------
+
+    // An open native <dialog> shown with showModal(): the browser owns Escape.
+    function _isNativeModal(el) {
+        return !!el && el.tagName === 'DIALOG' && el.open === true;
+    }
 
     function _isDialog(el) {
         if (!el || el.nodeType !== 1) return false;
@@ -22547,6 +22823,30 @@ globalThis.djust.djTransitionGroup = {
         return false;
     }
 
+    // WAI-ARIA tabs: focus entering a tab list lands on the SELECTED tab.
+    // The arrow keys move the Tab stop to the tab they focus; once focus
+    // leaves the list, give the stop back to the selected tab, so Tab and
+    // Shift+Tab into the list find it again. A list with no selected tab keeps
+    // whatever stop it has.
+    function _onTablistFocusOut(e) {
+        const tab = e.target && e.target.closest && e.target.closest('[role="tab"]');
+        if (!tab) return;
+        const tablist = tab.closest('[role="tablist"]');
+        if (!tablist) return;
+        const next = e.relatedTarget;
+        if (next && tablist.contains(next)) return;
+        const tabs = Array.prototype.slice.call(
+            tablist.querySelectorAll('[role="tab"]')
+        );
+        const selected = tabs.filter(function (el) {
+            return el.getAttribute('aria-selected') === 'true';
+        })[0];
+        if (!selected) return;
+        tabs.forEach(function (el) {
+            el.setAttribute('tabindex', el === selected ? '0' : '-1');
+        });
+    }
+
     function _handleAccordion(accordion, target, e) {
         const triggers = Array.prototype.slice.call(
             accordion.querySelectorAll('.dj-accordion__trigger')
@@ -22571,12 +22871,29 @@ globalThis.djust.djTransitionGroup = {
         return !!dropdown && dropdown.hasAttribute('data-open');
     }
 
+    const _DROPDOWN_SELECTOR = '.dj-dropdown, .dj-dropdown-menu';
     const _MENUITEM_SELECTOR =
-        '[role="menuitem"], a[href], button:not([disabled])';
+        '[role="menuitem"], [role="menuitemradio"], [role="menuitemcheckbox"], ' +
+        'a[href], button:not([disabled])';
+    const _CURRENT_ITEM_SELECTOR =
+        '[role="menuitem"], [role="menuitemradio"], [role="menuitemcheckbox"], a[href], button';
+
+    // Type-ahead: a printable key moves to the next item whose label starts
+    // with it, wrapping, starting after the current item.
+    function _typeAhead(menuitems, current, key) {
+        if (key.length !== 1 || !/\S/.test(key)) return null;
+        const ch = key.toLowerCase();
+        const start = menuitems.indexOf(current);
+        for (let step = 1; step <= menuitems.length; step++) {
+            const item = _at(menuitems, start + step);
+            if ((item.textContent || '').trim().toLowerCase().indexOf(ch) === 0) return item;
+        }
+        return null;
+    }
 
     function _handleDropdown(dropdown, target, e) {
         const menu = dropdown.querySelector('[role="menu"]');
-        const trigger = dropdown.querySelector('.dj-dropdown__trigger');
+        const trigger = dropdown.querySelector('.dj-dropdown__trigger, .dj-dropdown-menu__trigger');
         if (e.key === 'Escape') {
             e.preventDefault();
             _dispatchFrom(trigger);
@@ -22586,10 +22903,12 @@ globalThis.djust.djTransitionGroup = {
         if (!menu) return false;
         const menuitems = Array.prototype.slice.call(
             menu.querySelectorAll(_MENUITEM_SELECTOR)
-        );
+        ).filter(function (item) {
+            return item.getAttribute('aria-disabled') !== 'true';
+        });
         if (menuitems.length === 0) return false;
         // First Arrow/Home/End from the trigger focuses an item.
-        const current = target.closest('[role="menuitem"], a[href], button');
+        const current = target.closest(_CURRENT_ITEM_SELECTOR);
         if (!current || menuitems.indexOf(current) === -1) {
             if (e.key === 'ArrowDown' || e.key === 'ArrowUp' ||
                 e.key === 'Home' || e.key === 'End') {
@@ -22605,6 +22924,14 @@ globalThis.djust.djTransitionGroup = {
             ['ArrowDown'], ['ArrowUp'], false)) {
             e.preventDefault();
             return true;
+        }
+        if (!e.ctrlKey && !e.metaKey && !e.altKey) {
+            const match = _typeAhead(menuitems, current, e.key);
+            if (match) {
+                e.preventDefault();
+                match.focus();
+                return true;
+            }
         }
         return false;
     }
@@ -22626,7 +22953,7 @@ globalThis.djust.djTransitionGroup = {
             // and Esc-to-close (#1533). `closest` matches a dropdown that is
             // a descendant of the dialog; `dialog.contains` makes the intent
             // explicit (and guards a dropdown outside the dialog subtree).
-            const innerDropdown = target.closest('.dj-dropdown');
+            const innerDropdown = target.closest(_DROPDOWN_SELECTOR);
             const dropdownInDialog =
                 innerDropdown && dialog.contains(innerDropdown);
             // A handler closer to the target already took Tab or Escape (a
@@ -22650,6 +22977,9 @@ globalThis.djust.djTransitionGroup = {
                     _handleDropdown(innerDropdown, target, e);
                     return;
                 }
+                // A native modal closes itself (cancel → close); its close
+                // event reaches the server through dj-dialog-close-event.
+                if (_isNativeModal(top)) return;
                 e.preventDefault();
                 _closeModal(top);
                 return;
@@ -22664,7 +22994,7 @@ globalThis.djust.djTransitionGroup = {
         }
 
         // 2. Dropdown — Arrow roving + Esc.
-        const dropdown = target.closest('.dj-dropdown');
+        const dropdown = target.closest(_DROPDOWN_SELECTOR);
         if (dropdown && _handleDropdown(dropdown, target, e)) return;
 
         // 3. Tablist — Arrow roving.
@@ -22686,7 +23016,8 @@ globalThis.djust.djTransitionGroup = {
         });
         if (tracked) return;
         const doc = dialog.ownerDocument;
-        const returnFocus = doc.activeElement;
+        let returnFocus = doc.activeElement;
+        if (returnFocus && dialog.contains(returnFocus)) returnFocus = _lastOutsideFocus;
         _dialogStack.push({ el: dialog, returnFocus: returnFocus });
         const focusables = _focusable(dialog);
         if (focusables.length > 0) {
@@ -22763,6 +23094,13 @@ globalThis.djust.djTransitionGroup = {
 
     function _init() {
         document.addEventListener('keydown', _handleKeydown, false);
+        document.addEventListener('focusout', _onTablistFocusOut, false);
+        document.addEventListener('focusin', function (e) {
+            const el = e.target;
+            if (el && el.closest && !el.closest('[role="dialog"], .dj-modal')) {
+                _lastOutsideFocus = el;
+            }
+        }, true);
         _installObserver();
     }
 
@@ -22778,6 +23116,7 @@ globalThis.djust.djTransitionGroup = {
     globalThis.djust = globalThis.djust || {};
     globalThis.djust.keyboardNav = {
         _handleKeydown: _handleKeydown,
+        _onTablistFocusOut: _onTablistFocusOut,
         _focusable: _focusable,
         _wrapIndex: _wrapIndex,
         _dialogStack: _dialogStack,
@@ -22875,6 +23214,630 @@ globalThis.djust.djTransitionGroup = {
         _apply();
     } else {
         document.addEventListener('DOMContentLoaded', _apply, { once: true });
+    }
+})();
+// ============================================================================
+// Component behaviours: delegated, CSP-safe
+// ============================================================================
+//
+// The djust.components tags render markup only. The interactive parts that
+// used to be inline event handlers (onclick=, onkeydown=, oninput=, ...) live
+// here as listeners on `document`, so they work under a Content-Security-
+// Policy without 'unsafe-inline' and keep working across VDOM morphs without
+// re-binding:
+//
+//   .rich-select      open/close on click, Enter/Space and Escape; close on an
+//                     option pick or a click elsewhere; search-box filtering.
+//   .combobox         keep focus in the input while an option is pressed,
+//                     close the list after the pick, reflect aria-expanded;
+//                     the picked option's value goes to the hidden
+//                     `.combobox-value` input the form submits, and typed text
+//                     that matches no option is discarded on change unless the
+//                     combobox has `data-allow-free-text`. Without a server
+//                     search event (`data-filter="client"`) typing filters
+//                     the options here. Keyboard (WAI-ARIA combobox):
+//                     ArrowDown/Up move aria-activedescendant through the
+//                     visible options; Enter commits the active option (or a
+//                     typed exact label) by pressing it, so the pick reaches
+//                     the server like a mouse pick; Escape closes the list and
+//                     restores the chosen label. Focus stays on the input
+//                     after a pick; `combobox--closed` hides the list until
+//                     the next keystroke. Escape with the list open is the
+//                     combobox's alone: it does not also close a dialog or
+//                     sheet around it. Text committed on blur (Tab) does not
+//                     pull focus back and leaves the list unfiltered.
+//   .dj-theme-toggle  switch the colour mode (`data-theme-mode`) when
+//                     djust.theming's theme.js is not on the page, and keep
+//                     every toggle's aria-checked in step with the mode.
+//   .popover-wrapper, .dj-popconfirm-wrapper
+//                     open on the trigger (`data-open`, aria-expanded); close
+//                     on a click elsewhere, Escape, or a popconfirm button.
+//   .collapsible      toggle `collapsible-open` and aria-expanded.
+//   .ctx-wrapper      open the menu at the pointer on right-click; close on
+//                     the next click or Escape.
+//   .code-block-copy  copy the block's code.
+//   .dropzone         drag-over styling, put dropped files in the input, show
+//                     the file count.
+//   .kanban           drag cards between columns; a drop sends the board's
+//                     `data-move-event` with {card_id, from_col, to_col}.
+//   .rte              toolbar commands (`data-command`) keep the selection;
+//                     the editor's HTML is mirrored into its hidden input.
+//   .multi-select     search-box filtering.
+//   .split-pane       drag the handle to resize (10%-90%).
+// ============================================================================
+
+(function initComponentBehaviors() {
+    if (typeof document === 'undefined' || document._djustComponentBehaviors) return;
+    document._djustComponentBehaviors = true;
+
+    const THEME_MODE_KEY = 'djust-theme-mode';
+    const THEME_MODES = ['light', 'dark', 'system'];
+
+    function _closest(target, selector) {
+        return target && target.closest ? target.closest(selector) : null;
+    }
+
+    function _setRichSelectOpen(root, open) {
+        root.classList.toggle('rich-select--open', open);
+        const trigger = root.querySelector('.rich-select-trigger');
+        if (trigger) trigger.setAttribute('aria-expanded', open ? 'true' : 'false');
+    }
+
+    function _closeRichSelects(except) {
+        document.querySelectorAll('.rich-select--open').forEach(function (el) {
+            if (el !== except) _setRichSelectOpen(el, false);
+        });
+    }
+
+    function _syncThemeToggles(mode) {
+        document.querySelectorAll('.dj-theme-toggle').forEach(function (toggle) {
+            toggle.setAttribute('data-current', mode);
+            toggle.querySelectorAll('[data-theme-mode]').forEach(function (btn) {
+                const on = btn.getAttribute('data-theme-mode') === mode;
+                btn.setAttribute('aria-checked', on ? 'true' : 'false');
+                btn.classList.toggle('dj-theme-toggle__btn--active', on);
+            });
+        });
+    }
+
+    function _setThemeMode(mode) {
+        if (THEME_MODES.indexOf(mode) < 0) return;
+        // djust.theming's theme.js switches the mode itself on any
+        // [data-theme-mode] click; only stand in for it when it is absent.
+        if (!globalThis.djustTheme) {
+            try { localStorage.setItem(THEME_MODE_KEY, mode); } catch (_err) { /* storage blocked */ }
+            const prefersDark = globalThis.matchMedia &&
+                globalThis.matchMedia('(prefers-color-scheme: dark)').matches;
+            const dark = mode === 'dark' || (mode === 'system' && prefersDark);
+            document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+            document.documentElement.setAttribute('data-theme-mode', mode);
+        }
+        _syncThemeToggles(mode);
+    }
+
+    // Mark `chosen` as the selected option among `options`.
+    function _markSelected(options, chosen, activeClass) {
+        options.forEach(function (opt) {
+            const on = opt === chosen;
+            opt.setAttribute('aria-selected', on ? 'true' : 'false');
+            opt.classList.toggle(activeClass, on);
+        });
+    }
+
+    function _comboboxOptions(box) {
+        return Array.prototype.slice.call(box.querySelectorAll('.combobox-option'));
+    }
+
+    function _comboboxInput(box) {
+        return box.querySelector('.combobox-input');
+    }
+
+    function _comboboxVisibleOptions(box) {
+        return _comboboxOptions(box).filter(function (opt) {
+            return opt.style.display !== 'none' && !opt.hidden;
+        });
+    }
+
+    function _comboboxActive(box) {
+        const input = _comboboxInput(box);
+        const id = input && input.getAttribute('aria-activedescendant');
+        return id ? box.querySelector('[id="' + id.replace(/"/g, '') + '"]') : null;
+    }
+
+    function _setComboboxActive(box, option) {
+        const input = _comboboxInput(box);
+        _comboboxOptions(box).forEach(function (opt) {
+            opt.classList.toggle('combobox-option-active', opt === option);
+        });
+        if (!input) return;
+        if (option && option.id) {
+            input.setAttribute('aria-activedescendant', option.id);
+            if (typeof option.scrollIntoView === 'function') option.scrollIntoView({ block: 'nearest' });
+        } else {
+            input.removeAttribute('aria-activedescendant');
+        }
+    }
+
+    function _setComboboxOpen(box, open) {
+        box.classList.toggle('combobox--closed', !open);
+        const input = _comboboxInput(box);
+        if (input) {
+            input.setAttribute('aria-expanded',
+                open && document.activeElement === input ? 'true' : 'false');
+        }
+        if (!open) _setComboboxActive(box, null);
+    }
+
+    // False while a commit runs on blur: the pick must not pull focus back
+    // to the input the user is leaving.
+    let _comboboxRefocus = true;
+
+    function _comboboxSelectedLabel(box) {
+        const hidden = box.querySelector('.combobox-value');
+        if (!hidden) return null;
+        const current = _comboboxOptions(box).filter(function (opt) {
+            return opt.getAttribute('data-value') === hidden.value;
+        })[0];
+        return current ? current.textContent.trim() : '';
+    }
+
+    // Commit an option the way a mouse pick does: press it, so its dj-click
+    // event (value, field) reaches the server and the click handler records
+    // the pick. An option already chosen is not sent again.
+    function _commitComboboxOption(box, option) {
+        const hidden = box.querySelector('.combobox-value');
+        const input = _comboboxInput(box);
+        const label = option.textContent.trim();
+        if (hidden && input && hidden.value === option.getAttribute('data-value')) {
+            input.value = label;
+            _setComboboxOpen(box, false);
+            return;
+        }
+        option.click();
+    }
+
+    function _exactComboboxMatch(box, text) {
+        const wanted = text.trim().toLowerCase();
+        if (!wanted) return null;
+        return _comboboxOptions(box).filter(function (opt) {
+            return opt.textContent.trim().toLowerCase() === wanted;
+        })[0] || null;
+    }
+
+    function _pickComboboxOption(box, option) {
+        const hidden = box.querySelector('.combobox-value');
+        const input = box.querySelector('.combobox-input');
+        if (!hidden || !input) return;  // multiple mode: the server renders the tags
+        hidden.value = option.getAttribute('data-value') || '';
+        input.value = option.textContent.trim();
+        _markSelected(_comboboxOptions(box), option, 'combobox-option-selected');
+    }
+
+    function _pickRichSelectOption(root, option) {
+        const hidden = root.querySelector('input[type=hidden]');
+        if (hidden) hidden.value = option.getAttribute('data-value') || '';
+        const trigger = root.querySelector('.rich-select-trigger');
+        const chevron = trigger && trigger.querySelector('.rich-select-chevron');
+        if (trigger && chevron) {
+            Array.prototype.slice.call(trigger.childNodes).forEach(function (node) {
+                if (node !== chevron) trigger.removeChild(node);
+            });
+            Array.prototype.slice.call(option.childNodes).forEach(function (node) {
+                trigger.insertBefore(node.cloneNode(true), chevron);
+            });
+        }
+        _markSelected(Array.prototype.slice.call(root.querySelectorAll('.rich-select-option')),
+            option, 'rich-select-option--active');
+    }
+
+    document.addEventListener('click', function (e) {
+        const target = e.target;
+        const richSelect = _closest(target, '.rich-select');
+        _closeRichSelects(richSelect);
+        if (richSelect) {
+            const richOption = _closest(target, '.rich-select-option');
+            if (richOption) {
+                _pickRichSelectOption(richSelect, richOption);
+                _setRichSelectOpen(richSelect, false);
+            } else if (_closest(target, '.rich-select-trigger') &&
+                       !richSelect.classList.contains('rich-select--disabled')) {
+                _setRichSelectOpen(richSelect, !richSelect.classList.contains('rich-select--open'));
+            }
+        }
+
+        const comboList = _closest(target, '.combobox-dropdown');
+        if (comboList) {
+            const box = _closest(comboList, '.combobox');
+            const comboOption = _closest(target, '.combobox-option');
+            if (comboOption) {
+                _pickComboboxOption(box, comboOption);
+                // Focus stays on the input (the mousedown kept it there); the
+                // list closes until the next keystroke.
+                _setComboboxOpen(box, false);
+                const input = _comboboxInput(box);
+                if (_comboboxRefocus && input && document.activeElement !== input) input.focus();
+            }
+        }
+
+        const modeButton = _closest(target, '.dj-theme-toggle [data-theme-mode]');
+        if (modeButton) _setThemeMode(modeButton.getAttribute('data-theme-mode'));
+    });
+
+    document.addEventListener('keydown', function (e) {
+        const input = e.target;
+        if (!input || !input.classList || !input.classList.contains('combobox-input')) return;
+        const box = _closest(input, '.combobox');
+        if (!box) return;
+        const open = !box.classList.contains('combobox--closed');
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+            e.preventDefault();
+            _setComboboxOpen(box, true);
+            const visible = _comboboxVisibleOptions(box);
+            if (!visible.length) return;
+            const idx = visible.indexOf(_comboboxActive(box));
+            let next;
+            if (idx < 0) {
+                next = e.key === 'ArrowDown' ? 0 : visible.length - 1;
+            } else {
+                next = (idx + (e.key === 'ArrowDown' ? 1 : -1) + visible.length) % visible.length;
+            }
+            // eslint-disable-next-line security/detect-object-injection -- integer index
+            _setComboboxActive(box, visible[next]);
+        } else if (e.key === 'Enter') {
+            const activeOption = open ? _comboboxActive(box) : null;
+            const target = activeOption || _exactComboboxMatch(box, input.value);
+            const hidden = box.querySelector('.combobox-value');
+            if (target && (activeOption || !hidden ||
+                           hidden.value !== target.getAttribute('data-value'))) {
+                e.preventDefault();
+                _commitComboboxOption(box, target);
+            } else if (hidden) {
+                // Nothing to pick: settle the typed text (free text, or back
+                // to the chosen label) before the form submits.
+                _commitComboboxText(box, input);
+            }
+        }
+    });
+
+    // Escape with the list open closes the list and nothing else. This runs
+    // in the capture phase on document, ahead of the dialog keyboard handler
+    // (51-keyboard-nav.js, bubble phase on document) and of window-level
+    // bindings such as `dj-window-keydown.escape` on a sheet, and stops the
+    // event there so they do not also close the dialog or sheet. A native
+    // <dialog> closes itself on Escape through its `cancel` event, which is
+    // cancelled below for the same key press. With the list closed Escape
+    // passes through as before.
+    let _comboboxEscape = null;
+    document.addEventListener('keydown', function (e) {
+        _comboboxEscape = null;
+        if (e.key !== 'Escape') return;
+        const input = e.target;
+        if (!input || !input.classList || !input.classList.contains('combobox-input')) return;
+        const box = _closest(input, '.combobox');
+        if (!box) return;
+        if (box.classList.contains('combobox--closed') && !_comboboxActive(box)) return;
+        e.preventDefault();
+        e.stopPropagation();
+        _comboboxEscape = input;
+        const label = _comboboxSelectedLabel(box);
+        if (label !== null) input.value = label;
+        _comboboxOptions(box).forEach(function (opt) { opt.style.display = ''; });
+        _setComboboxOpen(box, false);
+    }, true);
+    document.addEventListener('keyup', function (e) {
+        if (e.key === 'Escape') _comboboxEscape = null;
+    }, true);
+    // `cancel` does not bubble; the capture phase still reaches document.
+    document.addEventListener('cancel', function (e) {
+        const dialog = e.target;
+        if (_comboboxEscape && dialog && typeof dialog.contains === 'function' &&
+            dialog.contains(_comboboxEscape)) {
+            e.preventDefault();
+        }
+    }, true);
+
+    document.addEventListener('keydown', function (e) {
+        const richSelect = _closest(e.target, '.rich-select');
+        if (!richSelect) return;
+        const open = richSelect.classList.contains('rich-select--open');
+        if (e.key === 'Escape' && open) {
+            _setRichSelectOpen(richSelect, false);
+            const trigger = richSelect.querySelector('.rich-select-trigger');
+            if (trigger) trigger.focus();
+            return;
+        }
+        if ((e.key === 'Enter' || e.key === ' ') && _closest(e.target, '.rich-select-trigger') &&
+            !richSelect.classList.contains('rich-select--disabled')) {
+            e.preventDefault();
+            _setRichSelectOpen(richSelect, !open);
+        }
+    });
+
+    document.addEventListener('input', function (e) {
+        const box = e.target;
+        if (!box || !box.classList || !box.classList.contains('rich-select-search-input')) return;
+        const list = _closest(box, '.rich-select-dropdown');
+        if (!list) return;
+        const query = box.value.toLowerCase();
+        list.querySelectorAll('.rich-select-option').forEach(function (item) {
+            item.style.display = item.textContent.toLowerCase().indexOf(query) >= 0 ? '' : 'none';
+        });
+    });
+
+    // An option press must not move focus out of the input: the list is
+    // shown by `.combobox-input:focus ~ .combobox-dropdown`.
+    document.addEventListener('mousedown', function (e) {
+        if (_closest(e.target, '.combobox-dropdown')) e.preventDefault();
+    });
+
+    function _comboExpanded(e, expanded) {
+        const input = e.target;
+        if (input && input.classList && input.classList.contains('combobox-input')) {
+            const box = _closest(input, '.combobox');
+            if (!expanded && box) {
+                // Leaving the input: the next focus opens the list again.
+                box.classList.remove('combobox--closed');
+                _setComboboxActive(box, null);
+            }
+            const closed = box && box.classList.contains('combobox--closed');
+            input.setAttribute('aria-expanded', expanded && !closed ? 'true' : 'false');
+        }
+    }
+    document.addEventListener('focusin', function (e) { _comboExpanded(e, true); });
+    document.addEventListener('focusout', function (e) { _comboExpanded(e, false); });
+
+    // ---- popover / popconfirm -------------------------------------------
+    const POPUPS = '.popover-wrapper, .dj-popconfirm-wrapper';
+
+    function _setPopupOpen(wrapper, open) {
+        if (open) wrapper.setAttribute('data-open', '');
+        else wrapper.removeAttribute('data-open');
+        const trigger = wrapper.querySelector('.popover-trigger, .dj-popconfirm-trigger');
+        if (trigger) trigger.setAttribute('aria-expanded', open ? 'true' : 'false');
+    }
+
+    function _closePopups(except) {
+        document.querySelectorAll('.popover-wrapper[data-open], .dj-popconfirm-wrapper[data-open]')
+            .forEach(function (w) { if (w !== except) _setPopupOpen(w, false); });
+        document.querySelectorAll('.ctx-menu[data-open]').forEach(function (m) {
+            m.removeAttribute('data-open');
+        });
+    }
+
+    function _countText(n) {
+        return n ? n + ' file' + (n > 1 ? 's' : '') + ' selected' : '';
+    }
+
+    function _showFileCount(zone, files) {
+        const count = zone.querySelector('.dz-file-count');
+        if (count) count.textContent = _countText(files.length);
+        zone.classList.toggle('dropzone-has-file', files.length > 0);
+    }
+
+    document.addEventListener('click', function (e) {
+        const target = e.target;
+        const popup = _closest(target, POPUPS);
+        _closePopups(popup);
+        if (popup) {
+            if (_closest(target, '.popover-trigger, .dj-popconfirm-trigger')) {
+                _setPopupOpen(popup, !popup.hasAttribute('data-open'));
+            } else if (_closest(target, '.dj-popconfirm__btn')) {
+                _setPopupOpen(popup, false);
+            }
+        }
+
+        const collapsibleTrigger = _closest(target, '.collapsible-trigger');
+        if (collapsibleTrigger) {
+            const box = _closest(collapsibleTrigger, '.collapsible');
+            if (box) {
+                const open = box.classList.toggle('collapsible-open');
+                collapsibleTrigger.setAttribute('aria-expanded', open ? 'true' : 'false');
+            }
+        }
+
+        const copyButton = _closest(target, '.code-block-copy');
+        if (copyButton) {
+            const code = _closest(copyButton, '.code-block').querySelector('code');
+            if (code && navigator.clipboard) {
+                navigator.clipboard.writeText(code.textContent).then(function () {
+                    copyButton.textContent = 'Copied!';
+                    setTimeout(function () { copyButton.textContent = 'Copy'; }, 2000);
+                });
+            }
+        }
+    });
+
+    document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape') _closePopups(null);
+    });
+
+    // ---- context menu -----------------------------------------------------
+    document.addEventListener('contextmenu', function (e) {
+        const wrapper = _closest(e.target, '.ctx-wrapper');
+        if (!wrapper) return;
+        const menu = wrapper.querySelector('.ctx-menu');
+        if (!menu) return;
+        e.preventDefault();
+        _closePopups(null);
+        const box = wrapper.getBoundingClientRect();
+        menu.style.left = (e.clientX - box.left) + 'px';
+        menu.style.top = (e.clientY - box.top) + 'px';
+        menu.setAttribute('data-open', '1');
+    });
+
+    // ---- drag and drop: dropzone, kanban --------------------------------
+    document.addEventListener('dragstart', function (e) {
+        const card = _closest(e.target, '.kanban-card');
+        if (!card || !e.dataTransfer) return;
+        e.dataTransfer.setData('card', card.dataset.cardId || '');
+        e.dataTransfer.setData('from', card.dataset.colId || '');
+        card.classList.add('dragging');
+    });
+
+    document.addEventListener('dragend', function (e) {
+        const card = _closest(e.target, '.kanban-card');
+        if (card) card.classList.remove('dragging');
+    });
+
+    document.addEventListener('dragover', function (e) {
+        const zone = _closest(e.target, '.dropzone, .kanban-col');
+        if (!zone) return;
+        e.preventDefault();
+        zone.classList.add(zone.classList.contains('dropzone') ? 'dropzone-over' : 'kanban-col-over');
+    });
+
+    document.addEventListener('dragleave', function (e) {
+        const zone = _closest(e.target, '.dropzone, .kanban-col');
+        if (zone) zone.classList.remove('dropzone-over', 'kanban-col-over');
+    });
+
+    document.addEventListener('drop', function (e) {
+        const zone = _closest(e.target, '.dropzone, .kanban-col');
+        if (!zone) return;
+        e.preventDefault();
+        zone.classList.remove('dropzone-over', 'kanban-col-over');
+        const data = e.dataTransfer;
+        if (zone.classList.contains('dropzone')) {
+            const files = data ? data.files : [];
+            if (!files || !files.length) return;
+            const input = zone.querySelector('input[type=file]');
+            try {
+                const transfer = new DataTransfer();
+                Array.prototype.forEach.call(files, function (file) { transfer.items.add(file); });
+                input.files = transfer.files;
+            } catch (_err) { /* no DataTransfer constructor: the count still shows */ }
+            _showFileCount(zone, files);
+            return;
+        }
+        const board = _closest(zone, '.kanban');
+        const moveEvent = board && board.getAttribute('data-move-event');
+        const from = data ? data.getData('from') : '';
+        const to = zone.dataset.colId;
+        if (moveEvent && from !== to && globalThis.djust && globalThis.djust.handleEvent) {
+            globalThis.djust.handleEvent(moveEvent,
+                { card_id: data.getData('card'), from_col: from, to_col: to });
+        }
+    });
+
+    // Typed combobox text, once committed: an exact (case-insensitive) label
+    // match picks that option; empty text clears the value; other text is the
+    // value only with data-allow-free-text, else the previous choice returns.
+    function _commitComboboxText(box, input) {
+        const hidden = box.querySelector('.combobox-value');
+        if (!hidden) return;
+        const text = input.value.trim();
+        const options = _comboboxOptions(box);
+        const match = options.filter(function (opt) {
+            return opt.textContent.trim().toLowerCase() === text.toLowerCase();
+        })[0];
+        if (match) {
+            // An exact label commits like a pick, telling the server.
+            _commitComboboxOption(box, match);
+        } else if (!text) {
+            hidden.value = '';
+            _markSelected(options, null, 'combobox-option-selected');
+        } else if (box.hasAttribute('data-allow-free-text')) {
+            hidden.value = text;
+            _markSelected(options, null, 'combobox-option-selected');
+        } else {
+            const current = options.filter(function (opt) {
+                return opt.getAttribute('data-value') === hidden.value;
+            })[0];
+            input.value = current ? current.textContent.trim() : '';
+        }
+    }
+
+    document.addEventListener('change', function (e) {
+        const input = e.target;
+        if (!input || !input.classList) return;
+        if (input.classList.contains('dropzone-input')) {
+            const zone = _closest(input, '.dropzone');
+            if (zone) _showFileCount(zone, input.files || []);
+        } else if (input.classList.contains('combobox-input')) {
+            const box = _closest(input, '.combobox');
+            if (!box) return;
+            // `change` fires as focus leaves the input (Tab, a click away):
+            // commit without pulling focus back, so one Tab moves on, and
+            // close the list unfiltered for the next visit.
+            _comboboxRefocus = false;
+            try {
+                _commitComboboxText(box, input);
+            } finally {
+                _comboboxRefocus = true;
+            }
+            _comboboxOptions(box).forEach(function (opt) { opt.style.display = ''; });
+            _setComboboxOpen(box, false);
+        }
+    });
+
+    // ---- rich text editor, multi-select search ----------------------------
+    document.addEventListener('mousedown', function (e) {
+        const button = _closest(e.target, '.rte-btn[data-command]');
+        if (!button) return;
+        e.preventDefault();  // keep the editor's selection
+        document.execCommand(button.getAttribute('data-command'), false,
+            button.getAttribute('data-command-arg'));
+    });
+
+    document.addEventListener('input', function (e) {
+        const field = e.target;
+        if (!field || !field.classList) return;
+        if (field.classList.contains('rte-editor')) {
+            const hidden = _closest(field, '.rte').querySelector('input[type=hidden]');
+            if (hidden) hidden.value = field.innerHTML;
+        } else if (field.classList.contains('combobox-input')) {
+            const box = _closest(field, '.combobox');
+            if (!box) return;
+            // Typing reopens a list a pick or Escape closed.
+            _setComboboxOpen(box, true);
+            if (box.getAttribute('data-filter') !== 'client') return;
+            const query = field.value.trim().toLowerCase();
+            _comboboxOptions(box).forEach(function (opt) {
+                opt.style.display = opt.textContent.toLowerCase().indexOf(query) >= 0 ? '' : 'none';
+            });
+        } else if (field.classList.contains('multi-select-search')) {
+            const query = field.value.toLowerCase();
+            _closest(field, '.multi-select').querySelectorAll('.multi-select-option')
+                .forEach(function (item) {
+                    item.style.display = item.textContent.toLowerCase().indexOf(query) >= 0 ? '' : 'none';
+                });
+        }
+    });
+
+    // ---- split pane ---------------------------------------------------------
+    let _splitDrag = null;
+    document.addEventListener('mousedown', function (e) {
+        const handle = _closest(e.target, '.sp-handle');
+        const pane = handle && _closest(handle, '.split-pane');
+        if (!pane) return;
+        e.preventDefault();
+        _splitDrag = pane;
+    });
+    document.addEventListener('mousemove', function (e) {
+        if (!_splitDrag) return;
+        const box = _splitDrag.getBoundingClientRect();
+        const horizontal = _splitDrag.classList.contains('split-pane-horizontal');
+        const span = horizontal ? box.width : box.height;
+        if (!span) return;
+        const offset = horizontal ? e.clientX - box.left : e.clientY - box.top;
+        const pct = Math.max(10, Math.min(90, offset / span * 100));
+        const first = _splitDrag.querySelector('.sp-pane-1');
+        if (first) {
+            if (horizontal) first.style.width = pct + '%';
+            else first.style.height = pct + '%';
+        }
+    });
+    document.addEventListener('mouseup', function () { _splitDrag = null; });
+
+    function _syncStoredThemeMode() {
+        let stored = null;
+        try { stored = localStorage.getItem(THEME_MODE_KEY); } catch (_err) { /* storage blocked */ }
+        if (stored && THEME_MODES.indexOf(stored) >= 0) _syncThemeToggles(stored);
+    }
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', _syncStoredThemeMode);
+    } else {
+        _syncStoredThemeMode();
     }
 })();
 

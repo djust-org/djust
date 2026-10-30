@@ -87,14 +87,16 @@ def test_plain_text_value_is_unchanged():
     assert 'id="dz-upload"' in out
 
 
-def test_kanban_move_event_is_escaped_for_the_js_string():
+def test_kanban_move_event_is_escaped_into_its_attribute():
+    """The move event is an HTML attribute (``data-move-event``) that the
+    client bundle reads on a drop; there is no inline JS string any more."""
     cols = [{"id": "todo", "title": "To Do", "cards": []}]
-    out = _render("{% kanban_board columns=cols move_event=ev %}", cols=cols, ev="x');alert(1);//")
-    assert "x');alert(1)" not in out
-    assert "x\\u0027)\\u003Balert(1)\\u003B//" in out
+    out = _render("{% kanban_board columns=cols move_event=ev %}", cols=cols, ev="x\"');alert(1);//")
+    assert 'data-move-event="x&quot;&#x27;);alert(1);//"' in out
+    assert "ondrop" not in out and "handleEvent" not in out
     # A plain event name is emitted unchanged.
     out = _render("{% kanban_board columns=cols move_event='move_card' %}", cols=cols)
-    assert "handleEvent('move_card'," in out
+    assert 'data-move-event="move_card"' in out
 
 
 # ---------------------------------------------------------------------------

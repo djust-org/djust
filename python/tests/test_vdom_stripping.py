@@ -47,16 +47,16 @@ class TestCommentStripping:
         assert "<span>Content</span>" in result
 
     def test_normalizes_whitespace(self):
-        """Test that whitespace is normalized"""
+        """Whitespace in markup and between tags is normalized; the whitespace
+        of text that has content is kept, as Django renders it and as the VDOM
+        parser keeps it (a ``white-space: pre-wrap`` text needs its lines)."""
         view = TestLiveView()
-        html = "<div>  \n\n  Multiple    spaces   \t\t tabs  </div>"
+        html = "<div\n   class='x'>\n\n  <span>a</span>  \n  </div>"
         result = view._strip_comments_and_whitespace(html)
+        assert result == "<div class='x'><span>a</span></div>"
 
-        # Multiple whitespace should be collapsed to single space
-        assert "  " not in result
-        assert "\n\n" not in result
-        assert "\t\t" not in result
-        assert "Multiple spaces tabs" in result
+        text = "<div>  \n\n  Multiple    spaces   \t\t tabs  </div>"
+        assert view._strip_comments_and_whitespace(text) == text
 
     def test_removes_whitespace_between_tags(self):
         """Test that whitespace between tags is removed"""

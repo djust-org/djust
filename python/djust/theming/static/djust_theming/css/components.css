@@ -56,6 +56,7 @@
     background: none;
     border: none;
     cursor: pointer;
+    font-family: inherit;
     padding: 0.25rem;
     opacity: 0.7;
     transition: opacity 0.15s;
@@ -157,6 +158,7 @@
     transition: all 0.15s ease;
     border: 1px solid transparent;
     cursor: pointer;
+    font-family: inherit;
     white-space: nowrap;
 }
 
@@ -298,11 +300,12 @@
     height: 2.5rem;
     width: 100%;
     padding: 0.5rem 0.75rem;
+    font-family: inherit;
     font-size: 0.875rem;
     line-height: 1.25rem;
-    background-color: hsl(var(--background));
+    background-color: hsl(var(--input-background, var(--background)));
     color: hsl(var(--foreground));
-    border: 1px solid hsl(var(--input));
+    border: 1px solid hsl(var(--input, var(--border)));
     border-radius: var(--radius);
     transition: all 0.15s ease;
 }
@@ -351,6 +354,7 @@
     font-weight: 500;
     line-height: 1.25rem;
     cursor: pointer;
+    font-family: inherit;
 }
 
 .checkbox-description {
@@ -394,6 +398,7 @@
     color: hsl(var(--muted-foreground));
     border-radius: calc(var(--radius) - 0.125rem);
     cursor: pointer;
+    font-family: inherit;
     font-size: 0.875rem;
     transition: all 0.15s ease;
 }
@@ -423,6 +428,7 @@
     color: hsl(var(--foreground));
     font-size: 0.875rem;
     cursor: pointer;
+    font-family: inherit;
     appearance: none;
     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
     background-repeat: no-repeat;
@@ -497,6 +503,7 @@
     background: none;
     border: none;
     cursor: pointer;
+    font-family: inherit;
     padding: 0.25rem;
     opacity: 0.7;
     color: hsl(var(--foreground));
@@ -551,6 +558,7 @@
     border: 1px solid hsl(var(--border));
     border-radius: var(--radius);
     cursor: pointer;
+    font-family: inherit;
     transition: all 0.15s ease;
 }
 
@@ -574,8 +582,8 @@
     min-width: 10rem;
     margin-top: 0.25rem;
     padding: 0.25rem;
-    background-color: hsl(var(--card));
-    color: hsl(var(--card-foreground));
+    background-color: hsl(var(--popover, var(--card)) / var(--overlay-surface-opacity, 1));
+    color: hsl(var(--popover-foreground, var(--card-foreground)));
     border: 1px solid hsl(var(--border));
     border-radius: var(--radius);
     box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
@@ -596,10 +604,11 @@
     gap: 0.5rem;
     padding: 0.5rem 0.75rem;
     font-size: 0.875rem;
-    color: hsl(var(--foreground));
+    color: inherit;
     text-decoration: none;
     border-radius: calc(var(--radius) - 2px);
     cursor: pointer;
+    font-family: inherit;
     border: none;
     background: none;
     width: 100%;
@@ -641,6 +650,7 @@
     border-bottom: 2px solid transparent;
     margin-bottom: -1px;
     cursor: pointer;
+    font-family: inherit;
     transition: all 0.15s ease;
     white-space: nowrap;
 }
@@ -931,6 +941,7 @@
     background: none;
     border: none;
     cursor: pointer;
+    font-family: inherit;
     padding: 0.25rem;
     opacity: 0.7;
     transition: opacity 0.15s;
@@ -1279,6 +1290,7 @@
     gap: 0.5rem;
     font-size: 0.875rem;
     cursor: pointer;
+    font-family: inherit;
 }
 
 /* Error state on fields */
@@ -1320,7 +1332,7 @@
 
 .theme-panel-trigger {
     background: none; border: 1px solid hsl(var(--border)); border-radius: var(--radius-md, 0.375rem);
-    padding: 0.4375rem; cursor: pointer; color: hsl(var(--muted-foreground));
+    padding: 0.4375rem; cursor: pointer; font-family: inherit; color: hsl(var(--muted-foreground));
     display: flex; align-items: center; transition: all 0.2s ease;
 }
 .theme-panel-trigger:hover {
@@ -1367,7 +1379,7 @@
 .theme-panel-mode-btn {
     flex: 1; display: flex; flex-direction: column; align-items: center; gap: 0.3125rem;
     padding: 0.625rem 0.375rem 0.5rem; border: 1px solid hsl(var(--border));
-    border-radius: 0.5rem; background: none; cursor: pointer;
+    border-radius: 0.5rem; background: none; cursor: pointer; font-family: inherit;
     color: hsl(var(--muted-foreground)); font-size: 0.6875rem; font-weight: 500;
     transition: all 0.2s ease;
 }
@@ -1388,7 +1400,7 @@
     width: 100%; display: flex; align-items: center; justify-content: space-between;
     padding: 0.4375rem 0.625rem; border: 1px solid hsl(var(--border));
     border-radius: 0.375rem; background: hsl(var(--muted) / 0.3);
-    color: hsl(var(--foreground)); font-size: 0.8125rem; cursor: pointer;
+    color: hsl(var(--foreground)); font-size: 0.8125rem; cursor: pointer; font-family: inherit;
     transition: border-color 0.15s, background 0.15s;
 }
 .tp-select-btn:hover { border-color: hsl(var(--foreground) / 0.25); background: hsl(var(--muted) / 0.5); }
@@ -1406,7 +1418,7 @@
     box-sizing: border-box;
     display: block; width: 100%; text-align: start; padding: 0.375rem 0.5rem;
     border: none; border-radius: 0.25rem; background: none;
-    color: hsl(var(--foreground)); font-size: 0.8125rem; cursor: pointer;
+    color: hsl(var(--foreground)); font-size: 0.8125rem; cursor: pointer; font-family: inherit;
     transition: background 0.1s;
 }
 .tp-select-option:hover { background: hsl(var(--accent, var(--muted))); }
@@ -1415,7 +1427,7 @@
 .theme-panel-customize-toggle {
     box-sizing: border-box;
     display: flex; align-items: center; gap: 0.375rem; width: 100%;
-    padding: 0.375rem 0 0.125rem; border: none; background: none; cursor: pointer;
+    padding: 0.375rem 0 0.125rem; border: none; background: none; cursor: pointer; font-family: inherit;
     color: hsl(var(--muted-foreground)); font-size: 0.75rem; font-weight: 500;
     transition: color 0.15s;
 }
@@ -1564,7 +1576,7 @@ label .text-danger, .form-label .text-danger { color: hsl(var(--destructive-text
 .validation-modal .modal-content { background: hsl(var(--surface-1, var(--card, 0 0% 100%))); border: 1px solid hsl(var(--border)); border-radius: var(--radius, 0.5rem); box-shadow: 0 10px 25px hsl(var(--foreground) / 0.2); overflow: hidden; }
 .validation-modal .modal-header.warning { display: flex; align-items: center; justify-content: space-between; padding: 1rem 1.25rem; background-color: hsl(var(--warning) / 0.12); border-bottom: 2px solid hsl(var(--warning)); }
 .validation-modal .modal-title { margin: 0; font-size: 1.125rem; font-weight: 700; color: hsl(var(--warning-text, var(--warning))); }
-.validation-modal .modal-close { background: transparent; border: 0; padding: 0 0.25rem; font-size: 1.5rem; line-height: 1; color: hsl(var(--warning-text, var(--warning))); cursor: pointer; }
+.validation-modal .modal-close { background: transparent; border: 0; padding: 0 0.25rem; font-size: 1.5rem; line-height: 1; color: hsl(var(--warning-text, var(--warning))); cursor: pointer; font-family: inherit; }
 .validation-modal .modal-close:hover, .validation-modal .modal-close:focus { opacity: 0.75; outline: 2px solid hsl(var(--ring, var(--primary))); outline-offset: 2px; }
 .validation-modal .modal-body { padding: 1.25rem; color: hsl(var(--foreground)); }
 .validation-modal .modal-body p { margin: 0 0 0.75rem 0; }
@@ -1579,7 +1591,7 @@ label .text-danger, .form-label .text-danger { color: hsl(var(--destructive-text
 .info-box { background: hsl(var(--muted) / 0.5); border-left: 4px solid hsl(var(--primary)); padding: 1rem 1.25rem; border-radius: 0.25rem; margin-bottom: 1.5rem; }
 .info-box p { margin: 0; }
 
-.upload-area { border: 2px dashed hsl(var(--border)); border-radius: 0.5rem; padding: 3rem 2rem; text-align: center; background: hsl(var(--muted) / 0.3); cursor: pointer; transition: border-color 0.15s ease, background 0.15s ease; }
+.upload-area { border: 2px dashed hsl(var(--border)); border-radius: 0.5rem; padding: 3rem 2rem; text-align: center; background: hsl(var(--muted) / 0.3); color: hsl(var(--foreground)); cursor: pointer; font-family: inherit; transition: border-color 0.15s ease, background 0.15s ease; }
 .upload-area:hover:not(.upload-area--disabled) { border-color: hsl(var(--primary)); background: hsl(var(--primary) / 0.05); }
 .upload-area.dragover { border-color: hsl(var(--primary)); background: hsl(var(--primary) / 0.1); }
 .upload-area--disabled { opacity: 0.65; cursor: not-allowed; }
@@ -1589,7 +1601,7 @@ label .text-danger, .form-label .text-danger { color: hsl(var(--destructive-text
 .uploaded-file-item { display: flex; align-items: center; justify-content: space-between; padding: 1rem; background: hsl(var(--background)); border: 1px solid hsl(var(--border)); border-radius: 0.25rem; margin-bottom: 0.75rem; }
 .file-info { display: flex; align-items: center; gap: 1rem; flex: 1; }
 .file-icon { color: hsl(var(--primary-text, var(--primary))); font-size: 1.5rem; }
-.btn-remove { background: transparent; color: hsl(var(--primary-text, var(--primary))); border: none; padding: 0.5rem; cursor: pointer; font-size: 1.25rem; }
+.btn-remove { background: transparent; color: hsl(var(--primary-text, var(--primary))); border: none; padding: 0.5rem; cursor: pointer; font-family: inherit; font-size: 1.25rem; }
 .btn-remove:hover { color: hsl(var(--link-hover)); }
 .btn-remove:focus { outline: 2px solid hsl(var(--primary)); outline-offset: 2px; }
 
@@ -1665,9 +1677,9 @@ label .text-danger, .form-label .text-danger { color: hsl(var(--destructive-text
     font-family: inherit;
     font-size: 0.875rem;
     line-height: 1.25rem;
-    background-color: hsl(var(--background));
+    background-color: hsl(var(--input-background, var(--background)));
     color: hsl(var(--foreground));
-    border: 1px solid hsl(var(--input));
+    border: 1px solid hsl(var(--input, var(--border)));
     border-radius: var(--radius);
     /* Native popup and arrow follow the theme mode. With no `data-theme` yet
        (no JS, or before the head script runs) they follow the OS, as the
@@ -1705,9 +1717,9 @@ label .text-danger, .form-label .text-danger { color: hsl(var(--destructive-text
     font-family: inherit;
     font-size: 0.875rem;
     line-height: 1.25rem;
-    background-color: hsl(var(--background));
+    background-color: hsl(var(--input-background, var(--background)));
     color: hsl(var(--foreground));
-    border: 1px solid hsl(var(--input));
+    border: 1px solid hsl(var(--input, var(--border)));
     border-radius: var(--radius);
     resize: vertical;
     transition: all 0.15s ease;
@@ -1761,6 +1773,7 @@ label .text-danger, .form-label .text-danger { color: hsl(var(--destructive-text
     font-size: 0.875rem;
     line-height: 1.25rem;
     cursor: pointer;
+    font-family: inherit;
 }
 
 .radio:disabled,
@@ -1845,6 +1858,7 @@ label .text-danger, .form-label .text-danger { color: hsl(var(--destructive-text
     align-items: center;
     gap: 0.5rem;
     cursor: pointer;
+    font-family: inherit;
 }
 
 /* Theme mode toggle (`{% theme_mode_button %}`) */
@@ -1860,6 +1874,7 @@ label .text-danger, .form-label .text-danger { color: hsl(var(--destructive-text
     color: hsl(var(--muted-foreground));
     font-size: 0.875rem;
     cursor: pointer;
+    font-family: inherit;
     transition: color 0.15s ease, background-color 0.15s ease;
 }
 
@@ -1888,6 +1903,7 @@ label .text-danger, .form-label .text-danger { color: hsl(var(--destructive-text
     color: hsl(var(--foreground));
     font-size: 0.875rem;
     cursor: pointer;
+    font-family: inherit;
 }
 
 .theme-preset-btn:hover {
@@ -1922,6 +1938,7 @@ label .text-danger, .form-label .text-danger { color: hsl(var(--destructive-text
     font-size: 0.875rem;
     color: hsl(var(--foreground));
     cursor: pointer;
+    font-family: inherit;
 }
 
 .theme-preset-item:hover {

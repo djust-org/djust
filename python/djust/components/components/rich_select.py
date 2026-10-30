@@ -118,6 +118,8 @@ class RichSelect(Component):
         searchable: bool = False,
         label: str = "",
         variant_map: Optional[Dict[str, str]] = None,
+        describedby: str = "",
+        invalid: bool = False,
         **kwargs: Any,
     ) -> None:
         super().__init__(
@@ -130,6 +132,8 @@ class RichSelect(Component):
             searchable=searchable,
             label=label,
             variant_map=variant_map,
+            describedby=describedby,
+            invalid=invalid,
             **kwargs,
         )
         self.name = name
@@ -141,6 +145,8 @@ class RichSelect(Component):
         self.searchable = searchable
         self.label = label
         self.variant_map = variant_map or {}
+        self.describedby = describedby
+        self.invalid = invalid
 
     def _resolve_variant(self, opt: Dict) -> str:
         """Return the variant to render for a given option.
@@ -192,9 +198,9 @@ class RichSelect(Component):
         else:
             selected_html = f'<span class="rich-select-placeholder">{e_placeholder}</span>'
 
-        # Build option list. Each option carries an onclick that closes the
-        # dropdown — the subsequent dj-click round-trip re-renders with the
-        # new value so the trigger updates its variant tint automatically.
+        # Build option list. The client bundle closes the dropdown on an
+        # option click; the dj-click round-trip re-renders with the new value
+        # so the trigger updates its variant tint automatically.
         opt_parts = []
         for opt in self.options:
             if not isinstance(opt, dict):
@@ -206,8 +212,7 @@ class RichSelect(Component):
             opt_parts.append(
                 f'<div class="rich-select-option{active_cls}{variant_cls}" '
                 f"{self.event_attrs(self.event or self.name, value=ov)} "
-                f'role="option" aria-selected="{"true" if ov == self.value else "false"}" '
-                f"onclick=\"this.closest('.rich-select').classList.remove('rich-select--open')\">"
+                f'role="option" aria-selected="{"true" if ov == self.value else "false"}">'
                 f"{self._option_html(opt)}"
                 f"</div>"
             )
@@ -216,16 +221,16 @@ class RichSelect(Component):
             f'<label class="form-label">{html.escape(self.label)}</label>' if self.label else ""
         )
 
-        # Trigger carries both the open/close toggle (onclick + keyboard) and
-        # its variant tint class. Keyboard handlers match the template-tag
-        # variant so parity is maintained between both entry points. Disabled
-        # pickers omit the handlers entirely.
-        trigger_behaviour = (
-            ""
-            if self.disabled
-            else " onclick=\"this.parentElement.classList.toggle('rich-select--open')\""
-            " onkeydown=\"if(event.key==='Enter'||event.key===' '){event.preventDefault();"
-            "this.parentElement.classList.toggle('rich-select--open');}\""
+        # Opening, closing and keyboard toggling are the client bundle's
+        # delegated ``.rich-select`` behaviour (no inline handler, so a strict
+        # CSP does not block it); it ignores ``.rich-select--disabled``.
+        tabindex = "-1" if self.disabled else "0"
+        aria_disabled = ' aria-disabled="true"' if self.disabled else ""
+        listbox_id = f"rs-{e_name}-listbox"
+        from djust.components.templatetags.djust_components import field_aria_attrs
+
+        aria_field = field_aria_attrs(
+            f"rs-{e_name}", describedby=self.describedby, invalid=self.invalid
         )
 
         return (
@@ -233,13 +238,12 @@ class RichSelect(Component):
             f"{label_html}"
             f'<input type="hidden" name="{e_name}" value="{html.escape(self.value)}">'
             f'<div class="rich-select-trigger{trigger_variant_cls}" '
-            f'tabindex="0" role="combobox" '
-            f'aria-expanded="false" aria-haspopup="listbox"{disabled_attr}'
-            f"{trigger_behaviour}>"
+            f'tabindex="{tabindex}" role="combobox" aria-controls="{listbox_id}" '
+            f'aria-expanded="false" aria-haspopup="listbox"{aria_field}{aria_disabled}{disabled_attr}>'
             f"{selected_html}"
-            f'<span class="rich-select-chevron">&#9662;</span>'
+            f'<span class="rich-select-chevron" aria-hidden="true">&#9662;</span>'
             f"</div>"
-            f'<div class="rich-select-dropdown" role="listbox">'
+            f'<div class="rich-select-dropdown" role="listbox" id="{listbox_id}">'
             f"{''.join(opt_parts)}"
             f"</div>"
             f"</div>"

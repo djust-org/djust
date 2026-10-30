@@ -3,6 +3,7 @@
 import html
 
 from djust import Component
+from djust.components.utils import url_attr
 from typing import Any, NamedTuple
 
 _HANDLES = ("nw", "n", "ne", "e", "se", "s", "sw", "w")
@@ -147,7 +148,7 @@ class ImageCropper(Component):
             classes.append(html.escape(self.custom_class))
         class_str = " ".join(classes)
 
-        e_src = html.escape(self.src)
+        e_src = url_attr(self.src, image=True, honor_safe=False)
         e_event = html.escape(self.crop_event)
         e_ratio = html.escape(self.aspect_ratio) if self.aspect_ratio else ""
 

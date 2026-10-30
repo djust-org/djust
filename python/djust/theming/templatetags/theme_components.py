@@ -332,7 +332,10 @@ _ATTR_NAME_RE = re.compile(r"[A-Za-z][A-Za-z0-9-]*")
 # Attributes whose value is a URL the browser will navigate to or load.
 _URL_ATTRS = frozenset({"href", "src", "action", "formaction"})
 
-_UNSAFE_URL_SCHEMES = ("javascript:", "vbscript:", "data:")
+# ``livescript:`` (Netscape) and ``mhtml:`` (Internet Explorer) are obsolete and dead in
+# every current browser; neither has a legitimate use in an href, so they are refused
+# alongside the live script schemes (#3665 review).
+_UNSAFE_URL_SCHEMES = ("javascript:", "vbscript:", "data:", "livescript:", "mhtml:")
 
 
 def _has_unsafe_url_scheme(value: Any, *, image: bool = False) -> bool:

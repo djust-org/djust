@@ -197,7 +197,7 @@ Each check has an ID such as `djust.V004`: a family letter and a number. The the
 | --- | --- | --- |
 | `A` | Audit / static security checks | A100 to A107 |
 | `B` | Vendored assets and SBOMs | B001 to B014 |
-| `C` | Configuration | C020 to C025 |
+| `C` | Configuration | C020 to C026 |
 | `D` | Database notifications | none |
 | `Q` | Code quality | Q004 |
 | `S` | Security | S013 |

@@ -106,6 +106,88 @@ function markBodyStamped() {
     if (window.djust) window.djust._bodyStamped = true;
 }
 
+// ============================================================================
+// dj-poll teardown
+// ============================================================================
+
+// Every element that currently owns a poll interval. A removal path tears
+// down by CONTAINMENT against this set rather than by `[dj-poll]` query, so a
+// poll whose element lost its attribute is still found. Kept in this module
+// (not 09-event-binding.js, which binds polls) because every removal path
+// lives here, and some tests evaluate this file on its own.
+const _pollElements = new Set();
+
+/**
+ * Stop one element's poll: clear its interval and visibilitychange handler
+ * and forget its bound key. The bind pass skips an element only when its
+ * stored key matches, so one that comes back (a sticky subtree re-attached
+ * after navigation, say) is re-bound.
+ * @param {Element} element
+ */
+function _teardownPoll(element) {
+    if (element._djustPollIntervalId) clearInterval(element._djustPollIntervalId);
+    if (element._djustPollVisibilityHandler) {
+        document.removeEventListener('visibilitychange', element._djustPollVisibilityHandler);
+    }
+    element._djustPollIntervalId = null;
+    element._djustPollVisibilityHandler = null;
+    element._djustPollBoundKey = null;
+    _pollElements.delete(element);
+}
+
+/**
+ * Stop the poll of `root` AND of every poll element inside it. Every path
+ * that removes or replaces DOM calls this on what it removes: clearing only
+ * the replaced node left a nested poll's interval running on the detached
+ * element after a live_redirect mount, firing a handler the next view does
+ * not have.
+ * @param {Node} root - an element, fragment, or document
+ * @param {boolean} [childrenOnly=false] - keep `root`'s own poll: for a
+ *   container whose CONTENT is replaced while the container survives.
+ */
+function teardownPollsIn(root, childrenOnly) {
+    if (!root || _pollElements.size === 0) return;
+    for (const element of Array.from(_pollElements)) {
+        if (element === root) {
+            if (!childrenOnly) _teardownPoll(element);
+        } else if (typeof root.contains === 'function' && root.contains(element)) {
+            _teardownPoll(element);
+        }
+    }
+}
+
+/**
+ * Give the page root the destination view's own `dj-poll` attributes.
+ *
+ * A mount replaces only the root's content, so after a live_redirect the root
+ * element still carries the departing view's attributes, and a root poll
+ * would keep calling a handler the new view does not have. The mount frame
+ * names the root's poll attributes (`root_poll`, `{}` for none); a frame
+ * without it (an older server) leaves the root alone. The next bind pass
+ * stops a dropped poll and rebuilds a changed one; an unchanged one keeps its
+ * phase (#2858).
+ */
+function applyRootPoll(container, rootPoll) {
+    if (!container || !rootPoll || typeof rootPoll !== 'object') return;
+    for (const name of ['dj-poll', 'dj-poll-interval']) {
+        // eslint-disable-next-line security/detect-object-injection
+        const value = rootPoll[name];
+        if (typeof value === 'string') {
+            if (container.getAttribute(name) !== value) container.setAttribute(name, value);
+        } else if (container.hasAttribute(name)) {
+            container.removeAttribute(name);
+        }
+    }
+    if (!container.getAttribute('dj-poll')) teardownPollsIn(container, false);
+}
+
+/** Stop the polls whose element left the document or dropped `dj-poll`. */
+function _sweepOrphanedPolls() {
+    for (const element of Array.from(_pollElements)) {
+        if (!element.isConnected || !element.getAttribute('dj-poll')) _teardownPoll(element);
+    }
+}
+
 /**
  * Replace a container's content with server HTML (`innerHTML` semantics: the
  * inserted scripts stay inert). For `<body>` the foreign children survive, in
@@ -113,6 +195,7 @@ function markBodyStamped() {
  */
 function replaceContainerHtml(container, html) {
     if (container !== document.body || !pageRootIsBody()) {
+        teardownPollsIn(container, true);
         container.innerHTML = html;
         return;
     }
@@ -120,7 +203,7 @@ function replaceContainerHtml(container, html) {
     const owned = all.filter((n) => !isForeignBodyChild(n));
     const lastOwned = owned.length ? all.indexOf(owned[owned.length - 1]) : -1;
     const anchor = all.slice(lastOwned + 1).find((n) => isForeignBodyChild(n)) || null;
-    owned.forEach((n) => container.removeChild(n));
+    owned.forEach((n) => { teardownPollsIn(n); container.removeChild(n); });
     const tpl = document.createElement('template');
     tpl.innerHTML = html;
     container.insertBefore(tpl.content, anchor);
@@ -299,6 +382,22 @@ function restoreFocusState(state, rootEl = null) {
  *   so a child's dj-id doesn't match the parent's.
  * @returns {Node|null} - Found node or null
  */
+/**
+ * The node that holds `node`'s children: a `<template>`'s parsed children are
+ * in its `.content` fragment, which DOM child lists don't show; the server
+ * VDOM counts them as the template's children (crates/djust_vdom parser).
+ */
+function childHost(node) {
+    return node && node.nodeType === 1 && node.tagName === 'TEMPLATE' && node.content
+        ? node.content : node;
+}
+
+/** `host`'s element child with dj-id `id`; `:scope` is not used on a fragment. */
+function _childByDjId(node, host, id) {
+    if (host === node) return node.querySelector(`:scope > [dj-id="${CSS.escape(id)}"]`);
+    return Array.from(host.children).find((c) => c.getAttribute('dj-id') === id) || null;
+}
+
 function getNodeByPath(path, djustId = null, rootEl = null) {
     // Strategy 1: ID-based resolution (fast, reliable)
     if (djustId) {
@@ -332,7 +431,7 @@ function getNodeByPath(path, djustId = null, rootEl = null) {
         // server counts every text node, whitespace-only ones included, so the
         // walk must too, or a path through one resolves the wrong node (#3012).
         const preserveWhitespace = isWhitespacePreserving(node);
-        const children = Array.from(node.childNodes).filter((child) =>
+        const children = Array.from(childHost(node).childNodes).filter((child) =>
             isSignificantChild(child, preserveWhitespace)
         );
 
@@ -710,6 +809,8 @@ function _foreignPlaceholderContext(namespace) {
  * "inside SVG" flag) keeps the name-based choice.
  */
 function createNodeFromVNode(vnode, context = false) {
+    // A template's contents fragment is an HTML context of its own.
+    if (context && typeof context === 'object' && context.nodeType === 11) context = false;
     const parentEl = context && typeof context === 'object' ? context : null;
     const inSvgContext = parentEl ? isInSvgContext(parentEl) : !!context;
     if (vnode.tag === '#text') {
@@ -825,8 +926,9 @@ function createNodeFromVNode(vnode, context = false) {
         const childContext = placeholderNamespace
             ? _foreignPlaceholderContext(placeholderNamespace)
             : (parentEl ? elem : useSvgNamespace);
+        const host = childHost(elem);
         for (const child of vnode.children) {
-            elem.appendChild(createNodeFromVNode(child, childContext));
+            host.appendChild(createNodeFromVNode(child, childContext));
         }
     }
 
@@ -1193,6 +1295,7 @@ function _morphChildrenInner(existing, desired) {
                 && globalThis.djust.maybeDeferRemoval(node)) {
                 continue;
             }
+            teardownPollsIn(node);
             existing.removeChild(node);
         }
     }
@@ -1213,13 +1316,8 @@ function morphElement(existing, desired) {
 function _morphElementInner(existing, desired) {
     // Tag mismatch — replace entirely
     if (existing.tagName !== desired.tagName) {
-        // Clean up poll timers before replacing (prevents orphaned intervals)
-        if (existing._djustPollIntervalId) {
-            clearInterval(existing._djustPollIntervalId);
-            if (existing._djustPollVisibilityHandler) {
-                document.removeEventListener('visibilitychange', existing._djustPollVisibilityHandler);
-            }
-        }
+        // Stop the polls of the replaced subtree (prevents orphaned intervals)
+        teardownPollsIn(existing);
         // Clean up scoped (window/document) listeners before replacing
         _cleanupScopedListeners(existing);
         if (globalThis.djust && typeof globalThis.djust.maybeDeferRemoval === 'function'
@@ -1323,7 +1421,8 @@ function _morphElementInner(existing, desired) {
         return;
     }
 
-    morphChildren(existing, desired);
+    // A template's children are its `.content` (both sides parsed as HTML).
+    morphChildren(childHost(existing), childHost(desired));
 
     // Sync textarea .value from textContent after children are morphed
     // (.value and .textContent diverge after initial render)
@@ -1475,6 +1574,7 @@ function _applyDjUpdateElementsInner(existingRoot, newRoot) {
                     && globalThis.djust.maybeDeferRemoval(existing)) {
                     continue;
                 }
+                teardownPollsIn(existing);
                 existing.remove();
             }
         }
@@ -1546,7 +1646,7 @@ function getSignificantChildren(node) {
 
     // Shared significant-child predicate (#1655) — see getNodeByPath; passing
     // preserveWhitespace keeps the pre/code/textarea behavior.
-    return Array.from(node.childNodes).filter((child) =>
+    return Array.from(childHost(node).childNodes).filter((child) =>
         isSignificantChild(child, preserveWhitespace)
     );
 }
@@ -1745,6 +1845,7 @@ function _removeDjIfBracketedRange(openMarker, closeMarker) {
     }
     for (const node of toRemove) {
         if (node.parentNode === parent) {
+            teardownPollsIn(node);
             parent.removeChild(node);
         }
     }
@@ -2322,7 +2423,8 @@ function _removeChildNode(parent, child) {
         && globalThis.djust.maybeDeferRemoval(child)) {
         return;
     }
-    parent.removeChild(child);
+    teardownPollsIn(child);
+    childHost(parent).removeChild(child);
     if (wasTextNode && parent.tagName === 'TEXTAREA' && document.activeElement !== parent) {
         parent.value = '';
     }
@@ -2355,6 +2457,8 @@ function _djIfSpanNodes(id, rootEl) {
 function _placeChildren(parent, ops, movedChildOf, rootEl, tally) {
     const preserve = isWhitespacePreserving(parent);
     const isSig = (n) => isSignificantChild(n, preserve);
+    // Where `parent`'s children live (a template's `.content`).
+    const host = childHost(parent);
 
     // Claim the nodes each move carries: moved children first, then spans
     // from the smallest up.
@@ -2362,28 +2466,28 @@ function _placeChildren(parent, ops, movedChildOf, rootEl, tally) {
     for (const op of ops) {
         if (op.type !== 'MoveChild') continue;
         const child = movedChildOf.get(op);
-        if (child && child.parentNode === parent && !owner.has(child)) owner.set(child, op);
+        if (child && child.parentNode === host && !owner.has(child)) owner.set(child, op);
     }
     const spans = [];
     for (const op of ops) {
         if (op.type !== 'MoveSubtree') continue;
         const nodes = _djIfSpanNodes(op.id, rootEl);
-        if (nodes && nodes[0].parentNode === parent) spans.push({ op, nodes });
+        if (nodes && nodes[0].parentNode === host) spans.push({ op, nodes });
     }
     spans.sort((a, b) => a.nodes.length - b.nodes.length);
     for (const { op, nodes } of spans) {
         for (const n of nodes) if (!owner.has(n)) owner.set(n, op);
     }
     const carried = new Map();
-    for (const n of Array.from(parent.childNodes)) {
+    for (const n of Array.from(host.childNodes)) {
         const op = owner.get(n);
         if (!op) continue;
         if (!carried.has(op)) carried.set(op, []);
         carried.get(op).push(n);
-        parent.removeChild(n);
+        host.removeChild(n);
     }
 
-    const sig = Array.from(parent.childNodes).filter(isSig);
+    const sig = Array.from(host.childNodes).filter(isSig);
     const sorted = ops.slice().sort((a, b) => _placementIndex(a) - _placementIndex(b));
     for (const op of sorted) {
         let nodes;
@@ -2427,7 +2531,7 @@ function _placeChildren(parent, ops, movedChildOf, rootEl, tally) {
         const ref = sig[at] || null;
         const frag = document.createDocumentFragment();
         for (const n of nodes) frag.appendChild(n);
-        parent.insertBefore(frag, ref);
+        host.insertBefore(frag, ref);
         sig.splice(at, 0, ...nodes.filter(isSig));
         if (op.type === 'InsertChild' && nodes[0].nodeType === Node.TEXT_NODE &&
                 parent.tagName === 'TEXTAREA' && document.activeElement !== parent) {
@@ -2503,8 +2607,7 @@ function _applyPatchBatchInner(patches, rootEl) {
     };
     const childOf = (parent, childD, index) => {
         if (childD) {
-            const escaped = CSS.escape(childD);
-            const byId = parent.querySelector(`:scope > [dj-id="${escaped}"]`);
+            const byId = _childByDjId(parent, childHost(parent), String(childD));
             if (byId) return byId;
         }
         // eslint-disable-next-line security/detect-object-injection -- server-provided integer index
@@ -2534,7 +2637,7 @@ function _applyPatchBatchInner(patches, rootEl) {
     // 2. Removals.
     for (const p of removeSubtrees) tally(applyRemoveSubtree(p, rootEl), p);
     for (const [parent, child] of toRemove) {
-        if (child.parentNode === parent) _removeChildNode(parent, child);
+        if (child.parentNode === childHost(parent)) _removeChildNode(parent, child);
     }
 
     // 3. Placements, per parent in first-seen order.
@@ -2676,13 +2779,8 @@ function applySinglePatch(patch, rootEl = null) {
     try {
         switch (patch.type) {
             case 'Replace':
-                // Clean up poll timers before replacing (prevents orphaned intervals)
-                if (node._djustPollIntervalId) {
-                    clearInterval(node._djustPollIntervalId);
-                    if (node._djustPollVisibilityHandler) {
-                        document.removeEventListener('visibilitychange', node._djustPollVisibilityHandler);
-                    }
-                }
+                // Stop the polls of the replaced subtree (prevents orphaned intervals)
+                teardownPollsIn(node);
                 const newNode = createNodeFromVNode(patch.node, node.parentNode);
                 if (node.nodeType === Node.ELEMENT_NODE
                     && globalThis.djust
@@ -2799,7 +2897,8 @@ function applySinglePatch(patch, rootEl = null) {
                 // container, causing new sibling nodes to be inserted inside the
                 // <select>.  Detect this mismatch and redirect the insert to the
                 // correct parent so the new node becomes a sibling of <select>.
-                let insertTarget = node;
+                const host = childHost(node);
+                let insertTarget = host;
                 let insertRefChild = null;
                 const isSelectNode = node.nodeType === Node.ELEMENT_NODE && node.tagName === 'SELECT';
                 const newChildIsOption = newChild.nodeType === Node.ELEMENT_NODE &&
@@ -2814,8 +2913,7 @@ function applySinglePatch(patch, rootEl = null) {
                 } else {
                     if (patch.ref_d) {
                         // ID-based resolution: find sibling by dj-id (resilient to index shifts)
-                        const escaped = CSS.escape(patch.ref_d);
-                        insertRefChild = node.querySelector(`:scope > [dj-id="${escaped}"]`);
+                        insertRefChild = _childByDjId(node, host, String(patch.ref_d));
                     }
                     if (!insertRefChild) {
                         // Fallback: index-based
@@ -2843,11 +2941,11 @@ function applySinglePatch(patch, rootEl = null) {
                     if (globalThis.djustDebug) console.log('[LiveView] Patch %s targets non-element (nodeType=%d), skipping', patch.type, node.nodeType);
                     return false;
                 }
+                const host = childHost(node);
                 let child = null;
                 if (patch.child_d) {
                     // ID-based resolution: find child by dj-id (resilient to index shifts)
-                    const escaped = CSS.escape(patch.child_d);
-                    child = node.querySelector(`:scope > [dj-id="${escaped}"]`);
+                    child = _childByDjId(node, host, String(patch.child_d));
                 }
                 if (!child) {
                     // Fallback: index-based
@@ -2864,7 +2962,8 @@ function applySinglePatch(patch, rootEl = null) {
                         && globalThis.djust.maybeDeferRemoval(child)) {
                         break;
                     }
-                    node.removeChild(child);
+                    teardownPollsIn(child);
+                    host.removeChild(child);
                     // If removing a text node from a textarea, also clear its .value
                     // (removing textContent alone doesn't update what's displayed)
                     if (wasTextNode && parentTag === 'TEXTAREA' && document.activeElement !== node) {
@@ -2880,11 +2979,11 @@ function applySinglePatch(patch, rootEl = null) {
                     if (globalThis.djustDebug) console.log('[LiveView] Patch %s targets non-element (nodeType=%d), skipping', patch.type, node.nodeType);
                     return false;
                 }
+                const host = childHost(node);
                 let child;
                 if (patch.child_d) {
                     // ID-based resolution: find direct child by dj-id (resilient to index shifts)
-                    const escaped = CSS.escape(patch.child_d);
-                    child = node.querySelector(`:scope > [dj-id="${escaped}"]`);
+                    child = _childByDjId(node, host, String(patch.child_d));
                 }
                 if (!child) {
                     // Fallback: index-based
@@ -2897,9 +2996,9 @@ function applySinglePatch(patch, rootEl = null) {
                     const children = getSignificantChildren(node).filter((c) => c !== child);
                     const refChild = children[patch.to];
                     if (refChild) {
-                        node.insertBefore(child, refChild);
+                        host.insertBefore(child, refChild);
                     } else {
-                        node.appendChild(child);
+                        host.appendChild(child);
                     }
                 }
                 break;

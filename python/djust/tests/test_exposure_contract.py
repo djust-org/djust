@@ -78,6 +78,9 @@ def test_invalid_permissions_fail_closed(kwargs):
         "exposure_policy",
         "mount",
         "get_context_data",
+        # The explicit render context's reserved key: a field named ``view``
+        # would shadow the view object the template reads.
+        "view",
     ],
 )
 def test_invalid_field_names_are_rejected(name):

@@ -248,6 +248,7 @@ function applySlotMount(transport, data, options = {}) {
             _morphPrerenderedMount(container, data.html, undefined, !mountedBefore);
         } else {
             // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
+            teardownPollsIn(container, true);
             container.innerHTML = data.html;
             _runInsertedScripts(container);
             _warnDeadScripts(container);

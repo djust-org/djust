@@ -8,8 +8,9 @@ import json
 import logging
 import os
 import re
+import threading
 from html import escape as _html_escape
-from typing import Any, Dict, Optional, Tuple, TYPE_CHECKING
+from typing import Any, Callable, Dict, List, Optional, Tuple, TYPE_CHECKING
 
 from .._child_rendering import reconcile_child_render
 from ..template_libraries import library_render_scope
@@ -56,9 +57,16 @@ logger = logging.getLogger(__name__)
 #   at the next one instead of running to the next ``>`` (linear, not
 #   quadratic, on tag soup with no ``>``).
 #
-# The Rust twins that must agree on what a root is (#1646, #3031):
-# ``crates/djust_live/src/lib.rs::find_dj_root_content_range`` (the text scan)
-# and ``crates/djust_vdom/src/parser.rs::find_liveview_root`` (the VDOM root).
+# These patterns locate the root in template SOURCE only
+# (``_extract_liveview_root_with_wrapper``, ``_extract_liveview_template_content``,
+# ``_search_template_root_open``), where ``{% if %}`` branches are balanced
+# (``_find_closing_tag_pos``) and Django comments are masked. In RENDERED HTML
+# (the WS frame, the initial-GET shell splice, the streaming split, the
+# ``dj-view`` stamp) the root is located by Rust alone
+# (``djust._rust.root_content_range`` / ``root_element_span`` /
+# ``dj_root_stamp_offsets``, ``crates/djust_live/src/lib.rs::find_root_span``),
+# which tokenizes as html5ever does and so agrees with the VDOM's
+# ``crates/djust_vdom/src/parser.rs::find_liveview_root`` (#1646, #3031).
 # ONE rule picks it, here and there: an embedded ``{% live_render %}`` child's
 # wrapper and everything inside it belong to the child (``_embedded_child_spans``)
 # and are never the root; of the rest, the first ``dj-root`` in document order
@@ -70,6 +78,39 @@ logger = logging.getLogger(__name__)
 _QUOTED = r""""[^"]*"|'[^']*'"""
 _TAG_BODY_UNIT = r"""(?:%s|[^'"<>])""" % _QUOTED
 _ROOT_TAG_NAME = r"<(?!(?:html|head|body)(?=[ \t\n\r\f/>]))([A-Za-z][A-Za-z0-9-]*)(?=[ \t\n\r\f/>])"
+
+
+_ROOT_POLL_ATTRS = ("dj-poll", "dj-poll-interval")
+
+
+def _root_poll_attrs(html: str) -> Dict[str, str]:
+    """The ``dj-poll`` / ``dj-poll-interval`` of the rendered page root's open tag.
+
+    A mount sends the root's content only, so the browser's root element
+    keeps its attributes across a live_redirect; the mount frame carries these
+    two so the client can give the root the destination view's poll (``{}``:
+    the root has none). Attributes are parsed as the browser does (entities
+    decoded); the root is found by the same Rust locator as the content.
+    """
+    from html.parser import HTMLParser
+
+    from .._rust import root_element_span
+
+    span = root_element_span(html) if html else None
+    if span is None:
+        return {}
+    found: Dict[str, str] = {}
+
+    class _OpenTag(HTMLParser):
+        def handle_starttag(self, tag: str, attrs: "list[tuple[str, Optional[str]]]") -> None:
+            for name, value in attrs:
+                if name in _ROOT_POLL_ATTRS and name not in found:
+                    found[name] = value or ""
+
+    parser = _OpenTag(convert_charrefs=True)
+    parser.feed(html[span[0] : span[1]])
+    parser.close()
+    return found
 
 
 def _root_open_re(tag_name: str, attr: str) -> "re.Pattern[str]":
@@ -164,8 +205,6 @@ def _mask_raw_text(html: str) -> str:
     return _RAW_TEXT_RE.sub(lambda m: "\x00" * len(m.group(0)), html)
 
 
-# HTML whitespace (not Python's broader Unicode whitespace class).
-_HTML_SPACE = " \t\n\r\f"
 _COMMENT_CLOSE_RE = re.compile(r"--!?>")
 _RAW_CLOSE_RES = {
     name: re.compile(r"</" + name + r"(?=[ \t\n\r\f/>])", re.IGNORECASE)
@@ -173,6 +212,26 @@ _RAW_CLOSE_RES = {
     # For root selection/balancing it has the same closing-tag boundary.
     for name in ("script", "style", "textarea")
 }
+
+
+# Character runs ``_scan_html_tag`` skips. Matching them with a compiled
+# pattern instead of a per-character Python loop keeps the mask linear in C:
+# it runs over the whole page on every mount and full render.
+_TAG_NAME_TAIL_RE = re.compile(r"[^ \t\n\r\f/>]*")
+_SPACE_OR_SLASH_RUN_RE = re.compile(r"[ \t\n\r\f/]*")
+_ATTR_NAME_TAIL_RE = re.compile(r"[^ \t\n\r\f/>=]*")
+_SPACE_RUN_RE = re.compile(r"[ \t\n\r\f]*")
+_UNQUOTED_VALUE_RE = re.compile(r"[^ \t\n\r\f>]*")
+# Inside a tag, '<' and stray quotes are literal parse errors and are masked.
+_IN_TAG_MASKED_CHAR_RE = re.compile(r"[<\"']")
+_TAG_NAME_RE = re.compile(r"</?([^ \t\n\r\f/>]+)")
+
+
+def _run_end(pattern: "re.Pattern[str]", text: str, pos: int) -> int:
+    """End of the character run ``pattern`` matches at ``pos`` (the run
+    patterns above match the empty string, so there is always a match)."""
+    match = pattern.match(text, pos)
+    return pos if match is None else match.end()
 
 
 def _scan_html_tag(html: str, start: int) -> "tuple[int, list[tuple[int, int, int, int]]]":
@@ -191,12 +250,10 @@ def _scan_html_tag(html: str, start: int) -> "tuple[int, list[tuple[int, int, in
     i = start + 1
     if i < n and html[i] == "/":
         i += 1
-    while i < n and html[i] not in _HTML_SPACE + "/>":
-        i += 1
+    i = _run_end(_TAG_NAME_TAIL_RE, html, i)
     attrs: list[tuple[int, int, int, int]] = []
     while i < n:
-        while i < n and html[i] in _HTML_SPACE + "/":
-            i += 1
+        i = _run_end(_SPACE_OR_SLASH_RUN_RE, html, i)
         if i >= n:
             break
         if html[i] == ">":
@@ -204,18 +261,12 @@ def _scan_html_tag(html: str, start: int) -> "tuple[int, list[tuple[int, int, in
         begin = i
         # '=' at the start of a name is an unexpected-equals parse error,
         # but belongs to that name rather than starting an empty value.
-        i += 1
-        while i < n and html[i] not in _HTML_SPACE + "/>=":
-            i += 1
-        name_end = i
-        while i < n and html[i] in _HTML_SPACE:
-            i += 1
+        name_end = _run_end(_ATTR_NAME_TAIL_RE, html, i + 1)
+        i = _run_end(_SPACE_RUN_RE, html, name_end)
         value_start = i
         end = name_end
         if i < n and html[i] == "=":
-            i += 1
-            while i < n and html[i] in _HTML_SPACE:
-                i += 1
+            i = _run_end(_SPACE_RUN_RE, html, i + 1)
             value_start = i
             if i < n and html[i] in "\"'":
                 quote = html[i]
@@ -224,11 +275,19 @@ def _scan_html_tag(html: str, start: int) -> "tuple[int, list[tuple[int, int, in
                     return -1, []
                 i = close + 1
             else:
-                while i < n and html[i] not in _HTML_SPACE + ">":
-                    i += 1
+                i = _run_end(_UNQUOTED_VALUE_RE, html, i)
             end = i
         attrs.append((begin, name_end, value_start, end))
     return -1, []
+
+
+# One-entry memo per thread for ``_mask_for_root_search``. Finding a
+# root and balancing its close tag both mask the SAME string (the search, then
+# ``_find_closing_tag_pos``), so every template-source extract masked it
+# twice. The entry holds a reference to its input, so an ``is`` hit can never
+# be a different string at a reused address; str is immutable, so the
+# mask of the same object cannot change.
+_mask_memo = threading.local()
 
 
 def _mask_for_root_search(html: str) -> str:
@@ -238,6 +297,17 @@ def _mask_for_root_search(html: str) -> str:
     candidates. The original offsets remain suitable for template splicing.
     Root precedence and embedded ownership are decided by the caller.
     """
+    if getattr(_mask_memo, "source", None) is html:
+        cached: str = _mask_memo.masked
+        return cached
+    source = html
+    masked = _mask_for_root_search_uncached(html)
+    _mask_memo.source = source
+    _mask_memo.masked = masked
+    return masked
+
+
+def _mask_for_root_search_uncached(html: str) -> str:
     html = str(html)  # Read-only scanner; returned coordinates address the original result.
     out = list(html)
     n = len(html)
@@ -267,9 +337,8 @@ def _mask_for_root_search(html: str) -> str:
                 out[i:] = "\x00" * (n - i)
                 break
             # Mask nested '<' and literal quote parse errors throughout tags.
-            for k in range(i + 1, end):
-                if html[k] in "<\"'":
-                    out[k] = "\x00"
+            for m in _IN_TAG_MASKED_CHAR_RE.finditer(html, i + 1, end):
+                out[m.start()] = "\x00"
             for begin, _name_end, value_start, attr_end in attrs:
                 # A stray '/' before an attribute is a tokenizer parse
                 # error, but still separates it from the preceding name.
@@ -279,7 +348,7 @@ def _mask_for_root_search(html: str) -> str:
                     out[value_start:attr_end] = "\x00" * (attr_end - value_start)
                     if html[value_start] in "\"'":
                         out[attr_end - 1] = " "
-            name = re.match(r"</?([^ \t\n\r\f/>]+)", html[i:end])
+            name = _TAG_NAME_RE.match(html, i, end)
             if name and name.group(1).lower() in _RAW_CLOSE_RES and nxt != "/":
                 content_start = end
                 raw_close = _RAW_CLOSE_RES[name.group(1).lower()].search(html, end)
@@ -525,11 +594,55 @@ def _search_template_root_open(template: str) -> "Optional[re.Match[str]]":
 # #2999: whitespace between inline-level siblings
 # ---------------------------------------------------------------------------
 
-# HTML whitespace (space, tab, LF, FF, CR). NOT ``\s``: Python's ``\s`` also
-# matches NBSP and the other Unicode spaces, which the Rust parser (and the
-# browser) treat as content.
-_HTML_WS_RUN_RE = re.compile(r"[ \t\n\r\f]+")
 _BLOCK_TAG_RE = re.compile(r"<([A-Za-z][^\s/>]*)")
+
+# The egress normalizer hides whitespace-preserving blocks behind
+# ``__PRESERVED_BLOCK_<n>__`` placeholders. Page text that already spells the
+# placeholder's core (a user-supplied value, a page documenting this very
+# function) is escaped to ``PRESERVED_BLOCK_~`` for the duration of the pass, so
+# only the normalizer's own placeholders are ever treated as one, and the
+# escape is undone at the end. ``djust_core::html_whitespace`` does the same.
+_MARKER_CORE = "PRESERVED_BLOCK_"
+_MARKER_CORE_ESCAPED = "PRESERVED_BLOCK_~"
+_PLACEHOLDER_RE = re.compile(r"__PRESERVED_BLOCK_([0-9]+)__")
+_COMMENT_RE = re.compile(r"<!--(?!\s*/?dj-if\b).*?-->", re.DOTALL)
+
+
+def _escape_joined_markers(html: str, joins: List[int], cat: Callable[[List[str]], str]) -> str:
+    """Escape a placeholder core that removing a comment spelled out.
+
+    ``PRESERVED_<!-- x -->BLOCK_0__`` reads ``PRESERVED_BLOCK_0__`` once the
+    comment is gone, and was not escaped up front because the input did not
+    contain it. An occurrence straddling a join is page text, unless it only
+    exists by borrowing an underscore of one of the normalizer's own
+    placeholders (whose real text starts with ``<``).
+    """
+    core = len(_MARKER_CORE)
+    straddling: List[int] = []
+    for j in joins:
+        k = html.find(_MARKER_CORE, max(0, j - core + 1), j + core - 1)
+        while k != -1:
+            if k < j < k + core and (not straddling or straddling[-1] != k):
+                straddling.append(k)
+            k = html.find(_MARKER_CORE, k + 1, j + core - 1)
+    if not straddling:
+        return html
+    straddling = sorted(set(straddling))
+    forged = set(straddling)
+    ours = [
+        (m.start(), m.end()) for m in _PLACEHOLDER_RE.finditer(html) if m.start() + 2 not in forged
+    ]
+    parts: List[str] = []
+    cursor = 0
+    for k in straddling:
+        if any(a < k + core and k < b for a, b in ours):
+            continue
+        parts.extend((html[cursor : k + core], "~"))
+        cursor = k + core
+    if not parts:
+        return html
+    parts.append(html[cursor:])
+    return cat(parts)
 
 
 class TemplateMixin:
@@ -562,6 +675,8 @@ class TemplateMixin:
         ) -> Dict[str, Any]: ...
 
         def _initialize_rust_view(self, request: Any = None) -> None: ...
+
+        def _refresh_cached_rust_view(self) -> None: ...
 
         def _sync_state_to_rust(
             self, preloaded_context: Optional[Dict[str, Any]] = None
@@ -725,7 +840,29 @@ class TemplateMixin:
 
         # Grant authority only to original literals. Normalize tracked OUTPUT
         # later, where replacements can invalidate their exact byte intervals.
-        return source if _needs_provenance(source) else self._strip_comments_and_whitespace(source)
+        if _needs_provenance(source):
+            return source
+        # One HTTP GET calls ``get_template()`` several times (the GET body,
+        # the template-hash slot, the Rust view's initialization), and each
+        # call normalized the same source again — ~100 KB three times per
+        # page. The result is a pure function of the source and of the
+        # normalizer, so it is cached on the class, keyed by both: an edited
+        # template (hot reload) is a new key, and so is an overridden or
+        # patched normalizer.
+        strip = self._strip_comments_and_whitespace
+        key = (source, getattr(strip, "__func__", strip))
+        cls = type(self)
+        cache = cls.__dict__.get("_djust_normalized_sources")
+        if cache is None:
+            cache = {}
+            setattr(cls, "_djust_normalized_sources", cache)
+        normalized = cache.get(key)
+        if normalized is None:
+            normalized = strip(source)
+            if len(cache) >= 8:
+                cache.clear()
+            cache[key] = normalized
+        return normalized
 
     def render(self, request: Optional["HttpRequest"] = None) -> str:
         """
@@ -866,8 +1003,31 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         positional patch paths over-counted the client's children (index N vs
         a marker-less DOM) and every subsequent event fell back to
         ``html_recovery``.
+
+        A plain render runs the Rust port of these rules
+        (``djust_core::html_whitespace::strip_comments_and_whitespace``),
+        detached from the interpreter; a render carrying provenance, and the
+        few inputs the port declines, run the Python reference below
+        (:meth:`_strip_comments_and_whitespace_py`). The two are held to
+        identical bytes by ``tests/unit/test_egress_normalizer_rust_parity.py``.
         """
-        from .._render_provenance import sub, collapse, RenderedHTML
+        from .._render_provenance import RenderedHTML
+
+        if not isinstance(html, RenderedHTML):
+            from .._rust import strip_html_comments_and_whitespace
+
+            stripped = strip_html_comments_and_whitespace(html)
+            if stripped is not None:
+                return stripped
+        return self._strip_comments_and_whitespace_py(html)
+
+    def _strip_comments_and_whitespace_py(self, html: str) -> str:
+        """The Python reference of :meth:`_strip_comments_and_whitespace`.
+
+        Runs for provenance-tracking renders and the inputs the Rust port
+        declines; the parity test compares the two over its corpus.
+        """
+        from .._render_provenance import sub, collapse, fold, RenderedHTML
 
         if isinstance(html, RenderedHTML):
             from .._rust import lazy_authority_spans
@@ -876,6 +1036,20 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
             if not spans:
                 return RenderedHTML(self._strip_comments_and_whitespace(str(html)))
             html = RenderedHTML(html, spans, html.held, html.origins)
+
+        from .._render_provenance import join
+
+        is_rendered = isinstance(html, RenderedHTML)
+
+        def cat(parts: List[str]) -> str:
+            return join(parts) if is_rendered else "".join(parts)
+
+        # Page text spelling the placeholder core is escaped for the pass, so
+        # a value such as ``__PRESERVED_BLOCK_0__`` is never mistaken for a
+        # placeholder (and replaced with the page's first <script>).
+        escaped = _MARKER_CORE in html
+        if escaped:
+            html = sub(re.escape(_MARKER_CORE), _MARKER_CORE_ESCAPED, html)
 
         preserved_blocks: list[str] = []
 
@@ -923,7 +1097,18 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         # Remove HTML comments — but NOT dj-if boundary markers (#1678). The
         # negative lookahead skips comments whose body is ``dj-if …`` or
         # ``/dj-if`` so they survive; all other comments are stripped.
-        html = sub(r"<!--(?!\s*/?dj-if\b).*?-->", "", html, flags=re.DOTALL)
+        parts: List[str] = []
+        joins: List[int] = []
+        cursor = kept = 0
+        for comment in _COMMENT_RE.finditer(html):
+            piece = html[cursor : comment.start()]
+            parts.append(piece)
+            kept += len(piece)
+            joins.append(kept)
+            cursor = comment.end()
+        if joins:
+            parts.append(html[cursor:])
+            html = _escape_joined_markers(cat(parts), joins, cat)
 
         # Preserve whitespace inside <pre>, <code>, and <textarea> tags
         html = sub(
@@ -939,10 +1124,14 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
             flags=re.DOTALL | re.IGNORECASE,
         )
 
-        # Normalize whitespace: collapse every run of HTML whitespace to one
-        # space (#2999: HTML whitespace only — NBSP and other Unicode spaces
-        # are content to the Rust parser and the browser, so ``\s`` was wrong).
-        html = sub(_HTML_WS_RUN_RE, " ", html)
+        # Normalize whitespace: fold every run of HTML whitespace inside markup,
+        # and every whitespace-only text run, to one space (#2999: HTML
+        # whitespace only — NBSP and other Unicode spaces are content). Text
+        # that has content keeps its whitespace: Django renders it verbatim and
+        # the Rust VDOM parser keeps it verbatim, so folding it made a
+        # `white-space: pre-wrap` text lose its line feeds on an HTTP load
+        # while the same text patched in over the socket kept them.
+        html = fold(html)
 
         # Then drop the space between two tags — and around/between preserved
         # blocks (#1737), whose placeholders hide their ``<`` — unless it sits
@@ -966,14 +1155,29 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
             block_tags.append(m.group(1).lower() if m else "")
         html = collapse(html, block_tags)
 
-        # Restore preserved blocks
-        from .._render_provenance import RenderedHTML, restore_preserved
+        # Restore preserved blocks, each verbatim — including the ones a later
+        # block swallowed (a <script> inside a <pre> is hidden first, so the
+        # <pre> block holds its placeholder): expand those recursively. Only
+        # the normalizer's own placeholders are left unescaped at this point.
+        from .._render_provenance import restore_preserved
 
         if isinstance(html, RenderedHTML):
-            return restore_preserved(html)
-        for i, block in enumerate(preserved_blocks):
-            html = html.replace(f"__PRESERVED_BLOCK_{i}__", block)
+            html = restore_preserved(html)
+        else:
 
+            def expand(text: str) -> str:
+                return _PLACEHOLDER_RE.sub(
+                    lambda m: (
+                        expand(preserved_blocks[int(m.group(1))])
+                        if int(m.group(1)) < len(preserved_blocks)
+                        else m.group(0)
+                    ),
+                    text,
+                )
+
+            html = expand(html)
+        if _MARKER_CORE_ESCAPED in html:
+            html = html.replace(_MARKER_CORE_ESCAPED, _MARKER_CORE)
         return html
 
     async def arender_chunks(
@@ -1021,11 +1225,15 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         :returns: ``None``. This is a coroutine, not an async generator —
             chunks are delivered exclusively via ``emitter.emit()``.
         """
+        from .._rust import root_element_span
         from ..http_streaming import ChunkEmitterCancelled
 
-        # Find <div dj-root> opening tag start.
-        dj_root_match = _search_dj_root_open(full_html, _DJ_ROOT_RE)
-        if not dj_root_match:
+        # The dj-root element (dj-root only: a dj-view-only page streams as one
+        # chunk) and its balancing close tag, from the one rendered-HTML root
+        # locator (#3031). Script/style/comment raw text is skipped (#2663),
+        # so the chunk boundary is the root's close tag, not the </body>.
+        span = root_element_span(full_html, with_view=False)
+        if span is None:
             # No dj-root wrapper: fragment template. Single-chunk fallback.
             try:
                 await emitter.emit(full_html.encode("utf-8"))
@@ -1033,17 +1241,8 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                 logger.debug("arender_chunks: cancelled during fragment emit")
             return
 
-        dj_root_open_start = dj_root_match.start()
-        dj_root_open_end = dj_root_match.end()
-
-        # Find the matching close tag for the dj-root element using shared
-        # logic. _find_closing_tag_pos balances nesting of the root's own
-        # element name (#2892) AND (since #2663) masks script/style/comment
-        # raw text, so the script-mask + </body> search the Phase-1 splitter
-        # does is redundant here — the chunk boundary is the root's close
-        # tag, not the </body>.
-        result = _find_root_close(full_html, dj_root_match)
-        if result[1] is None:
+        dj_root_open_start, dj_root_open_end, close_start, _close_end = span
+        if close_start is None:
             # Malformed HTML (no closing </div> for dj-root). Fall back to
             # a single chunk so we never produce broken output.
             try:
@@ -1052,13 +1251,12 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                 logger.debug("arender_chunks: cancelled during fallback emit")
             return
 
-        # result is (close_start, close_end); close_end is the index just
-        # AFTER </div>. Slice the four pieces.
+        # Slice the four pieces.
         shell_open = full_html[:dj_root_open_start]
         body_open = full_html[dj_root_open_start:dj_root_open_end]
-        body_content = full_html[dj_root_open_end : result[0]]
+        body_content = full_html[dj_root_open_end:close_start]
         # body_close: from the closing </div> through end-of-document.
-        body_close_chunk = full_html[result[0] :]
+        body_close_chunk = full_html[close_start:]
 
         try:
             # 1. Shell: <!DOCTYPE>, <head>, <body>, top chrome.
@@ -1278,11 +1476,13 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         :returns: Three-tuple of string chunks that, when concatenated,
             equal ``full_html``.
         """
-        m = _search_dj_root_open(full_html, _DJ_ROOT_RE)
-        if not m:
+        from .._rust import root_element_span
+
+        span = root_element_span(full_html, with_view=False)
+        if span is None:
             return full_html, "", ""
 
-        dj_root_start = m.start()
+        dj_root_start = span[0]
 
         # Mask the raw-text regions (script/style bodies, comments), preserving
         # string length via NUL fill, so a literal "</body>" inside a JS string
@@ -1312,20 +1512,19 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         just the content to insert into the existing [dj-root] container.
 
         Falls back to [dj-view] if [dj-root] is not present, since dj-root
-        is auto-inferred from dj-view (see PR #297).
+        is auto-inferred from dj-view (see PR #297). The whole ``html`` when
+        there is no root or its close tag is missing.
+
+        The rendered-HTML root locator is Rust (``djust._rust``, #3031): it
+        runs on every mount and full render, and the Python mask it replaced
+        was about half of a mount's CPU on a 300-row page.
         """
-        # Find the opening tag for [dj-root], falling back to [dj-view]
-        opening_match = _search_dj_root_open(html, _DJ_ROOT_RE, _DJ_VIEW_RE)
+        from .._rust import root_content_range
 
-        if not opening_match:
+        span = root_content_range(html)
+        if span is None:
             return html
-
-        start_pos = opening_match.end()
-
-        result = _find_root_close(html, opening_match)
-        if result[0] is not None:
-            return html[start_pos : result[0]]
-        return html
+        return html[span[0] : span[1]]
 
     def _extract_liveview_root_with_wrapper(self, template: str) -> str:
         """
@@ -1468,19 +1667,15 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
 
         Falls back to [dj-view] if [dj-root] is not present.
         """
-        opening_match = _search_dj_root_open(html, _DJ_ROOT_RE, _DJ_VIEW_RE)
+        from .._rust import root_element_span
 
-        if not opening_match:
+        span = root_element_span(html)
+        if span is None or span[3] is None:
             return html
-
-        start_pos = opening_match.start()
-
-        result = _find_root_close(html, opening_match)
-        if result[1] is not None:
-            liveview_div = html[start_pos : result[1]]
-            stripped_div = self._strip_comments_and_whitespace(liveview_div)
-            return html[:start_pos] + stripped_div + html[result[1] :]
-        return html
+        start_pos, close_end = span[0], span[3]
+        liveview_div = html[start_pos:close_end]
+        stripped_div = self._strip_comments_and_whitespace(liveview_div)
+        return html[:start_pos] + stripped_div + html[close_end:]
 
     @reconcile_child_render(whole_page=True)
     def render_full_template(
@@ -1586,7 +1781,9 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                 for key, value in json_compatible_context.items():
                     safe_keys.extend(_collect_safe_keys(value, key))
             else:
-                context = self.get_context_data()
+                from ..sync_turn import run_sync_step
+
+                context = run_sync_step(self, "render", self.get_context_data)
                 context = self._apply_context_processors(context, request)
 
                 from django.http import HttpRequest
@@ -1673,21 +1870,16 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
             # normalized ``self._rust_view`` the WS path uses, so the
             # replaced dj-root is structurally identical to the first WS
             # frame (modulo the dj-id attrs the client stamps on, per #1610).
-            dj_root_match = _search_dj_root_open(shell_html, _DJ_ROOT_RE, _DJ_VIEW_RE)
-            if dj_root_match:
-                # Start of the root element's opening tag (any element, #2892)
-                tag_start = dj_root_match.start()
-                # Find the matching close tag via the shared scanner instead of
-                # a duplicate hand-rolled depth loop. _find_closing_tag_pos is
-                # multi-line-safe on the open side (#1750) and
-                # whitespace-tolerant on the close side (#1751), and balances
-                # the root's own element name (#2892). The rendered shell
-                # carries no ``{% %}`` tags, so the helper's if/else branch
-                # handling is inert here; this is purely the balanced scan.
-                # Removing the second scanner closes the parallel-path-drift
-                # gap (#1646) that let the open-side bug exist in one copy and
-                # not the other.
-                _close_start, close_end = _find_root_close(shell_html, dj_root_match)
+            from .._rust import root_element_span
+
+            # The root element (any element, #2892) and its balancing close tag
+            # (multi-line open tags #1750, ``</div >`` #1751) from the one
+            # rendered-HTML root locator, so the shell, the WS frame and the
+            # VDOM cannot pick different roots (#1646, #3031). ``{% %}`` left in
+            # the rendered shell is text.
+            span = root_element_span(shell_html)
+            if span is not None:
+                tag_start, close_end = span[0], span[3]
                 if close_end is not None:
                     result = shell_html[:tag_start] + liveview_html + shell_html[close_end:]
                     from .._lazy_containers import register_lazy_containers
@@ -1700,7 +1892,7 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
             # no root at all; for a page that DECLARES one it means the
             # normalisation was skipped and every patch will miss (#2892) —
             # say so instead of degrading silently.
-            self._warn_unmatched_root(shell_html, found=dj_root_match is not None)
+            self._warn_unmatched_root(shell_html, found=span is not None)
             from .._lazy_containers import register_lazy_containers
 
             shell_html = register_lazy_containers(self, request, shell_html)
@@ -1721,43 +1913,17 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
         and are left alone (#2663). A ``<body dj-root>`` is stamped when it is the
         page's root (#3302).
         """
+        from .._rust import dj_root_stamp_offsets
+
         attr = ' dj-view="%s"' % _html_escape(view_path, quote=True)
-        masked = _mask_for_root_search(html)
-        # #3155: a dj-root inside an embedded {% live_render %} child is the
-        # child's, not this view's — stamping this view's path there would
-        # tell the client to mount the page a second time inside the child.
-        embedded = (
-            _embedded_child_spans(html, masked)
-            if _EMBEDDED_MARKER_RE.search(html) is not None
-            else []
-        )
-        starts = [
-            m.start()
-            for m in _DJ_ROOT_RE.finditer(masked)
-            if not (embedded and _span_containing(embedded, m.start()) is not None)
-        ]
-        # #3302: `<body dj-root>` is stamped only when it IS the page's root,
-        # i.e. nothing inside the page declares one (the client mounts on the
-        # first `[dj-view]`, so a stamp on an unused body would misdirect it).
-        if not starts:
-            chosen = _search_dj_root_open(html, _DJ_ROOT_RE, _DJ_VIEW_RE)
-            if chosen is not None and _root_tag_name(html, chosen) == "body":
-                starts = [chosen.start()]
+        # Where each stamp goes, from the one rendered-HTML root locator
+        # (#3031): a dj-root inside an embedded {% live_render %} child is the
+        # child's, not this view's (#3155) — stamping this view's path there
+        # would tell the client to mount the page a second time inside the
+        # child — and `<body dj-root>` only when it IS the page's root (#3302).
         parts: list[str] = []
         last = 0
-        for start in starts:
-            root_attr_end: Optional[int] = None
-            has_view = False
-            _, attrs = _scan_html_tag(html, start)
-            for begin, name_end, _value_start, end in attrs:
-                kind = str.__getitem__(html, slice(begin, name_end)).lower()
-                if kind == "dj-view":
-                    has_view = True
-                elif kind == "dj-root" and root_attr_end is None:
-                    root_attr_end = end
-            if has_view or root_attr_end is None:
-                continue
-            insert_at = root_attr_end
+        for insert_at in dj_root_stamp_offsets(html):
             parts.append(html[last:insert_at])
             parts.append(attr)
             last = insert_at
@@ -1930,6 +2096,9 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                 preloaded_context=None,
             )
         html, patches_json, version = result
+        # The state backend holds a snapshot, not this object; record the
+        # render so the next reader of the key starts from it.
+        self._refresh_cached_rust_view()
 
         # Record dj-model auto-allowlist from the TEMPLATE SOURCE (CWE-915
         # mass-assignment guard). This is the dominant render path — HTTP-GET

@@ -36,3 +36,4 @@ Rules:
 - Never convert QuerySets to lists
 - Never manually serialize model fields
 - JIT auto-detects `select_related` needs from template field access
+- A non-model object for the template (a dataclass, a presenter): `context["cards"] = self.serialize_for_template(self._cards, "cards")`; `self.template_paths()` lists what the template reads

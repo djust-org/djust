@@ -386,7 +386,10 @@ class TestPreviewFeedback:
     @pytest.mark.parametrize(
         "name,event",
         [
-            ("combobox", "language_search"),
+            # The combobox example has no search handler since search is
+            # opt-in (it filters its options on the client); its pick event
+            # is what the preview must answer.
+            ("combobox", "set_language"),
             ("multi_select", "set_frameworks"),
             ("rich_text_editor", "update_content"),
             ("otp_input", "verify_code"),

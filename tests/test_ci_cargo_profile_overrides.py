@@ -51,7 +51,9 @@ COMPILE_BOUND_JOBS = ("rust-tests",)
 # and its tests run THROUGH the extension — so a no-LTO build made the build
 # 29s cheaper and the tests 27s dearer, taking the job 347s -> 355s.
 # `python-free-threaded` showed no signal either way (86s -> 85s).
-TEST_BOUND_JOBS = ("python-tests", "python-free-threaded")
+# `python-build` compiles the extension every python-tests shard (and the
+# Playwright jobs) then run through, so it is held to the same rule.
+TEST_BOUND_JOBS = ("python-build", "python-tests", "python-free-threaded")
 
 
 def _jobs() -> dict:

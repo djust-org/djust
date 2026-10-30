@@ -356,7 +356,7 @@ from django.contrib.staticfiles.handlers import ASGIStaticFilesHandler
 from django.urls import path
 from channels.auth import AuthMiddlewareStack
 from channels.routing import ProtocolTypeRouter, URLRouter
-from channels.security.websocket import AllowedHostsOriginValidator
+from djust.routing import DjustOriginValidator
 from djust.websocket import LiveViewConsumer
 
 application = ProtocolTypeRouter({
@@ -364,7 +364,7 @@ application = ProtocolTypeRouter({
         ASGIStaticFilesHandler(django_asgi_app)
         if settings.DEBUG else django_asgi_app
     ),
-    "websocket": AllowedHostsOriginValidator(
+    "websocket": DjustOriginValidator(
         AuthMiddlewareStack(
             URLRouter([
                 path("ws/live/", LiveViewConsumer.as_asgi()),
@@ -375,8 +375,10 @@ application = ProtocolTypeRouter({
 ```
 
 The static-file handler serves the djust client and app assets under Uvicorn
-in development. The origin validator checks WebSocket origins against
-`ALLOWED_HOSTS`. This example keeps the WebSocket route in `asgi.py`; you do
+in development. The origin validator refuses a WebSocket handshake
+whose `Origin` is not the site's own origin (scheme, host and port) or listed in
+`DJUST_ALLOWED_ORIGINS` (default: `CSRF_TRUSTED_ORIGINS`); see
+[Security](../advanced/security.md). This example keeps the WebSocket route in `asgi.py`; you do
 not need a separate `routing.py`.
 
 ### 5. Connect the app's URLs

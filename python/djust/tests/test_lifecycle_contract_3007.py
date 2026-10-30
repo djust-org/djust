@@ -541,7 +541,10 @@ async def test_a_view_with_neither_hook_is_not_marked_and_pays_no_thread_hop(mon
         assert "_djust_connected_phase" not in VIEWS["NeitherHook"].__dict__
     finally:
         await communicator.disconnect()
-    assert hops == []
+    # The teardown's own hop, which clears the Rust view's live handles on the
+    # view's sync thread after any render still running there, is not a hook
+    # hop and every view pays it.
+    assert [h for h in hops if h != "_clear_live_handles"] == []
 
 
 async def test_cancelling_the_disconnect_during_the_hook_still_releases_the_view():
@@ -888,7 +891,7 @@ def test_every_function_that_releases_a_root_view_runs_its_disconnected_hook(mod
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             names = _called_names(node)
-            if "release_root_view" in names:
+            if names & {"release_root_view", "arelease_root_view"}:
                 releasing.append(node.name)
                 assert names & _HOOK_CALLS, (
                     f"{module}:{node.name} releases a root view without running "

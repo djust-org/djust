@@ -20,6 +20,8 @@ import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Dict, List, Optional
 
+import pytest
+
 from djust.audit_live import (
     LIVE_FINDING_CODES,
     FetchResult,
@@ -30,6 +32,7 @@ from djust.audit_live import (
     check_cookies,
     check_security_headers,
     fetch,
+    probe_paths,
     run_live_audit,
 )
 
@@ -323,13 +326,17 @@ class _MockHandler(BaseHTTPRequestHandler):
     response_headers: Dict[str, str] = {}
     response_cookies: List[str] = []
     status_by_path: Dict[str, int] = {}
+    redirect_by_path: Dict[str, str] = {}
 
     def log_message(self, format, *args):
         pass  # silence
 
     def do_GET(self):
-        status = self.status_by_path.get(self.path, 200)
+        location = self.redirect_by_path.get(self.path)
+        status = 302 if location else self.status_by_path.get(self.path, 200)
         self.send_response(status)
+        if location:
+            self.send_header("Location", location)
         for k, v in self.response_headers.items():
             self.send_header(k, v)
         for c in self.response_cookies:
@@ -340,12 +347,13 @@ class _MockHandler(BaseHTTPRequestHandler):
 
 
 @contextlib.contextmanager
-def _mock_server(headers=None, cookies=None, status_by_path=None):
+def _mock_server(headers=None, cookies=None, status_by_path=None, redirect_by_path=None):
     """Start a threaded HTTPServer on localhost:0 and yield its base URL."""
     handler = _MockHandler
     handler.response_headers = headers or {}
     handler.response_cookies = cookies or []
     handler.status_by_path = status_by_path or {}
+    handler.redirect_by_path = redirect_by_path or {}
 
     server = HTTPServer(("127.0.0.1", 0), handler)
     port = server.server_address[1]
@@ -370,6 +378,17 @@ class TestFetch:
         with _mock_server(status_by_path={"/missing": 404}) as base:
             result = fetch(base + "/missing")
         assert result.status == 404
+
+    def test_fetch_follows_redirects_by_default(self):
+        with _mock_server(redirect_by_path={"/old": "/new"}) as base:
+            result = fetch(base + "/old")
+        assert result.status == 200
+
+    def test_fetch_can_report_the_redirect_itself(self):
+        with _mock_server(redirect_by_path={"/old": "/new"}) as base:
+            result = fetch(base + "/old", follow_redirects=False)
+        assert result.status == 302
+        assert result.header("location") == "/new"
 
     def test_fetch_extra_headers(self):
         """Custom headers are passed through."""
@@ -442,6 +461,33 @@ class TestRunLiveAuditE2E:
                 skip_path_probes=False,
             )
         assert "L041" in _ids(report.findings)
+
+    def test_path_probes_do_not_follow_a_redirect_to_login(self):
+        """A probe path that 302s to a sign-in page (200) is not exposed."""
+        login = "/accounts/login/?next="
+        with _mock_server(
+            redirect_by_path={
+                "/.git/config": login + "/.git/config",
+                "/.env": login + "/.env",
+                "/__debug__/": login + "/__debug__/",
+            },
+        ) as base:
+            findings = probe_paths(base + "/")
+        codes = _ids(findings)
+        assert not {"L040", "L041", "L042"} & set(codes)
+
+    @pytest.mark.parametrize("status", [301, 401, 403, 404])
+    def test_path_probes_non_2xx_is_not_exposed(self, status):
+        probed = {"/.git/config": status, "/.env": status, "/__debug__/": status}
+        with _mock_server(status_by_path=probed) as base:
+            findings = probe_paths(base + "/")
+        assert not {"L040", "L041", "L042"} & set(_ids(findings))
+
+    def test_path_probes_still_flag_a_direct_200(self):
+        with _mock_server(status_by_path={"/.env": 404, "/__debug__/": 404}) as base:
+            findings = probe_paths(base + "/")
+        assert "L040" in _ids(findings)
+        assert "L041" not in _ids(findings)
 
     def test_websocket_probe_skip_finding(self):
         """--no-websocket-probe records an L061 info finding."""

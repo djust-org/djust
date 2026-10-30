@@ -196,7 +196,9 @@ The probe performs four classes of check:
    CSRF cookies. See [L020–L024](error-codes.md#l020-session-cookie-missing-httponly).
 3. **Information-disclosure paths** — `/.git/config`, `/.env`,
    `/__debug__/`, `/robots.txt`, `/.well-known/security.txt`. See
-   [L040–L044](error-codes.md#l040-gitconfig-publicly-accessible).
+   [L040–L044](error-codes.md#l040-gitconfig-publicly-accessible). The
+   first three are not followed through a redirect: a path that redirects
+   (to a sign-in page, say) or answers 401, 403 or 404 is not exposed.
 4. **WebSocket CSWSH probe** — attempts `wss://host/ws/live/` with
    `Origin: https://evil.example`. See [L060](error-codes.md#l060-websocket-accepted-cross-origin-handshake-cswsh).
 
