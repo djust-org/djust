@@ -19,6 +19,7 @@ from django.test import RequestFactory, override_settings
 from django.utils.safestring import mark_safe
 
 from djust import LiveView
+from djust.components.descriptors.base import LiveComponent, TypedState
 from djust.decorators import event_handler
 from djust.state_backends import get_backend, set_backend
 from djust.state_backends.base import DjustPerformanceWarning, describe_snapshot
@@ -471,6 +472,271 @@ class NormalHostOfStaticDock(Diagram):
         context = super().get_context_data(**kwargs)
         context["view"] = self
         return context
+
+
+# --------------------------------------------------------------------------
+# Every shape of context value, static_assigns, the diagnostics, the opt-in
+# --------------------------------------------------------------------------
+
+
+class _Box:
+    """An arbitrary object a template reads by attribute (not a str / list / dict)."""
+
+    name = "box-name"
+
+
+class ShapesPage(LiveView):
+    """One context value of each shape the change detector compares differently:
+    an immutable (value equality), a container (structural fingerprint) and any
+    other object (identity)."""
+
+    static_render = True
+    template = _root(
+        "ShapesPage",
+        '<p id="menu">{% if open %}open{% else %}closed{% endif %}</p>'
+        "<p>{{ label }}</p><ul>{% for r in rows %}<li>{{ r }}</li>{% endfor %}</ul>"
+        "<p>{{ box.name }}</p><p>{{ mapping.k }}</p>",
+    )
+
+    def mount(self, request, **kwargs):
+        self.open = False
+        self.label = "str-shape"
+        self.rows = ["row-a", "row-b"]
+        self.box = _Box()
+        self.mapping = {"k": "dict-shape"}
+
+    @event_handler()
+    def toggle(self, **kwargs):
+        self.open = not self.open
+
+
+class StaticAssignsPage(LiveView):
+    """``static_assigns`` are sent once because the renderer retains them; a
+    static view's renderer retains nothing."""
+
+    static_render = True
+    static_assigns = ["diagram"]
+    template = _root("StaticAssignsPage", _BODY)
+
+    def mount(self, request, **kwargs):
+        self.open = False
+        self.diagram = DIAGRAM
+
+    @event_handler()
+    def toggle(self, **kwargs):
+        self.open = not self.open
+
+
+class Tabs(LiveComponent):
+    class State(TypedState):
+        active: str = "overview"
+
+    template = (
+        '<nav><button dj-click="select" dj-value="billing">Billing</button></nav>'
+        "<p>{{ active }}</p>"
+    )
+
+    @event_handler()
+    def select(self, value: str = "", **kwargs):
+        self.state.active = value
+
+
+class StaticTabsPage(LiveView):
+    """A page with a bound component whose template is component-opaque: on a
+    normal view this is exactly the shape the scoped-patch path takes."""
+
+    static_render = True
+    template = _root("StaticTabsPage", '<h1>Page</h1>{{ nav }}<div id="d">{{ diagram }}</div>')
+    nav = Tabs()
+
+    def mount(self, request, **kwargs):
+        pass
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["diagram"] = DIAGRAM
+        return context
+
+
+class NormalTabsPage(StaticTabsPage):
+    """The control: the same page without the opt-in does take the scoped patch."""
+
+    static_render = False
+    template = _root("NormalTabsPage", '<h1>Page</h1>{{ nav }}<div id="d">{{ diagram }}</div>')
+
+
+class _Spy:
+    """Stands in for the Rust view: records what the release asked of it."""
+
+    def __init__(self):
+        self.calls = []
+
+    def release_baseline(self):
+        self.calls.append("release_baseline")
+
+    def retain_state_keys(self, keys):
+        self.calls.append(("retain_state_keys", list(keys)))
+
+    def set_raw_py_values(self, values):
+        self.calls.append(("set_raw_py_values", dict(values)))
+
+
+class TestWhichViewsAreReleased:
+    def _view(self, cls=StaticDiagram):
+        view = cls()
+        view._rust_view = _Spy()
+        view._prev_context_refs = {"a": 1}
+        view._prev_context_immutables = {"a": 1}
+        view._prev_context_fingerprints = {"a": 1}
+        return view
+
+    def test_the_html_renderer_is_released_in_full(self):
+        from djust._static_render import release_render_baseline
+
+        view = self._view()
+        assert release_render_baseline(view) is True
+        assert view._rust_view.calls == [
+            "release_baseline",
+            ("retain_state_keys", []),
+            ("set_raw_py_values", {}),
+        ]
+        assert view._prev_context_refs == {}
+        assert view._prev_context_immutables == {}
+        assert view._prev_context_fingerprints == {}
+
+    def test_a_native_renderer_is_never_released(self):
+        from djust._static_render import release_render_baseline
+        from djust.renderers.native import NativeRenderer
+
+        view = self._view()
+        view._djust_renderer = NativeRenderer(view)
+        assert release_render_baseline(view) is False
+        assert view._rust_view.calls == []
+        assert view._prev_context_refs == {"a": 1}  # its change tracking is untouched too
+
+    @pytest.mark.parametrize("flag", ["yes", 1, None])
+    def test_only_true_on_the_class_opts_in(self, flag):
+        from djust._static_render import is_static_render, release_render_baseline
+
+        view = self._view(type("Odd", (Diagram,), {"static_render": flag}))
+        assert is_static_render(view) is False
+        assert release_render_baseline(view) is False
+        assert view._rust_view.calls == []
+        # An instance attribute is not the class declaration the guide documents.
+        plain = self._view(Diagram)
+        plain.static_render = True
+        assert is_static_render(plain) is False
+
+
+@pytest.mark.asyncio
+class TestLaterRendersAreWholeAndCorrect:
+    async def test_a_value_of_every_shape_survives_an_event(self, backend):
+        """The change detector compares an immutable by value, a container by
+        fingerprint and any other object by identity; the renderer holds none of
+        them after the release, so every shape must be sent again, whichever
+        record of the previous render was kept."""
+        key = await _session_key()
+        with override_settings(LIVEVIEW_ALLOWED_MODULES=[MODULE]):
+            async with _Socket(key) as socket:
+                mounted = await socket.mount(ShapesPage)
+                first = await socket.event("toggle", 1)
+                second = await socket.event("toggle", 2)
+        for frame in (mounted, first, second):
+            for shown in ("str-shape", "row-a", "row-b", "box-name", "dict-shape"):
+                assert shown in frame["html"], (frame["type"], shown)
+        assert first["type"] == second["type"] == "html_update"
+        assert ">open<" in first["html"] and ">closed<" in second["html"]
+
+    async def test_static_assigns_are_sent_again_because_nothing_retains_them(self, backend):
+        key = await _session_key()
+        with override_settings(LIVEVIEW_ALLOWED_MODULES=[MODULE]):
+            async with _Socket(key) as socket:
+                mounted = await socket.mount(StaticAssignsPage)
+                first = await socket.event("toggle", 1)
+                second = await socket.event("toggle", 2)
+        for frame in (mounted, first, second):
+            assert "table_1999" in frame["html"], frame["type"]
+        assert first["type"] == second["type"] == "html_update"
+
+    async def test_a_bound_component_event_takes_the_whole_page_not_a_scoped_patch(self, backend):
+        """The scoped component render (ADR-032) diffs the component's subtree
+        against the page tree. A static view holds no tree, so it must decline
+        and answer the whole page, with the rest of the page still in it."""
+        key = await _session_key()
+        with override_settings(LIVEVIEW_ALLOWED_MODULES=[MODULE]):
+            async with _Socket(key) as socket:
+                mounted = await socket.mount(StaticTabsPage)
+                first = await socket.event("select", 1, component_id="nav", value="billing")
+                second = await socket.event("select", 2, component_id="nav", value="usage")
+        assert ">overview<" in mounted["html"] and "table_1999" in mounted["html"]
+        for frame, active in ((first, "billing"), (second, "usage")):
+            assert frame["type"] == "html_update", frame["type"]
+            assert f">{active}<" in frame["html"] or f">{active}<b>" in frame["html"], frame["html"]
+            assert "table_1999" in frame["html"]
+
+    async def test_the_same_component_event_on_a_normal_page_is_the_scoped_patch(self, backend):
+        key = await _session_key()
+        with override_settings(LIVEVIEW_ALLOWED_MODULES=[MODULE]):
+            async with _Socket(key) as socket:
+                await socket.mount(NormalTabsPage)
+                frame = await socket.event("select", 1, component_id="nav", value="billing")
+        assert frame["type"] == "patch" and frame["patches"]
+
+    async def test_the_full_frame_is_not_a_diff_failure(self, backend, caplog):
+        """A static view's full frame is by design: no DJE-053 warning, and the
+        full-HTML-update signal carries the reason ``static_render`` (not
+        ``no_patches``, which names a VDOM diff failure)."""
+        import logging
+
+        from djust.signals import full_html_update
+
+        seen = []
+
+        def receiver(sender, **kwargs):
+            seen.append((sender.__name__, kwargs.get("reason"), kwargs.get("version")))
+
+        full_html_update.connect(receiver, weak=False)
+        try:
+            key = await _session_key()
+            with caplog.at_level(logging.DEBUG):
+                with override_settings(LIVEVIEW_ALLOWED_MODULES=[MODULE]):
+                    async with _Socket(key) as socket:
+                        await socket.mount(StaticDiagram)
+                        seen.clear()
+                        frame = await socket.event("toggle", 1)
+        finally:
+            full_html_update.disconnect(receiver)
+        assert frame["type"] == "html_update"
+        assert "DJE-053" not in caplog.text
+        assert [(name, reason) for name, reason, _v in seen] == [("StaticDiagram", "static_render")]
+        # The gate the reason exists for: the version is past the first render.
+        assert seen[0][2] > 1
+
+    async def test_a_normal_view_forced_to_a_full_frame_still_warns(self, backend, caplog):
+        """The control for the test above: the warning is not gone, it is only
+        not raised for the view that opted out of the baseline."""
+        import logging
+
+        class Forcing(Diagram):
+            template = _root("Forcing", _BODY)
+
+            @event_handler()
+            def toggle(self, **kwargs):
+                self.open = not self.open
+                self._force_full_html = True
+
+        globals()["Forcing"] = Forcing
+        try:
+            key = await _session_key()
+            with caplog.at_level(logging.DEBUG):
+                with override_settings(LIVEVIEW_ALLOWED_MODULES=[MODULE]):
+                    async with _Socket(key) as socket:
+                        await socket.mount(Forcing)
+                        frame = await socket.event("toggle", 1)
+        finally:
+            globals().pop("Forcing", None)
+        assert frame["type"] == "html_update"
+        assert "DJE-053" in caplog.text
 
 
 @pytest.mark.asyncio

@@ -711,7 +711,8 @@ the stored snapshot fell from about 463 KB (context about 199 KB, tree about
 264 KB) to 196 bytes, which is the template (here a short inline one; a page's
 resolved template is stored at its own size) and the version counter
 (`test_static_render_3626.py`). The live view of an open socket drops the same
-two parts.
+two parts. The socket itself still keeps the last full HTML it sent, for
+`request_html` recovery; that one string is not part of what this releases.
 
 What still works, and what it costs:
 
