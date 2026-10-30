@@ -254,6 +254,9 @@ Keep `get_object()` minimal — just the FK lookup. Expensive I/O in this method
 
 Unit tests of `check_object_permission(view, request)` cover mount-time enforcement. For the per-event re-execution path, tests must connect to the WS as an authenticated user and exchange real frames:
 
+`channels.testing` imports `daphne.testing`, and djust does not install daphne,
+so add `djust[daphne]` (or `channels[daphne]`) to your test dependencies.
+
 Illustrative sketch (not run by the test suite):
 
 ```python

@@ -122,8 +122,8 @@ class CounterView(LiveView):
 ### Run with ASGI server (for WebSocket support)
 
 ```bash
-# Install daphne
-pip install daphne
+# Install daphne (djust's optional extra)
+pip install 'djust[daphne]'
 
 # Run with daphne
 daphne -b 0.0.0.0 -p 8000 demo_project.asgi:application
