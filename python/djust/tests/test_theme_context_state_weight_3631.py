@@ -179,7 +179,7 @@ def shell_templates(settings):
     (tmp / "child_3631.html").write_text(_SHELL_CHILD)
     templates = [
         {
-            "BACKEND": "djust.template_backend.DjustTemplateBackend",
+            "BACKEND": "djust.template.backend.DjustTemplateBackend",
             "DIRS": [str(tmp)],
             "APP_DIRS": False,
             "OPTIONS": {
