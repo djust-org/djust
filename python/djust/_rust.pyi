@@ -1364,6 +1364,17 @@ class RustLiveView:
         """
         ...
 
+    def release_baseline(self) -> None:
+        """
+        Drop the diff baseline (rendered tree, last HTML, render caches) and keep
+        the version counter (``static_render``, #3626).
+
+        The next ``render_with_diff`` returns full HTML and no patches; its
+        version is the next one in sequence, unlike after ``reset``. The state
+        is kept (``retain_state_keys([])`` clears it).
+        """
+        ...
+
     def serialize_msgpack(self) -> bytes:
         """
         Serialize the view state to MessagePack bytes (with embedded timestamp).
