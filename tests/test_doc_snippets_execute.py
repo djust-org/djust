@@ -734,30 +734,28 @@ def _param(block: Block):
 _LOOPBACK = {"localhost", "127.0.0.1", "::1", "", None}
 
 
-def _is_ip_literal(host) -> bool:
-    import ipaddress
-
-    try:
-        ipaddress.ip_address(host)
-    except (TypeError, ValueError):
-        return False
-    return True
-
-
 @pytest.fixture
 def no_network(monkeypatch):
     """A guide block that fetches ``https://api.example.com`` must fail the same
     way on every machine: ``ConnectError``, which the harness records as "performs
     a network call". Left alone it resolves a real name, so a resolver that
     answers for unknown hosts (a captive portal, an ISP) turns the same block
-    into a ``JSONDecodeError`` failure, and a slow DNS makes the test slow."""
+    into a ``JSONDecodeError`` failure, and a slow DNS makes the test slow.
+
+    The real resolver is reached only for loopback. It must NOT be reached for any
+    other host, numeric or not: on macOS ``getaddrinfo()`` of a public address
+    initialises Network.framework's path globals in the parent, and the framework's
+    ``atfork`` child handler (``nw_settings_child_has_forked`` ->
+    ``nw_path_release_globals`` -> ``os_log``) then segfaults in the forked child of
+    a later ``subprocess.run`` (returncode -11) in the same pytest process.
+    ``test_a_subprocess_still_forks_after_the_guard_and_an_http_block`` pins it."""
     import socket
 
     real_getaddrinfo = socket.getaddrinfo
     real_connect = socket.socket.connect
 
     def getaddrinfo(host, *args, **kwargs):
-        if host in _LOOPBACK or _is_ip_literal(host):
+        if host in _LOOPBACK:
             return real_getaddrinfo(host, *args, **kwargs)
         raise socket.gaierror(socket.EAI_NONAME, "Name or service not known")
 
@@ -771,14 +769,108 @@ def no_network(monkeypatch):
     monkeypatch.setattr(socket.socket, "connect", connect)
 
 
-def test_the_offline_guard_blocks_names_and_addresses_but_not_loopback(no_network):
+@pytest.fixture
+def answering_resolver(monkeypatch):
+    """An underlying resolver that answers for EVERY host. Request it before
+    ``no_network``: the guard wraps whatever ``socket.getaddrinfo`` is when it is
+    set up, so with this in place only the guard can refuse a name."""
+    import socket
+
+    calls = []
+
+    def answer(host, port, *args, **kwargs):
+        calls.append(host)
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("203.0.113.7", port))]
+
+    monkeypatch.setattr(socket, "getaddrinfo", answer)
+    return calls
+
+
+def test_the_dns_guard_refuses_a_name_the_resolver_would_answer(answering_resolver, no_network):
     import socket
 
     with pytest.raises(socket.gaierror):
         socket.getaddrinfo("api.example.com", 443)
-    with pytest.raises(ConnectionRefusedError):
+    with pytest.raises(socket.gaierror):
+        socket.getaddrinfo("203.0.113.7", 443)  # an address is refused too, see no_network
+    assert answering_resolver == []  # neither reached the resolver
+    # Loopback is the one thing handed through to it.
+    assert socket.getaddrinfo("localhost", 80)[0][4] == ("203.0.113.7", 80)
+    assert answering_resolver == ["localhost"]
+
+
+def test_the_connect_guard_refuses_an_address_but_not_loopback(no_network):
+    import socket
+
+    sock = socket.socket()
+    try:
+        with pytest.raises(ConnectionRefusedError):
+            sock.connect(("93.184.216.34", 80))
+    finally:
+        sock.close()
+    # create_connection resolves first: the name guard refuses a public address
+    # before the real resolver sees it (see no_network on why that matters).
+    with pytest.raises(socket.gaierror):
         socket.create_connection(("93.184.216.34", 80), timeout=1)
-    assert socket.getaddrinfo("localhost", 80)  # in-process transports still resolve
+    listener = socket.socket()
+    try:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(1)
+        client = socket.create_connection(listener.getsockname(), timeout=2)
+        client.close()  # in-process transports still connect
+    finally:
+        listener.close()
+
+
+_UNDECORATED_VIEW = (
+    "from djust import LiveView\n\n\n"
+    "class Counter(LiveView):\n"
+    "    template = '<div dj-root><button dj-click=\"bump\">+</button>{{ n }}</div>'\n\n"
+    "    def mount(self, request, **kwargs):\n"
+    "        self.n = 1\n\n"
+    "    def bump(self, **kwargs):\n"
+    "        self.n += 1\n"
+)
+_UNDECORATED_COMPONENT = (
+    "from djust import LiveComponent\n\n\n"
+    "class Toggle(LiveComponent):\n"
+    "    template = '<div><button dj-click=\"flip\">x</button>{{ on }}</div>'\n\n"
+    "    def mount(self, **kwargs):\n"
+    "        self.on = False\n\n"
+    "    def flip(self, **kwargs):\n"
+    "        self.on = not self.on\n"
+)
+
+
+def _synthetic(code: str) -> Block:
+    return Block(REPO_ROOT / "docs" / "website" / "guides" / "synthetic.md", 1, code)
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "code, decorated",
+    [(_UNDECORATED_VIEW, "    def bump"), (_UNDECORATED_COMPONENT, "    def flip")],
+    ids=["view", "component"],
+)
+def test_a_binding_without_the_decorator_is_reported(code, decorated, settings):
+    """The consumer refuses an undecorated method, so a guide whose template binds one
+    is broken for the reader; the test client calls methods by name and would not
+    notice. Pinned for both runners, with the decorated control passing."""
+    block = _synthetic(code)
+    settings.LIVEVIEW_ALLOWED_MODULES = [block.module_name]
+    outcome = run_block(block)
+    assert outcome.status == "fail" and outcome.category == "missing handler", outcome
+    assert "not decorated" in outcome.detail
+
+    fixed = _synthetic(
+        code.replace(decorated, "    @event_handler()\n" + decorated, 1).replace(
+            "from djust import ",
+            "from djust.decorators import event_handler\nfrom djust import ",
+            1,
+        )
+    )
+    settings.LIVEVIEW_ALLOWED_MODULES = [fixed.module_name]
+    assert run_block(fixed).status == "pass"
 
 
 def test_an_anti_pattern_block_is_not_executed(tmp_path, monkeypatch):
@@ -818,3 +910,19 @@ def test_doc_snippet_executes(block: Block, settings, no_network):
     assert outcome.status == "pass", (
         f"{block.id} [{', '.join(outcome.classes)}] {outcome.category}: {outcome.detail}"
     )
+
+
+def test_a_subprocess_forks_after_the_guard_and_every_snippet():
+    """Regression (macOS), deliberately LAST in the file: it relies on what ran
+    before it. A real ``getaddrinfo()`` of a public numeric address in one test,
+    then an httpx block (services.md) in another, then any ``subprocess.run`` in
+    the same process segfaulted the forked child (returncode -11; every test in
+    ``test_check_doc_snippets.py`` when run after this file). Only the first step
+    was ours: the guard handed numeric hosts to the real resolver. The fork is
+    clean while ``no_network`` reaches the resolver for loopback only (that is
+    pinned directly by ``test_the_dns_guard_refuses_a_name_the_resolver_would_answer``).
+    Linux never failed, so this can only go red on macOS."""
+    import subprocess
+
+    done = subprocess.run([sys.executable, "-c", "print(1)"], capture_output=True)
+    assert done.returncode == 0, done.returncode
