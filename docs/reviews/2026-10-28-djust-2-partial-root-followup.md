@@ -1,8 +1,10 @@
 # Django partial-root integration follow-up
 
-Status: **not ready for the 2.0 remote branch**. The partial-root candidate is
-committed locally, but its complete integration gates have not passed. The
-preceding partial and exception fixes were pushed as `9073fc881`.
+Status: **catalogue and child-ownership fixes implemented**. The sections below
+retain the development checkpoints and their original failures. Complete Django
+6.1 and integration gates passed on `9bc8aaeac`; the subsequent source-order
+cleanup and delivery checkpoint are recorded at the end. The preceding partial
+and exception fixes were pushed as `9073fc881`.
 
 ## Evidence
 
@@ -47,7 +49,7 @@ and 40 samples measured median baseline times of 0.46 ms for 100 rows and
 16.27–16.59 ms respectively. These figures cover include/inheritance fixtures,
 not all applications; the roughly 3.5–3.9x regression needs a safe design fix.
 
-## Required work before push
+## Original required work before push
 
 1. Preserve ordinary-page compatibility without allowing uncertain opaque tag
    output to grant root or model-binding authority. A generic fallback and
@@ -223,3 +225,20 @@ grants no database access, and preserves preexisting handles. The normal run,
 without diagnostic plugins, passes all 1,479 exposure and guarded-socket cases.
 A boundary regression checks that unmarked async and synchronous DB tests remain
 outside this fixture. Full gates must cover the resulting final test commit.
+
+
+## Complete-suite checkpoint
+
+Frozen commit `9bc8aaeac` passed the full Django 6.1.2 suite: 49,738 passed,
+635 skipped and three expected failures. Its full `make test-integration` gate
+also passed: 49,511 Python tests on Django 5.2.17, 3,694 JavaScript tests across
+261 files, and 1,750 Rust tests. The plain template engine, Python lint and
+typing checks passed too. These counts include the async worker ownership fix.
+
+The normal pre-push hook caught a stricter Clippy source-order requirement that
+`make lint` does not exercise: the new core layout functions followed a test
+module. The functions were moved unchanged above that module. Its existing
+call-site inventory now includes the core layout bridge, and the provenance
+inventory reflects the source order. No suppression or runtime behavior change
+was added. Full gates are repeated after this cleanup before retrying delivery;
+the delivery response and local session history identify the final tested SHA.

@@ -2579,153 +2579,6 @@ pub fn release_namespace(namespace: u64) -> PyResult<()> {
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_handler_exists_empty() {
-        // Clear any existing handlers
-        clear_tag_handlers().unwrap();
-
-        assert!(!handler_exists("url"));
-        assert!(!handler_exists("static"));
-    }
-
-    #[test]
-    fn test_get_registered_tags_empty() {
-        clear_tag_handlers().unwrap();
-
-        let tags = get_registered_tags().unwrap();
-        assert!(tags.is_empty());
-    }
-
-    #[test]
-    fn every_registry_builds_its_args_through_the_one_builder() {
-        // The SINK pin (#2416). Three registries hand a handler a `list[str]`,
-        // and the `SafeData` re-minting happens in exactly one place. A fourth
-        // registry — or a hand-rolled `PyList::new(py, args)` creeping back
-        // into one of the three — silently drops the marker for that path,
-        // which is the #1646 shape this whole change exists to retire.
-        let whole = include_str!("registry.rs");
-        let (src, tests) = whole
-            .split_once("\n#[cfg(test)]\n")
-            .expect("the test-module boundary moved; this pin scans the wrong half");
-        assert!(
-            tests.contains("every_registry_builds_its_args_through_the_one_builder"),
-            "the split landed in the wrong place"
-        );
-        // Eight call sites since #2658: tag, block, assign, the two
-        // bindings-returning variants (`call_handler_with_bindings`,
-        // `call_block_handler_with_bindings`), the raw-block registry
-        // (`call_raw_block_handler_with_bindings`) and the two phases of the
-        // lazy-body block contract (`call_block_handler_before_body`,
-        // `call_block_handler_after_body`).
-        assert_eq!(
-            src.matches("build_py_args(py, args)").count(),
-            8,
-            "the tag, block, assign, both bindings, the raw-block and both lazy-body \
-             phases must all build args here"
-        );
-        assert!(
-            !src.contains("PyList::new(py, args)"),
-            "a registry is building its args list without the marker again"
-        );
-        // And the builder is the only place `mark_safe_str` reaches an
-        // ARGUMENT: the block body's own call (#2379), its bindings twin, the
-        // marked-context re-mint (#2547) and the lazy-body `after_body` body
-        // (#2658 — the same `SafeData` grant on the same bytes) are the other
-        // four, and there must be exactly those five.
-        assert_eq!(src.matches("mark_safe_str(py, ").count(), 5);
-        // The context dict is built in ONE place for every registry (#2547):
-        // the call paths above plus no inline copy. Eight since #2658 added
-        // the two lazy-body phases.
-        assert_eq!(
-            src.matches("build_py_context(py, context, raw_py_objects)")
-                .count(),
-            8,
-            "every registry call path builds its context dict through the one builder"
-        );
-        assert_eq!(
-            src.matches("for (key, value) in context {").count(),
-            1,
-            "the context-dict loop lives only inside `build_py_context`"
-        );
-    }
-
-    // ---- the #2558 raw-block registry and scope arming --------------------
-    //
-    // Registering a handler needs a Python object, so these cover the halves
-    // that are pure Rust: the lookup contract the PARSER depends on, and the
-    // arming gate. The Python side of both is covered end-to-end in
-    // `python/tests/test_i18n_tags_bridge_2558.py`.
-
-    /// Serializes the tests that mutate the process-global scope-tag set.
-    static SCOPE_TAG_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-    #[test]
-    fn an_unregistered_raw_block_tag_has_no_end_tag() {
-        // What the parser asks before it collects a body as SOURCE. `None`
-        // is what keeps every non-raw tag on its existing arm.
-        clear_raw_block_tag_handlers().unwrap();
-        assert!(raw_block_handler_exists("blocktranslate").is_none());
-        assert!(!raw_block_handler_returns_bindings("blocktranslate"));
-        assert!(!has_raw_block_tag_handler("blocktranslate").unwrap());
-    }
-
-    #[test]
-    fn raw_block_handlers_are_a_registry_of_their_own() {
-        // The fourth kind is NOT reachable through the other three lookups —
-        // a name registered as raw-block must not answer to the inline or
-        // block registries, or the parser would render the body (#2558).
-        clear_tag_handlers().unwrap();
-        clear_block_tag_handlers().unwrap();
-        clear_raw_block_tag_handlers().unwrap();
-        assert!(!handler_exists("blocktranslate"));
-        assert!(block_handler_exists("blocktranslate").is_none());
-        assert!(raw_block_handler_exists("blocktranslate").is_none());
-    }
-
-    #[test]
-    fn scope_tags_are_armed_by_name_and_cleared_together() {
-        let _guard = SCOPE_TAG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        clear_scope_tags().unwrap();
-        assert!(!scope_tag_armed("language"));
-        arm_scope_tags(vec!["language".to_string(), "timezone".to_string()]).unwrap();
-        assert!(scope_tag_armed("language"));
-        assert!(scope_tag_armed("timezone"));
-        // Arming `i18n`'s names must not arm `l10n`'s — the loader arms per
-        // LIBRARY, so a project that loads only `i18n` keeps `{% localize %}`
-        // unsupported exactly as before this row.
-        assert!(!scope_tag_armed("localize"));
-        assert!(!scope_tag_armed("localtime"));
-        // Arming is additive (a second `{% load %}` of another library).
-        arm_scope_tags(vec!["localize".to_string()]).unwrap();
-        assert!(scope_tag_armed("language"));
-        assert!(scope_tag_armed("localize"));
-        clear_scope_tags().unwrap();
-        assert!(!scope_tag_armed("language"));
-        assert!(!scope_tag_armed("localize"));
-    }
-
-    #[test]
-    fn arming_the_same_name_twice_is_idempotent() {
-        let _guard = SCOPE_TAG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        clear_scope_tags().unwrap();
-        arm_scope_tags(vec!["language".to_string()]).unwrap();
-        arm_scope_tags(vec!["language".to_string()]).unwrap();
-        assert!(scope_tag_armed("language"));
-        clear_scope_tags().unwrap();
-    }
-
-    #[test]
-    fn a_tag_arg_is_plain_unless_explicitly_marked() {
-        assert!(!TagArg::plain("x".to_string()).safe);
-        assert!(TagArg::marked("x".to_string()).safe);
-        assert_eq!(TagArg::plain("x".to_string()).text, "x");
-    }
-}
-
 /// Only the exact built-in layout classes may supply the root-copy protocol.
 /// A tag name, subclass or similarly named method cannot opt into it.
 pub fn is_core_root_layout(name: &str) -> Result<bool, DjangoRustError> {
@@ -2845,4 +2698,152 @@ pub fn call_core_root_layout(
         }
         Ok((html, copies))
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_handler_exists_empty() {
+        // Clear any existing handlers
+        clear_tag_handlers().unwrap();
+
+        assert!(!handler_exists("url"));
+        assert!(!handler_exists("static"));
+    }
+
+    #[test]
+    fn test_get_registered_tags_empty() {
+        clear_tag_handlers().unwrap();
+
+        let tags = get_registered_tags().unwrap();
+        assert!(tags.is_empty());
+    }
+
+    #[test]
+    fn every_registry_builds_its_args_through_the_one_builder() {
+        // The SINK pin (#2416). Three registries hand a handler a `list[str]`,
+        // and the `SafeData` re-minting happens in exactly one place. A fourth
+        // registry — or a hand-rolled `PyList::new(py, args)` creeping back
+        // into one of the three — silently drops the marker for that path,
+        // which is the #1646 shape this whole change exists to retire.
+        let whole = include_str!("registry.rs");
+        let (src, tests) = whole
+            .split_once("\n#[cfg(test)]\n")
+            .expect("the test-module boundary moved; this pin scans the wrong half");
+        assert!(
+            tests.contains("every_registry_builds_its_args_through_the_one_builder"),
+            "the split landed in the wrong place"
+        );
+        // Nine call sites: tag, block, assign, the two
+        // bindings-returning variants (`call_handler_with_bindings`,
+        // `call_block_handler_with_bindings`), the raw-block registry
+        // (`call_raw_block_handler_with_bindings`) and the two phases of the
+        // lazy-body block contract (`call_block_handler_before_body`,
+        // `call_block_handler_after_body`) and the exact core layout protocol.
+        assert_eq!(
+            src.matches("build_py_args(py, args)").count(),
+            9,
+            "the tag, block, assign, both bindings, the raw-block and both lazy-body \
+             phases and the core layout protocol must all build args here"
+        );
+        assert!(
+            !src.contains("PyList::new(py, args)"),
+            "a registry is building its args list without the marker again"
+        );
+        // And the builder is the only place `mark_safe_str` reaches an
+        // ARGUMENT: the block body's own call (#2379), its bindings twin, the
+        // marked-context re-mint (#2547) and the lazy-body `after_body` body
+        // (#2658 — the same `SafeData` grant on the same bytes), plus the
+        // core layout's already-rendered body, are the other five grants.
+        assert_eq!(src.matches("mark_safe_str(py, ").count(), 6);
+        // The context dict is built in ONE place for every registry (#2547):
+        // the call paths above plus no inline copy. Eight since #2658 added
+        // the two lazy-body phases.
+        assert_eq!(
+            src.matches("build_py_context(py, context, raw_py_objects)")
+                .count(),
+            8,
+            "every registry call path builds its context dict through the one builder"
+        );
+        assert_eq!(src.matches("build_py_context(py, context, raw)").count(), 1);
+        assert_eq!(
+            src.matches("for (key, value) in context {").count(),
+            1,
+            "the context-dict loop lives only inside `build_py_context`"
+        );
+    }
+
+    // ---- the #2558 raw-block registry and scope arming --------------------
+    //
+    // Registering a handler needs a Python object, so these cover the halves
+    // that are pure Rust: the lookup contract the PARSER depends on, and the
+    // arming gate. The Python side of both is covered end-to-end in
+    // `python/tests/test_i18n_tags_bridge_2558.py`.
+
+    /// Serializes the tests that mutate the process-global scope-tag set.
+    static SCOPE_TAG_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn an_unregistered_raw_block_tag_has_no_end_tag() {
+        // What the parser asks before it collects a body as SOURCE. `None`
+        // is what keeps every non-raw tag on its existing arm.
+        clear_raw_block_tag_handlers().unwrap();
+        assert!(raw_block_handler_exists("blocktranslate").is_none());
+        assert!(!raw_block_handler_returns_bindings("blocktranslate"));
+        assert!(!has_raw_block_tag_handler("blocktranslate").unwrap());
+    }
+
+    #[test]
+    fn raw_block_handlers_are_a_registry_of_their_own() {
+        // The fourth kind is NOT reachable through the other three lookups —
+        // a name registered as raw-block must not answer to the inline or
+        // block registries, or the parser would render the body (#2558).
+        clear_tag_handlers().unwrap();
+        clear_block_tag_handlers().unwrap();
+        clear_raw_block_tag_handlers().unwrap();
+        assert!(!handler_exists("blocktranslate"));
+        assert!(block_handler_exists("blocktranslate").is_none());
+        assert!(raw_block_handler_exists("blocktranslate").is_none());
+    }
+
+    #[test]
+    fn scope_tags_are_armed_by_name_and_cleared_together() {
+        let _guard = SCOPE_TAG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        clear_scope_tags().unwrap();
+        assert!(!scope_tag_armed("language"));
+        arm_scope_tags(vec!["language".to_string(), "timezone".to_string()]).unwrap();
+        assert!(scope_tag_armed("language"));
+        assert!(scope_tag_armed("timezone"));
+        // Arming `i18n`'s names must not arm `l10n`'s — the loader arms per
+        // LIBRARY, so a project that loads only `i18n` keeps `{% localize %}`
+        // unsupported exactly as before this row.
+        assert!(!scope_tag_armed("localize"));
+        assert!(!scope_tag_armed("localtime"));
+        // Arming is additive (a second `{% load %}` of another library).
+        arm_scope_tags(vec!["localize".to_string()]).unwrap();
+        assert!(scope_tag_armed("language"));
+        assert!(scope_tag_armed("localize"));
+        clear_scope_tags().unwrap();
+        assert!(!scope_tag_armed("language"));
+        assert!(!scope_tag_armed("localize"));
+    }
+
+    #[test]
+    fn arming_the_same_name_twice_is_idempotent() {
+        let _guard = SCOPE_TAG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        clear_scope_tags().unwrap();
+        arm_scope_tags(vec!["language".to_string()]).unwrap();
+        arm_scope_tags(vec!["language".to_string()]).unwrap();
+        assert!(scope_tag_armed("language"));
+        clear_scope_tags().unwrap();
+    }
+
+    #[test]
+    fn a_tag_arg_is_plain_unless_explicitly_marked() {
+        assert!(!TagArg::plain("x".to_string()).safe);
+        assert!(TagArg::marked("x".to_string()).safe);
+        assert_eq!(TagArg::plain("x".to_string()).text, "x");
+    }
 }

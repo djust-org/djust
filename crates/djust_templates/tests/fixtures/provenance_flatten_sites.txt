@@ -1178,13 +1178,6 @@ PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: 
 PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Registry lock error: {e}"))
 .map_err(|e| DjangoRustError::TemplateError(format!("Registry lock error: {e}")))?;
 .map_err(|e| DjangoRustError::TemplateError(format!("Registry lock error: {e}")))?;
-arm_scope_tags(vec!["language".to_string(), "timezone".to_string()]).unwrap();
-arm_scope_tags(vec!["localize".to_string()]).unwrap();
-arm_scope_tags(vec!["language".to_string()]).unwrap();
-arm_scope_tags(vec!["language".to_string()]).unwrap();
-assert!(!TagArg::plain("x".to_string()).safe);
-assert!(TagArg::marked("x".to_string()).safe);
-assert_eq!(TagArg::plain("x".to_string()).text, "x");
 pub fn is_core_root_layout(name: &str) -> Result<bool, DjangoRustError> {
 .map_err(|e| DjangoRustError::TemplateError(format!("Registry lock error: {e}")))?;
 core_root_layout_object(py, handler.bind(py)).map_err(handler_exception)
@@ -1198,6 +1191,13 @@ if !core_root_layout_object(py, handler.bind(py)).map_err(handler_exception)? {
 "Invalid core layout body slice".into(),
 "Core layout lost or duplicated body bytes".into(),
 "Core layout lost body bytes".into(),
+arm_scope_tags(vec!["language".to_string(), "timezone".to_string()]).unwrap();
+arm_scope_tags(vec!["localize".to_string()]).unwrap();
+arm_scope_tags(vec!["language".to_string()]).unwrap();
+arm_scope_tags(vec!["language".to_string()]).unwrap();
+assert!(!TagArg::plain("x".to_string()).safe);
+assert!(TagArg::marked("x".to_string()).safe);
+assert_eq!(TagArg::plain("x".to_string()).text, "x");
 context.rs
 fn render_block_super(&self, ctx: &Context) -> crate::Result<String>;
 self.render_block_super(ctx).map(|html| {
