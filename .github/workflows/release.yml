@@ -153,9 +153,9 @@ jobs:
     runs-on: ${{ matrix.os }}
     # A 3.14t cell must not stop the release (#3074): the verify step installs
     # djust's dependencies on the free-threaded interpreter, and some of them
-    # (cbor2 on macOS x86_64) have no cp314t wheels and build from source. A
-    # failed 3.14t cell shows red and ships no cp314t wheel for that platform;
-    # every other wheel still publishes.
+    # (autobahn via channels[daphne]; cbor2 on macOS x86_64) have no cp314t
+    # wheels and build from source. A failed 3.14t cell shows red and ships no
+    # cp314t wheel for that platform; every other wheel still publishes.
     continue-on-error: ${{ matrix.python-version == '3.14t' }}
     strategy:
       fail-fast: false  # Continue building other platforms if one fails
