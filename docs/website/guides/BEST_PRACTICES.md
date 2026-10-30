@@ -689,6 +689,59 @@ What reduces each part, measured on the demo project with a 30-row page of about
 - **Streams** and **`get_render_only_context()`** do not lower the snapshot: the
   rows stay in the context and in the tree. `get_render_only_context()` keeps a
   value out of the *session* save, which is a different store.
+- **`static_render = True`**, for a page that renders once and is not expected
+  to change, stores neither the context nor the tree (below).
+
+#### Pages that render once: `static_render`
+
+A report, a diagram or a document page is rendered on the GET and on the
+socket's mount, and then nothing patches it. The tree and the context copy are
+kept anyway, in the live view and in the stored snapshot, for a diff that never
+comes. Set `static_render = True` on the view and djust drops both after every
+render:
+
+```python
+class DataModelView(LiveView):
+    template_name = "schema_docs/data_model.html"
+    static_render = True  # no diff baseline: the stored snapshot is the template and a counter
+```
+
+Measured on a page rendering a cached diagram of about 200 KB (2,000 nodes):
+the stored snapshot fell from about 463 KB (context about 199 KB, tree about
+264 KB) to 196 bytes, which is the template (here a short inline one; a page's
+resolved template is stored at its own size) and the version counter
+(`test_static_render_3626.py`). The live view of an open socket drops the same
+two parts. The socket itself still keeps the last full HTML it sent, for
+`request_html` recovery; that one string is not part of what this releases.
+
+What still works, and what it costs:
+
+- **Every later render sends the whole page.** An event that changes state (a
+  page-shell handler such as an account menu), a server push, an async result,
+  `request_html` recovery: the view renders in full and the client receives an
+  `html_update` frame (the HTTP fallback answers `html`) instead of patches.
+  Nothing is wrong on the page; the cost is a full render on the server and a
+  full-page frame on the wire, each time. An event that changes nothing still
+  answers `noop`. Versions stay consecutive, so the client never reloads.
+- **Navigation and reconnects re-render.** A `dj-navigate` back to the page, a
+  reconnect and an HTTP fallback POST render the page from the view's state, as
+  a socket mount always does; there is no stored tree to start from.
+- **Each view's flag is its own.** An embedded or sticky child
+  (`{% live_render %}`) with handlers inside a static page keeps its own
+  baseline and updates as usual; a static child inside a normal page sends its
+  whole HTML on each of its updates while the page keeps patching.
+- Only the HTML renderer is affected: a native (LVN) renderer keeps its baseline,
+  because its wire format is patches.
+
+The trade is CPU and bandwidth on each later render against memory for every
+open page and every stored snapshot (one per session and page, until the
+backend's TTL). Use it when later renders are rare; do not use it for a page
+whose own handlers update it often, or one that relies on `temporary_assigns`
+or streams (they exist to send small updates, and a full render shows only what
+the view still holds; a view that sets both `static_render` and `temporary_assigns` logs a
+warning once per class, because its rows are gone after the first render). It is independent of `view_state_in_session`, which is
+about the session save, not this snapshot. Keeping stream rows out of the
+snapshot of a view that *does* patch is a separate, open question (#3632).
 
 A view that mixes in `ThemeMixin` no longer adds the theme HTML to this
 snapshot; see [Reactive Theme Switching](components.md#reactive-theme-switching-with-liveview).

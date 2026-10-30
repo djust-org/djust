@@ -154,6 +154,7 @@ _FRAMEWORK_INTERNAL_ATTRS: frozenset = frozenset(
         "on_mount_count",
         "static_assigns",
         "static_assigns_count",
+        "static_render",
         "template",
         "template_name",
         "base_template",
@@ -708,6 +709,15 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
     # Use for large, unchanging context (pre-rendered HTML, static config).
     # Pair with dj-update="ignore" on the template element for full optimization.
     static_assigns: List[str] = []
+
+    # Memory optimization for a page that renders once and is not expected to
+    # change (#3626): keep no diff baseline. After every render the rendered
+    # tree and the context copy the renderer holds are dropped, in this process
+    # and in the state backend (whose entry keeps only the template and the
+    # version counter), so any later render (an event, a push, a reconnect)
+    # sends the whole page instead of patches. See the Best Practices guide,
+    # "Large LiveView state".
+    static_render: bool = False
 
     # Authentication & authorization
     login_required: Optional[bool] = None  # True = must be authenticated

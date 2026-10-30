@@ -812,6 +812,25 @@ def _queued_title(view: Any) -> bool:
     return any(isinstance(cmd, dict) and cmd.get("action") == "title" for cmd in pending)
 
 
+def navigation_title_variables(view: Any) -> Tuple[str, ...]:
+    """The variable names ``navigation_title`` would read for ``view``'s ``<title>``.
+
+    Empty when the title has none, when the template has no ``<head><title>`` and
+    when anything fails (the title is then left alone, as ``navigation_title``
+    leaves it). A ``static_render`` view uses this to keep exactly those values of
+    its last render when it drops the rest (#3626). Never raises.
+    """
+    try:
+        inner = _head_title_inner(_view_document_source(view))
+        if inner is None or "block.super" in inner or "{" not in inner:
+            return ()
+        from ._rust import extract_template_variables
+
+        return tuple(extract_template_variables(inner))
+    except Exception:  # noqa: BLE001 — losing the title is the fallback, not an error
+        return ()
+
+
 def navigation_title(view: Any) -> Optional[str]:
     """The ``<title>`` the destination page would have on a full load (#3036).
 
@@ -1040,7 +1059,8 @@ class Transport(Protocol):
              ``patch_compression``) + a context snapshot (for ``no_patches``).
 
         ``reason`` is one of ``first_render`` / ``no_patches`` / ``force_full_html``
-        / ``patch_compression``. ``version`` is the RAW Rust render counter (NOT the
+        / ``patch_compression`` / ``static_render`` (a ``static_render`` view's
+        full frame, #3626; no DJE-053). ``version`` is the RAW Rust render counter (NOT the
         wire version) — the DJE-053 gate keys on ``version > 1`` to distinguish a
         true first render from a diff failure, mirroring websocket.py:4215.
 
@@ -7941,11 +7961,19 @@ class ViewRuntime(RuntimeTurnPort):
             # by the ``force_html`` guard above); otherwise it is ``first_render``
             # (version <= 1, a benign first render → DEBUG log) or ``no_patches``
             # (version > 1, a real VDOM diff failure → the DJE-053 WARNING). The hook
-            # keys DJE-053 on ``reason == "no_patches" and version > 1``.
+            # keys DJE-053 on ``reason == "no_patches" and version > 1``. A
+            # ``static_render`` view keeps no baseline by design (#3626): its full
+            # frame is ``static_render``, not a diff failure, and warns nothing.
+            from ._static_render import is_static_render
+
             _reason = (
                 "force_full_html"
                 if force_html
-                else ("first_render" if version <= 1 else "no_patches")
+                else (
+                    "first_render"
+                    if version <= 1
+                    else ("static_render" if is_static_render(view) else "no_patches")
+                )
             )
             # #1908 item 2: the bespoke ``no_patches`` ``_emit_full_html_update`` carried
             # a ``context_snapshot`` built from the ``get_context_data()`` dict it had in

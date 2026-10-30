@@ -1391,6 +1391,24 @@ impl RustLiveViewBackend {
         reset_id_counter();
     }
 
+    /// Drop the diff baseline (the rendered tree and the render caches built
+    /// from it) but keep the version counter (``static_render``, #3626).
+    ///
+    /// Unlike ``reset`` the version is not restarted: the HTTP fallback and SSE
+    /// stamp this counter on their frames and the client checks it is
+    /// consecutive. The next ``render_with_diff`` has nothing to diff against,
+    /// so it returns full HTML and no patches, as a first render does. The
+    /// state is left alone (``retain_state_keys([])`` clears it).
+    fn release_baseline(&mut self) {
+        self.last_vdom = None;
+        self.last_root_ns = None;
+        self.last_html = None;
+        self.node_html_cache = Vec::new();
+        self.changed_keys = None;
+        self.fragment_text_map = None;
+        self.text_node_index = None;
+    }
+
     /// Serialize the RustLiveView state to MessagePack bytes
     ///
     /// This enables efficient state persistence to Redis or other storage backends.
@@ -8004,6 +8022,61 @@ mod fast_path_flag_tests {
         };
         assert!(!path_of(&fast).is_empty(), "fast: {fast}");
         assert_eq!(path_of(&fast), path_of(&full), "fast: {fast} full: {full}");
+    }
+
+    /// ``["label"]`` without the conversion spellings the provenance inventory
+    /// pins (`crates/djust_templates/tests/fixtures/provenance_flatten_sites.txt`
+    /// lists every such line of this file): this is a test fixture, not a flatten site.
+    fn label_changed() -> Vec<String> {
+        ["label"].iter().copied().map(String::from).collect()
+    }
+
+    /// `static_render` (#3626): `release_baseline` drops EVERY structure the last
+    /// render built from the tree, not only the tree. The cached HTML and the
+    /// per-node cache are each about the size of the page, and the two indexes
+    /// are built from the tree; none of them is in the serialized snapshot, so
+    /// only this test sees them go.
+    #[test]
+    fn release_baseline_drops_the_tree_and_every_cache_built_from_it() {
+        let mut view = mounted();
+        view.update_state_rust(state("v1", 0, 107));
+        view.set_changed_keys(label_changed());
+        view.render_with_diff_detached().expect("fast path");
+        view.set_changed_keys(label_changed());
+        // Premises: the render left each of them behind, or the asserts below
+        // would pass on a view that never had them.
+        assert!(view.last_vdom.is_some(), "premise: the tree");
+        assert!(view.last_root_ns.is_some(), "premise: the root namespace");
+        assert!(view.last_html.is_some(), "premise: the cached HTML");
+        assert!(!view.node_html_cache.is_empty(), "premise: the node cache");
+        assert!(
+            view.changed_keys.is_some(),
+            "premise: a pending changed set"
+        );
+        assert!(
+            view.fragment_text_map.is_some(),
+            "premise: the fragment map"
+        );
+        assert!(view.text_node_index.is_some(), "premise: the text index");
+        let version = view.version;
+
+        view.release_baseline();
+
+        assert!(view.last_vdom.is_none(), "the tree");
+        assert!(view.last_root_ns.is_none(), "the root namespace");
+        assert!(view.last_html.is_none(), "the cached HTML");
+        assert!(view.node_html_cache.is_empty(), "the node cache");
+        assert!(view.changed_keys.is_none(), "the pending changed set");
+        assert!(view.fragment_text_map.is_none(), "the fragment map");
+        assert!(view.text_node_index.is_none(), "the text index");
+        assert_eq!(view.version, version, "the version counter is kept");
+
+        // Nothing to diff against: the next render is full and keeps counting.
+        view.update_state_rust(state("v2", 0, 107));
+        let (html, patches, next) = view.render_with_diff_detached().expect("re-render");
+        assert!(html.contains("v2"), "html: {html}");
+        assert!(patches.is_none(), "a released view has no tree to diff");
+        assert_eq!(next, version + 1);
     }
 
     #[test]

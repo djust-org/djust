@@ -17,6 +17,8 @@ from django.dispatch import Signal
 #       "patch_compression"  – too many patches, HTML was smaller
 #       "no_patches"         – Rust diff returned empty (template structure changed)
 #       "no_change"          – diff produced 0 patches (state change outside root)
+#       "static_render"      – the view set ``static_render = True`` and keeps no diff
+#                              baseline by design, so a later render is full (not a failure)
 #   event_name  – str, the event that triggered the render (e.g. "increment")
 #   view_name   – str, fully qualified view class name
 #   html_size           – int, size of the full HTML in bytes

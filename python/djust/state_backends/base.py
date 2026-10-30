@@ -149,6 +149,9 @@ def large_state_warning_message(
         "tree; streams and get_render_only_context() do not shrink this snapshot (the latter "
         'only keeps values out of the session save). A dj-update="append" container keeps every '
         "row it was given in the tree, so it grows that part with each row added. "
+        "A page that renders once and is not expected to change can set "
+        "static_render = True: it stores neither part, and any later render sends the "
+        "whole page instead of patches. "
         "See the Best Practices guide, "
         "'Large LiveView state'."
     )
