@@ -1264,6 +1264,9 @@ constraint-dependencies = [
     # this with ">=26.10.0" (or drop it) and remove GHSA-8pqf-f4m5-798g and the
     # CVE-2026-1157xx twisted entries from .github/security/pip-audit-ignore.txt.
     "twisted>=26.10.0rc1",
+    # Lock-only: CVE-2026-116579 in autobahn 26.7.1 (reached through
+    # `djust[daphne]` only); fixed in 26.10.1. Constrains uv.lock, not published metadata.
+    "autobahn>=26.10.1",
 ]
 
 [tool.bandit.per_file_ignores]
