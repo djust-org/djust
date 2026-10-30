@@ -220,8 +220,6 @@ carve-out floor of `>= 1.1.0`; the rest carry the standard floor of `2.0.0`.
 | `@event` decorator | 0.3 | **2.0.0** | `@event_handler` |
 | `LiveViewForm` | 0.3 | **2.0.0** | `django.forms.Form` |
 | `_legacy` theming module (`THEMES`, `get_theme()`, `list_themes()`) | 0.5 | **2.0.0** | `DESIGN_SYSTEMS` / `get_design_system` / `get_all_design_systems` from `djust.theming.theme_packs` |
-| Dict-style reads of `block` in a Python-bridged tag (`block["super"]`, `block.get("super")`, `block.values()`, `block.items()`, `dict(block)`) | 1.3 | **2.0.0** | `context["block"].super()` |
-| Defining `_drain_announcements` or `_drain_focus` on a `LiveView` (duck-typed accessibility hooks the WebSocket and SSE transports drain; nothing in djust defines them) | 1.4 | **2.0.0** | A `role="status"` live region the view renders, and `JS.focus()` through `push_commands()` |
 | `@reactive` (raises `TypeError` on a `LiveView`, which has no `update()`; elsewhere the decorated body is never called) | 1.4 | **2.0.0** | A plain attribute, or `@computed` |
 | `djust.auth.social.social_auth_providers` context processor | 1.3 | **2.0.0** | `{% auth_providers auth %}` from `{% load djust_auth %}` |
 | `AccordionMixin`, `TabsMixin`, `ModalMixin`, `CollapsibleMixin`, `SheetMixin`, `DropdownMixin`, `TooltipMixin`, `CarouselMixin` (subclassing warns) | 1.4 | **2.0.0** | The matching component in `djust.components.descriptors` (`Accordion`, `Tabs`, …) |
@@ -231,6 +229,8 @@ carve-out floor of `>= 1.1.0`; the rest carry the standard floor of `2.0.0`.
 | `djust.rust_components.Button` | 1.4 | **2.0.0** | `djust.components.ui.Button` |
 | `StreamingMixin.stream_insert` / `stream_delete` (the async pair, reachable on a `LiveView` only as `StreamingMixin.stream_insert(self, ...)`) | 1.4 | **2.0.0** | `await self.astream_insert(...)` / `await self.astream_delete(...)` |
 | `DjustSSEEventView` (the SSE `sse/<id>/event/` endpoint) | 1.4 | **2.0.0** | `{"type": "event", ...}` posted to `sse/<id>/message/` |
+| Dict-style reads of `block` in a Python-bridged tag (`block["super"]`, `block.get("super")`, `block.values()`, `block.items()`, `dict(block)`) | 1.3 | **2.0.0** | `context["block"].super()` |
+| Defining `_drain_announcements` or `_drain_focus` on a `LiveView` (duck-typed accessibility hooks the WebSocket and SSE transports drain; nothing in djust defines them) | 1.4 | **2.0.0** | A `role="status"` live region the view renders, and `JS.focus()` through `push_commands()` |
 
 Deprecated **settings** warn once at startup, from `DjustConfig.ready()`
 (`python/djust/_deprecated_settings.py`); djust 2.0 refuses to start while one is set:
