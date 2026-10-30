@@ -1111,13 +1111,13 @@ class SaveFormView(LiveView):
 #### Behavior
 
 1. **User submits form** → Event sent to server
-2. **Loading starts** → `globalLoadingManager.startLoading(eventName, triggerElement)`
+2. **Loading starts** → `window.djust.globalLoadingManager.startLoading(eventName, triggerElement)`
    - Elements with `dj-loading.disable` become disabled
    - Elements with `dj-loading.class` get the class added
    - Elements with `dj-loading.show` become visible
    - Elements with `dj-loading.hide` become hidden
 3. **Handler executes** → Processing on server
-4. **Response received** → `globalLoadingManager.stopLoading(eventName, triggerElement)`
+4. **Response received** → `window.djust.globalLoadingManager.stopLoading(eventName, triggerElement)`
    - All original states restored automatically
 
 #### Scoping Rules

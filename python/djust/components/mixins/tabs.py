@@ -1,9 +1,9 @@
 """
 TabsMixin — tab state management for djust LiveViews.
 
-.. deprecated::
+.. deprecated:: 1.4
     Use the descriptor-based ``Tabs`` component from
-    ``djust_components.descriptors`` instead (DEP-002)::
+    ``djust.components.descriptors`` instead (DEP-002; removed in djust 2.0.0)::
 
         from djust.components.descriptors import Tabs
 
@@ -37,7 +37,8 @@ class TabsState(TypedState):
 class TabsMixin(ComponentMixin):
     """Mixin adding tab state management and event handlers.
 
-    .. deprecated:: Use ``djust_components.descriptors.Tabs`` instead.
+    .. deprecated:: 1.4
+        Use ``djust.components.descriptors.Tabs`` instead. Removed in djust 2.0.0.
     """
 
     _deprecated_replacement = "the Tabs component from djust.components.descriptors"

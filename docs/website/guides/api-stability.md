@@ -111,6 +111,10 @@ version; it does not use `PendingDeprecationWarning`.
 | The SSE `/event/` endpoint (`DjustSSEEventView`) | `sse/<id>/message/` | 2.0.0 |
 | Settings `DJUST_WS_COMPRESSION`, `DJUST_VDOM_CACHE_*`, `DJUST_STATE_BACKEND`, `DJUST_REDIS_URL` | The nested `LIVEVIEW_CONFIG` / `DJUST_CONFIG` keys (the startup warning names each) | 2.0.0 |
 | `LIVEVIEW_CONFIG` keys `template_auto_call`, `virtual_keyed_ops`, `django_value_repr` | Delete the key; 2.0 always enables the behaviour | 2.0.0 |
+| JSX-style Rust component template tags (`<RustButton …/>`, `<RustInput …/>` and the other `<Rust…/>` tags) | A `djust.components.ui` component | 2.0.0 |
+| Client: the `dj-params` JSON attribute (warns once per page in the browser console) | `dj-value-*` attributes | 2.0.0 |
+| Client: the `data-djust-root` marker in a `dj-layout` swap (warns once per page) | `dj-root` | 2.0.0 |
+| Client: `window.LiveViewWebSocket`, `window.setCacheConfig`, `window.globalLoadingManager` (each warns once, on first read) | `window.djust.LiveViewWebSocket`, `window.djust.setCacheConfig`, `window.djust.globalLoadingManager` | 2.0.0 |
 
 Migrating is mechanical in every case — see the
 [full reference](https://github.com/djust-org/djust/blob/main/docs/API_STABILITY.md#currently-deprecated-symbols)

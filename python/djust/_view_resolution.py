@@ -33,6 +33,10 @@ def is_view_import_allowed(view_path: str) -> bool:
 
     Kept for backward compatibility; removed in djust 2.0. See module
     docstring for the (new) allowlist semantics.
+
+    .. deprecated:: 1.4
+        Use :func:`djust.security.mount.is_view_path_allowed`. Removed in
+        djust 2.0.0.
     """
     warn_deprecated(
         "djust._view_resolution.is_view_import_allowed",

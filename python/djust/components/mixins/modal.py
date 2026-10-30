@@ -1,9 +1,9 @@
 """
 ModalMixin — modal dialog state management for djust LiveViews.
 
-.. deprecated::
+.. deprecated:: 1.4
     Use the descriptor-based ``Modal`` component from
-    ``djust_components.descriptors`` instead (DEP-002)::
+    ``djust.components.descriptors`` instead (DEP-002; removed in djust 2.0.0)::
 
         from djust.components.descriptors import Modal
 
@@ -37,7 +37,8 @@ class ModalState(TypedState):
 class ModalMixin(ComponentMixin):
     """Mixin adding modal state management and event handlers.
 
-    .. deprecated:: Use ``djust_components.descriptors.Modal`` instead.
+    .. deprecated:: 1.4
+        Use ``djust.components.descriptors.Modal`` instead. Removed in djust 2.0.0.
     """
 
     _deprecated_replacement = "the Modal component from djust.components.descriptors"

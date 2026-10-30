@@ -211,8 +211,9 @@ This is the core stability promise:
 
 ## Currently Deprecated Symbols
 
-Every symbol below is removed in djust **`2.0.0`**, and each one emits a
-`DeprecationWarning` that says so. The three `0.x` symbols carried the 0.x
+Every symbol below is removed in djust **`2.0.0`**, and each one warns that it
+is: a Python `DeprecationWarning`, or for the rows marked "Client:" a one-time
+`console.warn` in the browser. The three `0.x` symbols carried the 0.x
 carve-out floor of `>= 1.1.0`; the rest carry the standard floor of `2.0.0`.
 
 | Symbol | Deprecated since | Removed no earlier than | Replacement |
@@ -402,13 +403,16 @@ announced via a Python warning (templates are not Python), so they are surfaced
 through djust's system-check framework and reported by
 `manage.py djust_check`.
 
-Two such template-syntax deprecations exist today:
+Three such template-syntax deprecations exist today:
 
 - **T001** — the `@click` / `@input` event-attribute shorthand. Migrate to the
   `dj-click` / `dj-input` directive form.
 - **T014** — the `data-dj-id` attribute form. Migrate to `dj-id`.
+- **T027** — the JSX-style `<RustButton … />` component tags (deprecated since
+  1.4, removed no earlier than 2.0.0). Migrate to a `djust.components.ui`
+  component. The tag also emits a runtime `DeprecationWarning` when rendered.
 
-Both are reported as system-check warnings with a `fix_hint` naming the
+All are reported as system-check warnings with a `fix_hint` naming the
 replacement syntax, mirroring the migration-path rule above. This is documented
 audit finding **F6**.
 

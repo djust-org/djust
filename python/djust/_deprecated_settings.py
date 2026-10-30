@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from ._deprecation import warn_deprecated
+from ._deprecation import mark_announced, warn_deprecated
 
 #: Top-level settings that alias a nested key, and the key that replaces each.
 DEPRECATED_FLAT_SETTINGS: dict[str, str] = {
@@ -75,3 +75,7 @@ def warn_deprecated_settings() -> None:
 
     for what, instead in deprecated_settings_in_use(settings):
         warn_deprecated(what, since="1.4", removed_in="2.0.0", instead=instead, stacklevel=2)
+        if what.startswith("TEMPLATES["):
+            # Django imports the shim when it builds this backend; the import
+            # would warn about the same cause a second time.
+            mark_announced("djust.template_backend")

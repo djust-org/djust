@@ -71,6 +71,10 @@ class Button:
 
         >>> # Builder pattern
         >>> btn2 = Button("btn", "Click").with_variant("danger").with_disabled(True)
+
+    .. deprecated:: 1.4
+        Use :class:`djust.components.ui.Button`. Removed in djust 2.0.0;
+        constructing this class emits a ``DeprecationWarning``.
     """
 
     def __init__(

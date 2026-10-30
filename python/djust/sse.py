@@ -1592,6 +1592,11 @@ class DjustSSEEventView(View):
     """
     POST endpoint for client → server events over the SSE transport.
 
+    .. deprecated:: 1.4
+        The shipped client posts ``{"type": "event", ...}`` to
+        ``sse/<session_id>/message/`` instead. Removed in djust 2.0.0; each POST
+        to this endpoint emits a ``DeprecationWarning``.
+
     Request body (JSON)::
 
         {
@@ -1615,6 +1620,11 @@ class DjustSSEEventView(View):
     async def post(self, request: HttpRequest, session_id: str) -> HttpResponse:
         # Only clients older than #1237 post here; the shipped client posts to
         # /message/. Removed in djust 2.0.
+        #
+        # stacklevel=2 is deliberate: this is an HTTP endpoint, so no frame
+        # above ``post`` belongs to the application (the caller is Django's
+        # request handling). The warning is attributed to this module and
+        # names the endpoint and its replacement in its text.
         from ._deprecation import warn_deprecated
 
         warn_deprecated(

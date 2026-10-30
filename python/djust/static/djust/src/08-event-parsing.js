@@ -372,7 +372,8 @@ function extractTypedParams(element) {
             _djParamsWarned = true;
             console.warn(
                 '[LiveView] dj-params is deprecated and removed in djust 2.0.0. ' +
-                'Use dj-value-* attributes instead, e.g. dj-value-todo-id="{{ todo.id }}".'
+                'Use dj-value-* attributes instead, e.g. dj-value-todo-id:int="{{ todo.id }}" ' +
+                '(dj-params carried JSON types; a :int, :bool or :list hint keeps them).'
             );
         }
         if (djParamsAttr !== '') {

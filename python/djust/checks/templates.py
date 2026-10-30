@@ -500,6 +500,12 @@ _DEPRECATED_DATA_DJ_ID_RE = re.compile(r"""data-dj-id\s*=\s*["'][^"']*["']""")
 # so legitimate sibling attributes (`data-djust-embedded`, `data-djust-activity`,
 # `data-djust-view-model`, `data-djust-rooted`, ...) never false-match.
 _LEGACY_ROOT_ATTR_RE = re.compile(r"data-djust-(root|view)(?![\w-])")
+# T027 (1.4 deprecation) -- a JSX-style ``<RustButton ... />`` component tag. The
+# tag renders through a Rust component path djust 2.0 removes; rendering one
+# warns at runtime, and this finds it before the page is requested. The
+# lookahead keeps ``<RustyThing>`` and ``<Rust>`` out: the name is ``Rust`` plus
+# a capital letter, then whitespace, ``/`` or ``>``.
+_RUST_JSX_TAG_RE = re.compile(r"<(Rust[A-Z]\w*)(?=[\s/>])")
 # A090 — scanner for {% djust_markdown %} (v0.7.0). Fires info-level once
 # per project when the tag is detected, confirming the Rust-side safe
 # renderer is in use (raw HTML escaped, provisional-line splitter active).
@@ -959,6 +965,9 @@ def check_templates(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
 
         # T015 -- legacy data-djust-root / data-djust-view root attributes
         _check_legacy_root_attrs(content, relpath, filepath, errors)
+
+        # T027 -- JSX-style <Rust.../> component tags (deprecated in 1.4)
+        _check_rust_jsx_tags(content, relpath, filepath, errors)
 
         # T017 -- dj-view / dj-root on a table-section element (#1837)
         _check_table_section_root(content, relpath, filepath, errors)
@@ -1634,6 +1643,42 @@ def _check_legacy_root_attrs(
                 fix_hint=(
                     "Replace '%s' with '%s' at line %d in `%s`."
                     % (old_attr, new_attr, lineno, relpath)
+                ),
+                file_path=filepath,
+                line_number=lineno,
+            )
+        )
+
+
+def _check_rust_jsx_tags(
+    content: str, relpath: str, filepath: str, errors: list[CheckMessage]
+) -> None:
+    """T027: Detect a JSX-style ``<Rust.../>`` component tag (deprecated in 1.4).
+
+    Template syntax cannot emit a Python warning at import, so API_STABILITY's
+    policy asks for a system check beside the runtime ``DeprecationWarning``
+    the renderer emits when the tag is rendered. djust 2.0 turns the tag into
+    a template error.
+    """
+    if _is_check_suppressed("djust.T027"):
+        return
+    for match in _RUST_JSX_TAG_RE.finditer(content):
+        lineno = content[: match.start()].count("\n") + 1
+        tag = match.group(1)
+        errors.append(
+            DjustWarning(
+                "%s:%d -- JSX-style '<%s />' template tag is deprecated (removed in djust 2.0.0)."
+                % (relpath, lineno, tag),
+                hint=(
+                    "The <Rust.../> component tags render through a Rust component path "
+                    "that djust 2.0.0 removes; in 2.0 the tag is a template error. Render "
+                    "the matching djust.components.ui component instead. Suppress this "
+                    "check with DJUST_CONFIG = {'suppress_checks': ['T027']}."
+                ),
+                id="djust.T027",
+                fix_hint=(
+                    "Replace '<%s />' at line %d in `%s` with a djust.components.ui "
+                    "component rendered from the view." % (tag, lineno, relpath)
                 ),
                 file_path=filepath,
                 line_number=lineno,

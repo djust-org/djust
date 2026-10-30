@@ -27,7 +27,7 @@ keeps working.
 """
 
 import logging
-from typing import Any, Dict, Optional, Set
+from typing import TYPE_CHECKING, Any, Dict, Optional, Set
 
 from django.http import HttpRequest, HttpResponse
 from django.views import View
@@ -181,6 +181,16 @@ class SimpleLiveView(View):
         return HttpResponse(self.render_template())
 
 
+# ``LiveView`` stays in ``__all__`` so ``from djust.simple_live_view import *``
+# keeps binding the old name; it resolves through the module ``__getattr__``
+# below, so a star import that takes it warns at the importing statement. The
+# TYPE_CHECKING binding tells linters the name exists (no ``noqa: F822``).
+__all__ = ["LiveView", "SimpleLiveView"]
+
+if TYPE_CHECKING:
+    LiveView = SimpleLiveView
+
+
 def __getattr__(name: str) -> Any:  # PEP 562
     """``LiveView``: the deprecated pre-#2219 name, removed in djust 2.0.
 
@@ -188,6 +198,9 @@ def __getattr__(name: str) -> Any:  # PEP 562
     ``from djust.simple_live_view import LiveView``. New code should use
     ``SimpleLiveView`` — the old name shadows ``djust.LiveView``, which is a
     different class with a different lifecycle.
+
+    .. deprecated:: 1.4
+        Use ``djust.simple_live_view.SimpleLiveView``. Removed in djust 2.0.0.
     """
     if name == "LiveView":
         from ._deprecation import warn_deprecated

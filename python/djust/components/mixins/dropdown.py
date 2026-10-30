@@ -1,9 +1,9 @@
 """
 DropdownMixin — dropdown menu state management for djust LiveViews.
 
-.. deprecated::
+.. deprecated:: 1.4
     Use the descriptor-based ``Dropdown`` component from
-    ``djust_components.descriptors`` instead (DEP-002)::
+    ``djust.components.descriptors`` instead (DEP-002; removed in djust 2.0.0)::
 
         from djust.components.descriptors import Dropdown
 
@@ -37,7 +37,8 @@ class DropdownState(TypedState):
 class DropdownMixin(ComponentMixin):
     """Mixin adding dropdown menu state management and event handlers.
 
-    .. deprecated:: Use ``djust_components.descriptors.Dropdown`` instead.
+    .. deprecated:: 1.4
+        Use ``djust.components.descriptors.Dropdown`` instead. Removed in djust 2.0.0.
     """
 
     _deprecated_replacement = "the Dropdown component from djust.components.descriptors"

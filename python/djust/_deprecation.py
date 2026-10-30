@@ -23,7 +23,28 @@ import warnings
 from types import FrameType
 from typing import Optional
 
-__all__ = ["class_statement_stacklevel", "warn_deprecated"]
+__all__ = [
+    "class_statement_stacklevel",
+    "is_announced",
+    "mark_announced",
+    "warn_deprecated",
+]
+
+#: Deprecations a startup check has already announced, by dotted module name.
+#: An import-time shim warning for the same module is then a duplicate: the
+#: ``TEMPLATES`` entry that names ``djust.template_backend`` gets one warning
+#: from ``warn_deprecated_settings`` and none more when Django imports the shim.
+_ANNOUNCED: set[str] = set()
+
+
+def mark_announced(name: str) -> None:
+    """Record that ``name``'s deprecation was already announced at startup."""
+    _ANNOUNCED.add(name)
+
+
+def is_announced(name: str) -> bool:
+    """Whether :func:`mark_announced` was called for ``name``."""
+    return name in _ANNOUNCED
 
 
 def warn_deprecated(

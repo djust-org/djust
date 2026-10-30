@@ -380,7 +380,7 @@ In development, pages render without Tailwind utilities until you compile the CS
 
 **Severity**: Error
 
-**What causes it**: `DJUST_VDOM_CACHE_TTL_SECONDS` (or `LIVEVIEW_CONFIG["service_worker"]["vdom_cache_ttl_seconds"]`) is not a positive integer. Message: "DJUST_VDOM_CACHE_TTL_SECONDS must be a positive integer." A TTL <= 0 disables expiry, so the service worker could serve indefinitely stale HTML on back-navigation.
+**What causes it**: `LIVEVIEW_CONFIG["service_worker"]["vdom_cache_ttl_seconds"]` (or the deprecated flat `DJUST_VDOM_CACHE_TTL_SECONDS`) is not a positive integer. Message: "LIVEVIEW_CONFIG['service_worker']['vdom_cache_ttl_seconds'] must be a positive integer." A TTL <= 0 disables expiry, so the service worker could serve indefinitely stale HTML on back-navigation.
 
 **Fix**: Set a positive number of seconds (the default is 1800).
 
@@ -390,7 +390,7 @@ In development, pages render without Tailwind utilities until you compile the CS
 
 **Severity**: Error
 
-**What causes it**: `DJUST_VDOM_CACHE_MAX_ENTRIES` (or `LIVEVIEW_CONFIG["service_worker"]["vdom_cache_max_entries"]`) is below 1. Message: "DJUST_VDOM_CACHE_MAX_ENTRIES must be >= 1." A max of 0 evicts every entry on insertion and silently disables the cache.
+**What causes it**: `LIVEVIEW_CONFIG["service_worker"]["vdom_cache_max_entries"]` (or the deprecated flat `DJUST_VDOM_CACHE_MAX_ENTRIES`) is below 1. Message: "LIVEVIEW_CONFIG['service_worker']['vdom_cache_max_entries'] must be >= 1." A max of 0 evicts every entry on insertion and silently disables the cache.
 
 **Fix**: Set it to 1 or more (the default is 50).
 
@@ -400,7 +400,7 @@ In development, pages render without Tailwind utilities until you compile the CS
 
 **Severity**: Info
 
-**What causes it**: `DJUST_VDOM_CACHE_ENABLED` (or `LIVEVIEW_CONFIG["service_worker"]["vdom_cache_enabled"]`) is `False`. Message: "DJUST_VDOM_CACHE_ENABLED is False; VDOM cache disabled." Back-navigation falls through to a fresh mount and render instead of an instant paint.
+**What causes it**: `LIVEVIEW_CONFIG["service_worker"]["vdom_cache_enabled"]` (or the deprecated flat `DJUST_VDOM_CACHE_ENABLED`) is `False`. Message: "LIVEVIEW_CONFIG['service_worker']['vdom_cache_enabled'] is False; VDOM cache disabled." Back-navigation falls through to a fresh mount and render instead of an instant paint.
 
 **Fix**: Nothing is broken. Re-enable the cache, or suppress with `DJUST_CONFIG = {"suppress_checks": ["C303"]}`.
 
@@ -1373,6 +1373,19 @@ rename the other copy. Only libraries a template under the project's template
 directories loads are compared, so a library only Django's own engine renders
 (the admin's) does not count. Suppress with
 `DJUST_CONFIG = {"suppress_checks": ["T026"]}`.
+
+### T027: JSX-style `<Rust…/>` component tag
+
+**Severity**: Warning
+
+**What causes it**: A template contains a JSX-style Rust component tag such as
+`<RustButton id="b" label="Go" />`. Message: "<file>:<line> -- JSX-style
+'<RustButton />' template tag is deprecated (removed in djust 2.0.0)." The tags
+render through a Rust component path that djust 2.0.0 removes; rendering one
+also emits a runtime `DeprecationWarning`.
+
+**Fix**: Render the matching `djust.components.ui` component from the view
+instead. Suppress with `DJUST_CONFIG = {"suppress_checks": ["T027"]}`.
 
 ---
 

@@ -122,17 +122,80 @@ def test_social_auth_providers_warns_through_the_policy_helper():
         ("djust.state_backend", "djust.state_backends"),
     ],
 )
-def test_importing_a_shim_module_warns(module, replacement):
+def test_importing_a_shim_module_warns(module, replacement, monkeypatch):
+    """The warning blames the importing statement, not the shim file.
+
+    ``exec`` of a real ``import`` statement under a distinctive filename stands
+    in for a user's module: ``warnings`` skips importlib's own frames, so
+    stacklevel=3 lands on that statement (stacklevel=2 would blame the shim).
+    """
+    from djust import _deprecation
+
+    monkeypatch.setattr(_deprecation, "_ANNOUNCED", set())
     saved = sys.modules.pop(module, None)
     try:
         with warnings.catch_warnings(record=True) as record:
             warnings.simplefilter("always")
-            importlib.import_module(module)
+            exec(compile("import %s" % module, "<user import>", "exec"), {})
         hit = _one_deprecation(record, module)
         assert replacement in str(hit.message)
+        assert hit.filename == "<user import>", hit.filename
     finally:
         if saved is not None:
             sys.modules[module] = saved
+
+
+@pytest.mark.parametrize(
+    "module,target",
+    [
+        ("djust.template_backend", "djust.template"),
+        ("djust.state_backend", "djust.state_backends"),
+    ],
+)
+def test_a_shim_star_export_is_exactly_its_targets(module, target):
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        shim = importlib.import_module(module)
+    real = importlib.import_module(target)
+    assert shim.__all__ == real.__all__
+    assert "warn_deprecated" not in shim.__all__
+
+
+def test_a_templates_entry_naming_the_shim_warns_once(monkeypatch):
+    """The settings check names the ``TEMPLATES`` entry; the import it causes
+    would warn about the same cause again, so the shim stays quiet after it."""
+    from djust import _deprecation
+    from djust._deprecated_settings import warn_deprecated_settings
+
+    module = "djust.template_backend"
+    monkeypatch.setattr(_deprecation, "_ANNOUNCED", set())
+    saved = sys.modules.pop(module, None)
+    try:
+        with override_settings(
+            TEMPLATES=[{"BACKEND": "djust.template_backend.DjustTemplateBackend"}]
+        ):
+            with warnings.catch_warnings(record=True) as record:
+                warnings.simplefilter("always")
+                warn_deprecated_settings()
+                importlib.import_module(module)
+        messages = [str(w.message) for w in record if issubclass(w.category, DeprecationWarning)]
+        assert len([m for m in messages if "TEMPLATES[0]['BACKEND']" in m]) == 1, messages
+        assert [m for m in messages if m.startswith("djust.template_backend is deprecated")] == []
+    finally:
+        if saved is not None:
+            sys.modules[module] = saved
+
+
+def test_star_importing_simple_live_view_keeps_binding_the_old_name():
+    ns: dict = {}
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        exec(compile("from djust.simple_live_view import *", "<user import>", "exec"), ns)
+    from djust.simple_live_view import SimpleLiveView
+
+    assert ns["LiveView"] is SimpleLiveView
+    hit = _one_deprecation(record, "djust.simple_live_view.LiveView")
+    assert hit.filename == "<user import>", hit.filename
 
 
 def test_the_shim_still_re_exports_the_backend():
@@ -184,6 +247,10 @@ async def test_the_sse_event_endpoint_warns():
         await DjustSSEEventView().post(request, session_id="missing")
     hit = _one_deprecation(record, "DjustSSEEventView")
     assert "message/" in str(hit.message)
+    # Deliberate: an HTTP endpoint has no application frame to blame (the
+    # caller is Django's request handling), so the warning names the endpoint
+    # itself in its text and its location is djust's own ``sse.py``.
+    assert hit.filename.endswith(os.path.join("djust", "sse.py")), hit.filename
 
 
 # --- settings -------------------------------------------------------------------
@@ -245,16 +312,31 @@ def test_live_settings_do_not_warn():
 
 
 def test_ready_emits_the_settings_warnings():
-    import inspect
+    """A real ``django.setup()`` (so ``DjustConfig.ready()``) with a deprecated
+    setting warns. Run in a fresh interpreter: ``ready()`` is not re-runnable
+    in this process without side effects, and this is the path a server takes."""
+    import subprocess
 
-    from djust.apps import DjustConfig
-
-    code = "\n".join(
-        ln
-        for ln in inspect.getsource(DjustConfig.ready).splitlines()
-        if not ln.lstrip().startswith("#")
+    code = (
+        "import warnings\n"
+        "warnings.simplefilter('always')\n"
+        "import django\n"
+        "from django.conf import settings\n"
+        "settings.configure(INSTALLED_APPS=['djust'], SECRET_KEY='x', DEBUG=False,\n"
+        "                   DJUST_WS_COMPRESSION=False)\n"
+        "with warnings.catch_warnings(record=True) as w:\n"
+        "    warnings.simplefilter('always')\n"
+        "    django.setup()\n"
+        "print('\\n'.join('WARN ' + str(x.message) for x in w))\n"
     )
-    assert "warn_deprecated_settings()" in code
+    out = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, timeout=120, check=True
+    ).stdout
+    lines = [
+        ln for ln in out.splitlines() if ln.startswith("WARN ") and "DJUST_WS_COMPRESSION" in ln
+    ]
+    assert len(lines) == 1, out
+    assert "websocket_compression" in lines[0] and "2.0.0" in lines[0], lines[0]
 
 
 # --- @reactive ------------------------------------------------------------------
