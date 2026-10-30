@@ -1,5 +1,5 @@
 /**
- * 1.4 deprecation warnings for the client APIs djust 2.0.0 removes:
+ * 1.3 deprecation warnings for the client APIs djust 2.0.0 removes:
  * the `dj-params` attribute, the `[data-djust-root]` layout marker, and the
  * `window.LiveViewWebSocket` / `window.setCacheConfig` /
  * `window.globalLoadingManager` aliases. Each warns once per page, says it

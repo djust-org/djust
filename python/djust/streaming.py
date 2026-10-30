@@ -306,14 +306,14 @@ class StreamingMixin:
         ``StreamsMixin.stream_insert``, so it was only reachable as
         ``StreamingMixin.stream_insert(self, ...)``.
 
-        .. deprecated:: 1.4
+        .. deprecated:: 1.3
             Use ``await self.astream_insert(...)``. Removed in djust 2.0.0.
         """
         from ._deprecation import warn_deprecated
 
         warn_deprecated(
             "StreamingMixin.stream_insert",
-            since="1.4",
+            since="1.3",
             removed_in="2.0.0",
             instead="await self.astream_insert(...)",
             stacklevel=3,
@@ -323,14 +323,14 @@ class StreamingMixin:
     async def stream_delete(self, stream_name: str, selector: str) -> None:
         """Deprecated name of :meth:`astream_delete` (removed in djust 2.0).
 
-        .. deprecated:: 1.4
+        .. deprecated:: 1.3
             Use ``await self.astream_delete(...)``. Removed in djust 2.0.0.
         """
         from ._deprecation import warn_deprecated
 
         warn_deprecated(
             "StreamingMixin.stream_delete",
-            since="1.4",
+            since="1.3",
             removed_in="2.0.0",
             instead="await self.astream_delete(...)",
             stacklevel=3,

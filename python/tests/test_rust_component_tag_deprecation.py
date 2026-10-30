@@ -15,7 +15,7 @@ def test_a_rust_component_tag_warns_and_still_renders():
     assert "<button" in html, html
     messages = [str(w.message) for w in record if issubclass(w.category, DeprecationWarning)]
     assert any(
-        "`<RustButton />` template tag is deprecated since djust 1.4" in m
+        "`<RustButton />` template tag is deprecated since djust 1.3" in m
         and "no earlier than 2.0.0" in m
         and "djust.components.ui" in m
         for m in messages

@@ -205,7 +205,7 @@ This is the core stability promise:
   SemVer permitted removing them in any `0.x` release. Rather than yank them at
   `1.0.0`, the policy gives 1.0 adopters one full minor cycle of overlap:
   **these three symbols were scheduled for removal no earlier than `1.1.0`.**
-  djust `2.0.0` removes them, and their warnings name `2.0.0` from 1.4 on.
+  djust `2.0.0` removes them, and their warnings name `2.0.0` from 1.3 on.
 
 ---
 
@@ -221,31 +221,31 @@ carve-out floor of `>= 1.1.0`; the rest carry the standard floor of `2.0.0`.
 | `@event` decorator | 0.3 | **2.0.0** | `@event_handler` |
 | `LiveViewForm` | 0.3 | **2.0.0** | `django.forms.Form` |
 | `_legacy` theming module (`THEMES`, `get_theme()`, `list_themes()`) | 0.5 | **2.0.0** | `DESIGN_SYSTEMS` / `get_design_system` / `get_all_design_systems` from `djust.theming.theme_packs` |
-| `@reactive` (raises `TypeError` on a `LiveView`, which has no `update()`; elsewhere the decorated body is never called) | 1.4 | **2.0.0** | A plain attribute, or `@computed` |
+| `@reactive` (raises `TypeError` on a `LiveView`, which has no `update()`; elsewhere the decorated body is never called) | 1.3 | **2.0.0** | A plain attribute, or `@computed` |
 | `djust.auth.social.social_auth_providers` context processor | 1.3 | **2.0.0** | `{% auth_providers auth %}` from `{% load djust_auth %}` |
-| `AccordionMixin`, `TabsMixin`, `ModalMixin`, `CollapsibleMixin`, `SheetMixin`, `DropdownMixin`, `TooltipMixin`, `CarouselMixin` (subclassing warns) | 1.4 | **2.0.0** | The matching component in `djust.components.descriptors` (`Accordion`, `Tabs`, …) |
-| `djust.template_backend` module (and `'djust.template_backend.DjustTemplateBackend'` in `TEMPLATES`) | 1.4 | **2.0.0** | `djust.template` / `'djust.template.backend.DjustTemplateBackend'` |
-| `djust.state_backend` module | 1.4 | **2.0.0** | `djust.state_backends` |
-| `djust.simple_live_view.LiveView` | 1.4 | **2.0.0** | `djust.simple_live_view.SimpleLiveView` |
-| `djust.rust_components.Button` | 1.4 | **2.0.0** | `djust.components.ui.Button` |
-| `StreamingMixin.stream_insert` / `stream_delete` (the async pair, reachable on a `LiveView` only as `StreamingMixin.stream_insert(self, ...)`) | 1.4 | **2.0.0** | `await self.astream_insert(...)` / `await self.astream_delete(...)` |
-| `DjustSSEEventView` (the SSE `sse/<id>/event/` endpoint) | 1.4 | **2.0.0** | `{"type": "event", ...}` posted to `sse/<id>/message/` |
+| `AccordionMixin`, `TabsMixin`, `ModalMixin`, `CollapsibleMixin`, `SheetMixin`, `DropdownMixin`, `TooltipMixin`, `CarouselMixin` (subclassing warns) | 1.3 | **2.0.0** | The matching component in `djust.components.descriptors` (`Accordion`, `Tabs`, …) |
+| `djust.template_backend` module (and `'djust.template_backend.DjustTemplateBackend'` in `TEMPLATES`) | 1.3 | **2.0.0** | `djust.template` / `'djust.template.backend.DjustTemplateBackend'` |
+| `djust.state_backend` module | 1.3 | **2.0.0** | `djust.state_backends` |
+| `djust.simple_live_view.LiveView` | 1.3 | **2.0.0** | `djust.simple_live_view.SimpleLiveView` |
+| `djust.rust_components.Button` | 1.3 | **2.0.0** | `djust.components.ui.Button` |
+| `StreamingMixin.stream_insert` / `stream_delete` (the async pair, reachable on a `LiveView` only as `StreamingMixin.stream_insert(self, ...)`) | 1.3 | **2.0.0** | `await self.astream_insert(...)` / `await self.astream_delete(...)` |
+| `DjustSSEEventView` (the SSE `sse/<id>/event/` endpoint) | 1.3 | **2.0.0** | `{"type": "event", ...}` posted to `sse/<id>/message/` |
 | Dict-style reads of `block` in a Python-bridged tag (`block["super"]`, `block.get("super")`, `block.values()`, `block.items()`, `dict(block)`) | 1.3 | **2.0.0** | `context["block"].super()` |
-| JSX-style Rust component template tags (`<RustButton …/>`, `<RustInput …/>` and the other `<Rust…/>` tags) | 1.4 | **2.0.0** | a `djust.components.ui` component |
-| Defining `_drain_announcements` or `_drain_focus` on a `LiveView` (duck-typed accessibility hooks the WebSocket and SSE transports drain; nothing in djust defines them) | 1.4 | **2.0.0** | A `role="status"` live region the view renders, and `JS.focus()` through `push_commands()` |
-| Client: the `dj-params` JSON attribute (warns once per page in the browser console) | 1.4 | **2.0.0** | `dj-value-*` attributes |
-| Client: the `data-djust-root` marker in a `dj-layout` swap (warns once per page) | 1.4 | **2.0.0** | `dj-root` |
-| Client: `window.LiveViewWebSocket`, `window.setCacheConfig`, `window.globalLoadingManager` (each warns once, on first read) | 1.4 | **2.0.0** | `window.djust.LiveViewWebSocket`, `window.djust.setCacheConfig`, `window.djust.globalLoadingManager` |
+| JSX-style Rust component template tags (`<RustButton …/>`, `<RustInput …/>` and the other `<Rust…/>` tags) | 1.3 | **2.0.0** | a `djust.components.ui` component |
+| Defining `_drain_announcements` or `_drain_focus` on a `LiveView` (duck-typed accessibility hooks the WebSocket and SSE transports drain; nothing in djust defines them) | 1.3 | **2.0.0** | A `role="status"` live region the view renders, and `JS.focus()` through `push_commands()` |
+| Client: the `dj-params` JSON attribute (warns once per page in the browser console) | 1.3 | **2.0.0** | `dj-value-*` attributes |
+| Client: the `data-djust-root` marker in a `dj-layout` swap (warns once per page) | 1.3 | **2.0.0** | `dj-root` |
+| Client: `window.LiveViewWebSocket`, `window.setCacheConfig`, `window.globalLoadingManager` (each warns once, on first read) | 1.3 | **2.0.0** | `window.djust.LiveViewWebSocket`, `window.djust.setCacheConfig`, `window.djust.globalLoadingManager` |
 
 Deprecated **settings** warn once at startup, from `DjustConfig.ready()`
 (`python/djust/_deprecated_settings.py`); djust 2.0 refuses to start while one is set:
 
 | Setting | Deprecated since | Removed no earlier than | Replacement |
 | --- | --- | --- | --- |
-| `DJUST_WS_COMPRESSION` | 1.4 | **2.0.0** | `LIVEVIEW_CONFIG['websocket_compression']` |
-| `DJUST_VDOM_CACHE_ENABLED` / `_TTL_SECONDS` / `_MAX_ENTRIES` | 1.4 | **2.0.0** | `LIVEVIEW_CONFIG['service_worker']['vdom_cache_enabled' / 'vdom_cache_ttl_seconds' / 'vdom_cache_max_entries']` |
-| `DJUST_STATE_BACKEND` / `DJUST_REDIS_URL` | 1.4 | **2.0.0** | `DJUST_CONFIG['STATE_BACKEND']` (`'memory'` or `'redis'`) / `DJUST_CONFIG['REDIS_URL']` |
-| `LIVEVIEW_CONFIG` keys `template_auto_call`, `virtual_keyed_ops`, `django_value_repr` | 1.4 | **2.0.0** | None: 2.0 always enables what each one could switch off. Delete the key. |
+| `DJUST_WS_COMPRESSION` | 1.3 | **2.0.0** | `LIVEVIEW_CONFIG['websocket_compression']` |
+| `DJUST_VDOM_CACHE_ENABLED` / `_TTL_SECONDS` / `_MAX_ENTRIES` | 1.3 | **2.0.0** | `LIVEVIEW_CONFIG['service_worker']['vdom_cache_enabled' / 'vdom_cache_ttl_seconds' / 'vdom_cache_max_entries']` |
+| `DJUST_STATE_BACKEND` / `DJUST_REDIS_URL` | 1.3 | **2.0.0** | `DJUST_CONFIG['STATE_BACKEND']` (`'memory'` or `'redis'`) / `DJUST_CONFIG['REDIS_URL']` |
+| `LIVEVIEW_CONFIG` keys `template_auto_call`, `virtual_keyed_ops`, `django_value_repr` | 1.3 | **2.0.0** | None: 2.0 always enables what each one could switch off. Delete the key. |
 
 ### `@event` → `@event_handler`
 
@@ -291,7 +291,7 @@ class ContactForm(forms.Form):
 > **Note on the corrected warning text.** Before djust 1.0, the `LiveViewForm`
 > deprecation warning said it would be "removed in djust 0.4" — a version
 > already long past. That stale text was corrected to the policy-compliant
-> `>= 1.1.0` floor, and from 1.4 the warning names `2.0.0`, the release that
+> `>= 1.1.0` floor, and from 1.3 the warning names `2.0.0`, the release that
 > removes it.
 
 ### The `_legacy` theming module
@@ -316,7 +316,7 @@ theme = get_design_system("dark")
 
 A template tag such as `<RustButton id="save" label="Save" />` renders through a
 Rust component path that djust 2.0.0 removes. Each render of one emits a
-`DeprecationWarning` (deprecated since 1.4, removed no earlier than 2.0.0). In
+`DeprecationWarning` (deprecated since 1.3, removed no earlier than 2.0.0). In
 2.0 the tag is a template error. Render the matching `djust.components.ui`
 component instead:
 

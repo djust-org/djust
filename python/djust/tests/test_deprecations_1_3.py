@@ -1,4 +1,4 @@
-"""1.4 deprecations: everything djust 2.0 removes warns first (#3500).
+"""1.3 deprecations: everything djust 2.0 removes warns first (#3500).
 
 Each warning names its replacement and ``2.0.0``, through the standard
 ``warn_deprecated`` helper. Where a test asserts the warning's filename, the
@@ -430,7 +430,7 @@ def _marked_objects():
 def test_a_deprecated_symbol_carries_the_policy_docstring_marker(index):
     """API_STABILITY item 2: a ``.. deprecated:: X.Y`` marker naming the version."""
     obj = _marked_objects()[index]
-    assert ".. deprecated:: 1.4" in (obj.__doc__ or ""), obj
+    assert ".. deprecated:: 1.3" in (obj.__doc__ or ""), obj
 
 
 @pytest.mark.parametrize("mixin_name,replacement", MIXINS)

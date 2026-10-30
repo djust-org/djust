@@ -886,7 +886,7 @@ def reactive(func: Callable[..., Any]) -> "_ReactiveProperty":
     raised at class-definition time if it doesn't, rather than silently
     no-opping at runtime.
 
-    .. deprecated:: 1.4
+    .. deprecated:: 1.3
         Removed in djust 2.0. ``LiveView`` has no ``update()`` method, so
         ``@reactive`` on a view raises ``TypeError``; on a ``LiveComponent``
         the decorated function's body is never called and the setter's
@@ -895,7 +895,7 @@ def reactive(func: Callable[..., Any]) -> "_ReactiveProperty":
     """
     warn_deprecated(
         "@reactive",
-        since="1.4",
+        since="1.3",
         removed_in="2.0.0",
         instead="a plain attribute (djust re-renders after every handler) or @computed",
         # stacklevel=3: warnings.warn -> warn_deprecated -> reactive -> the

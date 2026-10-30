@@ -72,7 +72,7 @@ class Button:
         >>> # Builder pattern
         >>> btn2 = Button("btn", "Click").with_variant("danger").with_disabled(True)
 
-    .. deprecated:: 1.4
+    .. deprecated:: 1.3
         Use :class:`djust.components.ui.Button`. Removed in djust 2.0.0;
         constructing this class emits a ``DeprecationWarning``.
     """
@@ -94,7 +94,7 @@ class Button:
     ) -> None:
         warn_deprecated(
             "djust.rust_components.Button",
-            since="1.4",
+            since="1.3",
             removed_in="2.0.0",
             instead="djust.components.ui.Button",
             stacklevel=3,
