@@ -2027,16 +2027,16 @@
       "version": "1.0.24"
     },
     {
-      "bom-ref": "rust:pkg:cargo/unicode-normalization@0.1.25",
+      "bom-ref": "rust:pkg:cargo/unicode-normalization@0.1.26",
       "licenses": [
         {
-          "expression": "MIT OR Apache-2.0"
+          "expression": "(MIT OR Apache-2.0) AND Unicode-3.0"
         }
       ],
       "name": "unicode-normalization",
-      "purl": "pkg:cargo/unicode-normalization@0.1.25",
+      "purl": "pkg:cargo/unicode-normalization@0.1.26",
       "type": "library",
-      "version": "0.1.25"
+      "version": "0.1.26"
     },
     {
       "bom-ref": "rust:pkg:cargo/unicode-xid@0.2.6",
