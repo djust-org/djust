@@ -1241,16 +1241,16 @@
       "version": "0.1.0"
     },
     {
-      "bom-ref": "rust:pkg:cargo/libc@0.2.185",
+      "bom-ref": "rust:pkg:cargo/libc@0.2.191",
       "licenses": [
         {
           "expression": "MIT OR Apache-2.0"
         }
       ],
       "name": "libc",
-      "purl": "pkg:cargo/libc@0.2.185",
+      "purl": "pkg:cargo/libc@0.2.191",
       "type": "library",
-      "version": "0.2.185"
+      "version": "0.2.191"
     },
     {
       "bom-ref": "rust:pkg:cargo/lock_api@0.4.14",
@@ -1263,6 +1263,18 @@
       "purl": "pkg:cargo/lock_api@0.4.14",
       "type": "library",
       "version": "0.4.14"
+    },
+    {
+      "bom-ref": "rust:pkg:cargo/lock_api@0.5.0",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "lock_api",
+      "purl": "pkg:cargo/lock_api@0.5.0",
+      "type": "library",
+      "version": "0.5.0"
     },
     {
       "bom-ref": "rust:pkg:cargo/log@0.4.29",
@@ -1389,6 +1401,30 @@
       "purl": "pkg:cargo/parking_lot@0.12.5",
       "type": "library",
       "version": "0.12.5"
+    },
+    {
+      "bom-ref": "rust:pkg:cargo/parking_lot@0.13.0",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "parking_lot",
+      "purl": "pkg:cargo/parking_lot@0.13.0",
+      "type": "library",
+      "version": "0.13.0"
+    },
+    {
+      "bom-ref": "rust:pkg:cargo/parking_lot_core@0.10.0",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "parking_lot_core",
+      "purl": "pkg:cargo/parking_lot_core@0.10.0",
+      "type": "library",
+      "version": "0.10.0"
     },
     {
       "bom-ref": "rust:pkg:cargo/parking_lot_core@0.9.12",
@@ -1655,6 +1691,18 @@
       "version": "0.5.18"
     },
     {
+      "bom-ref": "rust:pkg:cargo/redox_syscall@0.9.5",
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "name": "redox_syscall",
+      "purl": "pkg:cargo/redox_syscall@0.9.5",
+      "type": "library",
+      "version": "0.9.5"
+    },
+    {
       "bom-ref": "rust:pkg:cargo/regex-automata@0.4.16",
       "licenses": [
         {
@@ -1823,16 +1871,16 @@
       "version": "0.4.12"
     },
     {
-      "bom-ref": "rust:pkg:cargo/smallvec@1.16.3",
+      "bom-ref": "rust:pkg:cargo/smallvec@1.16.4",
       "licenses": [
         {
           "expression": "MIT OR Apache-2.0"
         }
       ],
       "name": "smallvec",
-      "purl": "pkg:cargo/smallvec@1.16.3",
+      "purl": "pkg:cargo/smallvec@1.16.4",
       "type": "library",
-      "version": "1.16.3"
+      "version": "1.16.4"
     },
     {
       "bom-ref": "rust:pkg:cargo/socket2@0.6.3",
@@ -2027,16 +2075,16 @@
       "version": "1.0.24"
     },
     {
-      "bom-ref": "rust:pkg:cargo/unicode-normalization@0.1.25",
+      "bom-ref": "rust:pkg:cargo/unicode-normalization@0.1.26",
       "licenses": [
         {
-          "expression": "MIT OR Apache-2.0"
+          "expression": "(MIT OR Apache-2.0) AND Unicode-3.0"
         }
       ],
       "name": "unicode-normalization",
-      "purl": "pkg:cargo/unicode-normalization@0.1.25",
+      "purl": "pkg:cargo/unicode-normalization@0.1.26",
       "type": "library",
-      "version": "0.1.25"
+      "version": "0.1.26"
     },
     {
       "bom-ref": "rust:pkg:cargo/unicode-xid@0.2.6",
@@ -2063,16 +2111,16 @@
       "version": "0.0.4"
     },
     {
-      "bom-ref": "rust:pkg:cargo/uuid@1.28.0",
+      "bom-ref": "rust:pkg:cargo/uuid@1.29.0",
       "licenses": [
         {
           "expression": "Apache-2.0 OR MIT"
         }
       ],
       "name": "uuid",
-      "purl": "pkg:cargo/uuid@1.28.0",
+      "purl": "pkg:cargo/uuid@1.29.0",
       "type": "library",
-      "version": "1.28.0"
+      "version": "1.29.0"
     },
     {
       "bom-ref": "rust:pkg:cargo/valuable@0.1.1",
