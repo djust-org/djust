@@ -13,7 +13,7 @@ djust_components:app_sidebar,IDENTICAL,0,,,19,7/7,19
 djust_components:approval_gate,DIFFERENT-escape-policy-only,7,escaping:7+tags:4+text:4,,21,7/7,21
 djust_components:audit_log,DIFFERENT-escape-policy-only,2,escaping:2,,10,5/5,10
 djust_components:autocomplete,DIFFERENT-escape-policy-only,8,escaping:8+tags:2+text:2,,19,15/15,19
-djust_components:avatar,DIFFERENT,18,a11y:15+classes:18+escaping:8+other-attrs:3+tags:2+text:4,,18,5/5,18
+djust_components:avatar,DIFFERENT,18,a11y:15+classes:18+escaping:6+other-attrs:1+tags:2+text:4,,18,5/5,18
 djust_components:avatar_group,DIFFERENT-escape-policy-only,3,escaping:3,,17,7/7,17
 djust_components:await,DIFFERENT,5,a11y:1+classes:1+data/dj-attrs:1+escaping:4+tags:3+text:3,,17,5/5,17
 djust_components:badge,DIFFERENT,13,a11y:13+classes:13+escaping:4+tags:13+text:8,,13,3/3,13

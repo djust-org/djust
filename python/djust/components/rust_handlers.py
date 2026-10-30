@@ -41,6 +41,7 @@ from djust.components.utils import (
     interpolate_color_gradient,
     unique_ids as _unique_ids,
     url_attr,
+    srcset_attr,
 )
 
 
@@ -3514,7 +3515,7 @@ class ResponsiveImageHandler:
         alt = conditional_escape(str(kw.get("alt", "")))
         aspect_ratio = conditional_escape(safe_css_ratio(kw.get("aspect_ratio", ""), ""))
         lazy = kw.get("lazy", True)
-        srcset = conditional_escape(str(kw.get("srcset", "")))
+        srcset = srcset_attr(kw.get("srcset", ""))
         sizes = conditional_escape(str(kw.get("sizes", "")))
         placeholder = url_attr(kw.get("placeholder", ""), image=True)
         custom_class = conditional_escape(str(kw.get("custom_class", "")))
