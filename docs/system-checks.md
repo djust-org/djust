@@ -81,6 +81,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | T023 | Templates | Info | T019-T022 were skipped: no usable template engine (none configured, or it could not be built) |
 | T024 | Templates | Warning | A template an owner renders reads `is_staff`, `is_superuser` or `password` through a `user` variable; djust never serializes them |
 | T025 | Templates | Warning | `dj-view` / `dj-root` on `<html>` or `<head>`: unsupported and ignored, no live view is mounted and the page stays a plain HTTP page (`<body>` is a supported root) |
+| T027 | Templates | Warning | A JSX-style `<RustButton … />` (any `<Rust…/>`) component tag: deprecated in 1.4, a template error in 2.0.0 |
 | Q001 | Quality | Info | print() statement found |
 | Q002 | Quality | Warning | f-string in logger call |
 | Q003 | Quality | Info | console.log without djustDebug guard |
@@ -866,6 +867,22 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
   never reads as markup is skipped: HTML comments and `<script>` bodies. A
   `<style>` body or a `<textarea>` is not skipped; use the `noqa` comment there.
 - **Scope**: Static check only; it does not change how the mount finds the root.
+
+### T027 — JSX-style `<Rust…/>` component tag
+- **Severity**: Warning
+- **Method**: Regex (template scan)
+- **What it detects**: A JSX-style Rust component tag such as
+  `<RustButton id="b" label="Go" />`: the name is `Rust` plus a capital letter,
+  followed by whitespace, `/` or `>`. These tags render through a Rust component
+  path that djust 2.0.0 removes (in 2.0 the tag is a template error). Rendering
+  one also emits a runtime `DeprecationWarning`; this check finds it before the
+  page is requested, as the [deprecation policy](API_STABILITY.md#how-a-deprecation-is-announced)
+  asks of template-syntax deprecations.
+- **Fix**: Render the matching `djust.components.ui` component from the view
+  instead (for `<RustButton />`, `Button`).
+- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["T027"]}`
+- **False positives**: A template that only *shows* the tag as text (documentation
+  inside the template) is also reported; suppress the check there.
 
 ### T019–T022 — Template event bindings (ADR-037)
 - **Severity**: Warning (all four, in 1.3)

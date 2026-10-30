@@ -20,7 +20,7 @@ from djust.tests.test_djust_init import make_project
 
 FIXTURES = Path(__file__).parent / "fixtures"
 DJANGO_BACKEND = "django.template.backends.django.DjangoTemplates"
-DJUST_BACKEND = "djust.template_backend.DjustTemplateBackend"
+DJUST_BACKEND = "djust.template.backend.DjustTemplateBackend"
 
 
 def _write_settings(root, text):
@@ -243,7 +243,7 @@ def test_a_later_mutation_of_templates_is_seen_by_the_block(tmp_path):
 DJUST_FIRST = """\
 TEMPLATES = [
     {
-        "BACKEND": "djust.template_backend.DjustTemplateBackend",
+        "BACKEND": "djust.template.backend.DjustTemplateBackend",
         "DIRS": [],
         "APP_DIRS": True,
         "OPTIONS": {"context_processors": ["a.b"]},
@@ -254,7 +254,7 @@ TEMPLATES = [
 
 DJUST_ONLY = """\
 TEMPLATES = [
-    {"BACKEND": "djust.template_backend.DjustTemplateBackend", "DIRS": [], "APP_DIRS": True},
+    {"BACKEND": "djust.template.backend.DjustTemplateBackend", "DIRS": [], "APP_DIRS": True},
 ]
 """
 
@@ -262,7 +262,7 @@ MANUAL_INSERT = """\
 TEMPLATES = [
     {"BACKEND": "django.template.backends.django.DjangoTemplates", "DIRS": []},
 ]
-TEMPLATES.insert(0, {"BACKEND": "djust.template_backend.DjustTemplateBackend", "DIRS": []})
+TEMPLATES.insert(0, {"BACKEND": "djust.template.backend.DjustTemplateBackend", "DIRS": []})
 """
 
 
@@ -283,7 +283,7 @@ def test_djust_after_django_is_reported_not_reordered(tmp_path):
     source = (
         "TEMPLATES = [\n"
         '    {"BACKEND": "django.template.backends.django.DjangoTemplates", "DIRS": []},\n'
-        '    {"BACKEND": "djust.template_backend.DjustTemplateBackend", "DIRS": []},\n'
+        '    {"BACKEND": "djust.template.backend.DjustTemplateBackend", "DIRS": []},\n'
         "]\n"
     )
     path = _project(tmp_path, source)
@@ -670,7 +670,7 @@ def test_djust_after_django_is_informational_without_the_flag(tmp_path):
         tmp_path,
         "TEMPLATES = [\n"
         '    {"BACKEND": "django.template.backends.django.DjangoTemplates", "DIRS": []},\n'
-        '    {"BACKEND": "djust.template_backend.DjustTemplateBackend", "DIRS": []},\n'
+        '    {"BACKEND": "djust.template.backend.DjustTemplateBackend", "DIRS": []},\n'
         "]\n",
     )
     result = _run_init(tmp_path, templates=False)

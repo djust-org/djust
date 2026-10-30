@@ -21,12 +21,13 @@ That was true for any subclass, always.
 which it is not. That is why grepping for ``SimpleLiveView`` found nothing and
 the module read as unused when it was merely unfindable — it went two PRs
 without anyone noticing it was a live render path (#2223). The class is now
-``SimpleLiveView``; ``LiveView`` remains as a module-level alias so any existing
-``from djust.simple_live_view import LiveView`` keeps working.
+``SimpleLiveView``; ``LiveView`` remains as a deprecated module-level alias
+(removed in 2.0) so any existing ``from djust.simple_live_view import LiveView``
+keeps working.
 """
 
 import logging
-from typing import Any, Dict, Optional, Set
+from typing import TYPE_CHECKING, Any, Dict, Optional, Set
 
 from django.http import HttpRequest, HttpResponse
 from django.views import View
@@ -180,10 +181,36 @@ class SimpleLiveView(View):
         return HttpResponse(self.render_template())
 
 
-#: Back-compat alias for the pre-#2219 name.
-#:
-#: Kept because the module is importable and someone may have done
-#: ``from djust.simple_live_view import LiveView``. New code should use
-#: ``SimpleLiveView`` — the old name shadows ``djust.LiveView``, which is a
-#: different class with a different lifecycle.
-LiveView = SimpleLiveView
+# ``LiveView`` stays in ``__all__`` so ``from djust.simple_live_view import *``
+# keeps binding the old name; it resolves through the module ``__getattr__``
+# below, so a star import that takes it warns at the importing statement. The
+# TYPE_CHECKING binding tells linters the name exists (no ``noqa: F822``).
+__all__ = ["LiveView", "SimpleLiveView"]
+
+if TYPE_CHECKING:
+    LiveView = SimpleLiveView
+
+
+def __getattr__(name: str) -> Any:  # PEP 562
+    """``LiveView``: the deprecated pre-#2219 name, removed in djust 2.0.
+
+    Kept because the module is importable and someone may have done
+    ``from djust.simple_live_view import LiveView``. New code should use
+    ``SimpleLiveView`` — the old name shadows ``djust.LiveView``, which is a
+    different class with a different lifecycle.
+
+    .. deprecated:: 1.4
+        Use ``djust.simple_live_view.SimpleLiveView``. Removed in djust 2.0.0.
+    """
+    if name == "LiveView":
+        from ._deprecation import warn_deprecated
+
+        warn_deprecated(
+            "djust.simple_live_view.LiveView",
+            since="1.4",
+            removed_in="2.0.0",
+            instead="djust.simple_live_view.SimpleLiveView",
+            stacklevel=3,
+        )
+        return SimpleLiveView
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

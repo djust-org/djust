@@ -313,7 +313,7 @@ without the auth processor the admin index fails with `KeyError: 'user'`. The
 ```python
 TEMPLATES.insert(0, {
     "NAME": "djust",
-    "BACKEND": "djust.template_backend.DjustTemplateBackend",
+    "BACKEND": "djust.template.backend.DjustTemplateBackend",
     "DIRS": [BASE_DIR / "templates"],
     "APP_DIRS": True,
     "OPTIONS": {

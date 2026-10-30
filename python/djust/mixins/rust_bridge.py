@@ -547,7 +547,7 @@ class RustBridgeMixin:
                     getattr(self, "_django_session_key", None) or self._websocket_session_id
                 )
 
-                from ..state_backend import get_backend
+                from ..state_backends import get_backend
 
                 backend = get_backend()
                 # (A view mounted beside the page view has a scope of its own in
@@ -587,7 +587,7 @@ class RustBridgeMixin:
                     request.session.create()
                     session_key = request.session.session_key
 
-                from ..state_backend import get_backend
+                from ..state_backends import get_backend
 
                 backend = get_backend()
                 cache_key = self._saved_state_key(session_key, view_key, template_hash_slot)
@@ -637,7 +637,7 @@ class RustBridgeMixin:
             self._apply_template_auto_call_flag()
 
             if self._cache_key:
-                from ..state_backend import get_backend
+                from ..state_backends import get_backend
 
                 backend = get_backend()
                 backend.set(self._cache_key, self._rust_view)
@@ -655,7 +655,7 @@ class RustBridgeMixin:
         rust_view = getattr(self, "_rust_view", None)
         if not cache_key or rust_view is None:
             return
-        from ..state_backend import get_backend
+        from ..state_backends import get_backend
 
         refresh = getattr(get_backend(), "refresh", None)
         if callable(refresh):

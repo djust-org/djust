@@ -132,7 +132,7 @@ ROOT_URLCONF = "%(app_name)s.urls"
 
 TEMPLATES = [
     {
-        "BACKEND": "djust.template_backend.DjustTemplateBackend",
+        "BACKEND": "djust.template.backend.DjustTemplateBackend",
         "DIRS": [BASE_DIR / "templates"],
         "APP_DIRS": True,
         "OPTIONS": {
@@ -356,7 +356,7 @@ if not any("DjustTemplateBackend" in str(_entry.get("BACKEND")) for _entry in TE
     TEMPLATES = [
         {
             "NAME": "djust",
-            "BACKEND": "djust.template_backend.DjustTemplateBackend",
+            "BACKEND": "djust.template.backend.DjustTemplateBackend",
             "DIRS": list(_django.get("DIRS", [])),
             "APP_DIRS": True,
             "OPTIONS": {
@@ -384,7 +384,7 @@ if not any("DjustTemplateBackend" in str(_entry.get("BACKEND")) for _entry in TE
 TEMPLATES_ENTRY_SNIPPET = """\
 TEMPLATES.insert(0, {
     "NAME": "djust",
-    "BACKEND": "djust.template_backend.DjustTemplateBackend",
+    "BACKEND": "djust.template.backend.DjustTemplateBackend",
     "DIRS": [BASE_DIR / "templates"],
     "APP_DIRS": True,
     "OPTIONS": {

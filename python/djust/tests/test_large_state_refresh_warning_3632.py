@@ -447,13 +447,13 @@ async def _mount_then_grow(events: int):
 @pytest.mark.asyncio
 class TestTheRealConsumer:
     async def test_a_view_that_grows_during_its_life_is_reported_once(self):
-        from djust import state_backend
+        from djust import state_backends
 
         backend = InMemoryStateBackend(state_size_warning_kb=20)
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
             with pytest.MonkeyPatch.context() as mp:
-                mp.setattr(state_backend, "get_backend", lambda: backend)
+                mp.setattr(state_backends, "get_backend", lambda: backend)
                 session_key = await _mount_then_grow(events=6)
         messages = _large_warnings(caught)
         assert len(messages) == 1, messages
@@ -466,12 +466,12 @@ class TestTheRealConsumer:
             assert cache_key not in messages[0]
 
     async def test_a_view_that_stays_small_is_never_reported(self):
-        from djust import state_backend
+        from djust import state_backends
 
         backend = InMemoryStateBackend(state_size_warning_kb=20)
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
             with pytest.MonkeyPatch.context() as mp:
-                mp.setattr(state_backend, "get_backend", lambda: backend)
+                mp.setattr(state_backends, "get_backend", lambda: backend)
                 await _mount_then_grow(events=0)
         assert _large_warnings(caught) == []

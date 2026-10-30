@@ -151,12 +151,12 @@ Expose programmatic control for advanced use cases:
 
 ```javascript
 // Manual control
-globalLoadingManager.startLoading('save_article');
+window.djust.globalLoadingManager.startLoading('save_article');
 // ... do work ...
-globalLoadingManager.stopLoading('save_article');
+window.djust.globalLoadingManager.stopLoading('save_article');
 
 // Check state
-if (globalLoadingManager.isLoading('save_article')) {
+if (window.djust.globalLoadingManager.isLoading('save_article')) {
     // ...
 }
 ```

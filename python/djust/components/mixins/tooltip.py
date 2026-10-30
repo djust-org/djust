@@ -1,9 +1,9 @@
 """
 TooltipMixin — server-managed tooltip state for djust LiveViews.
 
-.. deprecated::
+.. deprecated:: 1.4
     Use the descriptor-based ``Tooltip`` component from
-    ``djust_components.descriptors`` instead (DEP-002)::
+    ``djust.components.descriptors`` instead (DEP-002; removed in djust 2.0.0)::
 
         from djust.components.descriptors import Tooltip
 
@@ -41,8 +41,11 @@ class TooltipState(TypedState):
 class TooltipMixin(ComponentMixin):
     """Mixin adding server-managed tooltip state and event handlers.
 
-    .. deprecated:: Use ``djust_components.descriptors.Tooltip`` instead.
+    .. deprecated:: 1.4
+        Use ``djust.components.descriptors.Tooltip`` instead. Removed in djust 2.0.0.
     """
+
+    _deprecated_replacement = "the Tooltip component from djust.components.descriptors"
 
     component_name = "tooltip"
     tooltip_instances: Optional[Dict[str, "TooltipState"]] = None

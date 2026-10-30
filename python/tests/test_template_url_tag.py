@@ -68,7 +68,7 @@ class TestUrlTagBasic:
     @override_settings(ROOT_URLCONF=__name__)
     def test_simple_url_resolution(self):
         """Test basic URL resolution: {% url 'home' %}"""
-        from djust.template_backend import DjustTemplateBackend
+        from djust.template import DjustTemplateBackend
 
         backend = DjustTemplateBackend(
             {
@@ -88,7 +88,7 @@ class TestUrlTagBasic:
     @override_settings(ROOT_URLCONF=__name__)
     def test_url_with_name_only(self):
         """Test URL tag with just a name: {% url 'blog' %}"""
-        from djust.template_backend import DjustTemplateBackend
+        from djust.template import DjustTemplateBackend
 
         backend = DjustTemplateBackend(
             {
@@ -112,7 +112,7 @@ class TestUrlTagWithArgs:
     @override_settings(ROOT_URLCONF=__name__)
     def test_url_with_string_literal_arg(self):
         """Test URL with string literal argument: {% url 'post_detail' 'my-post' %}"""
-        from djust.template_backend import DjustTemplateBackend
+        from djust.template import DjustTemplateBackend
 
         backend = DjustTemplateBackend(
             {
@@ -132,7 +132,7 @@ class TestUrlTagWithArgs:
     @override_settings(ROOT_URLCONF=__name__)
     def test_url_with_context_variable_arg(self):
         """Test URL with context variable: {% url 'post_detail' post.slug %}"""
-        from djust.template_backend import DjustTemplateBackend
+        from djust.template import DjustTemplateBackend
 
         backend = DjustTemplateBackend(
             {
@@ -154,7 +154,7 @@ class TestUrlTagWithArgs:
     @override_settings(ROOT_URLCONF=__name__)
     def test_url_with_nested_context_variable(self):
         """Test URL with nested context variable: {% url 'post_detail' post.slug %}"""
-        from djust.template_backend import DjustTemplateBackend
+        from djust.template import DjustTemplateBackend
 
         backend = DjustTemplateBackend(
             {
@@ -176,7 +176,7 @@ class TestUrlTagWithArgs:
     @override_settings(ROOT_URLCONF=__name__)
     def test_url_with_integer_arg(self):
         """Test URL with integer argument: {% url 'post_by_id' 42 %}"""
-        from djust.template_backend import DjustTemplateBackend
+        from djust.template import DjustTemplateBackend
 
         backend = DjustTemplateBackend(
             {
@@ -200,7 +200,7 @@ class TestUrlTagWithKwargs:
     @override_settings(ROOT_URLCONF=__name__)
     def test_url_with_kwarg(self):
         """Test URL with keyword argument: {% url 'post_detail' slug='my-post' %}"""
-        from djust.template_backend import DjustTemplateBackend
+        from djust.template import DjustTemplateBackend
 
         backend = DjustTemplateBackend(
             {
@@ -220,7 +220,7 @@ class TestUrlTagWithKwargs:
     @override_settings(ROOT_URLCONF=__name__)
     def test_url_with_context_kwarg(self):
         """Test URL with context variable as kwarg: {% url 'post_detail' slug=post.slug %}"""
-        from djust.template_backend import DjustTemplateBackend
+        from djust.template import DjustTemplateBackend
 
         backend = DjustTemplateBackend(
             {
@@ -246,7 +246,7 @@ class TestUrlTagAsVariable:
     @override_settings(ROOT_URLCONF=__name__)
     def test_url_as_variable(self):
         """Test URL assigned to variable: {% url 'home' as home_url %}{{ home_url }}"""
-        from djust.template_backend import DjustTemplateBackend
+        from djust.template import DjustTemplateBackend
 
         backend = DjustTemplateBackend(
             {
@@ -266,7 +266,7 @@ class TestUrlTagAsVariable:
     @override_settings(ROOT_URLCONF=__name__)
     def test_url_as_variable_with_args(self):
         """Test URL with args assigned to variable."""
-        from djust.template_backend import DjustTemplateBackend
+        from djust.template import DjustTemplateBackend
 
         backend = DjustTemplateBackend(
             {
@@ -292,7 +292,7 @@ class TestUrlTagInTemplateContext:
     @override_settings(ROOT_URLCONF=__name__)
     def test_url_in_href_attribute(self):
         """Test URL in href attribute of anchor tag."""
-        from djust.template_backend import DjustTemplateBackend
+        from djust.template import DjustTemplateBackend
 
         backend = DjustTemplateBackend(
             {
@@ -312,7 +312,7 @@ class TestUrlTagInTemplateContext:
     @override_settings(ROOT_URLCONF=__name__)
     def test_multiple_url_tags(self):
         """Test multiple URL tags in the same template."""
-        from djust.template_backend import DjustTemplateBackend
+        from djust.template import DjustTemplateBackend
 
         backend = DjustTemplateBackend(
             {
@@ -340,7 +340,7 @@ class TestUrlTagInTemplateContext:
     @override_settings(ROOT_URLCONF=__name__)
     def test_url_in_for_loop_static(self):
         """Test URL tag inside a for loop with static arguments."""
-        from djust.template_backend import DjustTemplateBackend
+        from djust.template import DjustTemplateBackend
 
         backend = DjustTemplateBackend(
             {
@@ -374,7 +374,7 @@ class TestUrlTagInTemplateContext:
     @override_settings(ROOT_URLCONF=__name__)
     def test_url_in_for_loop_with_dynamic_arg(self):
         """Test URL tag with dynamic loop variable as positional argument."""
-        from djust.template_backend import DjustTemplateBackend
+        from djust.template import DjustTemplateBackend
 
         backend = DjustTemplateBackend(
             {
@@ -407,7 +407,7 @@ class TestUrlTagInTemplateContext:
     @override_settings(ROOT_URLCONF=__name__)
     def test_url_in_for_loop_with_dynamic_kwarg(self):
         """Test URL tag with dynamic loop variable as keyword argument."""
-        from djust.template_backend import DjustTemplateBackend
+        from djust.template import DjustTemplateBackend
 
         backend = DjustTemplateBackend(
             {
@@ -438,7 +438,7 @@ class TestUrlTagInTemplateContext:
     @override_settings(ROOT_URLCONF=__name__)
     def test_url_in_for_loop_with_integer_arg(self):
         """Test URL tag with integer loop variable argument."""
-        from djust.template_backend import DjustTemplateBackend
+        from djust.template import DjustTemplateBackend
 
         backend = DjustTemplateBackend(
             {
@@ -473,7 +473,7 @@ class TestUrlTagErrorHandling:
     @override_settings(ROOT_URLCONF=__name__)
     def test_url_with_nonexistent_name(self):
         """Test URL with non-existent URL name returns empty or raises error."""
-        from djust.template_backend import DjustTemplateBackend
+        from djust.template import DjustTemplateBackend
 
         backend = DjustTemplateBackend(
             {
@@ -496,7 +496,7 @@ class TestUrlTagErrorHandling:
     @override_settings(ROOT_URLCONF=__name__)
     def test_url_with_missing_required_arg(self):
         """Test URL with missing required argument."""
-        from djust.template_backend import DjustTemplateBackend
+        from djust.template import DjustTemplateBackend
 
         backend = DjustTemplateBackend(
             {
@@ -523,7 +523,7 @@ class TestUrlTagWithQuoteVariations:
     @override_settings(ROOT_URLCONF=__name__)
     def test_url_with_single_quotes(self):
         """Test URL with single quotes."""
-        from djust.template_backend import DjustTemplateBackend
+        from djust.template import DjustTemplateBackend
 
         backend = DjustTemplateBackend(
             {
@@ -543,7 +543,7 @@ class TestUrlTagWithQuoteVariations:
     @override_settings(ROOT_URLCONF=__name__)
     def test_url_with_double_quotes(self):
         """Test URL with double quotes."""
-        from djust.template_backend import DjustTemplateBackend
+        from djust.template import DjustTemplateBackend
 
         backend = DjustTemplateBackend(
             {
@@ -567,7 +567,7 @@ class TestUrlTagEdgeCases:
     @override_settings(ROOT_URLCONF=__name__)
     def test_url_with_multiple_kwargs(self):
         """Test URL with multiple keyword arguments: {% url 'name' key1=val1 key2=val2 %}"""
-        from djust.template_backend import DjustTemplateBackend
+        from djust.template import DjustTemplateBackend
 
         backend = DjustTemplateBackend(
             {
@@ -589,7 +589,7 @@ class TestUrlTagEdgeCases:
     @override_settings(ROOT_URLCONF=__name__)
     def test_url_with_multiple_positional_args(self):
         """Test URL with multiple positional arguments."""
-        from djust.template_backend import DjustTemplateBackend
+        from djust.template import DjustTemplateBackend
 
         backend = DjustTemplateBackend(
             {
@@ -612,7 +612,7 @@ class TestUrlTagEdgeCases:
     @override_settings(ROOT_URLCONF=__name__)
     def test_url_with_string_containing_spaces_in_context(self):
         """Test URL with context variable containing spaces."""
-        from djust.template_backend import DjustTemplateBackend
+        from djust.template import DjustTemplateBackend
 
         backend = DjustTemplateBackend(
             {
@@ -635,7 +635,7 @@ class TestUrlTagEdgeCases:
     @override_settings(ROOT_URLCONF=__name__)
     def test_url_with_quoted_string_literal(self):
         """Test URL with quoted string literal containing special chars."""
-        from djust.template_backend import DjustTemplateBackend
+        from djust.template import DjustTemplateBackend
 
         backend = DjustTemplateBackend(
             {
@@ -657,7 +657,7 @@ class TestUrlTagEdgeCases:
     @override_settings(ROOT_URLCONF=__name__)
     def test_url_preserves_surrounding_whitespace(self):
         """Test that URL resolution preserves surrounding template content."""
-        from djust.template_backend import DjustTemplateBackend
+        from djust.template import DjustTemplateBackend
 
         backend = DjustTemplateBackend(
             {

@@ -48,7 +48,7 @@ class TestTemplateInclude:
         the template loader is not configured and we get:
         "Template loader not configured. Cannot include template: partial.html"
         """
-        from djust.template_backend import DjustTemplateBackend
+        from djust.template import DjustTemplateBackend
 
         # Create template directory structure
         templates_dir = tmp_path / "templates"
@@ -85,7 +85,7 @@ class TestTemplateInclude:
         """
         Test that {% include %} can access context variables.
         """
-        from djust.template_backend import DjustTemplateBackend
+        from djust.template import DjustTemplateBackend
 
         templates_dir = tmp_path / "templates"
         templates_dir.mkdir()
@@ -118,7 +118,7 @@ class TestTemplateInclude:
             {% include "blog/_post_card.html" with post=post %}
         {% endfor %}
         """
-        from djust.template_backend import DjustTemplateBackend
+        from djust.template import DjustTemplateBackend
 
         templates_dir = tmp_path / "templates"
         templates_dir.mkdir()
@@ -159,7 +159,7 @@ class TestTemplateInclude:
 
         The 'only' keyword should prevent parent context from being passed.
         """
-        from djust.template_backend import DjustTemplateBackend
+        from djust.template import DjustTemplateBackend
 
         templates_dir = tmp_path / "templates"
         templates_dir.mkdir()
@@ -196,7 +196,7 @@ class TestTemplateInclude:
 
         This tests the path from get_template() -> render().
         """
-        from djust.template_backend import DjustTemplateBackend
+        from djust.template import DjustTemplateBackend
 
         templates_dir = tmp_path / "templates"
         templates_dir.mkdir()
@@ -231,7 +231,7 @@ class TestTemplateIncludeErrorCases:
         """
         Test that missing included template gives a clear error.
         """
-        from djust.template_backend import DjustTemplateBackend
+        from djust.template import DjustTemplateBackend
 
         templates_dir = tmp_path / "templates"
         templates_dir.mkdir()

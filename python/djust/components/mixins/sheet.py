@@ -1,9 +1,9 @@
 """
 SheetMixin — slide-out sheet/drawer state management for djust LiveViews.
 
-.. deprecated::
+.. deprecated:: 1.4
     Use the descriptor-based ``Sheet`` component from
-    ``djust_components.descriptors`` instead (DEP-002)::
+    ``djust.components.descriptors`` instead (DEP-002; removed in djust 2.0.0)::
 
         from djust.components.descriptors import Sheet
 
@@ -38,8 +38,11 @@ class SheetState(TypedState):
 class SheetMixin(ComponentMixin):
     """Mixin adding sheet/drawer state management and event handlers.
 
-    .. deprecated:: Use ``djust_components.descriptors.Sheet`` instead.
+    .. deprecated:: 1.4
+        Use ``djust.components.descriptors.Sheet`` instead. Removed in djust 2.0.0.
     """
+
+    _deprecated_replacement = "the Sheet component from djust.components.descriptors"
 
     component_name = "sheet"
     sheet_instances: Optional[Dict[str, "SheetState"]] = None

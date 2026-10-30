@@ -134,7 +134,7 @@ class TestLiveViewGetDifferential:
 class TestAutoCallOffIsWhyBareIsCanonical:
     def test_bare_survives_but_dotted_degrades(self, monkeypatch):
         from djust import config as djust_config
-        from djust.template_backend import DjustTemplateBackend
+        from djust.template import DjustTemplateBackend
 
         class _Cfg:
             def get(self, key, default=None):

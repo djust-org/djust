@@ -35,6 +35,8 @@ def _make_view():
     view._stream_flush_task = None
     for name in (
         "stream_to",
+        "astream_insert",
+        "astream_delete",
         "stream_insert",
         "stream_delete",
         "stream_text",
@@ -85,7 +87,7 @@ def test_stream_insert_append():
     view = _make_view()
     consumer = FakeConsumer()
     view._ws_consumer = consumer
-    asyncio.run(view.stream_insert("feed", "<li>New</li>", at="append"))
+    asyncio.run(view.astream_insert("feed", "<li>New</li>", at="append"))
     assert consumer.sent_messages[0]["ops"][0]["op"] == "append"
 
 
@@ -93,7 +95,7 @@ def test_stream_insert_prepend():
     view = _make_view()
     consumer = FakeConsumer()
     view._ws_consumer = consumer
-    asyncio.run(view.stream_insert("feed", "<li>First!</li>", at="prepend"))
+    asyncio.run(view.astream_insert("feed", "<li>First!</li>", at="prepend"))
     assert consumer.sent_messages[0]["ops"][0]["op"] == "prepend"
 
 
@@ -101,7 +103,7 @@ def test_stream_insert_default_target():
     view = _make_view()
     consumer = FakeConsumer()
     view._ws_consumer = consumer
-    asyncio.run(view.stream_insert("notifications", "<div>Alert</div>"))
+    asyncio.run(view.astream_insert("notifications", "<div>Alert</div>"))
     op = consumer.sent_messages[0]["ops"][0]
     assert op["target"] == "[dj-stream='notifications']"
     assert op["html"] == "<div>Alert</div>"
@@ -111,7 +113,7 @@ def test_stream_insert_custom_target():
     view = _make_view()
     consumer = FakeConsumer()
     view._ws_consumer = consumer
-    asyncio.run(view.stream_insert("feed", "<p>Item</p>", target="#custom-list"))
+    asyncio.run(view.astream_insert("feed", "<p>Item</p>", target="#custom-list"))
     assert consumer.sent_messages[0]["ops"][0]["target"] == "#custom-list"
 
 
@@ -122,14 +124,14 @@ def test_stream_delete():
     view = _make_view()
     consumer = FakeConsumer()
     view._ws_consumer = consumer
-    asyncio.run(view.stream_delete("messages", "#msg-42"))
+    asyncio.run(view.astream_delete("messages", "#msg-42"))
     op = consumer.sent_messages[0]["ops"][0]
     assert op == {"op": "delete", "target": "#msg-42"}
 
 
 def test_stream_delete_no_consumer():
     view = _make_view()
-    asyncio.run(view.stream_delete("messages", "#msg-1"))  # no error
+    asyncio.run(view.astream_delete("messages", "#msg-1"))  # no error
 
 
 # ── stream_text tests ────────────────────────────────────────────────

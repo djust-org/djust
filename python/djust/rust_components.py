@@ -16,6 +16,8 @@ Example:
 
 from typing import Any, Dict, Literal, Optional
 
+from ._deprecation import warn_deprecated
+
 try:
     from djust._rust import RustButton
 
@@ -69,6 +71,10 @@ class Button:
 
         >>> # Builder pattern
         >>> btn2 = Button("btn", "Click").with_variant("danger").with_disabled(True)
+
+    .. deprecated:: 1.4
+        Use :class:`djust.components.ui.Button`. Removed in djust 2.0.0;
+        constructing this class emits a ``DeprecationWarning``.
     """
 
     def __init__(
@@ -86,6 +92,13 @@ class Button:
         on_click: Optional[str] = None,
         button_type: str = "button",
     ) -> None:
+        warn_deprecated(
+            "djust.rust_components.Button",
+            since="1.4",
+            removed_in="2.0.0",
+            instead="djust.components.ui.Button",
+            stacklevel=3,
+        )
         _check_rust_available()
 
         kwargs: Dict[str, Any] = {}

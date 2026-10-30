@@ -89,16 +89,32 @@ version; it does not use `PendingDeprecationWarning`.
   public symbol is never removed in a MINOR or PATCH release. It survives until
   at least the next MAJOR.
 - **0.x carve-out.** Three symbols deprecated back in the 0.x series get one
-  full minor cycle of overlap rather than being yanked at 1.0 — they are
-  scheduled for removal **no earlier than `1.1.0`**.
+  full minor cycle of overlap rather than being yanked at 1.0 — their floor
+  was `1.1.0`, and djust **2.0.0** removes them.
 
 ## Currently deprecated
 
 | API | Replacement | Removed no earlier than |
 | --- | --- | --- |
-| `@event` | `@event_handler` | 1.1.0 |
-| `LiveViewForm` | `django.forms.Form` | 1.1.0 |
-| `_legacy` theming module (`THEMES`, `get_theme()`, `list_themes()`) | `djust.theming.theme_packs` (`get_design_system`, etc.) | 1.1.0 |
+| `@event` | `@event_handler` | 2.0.0 |
+| `LiveViewForm` | `django.forms.Form` | 2.0.0 |
+| `_legacy` theming module (`THEMES`, `get_theme()`, `list_themes()`) | `djust.theming.theme_packs` (`get_design_system`, etc.) | 2.0.0 |
+| Dict-style reads of `block` in a Python-bridged tag (`block["super"]`, `block.get("super")`, ...) | `context["block"].super()` | 2.0.0 |
+| Defining `_drain_announcements` or `_drain_focus` on a `LiveView` | A `role="status"` live region the view renders, and `JS.focus()` through `push_commands()` | 2.0.0 |
+| `@reactive` | A plain attribute, or `@computed` | 2.0.0 |
+| `social_auth_providers` context processor | `{% auth_providers auth %}` | 2.0.0 |
+| `AccordionMixin`, `TabsMixin`, `ModalMixin`, `CollapsibleMixin`, `SheetMixin`, `DropdownMixin`, `TooltipMixin`, `CarouselMixin` | The matching component in `djust.components.descriptors` | 2.0.0 |
+| `djust.template_backend` | `djust.template` (`'djust.template.backend.DjustTemplateBackend'` in `TEMPLATES`) | 2.0.0 |
+| `djust.state_backend` | `djust.state_backends` | 2.0.0 |
+| `djust.simple_live_view.LiveView` | `SimpleLiveView` | 2.0.0 |
+| `djust.rust_components.Button` | `djust.components.ui.Button` | 2.0.0 |
+| The SSE `/event/` endpoint (`DjustSSEEventView`) | `sse/<id>/message/` | 2.0.0 |
+| Settings `DJUST_WS_COMPRESSION`, `DJUST_VDOM_CACHE_*`, `DJUST_STATE_BACKEND`, `DJUST_REDIS_URL` | The nested `LIVEVIEW_CONFIG` / `DJUST_CONFIG` keys (the startup warning names each) | 2.0.0 |
+| `LIVEVIEW_CONFIG` keys `template_auto_call`, `virtual_keyed_ops`, `django_value_repr` | Delete the key; 2.0 always enables the behaviour | 2.0.0 |
+| JSX-style Rust component template tags (`<RustButton …/>`, `<RustInput …/>` and the other `<Rust…/>` tags) | A `djust.components.ui` component | 2.0.0 |
+| Client: the `dj-params` JSON attribute (warns once per page in the browser console) | `dj-value-*` attributes | 2.0.0 |
+| Client: the `data-djust-root` marker in a `dj-layout` swap (warns once per page) | `dj-root` | 2.0.0 |
+| Client: `window.LiveViewWebSocket`, `window.setCacheConfig`, `window.globalLoadingManager` (each warns once, on first read) | `window.djust.LiveViewWebSocket`, `window.djust.setCacheConfig`, `window.djust.globalLoadingManager` | 2.0.0 |
 
 Migrating is mechanical in every case — see the
 [full reference](https://github.com/djust-org/djust/blob/main/docs/API_STABILITY.md#currently-deprecated-symbols)

@@ -4428,6 +4428,55 @@ class TestT015LegacyRootAttrs:
         assert len(t015) == 0
 
 
+class TestT027RustJsxTags:
+    """T027: a JSX-style ``<Rust.../>`` component tag is deprecated (1.4)."""
+
+    def _run(self, tmp_path, settings, html, **config):
+        tpl_dir = tmp_path / "templates"
+        tpl_dir.mkdir()
+        (tpl_dir / "page.html").write_text(html)
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(tpl_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplateBackend",
+            }
+        ]
+        if config:
+            settings.DJUST_CONFIG = config
+
+        from djust.checks import check_templates
+
+        return [e for e in check_templates(None) if e.id == "djust.T027"]
+
+    def test_fires_for_a_self_closing_tag_with_the_line_and_name(self, tmp_path, settings):
+        found = self._run(tmp_path, settings, '<div>\n  <RustButton id="b" label="Go" />\n</div>\n')
+        assert len(found) == 1
+        assert "page.html:2" in found[0].msg
+        assert "<RustButton />" in found[0].msg
+        assert "2.0.0" in found[0].msg
+        assert "djust.components.ui" in found[0].hint
+
+    def test_fires_once_per_tag(self, tmp_path, settings):
+        found = self._run(
+            tmp_path, settings, '<RustInput id="a"/><RustText content="x"></RustText>'
+        )
+        assert [e.msg.split("'")[1] for e in found] == ["<RustInput />", "<RustText />"]
+
+    def test_does_not_flag_look_alike_markup(self, tmp_path, settings):
+        found = self._run(
+            tmp_path,
+            settings,
+            "<Rusty>a</Rusty><Rust>b</Rust><rustButton/><div>Rust</div><RustButton-like>x</RustButton-like>",
+        )
+        assert found == []
+
+    def test_is_suppressed_via_suppress_checks(self, tmp_path, settings):
+        found = self._run(
+            tmp_path, settings, '<RustButton id="b" label="Go" />', suppress_checks=["T027"]
+        )
+        assert found == []
+
+
 # ---------------------------------------------------------------------------
 # V008 — primitive return type annotation suppresses warning (issue #393)
 # ---------------------------------------------------------------------------

@@ -576,7 +576,7 @@ not once per request like classic Django. For hot views, precompute in
 `get_context_data()` (djust warns once per path in `DEBUG` when a
 template auto-calls an ORM method). Kill-switch:
 `LIVEVIEW_CONFIG["template_auto_call"] = False` restores the old
-no-call behavior.
+no-call behavior; it is deprecated, and 2.0 removes the switch.
 
 ### Objects resolve like Django (ADR-027)
 

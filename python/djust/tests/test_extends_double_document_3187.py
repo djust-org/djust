@@ -93,7 +93,7 @@ def docs_templates():
         created.append(tmp)
         templates = [
             {
-                "BACKEND": "djust.template_backend.DjustTemplateBackend",
+                "BACKEND": "djust.template.backend.DjustTemplateBackend",
                 "DIRS": [str(tmp)],
                 "APP_DIRS": True,
                 "OPTIONS": {

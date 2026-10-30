@@ -92,8 +92,9 @@ ALLOWLIST_BACKEND = ALLOWLIST_PACKAGE | frozenset(
 assert len(ALLOWLIST_BACKEND) == 35
 
 
-# The compat shim (``djust/template_backend.py``) is one extra module.
-ALLOWLIST_BACKEND_SHIM = ALLOWLIST_BACKEND | {"djust.template_backend"}
+# The compat shim (``djust/template_backend.py``) adds itself and the
+# deprecation helper it warns through (removed in 2.0).
+ALLOWLIST_BACKEND_SHIM = ALLOWLIST_BACKEND | {"djust.template_backend", "djust._deprecation"}
 
 # After ``django.setup()`` on a templates-only project: ``DjustConfig.ready()``
 # registers the system checks, applies the differ flags, warms the filter
@@ -101,6 +102,8 @@ ALLOWLIST_BACKEND_SHIM = ALLOWLIST_BACKEND | {"djust.template_backend"}
 # and installs the ``{% load %}`` hooks. Exact, like the rows above.
 ALLOWLIST_SETUP = ALLOWLIST_BACKEND | frozenset(
     {
+        "djust._deprecated_settings",  # 1.4 startup warnings for 2.0 removals
+        "djust._deprecation",
         "djust.apps",
         "djust.assets",  # ADR-040 asset registry (setting_changed receiver)
         "djust.checks",
@@ -135,7 +138,7 @@ ALLOWLIST_SETUP = ALLOWLIST_BACKEND | frozenset(
         "djust.template_filters",
     }
 )
-assert len(ALLOWLIST_SETUP) == 67
+assert len(ALLOWLIST_SETUP) == 69
 
 # ``DEBUG=True`` additionally auto-enables hot reload: the file watcher only.
 # ``djust.websocket`` (and ``channels``) are deferred to a change event (#2566).

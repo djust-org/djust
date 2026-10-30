@@ -76,7 +76,7 @@ def fixture(tmp_path):
     spec.loader.exec_module(module)
     config = [
         {
-            "BACKEND": "djust.template_backend.DjustTemplateBackend",
+            "BACKEND": "djust.template.backend.DjustTemplateBackend",
             "DIRS": [str(templates)],
             "APP_DIRS": False,
             "OPTIONS": {},
@@ -152,7 +152,7 @@ def test_a_derived_boolean_renders_where_the_floor_field_does_not(tmp_path):
     )
     config = [
         {
-            "BACKEND": "djust.template_backend.DjustTemplateBackend",
+            "BACKEND": "djust.template.backend.DjustTemplateBackend",
             "DIRS": [str(tmp_path)],
             "APP_DIRS": False,
             "OPTIONS": {
