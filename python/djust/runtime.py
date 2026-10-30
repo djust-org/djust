@@ -812,6 +812,25 @@ def _queued_title(view: Any) -> bool:
     return any(isinstance(cmd, dict) and cmd.get("action") == "title" for cmd in pending)
 
 
+def navigation_title_variables(view: Any) -> Tuple[str, ...]:
+    """The variable names ``navigation_title`` would read for ``view``'s ``<title>``.
+
+    Empty when the title has none, when the template has no ``<head><title>`` and
+    when anything fails (the title is then left alone, as ``navigation_title``
+    leaves it). A ``static_render`` view uses this to keep exactly those values of
+    its last render when it drops the rest (#3626). Never raises.
+    """
+    try:
+        inner = _head_title_inner(_view_document_source(view))
+        if inner is None or "block.super" in inner or "{" not in inner:
+            return ()
+        from ._rust import extract_template_variables
+
+        return tuple(extract_template_variables(inner))
+    except Exception:  # noqa: BLE001 — losing the title is the fallback, not an error
+        return ()
+
+
 def navigation_title(view: Any) -> Optional[str]:
     """The ``<title>`` the destination page would have on a full load (#3036).
 

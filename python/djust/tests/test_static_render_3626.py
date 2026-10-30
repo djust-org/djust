@@ -326,6 +326,28 @@ class _Socket:
         )
         return await self.until("mount")
 
+    async def redirect(self, view_class, url):
+        """``dj-navigate`` to ``view_class``; the frames it produced (mount frame,
+        then the ``page_metadata`` title frame when one is sent) until quiet."""
+        await self.communicator.send_json_to(
+            {
+                "type": "live_redirect_mount",
+                "view": f"{MODULE}.{view_class.__name__}",
+                "url": url,
+                "params": {},
+            }
+        )
+        from ._ws_frames import receive_until
+
+        # Event-driven (#3130): wait for the title frame, never for a quiet window
+        # (a timed-out ``receive_json_from`` cancels the application under test).
+        return await receive_until(
+            self.communicator,
+            lambda frames: bool(_titles(frames)),
+            timeout=4,
+            what="the page_metadata title frame",
+        )
+
     async def event(self, name, ref, **params):
         await self.communicator.send_json_to(
             {"type": "event", "event": name, "params": params, "ref": ref}
@@ -581,7 +603,141 @@ class _Spy:
         self.calls.append(("set_raw_py_values", dict(values)))
 
 
+def _titled(name: str) -> str:
+    return (
+        "<!DOCTYPE html><html><head><title>{{ heading }}</title></head><body>"
+        f'<div dj-root dj-view="{MODULE}.{name}" dj-id="0"><p>{{{{ n }}}}</p></div></body></html>'
+    )
+
+
+class ComputedTitlePage(LiveView):
+    """The ``<title>`` reads ``heading``, which ``get_context_data`` computes: it is
+    in the render's context, not an attribute of the view."""
+
+    template = _titled("ComputedTitlePage")
+
+    def mount(self, request, **kwargs):
+        self.n = 3
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["heading"] = "Report of %d rows" % self.n
+        return context
+
+
+class StaticComputedTitlePage(ComputedTitlePage):
+    static_render = True
+    template = _titled("StaticComputedTitlePage")
+
+
+def _titles(frames):
+    return [
+        f["value"]
+        for f in frames
+        if f.get("type") == "page_metadata" and f.get("action") == "title"
+    ]
+
+
+@pytest.mark.asyncio
+class TestTheNavigationTitleSurvivesTheRelease:
+    @pytest.mark.parametrize("page", [ComputedTitlePage, StaticComputedTitlePage])
+    async def test_a_title_built_from_a_computed_value_follows_dj_navigate(self, backend, page):
+        """A static page is navigated to like any other: the tab must take ITS title
+        (rendered from the last render's values), not keep the previous page's."""
+        key = await _session_key()
+        with override_settings(LIVEVIEW_ALLOWED_MODULES=[MODULE]):
+            async with _Socket(key) as socket:
+                await socket.mount(SmallPage, url="/small/")
+                frames = await socket.redirect(page, "/report/")
+        assert _titles(frames) == ["Report of 3 rows"], [f.get("type") for f in frames]
+
+
+class MessagesPage(LiveView):
+    """``temporary_assigns`` empties ``messages`` after each render."""
+
+    temporary_assigns = {"messages": []}
+    template = _root(
+        "MessagesPage",
+        '<p id="menu">{% if open %}open{% else %}closed{% endif %}</p>'
+        "<ul>{% for m in messages %}<li>{{ m }}</li>{% endfor %}</ul>",
+    )
+
+    def mount(self, request, **kwargs):
+        self.open = False
+        self.messages = ["first-message"]
+
+    @event_handler()
+    def toggle(self, **kwargs):
+        self.open = not self.open
+
+
+class StaticMessagesPage(MessagesPage):
+    static_render = True
+    template = _root(
+        "StaticMessagesPage",
+        '<p id="menu">{% if open %}open{% else %}closed{% endif %}</p>'
+        "<ul>{% for m in messages %}<li>{{ m }}</li>{% endfor %}</ul>",
+    )
+
+
+@pytest.mark.asyncio
+class TestTemporaryAssignsOnAStaticView:
+    async def test_the_rows_are_gone_after_an_event_and_the_log_says_why(self, backend, caplog):
+        """The documented hazard, measured: ``temporary_assigns`` rows exist in the
+        first render only; a full render from the view's state no longer has them.
+        The view warns about the combination, once."""
+        import logging
+
+        from djust import _static_render
+
+        _static_render._WARNED_TEMPORARY_ASSIGNS.discard(StaticMessagesPage)
+        key = await _session_key()
+        with caplog.at_level(logging.WARNING, logger="djust._static_render"):
+            with override_settings(LIVEVIEW_ALLOWED_MODULES=[MODULE]):
+                async with _Socket(key) as socket:
+                    mounted = await socket.mount(StaticMessagesPage)
+                    first = await socket.event("toggle", 1)
+                    await socket.event("toggle", 2)
+        assert "first-message" in mounted["html"]
+        assert first["type"] == "html_update" and "first-message" not in first["html"]
+        warned = [r for r in caplog.records if r.name == "djust._static_render"]
+        assert len(warned) == 1, [r.getMessage() for r in warned]  # once, not per render
+        text = warned[0].getMessage()
+        assert "StaticMessagesPage" in text and "temporary_assigns (messages)" in text
+
+    async def test_a_normal_view_with_temporary_assigns_does_not_warn(self, backend, caplog):
+        import logging
+
+        key = await _session_key()
+        with caplog.at_level(logging.WARNING, logger="djust._static_render"):
+            with override_settings(LIVEVIEW_ALLOWED_MODULES=[MODULE]):
+                async with _Socket(key) as socket:
+                    await socket.mount(MessagesPage)
+                    await socket.event("toggle", 1)
+        assert [r for r in caplog.records if r.name == "djust._static_render"] == []
+
+    async def test_a_static_view_without_temporary_assigns_does_not_warn(self, backend, caplog):
+        import logging
+
+        key = await _session_key()
+        with caplog.at_level(logging.WARNING, logger="djust._static_render"):
+            with override_settings(LIVEVIEW_ALLOWED_MODULES=[MODULE]):
+                async with _Socket(key) as socket:
+                    await socket.mount(StaticDiagram)
+                    await socket.event("toggle", 1)
+        assert [r for r in caplog.records if r.name == "djust._static_render"] == []
+
+
 class TestWhichViewsAreReleased:
+    def test_only_the_values_the_title_reads_are_kept(self):
+        from djust._static_render import release_render_baseline
+
+        view = StaticComputedTitlePage()
+        view._rust_view = _Spy()
+        view._prev_context_immutables = {"heading": "Report of 3 rows", "diagram": "x" * 5000}
+        assert release_render_baseline(view) is True
+        assert view._prev_context_immutables == {"heading": "Report of 3 rows"}
+
     def _view(self, cls=StaticDiagram):
         view = cls()
         view._rust_view = _Spy()

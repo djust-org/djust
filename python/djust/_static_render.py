@@ -11,6 +11,8 @@ after every render:
   keeps the version counter the HTTP fallback and SSE stamp on their frames);
 - the renderer's context copy (``retain_state_keys([])``), and with it the
   change-detection fingerprints, so the next sync sends the whole context again.
+  The one thing kept is the few immutable values the page's ``<title>`` reads,
+  which ``navigation_title`` renders after a ``dj-navigate``.
 
 The state backend then stores the released view: the template and the version,
 no context and no tree. Any later render of the view (an event, a server push,
@@ -23,7 +25,34 @@ Only the HTML renderer is released: a native renderer's wire format is patches.
 
 from __future__ import annotations
 
+import logging
+import weakref
 from typing import Any
+
+logger = logging.getLogger(__name__)
+
+# Classes already warned about, so a view warns once per process, not per render.
+_WARNED_TEMPORARY_ASSIGNS: "weakref.WeakSet[type]" = weakref.WeakSet()
+
+
+def _warn_temporary_assigns(view: Any) -> None:
+    """``static_render`` + ``temporary_assigns``: every later render is full, and a
+    ``temporary_assigns`` key has been reset to its default by then, so its rows
+    vanish from the page after the first event. Say so once per class."""
+    declared = getattr(view, "temporary_assigns", None)
+    cls = type(view)
+    if not declared or cls in _WARNED_TEMPORARY_ASSIGNS:
+        return
+    _WARNED_TEMPORARY_ASSIGNS.add(cls)
+    logger.warning(
+        "%s sets static_render = True and temporary_assigns (%s). Every render after "
+        "the first is a full page rendered from the view's current state, and a "
+        "temporary_assigns key is reset to its default after each render, so those "
+        "rows are missing from every later page. Drop one of the two: static_render "
+        "for a page that updates, temporary_assigns for a page that renders once.",
+        cls.__name__,
+        ", ".join(sorted(str(key) for key in declared)),
+    )
 
 
 def is_static_render(view: Any) -> bool:
@@ -50,14 +79,23 @@ def release_render_baseline(view: Any) -> bool:
     release = getattr(rust_view, "release_baseline", None)
     if not callable(release):
         return False
+    # ``navigation_title`` renders the destination's ``<title>`` from the immutable
+    # values of the last render. Keep the ones the title reads, nothing else: a
+    # title built from a value ``get_context_data`` computed would otherwise be
+    # lost, and the tab would keep the previous page's title after ``dj-navigate``.
+    from .runtime import navigation_title_variables
+
+    held = getattr(view, "_prev_context_immutables", None) or {}
+    title_values = {name: held[name] for name in navigation_title_variables(view) if name in held}
     release()
     rust_view.retain_state_keys([])
     if hasattr(rust_view, "set_raw_py_values"):
         rust_view.set_raw_py_values({})
     # The next sync must send every key: the renderer no longer holds any.
     view._prev_context_refs = {}
-    view._prev_context_immutables = {}
+    view._prev_context_immutables = title_values
     view._prev_context_fingerprints = {}
+    _warn_temporary_assigns(view)
     # ``static_assigns`` are sent once because the renderer retains them.
     if getattr(view, "_static_assigns_sent", False):
         view._static_assigns_sent = False

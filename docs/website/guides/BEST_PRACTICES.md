@@ -738,7 +738,8 @@ open page and every stored snapshot (one per session and page, until the
 backend's TTL). Use it when later renders are rare; do not use it for a page
 whose own handlers update it often, or one that relies on `temporary_assigns`
 or streams (they exist to send small updates, and a full render shows only what
-the view still holds). It is independent of `view_state_in_session`, which is
+the view still holds; a view that sets both `static_render` and `temporary_assigns` logs a
+warning once per class, because its rows are gone after the first render). It is independent of `view_state_in_session`, which is
 about the session save, not this snapshot. Keeping stream rows out of the
 snapshot of a view that *does* patch is a separate, open question (#3632).
 

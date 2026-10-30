@@ -8024,6 +8024,54 @@ mod fast_path_flag_tests {
         assert_eq!(path_of(&fast), path_of(&full), "fast: {fast} full: {full}");
     }
 
+    /// `static_render` (#3626): `release_baseline` drops EVERY structure the last
+    /// render built from the tree, not only the tree. The cached HTML and the
+    /// per-node cache are each about the size of the page, and the two indexes
+    /// are built from the tree; none of them is in the serialized snapshot, so
+    /// only this test sees them go.
+    #[test]
+    fn release_baseline_drops_the_tree_and_every_cache_built_from_it() {
+        let mut view = mounted();
+        view.update_state_rust(state("v1", 0, 107));
+        view.set_changed_keys(vec!["label".to_string()]);
+        view.render_with_diff_detached().expect("fast path");
+        view.set_changed_keys(vec!["label".to_string()]);
+        // Premises: the render left each of them behind, or the asserts below
+        // would pass on a view that never had them.
+        assert!(view.last_vdom.is_some(), "premise: the tree");
+        assert!(view.last_root_ns.is_some(), "premise: the root namespace");
+        assert!(view.last_html.is_some(), "premise: the cached HTML");
+        assert!(!view.node_html_cache.is_empty(), "premise: the node cache");
+        assert!(
+            view.changed_keys.is_some(),
+            "premise: a pending changed set"
+        );
+        assert!(
+            view.fragment_text_map.is_some(),
+            "premise: the fragment map"
+        );
+        assert!(view.text_node_index.is_some(), "premise: the text index");
+        let version = view.version;
+
+        view.release_baseline();
+
+        assert!(view.last_vdom.is_none(), "the tree");
+        assert!(view.last_root_ns.is_none(), "the root namespace");
+        assert!(view.last_html.is_none(), "the cached HTML");
+        assert!(view.node_html_cache.is_empty(), "the node cache");
+        assert!(view.changed_keys.is_none(), "the pending changed set");
+        assert!(view.fragment_text_map.is_none(), "the fragment map");
+        assert!(view.text_node_index.is_none(), "the text index");
+        assert_eq!(view.version, version, "the version counter is kept");
+
+        // Nothing to diff against: the next render is full and keeps counting.
+        view.update_state_rust(state("v2", 0, 107));
+        let (html, patches, next) = view.render_with_diff_detached().expect("re-render");
+        assert!(html.contains("v2"), "html: {html}");
+        assert!(patches.is_none(), "a released view has no tree to diff");
+        assert_eq!(next, version + 1);
+    }
+
     #[test]
     fn attribute_change_takes_the_full_parse_and_diff() {
         let mut view = mounted();
