@@ -418,7 +418,7 @@ def unique_ids(items: Any) -> bool:
     return bool(ids) and all(ids) and len(set(ids)) == len(ids)
 
 
-def url_attr(value: Any, *, image: bool = False) -> str:
+def url_attr(value: Any, *, image: bool = False, honor_safe: bool = True) -> str:
     """Return ``value`` ready to place inside a quoted ``href``/``src``/``action``.
 
     Values the developer marked safe (``mark_safe`` / ``SafeString``) are
@@ -427,10 +427,15 @@ def url_attr(value: Any, *, image: bool = False) -> str:
     (``javascript:``, ``vbscript:``, ``data:``, ...) becomes ``"#"``. With
     ``image=True`` an inline ``data:image/...`` URI is also accepted (escaped),
     for ``<img src>``.
+
+    ``honor_safe=False`` treats a ``SafeData`` value as untrusted text (it is
+    checked and escaped like any other string). The class-based components pass
+    it: they have always escaped what they were given, a marked-safe value
+    included, and the scheme check must not widen that into an opt-out.
     """
     if value is None:
         return ""
-    if isinstance(value, SafeData):
+    if honor_safe and isinstance(value, SafeData):
         return str(value)
     if image:
         probe = _CTRL_WS_RE.sub("", str(value)).lower()
@@ -438,6 +443,106 @@ def url_attr(value: Any, *, image: bool = False) -> str:
             escaped: str = conditional_escape(str(value).strip())
             return escaped
     return safe_url(value)
+
+
+#: The HTML spec's "ASCII whitespace": TAB, LF, FF, CR and SPACE. Not VT, and not
+#: Unicode whitespace (``str.isspace()`` would be both): a browser does not split
+#: a ``srcset`` on U+00A0, so neither may this.
+_ASCII_WS = "\t\n\f\r "
+
+
+def _srcset_candidates(text: str) -> list[tuple[str, list[str]]]:
+    """``[(url, descriptors)]`` of an ``srcset`` value: the HTML spec's "parse a
+    srcset attribute", step for step
+    (https://html.spec.whatwg.org/multipage/images.html#parse-a-srcset-attribute).
+
+    A candidate's URL is the run of non-whitespace characters after any commas and
+    whitespace; if it ends in commas they are removed and it has no descriptors.
+    Otherwise descriptors are tokenised by the spec's three states, and
+    PARENTHESES DO NOT NEST: the first ``)`` after a ``(`` ends the "in parens"
+    state (``((),`` is one descriptor ``(()`` followed by a comma). A browser may
+    later drop a candidate whose descriptors are invalid; that is not modelled:
+    every candidate's URL is returned, because a URL that survives to the browser
+    through a candidate this parser skipped is exactly the bypass to avoid.
+    """
+    out: list[tuple[str, list[str]]] = []
+    pos, n = 0, len(text)
+    while True:
+        while pos < n and (text[pos] in _ASCII_WS or text[pos] == ","):
+            pos += 1
+        if pos >= n:
+            return out
+        start = pos
+        while pos < n and text[pos] not in _ASCII_WS:
+            pos += 1
+        url = text[start:pos]
+        descriptors: list[str] = []
+        if url.endswith(","):
+            url = url.rstrip(",")
+        else:
+            while pos < n and text[pos] in _ASCII_WS:
+                pos += 1
+            current, state = "", "descriptor"
+            while True:
+                c = text[pos] if pos < n else None
+                if state == "descriptor":
+                    if c is None:
+                        if current:
+                            descriptors.append(current)
+                        break
+                    if c in _ASCII_WS:
+                        if current:
+                            descriptors.append(current)
+                        current, state = "", "after"
+                    elif c == ",":
+                        pos += 1
+                        if current:
+                            descriptors.append(current)
+                        break
+                    elif c == "(":
+                        current, state = current + c, "parens"
+                    else:
+                        current += c
+                elif state == "parens":
+                    if c is None:
+                        descriptors.append(current)
+                        break
+                    current += c
+                    if c == ")":
+                        state = "descriptor"
+                else:  # after a descriptor
+                    if c is None:
+                        break
+                    if c not in _ASCII_WS:
+                        state = "descriptor"
+                        pos -= 1
+                pos += 1
+        out.append((url, descriptors))
+
+
+def srcset_attr(value: Any, *, honor_safe: bool = True) -> str:
+    """Return ``value`` ready to place inside a quoted ``srcset``.
+
+    Each candidate's URL (split as :func:`_srcset_candidates` does) goes through
+    :func:`url_attr` as an image source (a script scheme becomes ``"#"``,
+    ``data:image/...`` stays) and its descriptors (``2x``, ``480w``) are
+    HTML-escaped. Values the developer marked safe are returned unchanged, as
+    :func:`url_attr` does, unless ``honor_safe=False``. A value with no candidate
+    gives ``""`` (so a caller can omit the attribute).
+    """
+    if value is None:
+        return ""
+    if honor_safe and isinstance(value, SafeData):
+        return str(value)
+    parts = []
+    for url, descriptors in _srcset_candidates(str(value)):
+        candidate = url_attr(url, image=True, honor_safe=False)
+        if not candidate:
+            continue
+        if descriptors:
+            candidate += " " + " ".join(str(conditional_escape(d)) for d in descriptors)
+        parts.append(candidate)
+    return ", ".join(parts)
 
 
 def rich_html(value: Any) -> str:

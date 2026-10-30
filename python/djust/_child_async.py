@@ -9,6 +9,7 @@ from ._async_batch import AsyncBatch
 from ._exposure import ExposureError
 from ._exposure_auth import authorize_event, fresh_socket_request
 from ._exposure_children import child_event_adapter
+from ._view_hooks import call_async_result
 from .auth.core import check_view_auth, enforce_object_permission
 from .mixins.async_work import run_async_callback
 
@@ -103,7 +104,7 @@ async def _execute_body(
                 await sync_to_async(_authorize)(runtime, root, child, generation)
                 handler = getattr(child, "handle_async_result", None)
                 if callable(handler):
-                    await sync_to_async(handler)(name, result=result, error=error)
+                    await call_async_result(child, handler, name, result=result, error=error)
                 elif error is not None:
                     raise ExposureError("Child background callback failed")
                 await sync_to_async(_authorize)(runtime, root, child, generation)
@@ -192,7 +193,7 @@ def dispatch_legacy_child_work(
                     check_owner()
                     handler = getattr(child, "handle_async_result", None)
                     if callable(handler):
-                        await sync_to_async(handler)(name, result=result, error=error)
+                        await call_async_result(child, handler, name, result=result, error=error)
                     elif error is not None:
                         raise error
                     check_owner()

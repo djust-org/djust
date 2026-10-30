@@ -512,7 +512,7 @@ class TestMetadataInjection:
     def test_render_injects_metadata(self):
         """Test render() injects metadata script."""
         class TestView(LiveView):
-            template_string = "<html><body><div>{{ count }}</div></body></html>"
+            template = "<html><body><div>{{ count }}</div></body></html>"
 
             @debounce(wait=0.5)
             def increment(self, **kwargs):
@@ -530,7 +530,7 @@ class TestMetadataInjection:
     def test_render_handles_no_metadata(self):
         """Test render() handles views with no decorated handlers."""
         class TestView(LiveView):
-            template_string = "<html><body><div>{{ count }}</div></body></html>"
+            template = "<html><body><div>{{ count }}</div></body></html>"
 
             def plain_handler(self, **kwargs):
                 self.count += 1

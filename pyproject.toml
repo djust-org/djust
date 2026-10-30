@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "djust"
-version = "1.3.0rc11"
+version = "1.3.0rc14"
 description = "Phoenix LiveView-style reactive components for Django with Rust-powered performance. Real-time UI updates over WebSocket, no JavaScript build step required."
 authors = [{name = "djust contributors"}]
 readme = "README.md"
@@ -195,6 +195,7 @@ markers = [
     "admin: marks tests for djust.admin_ext module",
     "theming: marks tests for djust.theming module",
     "components: marks tests for djust.components module",
+    "pr_tier: stays in the PR fast tier even when .test_durations records it over 1s (tests/slow_tier.py)",
     "nightly: marks exhaustive differential sweeps for scheduled nightly CI (deselect with '-m \"not nightly\"')",
 ]
 asyncio_mode = "auto"
@@ -1241,6 +1242,14 @@ constraint-dependencies = [
     "ujson>=5.12.0",
     "pyopenssl>=26.0.0",
     "pyasn1>=0.6.4",
+    # Lock-only workaround for CVE-2026-115877 / GHSA-q7qq-6mhp-9rc4 (HTTP
+    # request smuggling in twisted.web.http.HTTPChannel, which daphne serves
+    # through). Only 26.10.0rc1 is fixed so far. This constrains uv.lock, not
+    # djust's published metadata, so installers still resolve daphne's
+    # twisted[tls]>=22.4 to 26.4.0. When twisted 26.10.0 final is out, replace
+    # this with ">=26.10.0" (or drop it) and remove GHSA-8pqf-f4m5-798g and the
+    # CVE-2026-1157xx twisted entries from .github/security/pip-audit-ignore.txt.
+    "twisted>=26.10.0rc1",
 ]
 
 [tool.bandit.per_file_ignores]

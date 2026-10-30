@@ -15,7 +15,7 @@ from typing import Any, Awaitable, Callable, ContextManager, Deque, Dict, List, 
 from asgiref.sync import sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
 
-from ._view_hooks import call_hook, is_async_hook
+from ._view_hooks import call_async_result, call_hook, call_tick, is_async_hook
 from ._background_render import (
     BackgroundRender,
     _discard_baseline,
@@ -483,6 +483,18 @@ def _snapshot_assigns(view_instance: Any) -> Dict[str, Any]:
             # For other objects, just use id — reassignment is detected,
             # in-place mutation is not (same as Phoenix LiveView).
             snapshot[k] = vid
+    # Streams (#3639). ``_streams`` is a framework attribute, so the walk above
+    # skips it, and a handler whose ONLY effect was ``stream_insert`` /
+    # ``stream_delete`` / ``stream_prune`` / ``stream_reset`` changed nothing it
+    # could see: the turn was answered ``noop`` and the row waited for the next
+    # unrelated render. ``StreamsMixin`` bumps ``_stream_epoch`` on every
+    # mutation that changed a stream; one int per view is the whole cost, and a
+    # turn that touched no stream compares equal. Reported under the storage
+    # name ``_streams`` (like ``_state_count`` above); the rendered key is
+    # ``streams``, which ``_sync_state_to_rust`` finds by comparing contexts.
+    stream_epoch = getattr(view_instance, "_stream_epoch", 0)
+    if stream_epoch:
+        snapshot["_streams"] = stream_epoch
     return snapshot
 
 
@@ -626,7 +638,9 @@ def render_embedded_child_html(child_view: Any) -> str:
 
     legacy_child = uses_legacy_exposure(child_view)
     try:
-        context = child_view.get_context_data()
+        from .sync_turn import run_sync_step
+
+        context = run_sync_step(child_view, "render", child_view.get_context_data)
         if not legacy_child and "view" in context:
             raise ExposureError("Explicit child context contains a reserved name")
         from django.template import engines
@@ -1559,8 +1573,8 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                     # still gets its user callback — only the stale re-render is
                     # dropped.
                     if hasattr(view, "handle_async_result"):
-                        await sync_to_async(view.handle_async_result)(
-                            task_name, result=result, error=None
+                        await call_async_result(
+                            view, view.handle_async_result, task_name, result=result, error=None
                         )
 
                     # Identity re-check INSIDE the lock (#1940): the guard above ran
@@ -1676,8 +1690,8 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                         if not await self._authorize_explicit_consumer_turn(view):
                             return
                         if hasattr(view, "handle_async_result"):
-                            await sync_to_async(view.handle_async_result)(
-                                task_name, result=None, error=error
+                            await call_async_result(
+                                view, view.handle_async_result, task_name, result=None, error=error
                             )
 
                         # Identity re-check INSIDE the lock: the guard above ran
@@ -2363,6 +2377,8 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             return
 
         # Render + diff (mirrors the simpler arm of handle_event).
+        from .sync_turn import run_sync_step
+
         _gcd = view.get_context_data
         _skip_thread = inspect.iscoroutinefunction(_gcd) or getattr(view, "sync_safe", False)
         t0 = time.perf_counter()
@@ -2371,13 +2387,13 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                 if inspect.iscoroutinefunction(_gcd):
                     await _gcd()
                 else:
-                    _gcd()
+                    run_sync_step(view, "render", _gcd)
                 with profiler.profile(profiler.OP_RENDER):
                     html, patches, version = view.render_with_diff()
             else:
 
                 def _sync_context_and_render() -> Any:
-                    _gcd()
+                    run_sync_step(view, "render", _gcd)
                     with profiler.profile(profiler.OP_RENDER):
                         return view.render_with_diff()
 
@@ -4091,6 +4107,11 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                         "Could not clear template cache for %s: %s", engine.name, e
                     )
 
+        # The per-template render caches (JIT source, dj-model allowlist).
+        from ._render_caches import clear_render_caches
+
+        clear_render_caches()
+
         hotreload_logger.debug("Cleared %d template caches", caches_cleared)
         return caches_cleared
 
@@ -4197,7 +4218,11 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
 
                 # Get the new template content
                 try:
-                    new_template = await database_sync_to_async(self.view_instance.get_template)()
+                    from .sync_turn import sync_step
+
+                    new_template = await database_sync_to_async(
+                        sync_step(self.view_instance, "render", self.view_instance.get_template)
+                    )()
                 except TemplateDoesNotExist as e:
                     hotreload_logger.error("Template not found for hot reload: %s", e)
                     await self.send_json(
@@ -5151,11 +5176,13 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             views = [consumer.view_instance] if consumer is not None else []
         else:
             views = self._mounted_views()
+        from .sync_turn import sync_step
+
         for view in views:
             if not hasattr(view, "update_presence_heartbeat"):
                 continue
             try:
-                await sync_to_async(view.update_presence_heartbeat)()
+                await sync_to_async(sync_step(view, "hook", view.update_presence_heartbeat))()
             except Exception as e:
                 self._log_view_hook_failure(view, e, "Error updating presence heartbeat: %s", e)
 
@@ -5164,11 +5191,13 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         if not self.view_instance or not hasattr(self.view_instance, "handle_cursor_move"):
             return
 
+        from .sync_turn import sync_step
+
         view = self.view_instance
         try:
             x = data.get("x", 0)
             y = data.get("y", 0)
-            await sync_to_async(view.handle_cursor_move)(x, y)
+            await sync_to_async(sync_step(view, "hook", view.handle_cursor_move))(x, y)
         except Exception as e:
             self._log_view_hook_failure(view, e, "Error handling cursor move: %s", e)
 
@@ -6153,6 +6182,9 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                 def turn() -> Tuple[List[BaseException], bool, bool, Any, Any]:
                     from django.db import close_old_connections
 
+                    from ._view_hooks import _hook_step
+                    from .sync_turn import run_sync_step
+
                     close_old_connections()
                     failures: List[BaseException] = []
                     applied = render = False
@@ -6163,7 +6195,10 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                             hook = self._prepare_server_push(view, event)
                             if hook is not None:
                                 handler_fn, payload = hook
-                                handler_fn(**payload)
+                                # The stock turn reaches the handler through ``call_hook``
+                                # (a ``hook`` step); this one-hop turn must enter the same
+                                # step, or the handler runs without the wrapper (#3646).
+                                run_sync_step(view, _hook_step(handler_fn), handler_fn, **payload)
                         except Exception as exc:  # noqa: BLE001 - logged on the loop
                             failures.append(exc)
                             continue
@@ -6816,11 +6851,13 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             # which is the same: that sync only joins and leaves groups.
             offloaded: Optional[Tuple[bool, bool]] = None
             if offload_enabled():
+                from .sync_turn import run_sync_step
+
                 tick_view = self.view_instance
 
                 def tick_turn() -> Tuple[bool, bool, Optional[BaseException]]:
                     before = _snapshot_assigns(tick_view)
-                    tick_view.handle_tick()
+                    run_sync_step(tick_view, "tick", tick_view.handle_tick)
                     # handle_tick ran: a later failure is reported after the
                     # caller marks its queued work for dispatch, as in the
                     # stock path.
@@ -6842,7 +6879,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                 # Snapshot state before tick to detect changes
                 pre_assigns = _snapshot_assigns(self.view_instance)
 
-                await sync_to_async(self.view_instance.handle_tick)()
+                await call_tick(self.view_instance)
             # start_async work handle_tick queued runs once the lock is
             # released (#2955).
             dispatch_work = True

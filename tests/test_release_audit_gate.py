@@ -14,6 +14,9 @@ from __future__ import annotations
 
 import datetime as dt
 import importlib.util
+import json
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -111,6 +114,90 @@ class TestWorkflowWiring:
             s for s in steps if str(s.get("uses", "")).startswith("github/codeql-action/init")
         )
         assert init["with"]["config-file"] == ".github/codeql/codeql-config.yml"
+
+
+class TestBlockedAuditAlert:
+    """A blocked audit raises an alert instead of leaving an unpublished tag (#3482)."""
+
+    @staticmethod
+    def _job():
+        return _workflow("release.yml")["jobs"]["audit-blocked-alert"]
+
+    def test_job_runs_only_when_the_audit_failed(self):
+        job = self._job()
+        assert job["needs"] == ["security-audit"]
+        condition = job["if"].replace(" ", "")
+        assert "always()" in condition
+        assert "needs.security-audit.result=='failure'" in condition
+
+    def test_job_can_write_issues_and_read_the_run_jobs_only(self):
+        assert self._job()["permissions"] == {
+            "actions": "read",
+            "contents": "read",
+            "issues": "write",
+        }
+
+    def test_nothing_waits_on_the_alert(self):
+        # The alert must be a leaf: its failure can neither block nor
+        # release anything.
+        for name, job in _workflow("release.yml")["jobs"].items():
+            assert "audit-blocked-alert" not in job.get("needs", []), name
+
+    def test_tag_and_run_are_passed_through_env_not_interpolated(self):
+        job = self._job()
+        script = job["steps"][0]["with"]["script"]
+        assert "${{" not in script
+        assert job["env"]["TAG"] == "${{ github.ref_name }}"
+
+    @pytest.mark.skipif(shutil.which("node") is None, reason="needs node")
+    @pytest.mark.parametrize("existing", [False, True])
+    def test_script_opens_one_issue_then_comments_on_a_retry(self, tmp_path, existing):
+        script = self._job()["steps"][0]["with"]["script"]
+        harness = tmp_path / "run.js"
+        harness.write_text(
+            "const calls = [];\n"
+            "const title = 'Release v9.9.9 blocked by the pre-release security audit';\n"
+            f"const existing = {str(existing).lower()};\n"
+            "const github = {rest: {\n"
+            "  actions: {listJobsForWorkflowRun: async () => ({data: {jobs: [\n"
+            "    {name: 'Pre-release security audit / js-security', conclusion: 'failure', html_url: 'https://x/job/1'},\n"
+            "    {name: 'Build wheel', conclusion: 'failure', html_url: 'https://x/job/2'},\n"
+            "    {name: 'Pre-release security audit / rust-security', conclusion: 'success', html_url: 'https://x/job/3'},\n"
+            "  ]}})},\n"
+            "  issues: {\n"
+            "    listForRepo: async (a) => { calls.push(['list', a.labels, a.state]);\n"
+            "      return {data: existing ? [{number: 7, title}, {number: 8, title, pull_request: {}}] : []}; },\n"
+            "    create: async (a) => { calls.push(['create', a.title, a.labels, a.body]); return {data: {html_url: 'u'}}; },\n"
+            "    createComment: async (a) => { calls.push(['comment', a.issue_number, a.body]); },\n"
+            "  },\n"
+            "}};\n"
+            "const context = {repo: {owner: 'o', repo: 'r'}};\n"
+            "const core = {notice: () => {}};\n"
+            "process.env.TAG = 'v9.9.9'; process.env.RUN_ID = '42';\n"
+            "process.env.RUN_URL = 'https://github.com/o/r/actions/runs/42';\n"
+            "(async () => {\n" + script + "\n console.log(JSON.stringify(calls)); })()"
+            ".catch((e) => { console.error(e); process.exit(1); });\n"
+        )
+        out = subprocess.run(
+            ["node", str(harness)], capture_output=True, text=True, check=True, timeout=60
+        ).stdout
+        calls = json.loads(out.strip().splitlines()[-1])
+        assert calls[0] == ["list", "release", "open"]
+        action = calls[1]
+        if existing:
+            assert action[0] == "comment" and action[1] == 7, calls
+            body = action[2]
+        else:
+            assert action[0] == "create", calls
+            assert action[1] == "Release v9.9.9 blocked by the pre-release security audit"
+            assert action[2] == ["release"]
+            body = action[3]
+            assert "`v9.9.9`" in body
+        assert "https://github.com/o/r/actions/runs/42" in body
+        # Only the failed AUDIT job is listed, not other failures or passes.
+        assert "https://x/job/1" in body
+        assert "https://x/job/2" not in body and "https://x/job/3" not in body
+        assert len(calls) == 2
 
 
 class TestAllowlist:
