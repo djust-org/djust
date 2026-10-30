@@ -73,7 +73,7 @@ chrono-tz = "0.10"
 unicode-normalization = "0.1"
 
 # Actor system dependencies
-parking_lot = "0.12"  # Faster sync primitives
+parking_lot = "0.13"  # Faster sync primitives
 tracing = "0.1"  # Structured logging
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 pyo3-async-runtimes = { version = "0.29", features = ["tokio-runtime"] }  # PyO3 async bridge (matches pyo3 0.29)
