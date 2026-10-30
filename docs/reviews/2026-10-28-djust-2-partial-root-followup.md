@@ -206,3 +206,20 @@ must keep a stable root namespace and use full navigation for a change. This
 check uses the active baseline; it does not add namespace data to legacy cache
 snapshots or introduce a cross-document restoration protocol. The 36-case
 transaction, child-execution and layout safeguard selection passes.
+
+The first frozen full Django 6.1 run on `cf29d91d9` passed 49,731 and failed four.
+Two failures were strict call-site inventories: the core layout protocol adds
+five typed Python-error conversion sites and an eighth lazy-super context bridge.
+The inventories now account for those sites, and new behavioral tests verify
+that `NoReverseMatch` retains its type and lazy `block.super` remains usable
+through the core protocol. All 142 bridge checks pass.
+
+Read-only connection tracing reproduced further source-test leaks into the
+unchanged, database-blocked named-partial socket tests. A diagnostic isolation
+run identified the shared pattern in 557 scopes across 34 exposure modules.
+The root test harness now attaches ownership teardown only to asynchronous tests
+that already declare database access. It creates no loops for synchronous tests,
+grants no database access, and preserves preexisting handles. The normal run,
+without diagnostic plugins, passes all 1,479 exposure and guarded-socket cases.
+A boundary regression checks that unmarked async and synchronous DB tests remain
+outside this fixture. Full gates must cover the resulting final test commit.

@@ -124,3 +124,43 @@ def test_invalid_core_body_copy_plan_is_rejected(monkeypatch, broken):
     view.set_authenticated_partial_root(True)
     with pytest.raises(Exception, match="[Cc]ore layout"):
         view.prepare_authenticated_page()
+
+
+def test_core_layout_protocol_preserves_python_exception_type(monkeypatch):
+    from django.urls import NoReverseMatch
+    from djust.components.rust_handlers import AppContentHandler
+
+    def failure(self, args, content, context):
+        raise NoReverseMatch("layout reverse failure")
+
+    monkeypatch.setattr(AppContentHandler, "_render_root_parts", failure)
+    view = RustLiveView("{% app_content %}<main dj-root>body</main>{% endapp_content %}", [])
+    view.set_authenticated_partial_root(True)
+    with pytest.raises(NoReverseMatch, match="layout reverse failure"):
+        view.prepare_authenticated_page()
+
+
+def test_core_layout_bridge_keeps_lazy_super_snapshot_alive(tmp_path, monkeypatch):
+    from djust.components.rust_handlers import AppContentHandler
+
+    (tmp_path / "base.html").write_text(
+        "<section dj-root>{% block body %}PARENT{% endblock %}</section>"
+    )
+    (tmp_path / "child.html").write_text(
+        '{% extends "base.html" %}{% block body %}'
+        "{% if False %}{{ block.super }}{% endif %}"
+        "{% app_content %}CHILD{% endapp_content %}{% endblock %}"
+    )
+    original = AppContentHandler._render_root_parts
+    seen = []
+
+    def inspect_context(self, args, content, context):
+        seen.append(context["block"].super())
+        return original(self, args, content, context)
+
+    monkeypatch.setattr(AppContentHandler, "_render_root_parts", inspect_context)
+    view = RustLiveView('{% include "child.html" %}', [str(tmp_path)])
+    view.set_authenticated_partial_root(True)
+    html, _, _, _ = view.prepare_authenticated_page()
+    assert seen == ["PARENT"]
+    assert "CHILD" in html

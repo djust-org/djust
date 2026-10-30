@@ -2903,7 +2903,7 @@ fn bridged_context_map(context: &Context) -> Result<BridgedContextMap> {
 
 /// The flat map a bridged tag is called with, plus the [`LazyBlockGuard`] that
 /// ends the lazy `block`'s snapshot when this drops — after the call, on every
-/// path. Derefs to the map, so the seven callers pass `&context_map` as before.
+/// path. Derefs to the map, so callers pass `&context_map` as before.
 struct BridgedContextMap {
     map: std::collections::HashMap<String, Value>,
     _guard: Option<djust_core::LazyBlockGuard>,

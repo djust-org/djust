@@ -427,7 +427,9 @@ class TestStructuralPins:
         # The three `call_*_with_py_sidecar` functions (#2563), plus the two
         # lazy-body block phases (#2658) — `before_body` and `after_body` are
         # sidecar-shaped calls into a handler and cross the same way.
-        assert src.count(".map_err(handler_exception)") == 5
+        # The core-layout bridge adds five typed-error sites: its two exact-
+        # handler checks, body SafeString conversion, protocol call and extraction.
+        assert src.count(".map_err(handler_exception)") == 10
         assert "DjangoRustError::PythonException(err)" in src
 
     def test_renderer_routes_all_sidecar_sites_through_one_mapping(self):
