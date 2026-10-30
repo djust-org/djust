@@ -144,7 +144,7 @@ class ComponentMixin:
                 # +2: warnings.warn -> warn_deprecated -> this frame.
                 warn_deprecated(
                     base.__name__,
-                    since="1.4",
+                    since="1.3",
                     removed_in="2.0.0",
                     instead=replacement,
                     stacklevel=2 + _frames_to_caller(),

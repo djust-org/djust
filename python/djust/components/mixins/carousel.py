@@ -1,7 +1,7 @@
 """
 CarouselMixin — carousel/slideshow state management for djust LiveViews.
 
-.. deprecated:: 1.4
+.. deprecated:: 1.3
     Use the descriptor-based ``Carousel`` component from
     ``djust.components.descriptors`` instead (DEP-002; removed in djust 2.0.0)::
 
@@ -38,7 +38,7 @@ class CarouselState(TypedState):
 class CarouselMixin(ComponentMixin):
     """Mixin adding carousel state management and event handlers.
 
-    .. deprecated:: 1.4
+    .. deprecated:: 1.3
         Use ``djust.components.descriptors.Carousel`` instead. Removed in djust 2.0.0.
     """
 

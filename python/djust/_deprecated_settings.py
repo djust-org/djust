@@ -74,7 +74,7 @@ def warn_deprecated_settings() -> None:
     from django.conf import settings
 
     for what, instead in deprecated_settings_in_use(settings):
-        warn_deprecated(what, since="1.4", removed_in="2.0.0", instead=instead, stacklevel=2)
+        warn_deprecated(what, since="1.3", removed_in="2.0.0", instead=instead, stacklevel=2)
         if what.startswith("TEMPLATES["):
             # Django imports the shim when it builds this backend; the import
             # would warn about the same cause a second time.

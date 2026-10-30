@@ -8,7 +8,7 @@ from ._deprecation import warn_deprecated
 # would blame this file.
 warn_deprecated(
     "djust.state_backend",
-    since="1.4",
+    since="1.3",
     removed_in="2.0.0",
     instead="djust.state_backends",
     stacklevel=3,

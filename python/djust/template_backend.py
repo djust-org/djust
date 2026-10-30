@@ -14,7 +14,7 @@ from ._deprecation import is_announced, warn_deprecated
 if not is_announced("djust.template_backend"):
     warn_deprecated(
         "djust.template_backend",
-        since="1.4",
+        since="1.3",
         removed_in="2.0.0",
         instead="djust.template (in TEMPLATES: 'djust.template.backend.DjustTemplateBackend')",
         stacklevel=3,

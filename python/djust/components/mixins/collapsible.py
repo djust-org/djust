@@ -1,7 +1,7 @@
 """
 CollapsibleMixin — collapsible section state management for djust LiveViews.
 
-.. deprecated:: 1.4
+.. deprecated:: 1.3
     Use the descriptor-based ``Collapsible`` component from
     ``djust.components.descriptors`` instead (DEP-002; removed in djust 2.0.0)::
 
@@ -37,7 +37,7 @@ class CollapsibleState(TypedState):
 class CollapsibleMixin(ComponentMixin):
     """Mixin adding collapsible section state management and event handlers.
 
-    .. deprecated:: 1.4
+    .. deprecated:: 1.3
         Use ``djust.components.descriptors.Collapsible`` instead. Removed in djust 2.0.0.
     """
 

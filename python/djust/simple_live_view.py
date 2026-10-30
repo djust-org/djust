@@ -199,7 +199,7 @@ def __getattr__(name: str) -> Any:  # PEP 562
     ``SimpleLiveView`` — the old name shadows ``djust.LiveView``, which is a
     different class with a different lifecycle.
 
-    .. deprecated:: 1.4
+    .. deprecated:: 1.3
         Use ``djust.simple_live_view.SimpleLiveView``. Removed in djust 2.0.0.
     """
     if name == "LiveView":
@@ -207,7 +207,7 @@ def __getattr__(name: str) -> Any:  # PEP 562
 
         warn_deprecated(
             "djust.simple_live_view.LiveView",
-            since="1.4",
+            since="1.3",
             removed_in="2.0.0",
             instead="djust.simple_live_view.SimpleLiveView",
             stacklevel=3,

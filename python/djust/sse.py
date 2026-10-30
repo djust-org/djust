@@ -1592,7 +1592,7 @@ class DjustSSEEventView(View):
     """
     POST endpoint for client → server events over the SSE transport.
 
-    .. deprecated:: 1.4
+    .. deprecated:: 1.3
         The shipped client posts ``{"type": "event", ...}`` to
         ``sse/<session_id>/message/`` instead. Removed in djust 2.0.0; each POST
         to this endpoint emits a ``DeprecationWarning``.
@@ -1629,7 +1629,7 @@ class DjustSSEEventView(View):
 
         warn_deprecated(
             "The SSE /event/ endpoint (djust.sse.DjustSSEEventView)",
-            since="1.4",
+            since="1.3",
             removed_in="2.0.0",
             instead='a {"type": "event", ...} POST to sse/<session_id>/message/',
             stacklevel=2,

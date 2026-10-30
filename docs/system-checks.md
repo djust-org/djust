@@ -81,7 +81,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | T023 | Templates | Info | T019-T022 were skipped: no usable template engine (none configured, or it could not be built) |
 | T024 | Templates | Warning | A template an owner renders reads `is_staff`, `is_superuser` or `password` through a `user` variable; djust never serializes them |
 | T025 | Templates | Warning | `dj-view` / `dj-root` on `<html>` or `<head>`: unsupported and ignored, no live view is mounted and the page stays a plain HTTP page (`<body>` is a supported root) |
-| T027 | Templates | Warning | A JSX-style `<RustButton … />` (any `<Rust…/>`) component tag: deprecated in 1.4, a template error in 2.0.0 |
+| T027 | Templates | Warning | A JSX-style `<RustButton … />` (any `<Rust…/>`) component tag: deprecated in 1.3, a template error in 2.0.0 |
 | Q001 | Quality | Info | print() statement found |
 | Q002 | Quality | Warning | f-string in logger call |
 | Q003 | Quality | Info | console.log without djustDebug guard |

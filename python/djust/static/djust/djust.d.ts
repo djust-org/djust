@@ -711,7 +711,7 @@ interface Djust {
    *
    * @deprecated djust assigns nothing here: the `accessibility` and `focus`
    * frames only reach an object your own script defines. The server-side hooks
-   * that send them are deprecated since 1.4 and removed in 2.0.0. Use a
+   * that send them are deprecated since 1.3 and removed in 2.0.0. Use a
    * `role="status"` live region and `JS.focus()` through `push_commands()`.
    */
   accessibility?: {

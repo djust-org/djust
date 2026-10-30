@@ -63,7 +63,7 @@ class TestTheWarning:
         assert len(warned) == 1, [str(w.message) for w in warned]
         text = str(warned[0].message)
         assert hook in text
-        assert "deprecated since djust 1.4" in text
+        assert "deprecated since djust 1.3" in text
         assert "no earlier than 2.0.0" in text
         # The migration path is named, and the text stays short.
         if hook == "_drain_focus":

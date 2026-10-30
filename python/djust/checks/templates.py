@@ -500,7 +500,7 @@ _DEPRECATED_DATA_DJ_ID_RE = re.compile(r"""data-dj-id\s*=\s*["'][^"']*["']""")
 # so legitimate sibling attributes (`data-djust-embedded`, `data-djust-activity`,
 # `data-djust-view-model`, `data-djust-rooted`, ...) never false-match.
 _LEGACY_ROOT_ATTR_RE = re.compile(r"data-djust-(root|view)(?![\w-])")
-# T027 (1.4 deprecation) -- a JSX-style ``<RustButton ... />`` component tag. The
+# T027 (1.3 deprecations) -- a JSX-style ``<RustButton ... />`` component tag. The
 # tag renders through a Rust component path djust 2.0 removes; rendering one
 # warns at runtime, and this finds it before the page is requested. The
 # lookahead keeps ``<RustyThing>`` and ``<Rust>`` out: the name is ``Rust`` plus
@@ -966,7 +966,7 @@ def check_templates(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
         # T015 -- legacy data-djust-root / data-djust-view root attributes
         _check_legacy_root_attrs(content, relpath, filepath, errors)
 
-        # T027 -- JSX-style <Rust.../> component tags (deprecated in 1.4)
+        # T027 -- JSX-style <Rust.../> component tags (deprecated in 1.3)
         _check_rust_jsx_tags(content, relpath, filepath, errors)
 
         # T017 -- dj-view / dj-root on a table-section element (#1837)
@@ -1653,7 +1653,7 @@ def _check_legacy_root_attrs(
 def _check_rust_jsx_tags(
     content: str, relpath: str, filepath: str, errors: list[CheckMessage]
 ) -> None:
-    """T027: Detect a JSX-style ``<Rust.../>`` component tag (deprecated in 1.4).
+    """T027: Detect a JSX-style ``<Rust.../>`` component tag (deprecated in 1.3).
 
     Template syntax cannot emit a Python warning at import, so API_STABILITY's
     policy asks for a system check beside the runtime ``DeprecationWarning``

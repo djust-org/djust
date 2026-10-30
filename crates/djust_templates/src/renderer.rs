@@ -4447,7 +4447,7 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
 
         #[cfg(feature = "liveview")]
         Node::RustComponent { name, props } => {
-            // Deprecated in 1.4, removed in 2.0.0: warn, then render as before.
+            // Deprecated in 1.3, removed in 2.0.0: warn, then render as before.
             warn_rust_component_tag(name)?;
             render_rust_component(name, props, context).map(R::from)
         }
@@ -5000,7 +5000,7 @@ fn warn_rust_component_tag(name: &str) -> Result<()> {
             return Ok(());
         };
         let kwargs = pyo3::types::PyDict::new(py);
-        kwargs.set_item("since", "1.4")?;
+        kwargs.set_item("since", "1.3")?;
         kwargs.set_item("removed_in", "2.0.0")?;
         kwargs.set_item("instead", "a djust.components.ui component")?;
         module.getattr("warn_deprecated")?.call(

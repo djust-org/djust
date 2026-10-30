@@ -669,7 +669,7 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
         Multiple concurrent tasks are supported with named tasks. Phoenix LiveView users
         will find this API familiar.
 
-    .. deprecated:: 1.4
+    .. deprecated:: 1.3
         Defining ``_drain_announcements`` or ``_drain_focus`` on a subclass is
         deprecated and the WebSocket/SSE flush that drains them is removed no
         earlier than djust 2.0.0. Render a ``role="status"`` live region and
@@ -945,7 +945,7 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
             ):
                 warn_deprecated(
                     "Defining %s on a LiveView" % hook,
-                    since="1.4",
+                    since="1.3",
                     removed_in="2.0.0",
                     instead=_DEPRECATED_ACCESSIBILITY_HOOKS[hook],
                     stacklevel=class_statement_stacklevel(),

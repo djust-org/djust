@@ -102,7 +102,7 @@ ALLOWLIST_BACKEND_SHIM = ALLOWLIST_BACKEND | {"djust.template_backend", "djust._
 # and installs the ``{% load %}`` hooks. Exact, like the rows above.
 ALLOWLIST_SETUP = ALLOWLIST_BACKEND | frozenset(
     {
-        "djust._deprecated_settings",  # 1.4 startup warnings for 2.0 removals
+        "djust._deprecated_settings",  # 1.3 startup warnings for 2.0 removals
         "djust._deprecation",
         "djust.apps",
         "djust.assets",  # ADR-040 asset registry (setting_changed receiver)
