@@ -539,6 +539,9 @@ jobs:
           uv venv --python 3.14t
           source .venv/bin/activate
           # uvicorn + websockets: the multi-loop launcher tests (#3128).
+          # No daphne here on purpose: djust's base install does not pull it
+          # (tests/test_base_dependencies_no_daphne.py), and the next step
+          # imports djust on exactly that base install. It is added after.
           uv pip install maturin pytest pytest-asyncio pytest-django django-allauth uvicorn websockets
           maturin develop --release
 
@@ -549,7 +552,15 @@ jobs:
           # `#[pymodule(gil_used = false)]` and of every extension djust's
           # core imports pull in. orjson must be absent: it has no
           # free-threaded build and djust must not need it.
-          python -c "import importlib.util, sys, django; import djust, djust._rust, djust.websocket, djust.live_view; assert importlib.util.find_spec('orjson') is None, 'orjson installed'; assert not sys._is_gil_enabled(), 'importing djust re-enabled the GIL'; print('GIL off after importing djust')"
+          python -c "import importlib.util, sys, django; import djust, djust._rust, djust.websocket, djust.live_view; assert importlib.util.find_spec('orjson') is None, 'orjson installed'; assert importlib.util.find_spec('daphne') is None, 'daphne installed: this step must import djust on a base install'; assert not sys._is_gil_enabled(), 'importing djust re-enabled the GIL'; print('GIL off after importing djust')"
+
+      # `channels.testing` (WebsocketCommunicator in the subset below) imports
+      # `daphne.testing`, and djust's base install no longer includes daphne.
+      # Installed only now, so the import check above ran without it.
+      - name: Install daphne for the tests' channels.testing import
+        run: |
+          source .venv/bin/activate
+          uv pip install "channels[daphne]>=4.0.0,<5"
 
       - name: Free-threaded core subset (GIL off, asserted)
         env:

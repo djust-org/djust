@@ -8,6 +8,30 @@
 // Create djust namespace at the top to ensure it's available for all exports
 window.djust = window.djust || {};
 
+/**
+ * Publish a deprecated window global that warns once, on first read, that
+ * djust 2.0.0 removes it. Assigning it replaces the alias with a plain value.
+ */
+function defineDeprecatedGlobal(name, value, replacement) {
+    let warned = false;
+    Object.defineProperty(window, name, {
+        configurable: true,
+        enumerable: true,
+        get() {
+            if (!warned) {
+                warned = true;
+                console.warn(`[LiveView] window.${name} is deprecated and removed in djust 2.0.0. Use ${replacement} instead.`);
+            }
+            return value;
+        },
+        set(newValue) {
+            Object.defineProperty(window, name, {
+                value: newValue, writable: true, configurable: true, enumerable: true,
+            });
+        },
+    });
+}
+
 // ============================================================================
 // API prefix resolution (#987) — FORCE_SCRIPT_NAME / sub-path mount support
 // ============================================================================
@@ -2874,8 +2898,8 @@ window.djust._runInsertedScripts = _runInsertedScripts;
 // #2058: exposed so every insertion path (and tests) can warn about a
 // classic <script> a morph/patch left dead.
 window.djust._warnDeadScripts = _warnDeadScripts;
-// Backward compatibility
-window.LiveViewWebSocket = LiveViewWebSocket;
+// Backward compatibility (removed in 2.0.0)
+defineDeprecatedGlobal('LiveViewWebSocket', LiveViewWebSocket, 'window.djust.LiveViewWebSocket');
 
 // Global WebSocket instance.
 // `let` (NOT const) — 14-init.js reassigns this when switching transports
@@ -3896,8 +3920,8 @@ function setCacheConfig(config) {
 
 // Expose setCacheConfig under djust namespace
 window.djust.setCacheConfig = setCacheConfig;
-// Backward compatibility
-window.setCacheConfig = setCacheConfig;
+// Backward compatibility (removed in 2.0.0)
+defineDeprecatedGlobal('setCacheConfig', setCacheConfig, 'window.djust.setCacheConfig');
 
 /**
  * Build a cache key from event name and parameters.
@@ -5019,6 +5043,9 @@ window.djust.initReactCounters = initReactCounters;
  * @param {HTMLElement} element - Element to extract params from
  * @returns {Object} - Parameters with coerced types
  */
+// dj-params warns once per page (removed in 2.0.0).
+let _djParamsWarned = false;
+
 function extractTypedParams(element) {
     const params = Object.create(null); // null prototype prevents prototype-pollution
 
@@ -5138,11 +5165,11 @@ function extractTypedParams(element) {
     // data-* attributes take precedence over dj-params keys.
     const djParamsAttr = element.getAttribute('dj-params');
     if (djParamsAttr !== null) {
-        if (globalThis.djustDebug) {
+        if (!_djParamsWarned) {
+            _djParamsWarned = true;
             console.warn(
-                '[LiveView] dj-params is deprecated and will be removed in a future release. ' +
-                'Replace with individual data-* attributes, e.g. data-todo-id:int="{{ todo.id }}". ' +
-                'See the 0.3.2 → 0.3.6 migration guide in CHANGELOG.md.'
+                '[LiveView] dj-params is deprecated and removed in djust 2.0.0. ' +
+                'Use dj-value-* attributes instead, e.g. dj-value-todo-id="{{ todo.id }}".'
             );
         }
         if (djParamsAttr !== '') {
@@ -8417,8 +8444,8 @@ const globalLoadingManager = {
 
 // Expose globalLoadingManager under djust namespace
 window.djust.globalLoadingManager = globalLoadingManager;
-// Backward compatibility
-window.globalLoadingManager = globalLoadingManager;
+// Backward compatibility (removed in 2.0.0)
+defineDeprecatedGlobal('globalLoadingManager', globalLoadingManager, 'window.djust.globalLoadingManager');
 
 // Generate unique request ID for cache tracking
 let cacheRequestCounter = 0;
@@ -20489,18 +20516,29 @@ globalThis.djust.djTrackStatic = {
 //     stylesheets or scripts, add them to the original layout's <head>.
 //   - Dispatches djust:layout-changed on document for app-level hooks.
 
+// The pre-1.0 [data-djust-root] marker warns once per page (removed in 2.0.0).
+let _legacyRootWarned = false;
+
 function _findRoot(scope) {
     // Sticky LiveViews (Phase B): exclude [dj-sticky-root] wrappers so
     // a sticky child embedded via {% live_render ... sticky=True %}
     // does not masquerade as the layout root. Sticky subtrees carry
     // [dj-sticky-root] on their outermost [dj-view]; the parent view's
     // [dj-root] is always outside of them.
-    return (
+    const root = (
         scope.querySelector('[data-djust-root]:not([dj-sticky-root])')
         || scope.querySelector('[dj-root]:not([dj-sticky-root])')
         || scope.querySelector('[data-djust-root]')
         || scope.querySelector('[dj-root]')
     );
+    if (root && !_legacyRootWarned && root.hasAttribute('data-djust-root') && !root.hasAttribute('dj-root')) {
+        _legacyRootWarned = true;
+        console.warn(
+            '[djust:layout] The data-djust-root marker is deprecated and removed in djust 2.0.0. ' +
+            'Use dj-root instead.'
+        );
+    }
+    return root;
 }
 
 function _applyLayout(payload) {

@@ -230,7 +230,11 @@ carve-out floor of `>= 1.1.0`; the rest carry the standard floor of `2.0.0`.
 | `StreamingMixin.stream_insert` / `stream_delete` (the async pair, reachable on a `LiveView` only as `StreamingMixin.stream_insert(self, ...)`) | 1.4 | **2.0.0** | `await self.astream_insert(...)` / `await self.astream_delete(...)` |
 | `DjustSSEEventView` (the SSE `sse/<id>/event/` endpoint) | 1.4 | **2.0.0** | `{"type": "event", ...}` posted to `sse/<id>/message/` |
 | Dict-style reads of `block` in a Python-bridged tag (`block["super"]`, `block.get("super")`, `block.values()`, `block.items()`, `dict(block)`) | 1.3 | **2.0.0** | `context["block"].super()` |
+| JSX-style Rust component template tags (`<RustButton …/>`, `<RustInput …/>` and the other `<Rust…/>` tags) | 1.4 | **2.0.0** | a `djust.components.ui` component |
 | Defining `_drain_announcements` or `_drain_focus` on a `LiveView` (duck-typed accessibility hooks the WebSocket and SSE transports drain; nothing in djust defines them) | 1.4 | **2.0.0** | A `role="status"` live region the view renders, and `JS.focus()` through `push_commands()` |
+| Client: the `dj-params` JSON attribute (warns once per page in the browser console) | 1.4 | **2.0.0** | `dj-value-*` attributes |
+| Client: the `data-djust-root` marker in a `dj-layout` swap (warns once per page) | 1.4 | **2.0.0** | `dj-root` |
+| Client: `window.LiveViewWebSocket`, `window.setCacheConfig`, `window.globalLoadingManager` (each warns once, on first read) | 1.4 | **2.0.0** | `window.djust.LiveViewWebSocket`, `window.djust.setCacheConfig`, `window.djust.globalLoadingManager` |
 
 Deprecated **settings** warn once at startup, from `DjustConfig.ready()`
 (`python/djust/_deprecated_settings.py`); djust 2.0 refuses to start while one is set:
@@ -305,6 +309,24 @@ theme = get_theme("dark")
 from djust.theming.theme_packs import get_design_system
 
 theme = get_design_system("dark")
+```
+
+### JSX-style `<Rust…/>` template tags → `djust.components.ui`
+
+A template tag such as `<RustButton id="save" label="Save" />` renders through a
+Rust component path that djust 2.0.0 removes. Each render of one emits a
+`DeprecationWarning` (deprecated since 1.4, removed no earlier than 2.0.0). In
+2.0 the tag is a template error. Render the matching `djust.components.ui`
+component instead:
+
+```python
+# Before (template)
+# <RustButton id="save" label="Save" variant="primary" />
+
+# After (view)
+from djust.components.ui import Button
+
+save_button = Button("Save", variant="primary")  # template: {{ save_button }}
 ```
 
 ### Dict-style `block.super` reads in a bridged tag → `block.super()`

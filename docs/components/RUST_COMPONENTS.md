@@ -18,6 +18,11 @@ benchmarked. Interactive behavior is bound by LiveView template attributes.
 > target API that is not currently exposed to Python; treat their snippets as
 > design examples, not runnable code.
 
+> **Deprecated:** the JSX-style `<RustButton />`-style template tags used in the
+> template examples below are deprecated since djust 1.4 and removed in 2.0.0.
+> Rendering one emits a `DeprecationWarning`. See
+> [API_STABILITY.md](../API_STABILITY.md#currently-deprecated-symbols).
+
 ## Architecture
 
 ```

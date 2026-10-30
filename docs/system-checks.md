@@ -154,6 +154,7 @@ console.log("debug info"); // noqa: Q003
 - **What it detects**: `daphne` is not listed before `django.contrib.staticfiles` in `INSTALLED_APPS`
 - **Suppression**: `SILENCED_SYSTEM_CHECKS = ["djust.C003"]`
 - **False positives**: Projects not using daphne as the ASGI server (e.g. uvicorn)
+- **Note**: djust does not install daphne; projects that use it install `djust[daphne]`
 
 ### C004 — 'djust' not in INSTALLED_APPS
 - **Severity**: Error

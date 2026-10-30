@@ -246,6 +246,9 @@ window.djust.initReactCounters = initReactCounters;
  * @param {HTMLElement} element - Element to extract params from
  * @returns {Object} - Parameters with coerced types
  */
+// dj-params warns once per page (removed in 2.0.0).
+let _djParamsWarned = false;
+
 function extractTypedParams(element) {
     const params = Object.create(null); // null prototype prevents prototype-pollution
 
@@ -365,11 +368,11 @@ function extractTypedParams(element) {
     // data-* attributes take precedence over dj-params keys.
     const djParamsAttr = element.getAttribute('dj-params');
     if (djParamsAttr !== null) {
-        if (globalThis.djustDebug) {
+        if (!_djParamsWarned) {
+            _djParamsWarned = true;
             console.warn(
-                '[LiveView] dj-params is deprecated and will be removed in a future release. ' +
-                'Replace with individual data-* attributes, e.g. data-todo-id:int="{{ todo.id }}". ' +
-                'See the 0.3.2 → 0.3.6 migration guide in CHANGELOG.md.'
+                '[LiveView] dj-params is deprecated and removed in djust 2.0.0. ' +
+                'Use dj-value-* attributes instead, e.g. dj-value-todo-id="{{ todo.id }}".'
             );
         }
         if (djParamsAttr !== '') {
