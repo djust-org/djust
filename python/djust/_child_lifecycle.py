@@ -1,5 +1,6 @@
 """Owned-subtree disposal for the gated explicit lifecycle."""
 
+import asyncio
 import inspect
 import logging
 import weakref
@@ -15,6 +16,26 @@ logger = logging.getLogger(__name__)
 #: Set on a root view when it reaches the connected phase of its live mount;
 #: popped by whoever runs ``disconnected()``, so the hook runs at most once.
 _CONNECTED_FLAG = "_djust_connected_phase"
+
+
+def call_teardown_hook(owner: Any, hook: Callable[[], Any]) -> Any:
+    """Call one application teardown hook of ``owner``: ``_cleanup_uploads``,
+    ``_cleanup_on_unregister`` or ``_on_sticky_unmount`` (#3646).
+
+    Every place a view or child is torn down calls its hooks through here, so a
+    hook that reads the database gets the ``sync_turn_wrapper`` scope wherever the
+    teardown runs on a worker thread: SSE navigation and the release of a view
+    mounted beside the page (``sync_to_async(release_root_view)``), SSE
+    ``shutdown()`` reached through ``abandon()`` / ``response.close()``, and a
+    WebSocket ``live_redirect`` discarding a sticky child whose auth now fails
+    (``_preserve_sticky_children`` runs on a worker thread). On the event loop
+    (the WebSocket release, the SSE stream's own close) the hook runs as before,
+    unwrapped: a wrapper that opens a transaction would raise there
+    (:func:`djust.sync_turn.run_teardown_step`).
+    """
+    from .sync_turn import run_teardown_step
+
+    return run_teardown_step(owner, "lifecycle", hook)
 
 
 def dispose_child_subtree(child: Any, *, navigation: bool = False) -> None:
@@ -82,7 +103,7 @@ def dispose_child_subtree(child: Any, *, navigation: bool = False) -> None:
             try:
                 hook = getattr(current, name, None)
                 if callable(hook):
-                    hook()
+                    call_teardown_hook(current, hook)
             except Exception:  # noqa: BLE001
                 logger.error("Child lifecycle cleanup failed")
 
@@ -166,7 +187,7 @@ def discard_sticky_child(child: Any, *, navigation: bool = True) -> None:
         hook = getattr(child, name, None)
         if callable(hook):
             try:
-                hook()
+                call_teardown_hook(child, hook)
             except Exception:  # noqa: BLE001 — legacy child only; cleanup must not raise
                 logger.exception("sticky child %s raised", name)
 
@@ -186,7 +207,10 @@ def untrack_view_presence(view: Any) -> None:
     if not callable(untrack):
         return
     try:
-        untrack()
+        from .sync_turn import run_sync_step
+
+        # ``untrack_presence`` reads ``get_presence_key()``: a ``"hook"`` step (#3637).
+        run_sync_step(view, "hook", untrack)
     except Exception as exc:  # noqa: BLE001 — application hooks run inside
         from ._exposure_diagnostics import log_failure_for
 
@@ -278,7 +302,13 @@ def begin_live_connection(view: Any) -> Optional[Callable[[], Any]]:
     if not any(_defines_hook(view, name) for name in _HOOK_NAMES):
         return None
     view.__dict__[_CONNECTED_FLAG] = True
-    return _lifecycle_hook(view, "connected")
+    hook = _lifecycle_hook(view, "connected")
+    if hook is None:
+        return None
+    from .sync_turn import sync_step
+
+    # A ``"lifecycle"`` step of the sync-turn wrapper (#3637).
+    return sync_step(view, "lifecycle", hook)
 
 
 def run_view_disconnected(view: Any) -> None:
@@ -299,8 +329,10 @@ def run_view_disconnected(view: Any) -> None:
     from .runtime import _tenant_context
 
     try:
+        from .sync_turn import run_sync_step
+
         with _tenant_context(getattr(view, "_tenant", None)):
-            hook()
+            run_sync_step(view, "lifecycle", hook)
     except Exception as exc:  # noqa: BLE001 — application hook; teardown must go on
         from ._exposure_diagnostics import log_failure_for
 
@@ -319,7 +351,9 @@ async def fire_view_disconnected(view: Any) -> None:
     await sync_to_async(run_view_disconnected)(view)
 
 
-def release_root_view(view: Any, *, navigation: bool, reason: str) -> None:
+def release_root_view(
+    view: Any, *, navigation: bool, reason: str, clear_live_handles: bool = True
+) -> None:
     """Tear down a root view its transport discards (#3244, #3245).
 
     The one view teardown shared by every place a transport lets go of its
@@ -337,7 +371,9 @@ def release_root_view(view: Any, *, navigation: bool, reason: str) -> None:
       refused, #3236), and every embedded child still registered is
       unregistered (``_unregister_child``: a legacy child's waiters are closed
       and its ``_cleanup_on_unregister`` runs; an explicit child is disposed).
-      Its other background work runs to completion, as it always has; the
+      Its other background work runs to completion, as it always has
+      (#3234), unless the view sets ``cancel_async_on_disconnect = True``:
+      then a close (``reason="view_disconnect"``) cancels it. Either way the
       transport drops the view, so a late result is discarded.
     * Either way its Rust live handles are dropped (``_clear_live_handles``,
       #2539): the handles hold application objects, which the GC cannot see.
@@ -354,10 +390,21 @@ def release_root_view(view: Any, *, navigation: bool, reason: str) -> None:
     else:
         if hasattr(view, "_cleanup_uploads"):
             try:
-                view._cleanup_uploads()
+                call_teardown_hook(view, view._cleanup_uploads)
             except Exception:  # noqa: BLE001
                 logger.warning("Cleaning up a released legacy view's uploads failed")
         _close_view_waiters(view, reason)
+        if (
+            reason == "view_disconnect"
+            and getattr(view, "cancel_async_on_disconnect", False) is True
+        ):
+            from .mixins.async_work import AsyncWorkMixin
+
+            if isinstance(view, AsyncWorkMixin):
+                try:
+                    view.cancel_async_all()
+                except Exception:  # noqa: BLE001
+                    logger.warning("Cancelling a released legacy view's background work failed")
         registry = getattr(view, "_child_views", None)
         unregister = getattr(view, "_unregister_child", None)
         if type(registry) is dict and callable(unregister):
@@ -366,4 +413,29 @@ def release_root_view(view: Any, *, navigation: bool, reason: str) -> None:
                     unregister(view_id)
                 except Exception:  # noqa: BLE001
                     logger.warning("Unregistering a released legacy view's child failed")
-    _clear_live_handles(view)
+    if clear_live_handles:
+        _clear_live_handles(view)
+
+
+async def arelease_root_view(view: Any, *, navigation: bool, reason: str) -> None:
+    """:func:`release_root_view` for a transport on the event loop.
+
+    The live handles are dropped on the view's sync thread rather than on
+    the loop: ``clear_live_handles`` borrows the Rust view mutably, and a
+    render of the view may still be running on that thread (a tick, a
+    deferred push or a background result queued before the release; a
+    cancelled coroutine does not stop its thread). On the loop the two
+    collided as ``Already borrowed`` and the handles stayed; as a hop on the
+    same thread the clear runs after that render. The rest of the release
+    stays on the loop, where the waiters and tasks it cancels live.
+    """
+    from .websocket import _clear_live_handles
+
+    release_root_view(view, navigation=navigation, reason=reason, clear_live_handles=False)
+    try:
+        await sync_to_async(_clear_live_handles)(view)
+    except asyncio.CancelledError:
+        # Cancelled again while waiting for the thread: drop the handles here
+        # rather than not at all.
+        _clear_live_handles(view)
+        raise

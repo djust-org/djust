@@ -22,6 +22,7 @@ pytest_plugins = [
     "pytester",  # pytest's plugin-testing fixture, for tests/test_lost_items_guard.py
     "tests.lost_items_guard",  # #2746: a run that loses collected items goes red
     "tests.corpus_shards",  # share the full differential sweep within one CI shard
+    "tests.slow_tier",  # mark tests > 1s in .test_durations `slow` (fast tier: -m "not slow")
 ]
 
 
@@ -44,6 +45,29 @@ def _load_tolerant_ws_communicator_defaults():
     finally:
         for method, defaults in zip(methods, original):
             method.__defaults__ = defaults
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _accept_communicators_without_origin():
+    """Let header-less Channels communicators connect.
+
+    djust refuses a WebSocket handshake with no ``Origin`` unless
+    ``DJUST_ALLOW_MISSING_ORIGIN`` is True, and most consumer tests build a
+    ``WebsocketCommunicator`` without headers. The Origin tests remove the
+    setting to run against the shipped default.
+    """
+    try:
+        from django.conf import settings
+
+        settings.DJUST_ALLOW_MISSING_ORIGIN = True
+    except Exception:  # noqa: BLE001 — Django not configured: nothing to set
+        yield
+        return
+    yield
+    try:
+        del settings.DJUST_ALLOW_MISSING_ORIGIN
+    except AttributeError:
+        pass
 
 
 def pytest_sessionstart(session):
@@ -76,6 +100,22 @@ def _isolate_system_check_registry():
     from tests.check_registry import isolated_check_registry
 
     with isolated_check_registry():
+        yield
+
+
+@pytest.fixture(autouse=True)
+def _isolate_current_tenant():
+    """Unbind djust's current tenant around every test (`tests/tenant_isolation.py`).
+
+    A sync test that bound tenant 42 and never reset it made
+    `tests/unit/test_server_push.py::TestPushToView::test_push_state` fail
+    with an extra `tenant_scope` when both ran on the same xdist worker.
+    Does nothing, and imports nothing, unless `djust.tenants.middleware` is
+    already loaded.
+    """
+    from tests.tenant_isolation import isolated_current_tenant
+
+    with isolated_current_tenant():
         yield
 
 

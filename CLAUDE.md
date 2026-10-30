@@ -69,7 +69,7 @@ djust/
 │   ├── templatetags/       # Django template tags
 │   ├── tenants/            # Multi-tenant support
 │   ├── backends/           # Presence backends (memory, redis)
-│   └── static/djust/       # Client JS — shipped client.min.js.gz is ~77 KB
+│   └── static/djust/       # Client JS — shipped client.min.js.gz is ~80 KB
 ├── crates/
 │   ├── djust_live/         # PyO3 bindings — the entry point
 │   │                       #   (pyproject `manifest-path`; module `djust._rust`)
@@ -104,10 +104,10 @@ djust/
   `python/djust/static/djust/client-sizes.json` by `scripts/build-client.sh`
   and enforced by `scripts/check-doc-snippets.py` against the artifact each
   line names — run `make sizes` to print the current values (#2138).
-  - **Shipped**: `client.min.js.gz` is **~77 KB** gz — what a user downloads,
+  - **Shipped**: `client.min.js.gz` is **~80 KB** gz — what a user downloads,
     and the only figure that constrains anything.
-  - **Build input**: unminified `client.js` is ~258 KB gz <!-- size-claim: unminified -->
-    across 57 modules in `static/djust/src/`. Not a deliverable; do not quote
+  - **Build input**: unminified `client.js` is ~270 KB gz <!-- size-claim: unminified -->
+    across 59 modules in `static/djust/src/`. Not a deliverable; do not quote
     it as "the client size".
   - Until #2138 these read ~87 KB gz / 388 KB raw / 35 modules <!-- size-claim: historical -->
     and had drifted more than 2x, because only the README pair was checked.
@@ -1225,10 +1225,10 @@ bugs.
   carrying (a) the reference impl to lift verbatim (#1077), (b) an explicit
   "verify the cited path/environment symptom-up" instruction, and (c) the
   gate-off self-test (#1468). Review every resulting PR (CI + diff) before
-  merge — do not rubber-stamp. Caveat surfaced: the native pre-push hook
-  hardcodes `.venv/bin/python` and fails inside a worktree, so subagents push
-  `--no-verify` after running gates manually; CI is the authoritative gate.
-  Tracked at #1796.
+  merge — do not rubber-stamp. The pre-push hook runs from linked worktrees
+  (#1796 interpreter resolution, #1810 worktree `python/` + `.so` — both in
+  `scripts/run-with-venv-python.sh`), so subagents push normally; never
+  `--no-verify`.
 
 ## Process canonicalizations from v1.0.5-2 retro arc (render-path + cleanup drain)
 

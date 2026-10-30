@@ -234,6 +234,7 @@ h6 { font-size: 1rem; }"""
 /* Component shapes */
 .btn, button {
   border-radius: var(--radius);
+  font-family: inherit;
 }
 
 .card {

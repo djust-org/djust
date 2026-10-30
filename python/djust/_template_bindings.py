@@ -82,7 +82,10 @@ class Directive:
     #: Generated only under the legacy policy (the strict binder never sends it).
     legacy_only: tuple[str, ...] = ()
     #: Whether the client attaches owner context (component or embedded view).
-    #: Without it the event always reaches the page's root view.
+    #: Without it the event reaches the page's root view; ``dj-poll`` is the
+    #: one exception: a poll inside an embedded child view (``{% live_render %}``)
+    #: carries that child's ``view_id``, while a component's poll still reaches
+    #: its host view.
     owner_context: bool = True
 
 

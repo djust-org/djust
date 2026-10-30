@@ -40,6 +40,49 @@ GENERIC_ERROR_MESSAGES = {
 }
 
 
+#: ``send_error`` context keys for developers only. They are never copied onto
+#: a frame as given; ``build_error_frame`` adds ``debug_detail`` and ``hint``
+#: back (and the abbreviated traceback ``_exc_info`` points at) under DEBUG.
+DEBUG_ONLY_ERROR_KEYS = frozenset({"debug_detail", "hint", "_exc_info"})
+
+
+def build_error_frame(error: str, **context: Any) -> Dict[str, Any]:
+    """The ``{"type": "error", ...}`` frame every transport's ``send_error`` sends.
+
+    One builder for the WebSocket consumer and the SSE session, so the
+    debug-only fields are handled in one place. Every other ``context`` key is
+    copied onto the frame. Under ``DEBUG`` only, it adds:
+
+    - ``debug_detail``: the unsanitized message, when it differs from ``error``;
+    - ``traceback``: the last three frames of ``context["_exc_info"]``, or of
+      the exception being handled when that key is absent (pass
+      ``_exc_info=(None, None, None)`` to send none);
+    - ``hint``: an actionable suggestion, when one is given.
+    """
+    from django.conf import settings
+
+    frame: Dict[str, Any] = {"type": "error", "error": error}
+    for key, value in context.items():
+        if key not in DEBUG_ONLY_ERROR_KEYS:
+            frame[key] = value
+
+    if getattr(settings, "DEBUG", False):
+        debug_detail = context.get("debug_detail")
+        if debug_detail and debug_detail != error:
+            frame["debug_detail"] = debug_detail
+        exc_info = context.get("_exc_info")
+        if exc_info is None:
+            import sys
+
+            exc_info = sys.exc_info()
+        if exc_info and exc_info[2] is not None:
+            frame["traceback"] = "".join(traceback.format_tb(exc_info[2])[-3:])
+        hint = context.get("hint")
+        if hint:
+            frame["hint"] = hint
+    return frame
+
+
 def safe_error_message(
     exception: Exception,
     error_type: str = "default",

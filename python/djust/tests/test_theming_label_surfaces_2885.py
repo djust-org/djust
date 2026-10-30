@@ -276,10 +276,14 @@ def _state_divergences():
                 last = normal.split(" ")[-1]
                 if not (_same_family(last.lstrip("."), label_cls[-1])):
                     continue
-                # an element of the state's class that sets its own colour does not wear the label
+                # an element of the state's class that sets its own colour does not wear the label,
+                # unless the label is that class's own BEM modifier (``X--active`` on an ``X``):
+                # the element wears both, and the modifier's colour wins
                 state_cls = _classes(selector)
                 if any(
-                    c in own_colour and not re.search(r"var\(--%s-foreground" % fill, own_colour[c])
+                    c in own_colour
+                    and not re.search(r"var\(--%s-foreground" % fill, own_colour[c])
+                    and not label_cls[-1].startswith(c + "--")
                     for c in state_cls
                 ):
                     continue

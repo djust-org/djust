@@ -44,9 +44,14 @@ class TestStripCommentsAndWhitespace:
     # ── Basic whitespace normalization ──
 
     def test_collapses_runs_of_whitespace(self, mixin):
-        html = "<div>   hello   world   </div>"
+        """Runs in markup and in whitespace-only text are folded; text with
+        content keeps its whitespace, as Django and the VDOM parser do."""
+        html = "<div\n   id='a'>\n   <b>x</b>\n   <i>y</i>\n</div>"
         result = mixin._strip_comments_and_whitespace(html)
-        assert result == "<div> hello world </div>"
+        assert result == "<div id='a'><b>x</b> <i>y</i></div>"
+        assert mixin._strip_comments_and_whitespace("<div>   hello   world   </div>") == (
+            "<div>   hello   world   </div>"
+        )
 
     def test_removes_whitespace_between_tags(self, mixin):
         html = "<div>  </div>  \n  <span>hi</span>"
@@ -273,12 +278,12 @@ class TestStripCommentsAndWhitespace:
 
     def test_non_script_whitespace_still_collapsed_with_script_present(self, mixin):
         """The fix preserves <script> WITHOUT disabling collapse elsewhere."""
-        html = "<div>   lots   of   space   <script>\n  // x\n  y();\n</script></div>"
+        html = "<div>\n   <p>a</p>\n   <script>\n  // x\n  y();\n</script></div>"
         result = mixin._strip_comments_and_whitespace(html)
         # Script body intact
         assert "// x\n  y();" in result
-        # Ordinary text still collapsed to single spaces
-        assert "lots of space" in result
+        # Whitespace between tags still dropped
+        assert "<div><p>a</p><script>" in result
 
     def test_html_comment_inside_script_not_stripped(self, mixin):
         """A comment-strip pass must not eat an HTML-comment-looking token that

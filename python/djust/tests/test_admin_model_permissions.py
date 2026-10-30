@@ -133,8 +133,9 @@ def test_app_list_only_shows_models_with_permissions(db, django_user_model):
 
 def test_list_view_requires_view_permission(db, django_user_model):
     req = _request(_staff(django_user_model, "plain"))
-    # check_permissions denials come back as a redirect URL (not None).
-    assert check_view_auth(_view(ModelListView, "list", req), req) is not None
+    # A signed-in user refused by check_permissions() gets a 403, not sign-in.
+    with pytest.raises(PermissionDenied):
+        check_view_auth(_view(ModelListView, "list", req), req)
 
 
 def test_list_view_allows_view_permission(db, django_user_model):
@@ -144,7 +145,8 @@ def test_list_view_allows_view_permission(db, django_user_model):
 
 def test_create_view_requires_add_permission(db, django_user_model):
     req = _request(_staff(django_user_model, "viewer", "view_group"))
-    assert check_view_auth(_view(ModelCreateView, "add", req), req) is not None
+    with pytest.raises(PermissionDenied):
+        check_view_auth(_view(ModelCreateView, "add", req), req)
     req = _request(_staff(django_user_model, "adder", "add_group"))
     assert check_view_auth(_view(ModelCreateView, "add", req), req) is None
 

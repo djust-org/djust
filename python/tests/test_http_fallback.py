@@ -381,7 +381,7 @@ class TestWSMountSkip:
 
         from djust.runtime import ViewRuntime
 
-        source = inspect.getsource(ViewRuntime.dispatch_mount)
+        source = inspect.getsource(ViewRuntime._dispatch_mount_body)
         # The runtime runs auth+tenant via _check_auth (→ run_pre_mount_auth →
         # _ensure_tenant) before the state-restore / mount() decision.
         check_auth_pos = source.find("_check_auth(")

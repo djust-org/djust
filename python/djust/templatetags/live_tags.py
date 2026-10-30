@@ -990,9 +990,10 @@ class ColocatedHookNode(Node):
     ``</script>`` to prevent premature tag close.  mark_safe is used on the
     final string because every interpolation is either a template-author hook
     name or the body (which has been ``</script>``-escaped) — no
-    request/POST data is interpolated.  The client uses ``new Function(...)``
-    to evaluate the body; strict-CSP apps without ``'unsafe-eval'`` should
-    avoid this tag and register hooks via a nonce-bearing script instead.
+    request/POST data is interpolated.  When the request has a CSP nonce the
+    tag carries it, and the client registers the body by inserting a script
+    element with that nonce, so a strict nonce CSP needs no ``'unsafe-eval'``.
+    Without a nonce the client evaluates the body with ``new Function(...)``.
     """
 
     def __init__(
@@ -1043,10 +1044,20 @@ class ColocatedHookNode(Node):
         # Build the tag via concatenation (no f-string interpolation with
         # mark_safe per CLAUDE.md rules). `safe_hook_name` is HTML-escaped
         # above; `safe_body` has been </script>-escaped above.
+        # The request's CSP nonce, when there is one: the client registers a
+        # nonce-bearing hook through a script element carrying that nonce, so
+        # a strict CSP needs neither 'unsafe-eval' nor 'unsafe-inline'.
+        request = context.get("request")
+        if request is None:
+            request = getattr(_context_view(context), "request", None)
+        nonce = get_csp_nonce(request)
+        nonce_attr = ' nonce="' + escape(nonce) + '"' if nonce else ""
         html = (
             '<script type="djust/hook" data-hook="'
             + safe_hook_name
-            + '">'
+            + '"'
+            + nonce_attr
+            + ">"
             + banner
             + "\n"
             + safe_body
@@ -2304,6 +2315,8 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
             def _render_eager() -> str:
                 # Eager mount + render path — same as the non-lazy
                 # branch below. Returns the stamped child HTML.
+                from ..sync_turn import run_sync_step
+
                 child = child_cls()
                 mark_embedded(child)
                 child.request = request
@@ -2312,7 +2325,10 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
                     raise PermissionError("child %r denied access (auth gate)" % view_path)
                 mount_fn = getattr(child, "mount", None)
                 if callable(mount_fn):
-                    mount_fn(request, **captured_kwargs)
+                    # This runs on its own worker thread (``sync_to_async`` below), outside
+                    # the parent's render hop, so the child's hooks enter their own
+                    # ``sync_turn_wrapper`` steps (#3646).
+                    run_sync_step(child, "mount", mount_fn, request, **captured_kwargs)
                 # Object-permission check (ADR-017) for the lazy embedded child
                 # — same as the eager path (finding #12). No-op unless the child
                 # overrides get_object; fail-closed otherwise.
@@ -2332,7 +2348,7 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
                 get_ctx_fn = getattr(child, "get_context_data", None)
                 if callable(get_ctx_fn):
                     try:
-                        child_context = dict(get_ctx_fn())
+                        child_context = dict(run_sync_step(child, "render", get_ctx_fn))
                     except Exception:  # noqa: BLE001
                         # Aliased so the names stay local to this closure: the
                         # enclosing live_render imports them only after the
@@ -2695,7 +2711,9 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
     if not restored:
         mount = getattr(child, "mount", None)
         if callable(mount):
-            mount(request, **kwargs)
+            from .._view_hooks import call_hook_sync
+
+            call_hook_sync(mount, request, **kwargs)
     if sticky_kwarg:
         _record_sticky_mount_kwargs(child, kwargs)
 

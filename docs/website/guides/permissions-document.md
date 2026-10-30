@@ -91,15 +91,21 @@ views:
     # the fields makes the intent reviewable.
     object_scoping:
       fields: ["claimant.email", "assigned_examiner"]
+
+  # permission_required = AnyOf("claims.review_claim", "claims.approve_claim")
+  apps.claims.views.ClaimDecisionView:
+    login_required: true
+    permissions_any: ["claims.review_claim", "claims.approve_claim"]
 ```
 
 ### Per-view keys
 
 | Key | Type | Description |
 |-----|------|-------------|
-| `public` | `bool` | View is intentionally accessible without auth. Mutually exclusive with `login_required` / `permissions`. |
+| `public` | `bool` | View is intentionally accessible without auth. Mutually exclusive with `login_required` / `permissions` / `permissions_any`. |
 | `login_required` | `bool` | Declares that the view requires auth. Satisfied by any auth in code: `login_required`, `permission_required`, a custom `check_permissions()`, or an auth dispatch mixin. |
-| `permissions` | `[str]` | Matches `cls.permission_required` (list or single string, normalized to list). |
+| `permissions` | `[str]` | Matches the all-of part of `cls.permission_required` (list or single string, normalized to list). |
+| `permissions_any` | `[[str]]` or `[str]` | Matches the `AnyOf(...)` groups of `cls.permission_required`: one list per group, at least one permission of each required. A flat list of strings is one group. Order does not matter. |
 | `roles` | `[str]` | Documentation only — djust cannot verify Django group membership via static analysis. |
 | `object_scoping.fields` | `[str]` | Documents which object-level fields the view checks for ownership. Currently informational; may be promoted to AST-verified in a later release. |
 | `notes` | `str` | Free-form documentation shown in error/diff output. |
@@ -123,7 +129,7 @@ stable error code:
 | `djust.P002` | error | View found in code but not declared in `permissions.yaml` (strict mode only). |
 | `djust.P003` | error | Document says `public: true` but code has auth configured. |
 | `djust.P004` | error | Document says auth required but code has none (no `login_required`, `permission_required`, custom `check_permissions()` or auth mixin). |
-| `djust.P005` | error | Permission list in `permissions.yaml` does not match `cls.permission_required`. |
+| `djust.P005` | error | `permissions` or `permissions_any` in `permissions.yaml` does not match `cls.permission_required`. |
 | `djust.P006` | warning | Reserved: not emitted yet. `object_scoping` is stored but not checked. |
 | `djust.P007` | info | `roles` declaration — djust cannot verify at static-analysis time, treated as documentation. |
 

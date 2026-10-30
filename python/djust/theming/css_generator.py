@@ -94,6 +94,7 @@ class ThemeCSSGenerator:
             ("brand-text", tokens.brand_text),
             ("border", tokens.border),
             ("input", tokens.input),
+            ("input-background", tokens.input_background),
             ("ring", tokens.ring),
             ("surface-1", tokens.surface_1),
             ("surface-2", tokens.surface_2),
@@ -390,6 +391,7 @@ html.theme-ready *::after {
   background-color: hsl(var(--primary));
   color: hsl(var(--primary-foreground));
   border-radius: var(--radius);
+  font-family: inherit;
 }
 
 .btn-primary:hover {
@@ -400,6 +402,7 @@ html.theme-ready *::after {
   background-color: hsl(var(--secondary));
   color: hsl(var(--secondary-foreground));
   border-radius: var(--radius);
+  font-family: inherit;
 }
 
 .btn-secondary:hover {
@@ -410,6 +413,7 @@ html.theme-ready *::after {
   background-color: hsl(var(--destructive));
   color: hsl(var(--destructive-foreground));
   border-radius: var(--radius);
+  font-family: inherit;
 }
 
 .btn-destructive:hover {

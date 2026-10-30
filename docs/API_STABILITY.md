@@ -61,13 +61,15 @@ The **public API** — the surface SemVer covers — is exactly the following:
    supported, stable import.
 
 2. **The documented decorators.** Every name in `djust.decorators.__all__`
-   (21 names as of 1.3). These include the core decorators (`event_handler`,
-   `server_function`, `push_handler`, `permission_required`, `rate_limit`, `reactive`,
+   (23 names as of 1.3). These include the core decorators (`event_handler`,
+   `action`, `server_function`, `push_handler`, `permission_required`, `rate_limit`, `reactive`,
    `state`, `computed`, `debounce`, `throttle`, `optimistic`, `cache`,
    `client_state`, `background`, `on_mount`), the deprecated alias `event`
    (see [Currently Deprecated Symbols](#currently-deprecated-symbols)), and the
-   introspection predicates `is_event_handler`, `is_server_function` and
-   `is_push_handler`.
+   introspection predicates `is_event_handler`, `is_action`,
+   `is_server_function` and `is_push_handler`. Two names are deliberately in
+   `djust.decorators.__all__` only, not at the top level: `StateProperty` (the
+   type `state()` returns) and `alters_data` (the Django-parity marker).
 
 3. **Public `LiveView` / `LiveComponent` / `Component` methods.** The
    documented public methods and lifecycle hooks of these classes —
@@ -209,8 +211,8 @@ This is the core stability promise:
 ## Currently Deprecated Symbols
 
 Three symbols deprecated during `0.x` carry the 0.x carve-out removal floor of
-**`>= 1.1.0`**. One access pattern deprecated during the `1.x` series carries the
-standard floor of **`2.0.0`**.
+**`>= 1.1.0`**. Symbols deprecated during the `1.x` series carry the standard floor of
+**`2.0.0`**.
 
 | Symbol | Deprecated since | Removed no earlier than | Replacement |
 | --- | --- | --- | --- |
@@ -218,6 +220,10 @@ standard floor of **`2.0.0`**.
 | `LiveViewForm` | 0.3 | **1.1.0** | `django.forms.Form` |
 | `_legacy` theming module (`THEMES`, `get_theme()`, `list_themes()`) | 0.5 | **1.1.0** | `DESIGN_SYSTEMS` / `get_design_system` / `get_all_design_systems` from `djust.theming.theme_packs` |
 | Dict-style reads of `block` in a Python-bridged tag (`block["super"]`, `block.get("super")`, `block.values()`, `block.items()`, `dict(block)`) | 1.3 | **2.0.0** | `context["block"].super()` |
+| Defining `_drain_announcements` or `_drain_focus` on a `LiveView` (duck-typed accessibility hooks the WebSocket and SSE transports drain; nothing in djust defines them) | 1.4 | **2.0.0** | A `role="status"` live region the view renders, and `JS.focus()` through `push_commands()` |
+| Client: the `dj-params` JSON attribute (warns once per page in the browser console) | 1.4 | **2.0.0** | `dj-value-*` attributes |
+| Client: the `data-djust-root` marker in a `dj-layout` swap (warns once per page) | 1.4 | **2.0.0** | `dj-root` |
+| Client: `window.LiveViewWebSocket`, `window.setCacheConfig`, `window.globalLoadingManager` (each warns once, on first read) | 1.4 | **2.0.0** | `window.djust.LiveViewWebSocket`, `window.djust.setCacheConfig`, `window.djust.globalLoadingManager` |
 
 ### `@event` → `@event_handler`
 
@@ -302,6 +308,48 @@ parent_html = context["block"]["super"]
 
 # After
 parent_html = context["block"].super()
+```
+
+### `_drain_announcements` / `_drain_focus` → a live region and `JS.focus()`
+
+The WebSocket consumer and the SSE runtime drain two duck-typed methods on the
+view behind `hasattr`: `_drain_announcements()` (sends an `accessibility` frame)
+and `_drain_focus()` (sends a `focus` frame). No 1.x release has ever defined
+either: `mixins/accessibility.py` (with `announce()` / `focus()`) shipped only in
+the 0.6.0 and 0.7.0 tags, which are not ancestors of `main`, and no tag from 0.9.0
+on has it. The shipped client assigns no `window.djust.accessibility`, so the
+frames reach only an object the application's own script defines, and the HTTP
+fallback never drained them.
+
+The names are underscore-prefixed, which this policy treats as internal. They are
+deprecated rather than deleted because the `accessibility` and `focus` frames are
+part of the wire protocol (point 7 above) and `djust.d.ts` types
+`window.djust.accessibility`, so an application can have supplied both halves.
+
+Defining either method on a `LiveView` subclass (in its body or through a mixin)
+emits one `DeprecationWarning` per hook at the `class` statement. A hook added
+after the class exists (`setattr`, a decorator, an instance attribute) is not
+detected and does not warn. Behaviour is unchanged until 2.0.0, where the flush is
+removed. Migrate to a live region the view renders and `JS.focus()` through
+`push_commands()` (see the [accessibility guide](website/guides/accessibility.md#announcing-a-change-and-moving-focus-from-the-server)).
+The replacement is not identical: a live region announces only when its text
+changes, so the same message sent in two turns in a row announces once, and
+several messages in one turn must be rendered together. The guide shows the
+workaround (alternate a no-break-space suffix).
+
+```python
+# Before
+class OrderView(LiveView):
+    def _drain_announcements(self):
+        out, self._said = self._said, []
+        return out
+
+# After: render the message into <p role="status" aria-live="polite">{{ status }}</p>
+class OrderView(LiveView):
+    @event_handler()
+    def save(self, **kwargs):
+        self.status = "Order saved"
+        self.push_commands(JS.focus("#order-summary"))
 ```
 
 ---

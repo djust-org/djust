@@ -66,9 +66,6 @@ from django.views.decorators.csrf import csrf_exempt
 from .rate_limit import ConnectionRateLimiter
 from .security import sanitize_for_log
 from .serialization import DjangoJSONEncoder
-from .websocket import (
-    _is_allowed_origin,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -467,6 +464,9 @@ class SSESession:
         self._closed_sentinel_queued = False
         # True while a live_redirect_mount mounts its destination (#3036).
         self._replacing_view = False
+        # True when this session's stream GET re-opened a known id (an
+        # EventSource reconnect): its mount runs as a ``reconnect`` turn.
+        self._mount_reconnect = False
         # Presence untracks scheduled by shutdown() (#3254): held so a task is
         # not garbage-collected before it finishes, dropped when it does.
         self._presence_untrack_tasks: set[asyncio.Task] = set()
@@ -491,7 +491,19 @@ class SSESession:
         # another owner may take the id; ``active`` stays True through the
         # linger so in-flight POSTs still dispatch.
         self._stream_closed = False
-        self._rate_limiter: ConnectionRateLimiter = ConnectionRateLimiter()
+        # Built from ``LIVEVIEW_CONFIG["rate_limit"]`` like the WebSocket's,
+        # now that every POSTed frame is charged to it (ADR-044 D7).
+        from .config import config as _djust_config
+
+        _rl = _djust_config.get("rate_limit", {})
+        _rl = _rl if isinstance(_rl, dict) else {}
+        self._rate_limiter: ConnectionRateLimiter = ConnectionRateLimiter(
+            rate=_rl.get("rate", 100),
+            burst=_rl.get("burst", 20),
+            max_warnings=_rl.get("max_warnings", 3),
+            upload_rate=_rl.get("upload_rate", 200),
+            upload_burst=_rl.get("upload_burst", 400),
+        )
         self._client_ip: Optional[str] = None
         # Serialize POST turns separately from render/result application.
         #: The page view's: one of its turns at a time. Each view mounted
@@ -547,7 +559,20 @@ class SSESession:
         A POST takes the lock of the view it is for, so turns of different views
         run at the same time and a view's own turns run one at a time. A
         navigation replaces every view, so it takes them all.
+
+        Every POSTed frame is charged to the session's per-connection rate
+        limiter first, as the WebSocket charges every frame on arrival (ADR-044
+        D7: rate limiting stays at transport ingress). Root-view events,
+        ``url_change`` and page mounts were not charged over SSE before.
         """
+        frame_type = data.get("type")
+        if not self._rate_limiter.check(frame_type if isinstance(frame_type, str) else "unknown"):
+            await self.send_error(
+                "Rate limit exceeded", code="rate_limited", **self._ref_fields(data)
+            )
+            if self._rate_limiter.should_disconnect():
+                self.shutdown()
+            return
         if data.get("target_id") is not None:
             # A view mounted beside the page view (#3252) has its own runtime; a
             # frame that names none that is mounted is refused, never answered by
@@ -568,12 +593,10 @@ class SSESession:
                 self._event_request = None
 
     async def _navigate(self, request: HttpRequest, data: dict[str, Any]) -> None:
-        """A ``live_redirect_mount``: wait for every view's running turn, then replace the page."""
-        if not self._rate_limiter.check("live_redirect_mount"):
-            await self.send_error("Navigation rate limit exceeded", code="rate_limited")
-            if self._rate_limiter.should_disconnect():
-                self.shutdown()
-            return
+        """A ``live_redirect_mount``: wait for every view's running turn, then replace the page.
+
+        Charged to the rate limiter by :meth:`dispatch`, like every frame.
+        """
         # Lock order: structure, the page view, then each view beside it in the
         # order it mounted. Nothing takes them in another order.
         async with contextlib.AsyncExitStack() as stack:
@@ -624,17 +647,7 @@ class SSESession:
             await self.send_error("Invalid view address", **fields)
             return
         frame_type = data.get("type")
-        if frame_type in ("mount", "unmount"):
-            # Each mount runs a view's mount, render and state restore: bound
-            # the rate of them as the WebSocket bounds every frame (and this
-            # session bounds a navigation).
-            if not self._rate_limiter.check(frame_type):
-                await self.send_error(
-                    "Rate limit exceeded", code="rate_limited", **self._ref_fields(data)
-                )
-                if self._rate_limiter.should_disconnect():
-                    self.shutdown()
-                return
+        # Every frame (mount and unmount included) was charged by dispatch().
         if frame_type == "mount":
             await self._mount_slot(request, data)
             return
@@ -1050,8 +1063,14 @@ class SSESession:
     # ------------------------------------------------------------------ #
 
     async def send_error(self, error: str, **kwargs: Any) -> None:
-        """Push an error message to the SSE client."""
-        self.push({"type": "error", "error": error, **kwargs})
+        """Push an error message to the SSE client.
+
+        Built by the same ``build_error_frame`` as the WebSocket consumer's
+        ``send_error``, so both transports handle debug fields in one place.
+        """
+        from .security.error_handling import build_error_frame
+
+        self.push(build_error_frame(error, **kwargs))
 
     async def close(self, code: int = 1000) -> None:
         """Called by rate-limit logic to force-close the transport."""
@@ -1252,25 +1271,33 @@ async def _flush_deferred_to_sse(view_instance: Any) -> None:
 
 def _sse_origin_allowed(request: HttpRequest) -> bool:
     """
-    SSE CSRF defense: validate the request ``Origin`` against ALLOWED_HOSTS.
+    SSE CSRF defense: apply djust's Origin policy to the request.
 
-    This is the SSE transport's *real* CSRF protection — the same model as the
-    WebSocket transport's CSWSH check (``_is_allowed_origin`` /
-    ``AllowedHostsOriginValidator``, #653). The client→server SSE endpoints are
-    ``@csrf_exempt`` (no Django CSRF cookie/token), so without an Origin check a
-    cross-origin page could drive a victim-cookie-authenticated SSE session
-    (mount views, fire state-changing handlers) using ``credentials: include``
-    (Finding #7, CWE-352).
+    This is the SSE transport's *real* CSRF protection — the same policy as
+    the WebSocket transport's CSWSH check (:mod:`djust.security.origin`,
+    #653): the Origin must be the request's own origin (scheme, host and port,
+    the host validated against ALLOWED_HOSTS) or listed in
+    ``DJUST_ALLOWED_ORIGINS`` / ``CSRF_TRUSTED_ORIGINS``. The client→server SSE
+    endpoints are ``@csrf_exempt`` (no Django CSRF cookie/token), so without an
+    Origin check a cross-origin page could drive a victim-cookie-authenticated
+    SSE session (mount views, fire state-changing handlers) using
+    ``credentials: include`` (Finding #7, CWE-352).
 
-    A browser ALWAYS sends ``Origin`` on a cross-origin request, so an attacker
-    page's Origin won't match ALLOWED_HOSTS and is rejected. Same-origin requests
-    pass. Non-browser clients (curl, native, tests) send no Origin and are
-    allowed — the helper allows missing/empty Origin by design.
+    Unlike the WebSocket handshake, a missing Origin is allowed here: a
+    browser omits ``Origin`` on a same-origin GET such as the ``EventSource``
+    stream request, and sends it on every cross-origin request, so an attacker
+    page cannot drop it.
     """
+    from django.core.exceptions import DisallowedHost
+
+    from .security.origin import origin_rejection
+
+    try:
+        own_origin: Optional[str] = "%s://%s" % (request.scheme, request.get_host())
+    except DisallowedHost:
+        own_origin = None
     origin = request.META.get("HTTP_ORIGIN")
-    # ``_is_allowed_origin`` takes the Origin as bytes (WS layer passes header
-    # bytes). For SSE the header is an str, so encode it; missing -> b"" -> allowed.
-    return _is_allowed_origin((origin or "").encode("utf-8", "surrogatepass"))
+    return origin_rejection(origin, own_origin, allow_missing=True) is None
 
 
 def _sse_content_type_is_json(request: HttpRequest) -> bool:
@@ -1404,6 +1431,9 @@ class DjustSSEStreamView(View):
             # A same-owner reconnect: order the new mount's saves after any
             # save the previous session's view still has running (#3212).
             previous = _sse_sessions.get(session_id)
+            # An EventSource auto-reconnect re-requests the stream with the same
+            # id: the mount runs as a ``reconnect`` turn (ADR-044; informational).
+            session._mount_reconnect = previous is not None
             if previous is not None and _owner_identity(previous) == _owner_identity(session):
                 _carry_save_ordering(previous.runtime, session.runtime)
             # Stash the REAL HTTP request so the runtime mounts against it (real

@@ -4454,10 +4454,18 @@ def compare(base_path: str, after_path: str, require_moved: tuple[str, ...] = ()
     # Both lists are printed in full; only the live half gates the exit.
     hot = [c for c in new if UNESCAPED_TAG.search(after[c][1])]
     escaped_only = [c for c in new if c not in hot]
+    # The same split for the two totals, so the headline counts live markup
+    # only and the escaped-text cells are reported on their own line.
+    lb_live = {c for c in lb if UNESCAPED_TAG.search(base[c][1])}
+    la_live = {c for c in la if UNESCAPED_TAG.search(after[c][1])}
     print()
-    print(f"live-payload leaks BEFORE : {len(lb)}   ({raised} cells where Django raised)")
-    print(f"live-payload leaks AFTER  : {len(la)}")
-    print(f"  closed                  : {len(set(lb) - set(la))}")
+    print(f"live-payload leaks BEFORE : {len(lb_live)}   ({raised} cells where Django raised)")
+    print(f"live-payload leaks AFTER  : {len(la_live)}")
+    print(
+        "  fragment inside fully-escaped text (not live), BEFORE -> AFTER: "
+        f"{len(lb) - len(lb_live)} -> {len(la) - len(la_live)}"
+    )
+    print(f"  closed                  : {len(lb_live - la_live)}")
     print(f"  flagged as INTRODUCED   : {len(new)}")
     print(f"    fragment inside fully-escaped text (not live): {len(escaped_only)}")
     print(f"    LIVE (an unescaped tag opener)              : {len(hot)}")

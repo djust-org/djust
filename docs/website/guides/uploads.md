@@ -19,6 +19,8 @@ djust provides chunked binary file uploads over WebSocket, with client-side prev
 - **Validation** -- File size limits, extension filtering, MIME type checking, magic byte verification
 - **Progress tracking** -- Real-time updates via `djust:upload:progress` DOM events
 
+Event parameters travel in a single WebSocket frame, which the server caps at `LIVEVIEW_CONFIG["max_message_size"]` (64 KB by default); a larger event is refused with the error code `message_too_large`. Send files, images and other large payloads with `UploadMixin`, whose chunks fit under that limit, instead of putting them in event parameters.
+
 ## Quick Start
 
 ### 1. Configure Uploads in Your View

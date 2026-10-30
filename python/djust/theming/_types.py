@@ -352,6 +352,19 @@ class ThemeTokens:
         )
         return ColorScale(h, s, lightness)
 
+    @property
+    def input_background(self) -> ColorScale:
+        """The FILL of a form field. Emitted as ``--input-background``.
+
+        ``input`` is the field BORDER (shadcn convention; ``.border-input``), so
+        painting a field with it gives a slate or grey box in many presets. A
+        field sits on the page, so its fill is the page ``background``, which
+        ``foreground`` text already reads on. A preset that wants a distinct
+        field fill sets ``--input-background`` in ``extra_css_vars``. Read-only:
+        no preset sets it.
+        """
+        return self.background
+
     # Derived text colours (#2885). Like ``destructive_text`` they are not tokens:
     # no preset sets them, they are solved from the fill, and the fill itself is
     # never touched. Emitted as ``--primary-text``, ``--brand-text``,

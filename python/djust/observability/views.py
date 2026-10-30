@@ -26,7 +26,7 @@ from djust.observability.registry import (
     get_view_for_session,
 )
 from djust.observability.sql import get_queries_since
-from djust.observability.timings import get_timing_stats
+from djust.observability.timings import get_timing_stats, get_turn_timing_stats
 from djust.observability.tracebacks import get_recent_tracebacks
 
 logger = logging.getLogger(__name__)
@@ -323,6 +323,33 @@ def handler_timings(request: HttpRequest) -> HttpResponse:
         since_ms = None
 
     rows = get_timing_stats(handler_name=handler_name, since_ms=since_ms)
+    return JsonResponse({"count": len(rows), "stats": rows})
+
+
+@require_GET
+def turn_timings(request: HttpRequest) -> HttpResponse:
+    """Return per-turn percentile stats (ADR-044 D9) over the rolling window.
+
+    Query params:
+        kind (optional): filter to one turn kind (``event``, ``push``, ...).
+        since_ms (optional): only include samples with timestamp > since_ms.
+
+    Each row: {kind, source, transport, view_class, count, min_ms, max_ms,
+    avg_ms, p50_ms, p90_ms, p99_ms}, slowest p90 first. A turn's duration
+    covers the whole middleware chain plus the turn body.
+    """
+    _gate_resp = _gate(request)
+    if _gate_resp is not None:
+        return _gate_resp
+
+    kind = request.GET.get("kind", "").strip() or None
+    since_ms_raw = request.GET.get("since_ms", "").strip()
+    try:
+        since_ms = int(since_ms_raw) if since_ms_raw else None
+    except ValueError:
+        since_ms = None
+
+    rows = get_turn_timing_stats(kind=kind, since_ms=since_ms)
     return JsonResponse({"count": len(rows), "stats": rows})
 
 

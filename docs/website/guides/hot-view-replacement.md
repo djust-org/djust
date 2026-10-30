@@ -84,6 +84,17 @@ When you edit a LiveView's Python file:
 5. The client dispatches a `djust:hvr-applied` CustomEvent and (in
    debug mode) paints a small green toast in the bottom-right.
 
+A new page load sees the change too: the `as_view()` callables in your
+URLconf (`settings.ROOT_URLCONF`, including decorators wrapped around them)
+are pointed at the reloaded class, so the next HTTP request builds it.
+Saving a template alone works the same way: the next page load renders the
+edited template, also for a session that has already rendered the page.
+
+Saving several files at once (a view and its template) is handled file by
+file, `.py` first. An editor that saves atomically (writes a temp file such as
+`.!123!views.py` and renames it over the original) counts as a save of the
+original; the temp file itself is ignored.
+
 The user keeps:
 
 - form field values
@@ -160,11 +171,19 @@ reloads in your own dev overlay.
   memory but doesn't run `migrate`. Restart if you changed models.
 - **No mixin slot growth.** Adding a new `__slots__` entry to a mixin
   always triggers a full reload.
-- **Mixin edits trigger a full reload.** HVR only reloads the module
-  whose file was saved. Editing a mixin's source file does not
-  propagate to views that inherit from it until you also save those
-  views' files — and if the mixin's MRO contribution changes, HVR will
-  reject the swap (`mro_changed`) and fall back to a full page reload.
+- **A mixin or base class in another module reloads its views too.**
+  Saving a module whose classes a LiveView elsewhere inherits from (a mixin,
+  a base view, or a view that other modules subclass) reloads that module and
+  then every module defining such a LiveView, bases before subclasses. Those
+  modules' top-level code runs again (see the caveats below). If the edit
+  changes the MRO (the mixin gains or loses a base), mounted views fall back
+  to a full page reload (`mro_changed`); new page loads use the new classes.
+
+- **A per-request URLconf is not updated.** Routes resolved through
+  `request.urlconf` (set by middleware) keep serving the pre-reload class
+  over HTTP until a restart; `settings.ROOT_URLCONF` is updated.
+- **A changed `exposure_policy` needs a restart** to reach the HTTP entry
+  (open sockets fall back to a full reload, as above).
 
 ## What HVR doesn't do (caveats)
 

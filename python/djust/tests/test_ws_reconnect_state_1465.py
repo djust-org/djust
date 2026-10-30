@@ -101,7 +101,7 @@ def test_load_gate_loosened_fires_on_saved_state_without_has_prerendered():
     """
     import djust.runtime as rt_mod
 
-    source = inspect.getsource(rt_mod.ViewRuntime.dispatch_mount)
+    source = inspect.getsource(rt_mod.ViewRuntime._dispatch_mount_body)
 
     # The runtime gate: restore whenever saved_state is non-empty (independent of
     # has_prerendered), inside the opt_in + session guard.
@@ -188,7 +188,7 @@ def test_skip_html_logic_present_in_source():
     """
     import djust.runtime as rt_mod
 
-    source = inspect.getsource(rt_mod.ViewRuntime.dispatch_mount)
+    source = inspect.getsource(rt_mod.ViewRuntime._dispatch_mount_body)
     assert "legacy_exposure and bool(mounted_from_restore) and bool(has_prerendered)" in " ".join(
         source.split()
     )

@@ -1,5 +1,5 @@
 {
- "_comment": "Shared corpus for #3031: every locator must pick the element carrying data-expect-root (or none). Read by python/tests/test_root_selection_3031.py and crates/djust_live (dj_root_selection_3031).",
+ "_comment": "Shared corpus for #3031: every locator must pick the element carrying data-expect-root (or none). Read by python/tests/test_root_selection_3031.py and crates/djust_live (dj_root_selection_3031). The rendered-HTML locator is the Rust scanner (\"scanner\"); \"python\" is the template-SOURCE locator (_search_dj_root_open), which also balances {% if %} branches. \"content\" is the root's inner HTML (null: no complete close tag), checked against html5ever's tree.",
  "cases": [
   {
    "name": "single_dj_root",
@@ -502,6 +502,115 @@
    "why": "the word inside a value is text",
    "html": "<div dj-view=\"p.P\" title=\"dj-lazy\" data-expect-root>P</div>",
    "root": true
+  },
+  {
+   "name": "rendered_if_else_text_is_text",
+   "why": "rendered output has no template branches: {% if %}/{% else %} left in it (a {% verbatim %} block, say) is text to html5ever, so the root closes at its own balancing </div>. The template-source balancer read it as branches and found no close (the whole page became the frame)",
+   "html": "<div dj-root data-expect-root><div>{% if a %}</div><p>x</p>{% else %}<p>y</p>{% endif %}</div><footer>f</footer>",
+   "root": true,
+   "content": "<div>{% if a %}</div><p>x</p>{% else %}<p>y</p>{% endif %}"
+  },
+  {
+   "name": "rendered_else_text_does_not_close_the_root_early",
+   "why": "{% else %} text restored the template-source balancer's depth, so the root closed at the first </div> and the tail was cut off",
+   "html": "<div dj-root data-expect-root>{% if a %}<div>{% else %}</div>{% endif %}<p>tail</p></div><footer>f</footer>",
+   "root": true,
+   "content": "{% if a %}<div>{% else %}</div>{% endif %}<p>tail</p>"
+  },
+  {
+   "name": "body_tag_inside_embedded_child_merges_onto_body",
+   "why": "#3302 beside #3031: a <body> start tag anywhere adds its attributes to the one body element (html5ever, browsers), so a child document's <body dj-view> inside its wrapper makes the page's body the root when nothing else declares one. The body closes at the LAST </body>",
+   "html": "<html><head></head><body data-expect-root><div dj-view data-djust-embedded=\"c\"><html><body dj-view=\"child.V\"><i>c</i></body></html></div><p>page</p></body></html>",
+   "root": true,
+   "content": "<div dj-view data-djust-embedded=\"c\"><html><body dj-view=\"child.V\"><i>c</i></body></html></div><p>page</p>",
+   "diverges": [
+    "python"
+   ]
+  },
+  {
+   "name": "body_attributes_merge_from_a_later_body_tag",
+   "why": "the root is the body element, whose open tag is the first <body>; a later <body dj-root> only adds the attribute",
+   "html": "<body data-expect-root><header>h</header><body dj-root><main>m</main></body>",
+   "root": true,
+   "content": "<header>h</header><body dj-root><main>m</main>",
+   "diverges": [
+    "python"
+   ]
+  },
+  {
+   "name": "body_that_is_an_embedded_wrapper_is_not_a_root",
+   "why": "a body carrying another view's container attributes belongs to that view (#3031), as on any other element",
+   "html": "<body dj-view data-djust-embedded=\"c\"><p>x</p></body>",
+   "root": null,
+   "vdom_fallback_tag": "p",
+   "diverges": [
+    "python"
+   ]
+  },
+  {
+   "name": "stray_body_close_in_embedded_child_keeps_the_page_body_open",
+   "why": "html5ever never closes the body early: after a child's stray </body></html> the rest of the page is still body content, so the body root runs to the last </body>",
+   "html": "<body dj-view data-expect-root><div dj-view data-djust-embedded=\"c\"><i>c</i></body></html></div><p>page</p></body>",
+   "root": true,
+   "content": "<div dj-view data-djust-embedded=\"c\"><i>c</i></body></html></div><p>page</p>"
+  },
+  {
+   "name": "lt_in_tag_name",
+   "why": "a '<' inside a tag name is part of the name (html5ever): <div<x dj-root> is an element named div<x carrying dj-root",
+   "html": "<div dj-view><div<x dj-root data-expect-root>m</div<x></div>",
+   "root": true,
+   "content": "m",
+   "diverges": [
+    "python"
+   ]
+  },
+  {
+   "name": "lt_in_unquoted_value",
+   "why": "a '<' in an unquoted value is part of the value; the next attribute still counts",
+   "html": "<div dj-view><p x=<y dj-root data-expect-root>m</p></div>",
+   "root": true,
+   "content": "m"
+  },
+  {
+   "name": "quote_in_attribute_name",
+   "why": "a quote in an attribute name is part of the name, not the start of a value",
+   "html": "<div dj-view><p a\"b dj-root data-expect-root>m</p></div>",
+   "root": true,
+   "content": "m"
+  },
+  {
+   "name": "nul_in_tag_name",
+   "why": "a NUL in a tag name is part of it (html5ever reads it as U+FFFD); the close tag spelled the same balances it",
+   "html": "<div dj-view><div\u0000 dj-root data-expect-root>m</div\u0000></div>",
+   "root": true,
+   "content": "m",
+   "diverges": [
+    "python"
+   ]
+  },
+  {
+   "name": "unterminated_quoted_value_drops_the_tag",
+   "why": "a quoted value open at EOF discards the whole tag, so its dj-root is not a root; the dj-view before it is",
+   "html": "<div dj-view data-expect-root><p>x</p><section dj-root title=\"open></section></div>",
+   "root": true,
+   "content": null
+  },
+  {
+   "name": "tag_open_at_eof_after_the_root",
+   "why": "a tag left open at EOF is discarded; the root before it is unaffected",
+   "html": "<div dj-root data-expect-root>m</div><p class=",
+   "root": true,
+   "content": "m"
+  },
+  {
+   "name": "lookalike_in_double_escaped_script",
+   "why": "inside <!-- in a script, a <script> start makes the next </script> text (the script data double-escaped state), so html5ever reads the lookalike as script text; the scanner and Python end the script at the first </script>. Not modelled yet",
+   "html": "<script><!--<script></script><div dj-root></div>--></script><main dj-root data-expect-root>m</main>",
+   "root": true,
+   "diverges": [
+    "python",
+    "scanner"
+   ]
   }
  ]
 }

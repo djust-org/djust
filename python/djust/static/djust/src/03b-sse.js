@@ -300,6 +300,7 @@ class LiveViewSSE {
                     if (!container) container = document.querySelector('[dj-root]:not(html):not(head)');
                     if (container) {
                         if (typeof data.view === 'string') container.setAttribute('dj-view', data.view);
+                        applyRootPoll(container, data.root_poll);
                         const hasDataDjAttrs = data.has_ids === true;
                         if (hasDataDjAttrs && !this._replacingView) {
                             // The page was prerendered over HTTP: morph it
@@ -461,6 +462,14 @@ class LiveViewSSE {
                 // Page metadata from server (page_title / page_meta)
                 if (window.djust.pageMetadata) {
                     window.djust.pageMetadata.handlePageMetadata(data);
+                }
+                break;
+
+            case 'layout':
+                // Runtime layout switch (set_layout). The server sends it from the
+                // shared turn end, on this transport too.
+                if (window.djust.djLayout && typeof window.djust.djLayout.applyLayout === 'function') {
+                    window.djust.djLayout.applyLayout(data);
                 }
                 break;
 

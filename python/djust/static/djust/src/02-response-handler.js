@@ -104,8 +104,11 @@ async function handleEmbeddedResponse(data, transport) {
  * Apply the side-channel commands an HTTP fallback response carries: the
  * navigation the handler queued (live_patch / live_redirect, #3303; each entry
  * is a WebSocket-shaped navigation frame, and unconnected a live_redirect
- * becomes a full-page navigation), flash messages and page metadata. Shared by
- * the page's own answers and an embedded child's (#3104): one path, not two.
+ * becomes a full-page navigation), flash messages, page metadata, push events
+ * (push_event / push_commands, each in the push_event frame's {event, payload}
+ * shape) and a set_layout swap ({path, html}, the layout frame's shape). The
+ * last two were dropped on HTTP before #3541. Shared by the page's own answers
+ * and an embedded child's (#3104): one path, not two.
  */
 function applyHttpSideChannels(data) {
     if (Array.isArray(data._navigation) && window.djust.navigation) {
@@ -123,6 +126,18 @@ function applyHttpSideChannels(data) {
             window.djust.pageMetadata.handlePageMetadata(cmd);
         });
     }
+    if (Array.isArray(data._push_events)) {
+        // The WebSocket push_event case, per queued event.
+        data._push_events.forEach(function(frame) {
+            window.dispatchEvent(new CustomEvent('djust:push_event', {
+                detail: { event: frame.event, payload: frame.payload }
+            }));
+            dispatchPushEventToHooks(frame.event, frame.payload);
+        });
+    }
+    if (data._layout && window.djust.djLayout && typeof window.djust.djLayout.applyLayout === 'function') {
+        window.djust.djLayout.applyLayout(data._layout);
+    }
 }
 
 /**
@@ -135,6 +150,33 @@ function applyHttpSideChannels(data) {
  * @param {Object|null} transport - Connection/local operation owning this response
  * @returns {boolean} - True if handled successfully, false otherwise
  */
+/**
+ * The `<form>` a server `reset_form` applies to.
+ *
+ * The form the event came from: the triggering form itself (a `dj-submit`) or
+ * the form that contains the triggering element (a reset button, a field).
+ * With no such form (a button outside any form, a URL change), the root's form
+ * only when it has exactly one: on a page with several forms there is no way
+ * to tell which one the server reset, and resetting the first one cleared an
+ * unrelated draft (a chat composer above the form that was opened).
+ *
+ * @param {Element|null} triggerElement element that sent the event
+ * @param {Element|null} root the view's root (a view slot), else `[dj-root]`
+ * @returns {HTMLFormElement|null}
+ */
+function formToReset(triggerElement, root) {
+    if (triggerElement && triggerElement.isConnected && triggerElement.closest) {
+        const own = triggerElement.closest('form');
+        if (own) return own;
+    }
+    const scope = root || document.querySelector('[dj-root]');
+    if (!scope) return null;
+    const forms = scope.querySelectorAll('form');
+    return forms.length === 1 ? forms[0] : null;
+}
+
+window.djust.formToReset = formToReset;
+
 async function handleServerResponse(data, eventName, triggerElement, transport = null) {
     try {
         // Handle cache storage (from @cache decorator)
@@ -315,18 +357,30 @@ async function handleServerResponse(data, eventName, triggerElement, transport =
         // A deferred save's catch-up (or a later committed turn) has reached
         // this owner's DOM. Do not clear saving status for rejected, malformed
         // or broadcast frames, which do not confirm this owner's state.
-        if (!data.broadcast && data.source !== 'broadcast' &&
-            ((Array.isArray(data.patches)) || data.html)) {
+        const appliedFrame = Array.isArray(data.patches) || !!data.html;
+        const renderedView = typeof data.view === 'string' ? data.view : (transport?.primaryViewPath || null);
+        const renderedTarget = typeof data.target_id === 'string' ? data.target_id : null;
+        if (!data.broadcast && data.source !== 'broadcast' && appliedFrame) {
             window.dispatchEvent(new CustomEvent('djust:rendered', {detail: {
-                view: typeof data.view === 'string' ? data.view : (transport?.primaryViewPath || null),
-                target_id: typeof data.target_id === 'string' ? data.target_id : null,
+                view: renderedView,
+                target_id: renderedTarget,
+            }}));
+        }
+        // Every applied frame, whoever caused it (a server push, a tick, an
+        // async result, this page's own event), after the DOM is updated: for
+        // client code that re-syncs after any patch. ``source`` says which.
+        if (appliedFrame) {
+            window.dispatchEvent(new CustomEvent('djust:patched', {detail: {
+                view: renderedView,
+                target_id: renderedTarget,
+                source: typeof data.source === 'string' && data.source ? data.source : 'event',
             }}));
         }
 
         // Handle form reset
         if (data.reset_form) {
-            if (globalThis.djustDebug) console.log('[LiveView] Resetting form');
-            const form = _activeSlot ? _activeSlot.root.querySelector('form') : document.querySelector('[dj-root] form');
+            const form = formToReset(triggerElement, _activeSlot ? _activeSlot.root : null);
+            if (globalThis.djustDebug) console.log('[LiveView] Resetting form', form);
             if (form) form.reset();
         }
 

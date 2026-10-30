@@ -490,6 +490,17 @@
                         btn.classList.toggle('active', btnMode === mode);
                     });
 
+                    // {% theme_toggle %} (djust.components) radios, so a mode
+                    // set by a click elsewhere or by a server push shows there.
+                    document.querySelectorAll('.dj-theme-toggle').forEach(toggle => {
+                        toggle.setAttribute('data-current', mode);
+                        toggle.querySelectorAll('[data-theme-mode]').forEach(btn => {
+                            const on = btn.getAttribute('data-theme-mode') === mode;
+                            btn.setAttribute('aria-checked', on ? 'true' : 'false');
+                            btn.classList.toggle('dj-theme-toggle__btn--active', on);
+                        });
+                    });
+
                     // Update preset selects, but only to a preset THIS page
                     // switched to live. Otherwise the server-rendered selected
                     // option is the truth: it is the preset the server

@@ -129,7 +129,7 @@ def test_skip_html_logic_present_in_source() -> None:
     """
     import djust.runtime as rt_mod
 
-    source = inspect.getsource(rt_mod.ViewRuntime.dispatch_mount)
+    source = inspect.getsource(rt_mod.ViewRuntime._dispatch_mount_body)
     # Explicit restore combines fresh server state with client state and must
     # send HTML. The legacy-only optimization still follows the truth table.
     assert "skip_html_for_resume = (" in source

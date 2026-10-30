@@ -9,7 +9,21 @@ import functools
 import logging
 import threading
 import types
-from typing import Callable, Any, TypeVar, Union, cast, List, Optional, Literal, overload
+from typing import (
+    TYPE_CHECKING,
+    Callable,
+    Any,
+    TypeVar,
+    Union,
+    cast,
+    List,
+    Optional,
+    Literal,
+    overload,
+)
+
+if TYPE_CHECKING:
+    from .auth.any_of import PermissionRequired
 
 from asgiref.sync import iscoroutinefunction
 
@@ -68,6 +82,30 @@ def _add_decorator_metadata(func: Callable, key: str, value: Any) -> None:
     func._djust_decorators[key] = value  # type: ignore
 
 
+def _passthrough(func: Callable[..., Any]) -> Callable[..., Any]:
+    """A wrapper that only calls ``func``, of the same kind as ``func``.
+
+    A metadata decorator must not change how djust calls the handler. A plain
+    ``def`` wrapper around an ``async def`` handler hid the coroutine function:
+    djust then ran the wrapper as sync code, got an un-awaited coroutine back,
+    and the handler body never ran, with no error (``@permission_required`` on
+    an async handler silently did nothing).
+    """
+    if iscoroutinefunction(func):
+
+        @functools.wraps(func)
+        async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
+            return await func(*args, **kwargs)
+
+        return async_wrapper
+
+    @functools.wraps(func)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        return func(*args, **kwargs)
+
+    return wrapper
+
+
 def _make_metadata_decorator(key: str, value: Any) -> Callable[[F], F]:
     """
     Create a decorator that adds metadata without modifying execution.
@@ -84,10 +122,7 @@ def _make_metadata_decorator(key: str, value: Any) -> Callable[[F], F]:
     """
 
     def decorator(func: F) -> F:
-        @functools.wraps(func)
-        def wrapper(*args: Any, **kwargs: Any) -> Any:
-            return func(*args, **kwargs)
-
+        wrapper = _passthrough(func)
         _add_decorator_metadata(wrapper, key, value)
         return cast(F, wrapper)
 
@@ -1120,9 +1155,7 @@ def optimistic(func: F) -> F:
         Decorated function with optimistic metadata (no runtime effect)
     """
 
-    @functools.wraps(func)
-    def wrapper(*args: Any, **kwargs: Any) -> Any:
-        return func(*args, **kwargs)
+    wrapper = _passthrough(func)
 
     # Add standardized metadata using helper
     _add_decorator_metadata(wrapper, "optimistic", True)
@@ -1278,7 +1311,7 @@ def rate_limit(
     return _make_metadata_decorator("rate_limit", settings)
 
 
-def permission_required(perm: Union[str, List[str]]) -> Callable[[F], F]:
+def permission_required(perm: "PermissionRequired") -> Callable[[F], F]:
     """
     Require Django permission(s) to call this event handler.
 
@@ -1286,13 +1319,20 @@ def permission_required(perm: Union[str, List[str]]) -> Callable[[F], F]:
     the permission, the event is rejected with "Permission denied".
 
     Args:
-        perm: Django permission string or list of strings.
+        perm: Django permission string, list of strings (all of them), or
+            ``djust.auth.AnyOf(...)`` (any one of them). A list may mix
+            strings and AnyOf groups.
 
     Usage:
         class MyView(LiveView):
             @permission_required("myapp.delete_item")
             @event_handler()
             def delete_item(self, item_id: int, **kwargs):
+                ...
+
+            @permission_required(AnyOf("myapp.review_item", "myapp.approve_item"))
+            @event_handler()
+            def decide(self, item_id: int, **kwargs):
                 ...
     """
     return _make_metadata_decorator("permission_required", perm)
@@ -1405,6 +1445,8 @@ __all__ = [
     "event_handler",
     "event",
     "is_event_handler",
+    "action",
+    "is_action",
     "server_function",
     "is_server_function",
     "push_handler",

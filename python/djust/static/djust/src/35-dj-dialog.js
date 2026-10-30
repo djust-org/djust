@@ -126,6 +126,19 @@ if (typeof document !== 'undefined') {
     }
 }
 
+// {% modal native=True %} has no scrim element: a click on the backdrop lands
+// on the <dialog> itself (its content fills it), and closes it like the
+// <div> modal's scrim. close() fires `close`, which reports to the server.
+if (typeof document !== 'undefined') {
+    document.addEventListener('click', function (e) {
+        const el = e.target;
+        if (el instanceof HTMLDialogElement && el.open &&
+            el.classList.contains('dj-modal--native')) {
+            el.close();
+        }
+    });
+}
+
 globalThis.djust = globalThis.djust || {};
 globalThis.djust.djDialog = {
     _syncDialogState,

@@ -21,13 +21,15 @@
 //
 // SECURITY BOUNDARY
 // -----------------
-// The script body is evaluated via `new Function(...)`. This is safe at the
-// same trust level as any other JS inside a Django template: the body is
-// template-author-controlled, not user-supplied. The {% colocated_hook %} tag
-// escapes `</script>` in the body to prevent premature tag close. Users on
-// strict CSP without 'unsafe-eval' should not use this feature — register
-// hooks via a nonce-bearing <script>window.djust.hooks.X = {...}</script>
-// instead.
+// The script body is template-author-controlled, not user-supplied, so
+// running it is at the same trust level as any other JS inside a Django
+// template. The {% colocated_hook %} tag escapes `</script>` in the body to
+// prevent premature tag close.
+//
+// When the request has a CSP nonce the tag carries it, and the body runs in a
+// script element created with that nonce: a strict nonce CSP allows it with
+// neither 'unsafe-eval' nor 'unsafe-inline'. Without a nonce the body is
+// evaluated with `new Function(...)`.
 // ============================================================================
 
 (function initColocatedHooks() {
@@ -49,6 +51,11 @@
             if (!hookName) {
                 // Mark as processed so we don't keep scanning it.
                 scriptEl.dataset.djustHookRegistered = '1';
+                continue;
+            }
+            const nonce = scriptEl.nonce || scriptEl.getAttribute('nonce');
+            if (nonce) {
+                _registerWithNonce(scriptEl, hookName, nonce);
                 continue;
             }
             try {
@@ -88,6 +95,30 @@
                 }
                 scriptEl.dataset.djustHookRegistered = 'error';
             }
+        }
+    }
+
+    /**
+     * Run a hook body under a strict CSP: a script element carrying the
+     * page's nonce is allowed where `new Function` ('unsafe-eval') is not.
+     * The inserted script runs synchronously and assigns the hook itself.
+     */
+    function _registerWithNonce(scriptEl, hookName, nonce) {
+        const runner = document.createElement('script');
+        runner.setAttribute('nonce', nonce);
+        runner.nonce = nonce;
+        runner.textContent =
+            '(function(){const hook={};' + scriptEl.textContent +
+            '\n;(globalThis.djust.hooks=globalThis.djust.hooks||{})[' +
+            JSON.stringify(hookName) + ']=hook;})();';
+        (document.head || document.documentElement).appendChild(runner);
+        runner.remove();
+        // eslint-disable-next-line security/detect-object-injection
+        const registered = !!(globalThis.djust.hooks && globalThis.djust.hooks[hookName]);
+        scriptEl.dataset.djustHookRegistered = registered ? '1' : 'error';
+        if (globalThis.djustDebug) {
+            console.debug('[colocated-hook] %s %s with the page nonce',
+                registered ? 'Registered' : 'Could not register', hookName);
         }
     }
 

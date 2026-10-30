@@ -1750,3 +1750,66 @@ def _check_document_element_root(
                 line_number=lineno,
             )
         )
+
+
+# T026 — a ``{% load %}`` tag's library labels. ``{% load a b %}`` and
+# ``{% load x y from lib %}`` (Django's ``from`` form: the last bit).
+_LOAD_TAG_RE = re.compile(r"\{%-?\s*load\s+([^%]+?)\s*-?%\}")
+
+
+def _loaded_library_labels(sources: "list[str]") -> "set[str]":
+    labels: "set[str]" = set()
+    for source in sources:
+        for match in _LOAD_TAG_RE.finditer(_blank_template_comments(source)):
+            bits = match.group(1).split()
+            if len(bits) >= 3 and bits[-2] == "from":
+                labels.add(bits[-1])
+            else:
+                labels.update(bits)
+    return labels
+
+
+@register("djust")
+def check_shared_template_library_names(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
+    """T026: two template libraries the project loads register one tag or filter name.
+
+    Django scopes ``{% load %}`` to the template; djust's Rust engine keeps one
+    registry for the process. A name two libraries register moves between
+    them on every ``{% load %}`` of either, which drops and re-parses every
+    cached template, and a template renders whichever version loaded last
+    (Point Guard N-38). Only libraries the project's templates ``{% load %}``
+    are compared, so a library only Django's own engine renders (the admin's)
+    does not count.
+    """
+    if _is_check_suppressed("djust.T026"):
+        return []
+    sources: "list[str]" = []
+    for filepath in _iter_template_files(_get_template_dirs()):
+        try:
+            with open(filepath, "r", encoding="utf-8", errors="replace") as fh:
+                sources.append(fh.read())
+        except OSError:
+            continue
+    labels = _loaded_library_labels(sources)
+    if len(labels) < 2:
+        return []
+    from djust.template_libraries import shared_library_names
+
+    messages: list[CheckMessage] = []
+    for kind, name, libraries in shared_library_names(labels):
+        messages.append(
+            DjustWarning(
+                "Template libraries %s all register the %s '%s'. djust's template "
+                "engine has one registry for the process: each {%% load %%} of one "
+                "takes the name from the other and every cached template is parsed "
+                "again, and a template gets whichever version loaded last."
+                % (", ".join("'%s'" % lib for lib in libraries), kind, name),
+                hint=(
+                    "Register the %s in one library and load that one where it is "
+                    "used (rename the other copy). Suppress with "
+                    "DJUST_CONFIG = {'suppress_checks': ['T026']}." % kind
+                ),
+                id="djust.T026",
+            )
+        )
+    return messages

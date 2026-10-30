@@ -88,7 +88,7 @@ if TYPE_CHECKING:
     from .markdown import render_markdown as render_markdown
     from . import rust_components  # noqa: F401
 
-__version__ = "1.3.0rc10"
+__version__ = "1.3.0rc14"
 
 # Import Rust functions
 try:
@@ -270,7 +270,10 @@ def enable_hot_reload():
 
     Notes:
         - Only activates when DEBUG=True
-        - Changes are debounced (500ms) to avoid excessive reloads
+        - Changes are debounced (500ms) to avoid excessive reloads; every
+          file saved in the window is handled (``.py`` first), and an
+          editor's atomic save (temp file renamed over the original) counts
+          as a change to the original
         - Excludes common directories: node_modules, .git, __pycache__, .venv, etc.
         - Hot reload messages are broadcast to all connected LiveView clients
     """
@@ -347,13 +350,21 @@ def enable_hot_reload():
     # path unchanged.
     def on_file_change(file_path: str):
         """Called when a file changes - broadcasts reload to all clients."""
+        if not file_path.lower().endswith(".py"):
+            # A template edit keeps the view class, whose cached template hash
+            # would otherwise key the saved renderer of the old template.
+            try:
+                from djust.hot_view_replacement import note_template_change
+
+                note_template_change(file_path)
+            except Exception:  # noqa: BLE001 — dev-only safety net
+                logger.exception("[HotReload] template hash reset failed")
         if file_path.lower().endswith(".py"):
             # #2602: a templatetags module added (or renamed) while the server
             # runs must be seen by the next ``{% load %}``. The installed-
-            # library scan is process-cached; drop it on ANY .py change — the
-            # debounced watcher hands us one representative path per burst, so
-            # matching ``templatetags/`` in it would miss a mixed burst. The
-            # drop is a pointer write; the re-scan is paid by the next load.
+            # library scan is process-cached; drop it on ANY .py change rather
+            # than matching ``templatetags/`` in the path. The drop is a
+            # pointer write; the re-scan is paid by the next load.
             try:
                 from djust.template_libraries import invalidate_installed_cache
 

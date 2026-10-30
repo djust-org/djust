@@ -126,6 +126,16 @@ class TagHandler:
     declares ``frozenset()`` — resolve nothing.
     """
 
+    # Optional parse-time hooks (inline handlers; both receive the tag's
+    # arguments as the template wrote them, before anything is resolved):
+    #
+    # * ``validate_at_parse(args)`` raises to refuse the template.
+    # * ``rewrite_args_at_parse(args) -> list[str]`` returns the argument list
+    #   the tag keeps (#3664). A handler reads the RESOLVED operands, where a
+    #   positional value and a keyword are the same text; this is where it can
+    #   still tell them apart, e.g. to name each positional operand after a
+    #   parameter (``djust._positional_args``).
+
     #: 0-based arg positions the Rust engine should resolve against the render
     #: context before calling ``render``; the rest arrive as literal tokens.
     #: ``None`` = resolve every arg (default). Read once at registration time

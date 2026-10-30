@@ -75,13 +75,21 @@ def mount(self, request, **kwargs):
         self.item = Item.objects.get(pk=pk)
 ```
 
+**`async def mount`.** `mount()` may also be a coroutine. A sync `mount()` runs on asgiref's one shared sync thread, which every session's sync work uses: when many pages open at once, each mount queues behind the others' database reads. An `async def mount` is awaited on the event loop instead, so its awaits (the async ORM, an async service) overlap with other sessions' work. Use the async ORM (`aget`, `afirst`, `async for`) inside it; a sync ORM call on the loop raises `SynchronousOnlyOperation`, so wrap any sync helper in `sync_to_async`. On the HTTP render djust runs the coroutine to completion before rendering. `handle_params()` may be `async def` too.
+
+```python
+async def mount(self, request, pk=None, **kwargs):
+    self.item = await Item.objects.aget(pk=pk)
+    self.related = [r async for r in self.item.related.all()]
+```
+
 ---
 
 #### `get_context_data(**kwargs) -> dict`
 
 Called before every render — both the initial HTTP render and every WebSocket update. Return the template context.
 
-Always call `super().get_context_data(**kwargs)` so the JIT serialization and change-detection machinery runs. It also matters on the HTTP page-POST fallback: there a view on the default state policy is rebuilt from the dict this method returned on the previous request, so an attribute your override leaves out is unset when the next event handler runs (see [HTTP-Only Mode](../guides/http-only-mode.md#what-the-page-post-fallback-keeps-between-events)). Set state in `mount()`, and add to the result instead of replacing it:
+Always call `super().get_context_data(**kwargs)` so the JIT serialization and change-detection machinery runs. It also matters on the HTTP page-POST fallback: there a view on the default state policy is rebuilt from the state the base `get_context_data()` built from its attributes on the previous request, so an attribute your override leaves out is unset when the next event handler runs (see [HTTP-Only Mode](../guides/http-only-mode.md#what-the-page-post-fallback-keeps-between-events)). Set state in `mount()`, and add to the result instead of replacing it:
 
 ```python
 def get_context_data(self, **kwargs):
@@ -93,11 +101,63 @@ def get_context_data(self, **kwargs):
     return context
 ```
 
+A key your override adds on top of `super()`'s result renders but is never saved in the session: it is computed again on every render. Only the view's attributes are state.
+
+---
+
+#### `get_render_only_context() -> dict`
+
+Template values that render on every transport but are never saved: not by the HTTP GET, not by the page-POST fallback, not by a socket turn's session save. Models, QuerySets and lists of models in it go through the JIT like public attributes (only the paths the template reads, with `djust_exclude_fields` applied). Use it for content that must not persist (a conversation's messages, a document's text) or for rows a handler already holds on a private attribute:
+
+```python
+class ChatView(LiveView):
+    template_name = "chat.html"
+
+    def mount(self, request, chat_id, **kwargs):
+        self.chat_id = chat_id          # state: saved, restored
+        self._load()
+
+    def _load(self):
+        self._chat = Chat.objects.get(pk=self.chat_id)
+        self._messages = list(self._chat.messages.order_by("-created")[:50])
+
+    def get_render_only_context(self):
+        return {"chat": self._chat, "messages": self._messages}
+```
+
+It is called once per render, before the JIT. A key it returns wins over a public attribute of the same name, and that attribute is then not saved either. After the page-POST fallback rebuilds the view, private attributes that are not JSON are gone; read the rows again (as `_load()` above) before the render needs them.
+
+---
+
+#### `handle_restore(request)`
+
+Called after the view was rebuilt from its saved session state: on the HTTP page-POST fallback (after the object permission check, before the event handler) and on a WebSocket/SSE mount restored from the session (`enable_state_snapshot`). `mount()` never sees that state (it does not run, or runs before the state is put back), so read here what the session does not hold, from the restored ids:
+
+```python
+def handle_restore(self, request):
+    self._rows = list(Message.objects.filter(chat_id=self.chat_id)[:50])
+```
+
+Not called after a plain `mount()`. May be `async def`.
+
+---
+
+#### `handle_restore(request)`
+
+Called after the view was rebuilt from its saved session state: on the HTTP page-POST fallback (after the object permission check, before the event handler) and on a WebSocket/SSE mount restored from the session (`enable_state_snapshot`). `mount()` never sees that state (it does not run, or runs before the state is put back), so read here what the session does not hold, from the restored ids:
+
+```python
+def handle_restore(self, request):
+    self._rows = list(Message.objects.filter(chat_id=self.chat_id)[:50])
+```
+
+Not called after a plain `mount()`. May be `async def`.
+
 ---
 
 #### `handle_params(params, uri)`
 
-Called after `mount()` on the initial WebSocket connect, on every `live_patch()` (soft navigation without a full page reload), and on browser back/forward navigation.
+Called after `mount()` on the initial WebSocket connect, on every `live_patch()` (soft navigation without a full page reload), and on browser back/forward navigation. It may be `async def`, like `mount()`.
 
 **Parameters:**
 
@@ -183,7 +243,7 @@ Existing views are unaffected unless they already define a regular no-argument m
 
 #### Disconnect cleanup
 
-The framework cleans up on disconnect by itself: `start_async` tasks are cancelled, presence is untracked, child views are released, and uploads are aborted (an incomplete `ResumableUploadWriter` upload is suspended so the client can resume it after reconnecting). `disconnect()` and `unmount()` methods you define on the view are not called; use `disconnected()` above, and release what it cannot reach (a process that dies runs nothing) with a timeout or a periodic sweep.
+The framework cleans up on disconnect by itself: an explicit-exposure view's `start_async` tasks are cancelled (a legacy view's run to completion and their result is discarded; set `cancel_async_on_disconnect = True` on a view whose work only serves the open page, such as a follower or a live feed, to have it cancelled; tasks the view starts with `self.create_task()` share that fate, see [Tasks the view starts itself](../guides/loading-states.md#tasks-the-view-starts-itself-create_task)), presence is untracked, child views are released, and uploads are aborted (an incomplete `ResumableUploadWriter` upload is suspended so the client can resume it after reconnecting). `disconnect()` and `unmount()` methods you define on the view are not called; use `disconnected()` above, and release what it cannot reach (a process that dies runs nothing) with a timeout or a periodic sweep.
 
 **Telling the live mount from the HTTP render.** `mount()` runs twice for a page: once for the HTTP response and again when the WebSocket (or SSE) connection mounts the view. On the live mount the framework sets `self._websocket_session_id` before `mount()` runs; on the HTTP render it is absent. This is the check djust's own presence tracking uses:
 
