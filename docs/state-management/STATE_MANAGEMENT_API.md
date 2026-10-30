@@ -246,7 +246,7 @@ from djust import LiveView
 from djust.decorators import debounce
 
 class SearchView(LiveView):
-    template_string = """
+    template = """
     <input type="text"
            dj-input="on_search"
            placeholder="Search products..." />
@@ -330,7 +330,7 @@ from djust import LiveView
 from djust.decorators import throttle
 
 class ScrollTrackerView(LiveView):
-    template_string = """
+    template = """
     <div @scroll="on_scroll" style="height: 500px; overflow-y: scroll;">
         <!-- Scrollable content -->
         <div style="height: 2000px;">
@@ -454,7 +454,7 @@ from djust import LiveView
 from djust.decorators import client_state, debounce
 
 class DashboardView(LiveView):
-    template_string = """
+    template = """
     <div>
         <!-- Slider controls temperature -->
         <input type="range"
@@ -606,7 +606,7 @@ from djust import LiveView
 from djust.decorators import cache, debounce
 
 class AutocompleteView(LiveView):
-    template_string = """
+    template = """
     <input type="text"
            dj-input="search"
            placeholder="Search languages..." />
@@ -1070,7 +1070,7 @@ Multiple modifiers can be combined on the same element.
 
 ```python
 class SaveFormView(LiveView):
-    template_string = """
+    template = """
     <form dj-submit="save_data">
         <input type="text" name="title" />
 
@@ -1293,7 +1293,7 @@ Temporarily replaces button text during event processing. Simpler alternative to
 
 ```python
 class UploadView(LiveView):
-    template_string = """
+    template = """
     <form dj-submit="upload_file">
         <input type="file" name="file" />
 

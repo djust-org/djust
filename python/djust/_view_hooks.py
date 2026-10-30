@@ -38,11 +38,29 @@ async def _await(awaitable: Any) -> Any:
     return await awaitable
 
 
+# ``handle_async_result`` / ``handle_tick`` reach here from the HTTP fallback's
+# background work (#3630), which has no ``call_async_result`` / ``call_tick``.
+_HOOK_STEPS = {
+    "mount": "mount",
+    "handle_params": "handle_params",
+    "handle_async_result": "async",
+    "handle_tick": "tick",
+}
+
+
+def _hook_step(fn: Any) -> str:
+    """The ``sync_turn_wrapper`` step of a view hook (``djust.sync_turn``)."""
+    return _HOOK_STEPS.get(getattr(fn, "__name__", ""), "hook")
+
+
 async def call_hook(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
     """Call ``fn`` from async code: awaited on the loop if async, else threaded."""
     if is_async_hook(fn):
         return await fn(*args, **kwargs)
-    result = await sync_to_async(fn)(*args, **kwargs)
+    from .sync_turn import sync_step
+
+    stepped = sync_step(getattr(fn, "__self__", None), _hook_step(fn), fn)
+    result = await sync_to_async(stepped)(*args, **kwargs)
     if inspect.isawaitable(result):
         # A sync callable that returned a coroutine (a wrapper the check above
         # could not see through): run it here, on the loop.
@@ -50,9 +68,50 @@ async def call_hook(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
     return result
 
 
+async def call_async_result(
+    view: Any, handler: Callable[..., Any], name: str, **outcome: Any
+) -> Any:
+    """Call ``view``'s ``handle_async_result`` off the loop, as an ``async`` step.
+
+    The one place the framework runs that hook from async code, so the
+    ``sync_turn_wrapper`` (``djust.sync_turn``) sees it on every transport and
+    for every owner (a root view, an embedded child, a sticky child). ``handler``
+    is the view's bound ``handle_async_result``; ``outcome`` is ``result=`` /
+    ``error=`` (#3625).
+    """
+    from .sync_turn import sync_step
+
+    if is_async_hook(handler):
+        # Not wrapped, as ``call_hook`` and ``run_async_callback`` do not wrap an
+        # ``async def``: ``sync_to_async`` refuses it with the same TypeError it
+        # raises with no wrapper configured, instead of the wrapper's
+        # ``functools.wraps`` shim hiding it and dropping the coroutine.
+        return await sync_to_async(handler)(name, **outcome)
+    return await sync_to_async(sync_step(view, "async", handler))(name, **outcome)
+
+
+async def call_tick(view: Any) -> Any:
+    """Call ``view.handle_tick`` off the loop, as a ``tick`` step (#3625).
+
+    The offloaded tick (``worker_threads``) runs ``handle_tick`` inside its own
+    sync hop and enters the step there with ``run_sync_step`` instead.
+    """
+    from .sync_turn import sync_step
+
+    if is_async_hook(view.handle_tick):
+        # See call_async_result: refused loudly, with or without a wrapper.
+        return await sync_to_async(view.handle_tick)()
+    return await sync_to_async(sync_step(view, "tick", view.handle_tick))()
+
+
 def call_hook_sync(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
     """Call ``fn`` from sync code, running an async hook to completion."""
-    result = fn(*args, **kwargs)
+    if is_async_hook(fn):
+        result = fn(*args, **kwargs)
+    else:
+        from .sync_turn import run_sync_step
+
+        result = run_sync_step(getattr(fn, "__self__", None), _hook_step(fn), fn, *args, **kwargs)
     if inspect.isawaitable(result):
         result = async_to_sync(_await)(result)
     return result

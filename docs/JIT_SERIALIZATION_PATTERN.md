@@ -235,7 +235,11 @@ When you assign a QuerySet to a public instance variable and call `super().get_c
 1. **Template Analysis**: JIT analyzes the template (including `{% include %}` directives) to extract all field access paths
    - Example: `{{ request.property.name }}` → extracts `property.name`
    - Example: `{{ tenant.user.get_full_name }}` → extracts `tenant.user`
-   - Included templates are inlined so their variables are also discovered
+   - Included templates are inlined so their variables are also discovered,
+     for a `template_name`, an inline `template` string and a file template
+     with no `{% extends %}` alike
+   - The bodies of raw-block tags (`{% tabs %}…{% tab %}`, `{% split_pane %}`)
+     are read too: a model list used only inside a tab gets its paths
 
 2. **Automatic Optimization**: JIT automatically applies `select_related()`, `prefetch_related()`, and model-declared annotations
    - Eliminates N+1 query problems
@@ -374,33 +378,35 @@ When refactoring a view to use JIT pattern:
 - [ ] Call `super().get_context_data()` to trigger JIT serialization
 - [ ] Don't add QuerySet to context dict (parent already did it)
 - [ ] Only add non-model context to context dict
-- [ ] Verify JIT is working by checking server logs for `[JIT] Serialized N objects`
+- [ ] Verify JIT is working with the `djust.mixins.jit` logger at `DEBUG` (see below)
 
 ## Debugging JIT Serialization
 
-Enable debug mode to see detailed JIT logging:
+The JIT logs through Python's `logging`, on the `djust.mixins.jit` logger at
+`DEBUG` level. It never writes to stdout or stderr, so production logs stay
+quiet unless you turn that logger up:
 
 ```python
 # In Django settings
-LIVEVIEW_CONFIG = {
-    'debug_vdom': True,  # Enable detailed VDOM and JIT logging
+LOGGING = {
+    "version": 1,
+    "handlers": {"console": {"class": "logging.StreamHandler"}},
+    "loggers": {
+        "djust.mixins.jit": {"handlers": ["console"], "level": "DEBUG"},
+    },
 }
 ```
 
-Or temporarily in code:
-
-```python
-from djust.config import config
-config.set('debug_vdom', True)
-```
-
-You should see logs like:
+You should see records like:
 
 ```
-[JIT] Serialized 7 MaintenanceRequest objects for 'requests' using Rust
-[JIT] Extracted paths from template: ['property.name', 'tenant.user.get_full_name', 'created_at']
-[JIT] Auto-applied select_related: ['property', 'tenant__user']
+[JIT] Cache MISS for 'requests' (MaintenanceRequest) - generating serializer for paths: ['created_at', 'property.name', 'tenant.user.get_full_name']
+[JIT] Query optimization: select_related=['property', 'tenant__user'], prefetch_related=[]
+[JIT] Cache HIT for 'requests' - using cached paths: ['created_at', 'property.name', 'tenant.user.get_full_name']
 ```
+
+`LIVEVIEW_CONFIG['jit_debug'] = True` adds a record per serialization with the
+row count and the first row's keys.
 
 ## JIT Serialization Behavior
 
@@ -606,7 +612,17 @@ JIT serializers are cached for performance. The cache key includes:
 - Variable name
 - Model structure hash (changes when model fields change)
 
-Template hashes are further cached by `id(template_content)` to avoid recomputing the SHA-256 for every variable in the same request. This is safe because the template string is kept alive by the caller for the duration of `get_context_data()`.
+Template hashes are cached by the template source itself (bounded), so the
+SHA-256 is computed once per source, not once per variable or per render.
+
+The extraction source (the template with its `{% extends %}` chain resolved and
+its `{% include %}` partials inlined) is built once per template and template
+directories while `DEBUG` is off, when Django's cached loader also serves a
+template unchanged until restart. With `DEBUG` on it is built on every render,
+so an edited template or partial is picked up. A change of `DEBUG`, `TEMPLATES`
+or `INSTALLED_APPS` and a hot-reload template refresh clear it
+(`djust._render_caches.clear_render_caches()` does it by hand). The dj-model
+allowlist follows the same rule (see the model-binding guide).
 
 **In development**, the cache auto-clears when Django's autoreloader runs.
 
@@ -645,8 +661,47 @@ entry. Aliases are local to the include, and `only` excludes unbound outer-conte
 names. Nested static includes are resolved with a bounded depth; dynamic include
 names still cannot be inferred statically.
 
+### Objects that are not models
+
+The JIT serializes models, QuerySets and lists of models by the paths the
+template reads. Any other object in the context (a dataclass of view logic, a
+presenter) reaches the renderer as the live object, which is not JSON and logs
+a "non-serializable value" warning on every render. Hand the template plain
+data instead, taken by the same paths:
+
+```python
+@dataclass
+class Card:
+    title: str
+    call: Call
+
+class InboxView(LiveView):
+    template_name = "inbox.html"   # {% for card in cards %}{{ card.title }} {{ card.call.label }}…
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["cards"] = self.serialize_for_template(self._cards, "cards")
+        # -> [{"title": "...", "call": {"label": "..."}}, ...]
+        return context
+```
+
+- `view.template_paths()` returns the extraction itself: a dict of top-level
+  name to the dotted paths read under it (`{"cards": ["call.label", "title"]}`),
+  from the template with its `{% extends %}` chain and static includes.
+- `view.serialize_for_template(value, name)` sends a model, a QuerySet or a
+  list of models through the JIT, as a public attribute of that name would.
+  Any other object is reduced to the paths read of `name`: attributes and
+  properties by name, `get_*` methods called, dicts taken whole, lists and
+  tuples item by item. The serialization floor (`DJUST_SENSITIVE_FIELDS`,
+  `djust_exclude_fields`) applies as for a model. A name the template prints
+  whole (no path) falls back to `normalize_django_value`.
+
 Dictionary and list properties retain their structure, so their contents can be
-used in template lookups and loops. Scalar FK IDs such as `entry.owner_id` do not
+used in template lookups and loops. A list (or tuple, set, QuerySet) whose items
+the template reads into, such as `{% for tool in agent.tools %}{{ tool.name }}`,
+is taken item by item by the rest of the paths, on every path (a single model,
+a list of models, a QuerySet): dict items whole, object items by the paths, under
+the same serialization gate as a model. Scalar FK IDs such as `entry.owner_id` do not
 add a join; accessing `entry.owner.name` does. Optional `FileField` and `ImageField`
 values support the usual `{% if entry.image %}{{ entry.image.url }}{% endif %}`
 guard, including when serialization falls back to generated Python code. The

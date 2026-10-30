@@ -1523,16 +1523,16 @@
       "version": "0.11.0"
     },
     {
-      "bom-ref": "rust:pkg:cargo/pulldown-cmark@0.13.4",
+      "bom-ref": "rust:pkg:cargo/pulldown-cmark@0.13.5",
       "licenses": [
         {
           "expression": "MIT"
         }
       ],
       "name": "pulldown-cmark",
-      "purl": "pkg:cargo/pulldown-cmark@0.13.4",
+      "purl": "pkg:cargo/pulldown-cmark@0.13.5",
       "type": "library",
-      "version": "0.13.4"
+      "version": "0.13.5"
     },
     {
       "bom-ref": "rust:pkg:cargo/pyo3-async-runtimes@0.29.0",
@@ -1955,16 +1955,16 @@
       "version": "2.7.0"
     },
     {
-      "bom-ref": "rust:pkg:cargo/tokio@1.53.2",
+      "bom-ref": "rust:pkg:cargo/tokio@1.54.1",
       "licenses": [
         {
           "expression": "MIT"
         }
       ],
       "name": "tokio",
-      "purl": "pkg:cargo/tokio@1.53.2",
+      "purl": "pkg:cargo/tokio@1.54.1",
       "type": "library",
-      "version": "1.53.2"
+      "version": "1.54.1"
     },
     {
       "bom-ref": "rust:pkg:cargo/tracing-attributes@0.1.31",
@@ -2529,7 +2529,7 @@
       "bom-ref": "root:djust",
       "name": "djust",
       "type": "application",
-      "version": "1.3.0rc11"
+      "version": "1.3.0rc14"
     },
     "properties": [
       {

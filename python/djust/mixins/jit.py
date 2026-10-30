@@ -6,19 +6,21 @@ import hashlib
 import logging
 import os
 import re
-import sys
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
 
+from .._render_caches import render_caches_enabled
 from ..serialization import model_identity, normalize_django_value
 from ..session_utils import _jit_serializer_cache, _get_model_hash
 
 logger = logging.getLogger(__name__)
 
-# Cache template_content id → sha256 hash (avoids recomputing per variable within a single request).
-# Keyed by id(template_content) which is safe within a single request lifetime where the
-# caller holds a reference to the string. Used only by _jit_serialize_queryset/_jit_serialize_model
-# for the _expected_keys_cache and _jit_serializer_cache lookups (not for _variable_extraction_cache).
-_template_hash_cache: Dict[int, str] = {}
+# Template source → its short sha256 (``_template_hash``). Keyed by the source
+# itself, not ``id()``: an id is reused once its string is freed, and a cache
+# keyed by it handed a new template the hash of an old one (and grew without
+# bound, one entry per render). A dict lookup by the same string object costs
+# an identity check, so a cached source (``_jit_template_content``) hashes once.
+_template_hash_cache: Dict[str, str] = {}
+_TEMPLATE_HASH_CACHE_MAX = 256
 
 # Cache (template_hash, variable_name) → expected top-level key count
 _expected_keys_cache: Dict[Tuple[str, str], int] = {}
@@ -53,9 +55,7 @@ def _cached_extract_template_variables(template_content: str) -> Optional[dict]:
     if extract_template_variables is None:
         return None
 
-    # Compute SHA-256 directly from content — safe regardless of GC/id reuse.
-    # ~2µs for a ~10KB string, negligible vs the Rust FFI call being cached.
-    content_hash = hashlib.sha256(template_content.encode()).hexdigest()[:8]
+    content_hash = _template_hash(template_content)
 
     # One lookup, not `in` then `[]`: another thread may `.clear()` the cache
     # between the two (#3074). The cached value itself can be None.
@@ -78,6 +78,81 @@ def _cached_extract_template_variables(template_content: str) -> Optional[dict]:
     return result
 
 
+def _template_hash(template_content: str) -> str:
+    """The short sha256 of a template source, computed once per source."""
+    try:
+        return _template_hash_cache[template_content]
+    except KeyError:
+        pass
+    digest = hashlib.sha256(template_content.encode()).hexdigest()[:8]
+    if len(_template_hash_cache) >= _TEMPLATE_HASH_CACHE_MAX:
+        _template_hash_cache.clear()
+    _template_hash_cache[template_content] = digest
+    return digest
+
+
+# The JIT's extraction source per template (Point Guard N-37). Building it
+# resolves the ``{% extends %}`` chain in Rust and reads every ``{% include %}``
+# from disk, on every render that serializes a model. The result depends on
+# the template's text and the template directories only, so it is kept per
+# (source or name, directories) while templates are cached: with DEBUG off,
+# when Django's cached loader serves a template unchanged until restart. With
+# DEBUG on (hot reload edits templates) it is built on every render, as before.
+_template_source_cache: Dict[Tuple[str, str, Tuple[str, ...]], str] = {}
+_TEMPLATE_SOURCE_CACHE_MAX = 256
+
+
+def clear_template_source_caches() -> None:
+    """Forget every cached extraction source, hash and variable map."""
+    _template_source_cache.clear()
+    _template_hash_cache.clear()
+    _variable_extraction_cache.clear()
+
+
+def _template_source_key(view: Any) -> Optional[Tuple[str, str, Tuple[str, ...]]]:
+    from ..utils import get_template_dirs
+
+    full = getattr(view, "_full_template", None)
+    if full and not _EXTENDS_STUB_RE.match(full):
+        kind, ident = "full", full
+    elif getattr(view, "template", None):
+        kind, ident = "inline", view.template
+    elif getattr(view, "template_name", None):
+        kind, ident = "name", view.template_name
+    else:
+        return None
+    if not isinstance(ident, str):
+        return None
+    return (kind, ident, tuple(get_template_dirs()))
+
+
+def _jit_template_content(view: Any) -> Optional[str]:
+    """``view._get_template_content()``, kept per template while templates are cached.
+
+    A view (or an instance) that overrides ``_get_template_content`` is called
+    every time: its answer may depend on more than the template.
+    """
+    if (
+        "_get_template_content" in getattr(view, "__dict__", {})
+        or getattr(type(view), "_get_template_content", None) is not JITMixin._get_template_content
+        or not render_caches_enabled()
+    ):
+        return cast(Optional[str], view._get_template_content())
+    key = _template_source_key(view)
+    if key is None:
+        return cast(Optional[str], view._get_template_content())
+    try:
+        return _template_source_cache[key]
+    except KeyError:
+        pass
+    content = view._get_template_content()
+    if content:
+        if len(_template_source_cache) >= _TEMPLATE_SOURCE_CACHE_MAX:
+            _template_source_cache.clear()
+        _template_source_cache[key] = content
+    return cast(Optional[str], content)
+
+
 try:
     from ..optimization.query_optimizer import analyze_queryset_optimization, optimize_queryset
     from ..optimization.codegen import generate_serializer_code, compile_serializer
@@ -90,6 +165,41 @@ except ImportError:
 # A `_full_template` that is nothing but `{% extends "x" %}`: the child's
 # real source lives behind the loader, so this carries zero variable paths.
 _EXTENDS_STUB_RE = re.compile(r"^\s*\{%\s*extends\s+[^%]*%\}\s*$")
+
+
+# (type, paths) -> compiled serializer, for serialize_for_template's non-model
+# objects. Bounded like the other JIT caches.
+_object_serializer_cache: Dict[Tuple[type, Tuple[str, ...]], Any] = {}
+_OBJECT_SERIALIZER_CACHE_MAX = 256
+
+_LEAF_TYPES = (str, bytes, int, float, bool, dict)
+
+
+def _serialize_object_by_paths(value: Any, paths: List[str]) -> Any:
+    """A non-model ``value`` reduced to ``paths`` (``serialize_for_template``)."""
+    if value is None or isinstance(value, _LEAF_TYPES):
+        return value
+    if not paths:
+        return normalize_django_value(value)
+    if not JIT_AVAILABLE:
+        return normalize_django_value(value)
+    key = (type(value), tuple(sorted(set(paths))))
+    serializer = _object_serializer_cache.get(key)
+    if serializer is None:
+        name = type(value).__name__
+        if not name.isidentifier():
+            name = "Object"
+        func_name = "serialize_object_%s" % hashlib.sha256(repr(key).encode()).hexdigest()[:8]
+        try:
+            code = generate_serializer_code(name, list(key[1]), func_name)
+            serializer = compile_serializer(code, func_name)
+        except (ValueError, SyntaxError):
+            logger.debug("No path serializer for %s; using normalize_django_value", name)
+            return normalize_django_value(value)
+        if len(_object_serializer_cache) >= _OBJECT_SERIALIZER_CACHE_MAX:
+            _object_serializer_cache.clear()
+        _object_serializer_cache[key] = serializer
+    return serializer(value)
 
 
 class JITMixin:
@@ -118,12 +228,16 @@ class JITMixin:
         # for the initial GET); a stub has no variable paths, and returning
         # it here silently disabled JIT query optimization on every
         # inheritance-using view. Fall through to the resolver instead.
+        # Both sources below are the template's own text, which can
+        # ``{% include %}`` partials: inline them, as the ``template_name``
+        # path does, or a variable read only inside a partial has no path and
+        # the JIT serializes every field of its rows (Point Guard N-34).
         if hasattr(self, "_full_template") and self._full_template:
             if not _EXTENDS_STUB_RE.match(self._full_template):
-                return self._full_template
+                return self._with_includes(self._full_template)
 
         if hasattr(self, "template") and self.template:
-            return self.template
+            return self._with_includes(self.template)
 
         if hasattr(self, "template_name") and self.template_name:
             # Try Rust template inheritance resolution first
@@ -168,6 +282,76 @@ class JITMixin:
                 return None
 
         return None
+
+    def _with_includes(self, source: str) -> str:
+        """``source`` with its static ``{% include %}`` partials inlined."""
+        try:
+            from ..utils import get_template_dirs
+
+            return self._inline_includes(source, get_template_dirs())
+        except Exception:  # noqa: BLE001 — extraction source only, never rendered
+            # Value-free: the error can carry template text.
+            logger.debug("Could not inline includes for JIT extraction")
+            return source
+
+    def template_paths(self) -> Dict[str, List[str]]:
+        """The dotted paths the view's template reads, by top-level name.
+
+        The same extraction the JIT serializes models by: the template with its
+        ``{% extends %}`` chain and static ``{% include %}`` partials, loop
+        variables folded onto their iterable (``{% for c in cards %}{{ c.title }}``
+        gives ``cards: ["title"]``). A name read whole (``{{ card }}``) maps to
+        an empty list. Returns ``{}`` when the template cannot be read or
+        parsed.
+
+        Use it with :meth:`serialize_for_template` to hand the template a value
+        that is not a model.
+        """
+        content = self._get_template_content()
+        if not content:
+            return {}
+        found = _cached_extract_template_variables(content) or {}
+        return {name: list(paths) for name, paths in found.items() if name != "*"}
+
+    def serialize_for_template(self, value: Any, name: str) -> Any:
+        """``value`` as the plain data the template reads under ``name``.
+
+        A model, a QuerySet or a list of models goes through the JIT, exactly as
+        a public attribute of that name would. Any other object (a dataclass of
+        view logic, a presenter) is reduced to the paths the template reads of
+        ``name`` (:meth:`template_paths`): attributes and properties by name, a
+        ``get_*`` method called, a dict taken whole, and a list or tuple item by
+        item. The serialization floor (``DJUST_SENSITIVE_FIELDS``,
+        ``djust_exclude_fields``) applies as it does to a model.
+
+        So a ``get_context_data()`` override can hand the renderer plain data
+        instead of the live object (which is not JSON, and which djust warns
+        about on every render)::
+
+            def get_context_data(self, **kwargs):
+                context = super().get_context_data(**kwargs)
+                context["cards"] = self.serialize_for_template(self._cards, "cards")
+                return context
+
+        With no path for ``name`` (the template prints the object whole, or
+        does not use it), the value goes through ``normalize_django_value``.
+        """
+        from django.db import models
+        from django.db.models import QuerySet
+
+        from ..utils import is_model_list
+
+        content = self._get_template_content() or ""
+        if isinstance(value, QuerySet):
+            return self._jit_serialize_queryset(value, content, name)
+        if isinstance(value, models.Model):
+            return self._jit_serialize_model(value, content, name)
+        if is_model_list(value):
+            return self._jit_serialize_model_list(value, content, name)
+        paths = self.template_paths().get(name, [])
+        if isinstance(value, (list, tuple)):
+            return [_serialize_object_by_paths(item, paths) for item in value]
+        return _serialize_object_by_paths(value, paths)
 
     @staticmethod
     def _inline_includes(template_content: str, template_dirs: List[str]) -> str:
@@ -248,39 +432,38 @@ class JITMixin:
             paths_for_var = variable_paths_map.get(variable_name, [])
 
             if not paths_for_var:
-                print(
-                    f"[JIT] No paths found for '{variable_name}', using DjangoJSONEncoder fallback",
-                    file=sys.stderr,
+                logger.debug(
+                    "[JIT] No paths found for '%s', using DjangoJSONEncoder fallback",
+                    variable_name,
                 )
                 return [normalize_django_value(obj) for obj in queryset]
 
             model_class = queryset.model
-            _tc_id = id(template_content)
-            if _tc_id not in _template_hash_cache:
-                _template_hash_cache[_tc_id] = hashlib.sha256(
-                    template_content.encode()
-                ).hexdigest()[:8]
-            template_hash = _template_hash_cache[_tc_id]
+            template_hash = _template_hash(template_content)
             model_hash = _get_model_hash(model_class)
             cache_key = (template_hash, variable_name, model_hash)
 
             if cache_key in _jit_serializer_cache:
                 paths_for_var, optimization = _jit_serializer_cache[cache_key]
-                print(
-                    f"[JIT] Cache HIT for '{variable_name}' - using cached paths: {paths_for_var}",
-                    file=sys.stderr,
+                logger.debug(
+                    "[JIT] Cache HIT for '%s' - using cached paths: %s",
+                    variable_name,
+                    paths_for_var,
                 )
             else:
                 optimization = analyze_queryset_optimization(model_class, paths_for_var)
 
-                print(
-                    f"[JIT] Cache MISS for '{variable_name}' ({model_class.__name__}) - generating serializer for paths: {paths_for_var}",
-                    file=sys.stderr,
+                logger.debug(
+                    "[JIT] Cache MISS for '%s' (%s) - generating serializer for paths: %s",
+                    variable_name,
+                    model_class.__name__,
+                    paths_for_var,
                 )
                 if optimization:
-                    print(
-                        f"[JIT] Query optimization: select_related={sorted(optimization.select_related)}, prefetch_related={sorted(optimization.prefetch_related)}",
-                        file=sys.stderr,
+                    logger.debug(
+                        "[JIT] Query optimization: select_related=%s, prefetch_related=%s",
+                        sorted(optimization.select_related),
+                        sorted(optimization.prefetch_related),
                     )
 
                 _jit_serializer_cache[cache_key] = (paths_for_var, optimization)
@@ -405,14 +588,12 @@ class JITMixin:
                 return model_identity(obj)
 
             model_class = obj.__class__
-            _tc_id = id(template_content)
-            if _tc_id not in _template_hash_cache:
-                _template_hash_cache[_tc_id] = hashlib.sha256(
-                    template_content.encode()
-                ).hexdigest()[:8]
-            template_hash = _template_hash_cache[_tc_id]
+            template_hash = _template_hash(template_content)
             model_hash = _get_model_hash(model_class)
-            cache_key = (template_hash, variable_name, model_hash)
+            # Its own slot: ``_jit_serialize_queryset`` keeps (paths,
+            # optimization) under the three-part key, and a name served as a
+            # QuerySet once and a model later read that tuple as a serializer.
+            cache_key = (template_hash, variable_name, model_hash, "model")
 
             if cache_key in _jit_serializer_cache:
                 serializer, _ = _jit_serializer_cache[cache_key]

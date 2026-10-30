@@ -137,6 +137,21 @@ def _is_json_serializable(value: Any) -> bool:
         return False
 
 
+def _keeps_out_of_state(value: Any) -> bool:
+    """Whether a REQUEST-SCOPED context value must stay out of the Rust state.
+
+    Two kinds: a value that is not JSON data (``WSGIRequest``, ``PermWrapper``,
+    ``FallbackStorage``, a lazy ``user``, a lazy HTML chunk), which the normalizer
+    would stringify, and plain data a processor marked ``RequestScopedList``
+    because storing it is the cost (#3631). Both ride the raw-value sidecar.
+    Every site that decides this asks here, so the dj-root render, the page-shell
+    render and the sidecar builder cannot disagree (#1646).
+    """
+    from ..request_scoped import is_request_scoped_data
+
+    return is_request_scoped_data(value) or not _is_json_serializable(value)
+
+
 def _request_scoped_keys(view: Any) -> set:
     """Context keys that are request-scoped, not LiveView state (#1786, #3061).
 
@@ -164,6 +179,33 @@ def legacy_render_only_keys(view: Any) -> frozenset:
     return frozenset(keys()) if callable(keys) else frozenset()
 
 
+def legacy_unsaved_keys(view: Any, context: Dict[str, Any]) -> frozenset:
+    """The keys of ``context`` a legacy session save drops.
+
+    A legacy save keeps the view's state: the keys the base
+    ``get_context_data()`` built from the view's attributes. It drops
+
+    - the render-only keys (:meth:`ContextMixin.get_render_only_context`, the
+      framework's private ``_djust_render_only_context`` hooks), and
+    - every key an override added on top of ``super().get_context_data()``.
+      Such a value is computed again on every render, so saving it only
+      copied derived data (a query set's rows with every column, content
+      that must not reach the session) into ``django_session`` and set it
+      back as an attribute on restore (Point Guard N-31 and Phase 2
+      decision 185).
+
+    Every legacy save site (the HTTP GET, the page-POST fallback, the socket
+    turn's save, a lazy child) filters through this one function.
+    """
+    unsaved = set(legacy_render_only_keys(view))
+    recorded = getattr(view, "__dict__", {})
+    unsaved.update(recorded.get("_djust_render_only_keys", ()))
+    base = recorded.get("_djust_state_context_keys")
+    if base is not None:
+        unsaved.update(key for key in context if key not in base)
+    return frozenset(unsaved)
+
+
 def _drop_request_scoped_values(view: Any, context: Dict[str, Any]) -> Dict[str, Any]:
     """Return ``context`` without its non-serializable request-scoped values.
 
@@ -176,13 +218,15 @@ def _drop_request_scoped_values(view: Any, context: Dict[str, Any]) -> Dict[str,
     (``render_full_template``) agree (#3061, the #1646 parallel-path class).
     The values still reach the template through the raw-value sidecar.
     Serializable processor output (``csrf_token``, ``DEFAULT_MESSAGE_LEVELS``,
-    a theming ``SafeString``) is kept.
+    a theming ``SafeString``) is kept, except plain data a processor marked
+    ``RequestScopedList`` (``theme_presets``, #3631): it is left out here and
+    reaches the template through the sidecar, as in ``_sync_state_to_rust``.
     """
     scoped = _request_scoped_keys(view)
     return {
         key: value
         for key, value in context.items()
-        if key not in scoped or _is_json_serializable(value)
+        if key not in scoped or not _keeps_out_of_state(value)
     }
 
 
@@ -376,12 +420,20 @@ class ContextMixin:
                             continue
                 context[key] = value
 
-        # Render-only values a mixin supplies (ADR-035's managed ``object``).
-        # Added before model serialization so they render like any other model;
-        # ``legacy_render_only_keys`` keeps them out of every session save.
+        # Render-only values: a mixin's (ADR-035's managed ``object``) and the
+        # view's own (``get_render_only_context``). Added before model
+        # serialization so they render like any other model;
+        # ``legacy_unsaved_keys`` keeps them out of every session save.
+        render_only_keys: set = set()
         render_only = getattr(self, "_djust_render_only_context", None)
         if callable(render_only):
-            context.update(render_only())
+            items = render_only()
+            context.update(items)
+            render_only_keys.update(items)
+        items = self.get_render_only_context()
+        if items:
+            context.update(items)
+            render_only_keys.update(items)
 
         # JIT auto-serialization for QuerySets and Models
         jit_serialized_keys = set()
@@ -404,19 +456,21 @@ class ContextMixin:
 
         if has_db_values:
             try:
-                template_content = self._get_template_content()
+                from ..mixins.jit import _jit_template_content
+
+                template_content = _jit_template_content(self)
                 if template_content:
                     # Extract variable paths once for list[Model] optimization
                     from ..mixins.jit import _cached_extract_template_variables
 
                     variable_paths_map = _cached_extract_template_variables(template_content)
 
-                    # Compute template hash once for codegen cache keys
-                    import hashlib
+                    # Template hash once for codegen cache keys
+                    from ..mixins.jit import _template_hash
                     from ..session_utils import _jit_serializer_cache, _get_model_hash
                     from ..optimization.codegen import generate_serializer_code, compile_serializer
 
-                    template_hash = hashlib.sha256(template_content.encode()).hexdigest()[:8]
+                    template_hash = _template_hash(template_content)
 
                     for key, value in list(context.items()):
                         if isinstance(value, QuerySet):
@@ -579,7 +633,37 @@ class ContextMixin:
             if streams_ctx:
                 context["streams"] = streams_ctx
 
+        # What a legacy session save may keep (``legacy_unsaved_keys``): the
+        # keys built here from the view's attributes, not the render-only
+        # ones (nor the counts derived from them), and not what an override
+        # adds after this returns.
+        derived = {key + "_count" for key in render_only_keys}
+        self._djust_render_only_keys = frozenset(render_only_keys | derived)
+        self._djust_state_context_keys = frozenset(
+            key for key in context if key not in render_only_keys and key not in derived
+        )
+
         return context
+
+    def get_render_only_context(self) -> Dict[str, Any]:
+        """Template values that render but are never saved. Override to add some.
+
+        The returned dict joins the context of every render. Its models,
+        QuerySets and lists of models go through the JIT like public
+        attributes (only the paths the template reads, with
+        ``djust_exclude_fields`` applied), but no session save keeps them:
+        not the HTTP GET's, not the page-POST fallback's, not a socket turn's.
+        Use it for content that must not persist, or for rows a handler
+        already holds on a private attribute::
+
+            def get_render_only_context(self):
+                return {"chat": self._rows.chat, "messages": self._rows.messages}
+
+        A key here wins over a public attribute of the same name, and that
+        attribute is then not saved either. Called once per render, before
+        the JIT runs.
+        """
+        return {}
 
     def _get_explicit_context_data(self, **kwargs: Any) -> Dict[str, Any]:
         """Render-only context from deliberate additions and known providers.
@@ -683,6 +767,13 @@ class ContextMixin:
                 context._provide(UPLOADS_PROVIDER.name, name, value)
 
         self._explicit_context_provider_keys = context.provider_keys()
+        # Explicit exposure saves declared server fields only, so the
+        # render-only values are just more render context.
+        render_only_items = self.get_render_only_context()
+        if render_only_items:
+            if any(key in context.provider_keys() for key in render_only_items):
+                raise ExposureError("Explicit context provider collision")
+            context.update(render_only_items)
         context.update(kwargs)
         self._jit_serialized_keys = set()
         return context

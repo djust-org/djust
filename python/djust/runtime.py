@@ -69,7 +69,7 @@ from typing import (
 
 from asgiref.sync import async_to_sync, sync_to_async
 
-from ._view_hooks import call_hook
+from ._view_hooks import call_async_result, call_hook
 
 if TYPE_CHECKING:
     from ._async_batch import AsyncBatch
@@ -588,6 +588,13 @@ def _tenant_context(tenant: Any) -> ContextManager[Any]:
 # single-sourced in djust.auth.core._bind_current_tenant, invoked by the shared
 # run_pre_mount_auth sequence; the runtime no longer carries its own copy. The
 # per-event / url-change re-bind still uses the _tenant_context manager above.
+
+
+def _lifecycle_step(view: Any, fn: Callable[..., Any]) -> Callable[..., Any]:
+    """``fn`` (a view's snapshot hook) as a ``"lifecycle"`` step for ``sync_to_async`` (#3637)."""
+    from .sync_turn import sync_step
+
+    return sync_step(view, "lifecycle", fn)
 
 
 def _consume_async_cancel(view: Any, task_name: str) -> bool:
@@ -1641,7 +1648,9 @@ class WSConsumerTransport:
             return
         consumer = self._consumer
         try:
-            presence_key = await sync_to_async(view.get_presence_key)()
+            from .sync_turn import sync_step
+
+            presence_key = await sync_to_async(sync_step(view, "hook", view.get_presence_key))()
             group = PresenceManager.presence_group_name(presence_key)
             joined = getattr(consumer, "_presence_groups", None)
             if not isinstance(joined, set):
@@ -2373,7 +2382,13 @@ class WSConsumerTransport:
         from .utils import get_template_dirs
 
         get_template = getattr(view, "get_template", None)
-        template = await sync_to_async(get_template)() if get_template is not None else None
+        from .sync_turn import sync_step as _sync_step
+
+        template = (
+            await sync_to_async(_sync_step(view, "render", get_template))()
+            if get_template is not None
+            else None
+        )
         # ADR-029 (#2741): the actor path never runs `_sync_state_to_rust`,
         # so nothing pushed the render environment for THIS mount. Push it on
         # the calling thread — `SessionActorHandle.mount` captures the calling
@@ -2383,7 +2398,9 @@ class WSConsumerTransport:
         from .render_env import apply_render_env
 
         apply_render_env()
-        context_data = await sync_to_async(view.get_context_data)()
+        from .sync_turn import sync_step
+
+        context_data = await sync_to_async(sync_step(view, "render", view.get_context_data))()
         result = await consumer.actor_handle.mount(
             view_path,
             context_data,
@@ -3792,8 +3809,12 @@ class ViewRuntime(RuntimeTurnPort):
         from ._tenant_state import session_view_key
 
         # None = tenant view with no resolved tenant: restore nothing (#2973).
+        from .config import view_state_in_session
+
         view_key = session_view_key(view_instance, page_url)
-        if opt_in and session is not None and view_key is not None:
+        # ``view_state_in_session=False``: no saved view state to read. The
+        # signed client snapshot below is not in the session and stays on.
+        if opt_in and view_state_in_session() and session is not None and view_key is not None:
             try:
                 saved_state = await session.aget(view_key, {})
             except Exception:  # noqa: BLE001 — session backend may be absent
@@ -3818,7 +3839,12 @@ class ViewRuntime(RuntimeTurnPort):
                 if hasattr(view_instance, "_restore_upload_configs"):
                     await sync_to_async(view_instance._restore_upload_configs)()
                 if hasattr(view_instance, "_restore_presence"):
-                    await sync_to_async(view_instance._restore_presence)()
+                    from .sync_turn import sync_step
+
+                    # Reads ``get_presence_key()``: a ``"hook"`` step (#3637).
+                    await sync_to_async(
+                        sync_step(view_instance, "hook", view_instance._restore_presence)
+                    )()
                 if hasattr(view_instance, "_restore_listen_channels"):
                     await sync_to_async(view_instance._restore_listen_channels)()
 
@@ -3841,6 +3867,12 @@ class ViewRuntime(RuntimeTurnPort):
                             component._renew_observation_lifetime()
                         elif isinstance(component, DropdownMenuCollection):
                             component._renew_observation_lifetimes()
+
+                # mount() did not run: let the view read again what the
+                # session does not hold, from the restored state.
+                handle_restore = getattr(view_instance, "handle_restore", None)
+                if callable(handle_restore):
+                    await call_hook(handle_restore, request)
 
                 mounted_from_restore = True
 
@@ -3917,8 +3949,19 @@ class ViewRuntime(RuntimeTurnPort):
                                 sanitize_for_log(view_path),
                             )
                             state_dict = None
+                    from .sync_turn import guarded_step, sync_step
+
+                    # ``_should_restore_snapshot`` / ``_restore_snapshot`` are
+                    # documented subclass overrides that may read rows: a
+                    # ``"lifecycle"`` step each, like ``on_mount`` (#3637). A
+                    # wrapper that swallows an exception from the gate reads as
+                    # "no" (None) and the view mounts fresh; one that swallows
+                    # ``_restore_snapshot``'s is a ``PermissionDenied`` here,
+                    # which the handler below turns into a fresh mount.
                     if state_dict is not None and await sync_to_async(
-                        view_instance._should_restore_snapshot
+                        sync_step(
+                            view_instance, "lifecycle", view_instance._should_restore_snapshot
+                        )
                     )(request):
                         # #2252: un-tag Decimals BEFORE handing the state to
                         # ``_restore_snapshot``, which is a documented
@@ -3928,7 +3971,11 @@ class ViewRuntime(RuntimeTurnPort):
 
                         state_dict = decode_state_roundtrip(state_dict)
                         try:
-                            await sync_to_async(view_instance._restore_snapshot)(state_dict)
+                            await sync_to_async(
+                                guarded_step(
+                                    view_instance, "lifecycle", view_instance._restore_snapshot
+                                )
+                            )(state_dict)
                             mounted_from_restore = True
                         except Exception:  # noqa: BLE001
                             logger.exception(
@@ -4003,7 +4050,9 @@ class ViewRuntime(RuntimeTurnPort):
                         and not slot_target
                         and type(incoming) is dict
                         and incoming.get("view_slug") == view_path
-                        and await sync_to_async(view_instance._should_restore_snapshot)(request)
+                        and await sync_to_async(
+                            _lifecycle_step(view_instance, view_instance._should_restore_snapshot)
+                        )(request)
                     ):
                         from ._exposure_snapshots import snapshot_codec
 
@@ -4387,7 +4436,9 @@ class ViewRuntime(RuntimeTurnPort):
                     # public state so a back-navigation restore can't hand a
                     # handler a plain dict where it expects a Model. See
                     # LiveView._reject_orm_value_in_state_persistence.
-                    public_state = await sync_to_async(snapshot_fn)(strict=True)
+                    public_state = await sync_to_async(_lifecycle_step(view_instance, snapshot_fn))(
+                        strict=True
+                    )
                     if isinstance(public_state, dict) and public_state:
                         from ._tenant_state import snapshot_tenant_scope
                         from .security import sign_snapshot
@@ -5567,6 +5618,12 @@ class ViewRuntime(RuntimeTurnPort):
             # ``commit_explicit_turn`` (E3); this best-effort save would ack a
             # failed write (#3211). Refused before any read or write.
             require_legacy_state_api(target_view)
+            from .config import view_state_in_session
+
+            # ``view_state_in_session=False``: nothing of the view goes in the
+            # session; this counts as saved, as a turn with no session does.
+            if not view_state_in_session():
+                return
             scope_session = (
                 (self.scope.get("session") if self.scope else None)
                 if mount_request is None
@@ -5613,11 +5670,13 @@ class ViewRuntime(RuntimeTurnPort):
             if inspect.iscoroutinefunction(_gcd_save):
                 save_context = async_to_sync(_gcd_save)()
             else:
-                save_context = _gcd_save()
+                from .sync_turn import run_sync_step
 
-            from .mixins.context import legacy_render_only_keys
+                save_context = run_sync_step(target_view, "render", _gcd_save)
 
-            render_only = legacy_render_only_keys(target_view)
+            from .mixins.context import legacy_unsaved_keys
+
+            render_only = legacy_unsaved_keys(target_view, save_context)
             from .components.base import LiveComponent as _LC, is_component_collection
 
             save_state = {
@@ -7909,7 +7968,11 @@ class ViewRuntime(RuntimeTurnPort):
                 and hasattr(view, "get_context_data")
             ):
                 try:
-                    _ctx_snapshot = await sync_to_async(view.get_context_data)()
+                    from .sync_turn import sync_step
+
+                    _ctx_snapshot = await sync_to_async(
+                        sync_step(view, "render", view.get_context_data)
+                    )()
                 except Exception:  # noqa: BLE001 — snapshot is best-effort DEBUG metadata
                     _ctx_snapshot = None
             _on_render = getattr(self.transport, "on_render_emitted", None)
@@ -8033,12 +8096,14 @@ class ViewRuntime(RuntimeTurnPort):
             # Verify, do not predict: the page is exact only if nothing the
             # template can read changed besides the component — including
             # values DERIVED from it elsewhere on the view.
-            context = await sync_to_async(view.get_context_data)()
+            from .sync_turn import sync_step
+
+            context = await sync_to_async(sync_step(view, "render", view.get_context_data))()
             reason = _context_changed_besides(view, context, name)
             if reason is not None:
                 logger.debug("Scoped render of %r: %r changed too; full render", name, reason)
                 return None
-            html = await sync_to_async(component.render)()
+            html = await sync_to_async(sync_step(component, "render", component.render))()
             # Component-sized parse + diff; runs inline on the event loop like
             # the JSON decode of the patches. Route a large component through
             # ``sync_to_async`` before making it larger.
@@ -8618,8 +8683,8 @@ class ViewRuntime(RuntimeTurnPort):
 
                 async def complete() -> None:
                     if hasattr(view, "handle_async_result"):
-                        await sync_to_async(view.handle_async_result)(
-                            task_name, result=result, error=None
+                        await call_async_result(
+                            view, view.handle_async_result, task_name, result=result, error=None
                         )
                     # Identity re-check INSIDE the lock (#1940): the handler await
                     # above is an unbounded wait during which the view can be torn
@@ -8653,8 +8718,12 @@ class ViewRuntime(RuntimeTurnPort):
 
                     async def complete_error() -> None:
                         if hasattr(view, "handle_async_result"):
-                            await sync_to_async(view.handle_async_result)(
-                                task_name, result=None, error=failure
+                            await call_async_result(
+                                view,
+                                view.handle_async_result,
+                                task_name,
+                                result=None,
+                                error=failure,
                             )
                         if self.view_instance is not view:
                             return
@@ -8774,7 +8843,9 @@ class ViewRuntime(RuntimeTurnPort):
                     handler = getattr(view, "handle_async_result", None)
                     if callable(handler):
                         try:
-                            await sync_to_async(handler)(task_name, result=result, error=error)
+                            await call_async_result(
+                                view, handler, task_name, result=result, error=error
+                            )
                         except Exception as exc:  # noqa: BLE001
                             from ._exposure_diagnostics import log_failure_for
 

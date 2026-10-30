@@ -1,0 +1,1 @@
+- **Roadmap: v1.3.0-14 drain bucket** — records the follow-ups of the v1.3.0-13 drain (HTTP fallback, sync-turn-wrapper hops, `dj-update` accumulation) and renames the earlier colliding v1.3.0-10 bucket to v1.3.0-13.

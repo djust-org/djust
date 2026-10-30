@@ -24,7 +24,7 @@ from django.utils.html import conditional_escape
 from django.utils.safestring import SafeString
 
 from ._registry import safe_url
-from djust.components.utils import rich_html, unique_ids as _unique_ids, url_attr
+from djust.components.utils import rich_html, unique_ids as _unique_ids, url_attr, srcset_attr
 from djust.components.utils import (
     safe_css_color,
     safe_css_length,
@@ -1091,7 +1091,12 @@ def avatar(
         status: online, offline, busy, away, or empty
     """
     return {
-        "src": src,
+        # The same sanitiser the native handler uses, so both engines agree: a
+        # script-capable scheme becomes "#", an inline data:image/ URI is kept
+        # (#3665). ``url_attr`` returns HTML-escaped text marked safe, so the
+        # template does not escape it a second time (pinned by
+        # ``test_a_marked_safe_src_is_not_escaped_twice_under_django``).
+        "src": url_attr(src, image=True),
         "alt": alt,
         "initials": initials or (alt[:2].upper() if alt else ""),
         "size": size,
@@ -5640,8 +5645,9 @@ def responsive_image(
     img_attrs = [f'src="{e_src}"', f'alt="{e_alt}"']
     if lazy:
         img_attrs.append('loading="lazy"')
-    if srcset:
-        img_attrs.append(f'srcset="{conditional_escape(srcset)}"')
+    e_srcset = srcset_attr(srcset)
+    if e_srcset:
+        img_attrs.append(f'srcset="{e_srcset}"')
     if sizes:
         img_attrs.append(f'sizes="{conditional_escape(sizes)}"')
 
