@@ -241,6 +241,17 @@ repos:
         files: ^(README|QUICKSTART|CLAUDE)\.md$|^pyproject\.toml$|^docs/website/guides/.*\.md$|^python/djust/static/djust/client-sizes\.json$
         pass_filenames: false
 
+      # Execute the documented LiveView / LiveComponent blocks (mount, render,
+      # fire handlers). CI skips docs-only PRs (test.yml paths-ignore), so this
+      # is the only place a guide edit meets the execution test before merge.
+      # ~5 s. See tests/test_doc_snippets_execute.py.
+      - id: execute-doc-snippets
+        name: execute documented LiveView snippets (docs/testing/doc-snippet-execution-inventory.md)
+        entry: bash -c 'PYTHONPATH=. bash scripts/run-with-venv-python.sh -m pytest tests/test_doc_snippets_execute.py -q -p no:cacheprovider'
+        language: system
+        files: ^QUICKSTART\.md$|^docs/website/(guides|getting-started)/.*\.md$|^docs/website/getting-started.*\.md$|^tests/test_doc_snippets_execute\.py$
+        pass_filenames: false
+
       # Methods named in the mixin guides must exist on the mixins.
       # docs/website/guides/pwa.md carried EIGHT phantom PWA methods — in an
       # API table and in two runnable examples — until #2655 removed them;
