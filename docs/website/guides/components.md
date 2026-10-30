@@ -1016,6 +1016,27 @@ The `{% theme_alert %}` / `{% theme_progress %}` / `{% theme_avatar %}` tags
 from `djust.theming` render the same components with the theming package's
 own class names.
 
+### URLs in component attributes
+
+What a built-in component prints into a URL attribute (`<a href>`, `<form action>`, `<img src>`, `srcset`, a poster) depends on which library prints it. The two are NOT the same rule.
+
+**`djust_components`: the template tags (in both rendering engines, the Python tag under Django's engine and the native handler under `DjustTemplateBackend`) and the class-based components.** An allowlist:
+
+| the value | what is printed |
+| --- | --- |
+| relative (`/x`, `../x`, `#frag`, `?q=1`), `http`, `https`, `ftp`, `ftps`, `mailto`, `tel`, `//host/x` | the value, HTML-escaped |
+| any other scheme: `javascript:`, `vbscript:`, `data:text/html`, `blob:`, `file:`, custom schemes, including the case-folded, whitespace/control-character-obfuscated forms (`JaVa<TAB>Script:`) | `#` |
+| `data:image/...` | kept, but only on an image source (`<img src>`, a `srcset` candidate) |
+| a `mark_safe` value | **tags:** unchanged, the author's explicit statement that they vouch for it (only Django's engine sees the marker; the Rust engine receives plain text and neutralises the same value, the stricter side). **Class-based components:** the six sinks that always escaped with `html.escape` (`ImageCropper`, `ImageUploadPreview`, `LiveIndicator`, `MentionsInput`, `OrgChart` and `ResponsiveImage`'s `srcset`) do NOT honour the marker: a `SafeString` is checked and escaped like any other string, as they always escaped it (an already-escaped `&amp;` becomes `&amp;amp;`). The other class components (`Avatar`, `Carousel`, `NavMenu`, `Breadcrumb`, `ResponsiveImage`'s `src`, the `LiveComponent`s such as `NavbarComponent`, and others) already honoured it before and still do: for them a `mark_safe` URL is the author's opt-out too, and one that breaks out of the attribute is emitted as written. |
+
+An entity or percent escape inside the scheme (`jav&#x61;script:`, `javascript%3A`) is printed as literal text, which a browser reads as a relative URL, not as a script URL. A `srcset` is a comma-separated list, so each candidate URL is checked as an image source; candidates are split exactly as the HTML specification's "parse a srcset attribute" splits them (parentheses in a descriptor do not nest, and only ASCII whitespace separates).
+
+The implementation is `djust.components.utils.url_attr` (one URL; `honor_safe=False` for the class components), `safe_url` (navigation sinks, no `data:` images) and `srcset_attr`. A new component that prints a caller-supplied URL must use one of them.
+
+**`djust_theming` (`theme_*` tags and pages) is different.** It refuses by DENYLIST: `javascript:`, `vbscript:`, `data:` and the obsolete `livescript:` and `mhtml:` become `#` (or raise, for a literal). It passes every other scheme the components allowlist would reject, among them `blob:`, `file:`, `view-source:`, `jar:`, `intent:`, `feed:`, `ws:`, `git:`, `ms-word:` and custom application schemes. None of those is a script scheme; whether the theming tags should move to the shared allowlist (which would break a legitimate custom scheme) is an open decision, so it is documented here rather than changed.
+
+`make template-library-url-sweep` (see [the template backend reference](../../TEMPLATE_BACKEND.md)) drives script-capable URLs through every parameter of every tag and driveable class component and `python/tests/test_url_scheme_sweep_3665.py` fails a PR that adds a sink without the check, because it derives the tags, parameters and classes from the code. It does not drive the descriptor components (their markup is the caller's template) or the gallery pages.
+
 ## djust-theming
 
 `djust.theming` is a production-ready theming system inspired by shadcn/ui, shipped in core. It provides CSS custom properties-based theming with light/dark mode, 12 design systems × 68 color presets, and reactive theme switching via djust LiveViews.

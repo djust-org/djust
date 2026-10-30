@@ -416,7 +416,8 @@ class TestMountWorkWaitsForEveryRefusal:
         """It passes no ``@rate_limit`` check, so it must not start the page's reads."""
         with STATELESS:
             _, response, body = _post(RefusalView, "no_such_handler")
-        assert response.status_code == 200, body
+        # Refused outright (400), as the socket transports do; nothing runs.
+        assert response.status_code == 400, body
         assert RefusalView.loads == 0
 
 

@@ -195,6 +195,7 @@ markers = [
     "admin: marks tests for djust.admin_ext module",
     "theming: marks tests for djust.theming module",
     "components: marks tests for djust.components module",
+    "pr_tier: stays in the PR fast tier even when .test_durations records it over 1s (tests/slow_tier.py)",
     "nightly: marks exhaustive differential sweeps for scheduled nightly CI (deselect with '-m \"not nightly\"')",
 ]
 asyncio_mode = "auto"

@@ -41,6 +41,7 @@ from djust.components.utils import (
     interpolate_color_gradient,
     unique_ids as _unique_ids,
     url_attr,
+    srcset_attr,
 )
 
 
@@ -2028,8 +2029,16 @@ def register_with_rust_engine() -> None:
         # Django template engine with {% load djust_components %})
         return
 
+    # Positional arguments (#3664): the Python tags are ``simple_tag`` /
+    # ``inclusion_tag``, so ``{% dj_tag "Python" %}`` is valid; a native handler
+    # reads ``key=value`` strings, so each one is wrapped to name its positional
+    # tokens after the Python tag's own parameters.
+    from djust._positional_args import with_positional_args
+
+    from .templatetags.djust_components import register as _tag_library
+
     for tag_name, handler in INLINE_HANDLERS:
-        register_tag_handler(tag_name, handler)
+        register_tag_handler(tag_name, with_positional_args(tag_name, handler, _tag_library))
 
     for tag_name, end_tag, handler in BLOCK_HANDLERS:
         register_block_tag_handler(tag_name, end_tag, handler)
@@ -3506,7 +3515,7 @@ class ResponsiveImageHandler:
         alt = conditional_escape(str(kw.get("alt", "")))
         aspect_ratio = conditional_escape(safe_css_ratio(kw.get("aspect_ratio", ""), ""))
         lazy = kw.get("lazy", True)
-        srcset = conditional_escape(str(kw.get("srcset", "")))
+        srcset = srcset_attr(kw.get("srcset", ""))
         sizes = conditional_escape(str(kw.get("sizes", "")))
         placeholder = url_attr(kw.get("placeholder", ""), image=True)
         custom_class = conditional_escape(str(kw.get("custom_class", "")))

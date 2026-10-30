@@ -451,9 +451,14 @@ class _Scan:
         source = self.source
         masked = _mask(source, self.spans)
         scanner = _Scanner(masked)
-        for offset in range(0, len(masked), _CHUNK):
+        # Nothing after the last ">" can complete a tag, so it cannot open or close
+        # a container. Leave it out: before 3.12.11 / 3.13.5 (gh-135462), close()
+        # rescans an unterminated "<a " or "<!--" to the end of input once per "<",
+        # which is quadratic. A prefix keeps every offset valid.
+        parsed = masked[: masked.rfind(">") + 1]
+        for offset in range(0, len(parsed), _CHUNK):
             self.budget.check()
-            scanner.feed(masked[offset : offset + _CHUNK])
+            scanner.feed(parsed[offset : offset + _CHUNK])
         self.budget.check()
         scanner.close()
         aliases = self._alias_states()
