@@ -104,6 +104,22 @@ def _isolate_system_check_registry():
 
 
 @pytest.fixture(autouse=True)
+def _isolate_current_tenant():
+    """Unbind djust's current tenant around every test (`tests/tenant_isolation.py`).
+
+    A sync test that bound tenant 42 and never reset it made
+    `tests/unit/test_server_push.py::TestPushToView::test_push_state` fail
+    with an extra `tenant_scope` when both ran on the same xdist worker.
+    Does nothing, and imports nothing, unless `djust.tenants.middleware` is
+    already loaded.
+    """
+    from tests.tenant_isolation import isolated_current_tenant
+
+    with isolated_current_tenant():
+        yield
+
+
+@pytest.fixture(autouse=True)
 def _no_agent_hint_env(monkeypatch):
     """Disable inherited AI hints in subprocess check tests; I001 tests opt in.
 
