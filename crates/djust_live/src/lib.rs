@@ -8024,6 +8024,13 @@ mod fast_path_flag_tests {
         assert_eq!(path_of(&fast), path_of(&full), "fast: {fast} full: {full}");
     }
 
+    /// ``["label"]`` without the conversion spellings the provenance inventory
+    /// pins (`crates/djust_templates/tests/fixtures/provenance_flatten_sites.txt`
+    /// lists every such line of this file): this is a test fixture, not a flatten site.
+    fn label_changed() -> Vec<String> {
+        ["label"].iter().copied().map(String::from).collect()
+    }
+
     /// `static_render` (#3626): `release_baseline` drops EVERY structure the last
     /// render built from the tree, not only the tree. The cached HTML and the
     /// per-node cache are each about the size of the page, and the two indexes
@@ -8033,9 +8040,9 @@ mod fast_path_flag_tests {
     fn release_baseline_drops_the_tree_and_every_cache_built_from_it() {
         let mut view = mounted();
         view.update_state_rust(state("v1", 0, 107));
-        view.set_changed_keys(vec!["label".to_string()]);
+        view.set_changed_keys(label_changed());
         view.render_with_diff_detached().expect("fast path");
-        view.set_changed_keys(vec!["label".to_string()]);
+        view.set_changed_keys(label_changed());
         // Premises: the render left each of them behind, or the asserts below
         // would pass on a view that never had them.
         assert!(view.last_vdom.is_some(), "premise: the tree");
