@@ -506,10 +506,10 @@ MIXIN_TABLES = {
     ),
     "state_backends/redis.py": (
         {
-            ("get", "Failed to deserialize from Redis key '%s': %s"): (
+            ("get", "Failed to deserialize from Redis %s: %s"): (
                 "legacy view-cache (de)serialization; explicit initialization bypasses the backend"
             ),
-            ("set", "Failed to serialize to Redis key '%s': %s"): (
+            ("set", "Failed to serialize to Redis %s: %s"): (
                 "legacy view-cache (de)serialization; explicit initialization bypasses the backend"
             ),
         },

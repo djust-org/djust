@@ -14,6 +14,7 @@ Registers checks with Django's check framework that also run via
 - Event bindings (T019-T022, T023) -- ADR-037 template bindings against their owners
 - Serialization floor (T024) -- user fields a template reads that djust never serializes
 - Document-root placement (T025) -- dj-view / dj-root on <html>, <head> or <body>
+- Shared template library names (T026) -- a tag or filter two loaded libraries register
 - AI discovery (I0xx) -- ADR-043 D1
 - Assets (B0xx) -- vendored third-party files and SBOMs
 """

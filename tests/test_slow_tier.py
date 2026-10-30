@@ -16,6 +16,7 @@ INI = """
 [pytest]
 markers =
     slow: slow
+    pr_tier: pr_tier
     nightly: nightly
 """
 
@@ -34,6 +35,10 @@ def _project(pytester: pytest.Pytester, durations: dict[str, float]) -> None:
 
         @pytest.mark.nightly
         def test_sweep():
+            pass
+
+        @pytest.mark.pr_tier
+        def test_ratchet():
             pass
         """
     )
@@ -54,26 +59,39 @@ def test_threshold_is_strictly_greater_than():
 def test_recorded_slow_tests_are_deselected_by_not_slow(pytester):
     _project(pytester, {"test_a.py::test_heavy": 5.0, "test_a.py::test_fast": 0.01})
     result = _run(pytester, "-m", "not slow")
-    result.assert_outcomes(passed=2, deselected=1)
+    result.assert_outcomes(passed=3, deselected=1)
 
 
 def test_combined_expression_drops_both_tiers(pytester):
     _project(pytester, {"test_a.py::test_heavy": 5.0})
     result = _run(pytester, "-m", "not nightly and not slow")
-    result.assert_outcomes(passed=1, deselected=2)
+    result.assert_outcomes(passed=2, deselected=2)
+
+
+def test_pr_tier_marker_keeps_a_recorded_slow_test_in_the_fast_tier(pytester):
+    """A ratchet whose cost is a fixture must not fall out of the PR run when the
+    durations are refreshed: the marked test is kept, the unmarked heavy one is not."""
+    _project(
+        pytester,
+        {"test_a.py::test_heavy": 5.0, "test_a.py::test_ratchet": 9.0, "test_a.py::test_fast": 0.1},
+    )
+    result = _run(pytester, "-m", "not slow", "-v")
+    result.assert_outcomes(passed=3, deselected=1)
+    result.stdout.fnmatch_lines(["*test_ratchet PASSED*"])
+    assert "test_heavy" not in result.stdout.str().replace("deselected", "")
 
 
 def test_unrecorded_tests_stay_in_the_fast_tier(pytester):
     _project(pytester, {})
     result = _run(pytester, "-m", "not slow")
-    result.assert_outcomes(passed=3)
+    result.assert_outcomes(passed=4)
 
 
 def test_env_switch_disables_the_derived_markers(pytester, monkeypatch):
     monkeypatch.setenv("DJUST_SLOW_TIER", "0")
     _project(pytester, {"test_a.py::test_heavy": 5.0})
     result = _run(pytester, "-m", "not slow")
-    result.assert_outcomes(passed=3)
+    result.assert_outcomes(passed=4)
 
 
 def test_pre_push_passes_one_combined_marker_expression():

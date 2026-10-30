@@ -364,7 +364,7 @@ dependencies = [
 
 [[package]]
 name = "djust_components"
-version = "1.3.0-rc.11"
+version = "1.3.0-rc.14"
 dependencies = [
  "ahash",
  "criterion",
@@ -379,7 +379,7 @@ dependencies = [
 
 [[package]]
 name = "djust_core"
-version = "1.3.0-rc.11"
+version = "1.3.0-rc.14"
 dependencies = [
  "ahash",
  "criterion",
@@ -395,7 +395,7 @@ dependencies = [
 
 [[package]]
 name = "djust_live"
-version = "1.3.0-rc.11"
+version = "1.3.0-rc.14"
 dependencies = [
  "bincode",
  "criterion",
@@ -420,7 +420,7 @@ dependencies = [
 
 [[package]]
 name = "djust_templates"
-version = "1.3.0-rc.11"
+version = "1.3.0-rc.14"
 dependencies = [
  "ahash",
  "chrono",
@@ -449,7 +449,7 @@ dependencies = [
 
 [[package]]
 name = "djust_vdom"
-version = "1.3.0-rc.11"
+version = "1.3.0-rc.14"
 dependencies = [
  "ahash",
  "criterion",
@@ -1010,9 +1010,9 @@ dependencies = [
 
 [[package]]
 name = "pulldown-cmark"
-version = "0.13.4"
+version = "0.13.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e9f068eba8e7071c5f9511831b44f32c740d5adf574e990f946ddb53db2f314e"
+checksum = "278e9268c93b9e498a2da46c34d90ba93a3255eb99009646398f34bc73ab36eb"
 dependencies = [
  "bitflags",
  "memchr",
@@ -1505,9 +1505,9 @@ checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 
 [[package]]
 name = "tokio"
-version = "1.53.2"
+version = "1.54.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e95f91fcc7a621e8b030f6aa23c71fe9838ae2fb4d8118b75602a328f5144044"
+checksum = "b52fd3255258d26fac7264ab5a76b53c13367136dc011d3d6ad4f8ed070396a3"
 dependencies = [
  "bytes",
  "libc",

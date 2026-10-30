@@ -300,7 +300,7 @@ In development, pages render without Tailwind utilities until you compile the CS
 
 **Severity**: Error
 
-**What causes it**: `LIVEVIEW_CONFIG['worker_threads']` is set to something other than `None`, `False`, `True`, `"auto"` or an integer `>= 0` (for example `"8"` or `2.5`). The setting opts the WebSocket path into a pinned worker pool (#3074). At runtime an invalid value is logged and treated as off, so every session keeps sharing one thread.
+**What causes it**: `LIVEVIEW_CONFIG['worker_threads']` is set to something other than `None`, `False`, `True`, `"auto"` or an integer `>= 0` (for example `"8"` or `2.5`). The setting opts the WebSocket path into a pinned worker pool (#3074). At runtime an invalid value is logged and treated as off, so every session keeps sharing one thread. The same check reports a `LIVEVIEW_CONFIG['worker_pinning']` that is not `True` or `False`; at runtime such a value keeps each session pinned to one thread.
 
 **Fix**: Use `True` (one thread per CPU, up to 32), an integer thread count such as `8`, or remove the key. See [More than one core per process](deployment.md#more-than-one-core-per-process-worker_threads). Suppress with `DJUST_CONFIG = {"suppress_checks": ["C021"]}`.
 
@@ -353,6 +353,26 @@ In development, pages render without Tailwind utilities until you compile the CS
 **What causes it**: `LIVEVIEW_MIDDLEWARE` is not a list of dotted paths, an entry cannot be imported, or an entry is a sync function. Turn middleware must be `async def mw(turn, next)`.
 
 **Fix**: Point each entry at an importable `async def mw(turn, next)` that returns `await next(turn)` or a `djust.turns.Refuse` refusal. See [Turn middleware](turn-middleware.md). Suppress with `DJUST_CONFIG = {"suppress_checks": ["C026"]}`.
+
+---
+
+### C027: Invalid view_state_in_session
+
+**Severity**: Error
+
+**What causes it**: `LIVEVIEW_CONFIG['view_state_in_session']` is set to something other than `True` or `False`, such as the string `"false"`. Only `False` turns the session copy of view state off, so with any other value djust keeps saving each view's state in the session.
+
+**Fix**: Set it to `False` (stateless) or `True`, or remove it. See [Keeping view state out of the session](http-only-mode.md#keeping-view-state-out-of-the-session). Suppress with `DJUST_CONFIG = {"suppress_checks": ["C027"]}`.
+
+---
+
+### C028: Invalid http_fallback_background_timeout
+
+**Severity**: Error
+
+**What causes it**: `LIVEVIEW_CONFIG['http_fallback_background_timeout']` is set to something other than `None` or a number of seconds greater than 0 and at most `threading.TIMEOUT_MAX` (about 9.2e9, the longest a thread can wait), such as `"30"`, `0`, `True` or `1e10`. A value above the maximum is rejected, not clamped. Any other value is read as no deadline, so the page-POST fallback keeps waiting for a `start_async` task that never returns.
+
+**Fix**: Set it to a number of seconds such as `30`, or remove it. See [Deadline](http-only-mode.md#what-the-page-post-fallback-keeps-between-events). Suppress with `DJUST_CONFIG = {"suppress_checks": ["C028"]}`.
 
 ---
 
@@ -1331,6 +1351,28 @@ the page content, such as `<div dj-root>`. See
 `DJUST_CONFIG = {"suppress_checks": ["T025"]}`, or one match with
 `{# noqa: T025 -- <reason> #}` on its line or the line above. HTML comments,
 `<script>` bodies and `{% verbatim %}` regions are not scanned.
+
+---
+
+### T026: Two loaded template libraries register one tag or filter name
+
+**Severity**: Warning
+
+**What causes it**: Two template libraries that the project's templates
+`{% load %}` both register a tag or filter with the same name (one module
+installed under two labels counts once). Django scopes `{% load %}` to the
+template; djust's Rust engine keeps one registry for the process. Each
+`{% load %}` of either library takes the name from the other, which drops and
+re-parses every cached template on the next render, and a template renders
+whichever version loaded last.
+Message: "Template libraries '<a>', '<b>' all register the <tag|filter>
+'<name>'. ..."
+
+**Fix**: Register the name in one library and load that one where it is used;
+rename the other copy. Only libraries a template under the project's template
+directories loads are compared, so a library only Django's own engine renders
+(the admin's) does not count. Suppress with
+`DJUST_CONFIG = {"suppress_checks": ["T026"]}`.
 
 ---
 

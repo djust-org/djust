@@ -4,6 +4,7 @@ import html
 from typing import Any, Optional
 
 from djust import Component
+from djust.components.utils import url_attr
 
 
 class LiveIndicator(Component):
@@ -81,7 +82,7 @@ class LiveIndicator(Component):
             avatar = ""
 
         e_name = html.escape(str(name))
-        e_avatar = html.escape(str(avatar))
+        e_avatar = url_attr(avatar, image=True, honor_safe=False)
         e_field = html.escape(str(self.field))
         e_action = html.escape(str(self.action))
 

@@ -122,7 +122,9 @@ class SimpleLiveView(View):
                 # so without the shared function it would render every
                 # timestamp in UTC while ``LiveView`` rendered it correctly.
                 apply_render_env()
-                context = self.get_context_data()
+                from .sync_turn import run_sync_step
+
+                context = run_sync_step(self, "render", self.get_context_data)
                 # A framework render path, so the project's auto-call setting
                 # governs rather than the Rust default (#2508).
                 return str(

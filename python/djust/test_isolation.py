@@ -123,6 +123,11 @@ Globals reset (and why):
   regardless of the assign registry being correct — merely re-asserting
   the correct registration does not heal that.
 
+- **Per-template render caches** (``djust._render_caches``: the JIT's
+  extraction source and hashes, the dj-model allowlist) — keyed by template
+  text and directories, but a test may rewrite a partial at a path an earlier
+  test cached. Lazily rebuilt on the next render.
+
 Explicitly NOT reset (would be too aggressive / not a leak):
 
 - ``state_backend`` — already isolated by the existing ``cleanup_session_cache``
@@ -425,6 +430,21 @@ def _reset_rust_render_env() -> None:
         pass
 
 
+def _reset_render_caches() -> None:
+    """Drop the per-template render caches (``djust._render_caches``).
+
+    Keyed by template text and directories, so a hit is never wrong for an
+    unchanged file; but two tests may write different partials to the same
+    path, which a cache kept for the whole worker would serve to the second.
+    """
+    try:
+        from djust._render_caches import clear_render_caches
+
+        clear_render_caches()
+    except Exception:  # noqa: BLE001 — never error the fixture
+        pass
+
+
 def reset_djust_globals() -> None:
     """Reset every leak-prone djust process-global. Call BEFORE each test.
 
@@ -443,6 +463,7 @@ def reset_djust_globals() -> None:
     _reset_builtin_template_tags()
     _reset_django_thread_locals()
     _reset_rust_render_env()
+    _reset_render_caches()
 
 
 __all__ = ["reset_djust_globals"]

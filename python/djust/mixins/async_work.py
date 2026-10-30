@@ -106,7 +106,11 @@ async def run_async_callback(
         if iscoroutinefunction(callback):
             result = await callback(*args, **(kwargs or {}))
         else:
-            result = await sync_to_async(callback)(*args, **(kwargs or {}))
+            from ..sync_turn import sync_step
+
+            result = await sync_to_async(sync_step(owner, "async", callback))(
+                *args, **(kwargs or {})
+            )
             if inspect.iscoroutine(result):
                 result = await result
     except Exception:
