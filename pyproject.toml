@@ -41,7 +41,11 @@ classifiers = [
 # reviewed change — not something lockfile refresh should do silently.
 dependencies = [
     "Django>=4.2.29,<6",
-    "channels[daphne]>=4.0.0,<5",
+    # Plain `channels`, not `channels[daphne]`: daphne pulls in twisted[tls],
+    # which apps served by uvicorn/hypercorn never import but still have to
+    # audit. Apps that serve with daphne install `djust[daphne]`.
+    # tests/test_base_dependencies_no_daphne.py keeps it this way.
+    "channels>=4.0.0,<5",
     "msgpack>=1.0.0,<2",
     "markdown>=3.0,<4",
     "nh3>=0.2,<1",
@@ -56,6 +60,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# The daphne ASGI server (and, through it, twisted). Only for apps that serve
+# with daphne or list "daphne" in INSTALLED_APPS for its runserver override;
+# djust's own docs and `djust new` projects use uvicorn.
+daphne = [
+    "channels[daphne]>=4.0.0,<5",
+]
 redis = [
     "redis>=5.0.0,<9",
 ]
@@ -102,7 +112,7 @@ azure = [
     "azure-storage-blob>=12.19,<13",
 ]
 all = [
-    "djust[redis,compression,performance,admin,deploy,theming,components,s3,gcs,azure]",
+    "djust[daphne,redis,compression,performance,admin,deploy,theming,components,s3,gcs,azure]",
 ]
 dev = [
     "maturin>=1.12.1,<2.0",
@@ -116,6 +126,9 @@ dev = [
     "ruff>=0.1,<1",
     "mypy>=1.0,<3",
     "uvicorn[standard]>=0.30.0,<1",
+    # daphne: the C003 ordering checks and the daphne.E001 registry tests put
+    # "daphne" in INSTALLED_APPS, so the dev env needs the `daphne` extra.
+    "channels[daphne]>=4.0.0,<5",
     "redis>=5.0.0,<9",
     "watchdog>=3.0.0,<7",  # File system monitoring for hot reload
     "zstandard>=0.22.0,<1",  # Compression support
@@ -1245,8 +1258,9 @@ constraint-dependencies = [
     # Lock-only workaround for CVE-2026-115877 / GHSA-q7qq-6mhp-9rc4 (HTTP
     # request smuggling in twisted.web.http.HTTPChannel, which daphne serves
     # through). Only 26.10.0rc1 is fixed so far. This constrains uv.lock, not
-    # djust's published metadata, so installers still resolve daphne's
-    # twisted[tls]>=22.4 to 26.4.0. When twisted 26.10.0 final is out, replace
+    # djust's published metadata, so installers of `djust[daphne]` still
+    # resolve daphne's twisted[tls]>=22.4 to 26.4.0 (a base `djust` install
+    # has no daphne or twisted at all). When twisted 26.10.0 final is out, replace
     # this with ">=26.10.0" (or drop it) and remove GHSA-8pqf-f4m5-798g and the
     # CVE-2026-1157xx twisted entries from .github/security/pip-audit-ignore.txt.
     "twisted>=26.10.0rc1",

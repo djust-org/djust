@@ -62,7 +62,7 @@ uv venv --python 3.14t && uv pip install djust uvicorn   # cp314t wheels
 uvicorn myproject.asgi:application --ws websockets
 ```
 
-A few of djust's dependencies have no free-threaded wheels yet: autobahn (through `channels[daphne]`) on every platform, and cbor2 on macOS x86_64. The installer builds them from source, which needs a C compiler and takes longer.
+A few of djust's dependencies have no free-threaded wheels yet: autobahn (only with the optional `djust[daphne]` extra, through `channels[daphne]`) on every platform, and cbor2 on macOS x86_64. The installer builds them from source, which needs a C compiler and takes longer.
 
 Each piece removes one ceiling. The sections below explain them.
 

@@ -30,8 +30,9 @@ already have with another. Both paths set up the pieces described in
   receiving fixes.
 - As of the October 5, 2026 wheel evaluation, Python 3.15 release candidates
   were tested in CI and the published wheel matrix covered 3.11 to 3.14.
-  Installing 3.15 from the source distribution needs a Rust toolchain and a
-  C compiler for the `daphne` dependencies. See the
+  Installing 3.15 from the source distribution needs a Rust toolchain, and
+  the optional `daphne` extra also needs a C compiler for its dependencies.
+  See the
   [dated wheel evaluation](../../performance/python-3.15-and-abi3-wheels-2026-10-05.md)
   for tested platforms and the pending release-wheel decision.
 - [uv](https://docs.astral.sh/uv/getting-started/installation/) for environment and package management.
@@ -417,6 +418,15 @@ Use an ASGI server for live updates. Django's stock `runserver` is WSGI;
 Daphne can provide an ASGI replacement when explicitly configured, as the
 [Channels installation guide](https://channels.readthedocs.io/en/stable/installation.html)
 explains. The Uvicorn commands here work without that override.
+
+djust depends on plain `channels`, so daphne (and Twisted, which daphne
+needs) is not installed by default. To serve with daphne, or to list
+`"daphne"` in `INSTALLED_APPS` for its `runserver` override, install the
+extra:
+
+```bash
+uv add "djust[daphne]"    # or: pip install "djust[daphne]"
+```
 
 ## Troubleshooting
 

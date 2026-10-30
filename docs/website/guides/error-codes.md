@@ -116,7 +116,7 @@ CHANNEL_LAYERS = {
 
 **What you see**: With the wrong order, `manage.py runserver` starts the WSGI server instead of the ASGI server, so WebSockets do not work in development.
 
-**Fix**: For the Info case, install an ASGI server; `pip install 'uvicorn[standard]'` is recommended. For the ordering case:
+**Fix**: For the Info case, install an ASGI server; `pip install 'uvicorn[standard]'` is recommended. djust does not install daphne itself; to use it, install `pip install 'djust[daphne]'`. For the ordering case:
 
 ```python
 # settings.py

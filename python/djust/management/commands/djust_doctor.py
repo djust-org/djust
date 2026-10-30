@@ -473,8 +473,8 @@ def check_asgi_server() -> "_CheckResult":
         "asgi_server",
         "routing",
         _CheckResult.WARN,
-        "No ASGI server found (install daphne or uvicorn)",
-        detail="pip install daphne  # or: pip install uvicorn",
+        "No ASGI server found (install uvicorn or daphne)",
+        detail="pip install 'uvicorn[standard]'  # or: pip install 'djust[daphne]'",
     )
 
 
