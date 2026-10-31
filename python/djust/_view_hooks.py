@@ -43,6 +43,7 @@ async def _await(awaitable: Any) -> Any:
 _HOOK_STEPS = {
     "mount": "mount",
     "handle_params": "handle_params",
+    "handle_invalid_params": "handle_params",
     "handle_async_result": "async",
     "handle_tick": "tick",
 }

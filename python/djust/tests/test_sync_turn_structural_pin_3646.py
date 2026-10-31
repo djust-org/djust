@@ -904,6 +904,7 @@ HOOKS: Dict[str, str] = {
     "ComponentMixin.mount": "stepped:mount",
     "SimpleLiveView.mount": "stepped:mount",
     "NavigationMixin.handle_params": "stepped:handle_params",
+    "NavigationMixin.handle_invalid_params": "stepped:handle_params",
     "LiveView.handle_tick": "stepped:tick",
     "LiveView.handle_restore": "stepped:hook",
     "NotificationMixin.handle_info": "stepped:hook",

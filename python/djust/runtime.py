@@ -69,6 +69,7 @@ from typing import (
 
 from asgiref.sync import async_to_sync, sync_to_async
 
+from ._params_form import run_handle_params
 from ._view_hooks import call_async_result, call_hook
 
 if TYPE_CHECKING:
@@ -4149,8 +4150,7 @@ class ViewRuntime(RuntimeTurnPort):
 
             query_string = urlencode(params) if params else ""
             uri = f"{page_url}?{query_string}" if query_string else page_url
-            if hasattr(view_instance, "handle_params"):
-                await call_hook(view_instance.handle_params, params, uri)
+            await run_handle_params(view_instance, params, uri)
         except Exception as exc:
             response = handle_exception(
                 exc,
@@ -6718,7 +6718,7 @@ class ViewRuntime(RuntimeTurnPort):
             return
 
         try:
-            await call_hook(self.view_instance.handle_params, params, uri)
+            await run_handle_params(self.view_instance, params, uri)
 
             # Object-permission re-check (ADR-017) after the client-supplied URL
             # params may have changed the access-determining state. Without this,

@@ -21,6 +21,7 @@ from typing import (
     Dict,
     Iterator,
     List,
+    Mapping,
     Optional,
     Tuple,
 )
@@ -121,7 +122,7 @@ def _http_url_params(request: Any) -> Dict[str, Any]:
 
 
 def _run_http_handle_params(view: Any, request: Any) -> None:
-    """Call ``view.handle_params(params, uri)`` the way the GET does.
+    """Run the view's params hook the way the GET does.
 
     The GET and the socket mount call it right after ``mount()``. The page-POST
     fallback builds a fresh view and calls ``mount()`` on it, so it calls this
@@ -130,8 +131,9 @@ def _run_http_handle_params(view: Any, request: Any) -> None:
     a page the browser never showed (#3624). The browser POSTs to
     ``window.location.href``, so the query string is on the POST's request.
     """
-    if hasattr(view, "handle_params"):
-        call_hook_sync(view.handle_params, _http_url_params(request), request.get_full_path())
+    from .._params_form import run_handle_params_sync
+
+    run_handle_params_sync(view, _http_url_params(request), request.get_full_path())
 
 
 def _take_queued_background_work(view: Any) -> List[Tuple[str, Any, Any, Any]]:
@@ -685,6 +687,8 @@ class RequestMixin:
         wrapper_template: Optional[str]
         _cached_context: Optional[Dict[str, Any]]
         _child_views: Dict[str, Any]
+        http_status_of_state: Mapping[str, int]
+        state_attribute: str
 
         def _apply_context_processors(
             self, context: Dict[str, Any], request: Any
@@ -1137,9 +1141,32 @@ class RequestMixin:
             def get_http_status(self):
                 return 404 if self.document is None else None
 
+        A project that draws its own not-found state need not override this on
+        every view. Set ``http_status_of_state`` once (on a base view) and the
+        default reads the state the view already has::
+
+            class AppView(LiveView):
+                abstract = True
+                http_status_of_state = {"not_found": 404, "gone": 410}
+
+            class ArticleView(AppView):
+                def mount(self, request, slug="", **kwargs):
+                    self.state = "ready" if load(slug) else "not_found"
+
+        ``state_attribute`` names the attribute that holds the state (``"state"``
+        by default); only a ``str`` is looked up, so any other value, or a name
+        the map does not hold, answers 200. An override still replaces all of
+        this.
+
         Only the HTTP response uses it.
         """
-        return None
+        statuses = self.http_status_of_state
+        if not statuses:
+            return None
+        state = getattr(self, self.state_attribute, None)
+        if not isinstance(state, str):
+            return None
+        return statuses.get(state)
 
     def _fill_lazy_slots(self, html: str) -> str:
         """Run this page's lazily-deferred slots into ``html`` (#3252).
