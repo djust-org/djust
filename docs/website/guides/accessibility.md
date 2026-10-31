@@ -87,7 +87,7 @@ startup. The new **`Y` category** (mnemonic: a11**Y**) scans your project's
 template files for accessibility defects. The checks run automatically as part
 of `manage.py check` and `manage.py djust_check`.
 
-The category ships with four checks — deliberately the lowest-ambiguity
+The category ships with six checks — deliberately the lowest-ambiguity
 defects, so the regex heuristics carry near-zero false positives. The category
 is extensible by design: adding more checks later (heading order, missing
 `lang` attribute, redundant `role`) is a single-function-body change.
@@ -195,7 +195,74 @@ interpolated value (`tabindex="{{ ... }}"` / `{% ... %}`) is treated
 conservatively and not flagged, and a `data-tabindex` attribute is not mistaken
 for `tabindex`.
 
-All four checks emit a `DjustWarning` (not an error) with the file path and line
+### Y005 — `role="img"` element or `<svg>` with no accessible name
+
+**Severity:** Warning
+
+Flags an element with `role="img"`, or an inline `<svg>`, that has no accessible
+name (WCAG 1.1.1, Level A). A hand-built chart is the usual case: a screen
+reader announces the `role="img"` element as just "image", and an `<svg>` with
+no `<title>` either says nothing or reads out its shapes. A name is a non-blank
+`aria-label`, `aria-labelledby` or `title` attribute, or, for an `<svg>`, a
+non-empty `<title>` child.
+
+```html
+<!-- Flagged by Y005 — announced as just "image" -->
+<div class="bars" role="img">...</div>
+
+<!-- Flagged by Y005 — no <title>, no aria-label, not hidden -->
+<svg viewBox="0 0 100 40"><rect width="40" height="40"/></svg>
+
+<!-- Not flagged — named -->
+<div class="bars" role="img" aria-label="Measured vs estimate, by month">...</div>
+<svg viewBox="0 0 100 40"><title>Measured vs estimate</title><rect width="40" height="40"/></svg>
+
+<!-- Not flagged — decorative -->
+<svg aria-hidden="true" viewBox="0 0 24 24"><path d="M0 0"/></svg>
+```
+
+These are not flagged: `aria-hidden="true"`; `role="presentation"` or
+`role="none"` on an `<svg>`; an `<svg>` inside a `<button>` or `<a href>` (the
+control owns the name, and Y001 covers a control that has none); an `<svg>`
+nested in another `<svg>` (only the outer graphic is judged); a hidden sprite
+sheet (`display:none`, `hidden`, `width="0"`, or `<symbol>` children); an
+opening tag with `{{ }}` or `{% %}` in it, which may inject the name; an
+`<img>` (Y002 covers it); and anything inside `<script>` or `<style>`. An empty
+`aria-label=""` is not a name, unlike for Y001.
+
+This rule can only see markup in templates. Contrast (WCAG 1.4.3, 1.4.11),
+heading order and names that exist only after render need a rendered page; the
+`Y` checks do not cover them.
+
+### Y006 — legend item told apart by colour alone
+
+**Severity:** Warning
+
+Flags a list item inside a legend that has no text and no name, so the series it
+stands for can be told apart only by colour (WCAG 1.4.1, Level A). A legend is an
+element whose `class` has a token containing `legend` (`legend`, `chart-legend`,
+`legend__list`). The form `<legend>` element is not a chart legend.
+
+```html
+<!-- Flagged by Y006 — two series, two swatches, no words -->
+<ul class="legend">
+  <li><span class="swatch measured"></span></li>
+  <li><span class="swatch estimate"></span></li>
+</ul>
+
+<!-- Not flagged — the name is in the item (it may be visually hidden) -->
+<ul class="legend">
+  <li><span class="swatch measured"></span> Measured</li>
+  <li><span class="swatch estimate"></span><span class="sr-only">Estimate</span></li>
+</ul>
+```
+
+An item is not flagged if it has any text, a `{{ }}` or `{% %}` that may render
+text, or an `aria-label`, `aria-labelledby` or `title` on it or on something
+inside it. Only `<li>` items inside a legend are checked; a legend built from
+`<span>` or `<div>` items is not.
+
+All six checks emit a `DjustWarning` (not an error) with the file path and line
 number, so a stray false positive never fails `manage.py check`. Templates that
 show literal HTML examples inside `{% verbatim %}` blocks are skipped, so docs
 and marketing pages don't false-positive.
@@ -230,12 +297,13 @@ DJUST_CONFIG = {
 
 Suppressing `Y001` silences the icon-only-button scan; `Y002` silences the
 `<img>` scan; `Y003` silences the form-label scan; `Y004` silences the
-positive-`tabindex` scan. Prefer suppressing the most specific id, and leave a
+positive-`tabindex` scan; `Y005` silences the unnamed chart and `<svg>` scan;
+`Y006` silences the colour-only legend scan. Prefer suppressing the most specific id, and leave a
 comment explaining *why* the suppression is intentional.
 
 > `DJUST_CONFIG['suppress_checks']` is djust's own suppression list and is what
 > the `Y` checks honor. Django's built-in `SILENCED_SYSTEM_CHECKS` also works
-> for the `djust.Y001` – `djust.Y004` ids if you prefer the standard Django
+> for the `djust.Y001` – `djust.Y006` ids if you prefer the standard Django
 > mechanism.
 
 ## Keyboard interaction
@@ -332,7 +400,7 @@ accessibility scan on demand and reports the findings as a standalone audit:
 python manage.py djust_audit --a11y
 ```
 
-This runs the `Y001`–`Y004` template scan and prints a grouped, per-code
+This runs the `Y001`–`Y006` template scan and prints a grouped, per-code
 report. Two flags compose with it:
 
 - `--a11y --json` emits a machine-readable `{"a11y_findings": [...],

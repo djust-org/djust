@@ -92,6 +92,8 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | Y002 | Accessibility | Warning | `<img>` tag missing an `alt` attribute (WCAG 1.1.1) |
 | Y003 | Accessibility | Warning | Form control (`<input>`/`<select>`/`<textarea>`) with no associated label (WCAG 1.3.1 / 3.3.2) |
 | Y004 | Accessibility | Warning | Positive `tabindex` value — a focus-order anti-pattern (WCAG 2.4.3) |
+| Y005 | Accessibility | Warning | `role="img"` element or inline `<svg>` with no accessible name (WCAG 1.1.1) |
+| Y006 | Accessibility | Warning | Legend item with no text — series told apart by colour alone (WCAG 1.4.1) |
 | B001 | Vendored Assets | Error | Manifest unparseable or fails schema |
 | B002 | Vendored Assets | Error | Package purl missing `@version`, or missing a license |
 | B003 | Vendored Assets | Error | Vendored file not found by staticfiles finders |
@@ -1035,6 +1037,20 @@ the full narrative.
 - **What it detects**: A `tabindex` attribute with a positive value (`tabindex="1"`+), which overrides the natural DOM focus order (WCAG 2.4.3, Level A). `tabindex="0"` (focusable in natural order) and `tabindex="-1"` (focusable only programmatically) are valid and not flagged
 - **Suppression**: `DJUST_CONFIG['suppress_checks'] = ['Y004']` or `SILENCED_SYSTEM_CHECKS = ["djust.Y004"]`
 - **False positives**: Near zero — `tabindex="0"` / `tabindex="-1"` are valid and not flagged; an interpolated value (`tabindex="{{ ... }}"` / `{% ... %}`) is treated conservatively and not flagged; a `data-tabindex` attribute is not mistaken for `tabindex`
+
+### Y005 — `role="img"` element or `<svg>` with no accessible name
+- **Severity**: Warning
+- **Method**: Tag scan (template file scan)
+- **What it detects**: An element with `role="img"`, or an inline `<svg>`, with no non-blank `aria-label` / `aria-labelledby` / `title` attribute and (for an `<svg>`) no non-empty `<title>` child (WCAG 1.1.1, Level A) — a screen reader announces a hand-built chart as just "image"
+- **Suppression**: `DJUST_CONFIG['suppress_checks'] = ['Y005']` or `SILENCED_SYSTEM_CHECKS = ["djust.Y005"]`
+- **False positives**: Low — `aria-hidden="true"`, `role="presentation"`/`"none"` on an `<svg>`, an `<svg>` inside a `<button>` or `<a href>`, a nested `<svg>`, a hidden sprite sheet, an opening tag with `{{ }}`/`{% %}` in it, `<img>` (Y002's) and `<script>`/`<style>` bodies are not flagged. A purely decorative icon `<svg>` with no `aria-hidden` outside a control is flagged by design: mark it `aria-hidden="true"`
+
+### Y006 — legend item told apart by colour alone
+- **Severity**: Warning
+- **Method**: Tag scan (template file scan)
+- **What it detects**: An `<li>` inside an element whose `class` has a token containing `legend`, with no text, no `{{ }}`/`{% %}`, and no `aria-label` / `aria-labelledby` / `title` on it or inside it (WCAG 1.4.1, Level A)
+- **Suppression**: `DJUST_CONFIG['suppress_checks'] = ['Y006']` or `SILENCED_SYSTEM_CHECKS = ["djust.Y006"]`
+- **False positives**: Low — only `<li>` items inside a legend are checked; text, interpolation or a name attribute clears an item; the form `<legend>` element is not a chart legend
 
 ---
 

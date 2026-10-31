@@ -151,13 +151,52 @@ class TestAllViews(TestCase, LiveViewSmokeTest):
 
 1. Mounts each view
 2. Asserts it renders without raising an exception
-3. Checks DB query counts stay under `max_queries`
+3. Checks DB query counts stay under `max_queries`, or under the view's own
+   [`query_budget`](#per-view-query-budgets)
 4. If `fuzz=True`, sends malformed event payloads to handlers and asserts no 500 errors
 
 The fuzzer sends events only to `@event_handler` handlers, the ones dispatch
 resolves in every `event_security` mode. Under `"warn"` or `"open"` a client can
 still call an undecorated public method, so the smoke test emits one
 `UserWarning` per view naming those methods: decorate them, or test them directly.
+
+### Per-view query budgets
+
+One `max_queries` for the whole app lets a cheap view grow tenfold unnoticed
+while a heavy report needs a high limit. A view can declare its own budget,
+next to the code that spends it, with `query_budget`:
+
+```python
+from djust import LiveView
+
+
+class ProductListView(LiveView):
+    template_name = "shop/product_list.html"
+    query_budget = 3  # mount + first render, together
+
+
+class SalesReportView(LiveView):
+    template_name = "shop/sales_report.html"
+    query_budget = {"mount": 30, "render": 5}  # each phase on its own
+```
+
+`test_smoke_queries` takes each view's budget from the first of these that is
+set:
+
+1. `view_config[View]["max_queries"]` on the test class (an int, for this test only);
+2. the view's `query_budget`;
+3. the test class's `max_queries`.
+
+An int counts mount and first render together. A dict counts `"mount"` and
+`"render"` separately, and a phase it leaves out falls back to `max_queries`.
+The smoke test measures only those two phases, so any other key (`"event"`,
+a typo) and any value that is not a non-negative int (a `bool` included) fails
+the test with a `ValueError` naming the view, instead of being ignored. A view
+over budget is reported by name with its count and where its limit came from,
+for example `shop.views.ProductListView: 5 queries (max 3, from query_budget)`.
+
+`query_budget` is read by `LiveViewSmokeTest` only; nothing at request time
+measures or enforces it, and the fuzz tests do not count queries per event.
 
 ## Performance Testing
 

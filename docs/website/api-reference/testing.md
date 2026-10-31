@@ -211,10 +211,10 @@ Auto-discover all `LiveView` subclasses in an app and run smoke tests.
 | Attribute     | Type   | Default | Description                                                                 |
 | ------------- | ------ | ------- | --------------------------------------------------------------------------- |
 | `app_label`   | `str`  | `None`  | Only test views in this Django app                                          |
-| `max_queries` | `int`  | `50`    | Fail if mounting + rendering a view exceeds this many DB queries            |
+| `max_queries` | `int`  | `50`    | Fail if mounting + rendering a view exceeds this many DB queries (a view's own `query_budget` or `view_config` `max_queries` takes precedence) |
 | `fuzz`        | `bool` | `True`  | Send XSS and type-mismatch payloads to handlers                             |
 | `skip_views`  | `list` | `[]`    | View classes to skip                                                        |
-| `view_config` | `dict` | `{}`    | Per-view setup: `{ViewClass: {"mount_params": {...}, "user": user}}`        |
+| `view_config` | `dict` | `{}`    | Per-view setup: `{ViewClass: {"mount_params": {...}, "user": user, "max_queries": 8}}` |
 
 ### Example
 
@@ -233,7 +233,7 @@ This auto-discovers all `LiveView` subclasses in `myapp` and:
 
 1. Mounts each view
 2. Asserts it renders without raising
-3. Checks DB query counts stay under `max_queries`
+3. Checks DB query counts stay under each view's budget: `view_config[View]["max_queries"]`, else the view's [`query_budget`](liveview.md#class-attributes), else `max_queries`
 4. If `fuzz=True`, sends malformed payloads and asserts no uncaught exceptions
 
 The fuzzer sends events only to `@event_handler` handlers, the ones dispatch
