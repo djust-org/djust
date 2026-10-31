@@ -1660,14 +1660,21 @@ def _check_rust_jsx_tags(
     the renderer emits when the tag is rendered. djust 2.0 turns the tag into
     a template error.
 
-    The check reads what the renderer reads. The renderer's lexer is blind to HTML
-    context: it turns any ``<`` followed by a capital letter into a component, so a
-    tag inside an HTML comment or a ``<script>`` body IS rendered and warned about,
+    The check follows the renderer. The renderer's lexer is blind to HTML context:
+    it turns any ``<`` followed by a capital letter into a component, so a tag
+    inside an HTML comment or a ``<script>`` body IS rendered and warned about,
     and in 2.0 is a template error. Those are reported. Only text the renderer
-    never lexes as a tag is skipped: a ``{% verbatim %}`` region (and the
+    does not render as a tag is skipped: a ``{% verbatim %}`` region (and the
     ``{# #}`` / ``{% comment %}`` the caller already blanked), which is how a
     template shows an example of the tag (#3691;
     ``test_the_check_flags_exactly_the_tags_the_renderer_warns_about``).
+
+    SCOPE: a verbatim region is found with ``_strip_verbatim_blocks``' regex, which
+    closes on the first ``{% endverbatim %}`` of any name and does not know a
+    ``{{ '...' }}`` string literal, so an exotic template (a named block closed by
+    another name, a verbatim marker inside a string literal) can read differently
+    from the renderer. A tag written inside another tag's attribute value is
+    reported once per tag; the renderer warns once.
 
     The scan is one pass; each tag's line number counts only the newlines since the
     previous tag, so a template with very many tags costs O(template + tags), not

@@ -884,13 +884,18 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
   instead (for `<RustButton />`, `Button`).
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["T027"]}`
 - **Not reported**: A tag inside `{% verbatim %}`, or a `{# #}` / `{% comment %}`
-  comment. The renderer never lexes those as a tag, so an example shown that way is
-  not a use (wrap a documentation example in `{% verbatim %}`). Line numbers are
-  those of the template.
+  comment. The renderer does not render those as a tag, so an example shown that
+  way is not a use (wrap a documentation example in `{% verbatim %}`). Line numbers
+  are those of the template.
 - **Still reported**: A tag inside an HTML comment (`<!-- ... -->`) or a `<script>`
   body. The renderer does not look at HTML context: it renders the component and
   emits the `DeprecationWarning` there too, and in 2.0 it is a template error.
-- **False positives**: None known.
+- **False positives**: Rare, and only in exotic templates. A verbatim region is
+  found with the regex that A070/A071 use, so a named block closed by a different
+  name (`{% verbatim a %}...{% endverbatim b %}`) is read differently from the
+  renderer, and a `{% verbatim %}` written inside a `{{ '...' }}` string literal can
+  hide a real tag. A tag written inside another tag's attribute value is reported
+  once per tag; the renderer warns once.
 
 ### T019–T022 — Template event bindings (ADR-037)
 - **Severity**: Warning (all four, in 1.3)
