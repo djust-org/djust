@@ -3,6 +3,7 @@
 import asyncio
 import inspect
 import threading
+import time
 
 import pytest
 from channels.generic.websocket import AsyncWebsocketConsumer
@@ -111,13 +112,15 @@ async def test_connect_waits_out_a_stalled_thread_sensitive_executor():
     from asgiref.sync import SyncToAsync
 
     release = threading.Event()
-    SyncToAsync.single_thread_executor.submit(release.wait, 30)
-    communicator = WebsocketCommunicator(_AcceptingConsumer.as_asgi(), "/ws/")
-    loop = asyncio.get_running_loop()
-    loop.call_later(1.5, release.set)
     try:
+        SyncToAsync.single_thread_executor.submit(release.wait, 30)
+        communicator = WebsocketCommunicator(_AcceptingConsumer.as_asgi(), "/ws/")
+        asyncio.get_running_loop().call_later(1.5, release.set)
+        started = time.monotonic()
         connected, _ = await communicator.connect()
+        waited = time.monotonic() - started
+        await communicator.disconnect()
     finally:
         release.set()
-        await communicator.disconnect()
     assert connected
+    assert waited >= 1.4, "the stall did not delay connect(): the test no longer forces it"

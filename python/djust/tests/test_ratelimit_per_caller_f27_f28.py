@@ -48,6 +48,16 @@ from djust.rate_limit import (
 
 
 @pytest.fixture(autouse=True)
+def _own_the_bucket_clock(frozen_rate_limit_clock):
+    """No token refills inside a test, however long the runner stalls (#3707).
+
+    A bucket with ``rate > 0`` refills ``elapsed * rate`` tokens from REAL time
+    unless the test owns the clock; a stall of a second mints a token and an
+    "exhausted" assertion goes false. See ``frozen_rate_limit_clock``.
+    """
+
+
+@pytest.fixture(autouse=True)
 def _clear_shared_store():
     """Each test starts with an empty shared per-caller bucket store."""
     reset_handler_buckets()
@@ -409,7 +419,7 @@ def test_f28_authenticated_caller_keyed_by_user_pk():
 # --------------------------------------------------------------------------- #
 
 
-def test_global_per_message_abuse_disconnect_intact(frozen_rate_limit_clock):
+def test_global_per_message_abuse_disconnect_intact():
     """The per-connection ConnectionRateLimiter still trips should_disconnect()
     after a per-message flood on a single connection — the per-handler shared
     store does NOT touch this global gate (#17).
@@ -426,7 +436,7 @@ def test_global_per_message_abuse_disconnect_intact(frozen_rate_limit_clock):
     )
 
 
-def test_global_check_independent_of_shared_handler_store(frozen_rate_limit_clock):
+def test_global_check_independent_of_shared_handler_store():
     """A handler-store rejection for one caller does NOT consume the global
     per-message bucket, and vice versa — the two are separate gates."""
     settings = {"rate": 1, "burst": 1}

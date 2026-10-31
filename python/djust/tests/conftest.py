@@ -60,8 +60,12 @@ class FakeRateLimitClock:
 @pytest.fixture
 def frozen_rate_limit_clock(monkeypatch) -> FakeRateLimitClock:
     """A clock that never advances, patched over ``djust.rate_limit._monotonic``."""
+    import importlib
+
     clock = FakeRateLimitClock()
-    monkeypatch.setattr("djust.rate_limit._monotonic", clock)
+    # The MODULE, not the dotted string: ``djust.rate_limit`` as an attribute of the
+    # ``djust`` package can resolve to the ``rate_limit`` decorator it re-exports.
+    monkeypatch.setattr(importlib.import_module("djust.rate_limit"), "_monotonic", clock)
     return clock
 
 

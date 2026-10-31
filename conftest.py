@@ -123,7 +123,8 @@ def pytest_collection_finish(session):
     1.5 million tracked objects, nearly all of it alive for the whole run. An
     xdist worker lives for the run, and each full (generation 2) collection
     re-walks all of it. A stop-the-world pause stalls the worker's event loop and
-    every ``WebsocketCommunicator`` wait with it: measured on a full local run,
+    every ``WebsocketCommunicator`` wait with it: measured on a full local run
+    (3.12; the CI interpreters were not measured),
     median 0.32 s and up to 3.4 s (22 pauses over 1 s), which is longer than the
     1 s ``connect()`` default and the 3 s receive that failed on CI.
 

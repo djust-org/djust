@@ -528,8 +528,9 @@ class TestDenialsAreGates:
         longer, the loop ended on its timeout and the assertions saw ``[]`` (#3692)."""
         from ._ws_frames import stall_the_consumer_at_the_next_mount
 
-        stall_the_consumer_at_the_next_mount(monkeypatch, 2.2)
+        stall = stall_the_consumer_at_the_next_mount(monkeypatch, 2.2)
         await _assert_refused("RaiseAfterCheckView", _AnonUser)
+        stall.assert_delayed()
 
     @pytest.mark.parametrize("view_name", R1_SHAPES)
     async def test_anonymous_sse_mount_is_refused(self, view_name):

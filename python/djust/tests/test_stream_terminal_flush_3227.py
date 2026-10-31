@@ -129,11 +129,14 @@ async def test_done_arrives_after_the_queued_settle_over_websocket(monkeypatch, 
 
     from ._ws_frames import receive_until, stall_the_consumer_at_the_next_mount
 
-    if mount_stall_s:
-        stall_the_consumer_at_the_next_mount(monkeypatch, mount_stall_s)
+    stall = (
+        stall_the_consumer_at_the_next_mount(monkeypatch, mount_stall_s) if mount_stall_s else None
+    )
 
     with override_settings(LIVEVIEW_ALLOWED_MODULES=[_MODULE]):
         communicator = await _connect_and_mount("_SettleView")
+        if stall is not None:
+            stall.assert_delayed()
         await communicator.send_json_to({"type": "event", "event": "go", "params": {}, "ref": 1})
         frames = await receive_until(
             communicator,

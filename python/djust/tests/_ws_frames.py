@@ -164,16 +164,42 @@ def _frame_type(text_data: str) -> Any:
         return None  # not a JSON object: not ours to classify
 
 
-def stall_the_consumer_at_the_next_mount(monkeypatch, seconds: float) -> None:
+class MountStall:
+    """What :func:`stall_the_consumer_at_the_next_mount` did, for the test to check."""
+
+    def __init__(self, seconds: float) -> None:
+        self.seconds = seconds
+        self.started: Any = None  # loop-independent monotonic time of the stall
+        self.first_reply: Any = None  # when the consumer first sent after it
+
+    def assert_delayed(self) -> None:
+        """The consumer's reply came at least ``seconds`` after the stall began.
+
+        A lower bound, so it cannot flake. Without it a refactor that made the
+        mount path skip the thread-sensitive hop would leave the stalled cases
+        green while no longer stalling anything.
+        """
+        assert self.started is not None, "no mount frame reached the consumer"
+        assert self.first_reply is not None, "the consumer never replied to the mount frame"
+        waited = self.first_reply - self.started
+        assert waited >= self.seconds, (
+            f"the consumer replied {waited:.2f} s after the stall began, not the "
+            f"{self.seconds} s it was held: the stall no longer delays the reply"
+        )
+
+
+def stall_the_consumer_at_the_next_mount(monkeypatch, seconds: float) -> MountStall:
     """Hold the consumer back for ``seconds`` when the next ``mount`` frame arrives.
 
     A loaded runner stalls a worker's event loop for whole seconds: a full
     garbage collection of an xdist worker's heap, measured at up to 3.4 s over a
-    full local run (#3692). Every frame Channels dispatches awaits a
-    thread-sensitive ``sync_to_async`` (``aclose_old_connections``) first, so
-    occupying that one thread for ``seconds`` delays the consumer's reply by the
-    same amount. Forced here as state, so a wait with a fixed bound fails on every
-    run instead of on a bad day. Only the FIRST mount frame is stalled.
+    full local run on 3.12 (#3692). Channels awaits a thread-sensitive
+    ``sync_to_async`` (``aclose_old_connections``) before each dispatch, and the
+    mount path makes more of them, so occupying the one thread they share for
+    ``seconds`` delays the consumer's reply by the same amount. Forced here as
+    state, so a wait with a fixed bound fails on every run instead of on a bad
+    day. Only the FIRST mount frame is stalled. Call ``assert_delayed`` on the
+    result once the reply arrived.
     """
     import time
 
@@ -181,20 +207,28 @@ def stall_the_consumer_at_the_next_mount(monkeypatch, seconds: float) -> None:
 
     from djust.websocket import LiveViewConsumer
 
-    real = LiveViewConsumer.receive
-    stalled: List[bool] = []
+    stall = MountStall(seconds)
+    real_receive = LiveViewConsumer.receive
+    real_send = LiveViewConsumer.send
 
     async def receive(self, text_data=None, bytes_data=None):
-        if text_data and not stalled and _frame_type(text_data) == "mount":
-            stalled.append(True)
+        if text_data and stall.started is None and _frame_type(text_data) == "mount":
+            stall.started = time.monotonic()
             SyncToAsync.single_thread_executor.submit(time.sleep, seconds)
-        return await real(self, text_data=text_data, bytes_data=bytes_data)
+        return await real_receive(self, text_data=text_data, bytes_data=bytes_data)
+
+    async def send(self, *args, **kwargs):
+        if stall.started is not None and stall.first_reply is None:
+            stall.first_reply = time.monotonic()
+        return await real_send(self, *args, **kwargs)
 
     monkeypatch.setattr(LiveViewConsumer, "receive", receive)
+    monkeypatch.setattr(LiveViewConsumer, "send", send)
+    return stall
 
 
 async def frame_barrier(socket, *, timeout: float = WAIT_S) -> List[Frame]:
-    """Return once the consumer has FINISHED every frame sent before this call.
+    """Return once the consumer has FINISHED the frames it handles inline.
 
     A frame the client observes is not the end of the consumer's work on it.
     ``LiveViewConsumer.receive`` runs a ``finally`` after the frame's reply was
@@ -210,6 +244,12 @@ async def frame_barrier(socket, *, timeout: float = WAIT_S) -> List[Frame]:
     earlier frame, ``finally`` included, is done. That is an ordering fact, not
     a quiet window. The frames received on the way (there are usually none) are
     returned.
+
+    Scope: frames the consumer awaits inside ``receive`` (a ``mount``, a
+    ``live_redirect_mount``, and ``receive``'s own ``finally``). A frame addressed
+    to a view that is queued on that view's lane (``_queue_on_lane``) returns from
+    ``receive`` before its turn runs, so the pong can precede that turn: wait for
+    the turn's own reply instead.
     """
     await socket.send_json_to({"type": "ping"})
     return await receive_until(socket, has_type("pong"), timeout=timeout, what="the pong")
