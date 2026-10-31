@@ -26,25 +26,71 @@ pytest_plugins = [
 ]
 
 
+#: Seconds a Channels communicator waits for output that WILL arrive. Only a hung
+#: turn reaches it; a loaded runner that stalls the loop for a few seconds does not.
+COMMUNICATOR_WAIT_S = 30
+
+#: ``receive_nothing`` is the one timeout that is a window for ABSENCE ("nothing
+#: arrived within 0.1 s"), so lengthening it would slow every such check 300x.
+COMMUNICATOR_ABSENCE_WINDOWS = frozenset({"receive_nothing"})
+
+
+def _communicator_timeout_defaults():
+    """``[(function, index into __defaults__)]`` for every communicator wait.
+
+    Derived from the Channels classes, not listed by hand: the list that was
+    written by hand (#3464) named ``disconnect`` / ``receive_output`` /
+    ``receive_from`` / ``receive_json_from`` and left out ``connect``, ``wait`` and
+    ``get_response`` (seven waits in all). ``connect``'s default is a 1 s wait for the consumer's ``accept``. A loaded runner timed
+    that out in ``test_anonymous_ws_mount_is_refused`` (#3692). A method a
+    Channels release adds is covered the day it appears.
+    """
+    import inspect
+
+    from channels.testing import HttpCommunicator, WebsocketCommunicator
+
+    found = {}
+    classes = [
+        cls
+        for communicator in (WebsocketCommunicator, HttpCommunicator)
+        for cls in communicator.__mro__
+        if cls is not object
+    ]
+    for cls in classes:
+        for name, func in vars(cls).items():
+            if name.startswith("_") or name in COMMUNICATOR_ABSENCE_WINDOWS:
+                continue
+            if not inspect.iscoroutinefunction(func):
+                continue
+            params = inspect.signature(func).parameters
+            timeout = params.get("timeout")
+            if timeout is None or isinstance(timeout.default, bool):
+                continue
+            if not isinstance(timeout.default, (int, float)):
+                continue
+            defaulted = [
+                n
+                for n, p in params.items()
+                if p.kind is p.POSITIONAL_OR_KEYWORD and p.default is not p.empty
+            ]
+            found[id(func)] = (func, defaulted.index("timeout"))
+    return list(found.values())
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _load_tolerant_ws_communicator_defaults():
     """Give Channels communicators time to finish under loaded test runners."""
-    from channels.testing import WebsocketCommunicator
-
-    methods = (
-        WebsocketCommunicator.disconnect,
-        WebsocketCommunicator.receive_output,
-        WebsocketCommunicator.receive_from,
-        WebsocketCommunicator.receive_json_from,
-    )
-    original = [method.__defaults__ for method in methods]
+    methods = _communicator_timeout_defaults()
+    original = [(func, func.__defaults__) for func, _ in methods]
     try:
-        for method, defaults in zip(methods, original):
-            method.__defaults__ = (*defaults[:-1], 30)
+        for func, index in methods:
+            defaults = list(func.__defaults__)
+            defaults[index] = COMMUNICATOR_WAIT_S
+            func.__defaults__ = tuple(defaults)
         yield
     finally:
-        for method, defaults in zip(methods, original):
-            method.__defaults__ = defaults
+        for func, defaults in original:
+            func.__defaults__ = defaults
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -68,6 +114,35 @@ def _accept_communicators_without_origin():
         del settings.DJUST_ALLOW_MISSING_ORIGIN
     except AttributeError:
         pass
+
+
+def pytest_collection_finish(session):
+    """Take the heap collection built out of every later garbage collection (#3692).
+
+    Collecting ~50k tests imports every test module and all they pull in: about
+    1.5 million tracked objects, nearly all of it alive for the whole run. An
+    xdist worker lives for the run, and each full (generation 2) collection
+    re-walks all of it. A stop-the-world pause stalls the worker's event loop and
+    every ``WebsocketCommunicator`` wait with it: measured on a full local run
+    (3.12; the CI interpreters were not measured),
+    median 0.32 s and up to 3.4 s (22 pauses over 1 s), which is longer than the
+    1 s ``connect()`` default and the 3 s receive that failed on CI.
+
+    ``gc.freeze()`` moves the objects that exist at this point into the
+    permanent generation, which no later collection visits. Measured on the same
+    run, median 0.10 s, max 1.05 s (one pause over 1 s). What
+    tests create afterwards is still collected normally; only what was
+    already alive when collection ended is exempt: live at that point,
+    though a frozen cycle that dies later is never collected, and
+    ``gc.get_referrers`` does not list a frozen object as a referrer (the one
+    negative assertion built on it, ``test_bridged_context_memo_2914``, builds its
+    objects inside the test).
+    ``python/djust/tests/test_gc_frozen_after_collection_3692.py`` pins it.
+    """
+    import gc
+
+    gc.collect()
+    gc.freeze()
 
 
 def pytest_sessionstart(session):

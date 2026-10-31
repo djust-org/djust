@@ -53,6 +53,16 @@ from djust.uploads import UploadMixin  # noqa: E402
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture(autouse=True)
+def _own_the_bucket_clock(frozen_rate_limit_clock):
+    """No token refills inside a test, however long the runner stalls (#3707).
+
+    A bucket with ``rate > 0`` refills ``elapsed * rate`` tokens from REAL time
+    unless the test owns the clock; a stall of a second mints a token and an
+    "exhausted" assertion goes false. See ``frozen_rate_limit_clock``.
+    """
+
+
 class _StateTargetView:
     """A real (non-Mock) view stand-in for server_push state application.
 

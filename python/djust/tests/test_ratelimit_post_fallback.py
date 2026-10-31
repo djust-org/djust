@@ -38,6 +38,16 @@ def _add_session(request):
 
 
 @pytest.fixture(autouse=True)
+def _own_the_bucket_clock(frozen_rate_limit_clock):
+    """No token refills inside a test, however long the runner stalls (#3707).
+
+    ``rate=1, burst=2`` below was "deterministic" only while less than a second
+    of wall clock passed between two POSTs; one CI run stalled past it and the
+    alias was admitted once.
+    """
+
+
+@pytest.fixture(autouse=True)
 def _clear_shared_store():
     """Each test starts with an empty shared per-caller bucket store."""
     reset_handler_buckets()
@@ -48,9 +58,9 @@ def _clear_shared_store():
 class _PostFallbackThrottled(LiveView):
     """A view whose handler declares ``@rate_limit(rate=1, burst=2)``.
 
-    ``rate=1, burst=2`` makes the accepted count deterministic inside one test
-    window: a token refills per second, so at most 3 calls could ever be
-    admitted by accident, and only 2 within the assertion's own duration.
+    The bucket clock is frozen for every test in this file (``_own_the_bucket_clock``),
+    so ``burst=2`` admits exactly 2 calls whatever ``rate`` is and however long the
+    runner stalls between them.
     """
 
     template = (
@@ -489,6 +499,38 @@ def test_one_callable_under_two_names_shares_one_budget_over_post():
         f"statuses={alias_statuses})"
     )
     assert view.calls == 2, f"the handler must have run twice total, not 4; ran {view.calls}"
+
+
+@pytest.mark.django_db
+def test_a_stall_between_the_two_names_does_not_refill_the_shared_budget():
+    """#3707: a CI worker stalled for over a second between the first name's POSTs
+    and the alias's, the ``rate=1`` bucket refilled a token and the alias was
+    admitted once. The stall is forced here as real time, which the frozen bucket
+    clock must be immune to; with the clock left on wall time this fails every run.
+    """
+    import time
+
+    view, factory, session_request = _fresh(_PostFallbackAliased)
+
+    first, _ = _drive_post(view, factory, session_request, "expensive_send", 2)
+    time.sleep(1.2)  # a stall longer than rate=1 needs to mint a token, forced
+    alias_ran, alias_statuses = _drive_post(view, factory, session_request, "send_alias", 2)
+
+    assert first == 2
+    assert alias_ran == 0, f"a token refilled across the stall: statuses={alias_statuses}"
+
+
+@pytest.mark.django_db
+def test_advancing_the_clock_is_what_refills_a_token(frozen_rate_limit_clock):
+    """The clock is owned, not removed: virtual time still refills, so the frozen
+    clock does not hide a bucket that never refills."""
+    view, factory, session_request = _fresh(_PostFallbackAliased)
+
+    _drive_post(view, factory, session_request, "expensive_send", 2)
+    frozen_rate_limit_clock.advance(1.1)  # rate=1: one token
+    ran, statuses = _drive_post(view, factory, session_request, "send_alias", 2)
+
+    assert ran == 1, f"one token should have refilled: statuses={statuses}"
 
 
 @pytest.mark.django_db

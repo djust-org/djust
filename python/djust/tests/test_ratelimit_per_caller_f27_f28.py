@@ -48,6 +48,16 @@ from djust.rate_limit import (
 
 
 @pytest.fixture(autouse=True)
+def _own_the_bucket_clock(frozen_rate_limit_clock):
+    """No token refills inside a test, however long the runner stalls (#3707).
+
+    A bucket with ``rate > 0`` refills ``elapsed * rate`` tokens from REAL time
+    unless the test owns the clock; a stall of a second mints a token and an
+    "exhausted" assertion goes false. See ``frozen_rate_limit_clock``.
+    """
+
+
+@pytest.fixture(autouse=True)
 def _clear_shared_store():
     """Each test starts with an empty shared per-caller bucket store."""
     reset_handler_buckets()

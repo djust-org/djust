@@ -391,7 +391,7 @@ class TestMountWorkWaitsForEveryRefusal:
         assert response.status_code == 403
         assert RefusalView.loads == 0
 
-    def test_a_rate_limited_post_starts_no_work(self):
+    def test_a_rate_limited_post_starts_no_work(self, frozen_rate_limit_clock):
         initial = _get_request()
         with STATELESS:
             _, first, _ = _post(RefusalView, "limited", initial=initial)

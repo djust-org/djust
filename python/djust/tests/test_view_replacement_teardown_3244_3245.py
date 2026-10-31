@@ -798,11 +798,48 @@ async def test_a_batch_siblings_groups_are_left_when_it_is_torn_down(end):
     assert _members(_view_group(ScopedListener)) == []
 
 
-@pytest.mark.parametrize("how", ["mount", "live_redirect", "batch-disconnect"])
-async def test_a_torn_down_view_is_untracked_from_presence(how):
+@pytest.mark.parametrize(
+    "how, flush",
+    [
+        ("mount", "prompt"),
+        ("mount", "held"),
+        ("live_redirect", "prompt"),
+        ("live_redirect", "held"),
+        ("batch-disconnect", "prompt"),
+    ],
+)
+async def test_a_torn_down_view_is_untracked_from_presence(how, flush, monkeypatch):
     """#3250 review M3: only the view mounted at disconnect was untracked, so a
     replaced view, and a mount_batch sibling, stayed in the presence list until
-    PRESENCE_TIMEOUT."""
+    PRESENCE_TIMEOUT.
+
+    A view a mount replaces is untracked AFTER the replacement's frame was sent
+    (#3254): ``receive`` does it in its ``finally``. This test used to read the
+    presence list the moment the frame arrived, so it passed or failed on whether
+    the ``finally`` reached the worker thread before the test's own call, and
+    failed on CI (#3692). It now waits for the consumer to finish the frame
+    (``frame_barrier``). ``flush="held"`` forces the losing interleave: the
+    ``finally`` is held until the test has read the list, so the old view is
+    provably still listed when the frame arrives and the barrier is the only
+    thing that makes the final assertion hold.
+    """
+    from djust.websocket import LiveViewConsumer
+
+    from ._ws_frames import frame_barrier
+
+    gate = asyncio.Event()
+    if flush == "held":
+        real_flush = LiveViewConsumer._flush_deferred_presence_untrack
+
+        async def held_flush(self):
+            # Only a frame that replaced a view has anything to untrack; the
+            # others pass through, or the first mount would hold the second.
+            if getattr(self, "_deferred_presence_untrack", None):
+                await gate.wait()
+            await real_flush(self)
+
+        monkeypatch.setattr(LiveViewConsumer, "_flush_deferred_presence_untrack", held_flush)
+
     communicator = await _ws_connect()
     try:
         if how == "batch-disconnect":
@@ -827,10 +864,17 @@ async def test_a_torn_down_view_is_untracked_from_presence(how):
                 {"type": "live_redirect_mount", "view": MOD + ".Beta", "url": "/beta/"}
             )
             await _ws_until(communicator, "mount")
+        if flush == "held":
+            # The replacement is mounted and its frame is here; the old view's
+            # presence is not gone yet. This is the window the barrier closes.
+            assert len(await sync_to_async(PresenceManager.list_presences)("wsx3250")) == 1
+            gate.set()
         if how != "batch-disconnect":
+            await frame_barrier(communicator)
             assert await sync_to_async(PresenceManager.list_presences)("wsx3250") == []
             assert VIEWS[present]._presence_tracked is False
     finally:
+        gate.set()
         await _close(communicator)
     assert await sync_to_async(PresenceManager.list_presences)("wsx3250") == []
 
