@@ -303,7 +303,7 @@ class TestEveryRefusalStillPrecedesTheWork:
         assert response.status_code == 200
         assert Loads.loads == 1 and view.data == "rows"
 
-    def test_a_rate_limited_post_starts_no_work(self):
+    def test_a_rate_limited_post_starts_no_work(self, frozen_rate_limit_clock):
         initial = _get(Loads)
         _, first, _ = _post(Loads, "limited", initial)
         _, second, _ = _post(Loads, "limited", initial)

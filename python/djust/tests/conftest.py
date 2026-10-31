@@ -36,6 +36,35 @@ def _reset_djust_globals():
     yield
 
 
+class FakeRateLimitClock:
+    """The token bucket's clock, owned by the test (#1930, #3707).
+
+    ``TokenBucket.consume`` refills ``elapsed * rate`` tokens, reading
+    ``djust.rate_limit._monotonic``. A test that drains a ``rate=1`` bucket and
+    then asserts it is empty is asserting that less than a second of REAL time
+    passed, and a worker stalled by a full garbage collection (measured up to
+    3.4 s, #3692) breaks that. Frozen, ``elapsed`` is 0 for every check;
+    ``advance`` drives the refill path explicitly.
+    """
+
+    def __init__(self, start: float = 1000.0) -> None:
+        self.now = float(start)
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
+@pytest.fixture
+def frozen_rate_limit_clock(monkeypatch) -> FakeRateLimitClock:
+    """A clock that never advances, patched over ``djust.rate_limit._monotonic``."""
+    clock = FakeRateLimitClock()
+    monkeypatch.setattr("djust.rate_limit._monotonic", clock)
+    return clock
+
+
 def make_staff_user(
     username: str = "tester",
     *,

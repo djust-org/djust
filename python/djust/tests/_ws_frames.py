@@ -157,6 +157,64 @@ async def drain_extra(socket, quiet: float = TRAILING_QUIET_S) -> List[Frame]:
     return frames
 
 
+def _frame_type(text_data: str) -> Any:
+    try:
+        return json.loads(text_data).get("type")
+    except (ValueError, AttributeError):
+        return None  # not a JSON object: not ours to classify
+
+
+def stall_the_consumer_at_the_next_mount(monkeypatch, seconds: float) -> None:
+    """Hold the consumer back for ``seconds`` when the next ``mount`` frame arrives.
+
+    A loaded runner stalls a worker's event loop for whole seconds: a full
+    garbage collection of an xdist worker's heap, measured at up to 3.4 s over a
+    full local run (#3692). Every frame Channels dispatches awaits a
+    thread-sensitive ``sync_to_async`` (``aclose_old_connections``) first, so
+    occupying that one thread for ``seconds`` delays the consumer's reply by the
+    same amount. Forced here as state, so a wait with a fixed bound fails on every
+    run instead of on a bad day. Only the FIRST mount frame is stalled.
+    """
+    import time
+
+    from asgiref.sync import SyncToAsync
+
+    from djust.websocket import LiveViewConsumer
+
+    real = LiveViewConsumer.receive
+    stalled: List[bool] = []
+
+    async def receive(self, text_data=None, bytes_data=None):
+        if text_data and not stalled and _frame_type(text_data) == "mount":
+            stalled.append(True)
+            SyncToAsync.single_thread_executor.submit(time.sleep, seconds)
+        return await real(self, text_data=text_data, bytes_data=bytes_data)
+
+    monkeypatch.setattr(LiveViewConsumer, "receive", receive)
+
+
+async def frame_barrier(socket, *, timeout: float = WAIT_S) -> List[Frame]:
+    """Return once the consumer has FINISHED every frame sent before this call.
+
+    A frame the client observes is not the end of the consumer's work on it.
+    ``LiveViewConsumer.receive`` runs a ``finally`` after the frame's reply was
+    sent: a ``mount`` that replaced a view untracks that view's presence there
+    (#3254), after the replacement's ``mount`` frame has already gone out. A test
+    that asserts the consumer's state right after receiving the reply races that
+    ``finally``: the reply wakes the test on the next loop turn, the ``finally``
+    hands its untrack to a worker thread, and which of the two reaches the
+    thread first is scheduling (#3692).
+
+    Channels dispatches a socket's frames one at a time and awaits each handler
+    to its end, so the ``pong`` answering a ``ping`` can only be sent once every
+    earlier frame, ``finally`` included, is done. That is an ordering fact, not
+    a quiet window. The frames received on the way (there are usually none) are
+    returned.
+    """
+    await socket.send_json_to({"type": "ping"})
+    return await receive_until(socket, has_type("pong"), timeout=timeout, what="the pong")
+
+
 async def wait_until(
     condition: Callable[[], bool], *, timeout: float = WAIT_S, what: str = "the condition"
 ) -> None:

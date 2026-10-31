@@ -371,8 +371,33 @@ def _with_user(app, user_cls):
     return mw
 
 
+async def _next_output(communicator):
+    """The next ASGI output, waiting for one that WILL arrive (#3692).
+
+    ``receive_output(timeout=2)`` made a 2 s stall in the consumer look like
+    "the socket went quiet", and the caller then asserted on an empty list.
+    Polls with ``receive_nothing`` and calls ``receive_output`` only when an
+    output is already queued, as ``_ws_frames.receive_until`` does, because
+    ``receive_output``'s own timeout path cancels the application under test.
+    """
+    from ._ws_frames import WAIT_S
+
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + WAIT_S
+    while await communicator.receive_nothing(timeout=0.05, interval=0.01):
+        if loop.time() >= deadline:
+            raise asyncio.TimeoutError
+    return await communicator.receive_output(timeout=3)
+
+
 async def _ws(user_cls, view_name, event=None, url="/x/"):
-    """Mount ``view_name`` over the real consumer, optionally send one event."""
+    """Mount ``view_name`` over the real consumer, optionally send one event.
+
+    Every wait is for output the consumer WILL send, so none is a wall-clock
+    bound: ``connect()`` takes the 30 s default the root conftest installs
+    (it used to time out at Channels' 1 s on CI, #3692), the connect ack is
+    awaited, and the loop ends on the mount frame or the close.
+    """
     from channels.testing import WebsocketCommunicator
 
     from djust.websocket import LiveViewConsumer
@@ -380,27 +405,32 @@ async def _ws(user_cls, view_name, event=None, url="/x/"):
     communicator = WebsocketCommunicator(_with_user(LiveViewConsumer.as_asgi(), user_cls), "/ws/")
     connected, _ = await communicator.connect()
     assert connected
-    try:
-        await communicator.receive_json_from(timeout=2)  # connect ack
-    except (asyncio.TimeoutError, asyncio.CancelledError):
-        pass
+    ack = await _next_output(communicator)  # connect ack
+    assert '"type": "connect"' in (ack.get("text") or ""), ack
     await communicator.send_json_to(
         {"type": "mount", "view": f"{_MOD}.{view_name}", "params": {}, "url": url}
     )
     outputs = []
+    sent_event = False
     try:
         while True:
-            out = await communicator.receive_output(timeout=2)
+            out = await _next_output(communicator)
             outputs.append(out)
             if out.get("type") == "websocket.close":
                 break
-            if '"type": "mount"' in (out.get("text") or ""):
+            frame = json.loads(out["text"]) if out.get("text") else {}
+            if sent_event:
+                # The event's own answer (a patch/noop carrying its ``ref``, or a
+                # refusal) ends the wait; no quiet window decides it.
+                if frame.get("ref") == 1 or frame.get("type") == "error":
+                    break
+            elif frame.get("type") == "mount":
                 if event is None:
                     break
                 await communicator.send_json_to(
                     {"type": "event", "event": event, "params": {}, "ref": 1}
                 )
-                event = None
+                sent_event = True
     except (asyncio.TimeoutError, asyncio.CancelledError):
         pass
     try:
@@ -492,6 +522,14 @@ class TestDenialsAreGates:
     @pytest.mark.parametrize("view_name", R1_SHAPES + ["RaiseAfterCheckView", "SetupGateView"])
     async def test_anonymous_ws_mount_is_refused(self, view_name):
         await _assert_refused(view_name, _AnonUser)
+
+    async def test_a_consumer_stalled_past_2s_still_refuses_the_anonymous_mount(self, monkeypatch):
+        """The helper's waits used to be 2 s; a loaded runner stalled the loop
+        longer, the loop ended on its timeout and the assertions saw ``[]`` (#3692)."""
+        from ._ws_frames import stall_the_consumer_at_the_next_mount
+
+        stall_the_consumer_at_the_next_mount(monkeypatch, 2.2)
+        await _assert_refused("RaiseAfterCheckView", _AnonUser)
 
     @pytest.mark.parametrize("view_name", R1_SHAPES)
     async def test_anonymous_sse_mount_is_refused(self, view_name):

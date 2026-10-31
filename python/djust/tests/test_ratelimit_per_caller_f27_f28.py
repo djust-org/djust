@@ -409,7 +409,7 @@ def test_f28_authenticated_caller_keyed_by_user_pk():
 # --------------------------------------------------------------------------- #
 
 
-def test_global_per_message_abuse_disconnect_intact():
+def test_global_per_message_abuse_disconnect_intact(frozen_rate_limit_clock):
     """The per-connection ConnectionRateLimiter still trips should_disconnect()
     after a per-message flood on a single connection — the per-handler shared
     store does NOT touch this global gate (#17).
@@ -426,7 +426,7 @@ def test_global_per_message_abuse_disconnect_intact():
     )
 
 
-def test_global_check_independent_of_shared_handler_store():
+def test_global_check_independent_of_shared_handler_store(frozen_rate_limit_clock):
     """A handler-store rejection for one caller does NOT consume the global
     per-message bucket, and vice versa — the two are separate gates."""
     settings = {"rate": 1, "burst": 1}

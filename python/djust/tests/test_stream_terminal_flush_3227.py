@@ -95,19 +95,23 @@ async def _connect_and_mount(view_suffix):
         def __init__(self, key):
             self.session_key = key
 
+    from ._ws_frames import has_type, receive_until
+
     communicator = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
     communicator.scope["session"] = _ScopeSession(session_key)
     connected, _ = await communicator.connect()
     assert connected
-    await communicator.receive_json_from(timeout=2)  # connect frame
+    # Each wait is for a frame that WILL come, with a deadline only a hung turn
+    # reaches. These were ``receive_json_from(timeout=2)`` / ``(timeout=3)``:
+    # an explicit timeout overrides the 30 s default the root conftest installs,
+    # and a stalled worker thread failed the test at 3.0 s (#3692).
+    await receive_until(communicator, has_type("connect"), what="the connect frame")
     await communicator.send_json_to(
         {"type": "mount", "view": f"{_MODULE}.{view_suffix}", "url": "/settle/"}
     )
-    for _ in range(6):
-        frame = await communicator.receive_json_from(timeout=3)
-        if frame.get("type") == "mount":
-            return communicator
-    raise AssertionError("never received a mount frame")
+    frames = await receive_until(communicator, has_type("mount", "error"), what="the mount frame")
+    assert frames[-1].get("type") == "mount", frames
+    return communicator
 
 
 def _stream_ops(frames):
@@ -116,10 +120,17 @@ def _stream_ops(frames):
 
 @pytest.mark.django_db
 @pytest.mark.asyncio
-async def test_done_arrives_after_the_queued_settle_over_websocket():
+@pytest.mark.parametrize("mount_stall_s", [0, 3.2], ids=["prompt", "mount-stalled-past-3s"])
+async def test_done_arrives_after_the_queued_settle_over_websocket(monkeypatch, mount_stall_s):
+    """The ``3.2`` case holds the consumer back longer than the 3 s this test's
+    mount wait used to allow, which is what failed it on CI (#3692): the test now
+    waits for the frame, so the stall only delays it."""
     from django.test import override_settings
 
-    from ._ws_frames import receive_until
+    from ._ws_frames import receive_until, stall_the_consumer_at_the_next_mount
+
+    if mount_stall_s:
+        stall_the_consumer_at_the_next_mount(monkeypatch, mount_stall_s)
 
     with override_settings(LIVEVIEW_ALLOWED_MODULES=[_MODULE]):
         communicator = await _connect_and_mount("_SettleView")
