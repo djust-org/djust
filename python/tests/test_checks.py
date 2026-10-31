@@ -4484,43 +4484,97 @@ class TestT027RustJsxTags:
         (found,) = self._run(tmp_path, settings, '<RustButton id="b" />')
         assert found.level == django_checks.WARNING
 
-    def test_an_example_in_an_html_comment_is_documentation_not_a_use(self, tmp_path, settings):
-        """The renderer never parses a comment as an element, so nothing is rendered
-        or warned about at runtime; the check must read it the same way (#3691)."""
-        html = (
-            "<!--\n  old style: <RustButton id='a' />\n-->\n"
-            "{# also not rendered: <RustButton id='b' /> #}\n"
-            '<RustCard id="real" />\n'
-        )
-        found = self._run(tmp_path, settings, html)
-        assert [(e.msg.split("'")[1], e.line_number) for e in found] == [("<RustCard />", 5)]
-
-    def test_an_unterminated_html_comment_hides_the_rest_as_a_browser_does(
-        self, tmp_path, settings
-    ):
-        assert self._run(tmp_path, settings, "<!-- never closed\n<RustButton />\n") == []
+    @staticmethod
+    def _names(found):
+        return [(e.msg.split("'")[1].strip("<> /"), e.line_number) for e in found]
 
     def test_an_example_in_a_verbatim_block_is_documentation_not_a_use(self, tmp_path, settings):
+        """``{% verbatim %}`` is how a template shows the tag as text: the renderer
+        never lexes it as a component, so it is not a use (#3691)."""
         html = (
             "{% verbatim %}\n<RustButton id='a' />\n{% endverbatim %}\n<RustCard id=\"real\" />\n"
         )
-        found = self._run(tmp_path, settings, html)
-        assert [(e.msg.split("'")[1], e.line_number) for e in found] == [("<RustCard />", 4)]
+        assert self._names(self._run(tmp_path, settings, html)) == [("RustCard", 4)]
 
-    def test_a_string_in_a_script_body_is_not_an_element(self, tmp_path, settings):
-        html = '<script>var s = "<RustButton />";</script>\n<RustCard id="real" />\n'
-        found = self._run(tmp_path, settings, html)
-        assert [(e.msg.split("'")[1], e.line_number) for e in found] == [("<RustCard />", 2)]
+    def test_an_example_in_a_template_comment_is_not_a_use(self, tmp_path, settings):
+        html = (
+            "{# <RustButton id='a' /> #}\n"
+            "{% comment %}\n<RustInput id='b' />\n{% endcomment %}\n"
+            '<RustCard id="real" />\n'
+        )
+        assert self._names(self._run(tmp_path, settings, html)) == [("RustCard", 5)]
+
+    def test_a_tag_in_an_html_comment_or_script_body_is_still_a_use(self, tmp_path, settings):
+        """The renderer's lexer is blind to HTML context, so these ARE rendered and
+        warned about (and are a template error in 2.0): reporting them is correct, and
+        skipping them would let a project pass T027 and break on upgrade (#3691)."""
+        html = (
+            "<!-- <RustButton id='a' /> -->\n"
+            "<script>var s = \"<RustInput id='b' />\";</script>\n"
+            '<RustCard id="real" />\n'
+        )
+        assert self._names(self._run(tmp_path, settings, html)) == [
+            ("RustButton", 1),
+            ("RustInput", 2),
+            ("RustCard", 3),
+        ]
 
     def test_line_numbers_survive_the_blanking(self, tmp_path, settings):
-        """A comment and a verbatim block that span lines must not shift the lines of
-        the tags after them."""
-        html = "<!--\n\n-->\n{% verbatim %}\n\n{% endverbatim %}\n<RustA />\n\n<RustB />\n"
-        found = self._run(tmp_path, settings, html)
-        assert [(e.msg.split("'")[1], e.line_number) for e in found] == [
-            ("<RustA />", 7),
-            ("<RustB />", 9),
-        ]
+        """A verbatim block and a template comment that span lines must not shift the
+        lines of the tags after them."""
+        html = (
+            "{% verbatim %}\n\n{% endverbatim %}\n{% comment %}\n\n{% endcomment %}\n"
+            "<RustA />\n\n<RustB />\n"
+        )
+        assert self._names(self._run(tmp_path, settings, html)) == [("RustA", 7), ("RustB", 9)]
+
+    @pytest.mark.parametrize(
+        "html",
+        [
+            "<RustButton id='a' label='x' />",
+            "{% verbatim %}<RustButton id='a' label='x' />{% endverbatim %}",
+            "{# <RustButton id='a' label='x' /> #}",
+            "{% comment %}<RustButton id='a' label='x' />{% endcomment %}",
+            "<!-- <RustButton id='a' label='x' /> -->",
+            "<script>var s = \"<RustButton id='a' label='x' />\";</script>",
+            "<!-- {% verbatim %} --><RustButton id='a' label='x' /><!-- {% endverbatim %} -->",
+            "{% verbatim %}<RustButton id='a' />{% endverbatim %}<RustButton id='b' label='y' />",
+        ],
+        ids=[
+            "plain",
+            "verbatim",
+            "template-comment",
+            "comment-block",
+            "html-comment",
+            "script-body",
+            "verbatim-markers-in-html-comments",
+            "verbatim-then-real",
+        ],
+    )
+    def test_the_check_flags_exactly_the_tags_the_renderer_warns_about(
+        self, tmp_path, settings, html
+    ):
+        """A differential against the real renderer, so the check cannot drift from
+        what it is a check for: the tags T027 reports are the tags that make the
+        renderer emit its ``DeprecationWarning`` (#3691)."""
+        import re
+        import warnings
+
+        from djust import _rust
+
+        with warnings.catch_warnings(record=True) as record:
+            warnings.simplefilter("always")
+            try:
+                _rust.render_template(html, {})
+            except Exception:  # noqa: BLE001 - a render error after the warning is irrelevant here
+                pass
+        warned = sorted(
+            re.search(r"`<(Rust\w+) />`", str(w.message)).group(1)
+            for w in record
+            if issubclass(w.category, DeprecationWarning) and "JSX-style" in str(w.message)
+        )
+        flagged = sorted(name for name, _line in self._names(self._run(tmp_path, settings, html)))
+        assert flagged == warned, html
 
     def test_the_line_count_reads_the_template_once_not_once_per_tag(self, monkeypatch):
         """Linear in the template, asserted without a clock (#3691).
@@ -4549,9 +4603,9 @@ class TestT027RustJsxTags:
                     Spy.reads += self._span(len(self), key.start, key.stop)
                 return str.__getitem__(self, key)
 
-        real = templates_module._document_root_scan_text
+        real = templates_module._strip_verbatim_blocks
         monkeypatch.setattr(
-            templates_module, "_document_root_scan_text", lambda content: Spy(real(content))
+            templates_module, "_strip_verbatim_blocks", lambda content: Spy(real(content))
         )
 
         def reads_for(tags):

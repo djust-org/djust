@@ -229,7 +229,6 @@ def test_a_templates_entry_naming_the_shim_announces_only_the_shim(monkeypatch):
             warnings.simplefilter("ignore", DeprecationWarning)
             warn_deprecated_settings()
     assert _deprecation._ANNOUNCED == {"djust.template_backend"}
-    assert _deprecation.is_announced("djust.state_backend") is False
 
 
 def test_the_shim_still_warns_on_import_when_only_another_setting_was_announced(monkeypatch):

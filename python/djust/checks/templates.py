@@ -1660,16 +1660,22 @@ def _check_rust_jsx_tags(
     the renderer emits when the tag is rendered. djust 2.0 turns the tag into
     a template error.
 
-    The renderer only warns for a tag it parses as an element, so a
-    ``{% verbatim %}`` region, an HTML comment and a ``<script>`` body, which it
-    reads as text, are skipped here too: an example of the tag in documentation is
-    not a use (#3691). The scan is one pass; each tag's line number counts only the
-    newlines since the previous tag, so a template with very many tags costs
-    O(template + tags), not O(template x tags).
+    The check reads what the renderer reads. The renderer's lexer is blind to HTML
+    context: it turns any ``<`` followed by a capital letter into a component, so a
+    tag inside an HTML comment or a ``<script>`` body IS rendered and warned about,
+    and in 2.0 is a template error. Those are reported. Only text the renderer
+    never lexes as a tag is skipped: a ``{% verbatim %}`` region (and the
+    ``{# #}`` / ``{% comment %}`` the caller already blanked), which is how a
+    template shows an example of the tag (#3691;
+    ``test_the_check_flags_exactly_the_tags_the_renderer_warns_about``).
+
+    The scan is one pass; each tag's line number counts only the newlines since the
+    previous tag, so a template with very many tags costs O(template + tags), not
+    O(template x tags).
     """
     if _is_check_suppressed("djust.T027"):
         return
-    scan = _document_root_scan_text(content)
+    scan = _strip_verbatim_blocks(content)
     lineno = 1
     counted_to = 0
     for match in _RUST_JSX_TAG_RE.finditer(scan):
