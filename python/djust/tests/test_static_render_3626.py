@@ -113,6 +113,20 @@ class SmallPage(LiveView):
         self.n += 1
 
 
+@pytest.fixture(autouse=True)
+def _fresh_temporary_assigns_warning_registry():
+    """``_static_render`` warns once per class per process. Every test that reads that
+    log (the warning and its negatives) starts from an empty registry: a negative such
+    as "a static view without temporary_assigns does not warn" otherwise passes
+    vacuously whenever an earlier test already released the same class, and only has
+    teeth when it happens to run first (#3691)."""
+    from djust import _static_render
+
+    _static_render._WARNED_TEMPORARY_ASSIGNS.clear()
+    yield
+    _static_render._WARNED_TEMPORARY_ASSIGNS.clear()
+
+
 @pytest.fixture
 def backend():
     previous = get_backend()
@@ -688,9 +702,6 @@ class TestTemporaryAssignsOnAStaticView:
         The view warns about the combination, once."""
         import logging
 
-        from djust import _static_render
-
-        _static_render._WARNED_TEMPORARY_ASSIGNS.discard(StaticMessagesPage)
         key = await _session_key()
         with caplog.at_level(logging.WARNING, logger="djust._static_render"):
             with override_settings(LIVEVIEW_ALLOWED_MODULES=[MODULE]):

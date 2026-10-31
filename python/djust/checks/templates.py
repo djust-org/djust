@@ -1659,11 +1659,22 @@ def _check_rust_jsx_tags(
     policy asks for a system check beside the runtime ``DeprecationWarning``
     the renderer emits when the tag is rendered. djust 2.0 turns the tag into
     a template error.
+
+    The renderer only warns for a tag it parses as an element, so a
+    ``{% verbatim %}`` region, an HTML comment and a ``<script>`` body, which it
+    reads as text, are skipped here too: an example of the tag in documentation is
+    not a use (#3691). The scan is one pass; each tag's line number counts only the
+    newlines since the previous tag, so a template with very many tags costs
+    O(template + tags), not O(template x tags).
     """
     if _is_check_suppressed("djust.T027"):
         return
-    for match in _RUST_JSX_TAG_RE.finditer(content):
-        lineno = content[: match.start()].count("\n") + 1
+    scan = _document_root_scan_text(content)
+    lineno = 1
+    counted_to = 0
+    for match in _RUST_JSX_TAG_RE.finditer(scan):
+        lineno += scan.count("\n", counted_to, match.start())
+        counted_to = match.start()
         tag = match.group(1)
         errors.append(
             DjustWarning(

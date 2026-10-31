@@ -186,6 +186,75 @@ def test_a_templates_entry_naming_the_shim_warns_once(monkeypatch):
             sys.modules[module] = saved
 
 
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        # Another deprecated setting: its warning is about something else, so the
+        # shim's own import warning is NOT a duplicate and must still fire.
+        {"DJUST_WS_COMPRESSION": False},
+        {"DJUST_REDIS_URL": "redis://h"},
+        {"LIVEVIEW_CONFIG": {"template_auto_call": False}},
+        # A TEMPLATES entry that names the supported backend is not deprecated.
+        {"TEMPLATES": [{"BACKEND": "djust.template.backend.DjustTemplateBackend"}]},
+        {"TEMPLATES": [{"BACKEND": "django.template.backends.django.DjangoTemplates"}]},
+    ],
+    ids=["ws-compression", "redis-url", "kill-switch-key", "live-djust-backend", "django-backend"],
+)
+def test_the_settings_dedupe_is_scoped_to_a_templates_entry_naming_the_shim(monkeypatch, overrides):
+    """``warn_deprecated_settings`` suppresses the shim's import warning only for the
+    cause it announced: a ``TEMPLATES`` entry naming ``djust.template_backend``.
+    Announcing any other setting must not silence that import, or an application
+    that imports the shim itself would lose its only warning (#3691)."""
+    from djust import _deprecation
+    from djust._deprecated_settings import warn_deprecated_settings
+
+    monkeypatch.setattr(_deprecation, "_ANNOUNCED", set())
+    with override_settings(**overrides):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            warn_deprecated_settings()
+    assert _deprecation.is_announced("djust.template_backend") is False
+    assert _deprecation._ANNOUNCED == set()
+
+
+def test_a_templates_entry_naming_the_shim_announces_only_the_shim(monkeypatch):
+    """The other side of the scope: the announcement names exactly the module the
+    ``TEMPLATES`` entry imports, and no other shim's import warning is silenced."""
+    from djust import _deprecation
+    from djust._deprecated_settings import warn_deprecated_settings
+
+    monkeypatch.setattr(_deprecation, "_ANNOUNCED", set())
+    with override_settings(TEMPLATES=[{"BACKEND": "djust.template_backend.DjustTemplateBackend"}]):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            warn_deprecated_settings()
+    assert _deprecation._ANNOUNCED == {"djust.template_backend"}
+    assert _deprecation.is_announced("djust.state_backend") is False
+
+
+def test_the_shim_still_warns_on_import_when_only_another_setting_was_announced(monkeypatch):
+    """End to end for the scope above: announce an unrelated setting, then import
+    the shim: it warns for itself (once, naming the module)."""
+    from djust import _deprecation
+    from djust._deprecated_settings import warn_deprecated_settings
+
+    module = "djust.template_backend"
+    monkeypatch.setattr(_deprecation, "_ANNOUNCED", set())
+    saved = sys.modules.pop(module, None)
+    try:
+        with override_settings(DJUST_WS_COMPRESSION=False):
+            with warnings.catch_warnings(record=True) as record:
+                warnings.simplefilter("always")
+                warn_deprecated_settings()
+                importlib.import_module(module)
+        messages = [str(w.message) for w in record if issubclass(w.category, DeprecationWarning)]
+        shim = [m for m in messages if m.startswith("djust.template_backend is deprecated")]
+        assert len(shim) == 1, messages
+    finally:
+        if saved is not None:
+            sys.modules[module] = saved
+
+
 def test_star_importing_simple_live_view_keeps_binding_the_old_name():
     ns: dict = {}
     with warnings.catch_warnings(record=True) as record:

@@ -4476,6 +4476,99 @@ class TestT027RustJsxTags:
         )
         assert found == []
 
+    def test_is_a_warning_not_an_error_or_info(self, tmp_path, settings):
+        """The tag still works in 1.x: Warning. In 2.0 it is a template error, which
+        is the runtime's job, not this check's (#3691)."""
+        from django.core import checks as django_checks
+
+        (found,) = self._run(tmp_path, settings, '<RustButton id="b" />')
+        assert found.level == django_checks.WARNING
+
+    def test_an_example_in_an_html_comment_is_documentation_not_a_use(self, tmp_path, settings):
+        """The renderer never parses a comment as an element, so nothing is rendered
+        or warned about at runtime; the check must read it the same way (#3691)."""
+        html = (
+            "<!--\n  old style: <RustButton id='a' />\n-->\n"
+            "{# also not rendered: <RustButton id='b' /> #}\n"
+            '<RustCard id="real" />\n'
+        )
+        found = self._run(tmp_path, settings, html)
+        assert [(e.msg.split("'")[1], e.line_number) for e in found] == [("<RustCard />", 5)]
+
+    def test_an_unterminated_html_comment_hides_the_rest_as_a_browser_does(
+        self, tmp_path, settings
+    ):
+        assert self._run(tmp_path, settings, "<!-- never closed\n<RustButton />\n") == []
+
+    def test_an_example_in_a_verbatim_block_is_documentation_not_a_use(self, tmp_path, settings):
+        html = (
+            "{% verbatim %}\n<RustButton id='a' />\n{% endverbatim %}\n<RustCard id=\"real\" />\n"
+        )
+        found = self._run(tmp_path, settings, html)
+        assert [(e.msg.split("'")[1], e.line_number) for e in found] == [("<RustCard />", 4)]
+
+    def test_a_string_in_a_script_body_is_not_an_element(self, tmp_path, settings):
+        html = '<script>var s = "<RustButton />";</script>\n<RustCard id="real" />\n'
+        found = self._run(tmp_path, settings, html)
+        assert [(e.msg.split("'")[1], e.line_number) for e in found] == [("<RustCard />", 2)]
+
+    def test_line_numbers_survive_the_blanking(self, tmp_path, settings):
+        """A comment and a verbatim block that span lines must not shift the lines of
+        the tags after them."""
+        html = "<!--\n\n-->\n{% verbatim %}\n\n{% endverbatim %}\n<RustA />\n\n<RustB />\n"
+        found = self._run(tmp_path, settings, html)
+        assert [(e.msg.split("'")[1], e.line_number) for e in found] == [
+            ("<RustA />", 7),
+            ("<RustB />", 9),
+        ]
+
+    def test_the_line_count_reads_the_template_once_not_once_per_tag(self, monkeypatch):
+        """Linear in the template, asserted without a clock (#3691).
+
+        Reporting a tag at line N needs the newlines before it. Counting them from the
+        start for every tag reads ~n/2 characters per tag: the characters read grow
+        with the square of the template. The scan text is a ``str`` that tallies the
+        characters read through ``count`` and slicing; quadrupling the template (and
+        its tags) must roughly quadruple the tally, not grow it sixteen-fold.
+        """
+        from djust.checks import templates as templates_module
+
+        class Spy(str):
+            reads = 0
+
+            @classmethod
+            def _span(cls, size, start, stop):
+                return len(range(*slice(start, stop).indices(size)))
+
+            def count(self, sub, start=None, end=None):
+                Spy.reads += self._span(len(self), start, end)
+                return str.count(self, sub, start, end)
+
+            def __getitem__(self, key):
+                if isinstance(key, slice):
+                    Spy.reads += self._span(len(self), key.start, key.stop)
+                return str.__getitem__(self, key)
+
+        real = templates_module._document_root_scan_text
+        monkeypatch.setattr(
+            templates_module, "_document_root_scan_text", lambda content: Spy(real(content))
+        )
+
+        def reads_for(tags):
+            Spy.reads = 0
+            text = "".join(
+                '<div class="row">\n<RustButton id="b%d" />\n</div>\n' % i for i in range(tags)
+            )
+            errors: list = []
+            templates_module._check_rust_jsx_tags(text, "page.html", "/tmp/page.html", errors)
+            assert len(errors) == tags  # every tag still reported
+            assert errors[-1].line_number == 3 * tags - 1  # on the right line
+            return Spy.reads
+
+        small, large = reads_for(1000), reads_for(4000)
+        assert small > 0, "the check no longer reads the scan text through the spy"
+        assert large < 6 * small, (small, large)  # linear ~4x; the per-tag count is ~16x
+
 
 # ---------------------------------------------------------------------------
 # V008 — primitive return type annotation suppresses warning (issue #393)
