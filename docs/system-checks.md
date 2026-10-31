@@ -883,10 +883,13 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 - **Fix**: Render the matching `djust.components.ui` component from the view
   instead (for `<RustButton />`, `Button`).
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["T027"]}`
-- **Not reported**: A tag inside `{% verbatim %}`, a `{# #}` or `{% comment %}`
-  comment, an HTML comment (`<!-- ... -->`) or a `<script>` body. The renderer
-  reads those as text and never parses an element there, so an example of the tag
-  in documentation is not a use. Line numbers are those of the template.
+- **Not reported**: A tag inside `{% verbatim %}`, or a `{# #}` / `{% comment %}`
+  comment. The renderer never lexes those as a tag, so an example shown that way is
+  not a use (wrap a documentation example in `{% verbatim %}`). Line numbers are
+  those of the template.
+- **Still reported**: A tag inside an HTML comment (`<!-- ... -->`) or a `<script>`
+  body. The renderer does not look at HTML context: it renders the component and
+  emits the `DeprecationWarning` there too, and in 2.0 it is a template error.
 - **False positives**: None known.
 
 ### T019–T022 — Template event bindings (ADR-037)
