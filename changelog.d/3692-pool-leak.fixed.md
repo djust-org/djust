@@ -1,0 +1,1 @@
+- **A test that turned the worker pool on no longer leaves it on for the rest of the xdist worker** — `monkeypatch.setitem(config._config, ...)` is restored onto a dict the config has since swapped out, so `worker_threads` stayed set; the per-test global reset now puts `worker_threads` and `worker_pinning` back (#3692).
