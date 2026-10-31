@@ -192,6 +192,27 @@ Two name shapes appear in this roadmap, with distinct meanings:
 | ~~**P3**~~ | ~~#3647 — `dj-update` accumulation: included templates, aliases, duplicate ids, nesting, scanner bounds~~ ✅ (#3648) | v1.3.0 |
 | **P3** | #3646 — Harden the `sync_turn_wrapper` pin: allowlist keyed by file and function, every override point has a checked disposition, teardown and template-time hook wording corrected | v1.3.0 |
 
+### v1.3.0-15 — security review leftovers, component-tag parity, and the first DX asks from a downstream app on 1.3.0rc14 (drain bucket → ships in 1.3)
+
+*Kind:* three row groups, each a grouped PR. **A, security:** the URL-sink leftovers of the #3665 review. **B, audit and test DX:** new rules and a per-view budget from the rc14 downstream report. **C, view API:** `get_http_status()` and `handle_params()`. The component-tag parity rows (#3663, #3666, #3667, #3669, #3676, #3677) need a canonical implementation chosen before code and are not started by this bucket's grouped PRs. #3500 (the 2.0 tracking issue), #3632 (design half) and the 2.0 design issues #3656–#3659 are not drain items.
+
+| Priority | Task | Milestone |
+|---|---|---|
+| **P1** | #3679 — `TtydTerminalView` takes its WebSocket target from `?url=` without validation (group A) | v1.3.0 |
+| **P2** | #3685 — `djust_audit --a11y`: a rule for a chart or `<svg>` with no accessible name, and a legend told apart by colour only (group B) | v1.3.0 |
+| **P2** | #3686 — Per-view query budget: `LiveViewSmokeTest` lets a view declare its own, instead of one `max_queries` for every view (group B) | v1.3.0 |
+| **P2** | #3687 — X105 also flags named colours, literal `font-family` stacks and `style=` attributes in LiveView templates (group B) | v1.3.0 |
+| **P2** | #3688 — `get_http_status()` is per view: a page that renders its not-found state answers 200 unless each view overrides it (group C) | v1.3.0 |
+| **P2** | #3689 — `handle_params()` gets raw strings: a declared params form, so the docstring example does not 500 on `?page=abc` (group C) | v1.3.0 |
+| **P2** | #3691 — Close the low-severity review leftovers from #3535, #3652 and #3678 (tidy-up checklist) | v1.3.0 |
+| **P2** | #3692 — `main`'s `python-tests` flakes: `target_id` on push frames fixed (#3694), pool-config leak fixed (#3695); two timing-dependent tests still open | v1.3.0 |
+| **P2** | #3663 — `djust_components` / `theme_tags`: the same tag renders different markup under the Django engine and the native Rust handler (117 of 208 tags). Needs a canonical implementation first | v1.3.0 |
+| **P2** | #3666 — Form and `BoundField` arguments do not reach the native Rust component handlers. Needs a canonical implementation first | v1.3.0 |
+| **P2** | #3667 — Native Rust component handlers swallow invalid input the Python tags reject. Needs a canonical implementation first | v1.3.0 |
+| **P2** | #3669 — Event-wiring (`dj-*`) attributes differ between the Django and Rust renderings of 12 component tags. Needs a canonical implementation first | v1.3.0 |
+| **P1** | #3676 — Native raw `@register.tag` component handlers read a bare variable's value as `key=value` pairs (parameter injection; 117 of 136 tags). Needs a canonical implementation first | v1.3.0 |
+| **P2** | #3677 — The `djust_theming` URL sanitiser is a denylist; `djust_components` uses an allowlist. Needs a canonical implementation first | v1.3.0 |
+
 ## Next: v1.2.1 — non-breaking fixes (drain)
 
 > Planned 2026-09-24 from a triage of every open issue. **Policy:** non-breaking bug fixes ship in 1.2.1; anything breaking, new features, and parser/dependency upgrades go to 1.3. Issues split into a 1.2.1 part and a 1.3 part are marked. The ADR-034–038 stack (#2944, #2954) merges after 1.2.1 is cut. Already shipped toward 1.2.1 on `main`: #3009 (inline whitespace, #2999/#3010), the CSRF resolver (#2978), SerializerCache removal (#2992), the audit gate (#2989).
