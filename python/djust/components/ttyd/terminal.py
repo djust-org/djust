@@ -113,7 +113,9 @@ class TtydTerminalView(LiveView):
     refused because a ttyd started with ``--url-arg`` turns URL arguments into
     command-line arguments of the spawned process. The URL the browser receives is
     rebuilt from the allowed origin plus the requested path, never echoed. A
-    subclass's own ``ttyd_url`` is trusted as written and may carry a query.
+    subclass's own ``ttyd_url`` is trusted as written and may carry a query; that
+    query is NOT restored when ``?url=`` restates the URL, so leave ``?url=`` off
+    to keep it.
 
     To embed a terminal on a deployment you control, set ``ttyd_url`` on a
     subclass; to let ``?url=`` reach other hosts, list them in
@@ -136,7 +138,7 @@ class TtydTerminalView(LiveView):
     template_name = "djust_components/ttyd_terminal.html"
     login_required = False  # v1: assume open/local access; override in subclasses
 
-    # Default props — override by subclassing or via URL query params
+    # Default props — override by subclassing (``?url=`` is restricted, see the class docstring)
     ttyd_url: str = "ws://localhost:7681"
     #: Extra origins (``"wss://host"`` / ``"ws://host:port"``) a ``?url=`` may name,
     #: besides the origin of ``ttyd_url``. Scheme, host and port are matched exactly.
