@@ -1,0 +1,1 @@
+- **Lock: pyasn1 0.6.4 -> 0.6.5 (CVE-2026-119194, CVE-2026-119195, CVE-2026-119196, CVE-2026-119197)** — `pyasn1` is a lock-only constraint; it is raised to `>=0.6.5`, the release that fixes the four advisories pip-audit now reports. This constrains `uv.lock`, not the published metadata.
