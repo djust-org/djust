@@ -7,7 +7,7 @@ StreamsMixin, and StreamingMixin that are used at runtime but may not be
 fully discoverable by static analysis tools.
 """
 
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Mapping, Optional, Union
 
 from django.views import View
 
@@ -56,6 +56,9 @@ class LiveView(
     template: Optional[str] = None
     query_budget: Optional[Union[int, Dict[str, int]]] = None
     exposure_policy: str = "legacy"
+    http_status_of_state: Mapping[str, int] = {}
+    state_attribute: str = "state"
+    params_form: Optional[type] = None
     _component_bindings: dict[str, object]
     _components: dict[str, LiveComponent]
     _component_subscriptions: tuple[SubscriptionBinding, ...]
@@ -86,6 +89,7 @@ class LiveView(
         replace: bool = False,
     ) -> None: ...
     def handle_params(self, params: Dict[str, Any], uri: str) -> None: ...
+    def handle_invalid_params(self, form: Any, uri: str) -> None: ...
 
     # PushEventMixin methods
     def push_event(self, event: str, payload: Optional[Dict[str, Any]] = None) -> None: ...

@@ -8,7 +8,7 @@ import logging
 import socket
 import threading
 from functools import wraps
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Set, Union, cast
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Mapping, Optional, Set, Union, cast
 
 if TYPE_CHECKING:
     from .auth.any_of import PermissionRequired
@@ -719,6 +719,25 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
     # sends the whole page instead of patches. See the Best Practices guide,
     # "Large LiveView state".
     static_render: bool = False
+
+    # The HTTP status a page answers for a state it renders itself (#3688).
+    # ``{"not_found": 404, "gone": 410}``: the default ``get_http_status()``
+    # reads the attribute ``state_attribute`` names (``self.state`` by default)
+    # and answers the status mapped to its value. Set it once, on a base view;
+    # the default is empty, so a view that declares nothing keeps answering 200.
+    # Only the HTTP response has a status. A view that overrides
+    # ``get_http_status()`` keeps its own answer.
+    http_status_of_state: Mapping[str, int] = {}
+    state_attribute: str = "state"
+
+    # URL parameters a view declares as a Django form (#3689). When set, the
+    # framework binds the URL's query parameters to it and calls
+    # ``handle_params(cleaned_data, uri)``; invalid input calls
+    # ``handle_invalid_params(form, uri)`` instead, and the messages are in the
+    # template as ``params_errors``. The same decision runs for the HTTP GET, the
+    # socket and SSE mount, ``url_change`` and the HTTP fallback POST. ``None``
+    # (the default) keeps ``handle_params`` receiving the raw dict.
+    params_form: Optional[type] = None
 
     # Per-view query budget for ``LiveViewSmokeTest`` (#3686). ``None`` (the
     # default) leaves the view on the smoke test's class-wide ``max_queries``.

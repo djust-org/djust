@@ -794,6 +794,15 @@ LIFECYCLE_METHODS: List[Dict[str, Any]] = [
         "required": False,
     },
     {
+        "name": "handle_invalid_params",
+        "signature": "def handle_invalid_params(self, form, uri: str):",
+        "description": "Called instead of handle_params() when the view's params_form rejects "
+        "the URL. The default hands handle_params() the form's initial values; the messages "
+        "are in the template as params_errors. Override to raise Http404 or answer 400.",
+        "phase": "navigation",
+        "required": False,
+    },
+    {
         "name": "handle_tick",
         "signature": "def handle_tick(self):",
         "description": "Called periodically when tick_interval is set (in ms). "
@@ -855,6 +864,28 @@ CLASS_ATTRIBUTES: List[Dict[str, Any]] = [
         "name": "login_required",
         "type": "Optional[bool]",
         "description": "Require authenticated user. Set to True to protect, False to acknowledge public.",
+    },
+    {
+        "name": "params_form",
+        "type": "Optional[Type[forms.Form]]",
+        "description": "Django form that declares the URL's query parameters. djust binds and "
+        "cleans them before handle_params() on the HTTP GET, the socket/SSE mount, url_change "
+        "and the HTTP fallback POST; invalid input goes to handle_invalid_params()",
+        "example": "params_form = ListParams",
+    },
+    {
+        "name": "http_status_of_state",
+        "type": "Mapping[str, int]",
+        "default": "{}",
+        "description": "HTTP status a page answers for a state it renders itself; the default "
+        "get_http_status() reads the attribute state_attribute names",
+        "example": "http_status_of_state = {'not_found': 404, 'gone': 410}",
+    },
+    {
+        "name": "state_attribute",
+        "type": "str",
+        "default": "'state'",
+        "description": "Name of the attribute http_status_of_state is looked up by",
     },
     {
         "name": "permission_required",

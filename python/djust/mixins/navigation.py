@@ -147,7 +147,8 @@ class NavigationMixin:
 
         This is the standard place to derive view state from URL parameters.
         It fires:
-        1. After ``mount()`` completes during the initial WebSocket connect.
+        1. After ``mount()`` on the HTTP render, and after ``mount()`` completes
+           during the initial WebSocket connect.
         2. On ``live_patch`` (server-initiated URL change without remount).
         3. On browser back/forward navigation (popstate).
 
@@ -155,13 +156,65 @@ class NavigationMixin:
         duplicating URL-parsing logic between ``mount()`` and event handlers.
 
         Args:
-            params: The URL query parameters as a dict.
+            params: The URL query parameters as a dict. Raw strings (a repeated
+                key is a list) unless the view sets ``params_form``, in which
+                case it is that form's ``cleaned_data``.
             uri: The full URI string (path + query string).
+
+        Query parameters arrive as untrusted strings, so declare them. A view
+        that sets ``params_form`` gets validated, typed values on every
+        transport, and a bad value is a message in the page instead of a 500.
 
         Example::
 
-            def handle_params(self, params, uri):
-                self.category = params.get("category", "all")
-                self.page = int(params.get("page", 1))
+            class ListParams(forms.Form):
+                category = forms.ChoiceField(
+                    choices=[("all", "All"), ("books", "Books")],
+                    required=False,
+                    initial="all",
+                )
+                page = forms.IntegerField(min_value=1, required=False, initial=1)
+
+            class ListView(LiveView):
+                params_form = ListParams
+
+                def handle_params(self, params, uri):
+                    self.category = params["category"]
+                    self.page = params["page"]
+
+        Invalid input goes to :meth:`handle_invalid_params` instead, and the
+        messages are in the template as ``params_errors``.
         """
         pass
+
+    def handle_invalid_params(self, form: Any, uri: str) -> None:
+        """
+        Called instead of :meth:`handle_params` when ``params_form`` rejects the URL.
+
+        ``form`` is the bound form (``form.errors`` holds the messages); ``uri``
+        is the page URL. The framework has already put the messages on
+        ``self.params_errors`` (``{field: [messages]}``, errors that belong to no
+        field under ``"__all__"``) for the template::
+
+            {% if params_errors.page %}<p>{{ params_errors.page.0 }}</p>{% endif %}
+
+        The default hands :meth:`handle_params` the form's initial values, so the
+        page renders its defaults and shows the errors. Override it to refuse the
+        URL instead::
+
+            def handle_invalid_params(self, form, uri):
+                raise Http404("No such page.")
+
+        or to answer 400 and keep the page (set a flag here and return 400 from
+        ``get_http_status()``). Call ``super().handle_invalid_params(form, uri)``
+        to keep the default as well (a sync override only: an ``async def``
+        override calls its own ``handle_params`` instead). Over a WebSocket or SSE mount, an exception
+        raised here fails the mount like one from ``handle_params``; a ``Http404``
+        is a Django 404 only on the HTTP render.
+        """
+        from .._params_form import initial_values
+        from .._view_hooks import call_hook_sync
+
+        # Run to completion here, so an override that calls ``super()`` without
+        # ``return`` (or an ``async def handle_params``) cannot drop the call.
+        call_hook_sync(self.handle_params, initial_values(form), uri)
