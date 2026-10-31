@@ -206,7 +206,16 @@ class TestAttribute:
         assert LiveView.query_budget is None
         assert FewMountQueries.query_budget is None
 
-    def test_query_budget_is_not_reactive_state(self):
-        from djust.live_view import _FRAMEWORK_INTERNAL_ATTRS
+    def test_a_query_budget_assigned_in_mount_is_not_reactive_state(self):
+        """``self.query_budget = n`` in mount() is config, like ``self.tick_interval``."""
 
-        assert "query_budget" in _FRAMEWORK_INTERNAL_ATTRS
+        class Budgeted(LiveView):
+            template = "<div dj-root>{{ count }}</div>"
+
+            def mount(self, request, **kwargs):
+                self.count = 1
+                self.query_budget = 4
+
+        view = Budgeted()
+        view.mount(None)
+        assert view.get_state() == {"count": 1}

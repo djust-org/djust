@@ -8,6 +8,8 @@ calls check_accessibility(None) directly, and filters results by e.id.
 
 import re
 
+import pytest
+
 from djust import checks as _checks_mod
 from djust.checks import (
     _content_is_icon_only,
@@ -1269,4 +1271,77 @@ class TestY005Y006Tokenizing:
             start = time.process_time()
             _find_unnamed_images(source)
             _find_colour_only_legend_items(source)
+            assert time.process_time() - start < 1.0, unit
+
+
+class TestReviewFixes3685:
+    """Findings from the PR #3702 review."""
+
+    def test_legend_item_named_by_an_img_alt_is_clean(self, tmp_path, settings):
+        html = '<ul class="legend"><li><img src="/m.png" alt="Measured"></li></ul>'
+        assert _scan(tmp_path, settings, html, "djust.Y006") == []
+
+    def test_legend_item_with_an_empty_img_alt_is_still_flagged(self, tmp_path, settings):
+        html = '<ul class="legend"><li><img src="/m.png" alt=""></li></ul>'
+        assert len(_scan(tmp_path, settings, html, "djust.Y006")) == 1
+
+    def test_unquoted_attribute_values(self, tmp_path, settings):
+        for html in (
+            "<svg aria-hidden=true><path/></svg>",
+            "<svg aria-label=Chart><path/></svg>",
+            "<div role=img aria-label=Sales></div>",
+        ):
+            assert _scan(tmp_path, settings, html, "djust.Y005") == [], html
+        assert (
+            len(_scan(tmp_path, settings, "<svg aria-hidden=false><path/></svg>", "djust.Y005"))
+            == 1
+        )
+
+    def test_template_expression_inside_a_quoted_value_cannot_carry_the_name(
+        self, tmp_path, settings
+    ):
+        for html in (
+            '<div role="img" class="bars {{ cls }}"></div>',
+            '<div role="img" style="--v: {{ v }}%"></div>',
+            '<svg class="{% if wide %}wide{% endif %}"><path/></svg>',
+            "<svg data-x='{{ x }}'><path/></svg>",
+        ):
+            assert len(_scan(tmp_path, settings, html, "djust.Y005")) == 1, html
+
+    def test_template_expression_between_attributes_may_carry_the_name(self, tmp_path, settings):
+        for html in (
+            '<div role="img" {{ attrs }}></div>',
+            '<svg {% if x %}aria-label="Chart"{% endif %}><path/></svg>',
+            '<div role="img" class="bars" {% include "a11y.html" %}></div>',
+        ):
+            assert _scan(tmp_path, settings, html, "djust.Y005") == [], html
+
+    def test_html_comments_are_skipped_and_keep_line_numbers(self, tmp_path, settings):
+        html = "<!-- <svg></svg>\n<div role='img'></div> -->\n<svg><path/></svg>"
+        (found,) = _scan(tmp_path, settings, html, "djust.Y005")
+        assert found.line_number == 3
+        legend = '<!-- <ul class="legend"><li><i></i></li></ul> -->'
+        assert _scan(tmp_path, settings, legend, "djust.Y006") == []
+
+    def test_an_unclosed_comment_hides_the_rest_of_the_file(self, tmp_path, settings):
+        assert _scan(tmp_path, settings, "<!-- never closed <svg><path/></svg>", "djust.Y005") == []
+
+    @pytest.mark.parametrize("cls", ["legend-item", "chart_legend", "map-legend__row", "LEGEND"])
+    def test_legend_class_tokens(self, tmp_path, settings, cls):
+        html = '<ul class="%s"><li><i></i></li></ul>' % cls
+        assert len(_scan(tmp_path, settings, html, "djust.Y006")) == 1
+
+    @pytest.mark.parametrize("cls", ["legendary-box", "illegendary", "legends", "olegend"])
+    def test_a_class_that_merely_contains_the_word_is_not_a_legend(self, tmp_path, settings, cls):
+        html = '<ul class="%s"><li><i></i></li></ul>' % cls
+        assert _scan(tmp_path, settings, html, "djust.Y006") == []
+
+    def test_unclosed_comment_openers_are_linear(self):
+        import time
+
+        from djust.checks.accessibility import _blank_html_comments
+
+        for unit in ("<!--", "<!-- x -->", "<!-"):
+            start = time.process_time()
+            _blank_html_comments(unit * 100000)
             assert time.process_time() - start < 1.0, unit

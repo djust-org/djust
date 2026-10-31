@@ -130,7 +130,7 @@ _CSS_NAMED_COLORS = frozenset(
 # ``animation-name`` or ``tan`` in ``grid-area`` is not a palette choice.
 _COLOR_PROPERTY_RE = re.compile(
     r"colou?r|background|border|outline|shadow|fill|stroke|text-decoration|column-rule|mask"
-    r"|filter|^stop-|scrollbar|gradient"
+    r"|filter|^stop-|scrollbar|gradient|emphasis"
 )
 # A whole identifier: not part of a longer one (`red-hat`, `x-red`), not a unit
 # or number tail (`10red`), not a hex run (`#red`), not a function name (`tan(`).
@@ -150,9 +150,17 @@ _FONT_SHORTHAND_WORDS = frozenset(
     }
 )  # fmt: skip
 _FONT_VAR_RE = re.compile(r"var\(\s*--font-", re.I)
+# Generic families are a fallback after a theme font token, not a font choice.
+_GENERIC_FONT_FAMILIES = frozenset(
+    {
+        "serif", "sans-serif", "monospace", "cursive", "fantasy", "system-ui", "ui-serif",
+        "ui-sans-serif", "ui-monospace", "ui-rounded", "emoji", "math", "fangsong",
+    }
+)  # fmt: skip
 # Stands in for a {{ }} expression in a style attribute: unknown, so never a literal.
 _TEMPLATE_VALUE = "var(--font-djust-template)"
-_STYLE_ATTR_RE = re.compile(r"""(?<![\w-])style\s*=\s*(?:"([^"]*)"|'([^']*)')""", re.I)
+# `:style` / `@style` / `x-bind:style` hold a script expression, not CSS.
+_STYLE_ATTR_RE = re.compile(r"""(?<![\w:@-])style\s*=\s*(?:"([^"]*)"|'([^']*)')""", re.I)
 _DERIVED_TEXT_TOKENS = {
     "primary-text",
     "destructive-text",
@@ -557,8 +565,9 @@ def _css_declarations(source: str) -> Iterator[Tuple[int, str, str, str, bool]]:
                 offset = start + len(segment) - len(segment.lstrip())
                 yield offset, *match.groups(), segment.strip(), stack[-1]
         if char == "{":
-            prelude = source[start : delimiter.start()].lstrip()[:10].lower()
-            stack.append(bool(stack and stack[-1]) or prelude.startswith("@font-face"))
+            prelude = source[start : delimiter.start()].lstrip()[:20].lower()
+            definition = prelude.startswith(("@font-face", "@font-palette-values"))
+            stack.append(bool(stack and stack[-1]) or definition)
         elif char == "}" and stack:
             stack.pop()
         start = delimiter.end()
@@ -619,10 +628,15 @@ def _is_font_literal(prop: str, value: str, in_font_face: bool) -> bool:
     # font-family needs a theme font token (var(--font-*)); the font shorthand
     # also carries size and line-height, so any var() may be one of those.
     text = _normalise_css_value(value, _FONT_VAR_RE if prop == "font-family" else None)
+    has_token = "__TOKEN__" in text
     text = text.replace("__TOKEN__", " ").replace("!important", " ").strip().lower()
     if not text or text in _CSS_WIDE_KEYWORDS:
         return False
     if prop == "font-family":
+        if has_token:
+            # `var(--font-sans), sans-serif`: a generic family after the token is
+            # its fallback. A named family after the token is still a literal.
+            return any(w not in _GENERIC_FONT_FAMILIES for w in re.split(r"[\s,]+", text) if w)
         return True
     if text in _FONT_SYSTEM_KEYWORDS or text in _CSS_WIDE_KEYWORDS:
         return False
@@ -703,6 +717,8 @@ def _style_attribute_offenders(
     """X105 / X106 offenders of the ``style="..."`` attribute in a tag's *attrs*."""
     colors: List[Tuple[int, str]] = []
     fonts: List[Tuple[int, str]] = []
+    line = tag_line
+    seen = 0  # attrs[:seen] is already counted into `line`
     for match in _STYLE_ATTR_RE.finditer(attrs):
         value = match.group(1) if match.group(1) is not None else match.group(2)
         # {% %} directives are control flow (their branches are still read);
@@ -717,7 +733,8 @@ def _style_attribute_offenders(
                 value,
                 flags=re.S,
             )
-        line = tag_line + attrs.count("\n", 0, match.start())
+        line += attrs.count("\n", seen, match.start())
+        seen = match.start()
         # Wrapped in a block so the declaration scanner reads it as a rule body.
         c, f = _scan_declarations("{" + value + "}", suppressed, line)
         # Show the expression the author wrote, not the stand-in for it.

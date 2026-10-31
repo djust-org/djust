@@ -790,9 +790,7 @@ class TestReviewRegressions:
         "css-noqa",
         "html-noqa",
         "unclosed-expressions",
-        "style-attrs",
         "css-font-face-nesting",
-        "css-named-colors",
     ],
 )
 def test_adversarial_scan_completes_under_two_seconds(case):
@@ -815,9 +813,7 @@ def test_adversarial_scan_completes_under_two_seconds(case):
         "css-noqa": " ",
         "html-noqa": " ",
         "unclosed-expressions": "{{",
-        "style-attrs": '<p style="color:red;font-family:Arial">{{ r }}</p>\n',
         "css-font-face-nesting": "@font-face{",
-        "css-named-colors": ".btn{border:1px solid red;font:12px Arial}\n",
     }
     prefix = {
         "table": "<table>{% for r in rows %}",
@@ -856,8 +852,6 @@ def test_adversarial_scan_completes_under_two_seconds(case):
         assert [f.code for f in findings] == ["X101"]
     elif case == "css-normal":
         assert [f.code for f in findings] == ["X105"]
-    elif case in {"style-attrs", "css-named-colors"}:
-        assert [f.code for f in findings] == ["X105", "X106"]
     else:
         assert not findings
 
@@ -948,15 +942,42 @@ def test_summary_temp_cleanup_only_before_successful_replace(tmp_path, monkeypat
     assert not list((tmp_path / ".djust").glob(".audit-ui.*.tmp"))
 
 
-@pytest.mark.parametrize("case", ["div", "table"])
+@pytest.mark.parametrize("case", ["div", "table", "style-attrs", "css-named-colors"])
 def test_adversarial_scan_scales_linearly(case):
     import gc
     import time
-    from djust.audit_ui import scan_ui
+    from djust.audit_ui import _scan_stylesheet, scan_ui
 
-    unit = "<div>" if case == "div" else '<tr><td class="cell">{{ r }}</td></tr>\n'
-    prefix = "" if case == "div" else "<table>{% for r in rows %}"
-    suffix = "" if case == "div" else "{% endfor %}</table>"
+    # (unit, prefix, suffix, expected finding codes). The heavy new corpora are judged
+    # by growth, not by a wall-clock bound: a 1 MB scan costs ~0.5 s here and several
+    # times that on a loaded CI runner, but a super-linear scan still grows >8x per 4x.
+    unit, prefix, suffix, expected = {
+        "div": ("<div>", "", "", []),
+        "table": (
+            '<tr><td class="cell">{{ r }}</td></tr>\n',
+            "<table>{% for r in rows %}",
+            "{% endfor %}</table>",
+            ["X101"],
+        ),
+        "style-attrs": (
+            '<p style="color:red;font-family:Arial">{{ r }}</p>\n',
+            "",
+            "",
+            ["X105", "X106"],
+        ),
+        "css-named-colors": (
+            ".btn{border:1px solid red;font:12px Arial}\n",
+            "",
+            "",
+            ["X105", "X106"],
+        ),
+    }[case]
+
+    def scan(source):
+        if case.startswith("css-"):
+            return _scan_stylesheet("app.css", source)
+        return scan_ui(".", {"app/templates/page.html": source}, {"page.html"}).findings
+
     timings = []
     for size in (262144, 1048576):
         remaining = size - len(prefix) - len(suffix)
@@ -971,11 +992,11 @@ def test_adversarial_scan_scales_linearly(case):
             gc.disable()
             try:
                 start = time.process_time()
-                findings = scan_ui(".", {"app/templates/page.html": source}, {"page.html"}).findings
+                findings = scan(source)
                 samples.append(time.process_time() - start)
             finally:
                 gc.enable()
-            assert [f.code for f in findings] == ([] if case == "div" else ["X101"])
+            assert [f.code for f in findings] == expected
         timings.append(min(samples))
     # 4x the input: a linear scan costs ~4x and a quadratic one ~16x. 8x is the
     # geometric midpoint, so it tolerates noise and still fails a quadratic.
@@ -1490,3 +1511,84 @@ class TestX106Registration:
             {"app/templates/page.html": '<div dj-root><p style="font-family: Arial">x</p></div>'},
         )
         assert "[djust.X106]" in _command(tmp_path)
+
+
+class TestReviewFixes3687:
+    """Findings from the PR #3702 review."""
+
+    def test_many_style_attributes_on_one_tag_scan_in_linear_time(self):
+        import time
+
+        from djust.audit_ui import scan_ui
+
+        # `attrs.count("\n", 0, ...)` per attribute made this quadratic (21 s at 80k).
+        source = "<div dj-root " + 'style="a" ' * 40000 + ">x</div>"
+        start = time.process_time()
+        scan_ui(".", {"app/templates/page.html": source}, {"page.html"})
+        assert time.process_time() - start < 2.0
+
+    def test_style_attributes_on_different_lines_of_one_tag_report_their_own_lines(self, tmp_path):
+        _tree(
+            tmp_path,
+            {
+                "app/templates/page.html": '<div dj-root\n  style="color: red"\n  data-x="1"\n'
+                '  style="background: blue">x</div>\n'
+            },
+        )
+        (finding,) = _by_code(_run(tmp_path), "X105")
+        assert finding.lineno == 2
+        assert "(lines 2, 4)" in finding.details
+
+    @pytest.mark.parametrize(
+        "decl",
+        [
+            "font-family: var(--font-sans), sans-serif",
+            "font-family: var(--font-sans),system-ui,sans-serif",
+            "font-family: var(--font-mono), ui-monospace, monospace",
+            "font-family: sans-serif, var(--font-sans)",
+            "font-family: var(--font-sans) , SERIF !important",
+        ],
+    )
+    def test_theme_token_with_generic_fallback_is_clean(self, tmp_path, decl):
+        assert _x106(tmp_path, "a { %s; }" % decl) == [], decl
+
+    @pytest.mark.parametrize(
+        "decl",
+        [
+            'font-family: var(--font-sans), "Inter"',
+            "font-family: var(--font-sans), Arial, sans-serif",
+            "font-family: sans-serif",
+            "font-family: system-ui, serif",
+            "font-family: var(--my-font), sans-serif",
+        ],
+    )
+    def test_named_family_or_missing_token_is_still_flagged(self, tmp_path, decl):
+        assert len(_x106(tmp_path, "a { %s; }" % decl)) == 1, decl
+
+    def test_template_expression_with_generic_fallback_is_clean(self, tmp_path):
+        _tree(
+            tmp_path,
+            {
+                "app/templates/p.html": '<div dj-root><i style="font-family: {{ f }}, sans-serif">x</i></div>'
+            },
+        )
+        assert _by_code(_run(tmp_path), "X106") == []
+
+    @pytest.mark.parametrize(
+        "attr",
+        [
+            ":style=\"{ color: 'red' }\"",
+            "x-bind:style=\"{ color: 'red' }\"",
+            '@style="color: red"',
+        ],
+    )
+    def test_framework_bound_style_expressions_are_not_css(self, tmp_path, attr):
+        _tree(tmp_path, {"app/templates/p.html": "<div dj-root><i %s>x</i></div>" % attr})
+        assert [f for f in _run(tmp_path).findings if f.code in ("X105", "X106")] == []
+
+    def test_font_palette_values_family_is_a_definition(self, tmp_path):
+        css = "@font-palette-values --brand { font-family: Bixa; override-colors: 0 #fff; }"
+        assert _x106(tmp_path, css) == []
+
+    def test_text_emphasis_named_colour_is_flagged(self, tmp_path):
+        assert len(_x105(tmp_path, "a { text-emphasis: filled red; }")) == 1

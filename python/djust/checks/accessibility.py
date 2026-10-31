@@ -33,7 +33,8 @@ logger = logging.getLogger(__name__)
 #        label (WCAG 1.3.1 / 3.3.2, A-level).
 # Y004 — positive tabindex (WCAG 2.4.3, Focus Order anti-pattern).
 # Y005 — `role="img"` element or inline <svg> with no accessible name
-#        (WCAG 1.1.1, A-level; #3685).
+#        (WCAG 1.1.1, A-level; #3685). Not near-zero false positives: a
+#        decorative <svg> with no aria-hidden is flagged by design.
 # Y006 — legend item that is only a colour swatch, no text (WCAG 1.4.1,
 #        A-level; #3685).
 #
@@ -142,14 +143,24 @@ _ROLE_IMG_RE = re.compile(r"""(?<![\w-])role\s*=\s*["']img["']""", re.IGNORECASE
 _DECORATIVE_ROLE_RE = re.compile(
     r"""(?<![\w-])role\s*=\s*["'](?:presentation|none)["']""", re.IGNORECASE
 )
-_ARIA_HIDDEN_TRUE_RE = re.compile(r"""(?<![\w-])aria-hidden\s*=\s*["']true["']""", re.IGNORECASE)
+_ARIA_HIDDEN_TRUE_RE = re.compile(
+    r"""(?<![\w-])aria-hidden\s*=\s*["']?true(?![\w-])""", re.IGNORECASE
+)
 # Unlike Y001's ``_ACCESSIBLE_NAME_ATTR_RE`` the value must contain a
 # non-blank character: an empty ``aria-label=""`` is the lazy fix this rule
 # exists to catch, not a name.
 _NONBLANK_NAME_ATTR_RE = re.compile(
-    r"""(?<![\w-])(?:aria-label|aria-labelledby|title)\s*=\s*(?:"[^"]*\S[^"]*"|'[^']*\S[^']*')""",
+    r"""(?<![\w-])(?:aria-label|aria-labelledby|title)\s*=\s*"""
+    r"""(?:"[^"]*\S[^"]*"|'[^']*\S[^']*'|[^\s"'>=`<]+)""",
     re.IGNORECASE,
 )
+# An <img alt="..."> inside a legend item names it (Y006 only; for Y005 the img is Y002's).
+_NONBLANK_ALT_RE = re.compile(
+    r"""(?<![\w-])alt\s*=\s*(?:"[^"]*\S[^"]*"|'[^']*\S[^']*'|[^\s"'>=`<]+)""", re.IGNORECASE
+)
+# A quoted attribute value cannot carry an attribute: ``class="bars {{ cls }}"`` is
+# not dynamic *attributes*; a bare ``{{ attrs }}`` or ``{% if %}...`` between them is.
+_QUOTED_VALUE_RE = re.compile(r"""(?<==)\s*(?:"[^"]*"|'[^']*')""")
 # A non-empty <title> child names an <svg>.
 _SVG_TITLE_CHILD_RE = re.compile(r"<title\b[^>]*>[^<]*\S[^<]*</title\s*>", re.IGNORECASE)
 # Sprite sheets / defs-only svgs are not rendered, so they need no name.
@@ -164,6 +175,8 @@ _SYMBOL_RE = re.compile(r"<symbol\b", re.IGNORECASE)
 # #3685). A legend is an element whose class has a token containing
 # "legend" (``legend``, ``chart-legend``, ``legend__list``).
 _CLASS_ATTR_RE = re.compile(r"""(?<![\w-])class\s*=\s*["']([^"']*)["']""", re.IGNORECASE)
+# ``legend``, ``chart-legend``, ``legend__list``, ``legend-item``; not ``legendary``.
+_LEGEND_TOKEN_RE = re.compile(r"(?:^|[-_])legend(?:$|[-_])")
 _ANY_TAG_RE = re.compile(r"<[^<>]*>")
 
 # Tag tokenizing for Y005/Y006. A regex such as ``<svg[^>]*>`` rescans to the
@@ -303,13 +316,32 @@ def _blank_script_and_style_bodies(source: str) -> str:
     return "".join(parts)
 
 
+def _blank_html_comments(source: str) -> str:
+    """Blank ``<!-- ... -->`` (newlines kept). Linear: each ``find`` resumes where the last ended."""
+    parts: list[str] = []
+    pos = 0
+    while (at := source.find("<!--", pos)) != -1:
+        end = source.find("-->", at + 4)
+        stop = len(source) if end == -1 else end + 3
+        parts.append(source[pos:at])
+        parts.append(re.sub(r"[^\n]", " ", source[at:stop]))
+        pos = stop
+    parts.append(source[pos:])
+    return "".join(parts)
+
+
+def _has_dynamic_attrs(attrs: str) -> bool:
+    """True if ``{{ }}`` / ``{% %}`` sits between attributes, where it may inject one."""
+    return bool(_CONTROL_DYNAMIC_ATTRS_RE.search(_QUOTED_VALUE_RE.sub('""', attrs)))
+
+
 def _find_unnamed_images(source: str) -> list[tuple[int, str]]:
     """Return ``(offset, label)`` for each Y005 candidate in *source*.
 
     *label* is ``'role="img"'`` or ``"<svg>"`` (an ``<svg role="img">`` is
     reported once, as an svg).
     """
-    source = _blank_script_and_style_bodies(source)
+    source = _blank_html_comments(_blank_script_and_style_bodies(source))
     index = _TagIndex(source)
     # A control owns the name of an icon inside it (Y001 covers an unnamed
     # control), so an svg within a <button> / <a href> is not judged here.
@@ -354,8 +386,8 @@ def _find_unnamed_images(source: str) -> list[tuple[int, str]]:
                 continue
         if _ARIA_HIDDEN_TRUE_RE.search(tag.attrs) or _NONBLANK_NAME_ATTR_RE.search(tag.attrs):
             continue
-        # {% ... %} / {{ ... }} on the opening tag may inject the name.
-        if _CONTROL_DYNAMIC_ATTRS_RE.search(tag.attrs):
+        # {% ... %} / {{ ... }} between the attributes may inject the name.
+        if _has_dynamic_attrs(tag.attrs):
             continue
         found.append((tag.start, "<svg>" if is_svg else 'role="img"'))
     return found
@@ -363,7 +395,7 @@ def _find_unnamed_images(source: str) -> list[tuple[int, str]]:
 
 def _find_colour_only_legend_items(source: str) -> list[int]:
     """Return the offset of each Y006 candidate ``<li>`` in *source*."""
-    source = _blank_script_and_style_bodies(source)
+    source = _blank_html_comments(_blank_script_and_style_bodies(source))
     index = _TagIndex(source)
     legends: list[tuple[int, int]] = []
     outer_end = 0
@@ -371,7 +403,9 @@ def _find_colour_only_legend_items(source: str) -> list[int]:
         if tag.name == "legend" or tag.start < outer_end:  # form <legend>; nested legend
             continue
         classes = _CLASS_ATTR_RE.search(tag.attrs)
-        if not classes or "legend" not in classes.group(1).lower():
+        if not classes or not any(
+            _LEGEND_TOKEN_RE.search(token) for token in classes.group(1).lower().split()
+        ):
             continue
         pair = index.pairs(tag.name).get(tag.start)
         end = tag.end if tag.self_closing else (pair[1] if pair else len(source))
@@ -391,7 +425,8 @@ def _find_colour_only_legend_items(source: str) -> list[int]:
         # a descendant names it.
         if "{{" in inner or "{%" in inner or _CONTROL_DYNAMIC_ATTRS_RE.search(tag.attrs):
             continue
-        if _NONBLANK_NAME_ATTR_RE.search(tag.attrs + inner):
+        named = tag.attrs + inner
+        if _NONBLANK_NAME_ATTR_RE.search(named) or _NONBLANK_ALT_RE.search(named):
             continue
         text = _HTML_ENTITY_RE.sub(" ", _ANY_TAG_RE.sub(" ", inner))
         if text.strip():
