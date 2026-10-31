@@ -52,8 +52,8 @@ _WS_DEFAULT_PORTS = {"ws": 80, "wss": 443}
 _MAX_URL_LENGTH = 2048
 
 
-def _split_ws_url(value: Any) -> Optional[Tuple[str, str, int, str]]:
-    """``(scheme, host, port, path_and_query)`` of a ``ws://`` / ``wss://`` URL, else None.
+def _split_ws_url(value: Any) -> Optional[Tuple[str, str, int, str, str]]:
+    """``(scheme, host, port, path, query)`` of a ``ws://`` / ``wss://`` URL, else None.
 
     Strict by design, because the result decides which endpoint receives a
     user's keystrokes. Refused outright: a non-string, an over-long value, any
@@ -79,8 +79,13 @@ def _split_ws_url(value: Any) -> Optional[Tuple[str, str, int, str]]:
     host = (parts.hostname or "").lower()
     if scheme not in _WS_DEFAULT_PORTS or not host or "@" in parts.netloc or "%" in host:
         return None
-    path = parts.path + ("?" + parts.query if parts.query else "")
-    return scheme, host, port if port is not None else _WS_DEFAULT_PORTS[scheme], path
+    return (
+        scheme,
+        host,
+        port if port is not None else _WS_DEFAULT_PORTS[scheme],
+        parts.path,
+        parts.query,
+    )
 
 
 def _serialize_origin(scheme: str, host: str, port: int) -> str:
@@ -101,12 +106,14 @@ class TtydTerminalView(LiveView):
     it answers as terminal output, so a link that chose the endpoint freely could
     point a victim's terminal at a server that shows a fake prompt and records the
     keystrokes (#3679). A ``?url=`` is therefore honoured only when it is a
-    ``ws://`` or ``wss://`` URL whose origin (scheme, host and port, compared
-    exactly) is the view's own :attr:`ttyd_url` or is listed in
+    ``ws://`` or ``wss://`` URL with no query string whose origin (scheme, host
+    and port, compared exactly) is the view's own :attr:`ttyd_url` or is listed in
     :attr:`ttyd_allowed_origins`; anything else is ignored (a warning is logged,
-    without the value) and the view falls back to :attr:`ttyd_url`. The URL the
-    browser receives is rebuilt from the allowed origin plus the requested path
-    and query, never echoed. A subclass's own ``ttyd_url`` is trusted as written.
+    without the value) and the view falls back to :attr:`ttyd_url`. A query is
+    refused because a ttyd started with ``--url-arg`` turns URL arguments into
+    command-line arguments of the spawned process. The URL the browser receives is
+    rebuilt from the allowed origin plus the requested path, never echoed. A
+    subclass's own ``ttyd_url`` is trusted as written and may carry a query.
 
     To embed a terminal on a deployment you control, set ``ttyd_url`` on a
     subclass; to let ``?url=`` reach other hosts, list them in
@@ -170,14 +177,17 @@ class TtydTerminalView(LiveView):
         allowed = {
             entry[:3] for entry in map(_split_ws_url, (cls.ttyd_url, *extra)) if entry is not None
         }
-        if target is None or target[:3] not in allowed:
+        # A requested query string is refused too: a ttyd run with ``--url-arg`` turns
+        # URL arguments into command-line arguments of the spawned process, and a link
+        # has no business supplying them. A subclass's own ``ttyd_url`` may carry one.
+        if target is None or target[:3] not in allowed or target[4]:
             logger.warning(
-                "%s ignored a ?url= that is not a ws:// or wss:// URL on an allowed origin "
-                "(its own ttyd_url or ttyd_allowed_origins)",
+                "%s ignored a ?url= that is not a ws:// or wss:// URL, without a query "
+                "string, on an allowed origin (its own ttyd_url or ttyd_allowed_origins)",
                 cls.__name__,
             )
             return cls.ttyd_url
-        scheme, host, port, path = target
+        scheme, host, port, path, _query = target
         return _serialize_origin(scheme, host, port) + path
 
     def get_context_data(self, **kwargs: Any) -> Dict[str, Any]:

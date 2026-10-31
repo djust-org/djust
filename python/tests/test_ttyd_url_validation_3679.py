@@ -40,7 +40,7 @@ CONFIGURED = "ws://localhost:7681"
 
 class AllowlistedView(TtydTerminalView):
     ttyd_url = "ws://localhost:7681"
-    ttyd_allowed_origins = ("wss://shell.example.com", "ws://10.0.0.5:7000")
+    ttyd_allowed_origins = ("wss://shell.example.com", "ws://10.0.0.5:7000", "ws://[::1]:7000")
 
 
 def _mount(view_cls, query: str) -> TtydTerminalView:
@@ -171,6 +171,11 @@ MALFORMED_ON_AN_ALLOWED_HOST = [
     ("leading space", " wss://shell.example.com/ws"),
     ("trailing space", "wss://shell.example.com/ws "),
     ("over-long value", "wss://shell.example.com/" + "a" * 2100),
+    # A query would reach a ttyd started with --url-arg as command-line arguments.
+    ("query string", "wss://shell.example.com/ws?arg=-x"),
+    ("query on the bare origin", "wss://shell.example.com?arg=-x"),
+    ("query after a fragment-looking part", "wss://shell.example.com/ws?a=1#b"),
+    ("trailing dot on the host", "wss://shell.example.com./ws"),
 ]
 
 
@@ -208,7 +213,11 @@ class TestAccepted:
         [
             ("wss://shell.example.com", "wss://shell.example.com"),
             ("wss://shell.example.com:443/ws", "wss://shell.example.com/ws"),
-            ("ws://10.0.0.5:7000/ws?arg=1", "ws://10.0.0.5:7000/ws?arg=1"),
+            ("ws://10.0.0.5:7000/ws", "ws://10.0.0.5:7000/ws"),
+            ("ws://[::1]:7000/ws", "ws://[::1]:7000/ws"),
+            ("wss://shell.example.com/ws#frag", "wss://shell.example.com/ws"),
+            ("wss://shell.example.com/a/../b", "wss://shell.example.com/a/../b"),
+            ("wss://shell.example.com/ws?", "wss://shell.example.com/ws"),
         ],
     )
     def test_an_allowlisted_origin_is_accepted_in_state_and_in_the_attribute(
@@ -248,3 +257,14 @@ class TestAttributeSink:
         html = _get(AllowlistedView, "?url=" + quote(target, safe=""))
         assert 'data-ttyd-url="' in html
         assert 'onmouseover="alert(1)' not in html
+
+
+class TestSubclassOwnUrl:
+    def test_a_subclass_ttyd_url_may_carry_a_query_and_a_request_cannot(self):
+        class WithToken(TtydTerminalView):
+            ttyd_url = "wss://logs.internal.example/ws?token=abc"
+
+        assert _mount(WithToken, "").ttyd_url == "wss://logs.internal.example/ws?token=abc"
+        # The view's own origin is allowed, but not a query a link supplies.
+        query = "?url=" + quote("wss://logs.internal.example/ws?token=evil", safe="")
+        assert _mount(WithToken, query).ttyd_url == "wss://logs.internal.example/ws?token=abc"
