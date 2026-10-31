@@ -629,7 +629,7 @@ def _is_font_literal(prop: str, value: str, in_font_face: bool) -> bool:
     # also carries size and line-height, so any var() may be one of those.
     text = _normalise_css_value(value, _FONT_VAR_RE if prop == "font-family" else None)
     has_token = "__TOKEN__" in text
-    text = text.replace("__TOKEN__", " ").replace("!important", " ").strip().lower()
+    text = re.sub(r"!\s*important", " ", text.replace("__TOKEN__", " "), flags=re.I).strip().lower()
     if not text or text in _CSS_WIDE_KEYWORDS:
         return False
     if prop == "font-family":

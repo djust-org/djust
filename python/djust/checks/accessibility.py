@@ -172,7 +172,7 @@ _ZERO_SIZE_RE = re.compile(r"""(?<![\w-])(?:width|height)\s*=\s*["']0(?:px)?["']
 _SYMBOL_RE = re.compile(r"<symbol\b", re.IGNORECASE)
 
 # Y006 — a legend item that is nothing but a colour swatch (WCAG 1.4.1;
-# #3685). A legend is an element whose class has a token containing
+# #3685). A legend is an element whose class has a token that is
 # "legend" (``legend``, ``chart-legend``, ``legend__list``).
 _CLASS_ATTR_RE = re.compile(r"""(?<![\w-])class\s*=\s*["']([^"']*)["']""", re.IGNORECASE)
 # ``legend``, ``chart-legend``, ``legend__list``, ``legend-item``; not ``legendary``.
@@ -321,7 +321,7 @@ def _blank_html_comments(source: str) -> str:
     parts: list[str] = []
     pos = 0
     while (at := source.find("<!--", pos)) != -1:
-        end = source.find("-->", at + 4)
+        end = source.find("-->", at + 2)  # `<!-->` and `<!--->` close at once
         stop = len(source) if end == -1 else end + 3
         parts.append(source[pos:at])
         parts.append(re.sub(r"[^\n]", " ", source[at:stop]))
@@ -497,7 +497,7 @@ def check_accessibility(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
       an svg inside a ``<button>`` / ``<a href>``, a nested svg and a
       hidden sprite sheet are not flagged.
     - **Y006** — a ``<li>`` inside a legend (an element whose ``class``
-      has a token containing ``legend``) with no text and no name
+      has a ``legend`` token, e.g. ``chart-legend``) with no text and no name
       attribute, so the series differ only by colour (WCAG 1.4.1).
 
     All emit :class:`DjustWarning` (not error) so a stray false positive

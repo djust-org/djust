@@ -2049,7 +2049,7 @@ These scan LiveView templates. All are Warnings, so a false positive never fails
 
 **Severity**: Warning
 
-**What causes it**: '<file>:<line> -- legend item has no text, so its series is told apart by colour alone (WCAG 1.4.1).' An `<li>` inside an element whose `class` has a token containing `legend` has no text, no `{{ }}`/`{% %}`, no `<img>` with a non-empty `alt`, and no `aria-label`, `aria-labelledby` or `title`.
+**What causes it**: '<file>:<line> -- legend item has no text, so its series is told apart by colour alone (WCAG 1.4.1).' An `<li>` inside an element whose `class` has a `legend` token (`legend`, `chart-legend`, `legend__list`) has no text, no `{{ }}`/`{% %}`, no `<img>` with a non-empty `alt`, and no `aria-label`, `aria-labelledby` or `title`.
 
 **Fix**: Put the series name in the `<li>` as text (it may be visually hidden), or add an `aria-label` to the item.
 

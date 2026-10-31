@@ -942,7 +942,9 @@ def test_summary_temp_cleanup_only_before_successful_replace(tmp_path, monkeypat
     assert not list((tmp_path / ".djust").glob(".audit-ui.*.tmp"))
 
 
-@pytest.mark.parametrize("case", ["div", "table", "style-attrs", "css-named-colors"])
+@pytest.mark.parametrize(
+    "case", ["div", "table", "style-attrs", "style-one-tag", "css-named-colors"]
+)
 def test_adversarial_scan_scales_linearly(case):
     import gc
     import time
@@ -965,6 +967,7 @@ def test_adversarial_scan_scales_linearly(case):
             "",
             ["X105", "X106"],
         ),
+        "style-one-tag": ('style="a" ', "<div dj-root ", ">x</div>", []),
         "css-named-colors": (
             ".btn{border:1px solid red;font:12px Arial}\n",
             "",
@@ -1592,3 +1595,9 @@ class TestReviewFixes3687:
 
     def test_text_emphasis_named_colour_is_flagged(self, tmp_path):
         assert len(_x105(tmp_path, "a { text-emphasis: filled red; }")) == 1
+
+
+class TestReviewFixes3687Round2:
+    @pytest.mark.parametrize("flag", ["!important", "!IMPORTANT", "! important", "!Important"])
+    def test_important_in_any_form_is_not_a_family(self, tmp_path, flag):
+        assert _x106(tmp_path, "a { font-family: var(--font-sans), serif %s; }" % flag) == []

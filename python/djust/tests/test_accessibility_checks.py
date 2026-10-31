@@ -1345,3 +1345,14 @@ class TestReviewFixes3685:
             start = time.process_time()
             _blank_html_comments(unit * 100000)
             assert time.process_time() - start < 1.0, unit
+
+
+class TestReviewFixes3685Round2:
+    @pytest.mark.parametrize("opener", ["<!-->", "<!--->"])
+    def test_degenerate_comments_close_at_once(self, tmp_path, settings, opener):
+        html = opener + "<svg><path/></svg>"
+        assert len(_scan(tmp_path, settings, html, "djust.Y005")) == 1
+
+    def test_unquoted_img_alt_names_a_legend_item(self, tmp_path, settings):
+        html = '<ul class="legend"><li><img src="/m.png" alt=Measured></li></ul>'
+        assert _scan(tmp_path, settings, html, "djust.Y006") == []
