@@ -21,7 +21,11 @@ Usage::
         rows = 40
         cols = 120
 
-    # Or pass URL query params: /shell/?url=ws://host:7681&rows=30&cols=100
+    # ``rows`` / ``cols`` / ``theme`` may also come from the query string:
+    #     /shell/?rows=30&cols=100
+    # ``?url=`` is honoured ONLY for an origin the view allows (see below):
+    #     /shell/?url=ws://localhost:7681/ws          # the view's own endpoint
+    #     /shell/?url=wss://shell.example.com/ws      # needs ttyd_allowed_origins
 
 Note: ttyd must be run with --check-origin=false (or same origin) to allow
 WebSocket connections from the browser. xterm.js is vendored by djust (asset
@@ -30,18 +34,87 @@ access is needed.
 """
 
 import json
-from typing import Any, Dict, Optional
+import logging
+from typing import Any, Dict, Optional, Tuple
+from urllib.parse import urlsplit
 
 from djust import LiveView
 from djust.decorators import event_handler
+
+logger = logging.getLogger(__name__)
+
+#: The schemes a ttyd endpoint may use, with the port each implies when none is
+#: written. The browser opens this URL with ``new WebSocket()``, so nothing else
+#: is meaningful (and ``http``/``https`` would be refused by the browser anyway).
+_WS_DEFAULT_PORTS = {"ws": 80, "wss": 443}
+
+#: The longest ``?url=`` value looked at. A real endpoint is far shorter.
+_MAX_URL_LENGTH = 2048
+
+
+def _split_ws_url(value: Any) -> Optional[Tuple[str, str, int, str]]:
+    """``(scheme, host, port, path_and_query)`` of a ``ws://`` / ``wss://`` URL, else None.
+
+    Strict by design, because the result decides which endpoint receives a
+    user's keystrokes. Refused outright: a non-string, an over-long value, any
+    backslash, whitespace or control character (a browser treats ``\\`` as ``/``
+    in a special-scheme URL, so ``ws://evil.example\\@localhost`` names ``evil.example``
+    to the browser and ``localhost`` to a ``urlsplit`` that does not know that),
+    any non-ASCII character (look-alike dots and hosts), userinfo, a missing host
+    and a scheme other than ``ws``/``wss``. The scheme and host are lower-cased and
+    the port made explicit so two spellings of one origin compare equal.
+    """
+    if not isinstance(value, str) or not value or len(value) > _MAX_URL_LENGTH:
+        return None
+    if not value.isascii() or any(
+        ch == "\\" or ch.isspace() or not ch.isprintable() for ch in value
+    ):
+        return None
+    try:
+        parts = urlsplit(value)
+        port = parts.port
+    except ValueError:
+        return None
+    scheme = parts.scheme.lower()
+    host = (parts.hostname or "").lower()
+    if scheme not in _WS_DEFAULT_PORTS or not host or "@" in parts.netloc or "%" in host:
+        return None
+    path = parts.path + ("?" + parts.query if parts.query else "")
+    return scheme, host, port if port is not None else _WS_DEFAULT_PORTS[scheme], path
+
+
+def _serialize_origin(scheme: str, host: str, port: int) -> str:
+    """``scheme://host[:port]`` from the parts :func:`_split_ws_url` returns."""
+    if ":" in host:  # an IPv6 literal, which ``urlsplit`` hands back without brackets
+        host = "[%s]" % host
+    if port == _WS_DEFAULT_PORTS[scheme]:
+        return "%s://%s" % (scheme, host)
+    return "%s://%s:%d" % (scheme, host, port)
 
 
 class TtydTerminalView(LiveView):
     """LiveView that renders an xterm.js terminal connected to a ttyd backend.
 
-    All terminal configuration flows through URL query params (mount-time only).
-    To hardcode config, use the subclass pattern — this avoids user-controlled
-    WebSocket URL injection in sensitive deployments.
+    ``rows``, ``cols`` and ``theme`` may come from the query string (mount-time
+    only). ``?url=`` is a development convenience and is **restricted**: the
+    browser sends everything the user types to that WebSocket and draws whatever
+    it answers as terminal output, so a link that chose the endpoint freely could
+    point a victim's terminal at a server that shows a fake prompt and records the
+    keystrokes (#3679). A ``?url=`` is therefore honoured only when it is a
+    ``ws://`` or ``wss://`` URL whose origin (scheme, host and port, compared
+    exactly) is the view's own :attr:`ttyd_url` or is listed in
+    :attr:`ttyd_allowed_origins`; anything else is ignored (a warning is logged,
+    without the value) and the view falls back to :attr:`ttyd_url`. The URL the
+    browser receives is rebuilt from the allowed origin plus the requested path
+    and query, never echoed. A subclass's own ``ttyd_url`` is trusted as written.
+
+    To embed a terminal on a deployment you control, set ``ttyd_url`` on a
+    subclass; to let ``?url=`` reach other hosts, list them in
+    ``ttyd_allowed_origins``::
+
+        class ShellView(TtydTerminalView):
+            ttyd_url = "wss://shell.internal.example:7681/ws"
+            ttyd_allowed_origins = ("wss://shell-2.internal.example",)
 
     Lifecycle callbacks::
 
@@ -58,13 +131,16 @@ class TtydTerminalView(LiveView):
 
     # Default props — override by subclassing or via URL query params
     ttyd_url: str = "ws://localhost:7681"
+    #: Extra origins (``"wss://host"`` / ``"ws://host:port"``) a ``?url=`` may name,
+    #: besides the origin of ``ttyd_url``. Scheme, host and port are matched exactly.
+    ttyd_allowed_origins: Tuple[str, ...] = ()
     rows: int = 24
     cols: int = 80
     theme: Optional[dict] = None
 
     def mount(self, request: Any, **kwargs: Any) -> None:
         params = request.GET
-        self.ttyd_url = params.get("url", self.__class__.ttyd_url)
+        self.ttyd_url = self._resolve_ttyd_url(params.get("url"))
         self.rows = int(params.get("rows", self.__class__.rows))
         self.cols = int(params.get("cols", self.__class__.cols))
 
@@ -81,6 +157,28 @@ class TtydTerminalView(LiveView):
         self.terminal_connected: bool = False
         self.session_start: Optional[str] = None
         self.session_end: Optional[str] = None
+
+    @classmethod
+    def _resolve_ttyd_url(cls, requested: Optional[str]) -> str:
+        """The endpoint to render: ``requested`` if it names an allowed origin, else ``ttyd_url``."""
+        if not requested:
+            return cls.ttyd_url
+        target = _split_ws_url(requested)
+        extra = cls.ttyd_allowed_origins or ()
+        if isinstance(extra, str):  # ("wss://host") without the comma is a str, not a tuple
+            extra = (extra,)
+        allowed = {
+            entry[:3] for entry in map(_split_ws_url, (cls.ttyd_url, *extra)) if entry is not None
+        }
+        if target is None or target[:3] not in allowed:
+            logger.warning(
+                "%s ignored a ?url= that is not a ws:// or wss:// URL on an allowed origin "
+                "(its own ttyd_url or ttyd_allowed_origins)",
+                cls.__name__,
+            )
+            return cls.ttyd_url
+        scheme, host, port, path = target
+        return _serialize_origin(scheme, host, port) + path
 
     def get_context_data(self, **kwargs: Any) -> Dict[str, Any]:
         ctx = super().get_context_data(**kwargs)

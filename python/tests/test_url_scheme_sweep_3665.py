@@ -111,6 +111,9 @@ UNDRIVEN = {
         "TypographyGalleryView",
     )
 }
+#: ``?url=`` here is a WebSocket target, not a link; it is driven through a real GET
+#: with the hostile forms by ``python/tests/test_ttyd_url_validation_3679.py`` (#3679).
+UNDRIVEN["djust.components.ttyd.terminal.TtydTerminalView"] = "page"
 
 LIBRARIES = url_sweep.SWEPT_LIBRARIES
 
