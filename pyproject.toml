@@ -1254,7 +1254,7 @@ constraint-dependencies = [
     "setuptools>=83.0.0",
     "ujson>=5.12.0",
     "pyopenssl>=26.0.0",
-    "pyasn1>=0.6.4",
+    "pyasn1>=0.6.5",
     # Lock-only workaround for CVE-2026-115877 / GHSA-q7qq-6mhp-9rc4 (HTTP
     # request smuggling in twisted.web.http.HTTPChannel, which daphne serves
     # through). Only 26.10.0rc1 is fixed so far. This constrains uv.lock, not
