@@ -718,9 +718,14 @@ def disagreements(sweep: Sweep) -> list[Cell]:
 # question is asked of them: every constructor parameter, every payload, every
 # shape, the FINAL attributes.
 
-#: Packages of ``djust.components`` that hold renderable classes.
+#: Packages of ``djust.components`` that hold renderable classes. ``ttyd`` holds
+#: ``TtydTerminalView``, whose WebSocket target came from ``?url=`` unchecked
+#: (#3679); the top-level modules ``_interactive`` and ``interactive_examples``
+#: (``DropdownMenu``, ``DropdownMenuExample``) are not packages and print no URL.
 FRAMEWORKS = ("bootstrap5", "tailwind", "plain")
-COMPONENT_PACKAGES = ("components", "ui", "data", "layout", "forms", "descriptors", "gallery")
+COMPONENT_PACKAGES = (
+    "components", "ui", "data", "layout", "forms", "descriptors", "gallery", "ttyd",
+)  # fmt: skip
 #: A value that satisfies a required constructor parameter without being a URL.
 FILLER = {
     "label": "x", "id": "x", "name": "x", "text": "x", "title": "x", "value": "x", "content": "x",
