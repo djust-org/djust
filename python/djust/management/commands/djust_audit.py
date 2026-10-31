@@ -439,7 +439,7 @@ class Command(BaseCommand):
                 "user Python and template files looking for IDOR, missing "
                 "auth on state-mutating handlers, SQL string formatting, "
                 "open redirects, and mark_safe/|safe abuse. Emits stable "
-                "X001-X008 security codes and X101-X105 UI-component warnings (ADR-043)."
+                "X001-X008 security codes and X101-X106 UI-component warnings (ADR-043)."
             ),
         )
         parser.add_argument(
@@ -488,8 +488,9 @@ class Command(BaseCommand):
             help=(
                 "Run the accessibility (Y0xx) audit (#1523). Regex-scans "
                 "template files for missing accessible names, image alt "
-                "text, form-control labels, and positive tabindex. Emits "
-                "stable Y001-Y004 finding codes. All findings are warnings: "
+                "text, form-control labels, positive tabindex, charts and "
+                "svgs with no name, and colour-only legends. Emits "
+                "stable Y001-Y006 finding codes. All findings are warnings: "
                 "normal mode always exits 0; --strict exits 1 if any "
                 "finding exists."
             ),
@@ -681,7 +682,7 @@ class Command(BaseCommand):
         directly, branches on ``--json``, and applies the strict exit-code
         rule.
 
-        Exit-code nuance — Y001-Y004 are *all* :class:`DjustWarning`; there
+        Exit-code nuance — Y001-Y006 are *all* :class:`DjustWarning`; there
         is no error tier. So normal mode NEVER exits non-zero; ``--strict``
         exits 1 if any finding exists. This is consistent with ``--ast``,
         which also only fails on warnings under ``strict`` — accessibility
@@ -750,7 +751,7 @@ class Command(BaseCommand):
         self.stdout.write("")
 
         if findings:
-            # Group findings by stable code (Y001-Y004) for readability.
+            # Group findings by stable code (Y001-Y006) for readability.
             by_code: Dict[str, list] = {}
             for f in findings:
                 by_code.setdefault(getattr(f, "id", "") or "", []).append(f)

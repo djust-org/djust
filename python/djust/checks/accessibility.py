@@ -6,7 +6,8 @@ Split from the former monolithic ``checks.py`` (#1822). No behavior change.
 import logging
 import os
 import re
-from typing import Any
+from bisect import bisect_right
+from typing import Any, Iterator, NamedTuple
 
 from django.core.checks import CheckMessage, register
 
@@ -31,10 +32,15 @@ logger = logging.getLogger(__name__)
 # Y003 — form control (<input>/<select>/<textarea>) with no associated
 #        label (WCAG 1.3.1 / 3.3.2, A-level).
 # Y004 — positive tabindex (WCAG 2.4.3, Focus Order anti-pattern).
+# Y005 — `role="img"` element or inline <svg> with no accessible name
+#        (WCAG 1.1.1, A-level; #3685). Not near-zero false positives: a
+#        decorative <svg> with no aria-hidden is flagged by design.
+# Y006 — legend item that is only a colour swatch, no text (WCAG 1.4.1,
+#        A-level; #3685).
 #
 # All are deliberately low-ambiguity a11y defects so the regex heuristics
 # carry near-zero false positives (see the #1060 dogfood discipline note
-# in the Stage-4 plan). The category is extensible — Y005+ are
+# in the Stage-4 plan). The category is extensible — Y007+ are
 # single-function-body additions in a follow-up.
 
 # Y001 — captures the OPENING tag (group "open"), the tag name (group
@@ -130,6 +136,304 @@ _POSITIVE_TABINDEX_RE = re.compile(
     r"""(?<![\w-])tabindex\s*=\s*["']\s*([1-9]\d*)\s*["']""", re.IGNORECASE
 )
 
+# Y005 — a `role="img"` element or an inline <svg> with no accessible name
+# (WCAG 1.1.1, Level A; #3685). `<img>` is skipped — Y002 owns it (its
+# `alt` is the name).
+_ROLE_IMG_RE = re.compile(r"""(?<![\w-])role\s*=\s*["']img["']""", re.IGNORECASE)
+_DECORATIVE_ROLE_RE = re.compile(
+    r"""(?<![\w-])role\s*=\s*["'](?:presentation|none)["']""", re.IGNORECASE
+)
+_ARIA_HIDDEN_TRUE_RE = re.compile(
+    r"""(?<![\w-])aria-hidden\s*=\s*["']?true(?![\w-])""", re.IGNORECASE
+)
+# Unlike Y001's ``_ACCESSIBLE_NAME_ATTR_RE`` the value must contain a
+# non-blank character: an empty ``aria-label=""`` is the lazy fix this rule
+# exists to catch, not a name.
+_NONBLANK_NAME_ATTR_RE = re.compile(
+    r"""(?<![\w-])(?:aria-label|aria-labelledby|title)\s*=\s*"""
+    r"""(?:"[^"]*\S[^"]*"|'[^']*\S[^']*'|[^\s"'>=`<]+)""",
+    re.IGNORECASE,
+)
+# An <img alt="..."> inside a legend item names it (Y006 only; for Y005 the img is Y002's).
+_NONBLANK_ALT_RE = re.compile(
+    r"""(?<![\w-])alt\s*=\s*(?:"[^"]*\S[^"]*"|'[^']*\S[^']*'|[^\s"'>=`<]+)""", re.IGNORECASE
+)
+# A quoted attribute value cannot carry an attribute: ``class="bars {{ cls }}"`` is
+# not dynamic *attributes*; a bare ``{{ attrs }}`` or ``{% if %}...`` between them is.
+_QUOTED_VALUE_RE = re.compile(r"""(?<==)\s*(?:"[^"]*"|'[^']*')""")
+# A non-empty <title> child names an <svg>.
+_SVG_TITLE_CHILD_RE = re.compile(r"<title\b[^>]*>[^<]*\S[^<]*</title\s*>", re.IGNORECASE)
+# Sprite sheets / defs-only svgs are not rendered, so they need no name.
+_HIDDEN_STYLE_RE = re.compile(
+    r"""(?<![\w-])style\s*=\s*["'][^"']*display\s*:\s*none""", re.IGNORECASE
+)
+_HIDDEN_ATTR_RE = re.compile(r"""(?<![\w-])hidden(?![\w-])""", re.IGNORECASE)
+_ZERO_SIZE_RE = re.compile(r"""(?<![\w-])(?:width|height)\s*=\s*["']0(?:px)?["']""", re.IGNORECASE)
+_SYMBOL_RE = re.compile(r"<symbol\b", re.IGNORECASE)
+
+# Y006 — a legend item that is nothing but a colour swatch (WCAG 1.4.1;
+# #3685). A legend is an element whose class has a token that is
+# "legend" (``legend``, ``chart-legend``, ``legend__list``).
+_CLASS_ATTR_RE = re.compile(r"""(?<![\w-])class\s*=\s*["']([^"']*)["']""", re.IGNORECASE)
+# ``legend``, ``chart-legend``, ``legend__list``, ``legend-item``; not ``legendary``.
+_LEGEND_TOKEN_RE = re.compile(r"(?:^|[-_])legend(?:$|[-_])")
+_ANY_TAG_RE = re.compile(r"<[^<>]*>")
+
+# Tag tokenizing for Y005/Y006. A regex such as ``<svg[^>]*>`` rescans to the
+# end of the file from every unterminated ``<svg``, which is quadratic on
+# malformed markup; this is one forward pass that stops a tag at the next ``<``.
+_TAG_START_RE = re.compile(r"<([a-zA-Z][\w-]*+)(?=[\s/>])")
+_CLOSE_TAG_RE = re.compile(r"</([a-zA-Z][\w-]*+)\s*>")
+
+
+class _Tag(NamedTuple):
+    start: int  # offset of "<"
+    name: str  # lower-cased
+    attrs: str  # text between the name and ">"
+    end: int  # offset just past ">"
+
+    @property
+    def self_closing(self) -> bool:
+        return self.attrs.rstrip().endswith("/")
+
+
+def _iter_open_tags(source: str) -> Iterator[_Tag]:
+    """Tokenize opening tags in one forward pass; a quoted ``>`` does not end one."""
+    cursor = 0
+    while match := _TAG_START_RE.search(source, cursor):
+        pos = match.end()
+        quote = None
+        while pos < len(source):
+            char = source[pos]
+            if quote:
+                if char == quote:
+                    quote = None
+            elif char in "\"'":
+                quote = char
+            elif char == "<":
+                break
+            elif char == ">":
+                yield _Tag(
+                    match.start(), match.group(1).lower(), source[match.end() : pos], pos + 1
+                )
+                pos += 1
+                break
+            pos += 1
+        cursor = pos
+
+
+class _TagIndex:
+    """Opening tags of a source plus, per tag name, each tag's matching close."""
+
+    def __init__(self, source: str) -> None:
+        self.source = source
+        self.opens = list(_iter_open_tags(source))
+        self._closes: dict[str, list[tuple[int, int]]] = {}
+        for match in _CLOSE_TAG_RE.finditer(source):
+            self._closes.setdefault(match.group(1).lower(), []).append(match.span())
+        self._pairs: dict[str, dict[int, tuple[int, int]]] = {}
+
+    def pairs(self, name: str) -> dict[int, tuple[int, int]]:
+        """Map the start of each matched ``<name>`` to its close ``(start, end)``.
+
+        Same-name nesting is balanced with a stack; an unclosed element has no
+        entry. Linear in the tags of that name.
+        """
+        if name not in self._pairs:
+            result: dict[int, tuple[int, int]] = {}
+            stack: list[int] = []
+            closes = self._closes.get(name, [])
+            j = 0
+            for tag in self.opens:
+                if tag.name != name or tag.self_closing:
+                    continue
+                while j < len(closes) and closes[j][0] < tag.start:
+                    if stack:
+                        result[stack.pop()] = closes[j]
+                    j += 1
+                stack.append(tag.start)
+            for close in closes[j:]:
+                if stack:
+                    result[stack.pop()] = close
+            self._pairs[name] = result
+        return self._pairs[name]
+
+
+def _merge_spans(spans: list[tuple[int, int]]) -> tuple[list[int], list[int]]:
+    """Merge overlapping spans; return parallel sorted ``(starts, ends)`` lists."""
+    starts: list[int] = []
+    ends: list[int] = []
+    for start, end in sorted(spans):
+        if ends and start < ends[-1]:
+            ends[-1] = max(ends[-1], end)
+        else:
+            starts.append(start)
+            ends.append(end)
+    return starts, ends
+
+
+def _in_spans(starts: list[int], ends: list[int], offset: int) -> bool:
+    i = bisect_right(starts, offset) - 1
+    return i >= 0 and offset < ends[i]
+
+
+def _blank_script_and_style_bodies(source: str) -> str:
+    """Blank <script>/<style> bodies, keeping newlines so line numbers hold.
+
+    JS template literals and CSS are not rendered markup: an <svg> inside a
+    script string belongs to a control the script builds and names itself.
+    Linear: every ``find`` resumes from where the last one stopped.
+    """
+    lower = source.lower()
+    parts: list[str] = []
+    pos = 0  # source up to here is already emitted
+    cursor = 0  # where the next opener is searched for
+    nxt = {"script": -2, "style": -2}
+    while True:
+        for name in nxt:
+            if nxt[name] != -1 and nxt[name] < cursor:
+                nxt[name] = lower.find("<" + name, cursor)
+        candidates = [(at, name) for name, at in nxt.items() if at != -1]
+        if not candidates:
+            break
+        at, name = min(candidates)
+        after = at + 1 + len(name)
+        boundary = lower[after : after + 1]
+        if boundary and boundary not in " \t\r\n/>":  # <scripty>, not <script>
+            cursor = after
+            continue
+        open_end = lower.find(">", after)
+        if open_end == -1:
+            break
+        close = lower.find("</" + name, open_end)
+        stop = len(source) if close == -1 else close
+        parts.append(source[pos : open_end + 1])
+        parts.append(re.sub(r"[^\n]", " ", source[open_end + 1 : stop]))
+        pos = cursor = stop
+        if close == -1:
+            break
+    parts.append(source[pos:])
+    return "".join(parts)
+
+
+def _blank_html_comments(source: str) -> str:
+    """Blank ``<!-- ... -->`` (newlines kept). Linear: each ``find`` resumes where the last ended."""
+    parts: list[str] = []
+    pos = 0
+    while (at := source.find("<!--", pos)) != -1:
+        end = source.find("-->", at + 2)  # `<!-->` and `<!--->` close at once
+        stop = len(source) if end == -1 else end + 3
+        parts.append(source[pos:at])
+        parts.append(re.sub(r"[^\n]", " ", source[at:stop]))
+        pos = stop
+    parts.append(source[pos:])
+    return "".join(parts)
+
+
+def _has_dynamic_attrs(attrs: str) -> bool:
+    """True if ``{{ }}`` / ``{% %}`` sits between attributes, where it may inject one."""
+    return bool(_CONTROL_DYNAMIC_ATTRS_RE.search(_QUOTED_VALUE_RE.sub('""', attrs)))
+
+
+def _find_unnamed_images(source: str) -> list[tuple[int, str]]:
+    """Return ``(offset, label)`` for each Y005 candidate in *source*.
+
+    *label* is ``'role="img"'`` or ``"<svg>"`` (an ``<svg role="img">`` is
+    reported once, as an svg).
+    """
+    source = _blank_html_comments(_blank_script_and_style_bodies(source))
+    index = _TagIndex(source)
+    # A control owns the name of an icon inside it (Y001 covers an unnamed
+    # control), so an svg within a <button> / <a href> is not judged here.
+    control_spans = [(start, close[1]) for start, close in index.pairs("button").items()]
+    anchors = index.pairs("a")
+    control_spans += [
+        (tag.start, anchors[tag.start][1])
+        for tag in index.opens
+        if tag.name == "a" and tag.start in anchors and _HREF_ATTR_RE.search(tag.attrs)
+    ]
+    control_starts, control_ends = _merge_spans(control_spans)
+    svg_pairs = index.pairs("svg")
+    outer_end = 0  # end of the outermost svg being read; later svgs inside it are nested
+    found: list[tuple[int, str]] = []
+    for tag in index.opens:
+        is_svg = tag.name == "svg"
+        if tag.name == "img" or not (is_svg or _ROLE_IMG_RE.search(tag.attrs)):
+            continue
+        if is_svg:
+            # A nested svg is part of its outer svg's graphic: judge only the outer.
+            if tag.start < outer_end:
+                continue
+            pair = svg_pairs.get(tag.start)
+            inner_end = outer_end = tag.end
+            if not tag.self_closing:
+                inner_end = pair[0] if pair else len(source)
+                outer_end = pair[1] if pair else len(source)
+            if _in_spans(control_starts, control_ends, tag.start):
+                continue
+            if _DECORATIVE_ROLE_RE.search(tag.attrs):
+                continue
+            inner = source[tag.end : inner_end]
+            if _SYMBOL_RE.search(inner):
+                continue
+            if (
+                _HIDDEN_STYLE_RE.search(tag.attrs)
+                or _HIDDEN_ATTR_RE.search(tag.attrs)
+                or _ZERO_SIZE_RE.search(tag.attrs)
+            ):
+                continue
+            if _SVG_TITLE_CHILD_RE.search(inner):
+                continue
+        if _ARIA_HIDDEN_TRUE_RE.search(tag.attrs) or _NONBLANK_NAME_ATTR_RE.search(tag.attrs):
+            continue
+        # {% ... %} / {{ ... }} between the attributes may inject the name.
+        if _has_dynamic_attrs(tag.attrs):
+            continue
+        found.append((tag.start, "<svg>" if is_svg else 'role="img"'))
+    return found
+
+
+def _find_colour_only_legend_items(source: str) -> list[int]:
+    """Return the offset of each Y006 candidate ``<li>`` in *source*."""
+    source = _blank_html_comments(_blank_script_and_style_bodies(source))
+    index = _TagIndex(source)
+    legends: list[tuple[int, int]] = []
+    outer_end = 0
+    for tag in index.opens:
+        if tag.name == "legend" or tag.start < outer_end:  # form <legend>; nested legend
+            continue
+        classes = _CLASS_ATTR_RE.search(tag.attrs)
+        if not classes or not any(
+            _LEGEND_TOKEN_RE.search(token) for token in classes.group(1).lower().split()
+        ):
+            continue
+        pair = index.pairs(tag.name).get(tag.start)
+        end = tag.end if tag.self_closing else (pair[1] if pair else len(source))
+        legends.append((tag.start, end))
+        outer_end = end
+    if not legends:
+        return []
+    legend_starts, legend_ends = _merge_spans(legends)
+    li_pairs = index.pairs("li")
+    found = []
+    for tag in index.opens:
+        close = li_pairs.get(tag.start) if tag.name == "li" else None
+        if close is None or not _in_spans(legend_starts, legend_ends, tag.start):
+            continue
+        inner = source[tag.end : close[0]]
+        # {{ }} / {% %} may render the label; a name attribute on the item or
+        # a descendant names it.
+        if "{{" in inner or "{%" in inner or _CONTROL_DYNAMIC_ATTRS_RE.search(tag.attrs):
+            continue
+        named = tag.attrs + inner
+        if _NONBLANK_NAME_ATTR_RE.search(named) or _NONBLANK_ALT_RE.search(named):
+            continue
+        text = _HTML_ENTITY_RE.sub(" ", _ANY_TAG_RE.sub(" ", inner))
+        if text.strip():
+            continue
+        found.append(tag.start)
+    return found
+
 
 def _content_is_icon_only(inner: str) -> bool:
     """Return True if *inner* has no human-readable accessible text.
@@ -186,6 +490,15 @@ def check_accessibility(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
     - **Y004** — an element with a positive ``tabindex`` (WCAG 2.4.3,
       Focus Order). ``tabindex="0"`` and ``tabindex="-1"`` are valid and
       not flagged.
+    - **Y005** — a ``role="img"`` element or an inline ``<svg>`` with no
+      accessible name (WCAG 1.1.1, Level A): no non-blank ``aria-label`` /
+      ``aria-labelledby`` / ``title`` attribute and, for an svg, no
+      ``<title>`` child. ``aria-hidden="true"``, ``role="presentation"``,
+      an svg inside a ``<button>`` / ``<a href>``, a nested svg and a
+      hidden sprite sheet are not flagged.
+    - **Y006** — a ``<li>`` inside a legend (an element whose ``class``
+      has a ``legend`` token, e.g. ``chart-legend``) with no text and no name
+      attribute, so the series differ only by colour (WCAG 1.4.1).
 
     All emit :class:`DjustWarning` (not error) so a stray false positive
     never fails ``manage.py check``; all are suppressible via
@@ -197,7 +510,18 @@ def check_accessibility(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
     y002_suppressed = _is_check_suppressed("djust.Y002")
     y003_suppressed = _is_check_suppressed("djust.Y003")
     y004_suppressed = _is_check_suppressed("djust.Y004")
-    if y001_suppressed and y002_suppressed and y003_suppressed and y004_suppressed:
+    y005_suppressed = _is_check_suppressed("djust.Y005")
+    y006_suppressed = _is_check_suppressed("djust.Y006")
+    if all(
+        (
+            y001_suppressed,
+            y002_suppressed,
+            y003_suppressed,
+            y004_suppressed,
+            y005_suppressed,
+            y006_suppressed,
+        )
+    ):
         return errors
 
     tpl_dirs = _get_template_dirs()
@@ -356,6 +680,54 @@ def check_accessibility(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
                         fix_hint=(
                             'Change tabindex="%s" to tabindex="0" (or remove '
                             "it) at line %d in `%s`." % (value, lineno, relpath)
+                        ),
+                        file_path=filepath,
+                        line_number=lineno,
+                    )
+                )
+
+        # Y005 — role="img" element / inline <svg> with no accessible name.
+        if not y005_suppressed:
+            for offset, label in _find_unnamed_images(scan_source):
+                lineno = scan_source[:offset].count("\n") + 1
+                errors.append(
+                    DjustWarning(
+                        "%s:%d -- %s has no accessible name (WCAG 1.1.1)."
+                        % (relpath, lineno, label),
+                        hint=(
+                            "A screen reader announces a nameless graphic as just "
+                            '"image" (or skips an svg). Add aria-label="..." or '
+                            "aria-labelledby (a <title> child also names an svg), "
+                            'or mark a purely decorative graphic aria-hidden="true".'
+                        ),
+                        id="djust.Y005",
+                        fix_hint=(
+                            'Add an aria-label="..." (or aria-hidden="true" if '
+                            "decorative) to the %s at line %d in `%s`." % (label, lineno, relpath)
+                        ),
+                        file_path=filepath,
+                        line_number=lineno,
+                    )
+                )
+
+        # Y006 — legend item that is only a colour swatch.
+        if not y006_suppressed:
+            for offset in _find_colour_only_legend_items(scan_source):
+                lineno = scan_source[:offset].count("\n") + 1
+                errors.append(
+                    DjustWarning(
+                        "%s:%d -- legend item has no text, so its series is "
+                        "told apart by colour alone (WCAG 1.4.1)." % (relpath, lineno),
+                        hint=(
+                            "Users who cannot tell the colours apart cannot read "
+                            "this legend. Put the series name in the <li> as "
+                            "text (it may be visually hidden), or add an "
+                            "aria-label / title to the item."
+                        ),
+                        id="djust.Y006",
+                        fix_hint=(
+                            "Add the series name as text (or an aria-label) to "
+                            "the <li> at line %d in `%s`." % (lineno, relpath)
                         ),
                         file_path=filepath,
                         line_number=lineno,

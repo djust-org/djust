@@ -1,6 +1,7 @@
 """Behavior contracts for ADR-043 D2 UI audit rules (#3448)."""
 
 import json
+import os
 import re
 import textwrap
 from io import StringIO
@@ -348,7 +349,7 @@ class TestUIRuleSwitches:
     def test_every_x1xx_code_is_a_warning(self):
         assert all(
             AST_FINDING_CODES[code][0] == "warning"
-            for code in ("X101", "X102", "X103", "X104", "X105")
+            for code in ("X101", "X102", "X103", "X104", "X105", "X106")
         )
 
     def test_existing_x006_scan_unchanged_on_non_live_template(self, tmp_path):
@@ -372,7 +373,7 @@ class TestSuggestedTagsExist:
         from djust.components import __all__ as exports
         from djust.components.templatetags.djust_components import register
 
-        for code in ("X101", "X102", "X103", "X104", "X105"):
+        for code in ("X101", "X102", "X103", "X104", "X105", "X106"):
             text = AST_FINDING_CODES[code][1] + getattr(audit_ui, f"_{code}_DETAILS")
             for name in re.findall(r"\{%\s*(\w+)", text):
                 assert (name[3:] if name.startswith("end") else name) in register.tags
@@ -391,8 +392,15 @@ class TestUISummaryCache:
         assert payload["version"] == 1
         assert payload["generator"] == "djust_audit --ast"
         assert payload["root"] == str(tmp_path)
-        assert payload["rules"] == ["X101", "X102", "X103", "X104", "X105"]
-        assert payload["counts"] == {"X101": 1, "X102": 0, "X103": 0, "X104": 0, "X105": 0}
+        assert payload["rules"] == ["X101", "X102", "X103", "X104", "X105", "X106"]
+        assert payload["counts"] == {
+            "X101": 1,
+            "X102": 0,
+            "X103": 0,
+            "X104": 0,
+            "X105": 0,
+            "X106": 0,
+        }
         assert payload["total"] == 1
         assert payload["djust_version"]
         assert payload["generated_at"].endswith("+00:00")
@@ -782,6 +790,7 @@ class TestReviewRegressions:
         "css-noqa",
         "html-noqa",
         "unclosed-expressions",
+        "css-font-face-nesting",
     ],
 )
 def test_adversarial_scan_completes_under_two_seconds(case):
@@ -804,6 +813,7 @@ def test_adversarial_scan_completes_under_two_seconds(case):
         "css-noqa": " ",
         "html-noqa": " ",
         "unclosed-expressions": "{{",
+        "css-font-face-nesting": "@font-face{",
     }
     prefix = {
         "table": "<table>{% for r in rows %}",
@@ -932,15 +942,45 @@ def test_summary_temp_cleanup_only_before_successful_replace(tmp_path, monkeypat
     assert not list((tmp_path / ".djust").glob(".audit-ui.*.tmp"))
 
 
-@pytest.mark.parametrize("case", ["div", "table"])
+@pytest.mark.parametrize(
+    "case", ["div", "table", "style-attrs", "style-one-tag", "css-named-colors"]
+)
 def test_adversarial_scan_scales_linearly(case):
     import gc
     import time
-    from djust.audit_ui import scan_ui
+    from djust.audit_ui import _scan_stylesheet, scan_ui
 
-    unit = "<div>" if case == "div" else '<tr><td class="cell">{{ r }}</td></tr>\n'
-    prefix = "" if case == "div" else "<table>{% for r in rows %}"
-    suffix = "" if case == "div" else "{% endfor %}</table>"
+    # (unit, prefix, suffix, expected finding codes). The heavy new corpora are judged
+    # by growth, not by a wall-clock bound: a 1 MB scan costs ~0.5 s here and several
+    # times that on a loaded CI runner, but a super-linear scan still grows >8x per 4x.
+    unit, prefix, suffix, expected = {
+        "div": ("<div>", "", "", []),
+        "table": (
+            '<tr><td class="cell">{{ r }}</td></tr>\n',
+            "<table>{% for r in rows %}",
+            "{% endfor %}</table>",
+            ["X101"],
+        ),
+        "style-attrs": (
+            '<p style="color:red;font-family:Arial">{{ r }}</p>\n',
+            "",
+            "",
+            ["X105", "X106"],
+        ),
+        "style-one-tag": ('style="a" ', "<div dj-root ", ">x</div>", []),
+        "css-named-colors": (
+            ".btn{border:1px solid red;font:12px Arial}\n",
+            "",
+            "",
+            ["X105", "X106"],
+        ),
+    }[case]
+
+    def scan(source):
+        if case.startswith("css-"):
+            return _scan_stylesheet("app.css", source)
+        return scan_ui(".", {"app/templates/page.html": source}, {"page.html"}).findings
+
     timings = []
     for size in (262144, 1048576):
         remaining = size - len(prefix) - len(suffix)
@@ -955,11 +995,11 @@ def test_adversarial_scan_scales_linearly(case):
             gc.disable()
             try:
                 start = time.process_time()
-                findings = scan_ui(".", {"app/templates/page.html": source}, {"page.html"}).findings
+                findings = scan(source)
                 samples.append(time.process_time() - start)
             finally:
                 gc.enable()
-            assert [f.code for f in findings] == ([] if case == "div" else ["X101"])
+            assert [f.code for f in findings] == expected
         timings.append(min(samples))
     # 4x the input: a linear scan costs ~4x and a quadratic one ~16x. 8x is the
     # geometric midpoint, so it tolerates noise and still fails a quadratic.
@@ -1029,3 +1069,535 @@ def test_summary_cleanup_does_not_suppress_unexpected_exception(tmp_path, monkey
     monkeypatch.setattr(audit_ui.os, "unlink", deny_cleanup)
     with pytest.raises(RuntimeError, match="unexpected encoder error"):
         audit_ui.write_ui_summary(report, str(tmp_path))
+
+
+# ---------------------------------------------------------------------------
+# #3687 -- X105 named colours, X106 font-family literals, style= attributes
+# ---------------------------------------------------------------------------
+
+# The stylesheet and template from the #3687 report.
+ISSUE_3687_CSS = """\
+.swatch { background: hsl(var(--primary)); }
+.note   { color: white; font-family: "Comic Sans MS", cursive; }
+.bars span { background: #3b82f6; }
+.menu { box-shadow: var(--shadow, 0 1px 2px rgb(0 0 0 / .2)); color: transparent; }
+"""
+ISSUE_3687_TEMPLATE = """\
+{% load static %}<link rel="stylesheet" href="{% static 'demo/app.css' %}">
+<div dj-root>
+  <p style="color: #9a9a9a; font-family: 'Comic Sans MS'">Note</p>
+</div>
+"""
+
+
+def _by_code(report, code):
+    return [f for f in report.findings if f.code == code]
+
+
+def _x105(tmp_path, css):
+    return _by_code(_css(tmp_path, css), "X105")
+
+
+def _x106(tmp_path, css):
+    return _by_code(_css(tmp_path, css), "X106")
+
+
+class TestIssue3687Repro:
+    def _report(self, tmp_path):
+        _tree(
+            tmp_path,
+            {
+                "demo/static/demo/app.css": ISSUE_3687_CSS,
+                "demo/templates/demo/styled.html": ISSUE_3687_TEMPLATE,
+            },
+        )
+        return _run(tmp_path)
+
+    def test_stylesheet_gives_x105_for_lines_2_and_3_and_x106_for_line_2(self, tmp_path):
+        report = self._report(tmp_path)
+        (x105,) = [f for f in _by_code(report, "X105") if f.path.endswith("app.css")]
+        assert x105.lineno == 2
+        assert x105.details.startswith("2 color literal(s), first `color: white` at line 2")
+        assert "(lines 2, 3)" in x105.details
+        (x106,) = [f for f in _by_code(report, "X106") if f.path.endswith("app.css")]
+        assert x106.lineno == 2
+        assert x106.details.startswith("1 font-family literal(s), first `font-family:")
+
+    def test_template_style_attribute_gives_x105_and_x106(self, tmp_path):
+        report = self._report(tmp_path)
+        (x105,) = [f for f in _by_code(report, "X105") if f.path.endswith("styled.html")]
+        (x106,) = [f for f in _by_code(report, "X106") if f.path.endswith("styled.html")]
+        assert (x105.lineno, x106.lineno) == (3, 3)
+        assert x105.details.startswith(
+            "1 color literal(s) in style attributes, first `color: #9a9a9a`"
+        )
+        assert x106.details.startswith("1 font-family literal(s) in style attributes")
+
+    def test_transparent_and_var_fallback_stay_clean(self, tmp_path):
+        css = ".menu { box-shadow: var(--shadow, 0 1px 2px rgb(0 0 0 / .2)); color: transparent; }"
+        assert _x105(tmp_path, css) == []
+        assert _x106(tmp_path, css) == []
+
+    def test_only_the_expected_findings(self, tmp_path):
+        assert sorted(
+            (f.code, os.path.basename(f.path)) for f in self._report(tmp_path).findings
+        ) == [
+            ("X105", "app.css"),
+            ("X105", "styled.html"),
+            ("X106", "app.css"),
+            ("X106", "styled.html"),
+        ]
+
+
+class TestX105NamedColors:
+    @pytest.mark.parametrize("name", ["white", "red", "black", "rebeccapurple", "Tomato", "GREY"])
+    def test_named_colour_triggers(self, tmp_path, name):
+        assert len(_x105(tmp_path, "a { color: %s; }" % name)) == 1
+
+    @pytest.mark.parametrize(
+        "value",
+        ["transparent", "currentColor", "currentcolor", "inherit", "initial", "unset", "revert"],
+    )
+    def test_keywords_are_allowed(self, tmp_path, value):
+        for prop in ("color", "background", "border-color", "fill"):
+            assert _x105(tmp_path, "a { %s: %s; }" % (prop, value)) == [], (prop, value)
+
+    @pytest.mark.parametrize(
+        "decl",
+        [
+            "border: 1px solid red",
+            "outline: 2px dashed navy",
+            "box-shadow: 0 0 4px gold",
+            "text-shadow: 1px 1px teal",
+            "background: linear-gradient(to right, red, blue)",
+            "background: url(a.png) no-repeat white",
+            "border-bottom-color: crimson",
+            "fill: tomato",
+            "stroke: black",
+            "caret-color: lime",
+            "text-decoration: underline wavy red",
+            "background: red !important",
+            "COLOR: Red",
+            "--my-accent: orange",
+        ],
+    )
+    def test_named_colour_in_colour_bearing_properties(self, tmp_path, decl):
+        assert len(_x105(tmp_path, "a { %s; }" % decl)) == 1, decl
+
+    @pytest.mark.parametrize(
+        "decl",
+        [
+            "animation-name: orange",
+            "grid-area: tan",
+            "font-family: Tomato, serif",
+            "content: 'red'",
+            "transition: color 0.2s, background-color 0.2s",
+            "transition-property: color",
+            "will-change: color",
+            "counter-reset: snow",
+            "background: url(red.png)",
+            "background: url('/img/white.png')",
+            "background: var(--card, white)",
+            "color: var(--foreground, black)",
+            "color: hsl(var(--foreground))",
+            "background-image: none",
+            "border: 1px solid var(--border)",
+            "border-style: dotted",
+            "width: calc(100% - 4px)",
+            "margin: 0 auto",
+            "background: tan(45deg)",
+            "--my-shadow: 0 1px 2px red",
+            "--font-stack: red-hat-display",
+            "color: redish",
+            "color: red-ish",
+            "color: x-red",
+            "color: 10red",
+            "background-position: top left",
+        ],
+    )
+    def test_not_a_named_colour_literal(self, tmp_path, decl):
+        assert _x105(tmp_path, "a { %s; }" % decl) == [], decl
+
+    def test_selectors_that_look_like_colours_are_not_declarations(self, tmp_path):
+        css = ".red, #white, a:hover.black { color: hsl(var(--foreground)); }"
+        assert _x105(tmp_path, css) == []
+
+    def test_theme_token_definition_with_a_named_colour_is_allowed(self, tmp_path):
+        assert _x105(tmp_path, ":root { --primary: red; --chart-1: blue; }") == []
+
+    def test_named_colour_counts_alongside_hex_in_one_finding(self, tmp_path):
+        (finding,) = _x105(tmp_path, "a { color: white; }\nb { color: #123; }\nc { fill: red; }")
+        assert finding.details.startswith("3 color literal(s), first `color: white` at line 1")
+        assert "(lines 1, 2, 3)" in finding.details
+
+    def test_named_colour_noqa_suppresses_the_line(self, tmp_path):
+        css = "a { color: white; } /* djust: noqa X105 */\nb { color: red; }"
+        (finding,) = _x105(tmp_path, css)
+        assert finding.lineno == 2
+        assert finding.details.startswith("1 color literal(s)")
+
+    def test_css_comment_with_named_colour_ignored(self, tmp_path):
+        assert _x105(tmp_path, "/* a { color: white; } */ b { color: var(--foreground); }") == []
+
+    def test_named_colour_inside_nested_media_block(self, tmp_path):
+        css = "@media (min-width: 1px) { a { color: white; } }"
+        assert len(_x105(tmp_path, css)) == 1
+
+    def test_named_colour_set_is_well_formed(self):
+        from djust.audit_ui import _CSS_NAMED_COLORS
+
+        assert {
+            "red",
+            "white",
+            "black",
+            "rebeccapurple",
+            "lightgoldenrodyellow",
+        } <= _CSS_NAMED_COLORS
+        assert all(n.isalpha() and n.islower() for n in _CSS_NAMED_COLORS)
+        assert not {"transparent", "currentcolor", "inherit", "initial", "unset", "revert"} & (
+            _CSS_NAMED_COLORS
+        )
+
+
+class TestX106FontFamily:
+    @pytest.mark.parametrize(
+        "decl",
+        [
+            'font-family: "Comic Sans MS", cursive',
+            "font-family: Arial",
+            "font-family: sans-serif",
+            "font-family: system-ui, -apple-system, 'Segoe UI', sans-serif",
+            "font-family: var(--brand-font)",
+            "font-family: var(--sans, Arial)",
+            "font-family: Arial !important",
+            "FONT-FAMILY: Georgia, serif",
+            "font: 12px/1.5 Arial, sans-serif",
+            "font: italic bold 1rem 'Inter'",
+            "font: 700 14px Helvetica",
+        ],
+    )
+    def test_literal_family_triggers(self, tmp_path, decl):
+        assert len(_x106(tmp_path, "a { %s; }" % decl)) == 1, decl
+
+    @pytest.mark.parametrize(
+        "decl",
+        [
+            "font-family: var(--font-sans)",
+            "font-family: var(--font-mono, ui-monospace, monospace)",
+            "font-family: var( --font-sans )",
+            "font-family: var(--font-display, var(--font-sans))",
+            "font-family: var(--font-sans) !important",
+            "font-family: inherit",
+            "font-family: initial",
+            "font-family: unset",
+            "font-family: revert",
+            "font-family: revert-layer",
+            "font: inherit",
+            "font: 12px/1.5 var(--font-sans)",
+            "font: var(--text-sm) var(--font-sans)",
+            "font: caption",
+            "font: status-bar",
+            "font-size: 12px",
+            "font-weight: bold",
+            "font-style: italic",
+            "font-variant: small-caps",
+            "line-height: 1.5",
+            "--font-sans: Arial, sans-serif",
+            "--font-body: 'Inter', sans-serif",
+            "color: hsl(var(--foreground))",
+        ],
+    )
+    def test_not_a_literal_family(self, tmp_path, decl):
+        assert _x106(tmp_path, "a { %s; }" % decl) == [], decl
+
+    def test_font_face_declarations_are_the_definition_not_a_use(self, tmp_path):
+        css = (
+            "@font-face { font-family: 'Inter'; src: url(inter.woff2); font-weight: 400; }\n"
+            "@font-face{font-family:Inter;src:url(i.woff2)}\n"
+        )
+        assert _x106(tmp_path, css) == []
+
+    def test_font_face_exemption_does_not_leak_to_the_next_rule(self, tmp_path):
+        css = "@font-face { font-family: Inter; }\na { font-family: Arial; }"
+        (finding,) = _x106(tmp_path, css)
+        assert finding.lineno == 2
+
+    def test_font_face_inside_a_media_block(self, tmp_path):
+        css = "@media print { @font-face { font-family: Inter; } a { font-family: Arial; } }"
+        (finding,) = _x106(tmp_path, css)
+        assert "Arial" in finding.details
+
+    def test_one_finding_per_stylesheet_with_count_and_lines(self, tmp_path):
+        css = "a { font-family: Arial; }\nb { color: hsl(var(--foreground)); }\nc { font: 1rem Georgia; }"
+        (finding,) = _x106(tmp_path, css)
+        assert finding.lineno == 1
+        assert finding.details.startswith("2 font-family literal(s), first `font-family: Arial`")
+        assert "(lines 1, 3)" in finding.details
+        assert "var(--font-sans)" in finding.details
+
+    def test_x106_is_independent_of_x105(self, tmp_path):
+        css = "a { font-family: Arial; }"
+        assert _x105(tmp_path, css) == []
+        assert len(_x106(tmp_path, css)) == 1
+        report = _css(tmp_path, "a { color: #fff; }")
+        assert _by_code(report, "X105") and not _by_code(report, "X106")
+
+    def test_noqa_x106_suppresses_only_x106(self, tmp_path):
+        css = "a { color: #fff; font-family: Arial; } /* djust: noqa X106 */"
+        report = _css(tmp_path, css)
+        assert _by_code(report, "X106") == []
+        assert len(_by_code(report, "X105")) == 1
+
+    def test_noqa_x105_does_not_suppress_x106(self, tmp_path):
+        css = "a { color: #fff; font-family: Arial; } /* djust: noqa X105 */"
+        report = _css(tmp_path, css)
+        assert _by_code(report, "X105") == []
+        assert len(_by_code(report, "X106")) == 1
+
+    def test_bare_noqa_suppresses_both(self, tmp_path):
+        report = _css(tmp_path, "a { color: #fff; font-family: Arial; } /* djust: noqa */")
+        assert [f.code for f in report.findings if f.code.startswith("X1")] == []
+
+    def test_x106_is_a_warning_in_the_code_table(self):
+        assert AST_FINDING_CODES["X106"][0] == "warning"
+        assert "font" in AST_FINDING_CODES["X106"][1].lower()
+
+
+class TestStyleAttributes:
+    def _tpl(self, tmp_path, body, name="page.html"):
+        _tree(tmp_path, {"app/templates/" + name: "<div dj-root>\n" + body + "\n</div>\n"})
+        return _run(tmp_path)
+
+    def _codes_of(self, report):
+        return sorted(f.code for f in report.findings if f.code in ("X105", "X106"))
+
+    @pytest.mark.parametrize(
+        "style, expected",
+        [
+            ("color: #9a9a9a", ["X105"]),
+            ("color: white", ["X105"]),
+            ("background:red;color:#fff", ["X105"]),
+            ("font-family: Arial", ["X106"]),
+            ("color: white; font-family: Arial", ["X105", "X106"]),
+            ("color: hsl(var(--foreground))", []),
+            ("color: var(--foreground, #fff)", []),
+            ("color: transparent", []),
+            ("color: currentColor", []),
+            ("font-family: var(--font-sans)", []),
+            ("height: 40%", []),
+            ("width: 50px; margin: 0 auto", []),
+            ("--bar-height: 40%", []),
+            ("", []),
+        ],
+    )
+    def test_style_attribute_declarations(self, tmp_path, style, expected):
+        report = self._tpl(tmp_path, '<p style="%s">x</p>' % style)
+        assert self._codes_of(report) == expected
+
+    def test_single_quoted_style_attribute(self, tmp_path):
+        assert self._codes_of(self._tpl(tmp_path, "<p style='color: red'>x</p>")) == ["X105"]
+
+    def test_template_expressions_are_masked(self, tmp_path):
+        for body in (
+            '<i style="color: {{ series.color }}">x</i>',
+            '<i style="background: {{ c|default:"#fff" }}">x</i>',
+            '<i style="font-family: {{ font }}">x</i>',
+            '<i style="height: {{ pct }}%">x</i>',
+            '<i style="color: rgb({{ r }}, 0, 0)">x</i>',
+            '<i style="{% if hot %}height: 70%{% endif %}">x</i>',
+        ):
+            assert self._codes_of(self._tpl(tmp_path, body)) == [], body
+
+    def test_literal_next_to_an_expression_still_counts(self, tmp_path):
+        body = '<i style="color: {{ c }}; background: #fff">x</i>'
+        assert self._codes_of(self._tpl(tmp_path, body)) == ["X105"]
+
+    def test_finding_text_shows_the_expression_not_the_stand_in(self, tmp_path):
+        body = '<i style="background: {{ c }} white">x</i>'
+        (finding,) = _by_code(self._tpl(tmp_path, body), "X105")
+        assert "`background: {{ … }} white`" in finding.details
+        assert "djust-template" not in finding.details
+
+    def test_literal_in_a_template_branch_counts(self, tmp_path):
+        body = '<i style="color: {% if hot %}red{% else %}blue{% endif %}">x</i>'
+        assert self._codes_of(self._tpl(tmp_path, body)) == ["X105"]
+
+    def test_data_style_attribute_is_not_a_style_attribute(self, tmp_path):
+        assert self._codes_of(self._tpl(tmp_path, '<p data-style="color: red">x</p>')) == []
+
+    def test_one_finding_per_template_with_count_and_lines(self, tmp_path):
+        body = (
+            '<p style="color: red">a</p>\n'
+            '<p style="height: 3px">b</p>\n'
+            '<p style="background: #fff; border: 1px solid navy">c</p>'
+        )
+        report = self._tpl(tmp_path, body)
+        (finding,) = _by_code(report, "X105")
+        assert finding.lineno == 2
+        assert finding.details.startswith(
+            "3 color literal(s) in style attributes, first `color: red`"
+        )
+        assert "(lines 2, 4, 4)" in finding.details  # one entry per offending declaration
+
+    def test_multiline_style_attribute_reports_the_declaration_line(self, tmp_path):
+        body = '<p style="\n  height: 3px;\n  color: red;\n">x</p>'
+        (finding,) = _by_code(self._tpl(tmp_path, body), "X105")
+        assert finding.lineno == 4
+
+    def test_noqa_on_the_same_line_suppresses(self, tmp_path):
+        body = '<p style="color: red">a</p> {# djust: noqa X105 #}\n<p style="color: blue">b</p>'
+        (finding,) = _by_code(self._tpl(tmp_path, body), "X105")
+        assert finding.lineno == 3
+        assert finding.details.startswith("1 color literal(s)")
+
+    def test_noqa_x105_leaves_x106_and_vice_versa(self, tmp_path):
+        body = '<p style="color: red; font-family: Arial">a</p> {# djust: noqa X105 #}'
+        assert self._codes_of(self._tpl(tmp_path, body)) == ["X106"]
+        body = '<p style="color: red; font-family: Arial">a</p> {# djust: noqa X106 #}'
+        assert self._codes_of(self._tpl(tmp_path, body)) == ["X105"]
+
+    def test_bare_noqa_suppresses_both(self, tmp_path):
+        body = '<p style="color: red; font-family: Arial">a</p> {# djust: noqa #}'
+        assert self._codes_of(self._tpl(tmp_path, body)) == []
+
+    def test_style_in_a_commented_out_tag_is_ignored(self, tmp_path):
+        body = '{# <p style="color: red">x</p> #}<!-- <p style="color: blue">y</p> -->'
+        assert self._codes_of(self._tpl(tmp_path, body)) == []
+
+    def test_non_live_template_is_not_scanned(self, tmp_path):
+        _tree(tmp_path, {"app/templates/plain.html": '<p style="color: red">x</p>'})
+        assert self._codes_of(_run(tmp_path)) == []
+
+    def test_included_and_extended_templates_are_scanned(self, tmp_path):
+        _tree(tmp_path, {"app/templates/partial.html": '<p style="color: red">x</p>'})
+        report = self._tpl(tmp_path, '{% include "partial.html" %}')
+        assert [os.path.basename(f.path) for f in _by_code(report, "X105")] == ["partial.html"]
+
+    def test_x103_overlay_detection_is_unchanged_by_style_scan(self, tmp_path):
+        body = '<div style="position:fixed;top:0;bottom:0;left:0;right:0;background:red"></div>'
+        assert sorted(f.code for f in self._tpl(tmp_path, body).findings) == ["X103", "X105"]
+
+    def test_include_ui_false_skips_style_findings(self, tmp_path):
+        _tree(
+            tmp_path, {"app/templates/page.html": '<div dj-root><p style="color: red">x</p></div>'}
+        )
+        assert self._codes_of(_run(tmp_path, include_ui=False)) == []
+
+
+class TestX106Registration:
+    def test_summary_cache_lists_x106(self, tmp_path):
+        _tree(
+            tmp_path,
+            {"app/templates/page.html": '<div dj-root><p style="font-family: Arial">x</p></div>'},
+        )
+        _command(tmp_path)
+        payload = json.loads((tmp_path / CACHE).read_text())
+        assert payload["rules"][-2:] == ["X105", "X106"]
+        assert payload["counts"]["X106"] == 1
+        assert payload["counts"]["X105"] == 0
+        assert payload["total"] == 1
+
+    def test_x106_alone_does_not_trigger_the_component_hint(self):
+        from djust.checks.ai_discovery import _UI_REPLACEMENTS
+
+        assert "X106" not in _UI_REPLACEMENTS and "X105" not in _UI_REPLACEMENTS
+
+    def test_x106_details_name_only_registered_theme_tokens(self):
+        from djust import audit_ui
+
+        for token in re.findall(r"var\((--[\w-]+)\)", audit_ui._X106_DETAILS):
+            assert token in {"--font-sans", "--font-mono"}
+
+    def test_command_pretty_output_reports_x106(self, tmp_path):
+        _tree(
+            tmp_path,
+            {"app/templates/page.html": '<div dj-root><p style="font-family: Arial">x</p></div>'},
+        )
+        assert "[djust.X106]" in _command(tmp_path)
+
+
+class TestReviewFixes3687:
+    """Findings from the PR #3702 review."""
+
+    def test_many_style_attributes_on_one_tag_scan_in_linear_time(self):
+        import time
+
+        from djust.audit_ui import scan_ui
+
+        # `attrs.count("\n", 0, ...)` per attribute made this quadratic (21 s at 80k).
+        source = "<div dj-root " + 'style="a" ' * 40000 + ">x</div>"
+        start = time.process_time()
+        scan_ui(".", {"app/templates/page.html": source}, {"page.html"})
+        assert time.process_time() - start < 2.0
+
+    def test_style_attributes_on_different_lines_of_one_tag_report_their_own_lines(self, tmp_path):
+        _tree(
+            tmp_path,
+            {
+                "app/templates/page.html": '<div dj-root\n  style="color: red"\n  data-x="1"\n'
+                '  style="background: blue">x</div>\n'
+            },
+        )
+        (finding,) = _by_code(_run(tmp_path), "X105")
+        assert finding.lineno == 2
+        assert "(lines 2, 4)" in finding.details
+
+    @pytest.mark.parametrize(
+        "decl",
+        [
+            "font-family: var(--font-sans), sans-serif",
+            "font-family: var(--font-sans),system-ui,sans-serif",
+            "font-family: var(--font-mono), ui-monospace, monospace",
+            "font-family: sans-serif, var(--font-sans)",
+            "font-family: var(--font-sans) , SERIF !important",
+        ],
+    )
+    def test_theme_token_with_generic_fallback_is_clean(self, tmp_path, decl):
+        assert _x106(tmp_path, "a { %s; }" % decl) == [], decl
+
+    @pytest.mark.parametrize(
+        "decl",
+        [
+            'font-family: var(--font-sans), "Inter"',
+            "font-family: var(--font-sans), Arial, sans-serif",
+            "font-family: sans-serif",
+            "font-family: system-ui, serif",
+            "font-family: var(--my-font), sans-serif",
+        ],
+    )
+    def test_named_family_or_missing_token_is_still_flagged(self, tmp_path, decl):
+        assert len(_x106(tmp_path, "a { %s; }" % decl)) == 1, decl
+
+    def test_template_expression_with_generic_fallback_is_clean(self, tmp_path):
+        _tree(
+            tmp_path,
+            {
+                "app/templates/p.html": '<div dj-root><i style="font-family: {{ f }}, sans-serif">x</i></div>'
+            },
+        )
+        assert _by_code(_run(tmp_path), "X106") == []
+
+    @pytest.mark.parametrize(
+        "attr",
+        [
+            ":style=\"{ color: 'red' }\"",
+            "x-bind:style=\"{ color: 'red' }\"",
+            '@style="color: red"',
+        ],
+    )
+    def test_framework_bound_style_expressions_are_not_css(self, tmp_path, attr):
+        _tree(tmp_path, {"app/templates/p.html": "<div dj-root><i %s>x</i></div>" % attr})
+        assert [f for f in _run(tmp_path).findings if f.code in ("X105", "X106")] == []
+
+    def test_font_palette_values_family_is_a_definition(self, tmp_path):
+        css = "@font-palette-values --brand { font-family: Bixa; override-colors: 0 #fff; }"
+        assert _x106(tmp_path, css) == []
+
+    def test_text_emphasis_named_colour_is_flagged(self, tmp_path):
+        assert len(_x105(tmp_path, "a { text-emphasis: filled red; }")) == 1
+
+
+class TestReviewFixes3687Round2:
+    @pytest.mark.parametrize("flag", ["!important", "!IMPORTANT", "! important", "!Important"])
+    def test_important_in_any_form_is_not_a_family(self, tmp_path, flag):
+        assert _x106(tmp_path, "a { font-family: var(--font-sans), serif %s; }" % flag) == []

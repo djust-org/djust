@@ -16,6 +16,7 @@ from djust import LiveView
 | `template`          | `str`  | —       | Inline HTML template string                                                   |
 | `temporary_assigns` | `dict` | `{}`    | State that resets to the default after each render (e.g., `{"messages": []}`) |
 | `static_render`     | `bool` | `False` | Keep no diff baseline: the rendered tree and context copy are dropped after every render, so the stored snapshot is the template and a counter, and any later render sends the whole page (see [Large LiveView state](../guides/BEST_PRACTICES.md#6-large-liveview-state)) |
+| `query_budget`      | `int` or `dict` | `None` | Query budget for `LiveViewSmokeTest`: an int caps mount + first render together, `{"mount": n, "render": n}` caps each phase. Read by the smoke test only (see [Per-view query budgets](../testing/index.md#per-view-query-budgets)) |
 | `use_actors`        | `bool` | `False` | Enable actor-based state management                                           |
 | `on_mount`          | `list` | `[]`    | List of hook functions to run before `mount()` (see [on_mount Hooks](../guides/on-mount-hooks.md)) |
 
