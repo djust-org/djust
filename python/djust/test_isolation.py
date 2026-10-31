@@ -445,6 +445,35 @@ def _reset_render_caches() -> None:
         pass
 
 
+def _reset_worker_pool_config() -> None:
+    """Put the worker-pool settings back to their defaults (#3692).
+
+    Sixteen test files turn the pool on with
+    ``monkeypatch.setitem(config._config, "worker_threads", N)``. ``config``
+    never mutates ``_config`` in place: ``set()`` / a reload build a copy and
+    swap it in. When that swap happens while such a test runs (a sibling
+    fixture calling ``config.set(...)`` is enough), the copy carries
+    ``worker_threads=N`` and monkeypatch restores the value onto the OLD dict,
+    so the pool stayed on for every later test on the worker. A server-push
+    turn then took the offloaded path in tests that expected the stock one,
+    and test_multi_view_socket_3252 failed intermittently on ``main``.
+
+    The keys are put back through the swap too, so a reader that already holds
+    the old dict never sees it change.
+    """
+    try:
+        from djust.config import config
+
+        with config._lock:
+            new = dict(config._config)
+            for key in ("worker_threads", "worker_pinning"):
+                if key in config._defaults:
+                    new[key] = config._defaults[key]
+            config._config = new
+    except Exception:  # noqa: BLE001 - never error the autouse fixture
+        pass
+
+
 def reset_djust_globals() -> None:
     """Reset every leak-prone djust process-global. Call BEFORE each test.
 
@@ -464,6 +493,7 @@ def reset_djust_globals() -> None:
     _reset_django_thread_locals()
     _reset_rust_render_env()
     _reset_render_caches()
+    _reset_worker_pool_config()
 
 
 __all__ = ["reset_djust_globals"]

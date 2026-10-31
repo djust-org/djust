@@ -455,3 +455,29 @@ def test_autouse_fixture_left_counters_clean():
     # Leave it advanced; the next test's autouse fixture re-resets it.
     next(sticky._view_id_counter)
     _ = itertools  # silence unused-import lints in stripped builds
+
+
+# ---------------------------------------------------------------------------
+# (3) The worker-pool settings (#3692)
+# ---------------------------------------------------------------------------
+
+
+def test_reset_clears_a_pool_setting_a_config_swap_stranded_3692(monkeypatch):
+    """The leak: ``monkeypatch.setitem`` on ``config._config`` followed by any
+    config swap leaves ``worker_threads`` on, because monkeypatch restores the
+    old dict. The reset puts it back."""
+    from djust.config import config
+    from djust.test_isolation import reset_djust_globals
+
+    monkeypatch.setitem(config._config, "worker_threads", 2)
+    config.set("css_framework", config.get("css_framework"))  # swaps _config
+    assert config.get("worker_threads") == 2  # the setitem is now on the new dict
+
+    # What monkeypatch's teardown does: restore onto the OLD dict.
+    stranded = config._config
+    try:
+        reset_djust_globals()
+        assert config.get("worker_threads") in (None, False)
+        assert config.get("worker_pinning") is True
+    finally:
+        config._config = stranded  # leave the dict monkeypatch will restore
