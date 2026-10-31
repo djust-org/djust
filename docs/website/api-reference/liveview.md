@@ -16,6 +16,7 @@ from djust import LiveView
 | `template`          | `str`  | —       | Inline HTML template string                                                   |
 | `temporary_assigns` | `dict` | `{}`    | State that resets to the default after each render (e.g., `{"messages": []}`) |
 | `static_render`     | `bool` | `False` | Keep no diff baseline: the rendered tree and context copy are dropped after every render, so the stored snapshot is the template and a counter, and any later render sends the whole page (see [Large LiveView state](../guides/BEST_PRACTICES.md#6-large-liveview-state)) |
+| `query_budget`      | `int` or `dict` | `None` | Query budget for `LiveViewSmokeTest`: an int caps mount + first render together, `{"mount": n, "render": n}` caps each phase. Read by the smoke test only (see [Per-view query budgets](../testing/index.md#per-view-query-budgets)) |
 | `use_actors`        | `bool` | `False` | Enable actor-based state management                                           |
 | `params_form`       | `Form` class | `None` | Django form that declares the URL's query parameters; `handle_params()` receives its `cleaned_data` (see [`handle_params`](#handle_paramsparams-uri)) |
 | `http_status_of_state` | `Mapping[str, int]` | `{}` | HTTP status for a state the page renders itself, e.g. `{"not_found": 404}`; read by the default `get_http_status()` |

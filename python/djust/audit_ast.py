@@ -38,15 +38,18 @@ prefix is separate from the ``P0xx`` permissions-document codes from
 Codes ``djust.X101``–``djust.X199`` are **UI rules** (ADR-043 §D2,
 implemented in :mod:`djust.audit_ui`): X101 hand-built ``<table>`` over a loop,
 X102 native ``<select dj-change>`` over a long or generated option list,
-X103 hand-built overlay, X104 class-switched status message, X105 app stylesheet
-colours outside theme tokens. They scan LiveView templates (and the templates
-they extend or include) and the stylesheets those link; all are warnings and
-each names the djust component tag to use.
+X103 hand-built overlay, X104 class-switched status message, X105 colour literals
+(hex, colour functions, named colours) outside theme tokens, X106 literal
+``font-family`` stacks outside theme font tokens. X105 and X106 read the
+stylesheets a LiveView template links and the ``style="..."`` attributes of the
+templates themselves. They scan LiveView templates (and the templates they
+extend or include) and the stylesheets those link; all are warnings and
+each names the djust component tag or theme token to use.
 
 Suppression: add ``# djust: noqa XNNN`` on the offending line (or bare
 ``# djust: noqa`` to suppress any djust.X finding on that line).
 Templates use ``{# djust: noqa X101 #}``; stylesheets use
-``/* djust: noqa X105 */``.
+``/* djust: noqa X105 */`` (``X106`` likewise).
 
 Integration: ``djust_audit --ast`` turns the scanner on; findings share
 the same ``--strict`` exit-code semantics as ``--permissions`` and
@@ -99,6 +102,10 @@ AST_FINDING_CODES: Dict[str, Tuple[str, str]] = {
     "X105": (
         "warning",
         "App stylesheet sets colors outside djust theme tokens — use theme tokens or a preset",
+    ),
+    "X106": (
+        "warning",
+        "Literal font-family outside djust theme font tokens — use var(--font-sans) or var(--font-mono)",
     ),
 }
 

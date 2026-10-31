@@ -7,7 +7,7 @@ StreamsMixin, and StreamingMixin that are used at runtime but may not be
 fully discoverable by static analysis tools.
 """
 
-from typing import Any, Callable, Dict, List, Mapping, Optional
+from typing import Any, Callable, Dict, List, Mapping, Optional, Union
 
 from django.views import View
 
@@ -54,6 +54,7 @@ class LiveView(
 
     template_name: Optional[str] = None
     template: Optional[str] = None
+    query_budget: Optional[Union[int, Dict[str, int]]] = None
     exposure_policy: str = "legacy"
     http_status_of_state: Mapping[str, int] = {}
     state_attribute: str = "state"

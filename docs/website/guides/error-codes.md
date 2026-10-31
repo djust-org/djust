@@ -1977,7 +1977,7 @@ not silence I002.
 **Why:** Tables, selects, overlays, and status feedback may have reusable
 component replacements. It fires even with `djust.components` installed and
 enabled; installation advice is conditional on availability/enabling.
-X105 alone does not trigger it. Missing, invalid, and stale caches are silent.
+X105 and X106 alone do not trigger it. Missing, invalid, and stale caches are silent.
 Cache lookup tries resolved `settings.BASE_DIR`, then cwd, and stops at the
 first non-missing state; see [reader limits and staleness](djust-audit.md#ui-summary-cache).
 The check reads the cache and stats covered files; it does not rescan sources.
@@ -2032,6 +2032,26 @@ These scan LiveView templates. All are Warnings, so a false positive never fails
 **What causes it**: '<file>:<line> -- positive tabindex="N" overrides natural focus order (WCAG 2.4.3).'
 
 **Fix**: Use `tabindex="0"` to add an element to the natural order, or `tabindex="-1"` to make it focusable only programmatically.
+
+---
+
+### Y005: Chart or svg with no accessible name
+
+**Severity**: Warning
+
+**What causes it**: '<file>:<line> -- role="img" has no accessible name (WCAG 1.1.1).' or '... -- <svg> has no accessible name (WCAG 1.1.1).' An element with `role="img"`, or an inline `<svg>`, has no non-blank `aria-label`, `aria-labelledby` or `title`, and an `<svg>` has no `<title>` child. `aria-hidden="true"` graphics, an `<svg>` inside a `<button>` or `<a href>`, and a nested `<svg>` are not flagged.
+
+**Fix**: Add `aria-label="..."` (or `aria-labelledby`, or a `<title>` in an `<svg>`), or mark a purely decorative graphic `aria-hidden="true"`. An empty `aria-label=""` is not a name.
+
+---
+
+### Y006: Legend item told apart by colour alone
+
+**Severity**: Warning
+
+**What causes it**: '<file>:<line> -- legend item has no text, so its series is told apart by colour alone (WCAG 1.4.1).' An `<li>` inside an element whose `class` has a `legend` token (`legend`, `chart-legend`, `legend__list`) has no text, no `{{ }}`/`{% %}`, no `<img>` with a non-empty `alt`, and no `aria-label`, `aria-labelledby` or `title`.
+
+**Fix**: Put the series name in the `<li>` as text (it may be visually hidden), or add an `aria-label` to the item.
 
 ---
 
@@ -2784,7 +2804,7 @@ WARN [djust.X007] /path/templates/emails/body.html:3:0 Template uses {% autoesca
 
 ## AST UI Rules (X1xx)
 
-`manage.py djust_audit --ast` includes X101–X105 by default. All five are
+`manage.py djust_audit --ast` includes X101–X106 by default. All six are
 warnings and fail CI under `--strict`. They scan the live template closure
 and its linked application stylesheets; see the [audit guide](djust-audit.md#ui-rules-x1xx)
 for discovery limits and the [summary cache](djust-audit.md#ui-summary-cache).
@@ -2793,13 +2813,13 @@ Use `--ast-no-ui` to opt out, or fix or suppress individual findings.
 The examples below assume a LiveView template. Load `djust_components` for
 component tags. Template suppressions belong on the same line as the opening
 HTML tag reported by the finding, for example `{# djust: noqa X101 #}`.
-CSS suppressions use `/* djust: noqa X105 */` on the declaration's starting
-line. Bare `{# djust: noqa #}` or `/* djust: noqa */` suppresses all applicable
+CSS suppressions use `/* djust: noqa X105 */` (or `X106`) on the declaration's starting
+line; in a template `style` attribute, put `{# djust: noqa X105 #}` on the declaration's line. Bare `{# djust: noqa #}` or `/* djust: noqa */` suppresses all applicable
 rules on that line; a comma-separated code list suppresses selected rules.
 
 **Differences from ADR-043 wording**: Bare `.panel` is not flagged because it
 is too common as a card class. X104 matches `<p>`, `<div>`, and `<span>`.
-X105 reports one finding per stylesheet and does not detect named colors.
+X105 reports one finding per stylesheet and, unlike the ADR, also detects named colors and reads `style` attributes (see below); X106 is an addition.
 
 ### X101: Hand-built `<table>` renders a loop — use the data_table component
 
@@ -2982,18 +3002,24 @@ opening line.
 **Severity**: Warning
 
 **What causes it**: A stylesheet linked from the live template closure
-through a literal `static` reference contains hex colors or color functions
-(`rgb`, `rgba`, `hsl`, `hsla`, `hwb`, `lab`, `lch`, `oklab`, `oklch`, or
-`color`) in declarations. Recognized theme-token definitions, CSS comments,
-`var(...)` including fallbacks, and `url(...)` are ignored. Selectors and
-named colors are not checked. Only linked, eligible application CSS is scanned;
-see [scan scope](djust-audit.md#ui-rules-x1xx).
+through a literal `static` reference, or a `style="…"` attribute in a template
+of that closure, contains hex colors, color functions (`rgb`, `rgba`, `hsl`,
+`hsla`, `hwb`, `lab`, `lch`, `oklab`, `oklch`, or `color`) or CSS named colors
+(`white`, `red`, `black`, and the rest) in declarations. A named color counts
+in a property that can hold one (`color`, `background`, `border*`, `outline*`,
+`box-shadow`, `fill`, `stroke`, and similar) and as the whole value of a custom
+property. `transparent`, `currentColor` and the CSS-wide keywords are allowed.
+Recognized theme-token definitions, CSS comments, `var(...)` including
+fallbacks, and `url(...)` are ignored, and selectors are not checked. A
+`{{ … }}` value in a `style` attribute is unknown, not a literal. Only linked,
+eligible application CSS is scanned; see [scan scope](djust-audit.md#ui-rules-x1xx).
 
-**What you see**: One `WARN [djust.X105]` per stylesheet, at its first
-unsuppressed offending declaration. Details give the number of literals,
-the first declaration and up to 10 line numbers, followed by the token/preset
-suggestion. The count is of offending declarations, even if one declaration
-contains multiple colors.
+**What you see**: One `WARN [djust.X105]` per stylesheet and one per template
+that has `style` attributes, at its first unsuppressed offending declaration.
+Details give the number of literals (with "in style attributes" for a
+template), the first declaration and up to 10 line numbers, followed by the
+token/preset suggestion. The count is of offending declarations, even if one
+declaration contains multiple colors.
 
 **Example trigger** (in a linked stylesheet):
 
@@ -3018,6 +3044,45 @@ a suppressed line can cover multiple declarations:
 ```css
 .brand-mark { color: #123456; } /* djust: noqa X105 */
 ```
+
+In a template, put `{# djust: noqa X105 #}` on the line of the declaration.
+
+---
+
+### X106: Literal font-family outside djust theme font tokens — use var(--font-sans) or var(--font-mono)
+
+**Severity**: Warning
+
+**What causes it**: A stylesheet linked from the live template closure, or a
+`style="…"` attribute in a template of that closure, sets `font-family` to
+anything other than a `var(--font-*)` theme token, or sets a `font` shorthand
+that names a family. A stack written out in CSS is repeated across the app, and
+a theme change does not reach it. `inherit`, `initial`, `unset` and `revert`
+are allowed, and so is everything inside `@font-face` and
+`@font-palette-values`, where `font-family` names the face being defined. A
+generic family after a theme token (`var(--font-sans), sans-serif`) is its
+fallback and is allowed; a named family after it is not. In a `font` shorthand any `var()` is accepted,
+since it may be the size or line height.
+
+**What you see**: One `WARN [djust.X106]` per stylesheet and one per template
+with `style` attributes, at its first unsuppressed offending declaration, with
+the count, the first declaration and up to 10 line numbers.
+
+**Example trigger**:
+
+```css
+.note { font-family: "Comic Sans MS", cursive; }
+```
+
+**Fix**: Use the theme's font token:
+
+```css
+.note { font-family: var(--font-sans); }
+```
+
+**Suppression**: `/* djust: noqa X106 */` on the declaration's starting line in
+CSS, or `{# djust: noqa X106 #}` on its line in a template. `noqa X105` does not
+suppress X106, and a bare `noqa` suppresses both.
 
 ---
 

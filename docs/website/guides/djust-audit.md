@@ -29,7 +29,7 @@ It runs as a Django management command and operates in six modes:
    stable [X0xx codes](error-codes.md#ast-anti-pattern-scanner-findings-x0xx)
    and includes [X1xx UI rules](error-codes.md#ast-ui-rules-x1xx) by default.
 6. **`--a11y` mode** — scan templates for accessibility problems
-   (Y001–Y004). Every finding is a warning: the scan never fails in
+   (Y001–Y006). Every finding is a warning: the scan never fails in
    normal mode, and fails under `--strict` when any finding exists.
 
 The configuration-level static checks (A0xx codes) also run via Django's
@@ -105,13 +105,13 @@ python manage.py djust_audit --ast --ast-no-templates
 | `--header 'Name: Value'` | repeatable | Extra HTTP header for `--live` requests (e.g. staging basic auth). |
 | `--no-websocket-probe` | switch | Skip the CSWSH handshake check. |
 | `--skip-path-probes` | switch | Skip `/.git/`, `/.env`, `/__debug__/` probes (for WAF-protected environments). |
-| `--ast` | switch | Run the X001–X008 security scanner and X101–X105 UI rules. |
+| `--ast` | switch | Run the X001–X008 security scanner and X101–X106 UI rules. |
 | `--ast-path <path>` | str | Root directory for `--ast` (default: current working directory). |
 | `--ast-exclude <path> [...]` | list | Path prefixes (relative to `--ast-path`) to skip during `--ast` scanning. |
 | `--ast-no-templates` | switch | Skip `.html` templates and all UI rules in `--ast` mode (Python only); no UI cache write. |
 | `--ast-no-ui` | switch | Skip X1xx UI rules, retaining the X0xx security scan; no UI cache write. |
 | `--ast-no-ui-cache` | switch | Run the scan without writing `.djust/audit-ui.json`. |
-| `--a11y` | switch | Run the accessibility (Y001–Y004) template audit. |
+| `--a11y` | switch | Run the accessibility (Y001–Y006) template audit. |
 
 ## Modes explained
 
@@ -274,7 +274,7 @@ that catches the common mistakes, not a full data-flow analyser.
 
 #### UI rules (X1xx)
 
-`--ast` also runs five UI heuristics by default. These are suggestions to
+`--ast` also runs six UI heuristics by default. These are suggestions to
 reuse components and theme tokens; every X1xx finding is a **warning**.
 See [AST UI Rules](error-codes.md#ast-ui-rules-x1xx) for triggers, fixes and
 same-line suppression examples.
@@ -285,7 +285,8 @@ same-line suppression examples.
 | X102 | A `<select dj-change>` with generated options or more than 10 `<option>` elements. | `combobox` or `rich_select` with `searchable=True`. |
 | X103 | An overlay class such as `modal`, `drawer`, or `sheet`, or an inline fixed-position full-screen overlay / full-height drawer with overlay markers (see [X103](error-codes.md#x103-hand-built-overlay-panel--use-the-sheet-or-modal-component)). | `sheet` for side panels, `modal` for dialogs. |
 | X104 | A `<p>`, `<div>`, or `<span>` with template-switched classes and message-like expressions. | `server_toast_container`, `toast_container`, or `page_alert`. |
-| X105 | Literal hex or color-function values in linked application CSS declarations outside recognized theme-token definitions. | Theme tokens such as `hsl(var(--foreground))` and `hsl(var(--card))`, or a theme preset. |
+| X105 | Literal hex, color-function or named-color values (`white`, `red`) in linked application CSS declarations and in `style="…"` attributes of live templates, outside recognized theme-token definitions. | Theme tokens such as `hsl(var(--foreground))` and `hsl(var(--card))`, or a theme preset. |
+| X106 | A literal `font-family` stack, or a `font` shorthand with a family, in linked application CSS (outside `@font-face`) or in a live template's `style="…"` attribute. | A theme font token such as `var(--font-sans)` or `var(--font-mono)`. |
 
 The UI scan starts with `.html` files containing a `dj-*` attribute or
 loading `live_tags`, plus literal `template_name = "…html"` assignments in
@@ -301,16 +302,42 @@ must stay within their static directory, including through symlinks.
 Absolute paths, traversal, `.min.css`, and paths in `site-packages`,
 `dist-packages`, or `node_modules` are skipped. The scan honors
 `--ast-exclude`; UI templates and stylesheets larger than 1 MiB are skipped.
-X105 parses declarations inside blocks, so selectors such as `#abc` do not
-count as colors. It ignores CSS comments, `url(...)`, `var(...)` (including
-fallbacks), and definitions of recognized theme tokens. It emits one finding
-per stylesheet, summarizing unsuppressed literals. It does not flag named
-colors or inspect every stylesheet in the project.
+X105 and X106 parse declarations inside blocks, so selectors such as `#abc`
+or `.red` do not count. They ignore CSS comments, `url(...)`, and definitions of
+recognized theme tokens, and each emits one finding per stylesheet (or per
+template, for `style` attributes), summarizing the unsuppressed literals. They
+do not inspect every stylesheet in the project.
+
+X105 reads three kinds of literal: hex colors, color functions, and CSS named
+colors. A named color counts only in a property that can hold a color (`color`,
+`background`, `border*`, `outline*`, `box-shadow`, `fill`, `stroke`, and similar),
+or as the whole value of a custom property, so `animation-name: orange` is
+not a finding. `black` and `white` are named colors like the rest.
+`transparent`, `currentColor` and the CSS-wide keywords (`inherit`, `initial`,
+`unset`, `revert`) are allowed, and so is any literal inside a `var()` fallback.
+
+X106 flags a `font-family` that is not a `var(--font-*)` theme token, and a
+`font` shorthand that names a family. `inherit`, `initial`, `unset` and
+`revert` are allowed, and so are declarations inside `@font-face` and
+`@font-palette-values`, where the family is being defined. A generic family
+after a theme token (`var(--font-sans), sans-serif`) is its fallback and is
+allowed; a named one (`var(--font-sans), "Inter"`) is not. A project's own
+variable counts only if it is named `--font-*` (otherwise alias it or suppress). In a `font` shorthand any `var()` is accepted, since it
+may be the size or line height. X106 has its own code so it can be suppressed
+without silencing colors.
+
+Both rules also read `style="…"` attributes in the live template closure
+(not `:style`, `@style` or `x-bind:style`, which hold script expressions). A
+`{{ … }}` value is treated as unknown, never as a literal, and a `{% … %}` tag is
+skipped while its branches are still read, so
+`style="color: {% if hot %}red{% else %}blue{% endif %}"` is a finding and
+`style="color: {{ series.color }}"` is not.
 
 Suppress a template finding with `{# djust: noqa X101 #}` (substitute the
-rule code) on the same line as the offending opening HTML tag. CSS uses
-`/* djust: noqa X105 */` on the declaration's starting line. Bare `noqa`
-suppresses all applicable rules on that line.
+rule code) on the same line as the offending opening HTML tag; for X105 and
+X106 in a `style` attribute, put it on the line of the declaration. CSS uses
+`/* djust: noqa X105 */` (or `X106`) on the declaration's starting line. Bare
+`noqa` suppresses all applicable rules on that line.
 
 **CI behavior change**: existing `djust_audit --ast --strict` jobs now fail
 when X1xx warnings are found. Fix the findings or add specific `noqa`
@@ -340,7 +367,7 @@ are reported. This is an mtime check, not a content hash: newly added files
 are not discovered by the reader. Inventory reports the state and suggests
 rerunning the audit. I003 is silent for missing, invalid, or stale caches;
 a fresh cache with X101–X104 findings triggers it even when components are
-enabled. X105 alone does not trigger I003.
+enabled. X105 and X106 alone do not trigger I003.
 
 The reader accepts at most **4 MiB (4,194,304 bytes)** and **20,000 combined
 template/stylesheet records**. It validates schema version, resolved root,
@@ -354,7 +381,7 @@ The JSON schema currently has:
 
 - `version: 1`, `generator: "djust_audit --ast"`, `djust_version`,
   `generated_at` (UTC), and `root` (the resolved absolute scan root).
-- `rules` (X101–X105), `counts` (a count for each code), and `total`.
+- `rules` (X101–X106), `counts` (a count for each code), and `total`.
 - `templates`: relative POSIX paths mapped to `mtime`, `findings` (per-code
   counts), and `live` (whether the template belongs to the live closure).
   This includes scanned non-live HTML templates with `live: false`.

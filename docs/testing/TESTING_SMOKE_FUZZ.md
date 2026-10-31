@@ -23,7 +23,7 @@ This single class generates four test methods automatically:
 | Test | What it checks |
 |------|---------------|
 | `test_smoke_render` | Every view mounts and renders without exceptions |
-| `test_smoke_queries` | Every render stays within the query count threshold |
+| `test_smoke_queries` | Every view stays within its query budget (its own `query_budget`, else `max_queries`) |
 | `test_fuzz_xss` | XSS payloads don't appear unescaped in rendered HTML |
 | `test_fuzz_no_unhandled_crash` | Wrong-type params don't cause unhandled exceptions |
 
@@ -36,7 +36,8 @@ class TestAllViews(TestCase, LiveViewSmokeTest):
     # Filter to a single Django app (default: all apps)
     app_label = "crm"
 
-    # Max DB queries allowed per render (default: 50)
+    # Max DB queries allowed per view, mount + render (default: 50). A view can
+    # declare its own with `query_budget`; see below.
     max_queries = 20
 
     # Enable/disable fuzz tests (default: True)
@@ -71,7 +72,27 @@ class TestBillingViews(TestCase, LiveViewSmokeTest):
 
 ### `max_queries`
 
-The query count threshold for `test_smoke_queries`. If any view exceeds this during rendering, the test fails with details about which views and how many queries they ran. Set this to your project's acceptable limit (default: 50).
+The query count threshold for `test_smoke_queries`. If any view exceeds this during mount and render, the test fails with details about which views and how many queries they ran. Set this to your project's acceptable limit (default: 50). It is the fallback: a view's own `query_budget` and `view_config[View]["max_queries"]` take precedence (see below).
+
+### `query_budget` (on the view)
+
+A view declares its own budget so one number does not have to fit every view:
+
+```python
+from djust import LiveView
+
+
+class ProductListView(LiveView):
+    template_name = "shop/product_list.html"
+    query_budget = 3  # mount + first render, together
+
+
+class SalesReportView(LiveView):
+    template_name = "shop/sales_report.html"
+    query_budget = {"mount": 30, "render": 5}  # each phase on its own
+```
+
+Resolution, most local first: `view_config[View]["max_queries"]`, then `View.query_budget`, then `max_queries`. An int covers mount and first render together; a dict covers `"mount"` and `"render"` separately, and a phase it omits falls back to `max_queries`. Any other dict key (such as `"event"`) or a value that is not a non-negative int fails the test with a `ValueError` naming the view, since a budget the test cannot enforce would only look like protection. Failures read `shop.views.ProductListView: 5 queries (max 3, from query_budget)`. Only `LiveViewSmokeTest` reads the budget; nothing at request time enforces it.
 
 ### `fuzz`
 
@@ -96,6 +117,7 @@ Dict mapping view classes to their mount configuration:
 
 - `mount_params` (dict): Keyword arguments passed to `client.mount(**params)`. Use this for views that require URL kwargs like `object_id`.
 - `user` (User instance): Passed to `LiveViewTestClient(view, user=user)`. Use this for views with `login_required = True`.
+- `max_queries` (int): The query budget for this view in this test class, ahead of the view's `query_budget` and the class `max_queries`.
 
 ## What Gets Tested
 
@@ -125,7 +147,7 @@ AssertionError: Smoke render failed for 2/15 views:
 
 ### Smoke Queries
 
-Same as smoke render, but with Django's query logging enabled. After each render, the number of database queries is counted and compared against `max_queries`. Catches N+1 query issues early.
+Same as smoke render, but with Django's query logging enabled. Each view's mount and first render are counted and compared against that view's budget (`view_config` `max_queries`, else the view's `query_budget`, else `max_queries`). Catches N+1 query issues early.
 
 ### Fuzz XSS
 
@@ -254,7 +276,7 @@ If a view intentionally renders raw HTML (e.g., a WYSIWYG editor preview), exclu
 
 ### Query count too strict
 
-Start with a high `max_queries` (e.g., 100) and lower it as you optimize. The default of 50 is a reasonable starting point for most views.
+Start with a high `max_queries` (e.g., 100) and lower it as you optimize. The default of 50 is a reasonable starting point for most views. Once a view is tuned, give it its own `query_budget` so a regression in it is caught at its real number, not the app-wide one.
 
 ## Related
 

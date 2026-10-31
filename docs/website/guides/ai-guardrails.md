@@ -295,7 +295,7 @@ System check identified 6 issues (0 silenced).
 | Dump permissions | `python manage.py djust_audit --dump-permissions` | A starter `permissions.yaml` written from the code. A view with no auth is written as public with a `TODO` note to confirm. |
 | Live | `python manage.py djust_audit --live https://staging.example.com` | A probe of a running deployment: response headers, cookie attributes, paths that should not be served, and whether the WebSocket accepts a cross-origin handshake, as `L0xx` findings. The WebSocket probe needs the `websockets` package and is skipped without it. |
 | AST | `python manage.py djust_audit --ast` | A scan of Python source and templates for a small set of patterns, as `X0xx` findings. |
-| Accessibility | `python manage.py djust_audit --a11y` | Template accessibility findings `Y001` to `Y004`. They are warnings, and the scan fails only under `--strict`. |
+| Accessibility | `python manage.py djust_audit --a11y` | Template accessibility findings `Y001` to `Y006`. They are warnings, and the scan fails only under `--strict`. |
 
 On the example view the default mode prints:
 
