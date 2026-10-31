@@ -47,8 +47,12 @@ class FakeRateLimitClock:
     ``advance`` drives the refill path explicitly.
     """
 
-    def __init__(self, start: float = 1000.0) -> None:
-        self.now = float(start)
+    def __init__(self, start: "float | None" = None) -> None:
+        # From the real clock, so a bucket stamped before the patch sees ~0 elapsed
+        # rather than a large negative one.
+        import time
+
+        self.now = float(time.monotonic() if start is None else start)
 
     def __call__(self) -> float:
         return self.now

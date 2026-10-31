@@ -40,8 +40,8 @@ def _communicator_timeout_defaults():
 
     Derived from the Channels classes, not listed by hand: the list that was
     written by hand (#3464) named ``disconnect`` / ``receive_output`` /
-    ``receive_from`` / ``receive_json_from`` and left out ``connect``, whose
-    default is a 1 s wait for the consumer's ``accept``. A loaded runner timed
+    ``receive_from`` / ``receive_json_from`` and left out ``connect``, ``wait`` and
+    ``get_response`` (seven waits in all). ``connect``'s default is a 1 s wait for the consumer's ``accept``. A loaded runner timed
     that out in ``test_anonymous_ws_mount_is_refused`` (#3692). A method a
     Channels release adds is covered the day it appears.
     """
@@ -132,7 +132,11 @@ def pytest_collection_finish(session):
     permanent generation, which no later collection visits. Measured on the same
     run, median 0.10 s, max 1.05 s (one pause over 1 s). What
     tests create afterwards is still collected normally; only what was
-    already alive when collection ended is exempt, and it was never garbage.
+    already alive when collection ended is exempt: live at that point,
+    though a frozen cycle that dies later is never collected, and
+    ``gc.get_referrers`` does not list a frozen object as a referrer (the one
+    negative assertion built on it, ``test_bridged_context_memo_2914``, builds its
+    objects inside the test).
     ``python/djust/tests/test_gc_frozen_after_collection_3692.py`` pins it.
     """
     import gc
