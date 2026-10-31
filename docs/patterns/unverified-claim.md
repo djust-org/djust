@@ -29,6 +29,9 @@ cause a *code* defect rather than a documentation one.
 | #3472 | first PR body said the new gates were "not PR gating"; the JavaScript job's lint step does run on PRs | review caught it before merge; body and fragment corrected | yes, fired |
 | #3473 | the issue asserted "no test assertion is involved" and a lost runner, from a `gh run view --log` copy truncated at ~8,000 of 24,882 lines; the real cause was a Python 3.14 test failure exposing GHSA-4h5m-xcmg-vvmw | raw job log via the API; CLAUDE.md rule (v1.3.0-11/12 arc) | yes, missed |
 | #3474 | the implementer's CodeQL report called #3004 a false positive by citing a different file, and #3042 a false positive when CodeQL was right | reviewer re-verified every dismissal against the source before filing it | yes, fired |
+| #3692 | the issue's title and body said CI shards "ended silently"; the full logs showed real failures (read through a truncated view) | issue corrected, premise named in the retro | yes, missed |
+| #3704 | the renderer "reads HTML comments and script bodies as text" was written into code, three tests, docs and a changelog; the lexer is HTML-blind (`crates/djust_templates/src/lexer.rs:404-407`). Round 2: docs said "False positives: None known" | fresh-context review; a differential test against `djust._rust.render_template` | yes, fired |
+| #3708 | first PR body carried a placeholder count and pointed at comments that did not exist yet | reviewer caught it before merge | yes, fired |
 
 ## Detection
 

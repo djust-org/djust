@@ -21,6 +21,8 @@ structural gate for one specific twin · **candidate for mechanical gate**: yes
 | #2825 | V008's escape hatch walked `tree.body` only, so class methods were never collected | collect methods; the check's documented remedy now works | yes, missed |
 | #2833 | T018 skipped `{% extends %}` templates in the system-check path while `djust_typecheck` covered them — the skip was invisible | emit an Info message so a "passed" run is falsifiable | yes, fired |
 | #2129, #2135, #1468, #1200 | the "tautology" family: tests that pass while the bug executes | gate-off discipline (revert the fix; confirm red) | yes, fired |
+| #3694 | the offloaded push turn built its frame outside the slot stand-in's `send_json`, so a push to a side-mounted view lost `target_id` | stamp `target_id` where the frame text is built | yes, missed |
+| #3703 | `handle_params` had three call sites (HTTP, WS/SSE mount, `url_change`) | one helper, pinned by an AST scan of every framework module | yes, fired |
 
 ## Detection
 

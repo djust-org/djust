@@ -383,7 +383,7 @@ issue or be explicitly closed with a reason.
 | 341 | No gate ties a completed ROADMAP bucket to a RETRO.md entry — 14 buckets drifted; #2140 was a previous backfill of the same kind | Retro backfill v1.1.0-9..v1.2.0-5 | #2848 | Open | Suggested `scripts/check-retro-coverage.py`: parse ✅ milestone headings in ROADMAP.md, fail when RETRO.md has no entry |
 | 342 | False/stale claims in changelog fragments and PR bodies are unchecked — five instances across v1.2.0-1..3, one of which caused a regression (#2838) | Retro backfill v1.1.0-9..v1.2.0-5 | #2849 | Open | Extend the existing path/class reference checks (cf. #2652) to `changelog.d/*.md`; share `check-changelog-test-counts`' parser rather than adding a third |
 | 343 | **Rule row** — enumerate every caller of a shared cache/registry/dispatch and the invariant each needs before the first edit (v1.2.0-6 retro arc, rule 1) | Retro v1.2.0-6 | — | Closed | pattern: fix-reproduces-own-bug  fired: —  re-violated: — (rule created at v1.2.0-6; origin instances #2147, #2146, #2838 r1-r3, #2846 are recorded on the page, not counted as re-violations since the rule did not exist for them) **gate v1.3.0-11: DEMOTE** (no instance in v1.3.0-10, -11, -12); rule line removed from CLAUDE.md, page `docs/patterns/fix-reproduces-own-bug.md` is `wiki-only`. |
-| 344 | **Rule row** — verify a claim against the source before writing it, and cite path:line; delete a claim that cannot be checked (v1.2.0-6 retro arc, rule 2) | Retro v1.2.0-6 | — | Open | pattern: unverified-claim  fired: #3463, #3472, #3474  re-violated: #3473 (rule created at v1.2.0-6; the ten origin instances — #2838, #2546, #2534, #2554, #2573, #2607, #2843, #2147 — predate it) **gate v1.3.0-11/12: KEEP** (fired 2, missed 1). |
+| 344 | **Rule row** — verify a claim against the source before writing it, and cite path:line; delete a claim that cannot be checked (v1.2.0-6 retro arc, rule 2) | Retro v1.2.0-6 | — | Open | pattern: unverified-claim  fired: #3463, #3472, #3474, #3704, #3708  re-violated: #3473, #3692 (issue) (rule created at v1.2.0-6; the ten origin instances — #2838, #2546, #2534, #2554, #2573, #2607, #2843, #2147 — predate it) **gate v1.3.0-11/12: KEEP** (fired 2, missed 1). **gate v1.3.0-15: KEEP** (fired 2, missed 1, flat; three author-side violations, see #3713). |
 | 345 | **Rule row** — a Code Review stage is not complete until the review is POSTED to the PR, and a bucket until `RETRO.md` has its entry (v1.2.0-6 retro arc, rule 3) | Retro v1.2.0-6 | #2848 | Open | pattern: retro-dropout  fired: #3483 (check-retro-coverage caught the missing v1.3.0-4 entry)  re-violated: #3474 (rule created at v1.2.0-6; #2837/#2838 merged with no review artifact and 14 buckets drifted before it. Mechanical half now exists: `scripts/check-retro-coverage.py`) **gate v1.3.0-11/12: KEEP** (#3474's review findings were posted only inside its retro comment, not as a review; one miss). |
 | 346 | Python and Rust root locators disagree when a quoted attribute value contains `<… dj-root>` | PR #3023 | #3030 | Open | pattern: parallel-path-drift. Needs author markup or `\|safe`, so not reachable from autoescaped content |
 | 347 | dj-root vs dj-view root precedence: Python searches dj-root first, the Rust VDOM takes the first element | PR #3023 | #3031 | Open | pattern: parallel-path-drift. Predates #3023; T005 warns about the split layout |
@@ -412,6 +412,17 @@ issue or be explicitly closed with a reason.
 | 370 | WebSocket test teardown/receives use channels' 1 s default timeout (453 bare `.disconnect()` calls) and flake under machine load; give test communicators a generous default plus a gate against bare ones | Retro v1.3.0-10 / PR #3463 review | #3464 | Closed | #3463 fixed only the two files named in #3456/#3451 Closed by #3474: a session-scoped autouse fixture in the root `conftest.py` raises the four channels communicator defaults to 30 s. |
 | 371 | Windows `djust ai inventory` hand-off: compare the discovered `manage.py`'s owner SID and DACL with the current user (the #3454 marker rule is a heuristic) | Retro v1.3.0-10 / PR #3463 review | #3462 | Closed | Needs a native Windows CI job to test Closed by #3474: `python/djust/_windows_acl.py` checks the owner (TokenUser or TokenOwner) and the DACL; the `windows-ai-inventory` CI job runs the real API path. |
 | 372 | A release run blocked by the pre-release audit raises no alert: v1.2.4 sat unpublished ~4 days; v1.3.0rc9 and v1.2.5 were caught only because the runs were being watched | Retro v1.3.0-11 (PR #3471) / v1.3.0-12 | #3482 | Open | |
+| 373 | Sweep the 16 remaining absolute wall-clock bounds on compute or waits (the #3710 class) and add a ratchet that counts `perf_counter() - … < N` assertions | Retro v1.3.0-15 / PR #3712 | #3711 | Open | main run 41245126443 failed on one (`test_the_walk_is_linear_on_tag_soup`, 1.23 s against a 1.0 s bound; fixed in #3712) |
+| 374 | 475 explicit short `timeout=` calls on communicator `receive_*` still override the 30 s default | PR #3708 | #3709 | Open | Waits, not compute bounds; the sweep in #3711 covers the other half |
+| 375 | Optional mechanical gate for `unverified-claim`: lint the PR body for placeholders and unresolved `#N` / comment references; record the truncated-log instrument on the page | Retro v1.3.0-15 | #3713 | Open | pattern: unverified-claim. Row 344's gate came out KEEP; this is the cheaper hardening if it is wanted |
+| 376 | A shared `scripts/gate_off.py` (assert applied, count errors, deadline as caught, restore by hash) so each PR stops rewriting its own | Retro v1.3.0-15 / PR #3702 | #3714 | Open | All five agent PRs of the milestone wrote a throwaway harness |
+| 377 | Print each xdist worker's worst gen-2 GC pause and longest loop stall at session end so the next timing flake is attributable | PR #3708 | #3715 | Open | #3708's cause is measured locally on 3.12 only; CI logs carry no GC data |
+| 378 | `TtydTerminalView`: `?rows=` / `?cols=` raise `ValueError` on non-integers and accept unbounded sizes | PR #3698 | #3699 | Open | Outside the v1.3.0-15 rows; needs a call |
+| 379 | `djust_audit --a11y`: a rendered-page pass (axe-core) for contrast, landmarks, heading order and names that exist only after render | PR #3702 | #3700 | Open | |
+| 380 | Query budgets beyond the smoke test: measure mount, render and event at run time; list budgets in `djust_audit` | PR #3702 | #3701 | Open | |
+| 381 | Finish the doc-snippet network guard and the per-match line-count idiom elsewhere; `_strip_verbatim_blocks` divergences and its quadratic unterminated opener | PR #3704 | #3705 | Open | |
+| 382 | `http_status_of_state` config-level map, `params_form` misconfiguration checks, test client | PR #3703 | #3706 | Open | |
+| 383 | Component-tag parity between the Django and Rust renderings: 117 of 208 tags differ; six issues need one canonical implementation chosen before code | Retro v1.3.0-15 | #3663 | Open | pattern: parallel-path-drift. Also #3666, #3667, #3669, #3676 (P1, parameter injection), #3677. Waiting on a decision, not started |
 
 ## Retro backfill — 14 un-retro'd drain buckets (v1.1.0-9 … v1.2.0-5)
 
@@ -1277,6 +1288,83 @@ The first implementation required the file owner to be the current user's SID. O
 ### Open Items
 
 - none. Rows 370 and 371 are closed by #3474.
+
+## v1.3.0-15 — security review leftovers, audit and view DX, and the CI flakes (PRs #3694–#3698, #3702–#3704, #3708, #3712)
+
+**Date**: 2026-10-31
+**Scope**: The drain bucket added by #3697 (14 rows). Eight shipped; six stayed open on purpose.
+- **Security:** #3698 restricts `TtydTerminalView`'s `?url=` to an allowed `ws`/`wss` origin (#3679); #3696 locks pyasn1 to 0.6.5.
+- **Audit and test DX:** #3702 adds `Y005`/`Y006`, `X106`, a wider `X105` and a per-view `query_budget` (#3685–#3687).
+- **View API:** #3703 adds page HTTP status from state and declared URL params via `params_form` (#3688, #3689).
+- **Leftovers and flakes:** #3704 closes the #3691 checklist; #3694, #3695 and #3708 fix the #3692/#3707 flakes (one framework bug, one test-isolation leak, four test-side races); #3712 fixes a fifth that appeared after the bucket was "done" (#3710).
+- **Not started:** the six component-tag parity issues (#3663, #3666, #3667, #3669, #3676, #3677), which need one canonical implementation chosen first.
+
+**Tests at close**: `Tests` on `main` at `9fdb7c0a6` (the #3708 merge) was **red**: one wall-clock test failed (#3710). The fix is PR #3712, open at the time of writing. The runs for the four earlier merges were green.
+
+### What We Learned
+
+**1. A "flaky shard" was five defects, and the bucket's flake row closed one run before the sixth.**
+#3692 hid a real framework bug (#3694: the offloaded push frame skipped the slot stand-in, so `target_id` was lost), a test-isolation leak (#3695: a copy-on-write `config` swap stranded `worker_threads` on an xdist worker), four test-side races (#3708), and, after the row was closed on four clean local runs, a fifth timing test (#3712). Four clean local runs on a quiet machine did not exercise the failure, which needs a runner stall. The class (an absolute wall-clock bound on compute or a wait) was fixed instance by instance; 16 more sites of the same shape remain.
+
+**Action taken**: Open — tracked in Action Tracker #373 (GitHub #3711) and #374 (GitHub #3709).
+
+**2. A diagnostic read through a truncated view looked like a silent crash, again.**
+`gh run view --log-failed` for main's failed shard ended at 66% with no pytest summary, which read as a runner kill, the same premise I had put in #3692's title earlier in the drain. The full job log (`gh api … /actions/jobs/<id>/logs`) held the summary: `1 failed, 12942 passed`. Row 344's page already records #3473 for the same instrument.
+
+**Action taken**: Open — tracked in Action Tracker #375 (GitHub #3713), which also records the full-log command on the page.
+
+**3. A claim about what the renderer does was written into code, tests, docs and a changelog without opening the lexer (#3704).**
+The author adopted the issue's premise ("T027 should read comments as documentation"), and the fresh-context review disproved it in one command against `crates/djust_templates/src/lexer.rs:404-407`. The fix added a differential test against `djust._rust.render_template`, which is what makes the claim checkable. Round 2 then found the docs said "False positives: None known" while the check had real, rare divergences. Reviewers caught both. The author-side violation count was three in this milestone (#3692 issue, #3704, #3708's first PR body).
+
+**Action taken**: Closed — the differential test is `test_the_check_flags_exactly_the_tags_the_renderer_warns_about` (#3704, merged `d302f3133`); gate decision KEEP, optional hardening filed as #3713 (Action Tracker #375).
+
+**4. The fix for a review finding created the next finding (#3703).**
+Review round 2 found `initial` was not applied to an absent `BooleanField`; the fix judged "supplied" by the field's own key, which review round 3 found wrong for multi-key widgets (`SplitDateTimeField`, `SelectDateWidget`). A survey of widget families before the first fix would have found both. The rule that covers it (`fix-reproduces-own-bug`) was demoted at v1.3.0-11/12; this is its first instance since.
+
+**Action taken**: Closed — recorded on `docs/patterns/fix-reproduces-own-bug.md`; the third defect was fixed in #3703 (`897d7a119`) with a test per widget family. If it recurs next milestone the page's `wiki-only` status should be reconsidered.
+
+**5. Parallel paths: one was a real defect, one was the structural cure.**
+#3694 is a parallel-path bug in framework code (the broadcast-render path built its frame outside the stand-in that stamps `target_id`). #3703 applied the cure the other way: `handle_params` had three call sites, and all now go through one helper, pinned by an AST scan of every framework module.
+
+**Action taken**: Closed — both recorded on `docs/patterns/parallel-path-drift.md` (#3694 missed, #3703 fired). The component-tag parity rows (Action Tracker #383) are the same class at 117 of 208 tags.
+
+### Insights
+
+- Every agent PR wrote its own gate-off harness and each re-learned the same rules (Action Tracker #376). The harnesses did their job: #3698's first run had three survivors, and diagnosing why (a refusal and a silent normalisation read the same on the default view) found a real gap (DEL, 0x7f).
+- Timing evidence: #3708 measured gen-2 GC pauses up to 3.38 s on Python 3.12 locally and added `gc.freeze()` at the end of collection. That is a measured sufficient cause, not a witnessed one; no CI log carries GC data (Action Tracker #377).
+- #3702 posted another agent's scratch file as a PR comment because `cat >` failed under `noclobber` while `gh pr comment --body-file` still ran; deleted within minutes. Chain `&&` between writing and posting, or check the file's first line.
+- #3694–#3697 were my own PRs and carried no retro; backfilled as comments at this retro.
+- Auto-fix could not be enabled on #3712 (the app allows it only for a PR it is sure the session opened); its CI was read by hand.
+
+### Review Stats
+
+| Metric | #3698 | #3702 | #3703 | #3704 | #3708 | Total |
+|--------|-------|-------|-------|-------|-------|-------|
+| Review rounds (review + re-review) | 2 | 2 | 3 | 2 | 2 | 11 |
+| 🔴 Findings | 0 | 0 | 0 | 1 | 0 | 1 |
+| Findings the retro lists | 1 | 4 | 3 | 4 | 4 | 16 |
+| CI failures on the PR | 0 | 1 (wall-clock `style-attrs` test) | 1 (fragment path) | 1 (unrelated flake, #3707) | 0 | 3 |
+| Findings by pattern class | one-off×1 | one-off×4 | `fix-reproduces-own-bug`×1, one-off×2 | `unverified-claim`×2, one-off×2 | one-off×4 | |
+
+The per-PR reviews do not tag severities uniformly, so the middle rows count what each PR's retro and review comments list; only #3704 used 🔴/🟡 markers. "One-off" means no recurrence is shown, so no pattern page was created.
+
+### Process Improvements Applied
+
+**CLAUDE.md**: none.
+**Pipeline template**: none.
+**Checklist**: none.
+**Skills**: none. The gate-off helper (#3714) and the PR-body lint (#3713) are proposals, not changes.
+
+### Open Items
+
+- [ ] Wall-clock sweep and ratchet — Action Tracker #373 (GitHub #3711)
+- [ ] 475 short communicator timeouts — Action Tracker #374 (GitHub #3709)
+- [ ] PR-body lint for `unverified-claim` — Action Tracker #375 (GitHub #3713)
+- [ ] Shared gate-off helper — Action Tracker #376 (GitHub #3714)
+- [ ] GC pause attribution — Action Tracker #377 (GitHub #3715)
+- [ ] Follow-ups #3699, #3700, #3701, #3705, #3706 — Action Tracker #378–#382
+- [ ] Component-tag parity decision — Action Tracker #383 (GitHub #3663)
+- [ ] #3712 (the #3710 fix) merged
 
 ## v1.3.0-9 — test git-env isolation (#3179)
 
