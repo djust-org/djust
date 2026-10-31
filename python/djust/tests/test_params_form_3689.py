@@ -238,6 +238,34 @@ class ExplodingView(LiveView):
         CALLS.append((dict(params), uri))
 
 
+class FlagParams(forms.Form):
+    closed = forms.BooleanField(required=False, initial=True)
+    n = forms.IntegerField(required=False, initial=5)
+
+
+class FlagView(LiveView):
+    login_required = False
+    params_form = FlagParams
+    template = "<div dj-root>{{ closed }}|{{ n }}</div>"
+
+    def mount(self, request, **kwargs):
+        self.closed = None
+        self.n = None
+
+    def handle_params(self, params, uri):
+        CALLS.append((dict(params), uri))
+        self.closed = params["closed"]
+        self.n = params["n"]
+
+
+class AsyncSuperView(AsyncListView):
+    """A sync override calls ``super()`` WITHOUT ``return`` over an ``async def handle_params``."""
+
+    def handle_invalid_params(self, form, uri):
+        INVALID_CALLS.append((form, uri))
+        super().handle_invalid_params(form, uri)
+
+
 class BrokenDeclaration(LiveView):
     login_required = False
     params_form = "not a form class"
@@ -276,6 +304,8 @@ _VIEWS = (
     RequiredView,
     GroupView,
     ExplodingView,
+    FlagView,
+    AsyncSuperView,
 )
 for _cls in _VIEWS:
     setattr(sys.modules[__name__], _cls.__name__, _cls)
@@ -293,6 +323,8 @@ urlpatterns = [
     path("required/", RequiredView.as_view()),
     path("group/", GroupView.as_view()),
     path("exploding/", ExplodingView.as_view()),
+    path("flags/", FlagView.as_view()),
+    path("asyncsuper/", AsyncSuperView.as_view()),
 ]
 
 
@@ -409,6 +441,33 @@ class TestValidInput:
         assert CALLS[0][0]["tag"] == ["a"]
 
 
+class TestInitialFillsWhatTheUrlLeftOut:
+    """The contract is "a field the URL left empty takes its initial value", for every field type."""
+
+    def test_an_absent_boolean_takes_its_initial_value(self):
+        """``BooleanField`` cleans an absent key to ``False``: that is not "empty" to Django."""
+        Client().get("/flags/")
+        assert CALLS == [({"closed": True, "n": 5}, "/flags/")]
+
+    def test_an_empty_boolean_takes_its_initial_value(self):
+        Client().get("/flags/?closed=")
+        assert CALLS[0][0]["closed"] is True
+
+    @pytest.mark.parametrize("value", ["false", "False"])
+    def test_a_boolean_the_url_supplies_is_kept(self, value):
+        Client().get("/flags/?closed=%s&n=7" % value)
+        assert CALLS[0][0] == {"closed": False, "n": 7}
+
+    def test_a_valid_url_and_the_invalid_fallback_agree_on_an_absent_field(self):
+        Client().get("/flags/")
+        valid = CALLS[0][0]["closed"]
+        form = FlagParams(data={"n": "abc"})
+        form.is_valid()
+        from djust._params_form import initial_values
+
+        assert initial_values(form)["closed"] is valid is True
+
+
 class TestInvalidInput:
     @pytest.mark.parametrize(
         "query, message",
@@ -504,6 +563,20 @@ class TestDeclarationAndExposure:
         assert response.status_code == 200
         assert _state(response.content) == "all/1"
         assert 'class="err">PAGE:' in response.content.decode()
+
+    def test_a_sync_override_that_calls_super_without_return_still_runs_an_async_handle_params(
+        self,
+    ):
+        """The documented ``super().handle_invalid_params(form, uri)`` pattern, no ``return``."""
+        response = Client().get("/asyncsuper/?page=abc")
+        assert response.status_code == 200
+        assert CALLS == [({"category": "all", "page": 1}, "/asyncsuper/?page=abc")]
+        assert len(INVALID_CALLS) == 1
+
+    def test_an_over_long_integer_binds_as_absent_instead_of_raising(self):
+        from djust._params_form import _bindable
+
+        assert dict(_bindable({"page": 10**5000, "ok": 1}).lists()) == {"ok": ["1"]}
 
     def test_an_explicit_exposure_view_cleans_its_params_too(self):
         response = Client().get("/explicit/?page=2&category=books")
@@ -773,28 +846,69 @@ class TestErrorsAreEscaped:
 # --------------------------------------------------------------------------- #
 
 
+def _direct_hook_references(source: str) -> list:
+    """``(line, kind)`` for each way a module names ``handle_params`` on some object."""
+    import ast
+
+    found = []
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Attribute) and node.attr == "handle_params":
+            found.append((node.lineno, "attribute"))
+        elif (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id in {"getattr", "hasattr"}
+            and len(node.args) >= 2
+            and isinstance(node.args[1], ast.Constant)
+            and node.args[1].value == "handle_params"
+        ):
+            found.append((node.lineno, node.func.id))
+    return found
+
+
 class TestNoPathCallsHandleParamsDirectly:
     """A pin on the CALLER SET (#1125): a new path must go through the helper.
 
-    A direct ``handle_params(`` call would skip the form on that transport, and
+    A direct ``handle_params`` call would skip the form on that transport, and
     only that transport, which is the parallel-path drift (#1646) this feature
-    exists to avoid.
+    exists to avoid. The scan is over the AST of every framework module, so a
+    renamed receiver (``target_view.handle_params``) or a
+    ``getattr(view, "handle_params")`` is found as well as ``view.handle_params``.
     """
 
-    def test_only_the_shared_resolver_names_the_hook(self):
+    #: The helper itself, and the default ``handle_invalid_params`` that hands
+    #: ``handle_params`` the initial values.
+    ALLOWED = {"_params_form.py", "mixins/navigation.py"}
+
+    def test_only_the_shared_helper_names_the_hook(self):
         import pathlib
 
         import djust
 
         root = pathlib.Path(djust.__file__).parent
-        direct = re.compile(
-            r"(?<![\w.])(?:view(?:_instance)?|self\.view_instance|self)\.handle_params\b"
-        )
         offenders = []
-        for rel in ("runtime.py", "websocket.py", "mixins/request.py", "_child_lifecycle.py"):
-            for number, line in enumerate((root / rel).read_text().splitlines(), 1):
-                if line.lstrip().startswith("#"):
-                    continue
-                if direct.search(line):
-                    offenders.append("%s:%d: %s" % (rel, number, line.strip()))
+        scanned = 0
+        for module in sorted(root.rglob("*.py")):
+            rel = module.relative_to(root).as_posix()
+            if rel.startswith("tests/") or "/tests/" in rel or rel in self.ALLOWED:
+                continue
+            scanned += 1
+            for line, kind in _direct_hook_references(module.read_text()):
+                offenders.append("%s:%d %s" % (rel, line, kind))
+        assert scanned > 100, "the scan found no framework modules"
         assert offenders == [], offenders
+
+    def test_the_scan_flags_each_shape_a_new_path_could_use(self):
+        """Not vacuous: renamed receivers and the getattr/hasattr forms are all found."""
+        source = (
+            "async def f(target_view, other):\n"
+            "    await call_hook(target_view.handle_params, {}, '')\n"
+            "    hook = getattr(other, 'handle_params')\n"
+            "    return hasattr(other, 'handle_params')\n"
+        )
+        assert sorted(_direct_hook_references(source)) == [
+            (2, "attribute"),
+            (3, "getattr"),
+            (4, "hasattr"),
+        ]
+        assert _direct_hook_references("def f(view):\n    return view.handle_other\n") == []

@@ -195,7 +195,7 @@ def _as_caller(user_id):
   | `step` | Runs |
   |---|---|
   | `"event"` | an event handler; also a time-travel replay of one |
-  | `"mount"`, `"handle_params"` | `mount()`, `handle_params()` |
+  | `"mount"`, `"handle_params"` | `mount()`, `handle_params()`. A view that sets `params_form` enters `"handle_params"` twice for a URL: once to validate it (the form's validators and querysets run there), once for `handle_params()` or `handle_invalid_params()` |
   | `"hook"` | another sync view hook: a push handler (in the stock turn and in the worker-pool one-hop turn), `handle_info`, `handle_cursor_move()`, `update_presence_heartbeat()`, and the `get_presence_key()` / `untrack_presence()` reads |
   | `"async"` | a `start_async` / `@background` callback **and** the `handle_async_result` call that receives its outcome (two separate entries) |
   | `"tick"` | `handle_tick()` |

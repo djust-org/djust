@@ -207,10 +207,14 @@ class NavigationMixin:
 
         or to answer 400 and keep the page (set a flag here and return 400 from
         ``get_http_status()``). Call ``super().handle_invalid_params(form, uri)``
-        to keep the default as well. Over a WebSocket or SSE mount, an exception
+        to keep the default as well (a sync override only: an ``async def``
+        override calls its own ``handle_params`` instead). Over a WebSocket or SSE mount, an exception
         raised here fails the mount like one from ``handle_params``; a ``Http404``
         is a Django 404 only on the HTTP render.
         """
         from .._params_form import initial_values
+        from .._view_hooks import call_hook_sync
 
-        return self.handle_params(initial_values(form), uri)  # type: ignore[func-returns-value]  # an async handle_params returns its coroutine; the hook runner awaits it
+        # Run to completion here, so an override that calls ``super()`` without
+        # ``return`` (or an ``async def handle_params``) cannot drop the call.
+        call_hook_sync(self.handle_params, initial_values(form), uri)

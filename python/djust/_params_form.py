@@ -74,14 +74,22 @@ def _bindable(params: Any) -> QueryDict:
         if not isinstance(key, str):
             continue
         values = value if isinstance(value, (list, tuple)) else [value]
-        scalars = [
-            item if isinstance(item, str) else str(item)
-            for item in values
-            if isinstance(item, (str, int, float))
-        ]
+        scalars = [text for text in map(_scalar_text, values) if text is not None]
         if scalars:
             data.setlist(key, scalars)
     return data
+
+
+def _scalar_text(item: Any) -> Optional[str]:
+    """``item`` as the string a query string would carry, or ``None`` if it is not a scalar."""
+    if isinstance(item, str):
+        return item
+    if isinstance(item, (int, float)):
+        try:
+            return str(item)
+        except ValueError:  # an int over Python's digit limit
+            return None
+    return None
 
 
 def initial_values(form: forms.BaseForm) -> Dict[str, Any]:
@@ -90,12 +98,21 @@ def initial_values(form: forms.BaseForm) -> Dict[str, Any]:
 
 
 def _cleaned_values(form: forms.BaseForm) -> Dict[str, Any]:
+    """The cleaned data, with each field the URL left out or empty set to its ``initial``.
+
+    "Left out" is read from what the URL supplied, not from what the field cleaned
+    to: a ``BooleanField`` cleans an absent key to ``False``, which Django does not
+    count as empty, so judging by the cleaned value would leave ``initial=True``
+    unapplied exactly where a URL has no way to say "unchecked".
+    """
     values: Dict[str, Any] = dict(form.cleaned_data)
     for name, field in form.fields.items():
-        if values.get(name) in field.empty_values:
-            initial = form.get_initial_for_field(field, name)
-            if initial is not None:
-                values[name] = initial
+        supplied = any(text != "" for text in form.data.getlist(form.add_prefix(name)))
+        if supplied and values.get(name) not in field.empty_values:
+            continue
+        initial = form.get_initial_for_field(field, name)
+        if initial is not None:
+            values[name] = initial
     return values
 
 

@@ -107,7 +107,7 @@ that reads typed or restricted values should declare them with
 Set `params_form` to a Django form and djust binds the URL's query parameters to
 it and cleans them before `handle_params()` runs. `params` is then the form's
 `cleaned_data`: `page` is an `int`, `category` one of the declared choices, and a
-field the URL left empty takes its `initial` value.
+field the URL left out or empty (a `BooleanField` too) takes its `initial` value.
 
 ```python
 from django import forms
