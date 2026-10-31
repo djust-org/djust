@@ -8,7 +8,7 @@ import logging
 import socket
 import threading
 from functools import wraps
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Set, cast
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Set, Union, cast
 
 if TYPE_CHECKING:
     from .auth.any_of import PermissionRequired
@@ -155,6 +155,7 @@ _FRAMEWORK_INTERNAL_ATTRS: frozenset = frozenset(
         "static_assigns",
         "static_assigns_count",
         "static_render",
+        "query_budget",
         "template",
         "template_name",
         "base_template",
@@ -718,6 +719,15 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
     # sends the whole page instead of patches. See the Best Practices guide,
     # "Large LiveView state".
     static_render: bool = False
+
+    # Per-view query budget for ``LiveViewSmokeTest`` (#3686). ``None`` (the
+    # default) leaves the view on the smoke test's class-wide ``max_queries``.
+    # An int caps mount + first render combined; a dict caps the two phases
+    # on their own: ``{"mount": 2, "render": 1}``. A budget the smoke test
+    # cannot enforce (any other key, a bool, a negative number) is reported
+    # as an error rather than ignored. Tests read it; nothing at request time
+    # does. ``view_config[View]["max_queries"]`` overrides it per test class.
+    query_budget: Optional[Union[int, Dict[str, int]]] = None
 
     # Authentication & authorization
     login_required: Optional[bool] = None  # True = must be authenticated

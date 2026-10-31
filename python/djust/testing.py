@@ -1845,14 +1845,21 @@ class LiveViewSmokeTest:
             # Optional: skip views that need special setup
             skip_views = []
 
-            # Optional: provide mount params or user per view
+            # Optional: provide mount params, user or a query budget per view
             view_config = {
-                # DealDetailView: {"mount_params": {"object_id": 1}, "user": staff_user},
+                # DealDetailView: {"mount_params": {"object_id": 1}, "user": staff_user,
+                #                  "max_queries": 8},
             }
+
+    A view can also declare its own budget next to the code that spends it
+    (``query_budget = 3`` on the view, or ``{"mount": 2, "render": 1}``); see
+    :attr:`djust.LiveView.query_budget`.
 
     What it tests:
         - test_smoke_render: Each view mounts and renders without exceptions
-        - test_smoke_queries: Each render stays within max_queries
+        - test_smoke_queries: Each view stays within its query budget:
+          ``view_config[View]["max_queries"]``, else ``View.query_budget``,
+          else the class-wide ``max_queries``
         - test_fuzz_xss: XSS payloads don't appear unescaped in output
         - test_fuzz_no_unhandled_crash: Fuzz payloads don't escape send_event()
         - test_fuzz_handlers_succeed: Handlers handle all fuzz input gracefully (no exceptions)
@@ -1907,8 +1914,49 @@ class LiveViewSmokeTest:
                 + "\n".join(f"  - {e}" for e in errors)
             )
 
+    def _resolve_query_budget(self, view_class: Type[Any]) -> Dict[str, Tuple[int, str]]:
+        """Return the query budget for *view_class* as ``{phase: (limit, source)}``.
+
+        Most local wins: ``view_config[View]["max_queries"]``, then the
+        view's own ``query_budget``, then the class-wide ``max_queries``.
+        The phase is ``"total"`` (mount + first render, an int budget) or
+        ``"mount"`` / ``"render"`` (a dict budget, each phase measured on
+        its own; a phase the dict leaves out falls back to ``max_queries``).
+        A budget the smoke test cannot enforce raises ``ValueError``: an
+        unenforced budget would read as protection and give none.
+        """
+
+        def valid(value: Any, label: str) -> int:
+            # bool is an int subclass: ``query_budget = True`` is a mistake, not 1.
+            if type(value) is not int or value < 0:
+                raise ValueError(f"{label} must be a non-negative int, got {value!r}")
+            return value
+
+        config = self.view_config.get(view_class, {})
+        if "max_queries" in config:
+            return {"total": (valid(config["max_queries"], "max_queries"), "view_config")}
+        budget = getattr(view_class, "query_budget", None)
+        if budget is None:
+            return {"total": (valid(self.max_queries, "max_queries"), "")}
+        if isinstance(budget, dict):
+            unsupported = sorted(set(budget) - {"mount", "render"}, key=repr)
+            if unsupported:
+                raise ValueError(
+                    f"query_budget key {unsupported[0]!r} is not supported: the smoke test "
+                    "measures only 'mount' and 'render'. Use an int, or a dict with those keys."
+                )
+            return {
+                phase: (
+                    (valid(budget[phase], f"query_budget[{phase!r}]"), f"query_budget[{phase!r}]")
+                    if phase in budget
+                    else (valid(self.max_queries, "max_queries"), "max_queries")
+                )
+                for phase in ("mount", "render")
+            }
+        return {"total": (valid(budget, "query_budget"), "query_budget")}
+
     def test_smoke_queries(self) -> None:
-        """Every discovered view renders within the query count threshold."""
+        """Every discovered view mounts and renders within its query budget."""
         from django.conf import settings
         from django.db import connection, reset_queries
 
@@ -1919,16 +1967,29 @@ class LiveViewSmokeTest:
             name = f"{view_class.__module__}.{view_class.__name__}"
             old_debug = settings.DEBUG
             try:
+                budget = self._resolve_query_budget(view_class)
                 settings.DEBUG = True
                 reset_queries()
 
                 client = self._make_client(view_class)
+                mount_count = len(connection.queries)
+                reset_queries()
                 client.render()
+                render_count = len(connection.queries)
 
-                query_count = len(connection.queries)
-
-                if query_count > self.max_queries:
-                    errors.append(f"{name}: {query_count} queries (max {self.max_queries})")
+                if "total" in budget:
+                    limit, source = budget["total"]
+                    total = mount_count + render_count
+                    if total > limit:
+                        origin = f", from {source}" if source else ""
+                        errors.append(f"{name}: {total} queries (max {limit}{origin})")
+                else:
+                    for phase, count in (("mount", mount_count), ("render", render_count)):
+                        limit, source = budget[phase]
+                        if count > limit:
+                            errors.append(
+                                f"{name}: {phase} ran {count} queries (max {limit}, from {source})"
+                            )
             except Exception as e:
                 errors.append(f"{name}: {type(e).__name__}: {e}")
             finally:

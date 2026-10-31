@@ -20,7 +20,7 @@ from typing import Any, Dict, Iterator, List, Mapping, Optional, Sequence, Set, 
 from djust.ai_discovery.inventory import UISummaryState
 from djust.audit_ast import ASTAuditReport, ASTFinding, _comment_suppressed, _template_suppressed
 
-X1XX_CODES = ("X101", "X102", "X103", "X104", "X105")
+X1XX_CODES = ("X101", "X102", "X103", "X104", "X105", "X106")
 X102_OPTION_THRESHOLD = 10
 _MAX_UI_FILE_BYTES = 1_048_576
 UI_SUMMARY_RELPATH = os.path.join(".djust", "audit-ui.json")
@@ -48,6 +48,10 @@ _X104_DETAILS = (
 _X105_DETAILS = (
     "use theme tokens such as color: hsl(var(--foreground)); background: hsl(var(--card)), "
     'and choose a preset with LIVEVIEW_CONFIG["theme"]["preset"]'
+)
+_X106_DETAILS = (
+    "use a theme font token such as font-family: var(--font-sans) or var(--font-mono), "
+    "so a theme change reaches this text"
 )
 
 _LIVE_MARKER_RE = re.compile(
@@ -100,6 +104,55 @@ _STATIC_LINK_RE = re.compile(
 _CSS_DECL_RE = re.compile(r"\s*+(--[\w-]++|[a-zA-Z-]++)\s*+:\s*+([^;{}]++)")
 _COLOR_HEX_RE = re.compile(r"#(?:[0-9a-fA-F]{8}|[0-9a-fA-F]{6}|[0-9a-fA-F]{3,4})\b")
 _COLOR_FUNC_RE = re.compile(r"\b(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch|color)\(([^()]*)\)", re.I)
+# CSS named colours (CSS Color Module 4). ``transparent`` and ``currentColor``
+# are deliberately absent: like the CSS-wide keywords they pick no palette.
+_CSS_NAMED_COLORS = frozenset(
+    """aliceblue antiquewhite aqua aquamarine azure beige bisque black blanchedalmond blue
+    blueviolet brown burlywood cadetblue chartreuse chocolate coral cornflowerblue cornsilk
+    crimson cyan darkblue darkcyan darkgoldenrod darkgray darkgreen darkgrey darkkhaki
+    darkmagenta darkolivegreen darkorange darkorchid darkred darksalmon darkseagreen
+    darkslateblue darkslategray darkslategrey darkturquoise darkviolet deeppink deepskyblue
+    dimgray dimgrey dodgerblue firebrick floralwhite forestgreen fuchsia gainsboro ghostwhite
+    gold goldenrod gray green greenyellow grey honeydew hotpink indianred indigo ivory khaki
+    lavender lavenderblush lawngreen lemonchiffon lightblue lightcoral lightcyan
+    lightgoldenrodyellow lightgray lightgreen lightgrey lightpink lightsalmon lightseagreen
+    lightskyblue lightslategray lightslategrey lightsteelblue lightyellow lime limegreen linen
+    magenta maroon mediumaquamarine mediumblue mediumorchid mediumpurple mediumseagreen
+    mediumslateblue mediumspringgreen mediumturquoise mediumvioletred midnightblue mintcream
+    mistyrose moccasin navajowhite navy oldlace olive olivedrab orange orangered orchid
+    palegoldenrod palegreen paleturquoise palevioletred papayawhip peachpuff peru pink plum
+    powderblue purple rebeccapurple red rosybrown royalblue saddlebrown salmon sandybrown
+    seagreen seashell sienna silver skyblue slateblue slategray slategrey snow springgreen
+    steelblue tan teal thistle tomato turquoise violet wheat white whitesmoke yellow
+    yellowgreen""".split()
+)
+# A named colour counts only in a property that can hold a colour: ``orange`` in
+# ``animation-name`` or ``tan`` in ``grid-area`` is not a palette choice.
+_COLOR_PROPERTY_RE = re.compile(
+    r"colou?r|background|border|outline|shadow|fill|stroke|text-decoration|column-rule|mask"
+    r"|filter|^stop-|scrollbar|gradient"
+)
+# A whole identifier: not part of a longer one (`red-hat`, `x-red`), not a unit
+# or number tail (`10red`), not a hex run (`#red`), not a function name (`tan(`).
+_CSS_IDENT_RE = re.compile(r"(?<![\w.#-])[a-zA-Z][\w-]*(?![\w(-])")
+_CSS_WIDE_KEYWORDS = frozenset({"inherit", "initial", "unset", "revert", "revert-layer"})
+_FONT_SYSTEM_KEYWORDS = frozenset(
+    {"caption", "icon", "menu", "message-box", "small-caption", "status-bar"}
+)
+# Words in a ``font`` shorthand that are style / weight / stretch / size, not a family.
+_FONT_SHORTHAND_WORDS = frozenset(
+    {
+        "normal", "italic", "oblique", "small-caps", "bold", "bolder", "lighter",
+        "ultra-condensed", "extra-condensed", "condensed", "semi-condensed",
+        "semi-expanded", "expanded", "extra-expanded", "ultra-expanded",
+        "xx-small", "x-small", "small", "medium", "large", "x-large", "xx-large",
+        "xxx-large", "larger", "smaller", "math", "important",
+    }
+)  # fmt: skip
+_FONT_VAR_RE = re.compile(r"var\(\s*--font-", re.I)
+# Stands in for a {{ }} expression in a style attribute: unknown, so never a literal.
+_TEMPLATE_VALUE = "var(--font-djust-template)"
+_STYLE_ATTR_RE = re.compile(r"""(?<![\w-])style\s*=\s*(?:"([^"]*)"|'([^']*)')""", re.I)
 _DERIVED_TEXT_TOKENS = {
     "primary-text",
     "destructive-text",
@@ -486,28 +539,35 @@ def _theme_token_names() -> Set[str]:
     )
 
 
-def _css_declarations(source: str) -> Iterator[Tuple[int, str, str, str]]:
-    """Match declarations only in blocks, never selector preludes."""
+def _css_declarations(source: str) -> Iterator[Tuple[int, str, str, str, bool]]:
+    """Match declarations only in blocks, never selector preludes.
+
+    Yields ``(offset, property, value, declaration, in_font_face)``; the last
+    is True inside an ``@font-face`` block, where ``font-family`` names the face
+    being defined rather than choosing one.
+    """
     start = 0
-    depth = 0
+    stack: List[bool] = []
     for delimiter in re.finditer(r"[{};]", source):
         char = delimiter.group()
-        if char != "{" and depth:
+        if char != "{" and stack:
             segment = source[start : delimiter.start()]
             match = _CSS_DECL_RE.fullmatch(segment)
             if match:
                 offset = start + len(segment) - len(segment.lstrip())
-                yield offset, *match.groups(), segment.strip()
+                yield offset, *match.groups(), segment.strip(), stack[-1]
         if char == "{":
-            depth += 1
-        elif char == "}":
-            depth = max(0, depth - 1)
+            prelude = source[start : delimiter.start()].lstrip()[:10].lower()
+            stack.append(bool(stack and stack[-1]) or prelude.startswith("@font-face"))
+        elif char == "}" and stack:
+            stack.pop()
         start = delimiter.end()
 
 
-def _normalise_css_value(value: str) -> str:
+def _normalise_css_value(value: str, var_only: Optional[re.Pattern] = None) -> str:
     # Drop entire var/url subtrees, including arbitrarily nested fallbacks,
-    # without repeatedly substituting innermost parentheses.
+    # without repeatedly substituting innermost parentheses. With *var_only*,
+    # only a var() it matches is dropped; any other var() stays in the text.
     parts = []
     cursor = 0
     depth = 0
@@ -517,6 +577,8 @@ def _normalise_css_value(value: str) -> str:
             depth += -1 if token == ")" else 1
             if depth == 0:
                 cursor = match.end()
+        elif token == "var(" and var_only is not None and not var_only.match(value, match.start()):
+            continue
         elif token in {"var(", "url("}:
             parts.append(value[cursor : match.start()])
             parts.append("__TOKEN__" if token == "var(" else "")
@@ -530,37 +592,138 @@ def _safe_declaration(decl: str) -> str:
     return re.sub(r"[\x00-\x1f\x7f-\x9f]", "?", decl[:120])
 
 
-def _scan_stylesheet(path: str, source: str) -> List[ASTFinding]:
-    masked = _mask_css_comments(source)
-    lines = source.splitlines()
-    starts = _line_starts(masked)
-    suppressed = {
-        i + 1 for i, line in enumerate(lines) if _comment_suppressed(line, "X105", "/*", "*/")
-    }
-    offenders: List[Tuple[int, str]] = []
-    for offset, prop, value, declaration in _css_declarations(masked):
-        if prop.startswith("--") and prop[2:] in _theme_token_names():
-            continue
-        value = _normalise_css_value(value)
-        if not (
-            _COLOR_HEX_RE.search(value)
-            or any("__TOKEN__" not in m.group(1) for m in _COLOR_FUNC_RE.finditer(value))
-        ):
-            continue
-        lineno, _ = _line_col(starts, offset)
-        if lineno not in suppressed:
-            offenders.append((lineno, _safe_declaration(declaration)))
-    if not offenders:
-        return []
-    lineno, decl = offenders[0]
-    line_list = ", ".join(str(n) for n, _ in offenders[:10])
-    if len(offenders) > 10:
-        line_list += ", …"
-    details = (
-        f"{len(offenders)} color literal(s), first `{decl}` at line {lineno} (lines {line_list}); "
-        + _X105_DETAILS
+def _is_color_literal(prop: str, value: str) -> bool:
+    """True if a declaration sets a colour literal (X105)."""
+    if prop.startswith("--") and prop[2:] in _theme_token_names():
+        return False
+    value = _normalise_css_value(value)
+    if _COLOR_HEX_RE.search(value) or any(
+        "__TOKEN__" not in m.group(1) for m in _COLOR_FUNC_RE.finditer(value)
+    ):
+        return True
+    if prop.startswith("--"):
+        # An arbitrary custom property can hold anything: only a value that is
+        # a single colour name is read as a colour.
+        words = [w.lower() for w in _CSS_IDENT_RE.findall(value)]
+        return len(words) == 1 and words[0] in _CSS_NAMED_COLORS and value.strip() == words[0]
+    if not _COLOR_PROPERTY_RE.search(prop.lower()):
+        return False
+    return any(word.lower() in _CSS_NAMED_COLORS for word in _CSS_IDENT_RE.findall(value))
+
+
+def _is_font_literal(prop: str, value: str, in_font_face: bool) -> bool:
+    """True if a declaration writes a font family out as a literal (X106)."""
+    prop = prop.lower()
+    if in_font_face or prop not in {"font-family", "font"}:
+        return False
+    # font-family needs a theme font token (var(--font-*)); the font shorthand
+    # also carries size and line-height, so any var() may be one of those.
+    text = _normalise_css_value(value, _FONT_VAR_RE if prop == "font-family" else None)
+    text = text.replace("__TOKEN__", " ").replace("!important", " ").strip().lower()
+    if not text or text in _CSS_WIDE_KEYWORDS:
+        return False
+    if prop == "font-family":
+        return True
+    if text in _FONT_SYSTEM_KEYWORDS or text in _CSS_WIDE_KEYWORDS:
+        return False
+    return (
+        '"' in text
+        or "'" in text
+        or any(word not in _FONT_SHORTHAND_WORDS for word in _CSS_IDENT_RE.findall(text))
     )
-    return [ASTFinding.make("X105", path, lineno, details=details)]
+
+
+def _scan_declarations(
+    source: str, suppressed: Mapping[str, Set[int]], first_line: int = 1
+) -> Tuple[List[Tuple[int, str]], List[Tuple[int, str]]]:
+    """Return the X105 and X106 offenders ``(line, declaration)`` of CSS *source*.
+
+    *first_line* is the line number of the source's first line; *suppressed*
+    maps each code to the lines that carry a ``noqa`` for it.
+    """
+    masked = _mask_css_comments(source) if "/*" in source else source
+    starts = _line_starts(masked)
+    colors: List[Tuple[int, str]] = []
+    fonts: List[Tuple[int, str]] = []
+    for offset, prop, value, declaration, in_font_face in _css_declarations(masked):
+        color = _is_color_literal(prop, value)
+        font = _is_font_literal(prop, value, in_font_face)
+        if not (color or font):
+            continue
+        lineno = _line_col(starts, offset)[0] + first_line - 1
+        if color and lineno not in suppressed["X105"]:
+            colors.append((lineno, _safe_declaration(declaration)))
+        if font and lineno not in suppressed["X106"]:
+            fonts.append((lineno, _safe_declaration(declaration)))
+    return colors, fonts
+
+
+def _offender_findings(
+    path: str,
+    colors: Sequence[Tuple[int, str]],
+    fonts: Sequence[Tuple[int, str]],
+    where: str = "",
+) -> List[ASTFinding]:
+    """One X105 and one X106 finding per file, summarising its offenders."""
+    findings = []
+    for code, noun, advice, offenders in (
+        ("X105", "color", _X105_DETAILS, colors),
+        ("X106", "font-family", _X106_DETAILS, fonts),
+    ):
+        if not offenders:
+            continue
+        lineno, decl = offenders[0]
+        line_list = ", ".join(str(n) for n, _ in offenders[:10])
+        if len(offenders) > 10:
+            line_list += ", …"
+        details = (
+            f"{len(offenders)} {noun} literal(s){where}, first `{decl}` at line {lineno} "
+            f"(lines {line_list}); " + advice
+        )
+        findings.append(ASTFinding.make(code, path, lineno, details=details))
+    return findings
+
+
+def _scan_stylesheet(path: str, source: str) -> List[ASTFinding]:
+    suppressed = {
+        code: {
+            i + 1
+            for i, line in enumerate(source.splitlines())
+            if _comment_suppressed(line, code, "/*", "*/")
+        }
+        for code in ("X105", "X106")
+    }
+    colors, fonts = _scan_declarations(source, suppressed)
+    return _offender_findings(path, colors, fonts)
+
+
+def _style_attribute_offenders(
+    attrs: str, tag_line: int, suppressed: Mapping[str, Set[int]]
+) -> Tuple[List[Tuple[int, str]], List[Tuple[int, str]]]:
+    """X105 / X106 offenders of the ``style="..."`` attribute in a tag's *attrs*."""
+    colors: List[Tuple[int, str]] = []
+    fonts: List[Tuple[int, str]] = []
+    for match in _STYLE_ATTR_RE.finditer(attrs):
+        value = match.group(1) if match.group(1) is not None else match.group(2)
+        # {% %} directives are control flow (their branches are still read);
+        # a {{ }} value is unknown. Newlines are kept so lines stay right.
+        if "{" in value:
+            value = re.sub(
+                r"\{%[^%]*+%\}", lambda m: " " + "\n" * m.group().count("\n"), value, flags=re.S
+            )
+            value = re.sub(
+                r"\{\{[^{}]*+\}\}",
+                lambda m: _TEMPLATE_VALUE + "\n" * m.group().count("\n"),
+                value,
+                flags=re.S,
+            )
+        line = tag_line + attrs.count("\n", 0, match.start())
+        # Wrapped in a block so the declaration scanner reads it as a rule body.
+        c, f = _scan_declarations("{" + value + "}", suppressed, line)
+        # Show the expression the author wrote, not the stand-in for it.
+        colors += [(n, d.replace(_TEMPLATE_VALUE, "{{ … }}")) for n, d in c]
+        fonts += [(n, d.replace(_TEMPLATE_VALUE, "{{ … }}")) for n, d in f]
+    return colors, fonts
 
 
 def scan_ui(
@@ -608,9 +771,25 @@ def scan_ui(
         }
         tags = list(_iter_open_tags(source))
         overlay_contexts = _overlay_contexts(source, tags)
+        style_colors: List[Tuple[int, str]] = []
+        style_fonts: List[Tuple[int, str]] = []
+        style_suppressed: Optional[Dict[str, Set[int]]] = None
         for offset, tag, attrs in tags:
             end = _region(closings, tag, offset, len(source))
             lineno, col = _line_col(starts, offset)
+            if _STYLE_ATTR_RE.search(attrs):
+                if style_suppressed is None:
+                    style_suppressed = {
+                        code: {
+                            i + 1
+                            for i, line in enumerate(original_lines)
+                            if _template_suppressed(line, code)
+                        }
+                        for code in ("X105", "X106")
+                    }
+                c, f = _style_attribute_offenders(attrs, lineno, style_suppressed)
+                style_colors += c
+                style_fonts += f
             checks = (
                 ("X101", _check_x101(tag, bool(_in_region(rows, offset, end)))),
                 (
@@ -635,6 +814,9 @@ def scan_ui(
             for code, details in checks:
                 if details and lineno not in suppressed[code]:
                     result.findings.append(ASTFinding.make(code, path, lineno, col, details))
+        result.findings.extend(
+            _offender_findings(path, style_colors, style_fonts, " in style attributes")
+        )
     for path in sorted(_find_linked_stylesheets(sources, live, static_dirs, static_roots)):
         rel = os.path.relpath(path, os.path.realpath(root))
         if any(rel == e or rel.startswith(e + os.sep) for e in exclude):
