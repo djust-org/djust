@@ -36,6 +36,15 @@ def _python_root(html: str) -> str:
     return html[m.start() : m.end()]
 
 
+def _best_of(fn, arg, runs=3):
+    best = float("inf")
+    for _ in range(runs):
+        start = time.perf_counter()
+        fn(arg)
+        best = min(best, time.perf_counter() - start)
+    return best
+
+
 class TestQuotedValues3030:
     def test_root_markup_inside_a_quoted_value_is_not_the_root(self):
         html = '<div data-h="<section dj-root>"><main dj-root><p>r</p></main></div>'
@@ -85,6 +94,13 @@ class TestQuotedValues3030:
         ],
     )
     def test_the_walk_is_linear_on_tag_soup(self, html):
-        start = time.perf_counter()
-        _mask_for_root_search(html)
-        assert time.perf_counter() - start < 1.0
+        # Growth, not an absolute bound (#3710): a 1 s ceiling failed main's CI
+        # on a runner that stalled for ~100 s, while the corpus costs 0.01-0.03 s
+        # here. Four times the input must cost under ten times as much; linear
+        # is ~4x and quadratic ~16x. Best of three per size drops a stall that
+        # lands on one run.
+        small = _best_of(_mask_for_root_search, html)
+        large = _best_of(_mask_for_root_search, html * 4)
+        assert large < small * 10, (
+            f"4x input cost {large / small:.1f}x ({small:.4f}s -> {large:.4f}s)"
+        )
