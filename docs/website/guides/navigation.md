@@ -94,9 +94,96 @@ Callback invoked when URL params change. Override this to update view state base
 ```python
 def handle_params(self, params, uri):
     self.category = params.get("category", "all")
-    self.page = int(params.get("page", 1))
-    self.results = self.search(self.category, self.page)
+    self.results = self.search(self.category)
 ```
+
+By default `params` holds raw strings from the query string (a repeated key is a
+list). Reading one with `int(...)` raises on `?page=abc` and answers 500, so a view
+that reads typed or restricted values should declare them with
+[`params_form`](#declared-parameters-params_form).
+
+### Declared parameters: `params_form`
+
+Set `params_form` to a Django form and djust binds the URL's query parameters to
+it and cleans them before `handle_params()` runs. `params` is then the form's
+`cleaned_data`: `page` is an `int`, `category` one of the declared choices, and a
+field the URL left empty takes its `initial` value.
+
+```python
+from django import forms
+
+from djust import LiveView
+
+
+class ListParams(forms.Form):
+    category = forms.ChoiceField(
+        choices=[("all", "All"), ("books", "Books")], required=False, initial="all"
+    )
+    page = forms.IntegerField(min_value=1, required=False, initial=1)
+
+
+class ListView(LiveView):
+    template_name = "demo/list.html"
+    params_form = ListParams
+
+    def mount(self, request, **kwargs):
+        self.category = "all"
+        self.page = 1
+
+    def handle_params(self, params, uri):
+        self.category = params["category"]
+        self.page = params["page"]
+```
+
+`GET /list/?page=2` answers 200 with `page == 2`. `GET /list/?page=abc` also
+answers 200: the form rejects the value, `handle_params()` receives the declared
+initial values (`category="all"`, `page=1`) and the template gets the messages:
+
+```html
+{% if params_errors.page %}<p class="error">{{ params_errors.page.0 }}</p>{% endif %}
+```
+
+`params_errors` is a plain dict, `{field: [messages]}`, with errors that belong to
+no field under `"__all__"`. It is `{}` when the URL is valid, so a message never
+outlives the URL that caused it. (A form instance placed in a template context is
+rendered to `{field: html}`, so it has no `.errors` to read; that is why the
+messages are a separate dict.)
+
+**Invalid input.** djust calls `handle_invalid_params(form, uri)` instead of
+`handle_params()`. The default hands `handle_params()` the initial values for every
+field, so one bad value means the declared defaults and not a half-applied URL.
+Override it to refuse the URL:
+
+```python
+from django.http import Http404
+
+
+class ListView(LiveView):
+    params_form = ListParams
+
+    def handle_invalid_params(self, form, uri):
+        raise Http404("No such page.")
+```
+
+`Http404` is a Django 404 on the HTTP render; over a WebSocket or SSE mount it
+fails the mount like any exception from `handle_params()`. To answer 400 and keep
+the page, set a flag in the override (calling `super().handle_invalid_params(form,
+uri)` keeps the default) and return 400 from `get_http_status()`.
+
+**Every transport.** The same form decides on the HTTP GET, the WebSocket and SSE
+mount, `live_patch` and back/forward (`url_change`), and the HTTP fallback POST.
+The page is rendered by the same template engine as any other render; the form
+only changes what `handle_params()` receives.
+
+Things to know:
+
+- It is opt-in. A view without `params_form` keeps receiving the raw dict.
+- Only the declared fields reach `handle_params()`; any other query key is dropped.
+- The form is built with `data=` only, so it cannot take required constructor arguments.
+- A `ModelChoiceField` is fine: validation runs on a worker thread on the socket paths.
+- With `exposure_policy = "explicit"` the view declares what it renders, so declare
+  `params_errors = state(default_factory=dict)` and pass it to `get_context_data()`.
+- A `params_form` that is not a form class raises `ImproperlyConfigured`.
 
 ## Template Directives
 

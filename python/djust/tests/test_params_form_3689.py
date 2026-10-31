@@ -358,6 +358,29 @@ class TestTheDocumentedExample:
         run_handle_params_sync(view, {"page": "2", "category": "books"}, "/list/?page=2")
         assert (view.category, view.page) == ("books", 2)
 
+    def test_the_example_in_the_navigation_guide_runs_and_survives_a_bad_page(self):
+        """The guide's ``params_form`` snippet is executed, not just parsed."""
+        import pathlib
+
+        from djust._params_form import run_handle_params_sync
+
+        guide = pathlib.Path(__file__).resolve().parents[3] / "docs/website/guides/navigation.md"
+        blocks = re.findall(r"```python\n(.*?)```", guide.read_text(), re.S)
+        [snippet] = [
+            b for b in blocks if "class ListParams" in b and "params_form = ListParams" in b
+        ]
+        namespace: dict = {}
+        exec(snippet, namespace)  # noqa: S102 - the documented snippet itself
+
+        view = namespace["ListView"]()
+        view.mount(None)
+        run_handle_params_sync(view, {"page": "abc"}, "/list/?page=abc")
+        assert (view.category, view.page) == ("all", 1)
+        assert view.params_errors == {"page": ["Enter a whole number."]}
+        run_handle_params_sync(view, {"page": "2", "category": "books"}, "/list/?page=2")
+        assert (view.category, view.page) == ("books", 2)
+        assert view.params_errors == {}
+
 
 class TestValidInput:
     def test_missing_fields_take_their_initial_values(self):
@@ -688,6 +711,8 @@ class TestValidationRunsOffTheEventLoop:
         assert "none|1" in _text(frame), frame
         await communicator.disconnect()
 
+
+class TestModelChoiceFieldOverHttp:
     def test_the_http_get_resolves_the_model_choice_field_too(self):
         from django.contrib.auth.models import Group
 
