@@ -749,24 +749,45 @@ def no_network(monkeypatch):
     ``nw_path_release_globals`` -> ``os_log``) then segfaults in the forked child of
     a later ``subprocess.run`` (returncode -11) in the same pytest process.
     ``test_a_subprocess_still_forks_after_the_guard_and_an_http_block`` pins it."""
+    import errno
     import socket
 
     real_getaddrinfo = socket.getaddrinfo
+    real_gethostbyname = socket.gethostbyname
     real_connect = socket.socket.connect
+    real_connect_ex = socket.socket.connect_ex
 
     def getaddrinfo(host, *args, **kwargs):
         if host in _LOOPBACK:
             return real_getaddrinfo(host, *args, **kwargs)
         raise socket.gaierror(socket.EAI_NONAME, "Name or service not known")
 
-    def connect(self, address):
+    def gethostbyname(host):
+        # A C function: it never calls the ``getaddrinfo`` above, so it needs its own.
+        if host in _LOOPBACK:
+            return real_gethostbyname(host)
+        raise socket.gaierror(socket.EAI_NONAME, "Name or service not known")
+
+    def _may_connect(sock, address):
         host = address[0] if isinstance(address, tuple) else None
-        if self.family == socket.AF_UNIX or host in _LOOPBACK:
+        return sock.family == socket.AF_UNIX or host in _LOOPBACK
+
+    def connect(self, address):
+        if _may_connect(self, address):
             return real_connect(self, address)
         raise ConnectionRefusedError(f"doc snippets run offline: {address!r}")
 
+    def connect_ex(self, address):
+        # A C method that does not go through ``connect`` above, and resolves a name
+        # itself. It reports failure as an errno rather than raising.
+        if _may_connect(self, address):
+            return real_connect_ex(self, address)
+        return errno.ECONNREFUSED
+
     monkeypatch.setattr(socket, "getaddrinfo", getaddrinfo)
+    monkeypatch.setattr(socket, "gethostbyname", gethostbyname)
     monkeypatch.setattr(socket.socket, "connect", connect)
+    monkeypatch.setattr(socket.socket, "connect_ex", connect_ex)
 
 
 @pytest.fixture
@@ -797,6 +818,108 @@ def test_the_dns_guard_refuses_a_name_the_resolver_would_answer(answering_resolv
     # Loopback is the one thing handed through to it.
     assert socket.getaddrinfo("localhost", 80)[0][4] == ("203.0.113.7", 80)
     assert answering_resolver == ["localhost"]
+
+
+@pytest.fixture
+def answering_gethostbyname(monkeypatch):
+    """An underlying ``gethostbyname`` that answers for EVERY host (request it before
+    ``no_network``, as ``answering_resolver``)."""
+    import socket
+
+    calls = []
+
+    def answer(host):
+        calls.append(host)
+        return "203.0.113.7"
+
+    monkeypatch.setattr(socket, "gethostbyname", answer)
+    return calls
+
+
+@pytest.fixture
+def answering_connect_ex(monkeypatch):
+    """An underlying ``connect_ex`` that "connects" to EVERY address (request it before
+    ``no_network``): only the guard can refuse one."""
+    import socket
+
+    calls = []
+
+    def connect_ex(self, address):
+        calls.append(address)
+        return 0
+
+    monkeypatch.setattr(socket.socket, "connect_ex", connect_ex)
+    return calls
+
+
+def test_the_gethostbyname_guard_refuses_a_name_the_resolver_would_answer(
+    answering_gethostbyname, no_network
+):
+    """``gethostbyname`` is a C function that never calls ``getaddrinfo``, so the
+    getaddrinfo guard does not cover it (#3691)."""
+    import socket
+
+    with pytest.raises(socket.gaierror):
+        socket.gethostbyname("api.example.com")
+    with pytest.raises(socket.gaierror):
+        socket.gethostbyname("203.0.113.7")  # an address is refused too, see no_network
+    assert answering_gethostbyname == []  # neither reached the resolver
+    # Loopback is the one thing handed through to it.
+    assert socket.gethostbyname("localhost") == "203.0.113.7"
+    assert answering_gethostbyname == ["localhost"]
+
+
+def test_the_connect_ex_guard_refuses_an_address_but_not_loopback(answering_connect_ex, no_network):
+    """``connect_ex`` is a C method that does not go through ``connect`` (and resolves
+    a name itself), so the connect guard does not cover it (#3691). It reports failure
+    as an errno, as the real one does, and does not raise."""
+    import errno
+    import socket
+
+    sock = socket.socket()
+    try:
+        assert sock.connect_ex(("93.184.216.34", 80)) == errno.ECONNREFUSED
+        assert sock.connect_ex(("api.example.com", 80)) == errno.ECONNREFUSED
+        assert answering_connect_ex == []  # neither reached the network
+        assert sock.connect_ex(("127.0.0.1", 9)) == 0
+        assert sock.connect_ex(("localhost", 9)) == 0
+    finally:
+        sock.close()
+    assert answering_connect_ex == [("127.0.0.1", 9), ("localhost", 9)]
+
+
+def test_connect_ex_and_gethostbyname_still_work_for_loopback_and_unix(
+    no_network, tmp_path, monkeypatch
+):
+    """The guard must not break in-process transports (asyncio's loopback, a unix
+    socket) that use the same calls."""
+    import socket
+
+    assert socket.gethostbyname("localhost").startswith("127.")
+    listener = socket.socket()
+    try:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(1)
+        client = socket.socket()
+        try:
+            assert client.connect_ex(listener.getsockname()) == 0
+        finally:
+            client.close()
+    finally:
+        listener.close()
+    monkeypatch.chdir(tmp_path)
+    path = "s.sock"  # relative: an absolute tmp path overflows sun_path on macOS
+    server = socket.socket(socket.AF_UNIX)
+    try:
+        server.bind(path)
+        server.listen(1)
+        client = socket.socket(socket.AF_UNIX)
+        try:
+            assert client.connect_ex(path) == 0
+        finally:
+            client.close()
+    finally:
+        server.close()
 
 
 def test_the_connect_guard_refuses_an_address_but_not_loopback(no_network):

@@ -1382,7 +1382,10 @@ directories loads are compared, so a library only Django's own engine renders
 `<RustButton id="b" label="Go" />`. Message: "<file>:<line> -- JSX-style
 '<RustButton />' template tag is deprecated (removed in djust 2.0.0)." The tags
 render through a Rust component path that djust 2.0.0 removes; rendering one
-also emits a runtime `DeprecationWarning`.
+also emits a runtime `DeprecationWarning`. A tag shown inside `{% verbatim %}` or
+a `{# #}` / `{% comment %}` comment is not rendered, and is not reported. A tag
+inside an HTML comment or a `<script>` body *is* rendered, so it is reported: wrap
+a documentation example in `{% verbatim %}`.
 
 **Fix**: Render the matching `djust.components.ui` component from the view
 instead. Suppress with `DJUST_CONFIG = {"suppress_checks": ["T027"]}`.

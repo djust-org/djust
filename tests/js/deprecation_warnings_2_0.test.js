@@ -41,6 +41,31 @@ describe('dj-params', () => {
         expect(calls[0][0]).toContain('dj-params');
         expect(calls[0][0]).toContain('dj-value-');
     });
+
+    it('shows a typed example that really keeps the number a dj-params JSON blob carried', () => {
+        // dj-params carried JSON types, and a bare dj-value-* attribute is a string:
+        // the migration is only right if the example carries a type hint. Pin the
+        // hint AND that the exact example shown does what the warning says (#3691).
+        const { window, warn } = load();
+        const el = window.document.createElement('button');
+        el.setAttribute('dj-params', '{"todo_id": 4}');
+        window.djust.extractTypedParams(el);
+        const message = String(warn.mock.calls.filter(removedIn2)[0][0]);
+        expect(message).toContain(':int');
+        const example = message.match(/(dj-value-[a-z-]+:int)="\{\{ [\w.]+ \}\}"/);
+        expect(example, message).not.toBeNull();
+
+        const migrated = window.document.createElement('button');
+        migrated.setAttribute(example[1], '4');
+        const params = window.djust.extractTypedParams(migrated);
+        expect(params.todo_id).toBe(4);
+        expect(typeof params.todo_id).toBe('number');
+
+        // Without the hint the same attribute is the string "4": the reason it is shown.
+        const untyped = window.document.createElement('button');
+        untyped.setAttribute(example[1].replace(':int', ''), '4');
+        expect(window.djust.extractTypedParams(untyped).todo_id).toBe('4');
+    });
 });
 
 describe('[data-djust-root] layout marker', () => {
