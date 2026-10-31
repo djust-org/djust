@@ -468,6 +468,63 @@ class TestInitialFillsWhatTheUrlLeftOut:
         assert initial_values(form)["closed"] is valid is True
 
 
+class MultiKeyParams(forms.Form):
+    """Widgets that read several query keys (``when_0``/``when_1``, ``day_year``...)."""
+
+    import datetime as _dt
+
+    when = forms.SplitDateTimeField(required=False, initial=_dt.datetime(2000, 1, 1, 0, 0))
+    day = forms.DateField(
+        required=False,
+        initial=_dt.date(1999, 12, 31),
+        widget=forms.SelectDateWidget(years=range(1990, 2031)),
+    )
+
+
+class MultiKeyView(LiveView):
+    login_required = False
+    params_form = MultiKeyParams
+    template = "<div dj-root>{{ when }}|{{ day }}</div>"
+
+    def mount(self, request, **kwargs):
+        self.when = None
+        self.day = None
+
+    def handle_params(self, params, uri):
+        CALLS.append((dict(params), uri))
+        self.when = params["when"]
+        self.day = params["day"]
+
+
+setattr(sys.modules[__name__], "MultiKeyView", MultiKeyView)
+urlpatterns.append(path("multikey/", MultiKeyView.as_view()))
+
+
+class TestMultiKeyWidgets:
+    """A field whose widget reads several keys has none under its own name."""
+
+    def test_a_split_datetime_the_url_supplies_is_kept(self):
+        import datetime
+
+        Client().get("/multikey/?when_0=2024-05-05&when_1=10:30:00")
+        assert CALLS[0][0]["when"].replace(tzinfo=None) == datetime.datetime(2024, 5, 5, 10, 30)
+
+    def test_a_select_date_the_url_supplies_is_kept(self):
+        import datetime
+
+        Client().get("/multikey/?day_year=2024&day_month=5&day_day=6")
+        assert CALLS[0][0]["day"] == datetime.date(2024, 5, 6)
+
+    def test_an_absent_multi_key_field_takes_its_initial_value(self):
+        import datetime
+
+        Client().get("/multikey/")
+        assert CALLS[0][0] == {
+            "when": datetime.datetime(2000, 1, 1, 0, 0),
+            "day": datetime.date(1999, 12, 31),
+        }
+
+
 class TestInvalidInput:
     @pytest.mark.parametrize(
         "query, message",

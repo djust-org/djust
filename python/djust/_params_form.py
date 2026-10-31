@@ -97,18 +97,36 @@ def initial_values(form: forms.BaseForm) -> Dict[str, Any]:
     return {name: form.get_initial_for_field(field, name) for name, field in form.fields.items()}
 
 
+def _url_supplied(form: forms.BaseForm, name: str, field: forms.Field) -> bool:
+    """Whether the URL carried a value for ``field`` (an empty string is no value).
+
+    Django's own ``value_omitted_from_data`` knows which keys a widget reads, so a
+    widget with several (``SplitDateTimeField``'s ``when_0`` / ``when_1``, a
+    ``SelectDateWidget``'s year, month and day) is judged by all of them. A
+    checkbox says it is never omitted, because an unchecked HTML checkbox sends
+    nothing; a URL has no such convention, so there the key itself decides.
+    """
+    key = form.add_prefix(name)
+    if isinstance(field.widget, forms.CheckboxInput):
+        omitted = key not in form.data
+    else:
+        omitted = field.widget.value_omitted_from_data(form.data, form.files, key)
+    if omitted:
+        return False
+    return key not in form.data or any(text != "" for text in form.data.getlist(key))
+
+
 def _cleaned_values(form: forms.BaseForm) -> Dict[str, Any]:
     """The cleaned data, with each field the URL left out or empty set to its ``initial``.
 
     "Left out" is read from what the URL supplied, not from what the field cleaned
     to: a ``BooleanField`` cleans an absent key to ``False``, which Django does not
-    count as empty, so judging by the cleaned value would leave ``initial=True``
-    unapplied exactly where a URL has no way to say "unchecked".
+    count as empty, so judging by the cleaned value alone would leave
+    ``initial=True`` unapplied exactly where a URL has no way to say "unchecked".
     """
     values: Dict[str, Any] = dict(form.cleaned_data)
     for name, field in form.fields.items():
-        supplied = any(text != "" for text in form.data.getlist(form.add_prefix(name)))
-        if supplied and values.get(name) not in field.empty_values:
+        if _url_supplied(form, name, field) and values.get(name) not in field.empty_values:
             continue
         initial = form.get_initial_for_field(field, name)
         if initial is not None:
