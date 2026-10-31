@@ -6301,9 +6301,19 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             from django.conf import settings
 
             if not getattr(settings, "DEBUG", False):
+                # ``_send_frame`` is the socket's own chokepoint and does not
+                # go through a slot's ``send_json``, so the frame of a view
+                # beside the page view is addressed here (#3692); a frame
+                # without it is applied to the page's container.
+                target = getattr(self, "target_id", None)
                 await self._send_frame(
                     text_data='{"type":"patch","patches":%s,"version":%d,'
-                    '"broadcast":true,"source":"broadcast"}' % (patches, version)
+                    '"broadcast":true,"source":"broadcast"%s}'
+                    % (
+                        patches,
+                        version,
+                        ',"target_id":' + json.dumps(target) if target else "",
+                    )
                 )
                 await self._flush_all_pending()
                 return

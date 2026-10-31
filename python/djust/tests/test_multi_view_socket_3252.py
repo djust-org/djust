@@ -383,6 +383,29 @@ async def test_a_push_to_the_lazy_view_runs_on_it_and_is_addressed_to_it():
         await _close(communicator)
 
 
+async def test_a_push_to_the_lazy_view_is_addressed_to_it_with_the_worker_pool_on(monkeypatch):
+    """#3692: with ``worker_threads`` on, a push turn takes the offloaded path,
+    which splices the patch JSON into the frame by hand. That frame skipped the
+    slot's ``target_id`` stamp, so the client applied the patch to the wrong
+    container. The same assertion as the stock path's test above, pool forced on.
+    """
+    import djust.worker_pool as worker_pool
+
+    monkeypatch.setattr(worker_pool, "configured_pool_size", lambda: 2)
+    communicator = await _connect()
+    try:
+        await _mount_page(communicator)
+        await _hydrate(communicator, Lazy, "lazy-1")
+        lazy = _one(Lazy)
+
+        await apush_to_view(MOD + ".Lazy", handler="on_push")
+        frames = await _frames_until(communicator, "patch", "html_update")
+        assert EVENTS == [("pushed", lazy)]
+        assert frames[-1]["target_id"] == "lazy-1"
+    finally:
+        await _close(communicator)
+
+
 async def test_pushes_reach_each_of_several_lazy_views():
     """Issue table row 4: with two lazy views a push to the first ran on the
     second."""
