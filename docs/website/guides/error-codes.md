@@ -2049,7 +2049,7 @@ These scan LiveView templates. All are Warnings, so a false positive never fails
 
 **Severity**: Warning
 
-**What causes it**: '<file>:<line> -- legend item has no text, so its series is told apart by colour alone (WCAG 1.4.1).' An `<li>` inside an element whose `class` has a token containing `legend` has no text, no `{{ }}`/`{% %}`, and no `aria-label`, `aria-labelledby` or `title`.
+**What causes it**: '<file>:<line> -- legend item has no text, so its series is told apart by colour alone (WCAG 1.4.1).' An `<li>` inside an element whose `class` has a token containing `legend` has no text, no `{{ }}`/`{% %}`, no `<img>` with a non-empty `alt`, and no `aria-label`, `aria-labelledby` or `title`.
 
 **Fix**: Put the series name in the `<li>` as text (it may be visually hidden), or add an `aria-label` to the item.
 
@@ -3058,8 +3058,10 @@ In a template, put `{# djust: noqa X105 #}` on the line of the declaration.
 anything other than a `var(--font-*)` theme token, or sets a `font` shorthand
 that names a family. A stack written out in CSS is repeated across the app, and
 a theme change does not reach it. `inherit`, `initial`, `unset` and `revert`
-are allowed, and so is everything inside `@font-face`, where `font-family`
-names the face being defined. In a `font` shorthand any `var()` is accepted,
+are allowed, and so is everything inside `@font-face` and
+`@font-palette-values`, where `font-family` names the face being defined. A
+generic family after a theme token (`var(--font-sans), sans-serif`) is its
+fallback and is allowed; a named family after it is not. In a `font` shorthand any `var()` is accepted,
 since it may be the size or line height.
 
 **What you see**: One `WARN [djust.X106]` per stylesheet and one per template

@@ -226,8 +226,9 @@ These are not flagged: `aria-hidden="true"`; `role="presentation"` or
 control owns the name, and Y001 covers a control that has none); an `<svg>`
 nested in another `<svg>` (only the outer graphic is judged); a hidden sprite
 sheet (`display:none`, `hidden`, `width="0"`, or `<symbol>` children); an
-opening tag with `{{ }}` or `{% %}` in it, which may inject the name; an
-`<img>` (Y002 covers it); and anything inside `<script>` or `<style>`. An empty
+opening tag with `{{ }}` or `{% %}` between its attributes (for example `{{ attrs }}`), which may inject the name — a `{{ }}` inside a quoted value such as
+`class="bars {{ cls }}"` cannot, so that chart is still flagged; an
+`<img>` (Y002 covers it); and anything inside `<script>`, `<style>` or an HTML comment. Unquoted values (`aria-hidden=true`) are read. An empty
 `aria-label=""` is not a name, unlike for Y001.
 
 This rule can only see markup in templates. Contrast (WCAG 1.4.3, 1.4.11),
@@ -240,8 +241,8 @@ heading order and names that exist only after render need a rendered page; the
 
 Flags a list item inside a legend that has no text and no name, so the series it
 stands for can be told apart only by colour (WCAG 1.4.1, Level A). A legend is an
-element whose `class` has a token containing `legend` (`legend`, `chart-legend`,
-`legend__list`). The form `<legend>` element is not a chart legend.
+element whose `class` has a token that is `legend` or has it as a `-`/`_` separated part (`legend`, `chart-legend`,
+`legend__list`; not `legendary`). The form `<legend>` element is not a chart legend.
 
 ```html
 <!-- Flagged by Y006 — two series, two swatches, no words -->
@@ -258,8 +259,8 @@ element whose `class` has a token containing `legend` (`legend`, `chart-legend`,
 ```
 
 An item is not flagged if it has any text, a `{{ }}` or `{% %}` that may render
-text, or an `aria-label`, `aria-labelledby` or `title` on it or on something
-inside it. Only `<li>` items inside a legend are checked; a legend built from
+text, an `aria-label`, `aria-labelledby` or `title` on it or on something
+inside it, or an `<img>` with a non-empty `alt`. Only `<li>` items inside a legend are checked; a legend built from
 `<span>` or `<div>` items is not.
 
 All six checks emit a `DjustWarning` (not an error) with the file path and line

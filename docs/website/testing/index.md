@@ -188,7 +188,8 @@ set:
 3. the test class's `max_queries`.
 
 An int counts mount and first render together. A dict counts `"mount"` and
-`"render"` separately, and a phase it leaves out falls back to `max_queries`.
+`"render"` separately, and a phase it leaves out falls back to `max_queries` on its own, so a dict
+that names one phase can spend up to `max_queries` on the other.
 The smoke test measures only those two phases, so any other key (`"event"`,
 a typo) and any value that is not a non-negative int (a `bool` included) fails
 the test with a `ValueError` naming the view, instead of being ignored. A view

@@ -318,12 +318,16 @@ not a finding. `black` and `white` are named colors like the rest.
 
 X106 flags a `font-family` that is not a `var(--font-*)` theme token, and a
 `font` shorthand that names a family. `inherit`, `initial`, `unset` and
-`revert` are allowed, and so are declarations inside `@font-face`, where the
-family is being defined. In a `font` shorthand any `var()` is accepted, since it
+`revert` are allowed, and so are declarations inside `@font-face` and
+`@font-palette-values`, where the family is being defined. A generic family
+after a theme token (`var(--font-sans), sans-serif`) is its fallback and is
+allowed; a named one (`var(--font-sans), "Inter"`) is not. A project's own
+variable counts only if it is named `--font-*` (otherwise alias it or suppress). In a `font` shorthand any `var()` is accepted, since it
 may be the size or line height. X106 has its own code so it can be suppressed
 without silencing colors.
 
-Both rules also read `style="…"` attributes in the live template closure. A
+Both rules also read `style="…"` attributes in the live template closure
+(not `:style`, `@style` or `x-bind:style`, which hold script expressions). A
 `{{ … }}` value is treated as unknown, never as a literal, and a `{% … %}` tag is
 skipped while its branches are still read, so
 `style="color: {% if hot %}red{% else %}blue{% endif %}"` is a finding and
