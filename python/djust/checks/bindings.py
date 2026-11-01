@@ -31,7 +31,7 @@ from typing import Any, Optional
 
 from django.core.checks import CheckMessage, Info, register
 
-from djust.checks.utils import DjustWarning, _is_check_suppressed
+from djust.checks.utils import DjustWarning, LineCounter, _is_check_suppressed
 
 BINDING_IDS = ("T019", "T020", "T021", "T022")
 _ABSENT = object()
@@ -997,8 +997,9 @@ def _floor_messages(reports: list[OwnerReport]) -> list[CheckMessage]:
     messages: list[CheckMessage] = []
     for file, first_line, source in sources:
         scan = _blank_template_comments(_strip_verbatim_blocks(source))
+        _line_counter = LineCounter(scan)
         for offset, path, member in _floor_references(scan):
-            line = first_line + scan.count("\n", 0, offset)
+            line = first_line - 1 + _line_counter.line_at(offset)
             if noqa_state(file, line, "T024") == "suppressed":
                 continue
             messages.append(

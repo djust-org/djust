@@ -13,6 +13,7 @@ from django.core.checks import CheckMessage, register
 
 from djust.checks.utils import (
     DjustWarning,
+    LineCounter,
     _is_check_suppressed,
     _iter_template_files,
     _get_template_dirs,
@@ -543,6 +544,7 @@ def check_accessibility(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
 
         # Y001 — interactive element missing an accessible name.
         if not y001_suppressed:
+            _line_counter = LineCounter(scan_source)
             for match in _INTERACTIVE_EL_RE.finditer(scan_source):
                 open_attrs = match.group("open")
                 tag = match.group("tag").lower()
@@ -554,7 +556,7 @@ def check_accessibility(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
                     continue
                 if not _content_is_icon_only(match.group("inner")):
                     continue
-                lineno = scan_source[: match.start()].count("\n") + 1
+                lineno = _line_counter.line_at(match.start())
                 errors.append(
                     DjustWarning(
                         "%s:%d -- <%s> has no accessible name (icon-only content "
@@ -577,6 +579,7 @@ def check_accessibility(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
 
         # Y002 — <img> missing an alt attribute.
         if not y002_suppressed:
+            _line_counter = LineCounter(scan_source)
             for match in _IMG_TAG_RE.finditer(scan_source):
                 tag_text = match.group(0)
                 if _IMG_HAS_ALT_RE.search(tag_text):
@@ -585,7 +588,7 @@ def check_accessibility(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
                 # may carry the alt — don't flag.
                 if _IMG_DYNAMIC_ATTRS_RE.search(tag_text):
                     continue
-                lineno = scan_source[: match.start()].count("\n") + 1
+                lineno = _line_counter.line_at(match.start())
                 errors.append(
                     DjustWarning(
                         "%s:%d -- <img> tag is missing an 'alt' attribute "
@@ -613,6 +616,7 @@ def check_accessibility(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
             # Spans of every <label>...</label> block — a control whose
             # opening tag starts inside one is wrapped (named by it).
             label_spans = [(m.start(), m.end()) for m in _LABEL_BLOCK_RE.finditer(scan_source)]
+            _line_counter = LineCounter(scan_source)
             for match in _FORM_CONTROL_RE.finditer(scan_source):
                 open_attrs = match.group("open")
                 tag = match.group("tag").lower()
@@ -636,7 +640,7 @@ def check_accessibility(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
                 # Wrapped by a <label>...</label> element → named.
                 if any(start <= match.start() < end for start, end in label_spans):
                     continue
-                lineno = scan_source[: match.start()].count("\n") + 1
+                lineno = _line_counter.line_at(match.start())
                 errors.append(
                     DjustWarning(
                         "%s:%d -- <%s> form control has no associated label "
@@ -661,9 +665,10 @@ def check_accessibility(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
 
         # Y004 — positive tabindex (focus-order anti-pattern).
         if not y004_suppressed:
+            _line_counter = LineCounter(scan_source)
             for match in _POSITIVE_TABINDEX_RE.finditer(scan_source):
                 value = match.group(1)
-                lineno = scan_source[: match.start()].count("\n") + 1
+                lineno = _line_counter.line_at(match.start())
                 errors.append(
                     DjustWarning(
                         '%s:%d -- positive tabindex="%s" overrides natural '
@@ -688,8 +693,9 @@ def check_accessibility(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
 
         # Y005 — role="img" element / inline <svg> with no accessible name.
         if not y005_suppressed:
+            _line_counter = LineCounter(scan_source)
             for offset, label in _find_unnamed_images(scan_source):
-                lineno = scan_source[:offset].count("\n") + 1
+                lineno = _line_counter.line_at(offset)
                 errors.append(
                     DjustWarning(
                         "%s:%d -- %s has no accessible name (WCAG 1.1.1)."
@@ -712,8 +718,9 @@ def check_accessibility(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
 
         # Y006 — legend item that is only a colour swatch.
         if not y006_suppressed:
+            _line_counter = LineCounter(scan_source)
             for offset in _find_colour_only_legend_items(scan_source):
-                lineno = scan_source[:offset].count("\n") + 1
+                lineno = _line_counter.line_at(offset)
                 errors.append(
                     DjustWarning(
                         "%s:%d -- legend item has no text, so its series is "

@@ -35,6 +35,7 @@ access is needed.
 
 import json
 import logging
+import re
 from typing import Any, Dict, Optional, Tuple
 from urllib.parse import urlsplit
 
@@ -50,6 +51,43 @@ _WS_DEFAULT_PORTS = {"ws": 80, "wss": 443}
 
 #: The longest ``?url=`` value looked at. A real endpoint is far shorter.
 _MAX_URL_LENGTH = 2048
+
+#: The largest terminal a ``?rows=`` / ``?cols=`` may ask for (#3699). The browser draws
+#: ``rows`` x ``cols`` cells and sizes the container with ``calc(<rows> * 1.2em)``, so an
+#: unbounded value would let a link make the victim's own tab allocate a huge terminal.
+MAX_ROWS = 500
+MAX_COLS = 1000
+
+
+_INTEGER_RE = re.compile(r"\s*([+-]?)([0-9]+)\s*")
+
+
+def _bounded_int(value: Any, default: int, maximum: int) -> int:
+    """``value`` as an int clamped to ``1..maximum``, or ``default`` if it is not an integer.
+
+    ``value`` is a query-string parameter, so it is untrusted (#3699). ``None`` (the
+    parameter is absent) keeps ``default`` as the class author wrote it. A string that
+    is not an integer (``"x"``, ``""``, ``"1.5"``) also falls back to ``default``
+    rather than raising. A valid integer is pulled into ``1..maximum``: zero and
+    negative become 1, an oversized one the cap.
+
+    A digit string too long for ``int()`` to parse (Python refuses past
+    ``sys.get_int_max_str_digits()``, 4300 by default, and ``PYTHONINTMAXSTRDIGITS=0``
+    lifts the limit) is still a syntactically valid integer, just a huge one, so it
+    clamps like any other: the cap, or 1 if it is negative or all zeros. The answer must not depend
+    on the interpreter's limit setting (4299 nines and 4301 nines both give the cap).
+    """
+    if value is None:
+        return default
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        found = _INTEGER_RE.fullmatch(value) if isinstance(value, str) else None
+        if found is None:
+            return default
+        # Zero and negative clamp to 1; any other value is above the cap.
+        return 1 if found.group(1) == "-" or not found.group(2).strip("0") else maximum
+    return max(1, min(number, maximum))
 
 
 def _split_ws_url(value: Any) -> Optional[Tuple[str, str, int, str, str]]:
@@ -101,7 +139,10 @@ class TtydTerminalView(LiveView):
     """LiveView that renders an xterm.js terminal connected to a ttyd backend.
 
     ``rows``, ``cols`` and ``theme`` may come from the query string (mount-time
-    only). ``?url=`` is a development convenience and is **restricted**: the
+    only). ``?rows=`` / ``?cols=`` are untrusted: a value that is not an integer
+    (``x``, empty) falls back to the class default, and an integer is clamped to
+    ``1..MAX_ROWS`` (500) / ``1..MAX_COLS`` (1000), so a link cannot make the
+    victim's tab allocate a huge terminal (#3699). ``?url=`` is a development convenience and is **restricted**: the
     browser sends everything the user types to that WebSocket and draws whatever
     it answers as terminal output, so a link that chose the endpoint freely could
     point a victim's terminal at a server that shows a fake prompt and records the
@@ -150,8 +191,8 @@ class TtydTerminalView(LiveView):
     def mount(self, request: Any, **kwargs: Any) -> None:
         params = request.GET
         self.ttyd_url = self._resolve_ttyd_url(params.get("url"))
-        self.rows = int(params.get("rows", self.__class__.rows))
-        self.cols = int(params.get("cols", self.__class__.cols))
+        self.rows = _bounded_int(params.get("rows"), self.__class__.rows, MAX_ROWS)
+        self.cols = _bounded_int(params.get("cols"), self.__class__.cols, MAX_COLS)
 
         theme_param = params.get("theme", None)
         if theme_param:
