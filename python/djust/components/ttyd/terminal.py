@@ -125,7 +125,10 @@ class TtydTerminalView(LiveView):
     """LiveView that renders an xterm.js terminal connected to a ttyd backend.
 
     ``rows``, ``cols`` and ``theme`` may come from the query string (mount-time
-    only). ``?url=`` is a development convenience and is **restricted**: the
+    only). ``?rows=`` / ``?cols=`` are untrusted: a value that is not an integer
+    (``x``, empty) falls back to the class default, and an integer is clamped to
+    ``1..MAX_ROWS`` (500) / ``1..MAX_COLS`` (1000), so a link cannot make the
+    victim's tab allocate a huge terminal (#3699). ``?url=`` is a development convenience and is **restricted**: the
     browser sends everything the user types to that WebSocket and draws whatever
     it answers as terminal output, so a link that chose the endpoint freely could
     point a victim's terminal at a server that shows a fake prompt and records the
