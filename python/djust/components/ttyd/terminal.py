@@ -35,6 +35,7 @@ access is needed.
 
 import json
 import logging
+import re
 from typing import Any, Dict, Optional, Tuple
 from urllib.parse import urlsplit
 
@@ -58,21 +59,34 @@ MAX_ROWS = 500
 MAX_COLS = 1000
 
 
+_INTEGER_RE = re.compile(r"\s*([+-]?)([0-9]+)\s*")
+
+
 def _bounded_int(value: Any, default: int, maximum: int) -> int:
     """``value`` as an int clamped to ``1..maximum``, or ``default`` if it is not an integer.
 
     ``value`` is a query-string parameter, so it is untrusted (#3699). ``None`` (the
-    parameter is absent) keeps ``default`` as the class author wrote it; a string that
-    ``int()`` refuses (``"x"``, ``""``, ``"1.5"``, a digit string past Python's int
-    limit) also falls back to ``default`` rather than raising. A valid integer is
-    pulled into ``1..maximum``: zero and negative become 1, an oversized one the cap.
+    parameter is absent) keeps ``default`` as the class author wrote it. A string that
+    is not an integer (``"x"``, ``""``, ``"1.5"``) also falls back to ``default``
+    rather than raising. A valid integer is pulled into ``1..maximum``: zero and
+    negative become 1, an oversized one the cap.
+
+    A digit string too long for ``int()`` to parse (Python refuses past
+    ``sys.get_int_max_str_digits()``, 4300 by default, and ``PYTHONINTMAXSTRDIGITS=0``
+    lifts the limit) is still a syntactically valid integer, just a huge one, so it
+    clamps like any other: the cap, or 1 if it is negative or all zeros. The answer must not depend
+    on the interpreter's limit setting (4299 nines and 4301 nines both give the cap).
     """
     if value is None:
         return default
     try:
         number = int(value)
     except (TypeError, ValueError):
-        return default
+        found = _INTEGER_RE.fullmatch(value) if isinstance(value, str) else None
+        if found is None:
+            return default
+        # Zero and negative clamp to 1; any other value is above the cap.
+        return 1 if found.group(1) == "-" or not found.group(2).strip("0") else maximum
     return max(1, min(number, maximum))
 
 

@@ -315,3 +315,92 @@ class TestScansReadTheTemplateOnce:
             assert any(token in line for token in tokens), (finding.id, finding.line_number, line)
             checked[finding.id] += 1
         assert set(checked) == set(TOKENS), sorted(set(TOKENS) - set(checked))
+
+
+# ---------------------------------------------------------------------------
+# A finding is reported on the line where its match STARTS, whatever the element's
+# extent, the line ending, or how many lines come before it. Every construct above sits
+# on one line, where ``line_at(match.start())`` and ``line_at(match.end())`` agree; the
+# pieces below span several lines, so an offset taken from the wrong end of the match
+# reports a different line.
+# ---------------------------------------------------------------------------
+
+# name -> (the construct's text, {check id: 0-based line WITHIN the piece where the match
+# starts}). Most checks match from the element's opening tag (offset 0); T013, T014 and Y004
+# match an attribute, which sits on a later line of the tag.
+MULTILINE_MAIN = {
+    "t010": (
+        '<button\n  class="b"\n  dj-click="go"\n  data-view="x">Go\n</button>',
+        {"djust.T010": 0},
+    ),
+    "t017": (
+        '<table><tbody\n  class="a"\n  dj-root><tr><td>c</td></tr>\n</tbody></table>',
+        {"djust.T017": 0},
+    ),
+    "a075": ('{% live_render "a.B"\n  sticky=True\n  lazy=True %}', {"djust.A075": 0}),
+    "a070": ("{% dj_activity\n  %}x{% enddj_activity %}", {"djust.A070": 0}),
+    "t027": ('<RustButton\n  id="b"\n  />', {"djust.T027": 0}),
+    "t013": ('<div\n  class="a"\n  dj-view="nodot"></div>', {"djust.T013": 2}),
+    "t014": ('<span\n  class="a"\n  data-dj-id="1"></span>', {"djust.T014": 2}),
+}
+MULTILINE_A11Y = {
+    "y001": ('<button\n  class="b">\n  <i class="icon"></i>\n</button>', {"djust.Y001": 0}),
+    "y002": ('<img\n  src="a.png"\n  class="c">', {"djust.Y002": 0}),
+    "y003": ('<input\n  type="text"\n  name="q">', {"djust.Y003": 0}),
+    "y004": ('<div\n  class="a"\n  tabindex="3">x</div>', {"djust.Y004": 2}),
+    "y005": ('<svg\n  width="1">\n  <path d="M0 0"/>\n</svg>', {"djust.Y005": 0}),
+    "y006": (
+        '<ul class="legend"><li>\n  <span class="swatch"\n'
+        '  style="background:red"></span>\n</li></ul>',
+        {"djust.Y006": 0},
+    ),
+    "s011": ('<script\n  type="text/javascript">\n  var x = 1;\n</script>', {"djust.S011": 0}),
+}
+
+
+def _assemble(pieces: dict, lead: int) -> tuple[str, dict]:
+    """A template that starts ``lead`` filler lines in, with each piece on its own lines.
+
+    Returns ``(text, {check id: sorted 1-based lines the match starts on})``."""
+    lines = ['<div dj-root dj-view="a.b.C">'] + ["<p>filler</p>"] * lead
+    expected: dict = collections.defaultdict(list)
+    for text, starts in pieces.values():
+        first = len(lines) + 1
+        for check_id, offset in starts.items():
+            expected[check_id].append(first + offset)
+        lines.extend(text.split("\n"))
+        lines.append("<p>filler</p>")
+    lines.append("</div>")
+    return "\n".join(lines) + "\n", {k: sorted(v) for k, v in expected.items()}
+
+
+class TestFindingsReportTheLineWhereTheMatchStarts:
+    @pytest.mark.parametrize("newline", ["\n", "\r\n"], ids=["LF", "CRLF"])
+    @pytest.mark.parametrize("lead", [0, 7], ids=["first-lines", "line-8-onward"])
+    def test_a_multiline_construct_is_reported_on_its_first_line(
+        self, tmp_path, settings, tally, newline, lead
+    ):
+        from djust.checks import check_accessibility, check_templates
+        from djust.checks.security import check_inline_script_csp
+
+        main_text, main_expected = _assemble(MULTILINE_MAIN, lead)
+        a11y_text, a11y_expected = _assemble(MULTILINE_A11Y, lead)
+        main_dir, a11y_dir = tmp_path / "main", tmp_path / "a11y"
+        main_dir.mkdir()
+        a11y_dir.mkdir()
+        (main_dir / "page.html").write_bytes(main_text.replace("\n", newline).encode())
+        (a11y_dir / "page.html").write_bytes(a11y_text.replace("\n", newline).encode())
+        settings.TEMPLATES = [
+            {
+                "DIRS": [str(main_dir), str(a11y_dir)],
+                "BACKEND": "django.template.backends.django.DjangoTemplates",
+            }
+        ]
+        found: dict = collections.defaultdict(list)
+        for check in (check_templates, check_accessibility, check_inline_script_csp):
+            for e in check(None):
+                if str(getattr(e, "file_path", "")).startswith(str(tmp_path)) and e.line_number:
+                    found[e.id].append(e.line_number)
+        expected = {**main_expected, **a11y_expected}
+        for check_id, lines in expected.items():
+            assert sorted(found[check_id]) == lines, (check_id, sorted(found[check_id]), lines)

@@ -20,6 +20,7 @@ Refs #3699, #3679, #1468.
 from __future__ import annotations
 
 import re
+import sys
 
 import pytest
 from django.test import RequestFactory
@@ -81,11 +82,6 @@ class TestMalformedFallsBackToTheClassDefault:
         view = _mount(CustomDefaults, "?rows&cols")
         assert (view.rows, view.cols) == (40, 120)
 
-    def test_a_digit_string_past_pythons_int_limit_mounts_with_the_default(self):
-        """``int()`` refuses more than ~4300 digits with ``ValueError`` (3.11+)."""
-        view = _mount(CustomDefaults, "?rows=%s&cols=%s" % ("9" * 5000, "9" * 5000))
-        assert (view.rows, view.cols) == (40, 120)
-
     def test_one_bad_value_does_not_discard_the_other(self):
         view = _mount(CustomDefaults, "?rows=x&cols=100")
         assert (view.rows, view.cols) == (40, 100)
@@ -122,6 +118,37 @@ class TestClamped:
         assert _attr(html, "cols") == str(MAX_COLS)
         assert "calc(%d * 1.2em)" % MAX_ROWS in html
         assert "1000000000" not in html
+
+    @pytest.mark.skipif(
+        not hasattr(sys, "set_int_max_str_digits"), reason="no int digit limit before 3.11"
+    )
+    @pytest.mark.parametrize("limit", [0, 640, 4300])
+    @pytest.mark.parametrize(
+        "digits, expected_rows, expected_cols",
+        [
+            ("9" * 4299, MAX_ROWS, MAX_COLS),
+            ("9" * 4301, MAX_ROWS, MAX_COLS),
+            ("9" * 5000, MAX_ROWS, MAX_COLS),
+            ("+" + "9" * 5000, MAX_ROWS, MAX_COLS),
+            ("%20" + "9" * 5000 + "%20", MAX_ROWS, MAX_COLS),
+            ("-" + "9" * 5000, 1, 1),
+            ("0" * 5000, 1, 1),
+        ],
+        ids=["4299-nines", "4301-nines", "5000-nines", "plus", "padded", "negative", "zeros"],
+    )
+    def test_a_huge_digit_string_clamps_whatever_the_interpreters_int_limit(
+        self, limit, digits, expected_rows, expected_cols
+    ):
+        """A syntactically valid integer too large for ``int()`` is a huge number: it
+        clamps like any other and does not fall back to the default. The answer is the
+        same with the limit at its default, raised, or off (``PYTHONINTMAXSTRDIGITS=0``)."""
+        previous = sys.get_int_max_str_digits()
+        sys.set_int_max_str_digits(limit)
+        try:
+            view = _mount(CustomDefaults, "?rows=%s&cols=%s" % (digits, digits))
+        finally:
+            sys.set_int_max_str_digits(previous)
+        assert (view.rows, view.cols) == (expected_rows, expected_cols)
 
     def test_a_subclass_default_outside_the_range_is_not_clamped_away_silently(self):
         """The class attribute is the developer's own, trusted like ``ttyd_url``: only the
