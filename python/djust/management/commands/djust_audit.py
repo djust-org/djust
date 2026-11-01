@@ -300,7 +300,32 @@ def _audit_class(
     if template_vars is not None:
         result["template_vars"] = template_vars
 
+    # The declared query budget (#3701): every LiveView says so, with None for
+    # "none declared", so a view that spends without a limit is as visible as
+    # one that has one. Reported as declared, even when invalid.
+    if cls_type == "LiveView":
+        result["query_budget"] = getattr(cls, "query_budget", None)
+
     return result
+
+
+def _describe_query_budget(budget: Any) -> str:
+    """A ``query_budget`` as one line for the report."""
+    if budget is None:
+        return "(none)"
+    if not isinstance(budget, dict):
+        return "%s (mount + first render)" % (budget,)
+    parts = []
+    for key in ("mount", "render", "event"):
+        if key in budget:
+            parts.append("%s %s" % (key, budget[key]))
+    events = budget.get("events")
+    if isinstance(events, dict) and events:
+        parts.append("events " + ", ".join("%s %s" % (name, n) for name, n in events.items()))
+    unknown = [k for k in budget if k not in ("mount", "render", "event", "events")]
+    if unknown:
+        parts.append("invalid key %s" % ", ".join(repr(k) for k in unknown))
+    return ", ".join(parts) if parts else "(empty)"
 
 
 def _extract_vars(cls: type) -> Optional[Any]:
@@ -1034,6 +1059,11 @@ class Command(BaseCommand):
                     self.stdout.write("    Mixins:     %s" % ", ".join(audit["mixins"]))
                 else:
                     self.stdout.write("    Mixins:     (none)")
+
+                if "query_budget" in audit:
+                    self.stdout.write(
+                        "    Query budget: %s" % _describe_query_budget(audit["query_budget"])
+                    )
 
                 # Config flags
                 config = audit["config"]

@@ -2005,3 +2005,63 @@ def check_reserved_view_attributes(app_configs: Any, **kwargs: Any) -> list[Chec
                         )
                     )
     return messages
+
+
+@register("djust")
+def check_params_form_declarations(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
+    """V023 (Error): a ``params_form`` the request path cannot use (#3706).
+
+    The framework binds the URL's parameters with ``form_class(data=...)`` and
+    nothing else (``djust._params_form.bind_params``). A ``params_form`` that is
+    not a form class raises ``ImproperlyConfigured``, and a form whose
+    ``__init__`` needs another argument raises ``TypeError``, both on the first
+    request of the view. The verdicts are the runtime's own
+    (``form_class_problem`` / ``construction_problem``), so the check cannot
+    call a form usable that the request path then refuses. No view is
+    constructed and no form is instantiated.
+    """
+    messages: list[CheckMessage] = []
+    if _is_check_suppressed("djust.V023"):
+        return messages
+    try:
+        from djust._params_form import construction_problem, form_class_problem
+        from djust.live_view import LiveView
+    except Exception:  # noqa: BLE001 — djust not importable/configured: nothing to check
+        return messages
+
+    candidates = set(_routed_liveview_classes()) | set(_walk_subclasses(LiveView))
+    for cls in sorted(candidates, key=lambda c: (c.__module__, c.__qualname__)):
+        if _is_framework_internal_class(cls):
+            continue
+        # Read from the class, as the request path does: an inherited
+        # declaration is the subclass's declaration too.
+        declared = getattr(cls, "params_form", None)
+        if declared is None:
+            continue
+        label = "%s.%s" % (cls.__module__, cls.__qualname__)
+        problem = form_class_problem(declared)
+        if problem is not None:
+            hint = (
+                "Set params_form to a Django form class (a subclass of "
+                "django.forms.Form), not an instance, a dotted path or another "
+                "object. Without this the first request raises ImproperlyConfigured."
+            )
+        else:
+            problem = construction_problem(declared)
+            if problem is None:
+                continue
+            hint = (
+                "The framework calls %s(data=...) with the URL's parameters and "
+                "nothing else. Give every other __init__ argument a default, or "
+                "read it from the view in handle_params() instead. Without this "
+                "the first request raises TypeError." % declared.__name__
+            )
+        messages.append(
+            DjustError(
+                "%s.params_form %s." % (label, problem),
+                hint=hint,
+                id="djust.V023",
+                fix_hint="Fix the `params_form` declaration of `%s`." % cls.__qualname__,
+            )
+        )
+    return messages

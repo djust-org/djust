@@ -45,6 +45,9 @@ class ProductListView(LiveView):
         self.page = int(params.get("page", 1))
         self.products = self.fetch_products()
 
+    def fetch_products(self):
+        return []  # your query, filtered by self.category and self.page
+
     @event_handler()
     def filter_by_category(self, category="all", **kwargs):
         self.live_patch(params={"category": category, "page": 1})
@@ -688,6 +691,9 @@ class DashboardView(LiveView):  # navigation is built in — no NavigationMixin 
         if tab in self.VALID_TABS:
             self.active_tab = tab
         self._load_tab_data()
+
+    def _load_tab_data(self):
+        pass  # load what the active tab shows
 ```
 
 **Why it works:**

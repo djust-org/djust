@@ -23,6 +23,7 @@ exactly as before.
 
 from __future__ import annotations
 
+import inspect
 from collections.abc import Mapping
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -41,6 +42,55 @@ NON_FIELD_ERRORS_KEY = "__all__"
 BoundParams = Tuple[forms.BaseForm, Optional[Dict[str, Any]]]
 
 
+def form_class_problem(declared: Any) -> Optional[str]:
+    """Why ``declared`` cannot be a ``params_form``, or ``None`` when it can.
+
+    The one definition of "is a form class": the request path raises on it
+    (:func:`_declared_form_class`) and the V023 system check reports it, so the
+    two cannot disagree (#3706). ``None`` (undeclared) is not a problem.
+    """
+    if declared is None:
+        return None
+    if isinstance(declared, type) and issubclass(declared, forms.BaseForm):
+        return None
+    return "must be a Django form class, not %r" % type(declared).__name__
+
+
+def construction_problem(form_class: type) -> Optional[str]:
+    """Why the framework cannot build ``form_class(data=...)``, or ``None`` when it can.
+
+    :func:`bind_params` calls ``form_class(data=...)`` and nothing else, so a form
+    whose ``__init__`` needs another argument (a user, a queryset, a tenant)
+    fails with ``TypeError`` on the first request. A signature that cannot be
+    read is not reported: "could not tell" is not "broken".
+    """
+    try:
+        signature = inspect.signature(form_class)
+    except (TypeError, ValueError):
+        return None
+    required = [
+        name
+        for name, parameter in signature.parameters.items()
+        if name != "data"
+        and parameter.default is parameter.empty
+        and parameter.kind
+        in (
+            parameter.POSITIONAL_ONLY,
+            parameter.POSITIONAL_OR_KEYWORD,
+            parameter.KEYWORD_ONLY,
+        )
+    ]
+    if required:
+        return "cannot be built as form_class(data=...): its __init__ requires %s" % (
+            ", ".join(repr(name) for name in required)
+        )
+    try:
+        signature.bind(data={})
+    except TypeError:
+        return "cannot be built as form_class(data=...): its __init__ does not accept data="
+    return None
+
+
 def _declared_form_class(view: Any) -> Optional[type]:
     """The view's ``params_form``, read from its class; ``None`` when undeclared.
 
@@ -48,13 +98,9 @@ def _declared_form_class(view: Any) -> Optional[type]:
     share the name cannot replace the declaration.
     """
     declared = getattr(type(view), "params_form", None)
-    if declared is None:
-        return None
-    if not (isinstance(declared, type) and issubclass(declared, forms.BaseForm)):
-        raise ImproperlyConfigured(
-            "%s.params_form must be a Django form class, not %r."
-            % (type(view).__name__, type(declared).__name__)
-        )
+    problem = form_class_problem(declared)
+    if problem is not None:
+        raise ImproperlyConfigured("%s.params_form %s." % (type(view).__name__, problem))
     return declared
 
 
