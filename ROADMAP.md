@@ -198,14 +198,14 @@ Two name shapes appear in this roadmap, with distinct meanings:
 
 | Priority | Task | Milestone |
 |---|---|---|
-| **P1** | #3679 — `TtydTerminalView` takes its WebSocket target from `?url=` without validation (group A) | v1.3.0 |
-| **P2** | #3685 — `djust_audit --a11y`: a rule for a chart or `<svg>` with no accessible name, and a legend told apart by colour only (group B) | v1.3.0 |
-| **P2** | #3686 — Per-view query budget: `LiveViewSmokeTest` lets a view declare its own, instead of one `max_queries` for every view (group B) | v1.3.0 |
-| **P2** | #3687 — X105 also flags named colours, literal `font-family` stacks and `style=` attributes in LiveView templates (group B) | v1.3.0 |
-| **P2** | #3688 — `get_http_status()` is per view: a page that renders its not-found state answers 200 unless each view overrides it (group C) | v1.3.0 |
-| **P2** | #3689 — `handle_params()` gets raw strings: a declared params form, so the docstring example does not 500 on `?page=abc` (group C) | v1.3.0 |
-| **P2** | #3691 — Close the low-severity review leftovers from #3535, #3652 and #3678 (tidy-up checklist) | v1.3.0 |
-| **P2** | #3692 — `main`'s `python-tests` flakes: `target_id` on push frames fixed (#3694), pool-config leak fixed (#3695); two timing-dependent tests still open | v1.3.0 |
+| ~~**P1**~~ | ~~`TtydTerminalView` takes its WebSocket target from `?url=` without validation~~ ✅ (#3698) | v1.3.0 |
+| ~~**P2**~~ | ~~`djust_audit --a11y`: a rule for a chart or `<svg>` with no accessible name, and a legend told apart by colour only~~ ✅ (#3702) | v1.3.0 |
+| ~~**P2**~~ | ~~Per-view query budget: `LiveViewSmokeTest` lets a view declare its own, instead of one `max_queries` for every view~~ ✅ (#3702) | v1.3.0 |
+| ~~**P2**~~ | ~~X105 also flags named colours, literal `font-family` stacks and `style=` attributes in LiveView templates~~ ✅ (#3702) | v1.3.0 |
+| ~~**P2**~~ | ~~`get_http_status()` is per view: a page that renders its not-found state answers 200 unless each view overrides it~~ ✅ (#3703) | v1.3.0 |
+| ~~**P2**~~ | ~~`handle_params()` gets raw strings: a declared params form, so the docstring example does not 500 on `?page=abc`~~ ✅ (#3703) | v1.3.0 |
+| ~~**P2**~~ | ~~Close the low-severity review leftovers from #3535, #3652 and #3678 (tidy-up checklist)~~ ✅ (#3704) | v1.3.0 |
+| ~~**P2**~~ | ~~#3692 — `main`'s `python-tests` flakes: `target_id` on push frames (#3694), pool-config leak (#3695), and the four timing races (test-side only)~~ ✅ (#3708) | v1.3.0 |
 | **P2** | #3663 — `djust_components` / `theme_tags`: the same tag renders different markup under the Django engine and the native Rust handler (117 of 208 tags). Needs a canonical implementation first | v1.3.0 |
 | **P2** | #3666 — Form and `BoundField` arguments do not reach the native Rust component handlers. Needs a canonical implementation first | v1.3.0 |
 | **P2** | #3667 — Native Rust component handlers swallow invalid input the Python tags reject. Needs a canonical implementation first | v1.3.0 |
