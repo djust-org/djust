@@ -128,6 +128,9 @@ Running `djust_audit` with no mode flags walks every `LiveView` and
 - Event handlers and their decorators (`@event_handler`, `@debounce`,
   `@throttle`, `@rate_limit`, `@cache`, `@optimistic`, etc.)
 - Config flags (`tick_interval`, `temporary_assigns`, `use_actors`)
+- The view's declared [`query_budget`](../testing/index.md#per-view-query-budgets), or
+  that it has none (`Query budget: (none)`; `"query_budget": null` in `--json`). A view
+  that spends on the database without a limit is as visible as one that has one.
 
 This is the "what does my app actually expose" report. Run it when you're
 onboarding a new codebase, preparing for a security review, or diffing

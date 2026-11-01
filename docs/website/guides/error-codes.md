@@ -795,6 +795,16 @@ V008 is broader than V006 and will flag any custom class instantiation, not just
 
 ---
 
+### V023: `params_form` the request path cannot use
+
+**Severity**: Error
+
+**What causes it**: A view sets `params_form` to something djust cannot build as `form_class(data=...)`, which is how it binds the URL's query parameters. Either the value is not a Django form class (a dotted-path string, a form instance, an unrelated class), which raises `ImproperlyConfigured` on the first request, or the form's `__init__` requires an argument besides `data` (a user, a queryset, a tenant) or cannot take `data=`, which raises `TypeError` there. Message: "<view>.params_form must be a Django form class, not 'str'." or "<view>.params_form cannot be built as form_class(data=...): its __init__ requires 'user'."
+
+**Fix**: Set `params_form` to a form class. Give every other `__init__` argument a default, or read it from the view in `handle_params()` instead. Suppress with `DJUST_CONFIG = {"suppress_checks": ["V023"]}`.
+
+---
+
 ## Security Errors (S0xx)
 
 ### S001: mark_safe() with f-string

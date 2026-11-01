@@ -51,6 +51,8 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | V019 | LiveView | Warning | A `dj-auto-recover` handler declares `parameter_policy="strict"`; recovery always runs under legacy policy |
 | V020 | LiveView | Error | A `use_actors = True` view declares an interactive component (`djust.components.interactive`); actor views do not support them |
 | V021 | LiveView | Info / Warning | A subclass overrides a `@push_handler` method without the marker (Info; still push-only), or gives the override `@event_handler` (Warning; browsers are still refused) |
+| V022 | LiveView | Warning | View code assigns an attribute djust's `LiveView` keeps its own state under (`self._streams = ...`) |
+| V023 | LiveView | Error | A `params_form` the request path cannot use: not a form class, or a form whose `__init__` needs arguments beyond `data=` |
 | S001 | Security | Error | mark_safe() with f-string (XSS risk) |
 | S002 | Security | Warning | @csrf_exempt without justification comment |
 | S003 | Security | Warning | Bare except: pass swallows all exceptions |
@@ -451,6 +453,13 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 - **What it detects**: a LiveView class whose effective definition of a method name is not marked, while another class in its MRO (a base or mixin) defines the same name with `@push_handler`. That covers an override and the multiple-inheritance case where one base's unmarked or `@event_handler` method comes first in the MRO and another base's marked method comes later. The marker is inherited by method name, so the override is still refused to browsers in every `event_security` mode; the check makes that visible. With `@event_handler` on the override it is a Warning: the decorator cannot make the name browser-callable, so the event handler is dead code.
 - **Fix**: add `@push_handler` to the override. For the Warning, remove `@event_handler`, or rename the method if a browser should call it.
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["V021"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.V021"]`
+
+### V023 — `params_form` the request path cannot use
+- **Severity**: Error
+- **Method**: Runtime (class inspection; no view is constructed and no form is instantiated)
+- **What it detects**: a LiveView whose `params_form` (read from the class, so an inherited declaration counts) will fail on the first request. djust binds the URL's query parameters with `form_class(data=...)` and nothing else, so two declarations fail there: a `params_form` that is not a Django form class (a dotted-path string, a form instance, another class) raises `ImproperlyConfigured`, and a form whose `__init__` requires another argument (a user, a queryset, a tenant) or cannot take `data=` raises `TypeError`. The verdicts are the request path's own (`djust._params_form.form_class_problem` and `construction_problem`), so the check cannot call a form usable that the request path then refuses. A signature that cannot be read is not reported.
+- **Fix**: set `params_form` to a form class; give every other `__init__` argument a default, or read it from the view in `handle_params()` instead.
+- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["V023"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.V023"]`
 
 ---
 
