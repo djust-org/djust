@@ -224,7 +224,12 @@ class TestAllViews(TestCase, LiveViewSmokeTest):
     }
 ```
 
-A handler name in `"events"` that the view does not have is a `ValueError`. A
+A handler name in `"events"` that the view does not have is a `ValueError`, and so is an
+`async def` or `@background` handler: a budget cannot be measured on either, and one that was
+accepted anyway would only look like protection. Under the broad `"event"` number those
+handlers are left out and a `UserWarning` names them. The same rule holds everywhere the
+declaration is read: `manage.py check` reports it as V024, the run-time meter logs it once and
+measures nothing, and `djust_audit` lists the view as `invalid: ...`. A
 `view_config` `max_queries` replaces the declared `mount` / `render` budget for that test
 class, and leaves the event budget in force.
 
@@ -248,11 +253,35 @@ database connection, and each sync step pays one class-attribute read (about 90 
 
 The phases are the ones the smoke test uses. `"mount"` is `mount()` plus `handle_params()`;
 a mount phase is reported once, when it first goes over, so its figure reads `at least N`.
-`"render"` is one `get_context_data()` pass (a page load may run it more than once; each pass
-is judged on its own). `"event"` is a handler's own queries. An int budget is the mount phase plus the
-first render that follows it. Not measured: `async def` handlers and hooks (a query cannot run on
-the event loop), `start_async` work, ticks, and the authorization hops. Only the default database
-connection is counted, as in the smoke test.
+`"event"` is the handler's own queries, in the smoke test and at run time alike (the per-event
+object-permission re-check is not counted in either). An int budget is the mount phase plus the
+first render that follows it.
+
+`"render"` is one `get_context_data()` pass, and each pass is judged on its own. **A budget has to
+allow for how many passes a page load makes.** Measured on an HTTP GET with the Django test
+client: a view that overrides `get_context_data()` has the override called **twice** by one GET,
+whether or not it calls `super()` (once in the request's turn body, once more from
+`_sync_state_to_rust()` during the render, which is called without `preloaded_context`). djust's own
+`_cached_context` short-circuit sits inside the stock `get_context_data()`, so only the work
+`super()` does is skipped the second time; a view with no override evaluates once. So an `int`
+budget (its window closes after the first render) and a `"render"` number under-report what the
+GET spends: 2 queries per pass is 4 on the page. A separate probe of the WebSocket mount ran it once.
+The double evaluation is a framework behaviour, not something the budget changes.
+
+Not measured, by design: `async def` handlers and hooks (they run on the event loop, outside
+the metered sync steps) and `@background` handlers (the work runs later, in `start_async`);
+`start_async` work and `handle_async_result`; ticks; the authorization hops (`check_permissions`,
+`get_object`, `has_object_permission`); the `on_mount` hooks and `connected()` /
+`disconnected()` (the `"lifecycle"` step); and a step that runs inside another step on the same
+thread, such as an embedded `{% live_render %}` child's `get_context_data()` (it is part of the
+parent's step, and the parent is the one judged: the child's own `"render"` budget is not
+judged there). Only the default database connection is counted, as in
+the smoke test.
+
+Two invalid-input rules are the same everywhere. An invalid `query_budget` is never measured
+(see above). An invalid `LIVEVIEW_CONFIG["query_budget"]` (`True`, `"WARN"`) is reported by
+`manage.py check` as C029; a request never fails over it, it reads the value as `"warn"` and logs
+that once.
 
 ## Performance Testing
 

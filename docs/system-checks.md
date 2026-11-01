@@ -33,6 +33,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | C026 | Config | Error | `LIVEVIEW_MIDDLEWARE` has an entry that is not an importable `async def mw(turn, next)` (ADR-044) |
 | C027 | Config | Error | `LIVEVIEW_CONFIG['view_state_in_session']` is not `True` or `False` |
 | C028 | Config | Error | `LIVEVIEW_CONFIG['http_fallback_background_timeout']` is not `None` or a number of seconds greater than 0 |
+| C029 | Config | Error | `LIVEVIEW_CONFIG['query_budget']` is not `None`, `"off"`, `"warn"` or `"error"` |
 | V001 | LiveView | Warning | LiveView missing template_name attribute |
 | V002 | LiveView | Info | LiveView missing mount() method |
 | V003 | LiveView | Error | mount() has wrong signature |
@@ -53,6 +54,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | V021 | LiveView | Info / Warning | A subclass overrides a `@push_handler` method without the marker (Info; still push-only), or gives the override `@event_handler` (Warning; browsers are still refused) |
 | V022 | LiveView | Warning | View code assigns an attribute djust's `LiveView` keeps its own state under (`self._streams = ...`) |
 | V023 | LiveView | Error | A `params_form` the request path cannot use: not a form class, or a form whose `__init__` needs arguments beyond `data=` |
+| V024 | LiveView | Error | A `query_budget` nothing can enforce: an unknown key, a bool or negative number, a handler named in `events` that the view lacks or that is `async def` / `@background` |
 | S001 | Security | Error | mark_safe() with f-string (XSS risk) |
 | S002 | Security | Warning | @csrf_exempt without justification comment |
 | S003 | Security | Warning | Bare except: pass swallows all exceptions |
@@ -259,6 +261,13 @@ console.log("debug info"); // noqa: Q003
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C028"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C028"]` (the runtime still applies no deadline)
 - **False positives**: None
 
+### C029 — Invalid `query_budget` mode
+- **Severity**: Error
+- **Method**: Settings inspection
+- **What it detects**: `LIVEVIEW_CONFIG['query_budget']` (or the same key in `DJUST_CONFIG`) is set to something other than `None`, `"off"`, `"warn"` or `"error"`, such as `True`, `"WARN"`, `1` or `"errors"`. The request path never fails over it: it reads the value as `"warn"` and logs that once, so a project that meant `"error"` would not learn it otherwise. See [Per-view query budgets](website/testing/index.md#per-view-query-budgets).
+- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C029"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C029"]` (the runtime still reads it as `"warn"`)
+- **False positives**: None
+
 ---
 
 ## LiveView Checks (V)
@@ -457,9 +466,16 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 ### V023 — `params_form` the request path cannot use
 - **Severity**: Error
 - **Method**: Runtime (class inspection; no view is constructed and no form is instantiated)
-- **What it detects**: a LiveView whose `params_form` (read from the class, so an inherited declaration counts) will fail on the first request. djust binds the URL's query parameters with `form_class(data=...)` and nothing else, so two declarations fail there: a `params_form` that is not a Django form class (a dotted-path string, a form instance, another class) raises `ImproperlyConfigured`, and a form whose `__init__` requires another argument (a user, a queryset, a tenant) or cannot take `data=` raises `TypeError`. The verdicts are the request path's own (`djust._params_form.form_class_problem` and `construction_problem`), so the check cannot call a form usable that the request path then refuses. A signature that cannot be read is not reported.
+- **What it detects**: a LiveView whose `params_form` (read from the class, so an inherited declaration counts) will fail on the first request. djust binds the URL's query parameters with `form_class(data=...)` and nothing else, so two declarations fail there: a `params_form` that is not a Django form class (a dotted-path string, a form instance, another class) raises `ImproperlyConfigured`, and a form whose `__init__` requires another argument (a user, a queryset, a tenant) or cannot take `data=` raises `TypeError`. The verdicts are the request path's own (`djust._params_form.form_class_problem` and `construction_problem`), so every failure visible in the signature is judged as the request path judges it. It reads signatures only: it does not instantiate the form, so an `__init__` that raises, a positional-only `data` (`__init__(self, data=None, /, **kw)`) that the form's own `super().__init__` then rejects, or a lazy object wrapping a form class passes the check and still fails on the first request. A signature that cannot be read is not reported.
 - **Fix**: set `params_form` to a form class; give every other `__init__` argument a default, or read it from the view in `handle_params()` instead.
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["V023"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.V023"]`
+
+### V024 — Invalid `query_budget`
+- **Severity**: Error
+- **Method**: Runtime (class inspection; no view is constructed)
+- **What it detects**: a LiveView whose `query_budget` (read from the class) is a declaration nothing can enforce: a dict key other than `mount`, `render`, `event`, `events`; a `bool`, a negative number or a non-int; an `events` that is not a `{handler: n}` dict; a handler named in `events` that the view does not have; or one that a budget cannot be enforced on, an `async def` handler (it runs on the event loop) or a `@background` handler (its work runs later, in `start_async`). The verdict is `djust._query_budget.declared_budget`, the one reader that `LiveViewSmokeTest`, the run-time meter and `djust_audit` also use: the smoke test raises `ValueError` on the same declaration, the run-time meter logs it once and measures nothing, and `djust_audit` lists it as invalid.
+- **Fix**: use an int, or a dict with those keys; name only synchronous `@event_handler` methods of the view in `events`.
+- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["V024"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.V024"]`
 
 ---
 

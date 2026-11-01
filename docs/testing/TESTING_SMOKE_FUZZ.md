@@ -18,7 +18,7 @@ Run it:
 pytest -k "TestMyAppViews" -v
 ```
 
-This single class generates five test methods automatically:
+This single class generates six test methods automatically:
 
 | Test | What it checks |
 |------|---------------|
@@ -27,6 +27,7 @@ This single class generates five test methods automatically:
 | `test_smoke_event_queries` | Every handler with an event budget (`query_budget["event"]` / `["events"]`) stays within it |
 | `test_fuzz_xss` | XSS payloads don't appear unescaped in rendered HTML |
 | `test_fuzz_no_unhandled_crash` | Wrong-type params don't cause unhandled exceptions |
+| `test_fuzz_handlers_succeed` | Handlers handle the fuzz payloads without returning `success=False` |
 
 ## Configuration
 
@@ -93,11 +94,11 @@ class SalesReportView(LiveView):
     query_budget = {"mount": 30, "render": 5}  # each phase on its own
 ```
 
-Resolution, most local first: `view_config[View]["max_queries"]`, then `View.query_budget`, then `max_queries`. An int covers mount and first render together; a dict covers `"mount"` and `"render"` separately, and a phase it omits falls back to `max_queries`. `"event": n` and `"events": {handler: n}` cap a handler's queries and are checked by `test_smoke_event_queries` (below). Any other dict key (a typo), a handler name in `"events"` the view does not have, or a value that is not a non-negative int fails the test with a `ValueError` naming the view, since a budget the test cannot enforce would only look like protection. Failures read `shop.views.ProductListView: 5 queries (max 3, from query_budget)`. `LiveViewSmokeTest` reads the budget, and a view that declares one is also measured while the app runs in `DEBUG`: see [Per-view query budgets](../website/testing/index.md#per-view-query-budgets).
+Resolution, most local first: `view_config[View]["max_queries"]`, then `View.query_budget`, then `max_queries`. An int covers mount and first render together; a dict covers `"mount"` and `"render"` separately, and a phase it omits falls back to `max_queries`. `"event": n` and `"events": {handler: n}` cap a handler's queries and are checked by `test_smoke_event_queries` (below). Any other dict key (a typo), a handler name in `"events"` the view does not have or that is `async def` / `@background` (nothing measures those), or a value that is not a non-negative int fails the test with a `ValueError` naming the view, since a budget the test cannot enforce would only look like protection. Failures read `shop.views.ProductListView: 5 queries (max 3, from query_budget)`. `LiveViewSmokeTest` reads the budget, and a view that declares one is also measured while the app runs in `DEBUG`: see [Per-view query budgets](../website/testing/index.md#per-view-query-budgets).
 
 ### Event budgets (`test_smoke_event_queries`)
 
-Calls each budgeted handler on a freshly mounted view, with the `view_config[View]["event_params"]` you supply and the generated fuzz payloads, and fails when any call ran more queries than the budget. It runs whether or not `fuzz` is on. A handler named in `"events"` that no call succeeded for is an error (it was not measured); one covered only by `"event"` is a `UserWarning`.
+Counts the handler step's own queries (as the run-time meter does, so not the per-event object-permission re-check). Calls each budgeted handler on a freshly mounted view, with the `view_config[View]["event_params"]` you supply and the generated fuzz payloads, and fails when any call ran more queries than the budget. It runs whether or not `fuzz` is on. A handler named in `"events"` that no call succeeded for is an error (it was not measured); one covered only by `"event"` is a `UserWarning`.
 
 ### `fuzz`
 

@@ -366,6 +366,16 @@ In development, pages render without Tailwind utilities until you compile the CS
 
 ---
 
+### C029: Invalid query_budget mode
+
+**Severity**: Error
+
+**What causes it**: `LIVEVIEW_CONFIG['query_budget']` is set to something other than `None`, `"off"`, `"warn"` or `"error"` (`True`, `"WARN"`, `1`). The request path reads any such value as `"warn"` and logs it once.
+
+**Fix**: Set it to `"warn"`, `"error"` or `"off"`, or remove it. See [Per-view query budgets](../testing/index.md#per-view-query-budgets).
+
+---
+
 ### C028: Invalid http_fallback_background_timeout
 
 **Severity**: Error
@@ -802,6 +812,14 @@ V008 is broader than V006 and will flag any custom class instantiation, not just
 **What causes it**: A view sets `params_form` to something djust cannot build as `form_class(data=...)`, which is how it binds the URL's query parameters. Either the value is not a Django form class (a dotted-path string, a form instance, an unrelated class), which raises `ImproperlyConfigured` on the first request, or the form's `__init__` requires an argument besides `data` (a user, a queryset, a tenant) or cannot take `data=`, which raises `TypeError` there. Message: "<view>.params_form must be a Django form class, not 'str'." or "<view>.params_form cannot be built as form_class(data=...): its __init__ requires 'user'."
 
 **Fix**: Set `params_form` to a form class. Give every other `__init__` argument a default, or read it from the view in `handle_params()` instead. Suppress with `DJUST_CONFIG = {"suppress_checks": ["V023"]}`.
+
+### V024: Invalid `query_budget`
+
+**Severity**: Error
+
+**What causes it**: A view's `query_budget` is a declaration nothing can enforce: an unknown dict key, a `bool`, a negative or non-int number, a malformed `events`, a handler named in `events` that the view does not have, or an `async def` / `@background` handler (a budget cannot be measured on either). `LiveViewSmokeTest` raises `ValueError` on it, the run-time meter logs it once and measures nothing, and `djust_audit` lists it as invalid.
+
+**Fix**: Use an int, or a dict with `mount`, `render`, `event` and `events`; name only synchronous `@event_handler` methods in `events`. Suppress with `DJUST_CONFIG = {"suppress_checks": ["V024"]}`.
 
 ---
 
