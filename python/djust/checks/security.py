@@ -22,6 +22,7 @@ import djust.checks as _root
 from djust.checks.utils import (
     DjustError,
     DjustWarning,
+    LineCounter,
     _blank_template_comments,
     _get_template_dirs,
     _has_noqa,
@@ -1152,13 +1153,14 @@ def check_inline_script_csp(app_configs: Any, **kwargs: Any) -> list[CheckMessag
 
         relpath = os.path.relpath(filepath)
         source_lines = [""] + content.splitlines()
+        _line_counter = LineCounter(content)
         for match in _SCRIPT_OPEN_RE.finditer(scan):
             if not _script_open_is_executable_inline(match.group(1)):
                 continue
             pos = match.start()
             if not any(lo <= pos < hi for lo, hi in ranges):
                 continue
-            lineno = content[:pos].count("\n") + 1
+            lineno = _line_counter.line_at(pos)
             if _has_noqa(source_lines, lineno, "S011"):
                 continue
             errors.append(

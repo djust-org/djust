@@ -386,6 +386,45 @@ _ENDCOMMENT = re.compile(r"\{%\s*endcomment\s*%\}")
 _LINE_BREAKS = frozenset("\n\r\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029")
 
 
+def _count_newlines(text: str, start: int, end: int) -> int:
+    """Newlines in ``text[start:end]`` -- the ONLY place :class:`LineCounter` reads ``text``.
+
+    A module-level function so a test can tally how many characters a scan reads
+    (``end - start``) without a clock (#3705)."""
+    return text.count("\n", start, end)
+
+
+class LineCounter:
+    """The 1-based line of a character offset, for a scan that reports one per match.
+
+    ``text[:offset].count("\n") + 1`` re-reads the text from the start for every
+    match, so a template with many matches costs O(template x matches) (#3705).
+    This reads only the characters between the previous query and this one: a scan
+    that visits matches in order (every ``finditer`` loop) reads the text once in
+    total. An out-of-order query is still correct, at the cost of the distance moved.
+
+    One counter per text. The text the counter reads must be the text the offsets
+    index into (or one that keeps every newline in place, as the ``_blank_*`` /
+    ``_strip_*`` helpers do).
+    """
+
+    __slots__ = ("_text", "_offset", "_line")
+
+    def __init__(self, text: str) -> None:
+        self._text = text
+        self._offset = 0
+        self._line = 1
+
+    def line_at(self, offset: int) -> int:
+        """The line ``offset`` falls on; the same as ``text[:offset].count("\\n") + 1``."""
+        if offset >= self._offset:
+            self._line += _count_newlines(self._text, self._offset, offset)
+        else:
+            self._line -= _count_newlines(self._text, offset, self._offset)
+        self._offset = offset
+        return self._line
+
+
 def _blank_template_comments(content: str) -> str:
     """Replace every ``{# #}`` and ``{% comment %}...{% endcomment %}`` region
     with whitespace, keeping line breaks so line numbers stay aligned (#3283).

@@ -24,6 +24,7 @@ from djust.checks.utils import (
     _blank_template_comments,
     _strip_verbatim_blocks,
     _walk_subclasses,
+    LineCounter,
     _LIVE_RENDER_TAG_RE,
     _LIVE_RENDER_STICKY_TRUTHY_RE,
     _LIVE_RENDER_STICKY_FALSY_RE,
@@ -726,8 +727,9 @@ def check_templates(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
         relpath = os.path.relpath(filepath)
 
         # T001 -- deprecated @click/@input syntax
+        _line_counter = LineCounter(content)
         for match in _DEPRECATED_ATTR_RE.finditer(content):
-            lineno = content[: match.start()].count("\n") + 1
+            lineno = _line_counter.line_at(match.start())
             old_attr = match.group(0).rstrip("=")
             new_attr = old_attr.replace("@", "dj-")
             errors.append(
@@ -751,8 +753,9 @@ def check_templates(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
         # WARNING (not Error): a pre-sanitised value is a legitimate, if rare,
         # use case. Honours DJUST_CONFIG['suppress_checks'] (mirrors T004/S004).
         if not _is_check_suppressed("djust.S007"):
+            _line_counter = LineCounter(content)
             for match in _CLIENT_NAME_SAFE_RE.finditer(content):
-                lineno = content[: match.start()].count("\n") + 1
+                lineno = _line_counter.line_at(match.start())
                 errors.append(
                     DjustWarning(
                         "%s:%d -- potentially unsafe rendering of client-supplied "
@@ -848,11 +851,12 @@ def check_templates(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
         # time-travel-*), where `document` is CORRECT. Also honor
         # suppress_checks (mirrors T002/C013).
         if not _is_check_suppressed("djust.T004"):
+            _line_counter = LineCounter(content)
             for match in _DOC_DJUST_EVENT_RE.finditer(content):
                 event_name = match.group(1)
                 if event_name in _DOC_DISPATCHED_DJUST_EVENTS:
                     continue
-                lineno = content[: match.start()].count("\n") + 1
+                lineno = _line_counter.line_at(match.start())
                 errors.append(
                     DjustWarning(
                         "%s:%d -- document.addEventListener for djust: event." % (relpath, lineno),
@@ -918,6 +922,7 @@ def check_templates(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
             )
 
         # T013 -- dj-view with empty or invalid value
+        _line_counter = LineCounter(content)
         for match in re.finditer(r'dj-view="([^"]*)"', content):
             value = match.group(1)
             # {{ ... }} is a valid dynamic injection pattern (base-template use case)
@@ -928,7 +933,7 @@ def check_templates(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
             # console.warn. Flag exactly those; any other variable stays exempt.
             phantom = _PHANTOM_VIEW_VAR_RE.match(value)
             if phantom:
-                lineno = content[: match.start()].count("\n") + 1
+                lineno = _line_counter.line_at(match.start())
                 errors.append(
                     DjustWarning(
                         '%s:%d -- dj-view="{{ %s }}" names a context variable djust '
@@ -948,7 +953,7 @@ def check_templates(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
             if re.match(r"^\s*\{\{.*\}\}\s*$", value):
                 continue
             if not value or "." not in value:
-                lineno = content[: match.start()].count("\n") + 1
+                lineno = _line_counter.line_at(match.start())
                 errors.append(
                     DjustWarning(
                         "%s:%d -- dj-view has empty or invalid value '%s'."
@@ -989,9 +994,10 @@ def check_templates(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
         # line numbers by replacing the body with whitespace.
         _activity_scan_source = _strip_verbatim_blocks(content)
         _seen_activity_names = {}  # type: ignore[var-annotated]
+        _line_counter = LineCounter(content)
         for match in _DJ_ACTIVITY_TAG_RE.finditer(_activity_scan_source):
             args = match.group(1)
-            lineno = content[: match.start()].count("\n") + 1
+            lineno = _line_counter.line_at(match.start())
             name_match = _DJ_ACTIVITY_NAME_RE.match(args)
             # A name is "present" iff ANY of the three groups (double-quoted,
             # single-quoted, bare identifier / dotted path) matched.
@@ -1066,6 +1072,7 @@ def check_templates(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
         # (mirrors the A070/A071 / #1004 fix).
         if not _is_check_suppressed("djust.A075"):
             _live_render_scan_source = _strip_verbatim_blocks(content)
+            _line_counter = LineCounter(content)
             for match in _LIVE_RENDER_TAG_RE.finditer(_live_render_scan_source):
                 args = match.group(1)
                 # Reject FALSY assignments first so e.g. ``sticky=False
@@ -1077,7 +1084,7 @@ def check_templates(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
                 )
                 lazy_truthy = bool(_LIVE_RENDER_LAZY_TRUTHY_RE.search(args)) and not lazy_falsy
                 if sticky_truthy and lazy_truthy:
-                    lineno = content[: match.start()].count("\n") + 1
+                    lineno = _line_counter.line_at(match.start())
                     errors.append(
                         DjustWarning(
                             "%s:%d -- {%% live_render %%} has both sticky=True and "
@@ -1106,13 +1113,15 @@ def check_templates(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
         # A090 — tally {% djust_markdown %} occurrences (v0.7.0). The
         # actual Info-level check is emitted once per project after the
         # per-file loop (below).
+        _line_counter = LineCounter(content)
         for match in _DJ_MARKDOWN_TAG_RE.finditer(content):
-            lineno = content[: match.start()].count("\n") + 1
+            lineno = _line_counter.line_at(match.start())
             djust_markdown_hits.append((relpath, lineno))
 
         # T016 — tally dj-navigate occurrences (#1733).
+        _line_counter = LineCounter(content)
         for match in _DJ_NAVIGATE_RE.finditer(content):
-            lineno = content[: match.start()].count("\n") + 1
+            lineno = _line_counter.line_at(match.start())
             dj_navigate_hits.append((relpath, lineno))
 
     # T016 (#1733) — dj-navigate used but the URLconf-derived route map is
@@ -1448,6 +1457,7 @@ def _check_view_root_same_element(
     has_view_only = False
     has_root_only = False
     view_only_lineno = None
+    _line_counter = LineCounter(content)
     for match in tag_re.finditer(content):
         tag = match.group(0)
         # Attribute names, not substrings (#2892): ``dj-view-transitions`` /
@@ -1460,7 +1470,7 @@ def _check_view_root_same_element(
         if tag_has_view and not tag_has_root:
             has_view_only = True
             if view_only_lineno is None:
-                view_only_lineno = content[: match.start()].count("\n") + 1
+                view_only_lineno = _line_counter.line_at(match.start())
         if tag_has_root and not tag_has_view:
             has_root_only = True
 
@@ -1518,9 +1528,10 @@ def _check_unsupported_tags(
     if has_noqa:
         return
 
+    _line_counter = LineCounter(content)
     for match in _UNSUPPORTED_TAGS_RE.finditer(content):
         tag_name = match.group(1)
-        lineno = content[: match.start()].count("\n") + 1
+        lineno = _line_counter.line_at(match.start())
         errors.append(
             DjustWarning(
                 "%s:%d -- unsupported template tag '{%% %s %%}' will be silently "
@@ -1546,13 +1557,14 @@ def _check_click_for_navigation(
     updates and back-button support.
     """
     tag_re = re.compile(r"<[a-zA-Z][^>]*>", re.DOTALL)
+    _line_counter = LineCounter(content)
     for match in tag_re.finditer(content):
         tag = match.group(0)
         has_dj_click = "dj-click" in tag
         has_nav_data = _NAV_DATA_ATTRS.search(tag)
 
         if has_dj_click and has_nav_data:
-            lineno = content[: match.start()].count("\n") + 1
+            lineno = _line_counter.line_at(match.start())
             # Extract which data attribute was found for better messaging
             nav_match = _NAV_DATA_ATTRS.search(tag)
             nav_attr = nav_match.group(0) if nav_match else "data-*"
@@ -1587,8 +1599,9 @@ def _check_deprecated_data_dj_id(
     It has been renamed to dj-id to be consistent with all other dj- prefixed
     attributes (dj-view, dj-click, dj-model, etc.).
     """
+    _line_counter = LineCounter(content)
     for match in _DEPRECATED_DATA_DJ_ID_RE.finditer(content):
-        lineno = content[: match.start()].count("\n") + 1
+        lineno = _line_counter.line_at(match.start())
         errors.append(
             DjustWarning(
                 "%s:%d -- deprecated 'data-dj-id' attribute (renamed to 'dj-id' in v1.0)."
@@ -1626,8 +1639,9 @@ def _check_legacy_root_attrs(
     """
     if _is_check_suppressed("djust.T015"):
         return
+    _line_counter = LineCounter(content)
     for match in _LEGACY_ROOT_ATTR_RE.finditer(content):
-        lineno = content[: match.start()].count("\n") + 1
+        lineno = _line_counter.line_at(match.start())
         old_attr = match.group(0)  # e.g. "data-djust-view"
         new_attr = old_attr.replace("data-djust-", "dj-")  # -> "dj-view"
         errors.append(
@@ -1683,11 +1697,9 @@ def _check_rust_jsx_tags(
     if _is_check_suppressed("djust.T027"):
         return
     scan = _strip_verbatim_blocks(content)
-    lineno = 1
-    counted_to = 0
+    _line_counter = LineCounter(scan)
     for match in _RUST_JSX_TAG_RE.finditer(scan):
-        lineno += scan.count("\n", counted_to, match.start())
-        counted_to = match.start()
+        lineno = _line_counter.line_at(match.start())
         tag = match.group(1)
         errors.append(
             DjustWarning(
@@ -1736,8 +1748,9 @@ def _check_table_section_root(
     """
     if _is_check_suppressed("djust.T017"):
         return
+    _line_counter = LineCounter(content)
     for match in _DJ_TABLE_SECTION_ROOT_RE.finditer(content):
-        lineno = content[: match.start()].count("\n") + 1
+        lineno = _line_counter.line_at(match.start())
         tag_name = match.group(1).lower()
         attr = match.group(2).lower()
         errors.append(
@@ -1790,8 +1803,9 @@ def _check_document_element_root(
     from .bindings import noqa_state
 
     scan = _document_root_scan_text(content)
+    _line_counter = LineCounter(scan)
     for offset, tag_name, attr in _find_document_roots(scan):
-        lineno = scan[:offset].count("\n") + 1
+        lineno = _line_counter.line_at(offset)
         state = noqa_state(filepath, lineno, "T025")
         if state == "suppressed":
             continue

@@ -754,6 +754,9 @@ def no_network(monkeypatch):
 
     real_getaddrinfo = socket.getaddrinfo
     real_gethostbyname = socket.gethostbyname
+    real_gethostbyname_ex = socket.gethostbyname_ex
+    real_gethostbyaddr = socket.gethostbyaddr
+    real_getnameinfo = socket.getnameinfo
     real_connect = socket.socket.connect
     real_connect_ex = socket.socket.connect_ex
 
@@ -766,6 +769,25 @@ def no_network(monkeypatch):
         # A C function: it never calls the ``getaddrinfo`` above, so it needs its own.
         if host in _LOOPBACK:
             return real_gethostbyname(host)
+        raise socket.gaierror(socket.EAI_NONAME, "Name or service not known")
+
+    def gethostbyname_ex(host):
+        # Same C entry point family as ``gethostbyname``: never calls ``getaddrinfo``.
+        if host in _LOOPBACK:
+            return real_gethostbyname_ex(host)
+        raise socket.gaierror(socket.EAI_NONAME, "Name or service not known")
+
+    def gethostbyaddr(host):
+        # A reverse lookup, again straight into libc. It reports an unknown host as ``herror``.
+        if host in _LOOPBACK:
+            return real_gethostbyaddr(host)
+        raise socket.herror(1, "Unknown host")
+
+    def getnameinfo(sockaddr, flags):
+        # A reverse lookup of a ``(host, port, ...)`` socket address, straight into libc.
+        host = sockaddr[0] if isinstance(sockaddr, tuple) and sockaddr else None
+        if host in _LOOPBACK:
+            return real_getnameinfo(sockaddr, flags)
         raise socket.gaierror(socket.EAI_NONAME, "Name or service not known")
 
     def _may_connect(sock, address):
@@ -786,6 +808,9 @@ def no_network(monkeypatch):
 
     monkeypatch.setattr(socket, "getaddrinfo", getaddrinfo)
     monkeypatch.setattr(socket, "gethostbyname", gethostbyname)
+    monkeypatch.setattr(socket, "gethostbyname_ex", gethostbyname_ex)
+    monkeypatch.setattr(socket, "gethostbyaddr", gethostbyaddr)
+    monkeypatch.setattr(socket, "getnameinfo", getnameinfo)
     monkeypatch.setattr(socket.socket, "connect", connect)
     monkeypatch.setattr(socket.socket, "connect_ex", connect_ex)
 
@@ -867,6 +892,63 @@ def test_the_gethostbyname_guard_refuses_a_name_the_resolver_would_answer(
     # Loopback is the one thing handed through to it.
     assert socket.gethostbyname("localhost") == "203.0.113.7"
     assert answering_gethostbyname == ["localhost"]
+
+
+@pytest.fixture
+def answering_reverse_and_ex_resolvers(monkeypatch):
+    """Underlying ``gethostbyname_ex`` / ``gethostbyaddr`` / ``getnameinfo`` that answer
+    for EVERY host (request it before ``no_network``): only the guard can refuse one."""
+    import socket
+
+    calls = []
+
+    def gethostbyname_ex(host):
+        calls.append(("gethostbyname_ex", host))
+        return (host, [], ["203.0.113.7"])
+
+    def gethostbyaddr(host):
+        calls.append(("gethostbyaddr", host))
+        return ("answered.example", [], [host])
+
+    def getnameinfo(sockaddr, flags):
+        calls.append(("getnameinfo", sockaddr[0]))
+        return ("answered.example", "80")
+
+    monkeypatch.setattr(socket, "gethostbyname_ex", gethostbyname_ex)
+    monkeypatch.setattr(socket, "gethostbyaddr", gethostbyaddr)
+    monkeypatch.setattr(socket, "getnameinfo", getnameinfo)
+    return calls
+
+
+def test_the_ex_and_reverse_lookup_guards_refuse_a_host_the_resolver_would_answer(
+    answering_reverse_and_ex_resolvers, no_network
+):
+    """``gethostbyname_ex``, ``gethostbyaddr`` and ``getnameinfo`` are C entry points
+    like ``gethostbyname``: the getaddrinfo guard does not cover them (#3705)."""
+    import socket
+
+    with pytest.raises(socket.gaierror):
+        socket.gethostbyname_ex("api.example.com")
+    with pytest.raises(socket.gaierror):
+        socket.gethostbyname_ex("203.0.113.7")
+    with pytest.raises(socket.herror):
+        socket.gethostbyaddr("203.0.113.7")
+    with pytest.raises(socket.herror):
+        socket.gethostbyaddr("api.example.com")
+    with pytest.raises(socket.gaierror):
+        socket.getnameinfo(("203.0.113.7", 80), 0)
+    with pytest.raises(socket.gaierror):
+        socket.getnameinfo(("api.example.com", 80), 0)
+    assert answering_reverse_and_ex_resolvers == []  # none reached the resolver
+    # Loopback is the one thing handed through to it.
+    assert socket.gethostbyname_ex("localhost")[2] == ["203.0.113.7"]
+    assert socket.gethostbyaddr("127.0.0.1")[0] == "answered.example"
+    assert socket.getnameinfo(("127.0.0.1", 80), 0) == ("answered.example", "80")
+    assert answering_reverse_and_ex_resolvers == [
+        ("gethostbyname_ex", "localhost"),
+        ("gethostbyaddr", "127.0.0.1"),
+        ("getnameinfo", "127.0.0.1"),
+    ]
 
 
 def test_the_connect_ex_guard_refuses_an_address_but_not_loopback(answering_connect_ex, no_network):

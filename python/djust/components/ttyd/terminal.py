@@ -51,6 +51,30 @@ _WS_DEFAULT_PORTS = {"ws": 80, "wss": 443}
 #: The longest ``?url=`` value looked at. A real endpoint is far shorter.
 _MAX_URL_LENGTH = 2048
 
+#: The largest terminal a ``?rows=`` / ``?cols=`` may ask for (#3699). The browser draws
+#: ``rows`` x ``cols`` cells and sizes the container with ``calc(<rows> * 1.2em)``, so an
+#: unbounded value would let a link make the victim's own tab allocate a huge terminal.
+MAX_ROWS = 500
+MAX_COLS = 1000
+
+
+def _bounded_int(value: Any, default: int, maximum: int) -> int:
+    """``value`` as an int clamped to ``1..maximum``, or ``default`` if it is not an integer.
+
+    ``value`` is a query-string parameter, so it is untrusted (#3699). ``None`` (the
+    parameter is absent) keeps ``default`` as the class author wrote it; a string that
+    ``int()`` refuses (``"x"``, ``""``, ``"1.5"``, a digit string past Python's int
+    limit) also falls back to ``default`` rather than raising. A valid integer is
+    pulled into ``1..maximum``: zero and negative become 1, an oversized one the cap.
+    """
+    if value is None:
+        return default
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return default
+    return max(1, min(number, maximum))
+
 
 def _split_ws_url(value: Any) -> Optional[Tuple[str, str, int, str, str]]:
     """``(scheme, host, port, path, query)`` of a ``ws://`` / ``wss://`` URL, else None.
@@ -150,8 +174,8 @@ class TtydTerminalView(LiveView):
     def mount(self, request: Any, **kwargs: Any) -> None:
         params = request.GET
         self.ttyd_url = self._resolve_ttyd_url(params.get("url"))
-        self.rows = int(params.get("rows", self.__class__.rows))
-        self.cols = int(params.get("cols", self.__class__.cols))
+        self.rows = _bounded_int(params.get("rows"), self.__class__.rows, MAX_ROWS)
+        self.cols = _bounded_int(params.get("cols"), self.__class__.cols, MAX_COLS)
 
         theme_param = params.get("theme", None)
         if theme_param:
