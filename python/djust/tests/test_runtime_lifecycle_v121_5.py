@@ -122,7 +122,7 @@ async def _connect_and_mount(view_path: str, url: str = "/v121-5/"):
     communicator.scope["session"] = _ScopeSession(session_key)
     connected, _ = await communicator.connect()
     assert connected
-    await communicator.receive_json_from(timeout=2)  # connect frame
+    await communicator.receive_json_from()  # connect frame
     await communicator.send_json_to({"type": "mount", "view": view_path, "url": url})
     mount_frame = await _receive_until(communicator, "mount")
     assert mount_frame.get("type") == "mount", mount_frame

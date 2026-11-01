@@ -199,7 +199,7 @@ async def _connect(view, query):
     communicator.scope["user"] = AnonymousUser()
     connected, _ = await communicator.connect()
     assert connected
-    await communicator.receive_json_from(timeout=3)  # connect frame
+    await communicator.receive_json_from()  # connect frame
     await communicator.send_json_to(
         {"type": "mount", "view": f"{MOD}.{view}", "url": f"/r/?{query}"}
     )

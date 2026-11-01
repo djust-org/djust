@@ -232,7 +232,7 @@ class TestWebsocketMountPath:
                 connected, _ = await communicator.connect()
                 assert connected
                 # Consume the initial connect frame
-                await communicator.receive_json_from(timeout=2)
+                await communicator.receive_json_from()
                 await communicator.send_json_to(
                     {
                         "type": "mount",

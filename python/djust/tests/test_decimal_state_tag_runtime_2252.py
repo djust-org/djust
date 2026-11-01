@@ -98,7 +98,7 @@ async def _connect(url):
     communicator.scope["session"] = _ScopeSession(session_key)
     connected, _ = await communicator.connect()
     assert connected
-    await communicator.receive_json_from(timeout=2)  # drain connect frame
+    await communicator.receive_json_from()  # drain connect frame
     return communicator, session_key
 
 
@@ -108,7 +108,7 @@ async def _mount(communicator, view: str, url: str, **extra):
     with _ALLOWLIST:
         await communicator.send_json_to(frame)
         for _ in range(8):
-            msg = await communicator.receive_json_from(timeout=3)
+            msg = await communicator.receive_json_from()
             if msg.get("type") == "mount":
                 return msg
     raise AssertionError("no mount frame arrived")

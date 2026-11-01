@@ -159,7 +159,7 @@ async def _connect(view_path=None):
 
     connected, _ = await communicator.connect()
     assert connected, "WebsocketCommunicator must connect"
-    await communicator.receive_json_from(timeout=2)  # drain connect frame
+    await communicator.receive_json_from()  # drain connect frame
     return communicator
 
 

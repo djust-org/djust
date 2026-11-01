@@ -82,11 +82,11 @@ async def _mount(view: str, session_key: str, host: str = "testserver") -> dict:
     communicator.scope["session"] = _ScopeSession(session_key)
     connected, _ = await communicator.connect()
     assert connected
-    await communicator.receive_json_from(timeout=2)  # connect frame
+    await communicator.receive_json_from()  # connect frame
     await communicator.send_json_to({"type": "mount", "view": f"{__name__}.{view}", "url": _URL})
     frame = None
     for _ in range(5):
-        frame = await communicator.receive_json_from(timeout=3)
+        frame = await communicator.receive_json_from()
         if frame.get("type") in ("mount", "error", "navigate"):
             break
     await communicator.disconnect()

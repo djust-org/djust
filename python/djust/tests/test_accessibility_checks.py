@@ -17,6 +17,7 @@ from djust.checks import (
     _IMG_TAG_RE,
     check_accessibility,
 )
+from djust.tests._growth import assert_scales_linearly
 
 
 def _settings_with_tpl_dir(settings, tpl_dir):
@@ -1245,18 +1246,9 @@ class TestY005Y006Tokenizing:
         assert [(t.name, t.end) for t in tags] == [("a", len(first)), ("i", len(first) + 6)]
         assert tags[0].attrs == ' title="x > y" href="/"'
 
-    def test_malformed_markup_is_scanned_in_linear_time(self):
-        import time
-
-        from djust.checks.accessibility import (
-            _find_colour_only_legend_items,
-            _find_unnamed_images,
-        )
-
-        # Each unit is an unterminated or unclosed opener. A regex that rescans to the
-        # end of the file from every one of them takes seconds at this size
-        # (quadratic); the one-pass scan takes a few hundredths of a second.
-        for unit in (
+    @pytest.mark.parametrize(
+        "unit",
+        [
             '<svg "',
             "<svg ",
             '<div role="img" ',
@@ -1266,12 +1258,24 @@ class TestY005Y006Tokenizing:
             '<div class="legend">',
             "<script>",
             "<li>",
-        ):
-            source = unit * 6000
-            start = time.process_time()
+        ],
+    )
+    def test_malformed_markup_is_scanned_in_linear_time(self, unit):
+        from djust.checks.accessibility import (
+            _find_colour_only_legend_items,
+            _find_unnamed_images,
+        )
+
+        # Each unit is an unterminated or unclosed opener. A regex that rescans to the
+        # end of the file from every one of them takes seconds at this size
+        # (quadratic). Judged by growth, not by seconds (#3711): 4x the openers
+        # (1 500 -> 6 000) must cost under 10x as much.
+        def scan(scale):
+            source = unit * (1500 * scale)
             _find_unnamed_images(source)
             _find_colour_only_legend_items(source)
-            assert time.process_time() - start < 1.0, unit
+
+        assert_scales_linearly(scan, what=f"scanning {unit!r} openers")
 
 
 class TestReviewFixes3685:
@@ -1336,15 +1340,15 @@ class TestReviewFixes3685:
         html = '<ul class="%s"><li><i></i></li></ul>' % cls
         assert _scan(tmp_path, settings, html, "djust.Y006") == []
 
-    def test_unclosed_comment_openers_are_linear(self):
-        import time
-
+    @pytest.mark.parametrize("unit", ["<!--", "<!-- x -->", "<!-"])
+    def test_unclosed_comment_openers_are_linear(self, unit):
         from djust.checks.accessibility import _blank_html_comments
 
-        for unit in ("<!--", "<!-- x -->", "<!-"):
-            start = time.process_time()
-            _blank_html_comments(unit * 100000)
-            assert time.process_time() - start < 1.0, unit
+        # Growth, not an absolute bound (#3711): 4x the openers under 10x the cost.
+        assert_scales_linearly(
+            lambda scale: _blank_html_comments(unit * (25000 * scale)),
+            what=f"blanking {unit!r} comments",
+        )
 
 
 class TestReviewFixes3685Round2:

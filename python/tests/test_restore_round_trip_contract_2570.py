@@ -112,7 +112,7 @@ async def _mount_once(session_key: str, url: str) -> dict:
     communicator.scope["session"] = _ScopeSession(session_key)
     connected, _ = await communicator.connect()
     assert connected, "WebsocketCommunicator must connect"
-    await communicator.receive_json_from(timeout=2)  # drain connect frame
+    await communicator.receive_json_from()  # drain connect frame
     await communicator.send_json_to(
         {"type": "mount", "view": f"{__name__}._RoundTripView", "url": url}
     )

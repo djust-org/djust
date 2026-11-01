@@ -111,7 +111,7 @@ class _Superuser:
 async def _event(communicator, name):
     await communicator.send_json_to({"type": "event", "event": name, "params": {}})
     for _ in range(6):
-        output = await communicator.receive_output(timeout=2)
+        output = await communicator.receive_output()
         if output["type"] == "websocket.send":
             frame = json.loads(output.get("text") or "{}")
             if frame.get("type") in ("patch", "noop", "html_update", "error"):
@@ -144,7 +144,7 @@ async def test_decorated_async_handlers_run_over_the_socket(settings):
     except Exception:
         pass
     await communicator.send_json_to({"type": "mount", "view": f"{__name__}._AsyncHandlersView"})
-    assert (await communicator.receive_json_from(timeout=2)).get("type") == "mount"
+    assert (await communicator.receive_json_from()).get("type") == "mount"
     await _event(communicator, "guarded")
     await _event(communicator, "debounced")
     assert _RAN == ["guarded", "debounced"]

@@ -139,7 +139,7 @@ async def _connect(view, query=""):
     communicator.scope["session"] = _ScopeSession()
     connected, _ = await communicator.connect()
     assert connected
-    await communicator.receive_json_from(timeout=3)
+    await communicator.receive_json_from()
     await communicator.send_json_to(
         {"type": "mount", "view": f"{MOD}.{view}", "url": f"/ceiling/?{query}"}
     )

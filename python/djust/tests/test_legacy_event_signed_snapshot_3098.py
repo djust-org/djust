@@ -73,14 +73,14 @@ async def _connect():
     communicator.scope["session"] = _ScopeSession(session_key)
     connected, _ = await communicator.connect()
     assert connected
-    await communicator.receive_json_from(timeout=2)  # connect ack
+    await communicator.receive_json_from()  # connect ack
     return communicator, session_key
 
 
 async def _until(communicator, pred):
     with _ALLOWLIST:
         for _ in range(12):
-            msg = await communicator.receive_json_from(timeout=3)
+            msg = await communicator.receive_json_from()
             if pred(msg):
                 return msg
     raise AssertionError("expected frame never arrived")
@@ -151,7 +151,7 @@ class TestLegacyEventSnapshot:
         again.scope["session"] = _ScopeSession(session_key)
         connected, _ = await again.connect()
         assert connected
-        await again.receive_json_from(timeout=2)
+        await again.receive_json_from()
         try:
             restored = await _mount(
                 again, VIEW, url, state_snapshot={"view_slug": VIEW, "state_json": token}

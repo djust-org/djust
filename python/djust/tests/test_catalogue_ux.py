@@ -271,7 +271,7 @@ async def _mount(component_name: str):
             "params": {"component_name": component_name},
         }
     )
-    return communicator, await communicator.receive_json_from(timeout=5)
+    return communicator, await communicator.receive_json_from()
 
 
 @override_settings(
@@ -293,7 +293,7 @@ async def test_a_playground_chip_patches_only_the_preview():
                 "ref": 1,
             }
         )
-        updated = await communicator.receive_json_from(timeout=5)
+        updated = await communicator.receive_json_from()
     finally:
         await communicator.disconnect()
     assert updated.get("type") == "patch", updated

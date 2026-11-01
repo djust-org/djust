@@ -259,7 +259,7 @@ async def test_f27_two_websocket_connections_combined_limit():
         except Exception:
             pass
         await comm.send_json_to({"type": "mount", "view": view_path})
-        mount_resp = await comm.receive_json_from(timeout=2)
+        mount_resp = await comm.receive_json_from()
         assert mount_resp.get("type") != "navigate", f"unexpected redirect: {mount_resp!r}"
         return comm
 

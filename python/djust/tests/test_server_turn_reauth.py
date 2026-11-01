@@ -124,7 +124,7 @@ async def _open(view_name, *, reauth=True, interval=None):
     except Exception:  # noqa: BLE001
         pass
     await comm.send_json_to({"type": "mount", "view": f"{MOD}.{view_name}"})
-    first = await comm.receive_json_from(timeout=3)
+    first = await comm.receive_json_from()
     assert first.get("type") in ("mount", "html_update", "patch"), first
     return comm, ctx
 
@@ -333,7 +333,7 @@ async def test_real_session_logout_stops_push():
             except Exception:  # noqa: BLE001
                 pass
             await comm.send_json_to({"type": "mount", "view": f"{MOD}.QuietView"})
-            await comm.receive_json_from(timeout=3)
+            await comm.receive_json_from()
             await database_sync_to_async(lambda: logout(rf))()
             await comm.send_input(PUSH)
             frames = await _drain(comm, 1.0)

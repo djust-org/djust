@@ -114,14 +114,14 @@ async def _ws(
     communicator.scope["session"] = session
     connected, _ = await communicator.connect()
     assert connected
-    await communicator.receive_json_from(timeout=2)
+    await communicator.receive_json_from()
     message = {"type": kind, "view": _slug(view), "url": _URL}
     if snapshot is not None:
         message["state_snapshot"] = {"view_slug": _slug(view), "state_json": snapshot}
     await communicator.send_json_to(message)
     frame = None
     for _ in range(6):
-        frame = await communicator.receive_json_from(timeout=3)
+        frame = await communicator.receive_json_from()
         if frame.get("type") in ("mount", "error", "navigate"):
             break
     assert frame is not None and frame.get("type") == "mount", frame
@@ -129,7 +129,7 @@ async def _ws(
     if event:
         await communicator.send_json_to({"type": "event", "event": event, "params": {}})
         for _ in range(6):
-            reply = await communicator.receive_json_from(timeout=3)
+            reply = await communicator.receive_json_from()
             if "state_snapshot_signed" in reply:
                 event_token = reply["state_snapshot_signed"]
             if reply.get("type") in ("patch", "html_update", "diff", "noop", "error"):

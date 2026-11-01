@@ -203,7 +203,7 @@ async def _open(view_name):
     communicator.scope["user"] = AnonymousUser()
     connected, _ = await communicator.connect()
     assert connected
-    await communicator.receive_json_from(timeout=3)
+    await communicator.receive_json_from()
     await communicator.send_json_to(
         {"type": "mount", "view": f"{MOD}.{view_name}", "url": "/probe/"}
     )
@@ -213,7 +213,7 @@ async def _open(view_name):
 async def _mounted(view_name):
     communicator = await _open(view_name)
     for _ in range(8):
-        frame = await communicator.receive_json_from(timeout=5)
+        frame = await communicator.receive_json_from()
         if frame.get("type") == "mount":
             return communicator
     raise AssertionError("no mount frame")

@@ -127,7 +127,7 @@ async def _connect():
     communicator.scope["session"] = SessionStore(await sync_to_async(_fresh_key)())
     communicator.scope["user"] = AnonymousUser()
     assert (await communicator.connect())[0]
-    await communicator.receive_json_from(timeout=3)
+    await communicator.receive_json_from()
     return communicator
 
 
@@ -197,7 +197,7 @@ async def test_a_signed_in_user_without_the_permission_is_refused_in_the_contain
     communicator.scope["session"] = SessionStore(await sync_to_async(_fresh_key)())
     communicator.scope["user"] = user
     assert (await communicator.connect())[0]
-    await communicator.receive_json_from(timeout=3)
+    await communicator.receive_json_from()
     try:
         await _mount(communicator, Page)
         await _frames(communicator, "mount")
@@ -289,7 +289,7 @@ async def _signed_in_connect():
     communicator.scope["session"] = SessionStore(await sync_to_async(_fresh_key)())
     communicator.scope["user"] = user
     assert (await communicator.connect())[0]
-    await communicator.receive_json_from(timeout=3)
+    await communicator.receive_json_from()
     return communicator
 
 
@@ -347,7 +347,7 @@ async def test_the_page_views_own_revoked_authority_still_navigates_and_closes_t
         await communicator.send_json_to({"type": "event", "event": "click", "params": {}, "ref": 1})
         seen = []
         while not seen or seen[-1]["type"] != "websocket.close":
-            seen.append(await communicator.receive_output(timeout=5))
+            seen.append(await communicator.receive_output())
         assert [_kind(o) for o in seen] == ["navigate", "websocket.close"], seen
         assert seen[-1]["code"] == 4403
     finally:

@@ -109,11 +109,11 @@ async def test_deferred_turn_is_saved_and_refreshes_token(transport, cls, quiet)
             socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
             socket.scope.update(session=request.session, user=request.user, tenant=None)
             assert (await socket.connect())[0]
-            await socket.receive_json_from(timeout=3)
+            await socket.receive_json_from()
             await socket.send_json_to(
                 {"type": "mount", "view": f"{MOD}.{cls.__name__}", "url": request.path}
             )
-            assert (await socket.receive_json_from(timeout=3))["type"] == "mount"
+            assert (await socket.receive_json_from())["type"] == "mount"
             await socket.send_json_to(
                 {
                     "type": "event",

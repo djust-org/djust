@@ -138,7 +138,7 @@ class Socket:
     async def open(self):
         ok, _ = await self.ws.connect()
         assert ok
-        assert (await self.ws.receive_json_from(timeout=3))["type"] == "connect"
+        assert (await self.ws.receive_json_from())["type"] == "connect"
         await self.mount("Page")
         return await self.mount("Widget", target_id="lazy")
 
@@ -148,7 +148,7 @@ class Socket:
             frame["target_id"] = target_id
         await self.ws.send_json_to(frame)
         for _ in range(10):
-            reply = await self.ws.receive_json_from(timeout=5)
+            reply = await self.ws.receive_json_from()
             if reply.get("type") == "mount":
                 return reply
         raise AssertionError("no mount frame")
@@ -158,9 +158,9 @@ class Socket:
         if target_id:
             frame["target_id"] = target_id
         await self.ws.send_json_to(frame)
-        out = [await self.ws.receive_json_from(timeout=5)]
+        out = [await self.ws.receive_json_from()]
         while not await self.ws.receive_nothing(timeout=0.05):
-            out.append(await self.ws.receive_json_from(timeout=5))
+            out.append(await self.ws.receive_json_from())
         return out
 
     async def close(self):

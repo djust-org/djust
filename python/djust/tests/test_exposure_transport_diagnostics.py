@@ -74,7 +74,7 @@ async def test_outer_ws_event_failure(monkeypatch, caplog, debug, initial, final
         socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
         socket.scope.update(session=request.session, user=request.user, tenant=None)
         assert (await socket.connect())[0]
-        await socket.receive_json_from(timeout=3)
+        await socket.receive_json_from()
         try:
             await socket.send_json_to(
                 {
@@ -83,13 +83,13 @@ async def test_outer_ws_event_failure(monkeypatch, caplog, debug, initial, final
                     "url": request.path,
                 }
             )
-            mounted = await socket.receive_json_from(timeout=3)
+            mounted = await socket.receive_json_from()
             assert mounted["type"] == "mount", mounted
             caplog.clear()
             await socket.send_json_to(
                 {"type": "event", "event": "explode", "params": {"stage": "render"}, "ref": 19}
             )
-            failure = await socket.receive_json_from(timeout=3)
+            failure = await socket.receive_json_from()
             assert called == ["explode"]
             assert failure["type"] == "error", failure
             # Details are allowed for a legacy owner, and for every owner under DEBUG.
@@ -108,7 +108,7 @@ async def test_outer_ws_event_failure(monkeypatch, caplog, debug, initial, final
                 assert failure["source"] == "event"
                 assert failure["ref"] == 19
             await socket.send_json_to({"type": "ping"})
-            assert (await socket.receive_json_from(timeout=3))["type"] == "pong"
+            assert (await socket.receive_json_from())["type"] == "pong"
         finally:
             await socket.disconnect()
 

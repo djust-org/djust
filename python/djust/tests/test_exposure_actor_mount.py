@@ -52,7 +52,7 @@ async def test_actor_mount_rejects_before_lifecycle_and_preserves_socket(
         communicator = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
         communicator.scope.update(session=request.session, user=request.user, tenant=None)
         assert (await communicator.connect())[0]
-        await communicator.receive_json_from(timeout=3)
+        await communicator.receive_json_from()
         try:
             denied = {"view": __name__ + ".ExplicitActorView", "url": "/actor/"}
             if batch:
@@ -71,7 +71,7 @@ async def test_actor_mount_rejects_before_lifecycle_and_preserves_socket(
                 )
             else:
                 await communicator.send_json_to({"type": "mount", **denied})
-            frame = await communicator.receive_json_from(timeout=3)
+            frame = await communicator.receive_json_from()
             assert calls == [], frame
             assert "ACTOR_CONTEXT_SENTINEL" not in str(frame)
             if batch:
@@ -82,7 +82,7 @@ async def test_actor_mount_rejects_before_lifecycle_and_preserves_socket(
                 assert frame["type"] == "error"
                 assert frame["error"] == "Explicit actor mounts are not yet supported"
             await communicator.send_json_to({"type": "ping"})
-            assert (await communicator.receive_json_from(timeout=3))["type"] == "pong"
+            assert (await communicator.receive_json_from())["type"] == "pong"
         finally:
             await communicator.disconnect()
 
@@ -148,12 +148,12 @@ async def test_actor_event_refuses_after_a_late_policy_transition(monkeypatch, p
         communicator = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
         communicator.scope.update(session=request.session, user=request.user, tenant=None)
         assert (await communicator.connect())[0]
-        await communicator.receive_json_from(timeout=3)
+        await communicator.receive_json_from()
         try:
             await communicator.send_json_to(
                 {"type": "mount", "view": __name__ + ".TransitionActorView", "url": "/actor/"}
             )
-            mounted = await communicator.receive_json_from(timeout=3)
+            mounted = await communicator.receive_json_from()
             assert mounted["type"] == "mount", mounted
 
             monkeypatch.setattr(TransitionActorView, "exposure_policy", policy)
@@ -166,11 +166,11 @@ async def test_actor_event_refuses_after_a_late_policy_transition(monkeypatch, p
                     await asyncio.sleep(0.05)
                 assert calls == ["dispatch_actor_event"]
             else:
-                frame = await communicator.receive_json_from(timeout=3)
+                frame = await communicator.receive_json_from()
                 assert frame["type"] == "error", frame
                 assert frame["error"] == "Explicit actor events are not yet supported"
                 assert "SENTINEL" not in str(frame)
-                closed = await communicator.receive_output(timeout=3)
+                closed = await communicator.receive_output()
                 assert closed == {"type": "websocket.close", "code": 4403}
                 assert calls == []
         finally:

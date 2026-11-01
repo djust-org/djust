@@ -74,7 +74,7 @@ async def _connect():
     except Exception:  # noqa: BLE001 - no ack frame on this transport
         pass
     await comm.send_json_to({"type": "mount", "view": _VIEW})
-    mount = await comm.receive_json_from(timeout=3)
+    mount = await comm.receive_json_from()
     assert mount.get("type") == "mount", mount
     return comm
 

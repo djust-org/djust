@@ -301,20 +301,20 @@ class TestRealRenderPaths:
             comm.scope["session"] = _ScopeSession(session_key)
             connected, _ = await comm.connect()
             assert connected
-            await comm.receive_json_from(timeout=2)  # connect frame
+            await comm.receive_json_from()  # connect frame
             await comm.send_json_to(
                 {"type": "mount", "view": f"{__name__}._ShadowView", "url": "/shadow/"}
             )
             frames = []
             for _ in range(6):
-                f = await comm.receive_json_from(timeout=3)
+                f = await comm.receive_json_from()
                 frames.append(f)
                 if f.get("type") == "mount":
                     break
             assert frames[-1].get("type") == "mount", frames
             await comm.send_json_to({"type": "event", "event": "bump", "params": {}, "ref": 1})
             for _ in range(6):
-                f = await comm.receive_json_from(timeout=3)
+                f = await comm.receive_json_from()
                 frames.append(f)
                 if f.get("type") in ("patch", "html_update"):
                     break
@@ -516,20 +516,20 @@ class TestJitRealRenderPaths:
             comm.scope["session"] = _ScopeSession(session_key)
             connected, _ = await comm.connect()
             assert connected
-            await comm.receive_json_from(timeout=2)  # connect frame
+            await comm.receive_json_from()  # connect frame
             await comm.send_json_to(
                 {"type": "mount", "view": f"{__name__}._JitView", "url": "/jit/"}
             )
             frames = []
             for _ in range(6):
-                f = await comm.receive_json_from(timeout=3)
+                f = await comm.receive_json_from()
                 frames.append(f)
                 if f.get("type") == "mount":
                     break
             assert frames[-1].get("type") == "mount", frames
             await comm.send_json_to({"type": "event", "event": "bump", "params": {}, "ref": 1})
             for _ in range(6):
-                f = await comm.receive_json_from(timeout=3)
+                f = await comm.receive_json_from()
                 frames.append(f)
                 if f.get("type") in ("patch", "html_update"):
                     break
@@ -884,11 +884,11 @@ class TestRustQuerySetRealRenderPaths:
             comm.scope["session"] = _ScopeSession(session_key)
             connected, _ = await comm.connect()
             assert connected
-            await comm.receive_json_from(timeout=2)
+            await comm.receive_json_from()
             await comm.send_json_to({"type": "mount", "view": f"{__name__}._QsView", "url": "/qs/"})
             mount_frames = []
             for _ in range(6):
-                f = await comm.receive_json_from(timeout=3)
+                f = await comm.receive_json_from()
                 mount_frames.append(f)
                 if f.get("type") == "mount":
                     break
@@ -897,7 +897,7 @@ class TestRustQuerySetRealRenderPaths:
             await comm.send_json_to({"type": "event", "event": "bump", "params": {}, "ref": 1})
             event_frames = []
             for _ in range(6):
-                f = await comm.receive_json_from(timeout=3)
+                f = await comm.receive_json_from()
                 event_frames.append(f)
                 if f.get("type") in ("patch", "html_update"):
                     break

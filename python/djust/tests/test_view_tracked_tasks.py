@@ -86,7 +86,7 @@ async def _until(predicate, what):
 
 async def _receive_until(comm, wanted):
     for _ in range(8):
-        frame = await comm.receive_json_from(timeout=5)
+        frame = await comm.receive_json_from()
         if frame.get("type") in wanted:
             return frame
     raise AssertionError("no %s frame" % (wanted,))
@@ -114,7 +114,7 @@ async def _mounted(view):
 
     comm.scope["user"] = AnonymousUser()
     assert (await comm.connect())[0]
-    await comm.receive_json_from(timeout=3)
+    await comm.receive_json_from()
     await comm.send_json_to({"type": "mount", "view": f"{__name__}.{view}", "url": "/f/"})
     frame = await _receive_until(comm, ("mount", "error"))
     assert frame["type"] == "mount", frame

@@ -422,7 +422,7 @@ async def test_a_parent_event_applies_the_new_input_to_the_live_child_over_the_s
         socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
         socket.scope["session"] = _ScopeSession(key)
         assert (await socket.connect())[0]
-        await socket.receive_json_from(timeout=2)
+        await socket.receive_json_from()
         try:
             await socket.send_json_to({"type": "mount", "view": f"{_MOD}.HookParent", "url": "/p/"})
             mount = await _receive_until(socket, "mount")

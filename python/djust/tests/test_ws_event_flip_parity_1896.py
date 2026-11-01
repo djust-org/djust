@@ -100,7 +100,7 @@ async def _connect_and_mount(view_path: str, url: str = "/parity/"):
 
     connected, _ = await communicator.connect()
     assert connected, "WebsocketCommunicator must connect"
-    await communicator.receive_json_from(timeout=2)  # drain connect frame
+    await communicator.receive_json_from()  # drain connect frame
 
     await communicator.send_json_to({"type": "mount", "view": view_path, "url": url})
     mount_frame = await _receive_until(communicator, "mount")
@@ -383,7 +383,7 @@ class TestComponentIdRouting:
                     "ref": 5,
                 }
             )
-            resp = await communicator.receive_json_from(timeout=3)
+            resp = await communicator.receive_json_from()
 
             # #1898 FIX (#1907 THE FLIP): the runtime component_id path re-renders
             # the parent and emits a parent-scoped html_update — NOT the bespoke
@@ -426,7 +426,7 @@ class TestComponentIdRouting:
                     "ref": 6,
                 }
             )
-            resp = await communicator.receive_json_from(timeout=3)
+            resp = await communicator.receive_json_from()
 
             assert resp.get("type") == "error", f"unknown component_id must error; got {resp!r}"
             assert "not found" in resp.get("error", "").lower(), (
@@ -535,7 +535,7 @@ class TestActivityDeferral:
                     "ref": 1,
                 }
             )
-            deferred = await communicator.receive_json_from(timeout=3)
+            deferred = await communicator.receive_json_from()
             assert deferred.get("type") == "noop", (
                 "an event on a hidden non-eager activity must be deferred with a "
                 f"noop (no render); got {deferred!r}"
@@ -676,7 +676,7 @@ class TestRefEcho:
             await communicator.send_json_to(
                 {"type": "event", "event": "noop_event", "params": {}, "ref": 11}
             )
-            noop = await communicator.receive_json_from(timeout=3)
+            noop = await communicator.receive_json_from()
             assert noop.get("type") == "noop", f"no-state-change event must noop; got {noop!r}"
             assert noop.get("ref") == 11, f"noop must echo ref=11; got {noop!r}"
 

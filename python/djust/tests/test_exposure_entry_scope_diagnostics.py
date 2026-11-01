@@ -444,7 +444,7 @@ async def _connect():
     socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
     socket.scope.update(session=request.session, user=request.user, tenant=None)
     assert (await socket.connect())[0]
-    await socket.receive_json_from(timeout=3)
+    await socket.receive_json_from()
     return socket
 
 
@@ -490,7 +490,7 @@ async def test_ws_request_html_failure(monkeypatch, caplog, debug, policy):
             assert observed == (False, False, False)
             assert STATIC_LOG in caplog.text
         await socket.send_json_to({"type": "ping"})
-        assert (await socket.receive_json_from(timeout=3))["type"] == "pong"
+        assert (await socket.receive_json_from())["type"] == "pong"
     finally:
         await socket.disconnect()
 

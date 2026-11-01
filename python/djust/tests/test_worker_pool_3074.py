@@ -85,7 +85,7 @@ async def _connect(tag):
     communicator.scope["session"] = _ScopeSession()
     connected, _ = await communicator.connect()
     assert connected
-    await communicator.receive_json_from(timeout=3)  # connect frame
+    await communicator.receive_json_from()  # connect frame
     await communicator.send_json_to(
         {"type": "mount", "view": f"{__name__}._PoolView", "url": f"/pool/?tag={tag}"}
     )

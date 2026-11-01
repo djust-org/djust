@@ -19,7 +19,6 @@ The probes are the #3229 reviewer's.
 
 import asyncio
 import threading
-import time
 import uuid
 
 import pytest
@@ -37,7 +36,10 @@ from djust.tests.test_exposure_sse_resilience_3200 import BackgroundPage, _fresh
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.django_db(transaction=True)]
 
-VALVE_S = 3.0
+#: Releases a hung store after this long so a regression cannot hang the run. It is the
+#: ONLY clock in the "does not stall other sessions" test, so it is generous: a runner
+#: pause shorter than this must not be mistaken for B waiting on A (#3711).
+VALVE_S = 15.0
 
 urlpatterns = [path("bg/", BackgroundPage.as_view())]
 
@@ -158,15 +160,14 @@ async def test_one_hung_store_write_does_not_stall_other_sessions(hung_store):
     blocked.add(key_a)
 
     assert (await _post(a, key_a)).status_code == 200  # deferred; its save holds a thread
-    t0 = time.monotonic()
     rb = await _post(b, key_b)
-    elapsed = time.monotonic() - t0
     released_first = release.is_set()
 
     assert rb.status_code == 200
-    assert not released_first and elapsed < 1.0, (
-        f"B's event took {elapsed:.2f}s and only finished after A's store answered"
-    )
+    # An ordering, not a duration (#3711): B's event completed while A's store had
+    # not answered. If B waited on A's save, the valve is what would release it, and
+    # ``release`` would already be set here.
+    assert not released_first, "B's event only finished after A's store answered"
     frames = [f for f in list(b.queue._queue) if f]
     assert not [f for f in frames if f.get("type") == "error"], frames
 

@@ -83,7 +83,7 @@ async def _connect_and_mount():
         pass
     await communicator.send_json_to({"type": "mount", "view": _VIEW_PATH})
     # Drain the mount response (should be a real mount, not a redirect).
-    mount_resp = await communicator.receive_json_from(timeout=2)
+    mount_resp = await communicator.receive_json_from()
     assert mount_resp.get("type") != "navigate", f"unexpected mount redirect: {mount_resp!r}"
     return communicator
 

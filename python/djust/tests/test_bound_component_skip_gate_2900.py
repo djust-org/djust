@@ -304,7 +304,7 @@ async def _connect_and_mount(view_path: str, url: str = "/2900/"):
     communicator.scope["session"] = _ScopeSession(session_key)
     connected, _ = await communicator.connect()
     assert connected
-    await communicator.receive_json_from(timeout=2)  # connect frame
+    await communicator.receive_json_from()  # connect frame
     await communicator.send_json_to({"type": "mount", "view": view_path, "url": url})
     mount_frame = await _receive_until(communicator, "mount")
     assert mount_frame.get("type") == "mount", mount_frame
@@ -329,7 +329,7 @@ class TestWebSocketFrame:
                         "ref": 1,
                     }
                 )
-                updated = await communicator.receive_json_from(timeout=5)
+                updated = await communicator.receive_json_from()
                 assert updated.get("type") != "error", updated
                 assert updated.get("type") in ("patch", "html_update", "html_recovery"), (
                     f"a state change must re-render, not noop: {updated!r}"
@@ -357,7 +357,7 @@ class TestWebSocketFrame:
                         "ref": 2,
                     }
                 )
-                updated = await communicator.receive_json_from(timeout=5)
+                updated = await communicator.receive_json_from()
                 assert updated.get("type") in ("patch", "html_update"), updated
                 assert "True" in str(updated), updated
             finally:

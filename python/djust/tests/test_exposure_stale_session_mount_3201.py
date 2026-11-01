@@ -43,13 +43,13 @@ async def _connect(session, user=None):
     comm.scope["user"] = user if user is not None else AnonymousUser()
     connected, _ = await comm.connect()
     assert connected
-    await comm.receive_json_from(timeout=5)
+    await comm.receive_json_from()
     return comm
 
 
 async def _mount(comm):
     await comm.send_json_to({"type": "mount", "view": VIEW, "url": "/runtime-explicit/"})
-    return await comm.receive_json_from(timeout=5)
+    return await comm.receive_json_from()
 
 
 def _settings():
@@ -71,7 +71,7 @@ async def _persisted_then_deleted_session_key():
             frame = await _mount(comm)
             assert frame["type"] == "mount", frame
             await comm.send_json_to({"type": "event", "event": "increment", "params": {}})
-            reply = await comm.receive_json_from(timeout=5)
+            reply = await comm.receive_json_from()
             assert reply["type"] in {"patch", "html_update"}, reply
         finally:
             await comm.disconnect()
@@ -93,7 +93,7 @@ async def test_mount_with_a_vanished_session_mounts_fresh_and_works(staged):
             # The socket keeps working under the replacement session: events
             # authorize, persist, and acknowledge.
             await comm.send_json_to({"type": "event", "event": "increment", "params": {}})
-            reply = await comm.receive_json_from(timeout=5)
+            reply = await comm.receive_json_from()
             assert reply["type"] in {"patch", "html_update"}, reply
         finally:
             await comm.disconnect()
@@ -119,7 +119,7 @@ async def test_flushed_cache_session_mounts_fresh(staged):
             frame = await _mount(comm)
             assert frame["type"] == "mount", frame
             await comm.send_json_to({"type": "event", "event": "increment", "params": {}})
-            reply = await comm.receive_json_from(timeout=5)
+            reply = await comm.receive_json_from()
             assert reply["type"] in {"patch", "html_update"}, reply
         finally:
             await comm.disconnect()
@@ -139,7 +139,7 @@ async def test_vanished_session_state_lands_in_a_new_session_only(staged):
             frame = await _mount(comm)
             assert frame["type"] == "mount", frame
             await comm.send_json_to({"type": "event", "event": "increment", "params": {}})
-            reply = await comm.receive_json_from(timeout=5)
+            reply = await comm.receive_json_from()
             assert reply["type"] in {"patch", "html_update"}, reply
         finally:
             await comm.disconnect()
@@ -201,7 +201,7 @@ async def test_an_existing_session_keeps_its_identity(staged):
             frame = await _mount(comm)
             assert frame["type"] == "mount", frame
             await comm.send_json_to({"type": "event", "event": "increment", "params": {}})
-            reply = await comm.receive_json_from(timeout=5)
+            reply = await comm.receive_json_from()
             assert reply["type"] in {"patch", "html_update"}, reply
         finally:
             await comm.disconnect()
@@ -229,9 +229,9 @@ async def test_revoked_socket_recovers_on_the_reconnect_mount(staged):
             assert frame["type"] == "mount", frame
             await sync_to_async(SessionStore(key).delete)()
             await comm.send_json_to({"type": "event", "event": "increment", "params": {}})
-            reply = await comm.receive_json_from(timeout=5)
+            reply = await comm.receive_json_from()
             assert reply["type"] == "error", reply
-            closed = await comm.receive_output(timeout=5)
+            closed = await comm.receive_output()
             assert closed == {"type": "websocket.close", "code": 4403}
         finally:
             await comm.disconnect()
@@ -323,7 +323,7 @@ async def test_vanished_cached_db_session_mounts_fresh(staged):
             frame = await _mount(comm)
             assert frame["type"] == "mount", frame
             await comm.send_json_to({"type": "event", "event": "increment", "params": {}})
-            reply = await comm.receive_json_from(timeout=5)
+            reply = await comm.receive_json_from()
             assert reply["type"] in {"patch", "html_update"}, reply
         finally:
             await comm.disconnect()

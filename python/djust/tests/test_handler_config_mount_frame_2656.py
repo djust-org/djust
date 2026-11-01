@@ -71,10 +71,10 @@ async def _mount_frame() -> Dict[str, Any]:
     comm = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
     connected, _ = await comm.connect()
     assert connected
-    await comm.receive_json_from(timeout=5)
+    await comm.receive_json_from()
     try:
         await comm.send_json_to({"type": "mount", "view": f"{MOD}.RateLimited2656", "url": "/x/"})
-        return await comm.receive_json_from(timeout=5)
+        return await comm.receive_json_from()
     finally:
         await comm.disconnect()
 

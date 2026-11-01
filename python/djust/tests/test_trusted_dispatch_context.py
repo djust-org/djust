@@ -287,18 +287,18 @@ async def test_real_websocket(actor_mode):
         socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
         socket.scope.update(session=request.session, user=request.user, tenant=None)
         assert (await socket.connect())[0]
-        await socket.receive_json_from(timeout=3)
+        await socket.receive_json_from()
         try:
             await socket.send_json_to(
                 {"type": "mount", "view": __name__ + "." + view, "url": request.path}
             )
-            assert (await socket.receive_json_from(timeout=3))["type"] == "mount"
+            assert (await socket.receive_json_from())["type"] == "mount"
             for case, payload in cases.items():
                 CALLS.clear()
                 await socket.send_json_to(
                     {"type": "event", "event": "choose", "params": payload, "ref": 1}
                 )
-                frame = await socket.receive_json_from(timeout=3)
+                frame = await socket.receive_json_from()
                 assert CALLS == _expect(case), (case, frame)
                 assert (frame["type"] == "error") is (case in FORGED), (case, frame)
                 assert "forged" not in json.dumps(frame)

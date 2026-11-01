@@ -187,12 +187,12 @@ async def test_time_travel_jump_restores_interactive_state_over_websocket():
         socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
         socket.scope.update(session=request.session, user=request.user, tenant=None)
         assert (await socket.connect())[0]
-        await socket.receive_json_from(timeout=3)
+        await socket.receive_json_from()
 
         async def receive_until(kinds):
             frames = []
             for _ in range(8):
-                frame = await socket.receive_json_from(timeout=5)
+                frame = await socket.receive_json_from()
                 frames.append(frame)
                 if frame.get("type") in kinds:
                     return frames

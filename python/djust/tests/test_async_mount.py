@@ -89,7 +89,7 @@ async def _ws_mount(view, url="/m/", params=None):
     comm = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
     connected, _ = await comm.connect()
     assert connected
-    await comm.receive_json_from(timeout=3)
+    await comm.receive_json_from()
     frame = {"type": "mount", "view": f"{_MODULE}.{view}", "url": url}
     if params is not None:
         frame["params"] = params

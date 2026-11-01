@@ -69,7 +69,7 @@ async def _connect_and_mount(params=None, url="/tabs/"):
     communicator.scope["session"] = _ScopeSession(session_key)
     connected, _ = await communicator.connect()
     assert connected
-    await communicator.receive_json_from(timeout=2)  # connect frame
+    await communicator.receive_json_from()  # connect frame
     await communicator.send_json_to(
         {
             "type": "mount",

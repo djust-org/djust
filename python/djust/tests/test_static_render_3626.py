@@ -321,7 +321,7 @@ class _Socket:
         self.communicator.scope["session"] = Session()
         connected, _ = await self.communicator.connect()
         assert connected
-        await self.communicator.receive_json_from(timeout=3)
+        await self.communicator.receive_json_from()
         return self
 
     async def __aexit__(self, *exc):
@@ -329,7 +329,7 @@ class _Socket:
 
     async def until(self, *types):
         for _ in range(12):
-            frame = await self.communicator.receive_json_from(timeout=5)
+            frame = await self.communicator.receive_json_from()
             if frame.get("type") in types:
                 return frame
         raise AssertionError("no %s frame" % (types,))
@@ -447,7 +447,7 @@ class TestTheWebSocket:
                 mounted = await socket.mount(StaticDiagramWithBadge)
                 result = None
                 for _ in range(12):
-                    frame = await socket.communicator.receive_json_from(timeout=5)
+                    frame = await socket.communicator.receive_json_from()
                     if frame.get("source") == "async":
                         result = frame
                         break

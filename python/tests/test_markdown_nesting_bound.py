@@ -18,6 +18,7 @@ import pytest
 
 from djust import LiveView, _rust, render_markdown
 from djust.testing import LiveViewTestClient
+from djust.tests._growth import assert_scales_linearly
 
 # Read through getattr so a build without the constant fails the assertions
 # below rather than the import of this module.
@@ -62,11 +63,13 @@ def test_the_bound_is_exported():
 
 
 def test_deep_quotes_render_quickly_and_stay_bounded():
-    src = "> " * 100_000 + "bottom"
-    started = time.perf_counter()
-    html = render_markdown(src)
-    took = time.perf_counter() - started
-    assert took < 2.0, f"100,000 nested quotes took {took:.2f}s"
+    # Growth, not an absolute bound (#3711): 4x the quotes (25 000 -> 100 000) must cost
+    # under 10x as much, which is what "proportional to the length of the source" means.
+    assert_scales_linearly(
+        lambda scale: render_markdown("> " * (25_000 * scale) + "bottom"),
+        what="rendering nested quotes",
+    )
+    html = render_markdown("> " * 100_000 + "bottom")
     assert shape(html).deepest == MAX
     assert "bottom" in html
 
@@ -106,19 +109,26 @@ def test_lists_within_the_bound_are_unchanged():
 
 @pytest.mark.django_db
 def test_template_tag_bounds_nested_quotes_through_a_live_view_render():
-    body = "> " * 80_000 + "tail"
+    page = {}
 
     class _V(LiveView):
         template = '<div dj-root class="prose">{% djust_markdown body %}</div>'
 
         def mount(self, request, **kwargs):
-            self.body = body
+            self.body = page["body"]
 
-    client = LiveViewTestClient(_V)
-    started = time.perf_counter()
-    client.mount()
-    html, _, _ = client.render_with_patches()
-    took = time.perf_counter() - started
-    assert took < 10.0, f"mount + render took {took:.2f}s"
+    def mount_and_render(scale):
+        page["body"] = "> " * (20_000 * scale) + "tail"
+        client = LiveViewTestClient(_V)
+        client.mount()
+        return client.render_with_patches()[0]
+
+    # Growth, not an absolute bound (#3711): 4x the quotes (20 000 -> 80 000) must cost
+    # under 10x as much. The mount and render do work on other threads' behalf too, so
+    # the wall clock is the honest clock here.
+    assert_scales_linearly(
+        mount_and_render, clock=time.perf_counter, what="mounting and rendering nested quotes"
+    )
+    html = mount_and_render(4)
     assert "tail" in html
     assert html.count("<blockquote") == MAX

@@ -209,9 +209,9 @@ async def test_the_socket_still_sends_the_accessibility_and_focus_frames():
     socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
     socket.scope.update(session=request.session, user=request.user, tenant=None)
     assert (await socket.connect())[0]
-    await socket.receive_json_from(timeout=3)
+    await socket.receive_json_from()
     await socket.send_json_to({"type": "mount", "view": f"{MOD}.AnnouncingView", "url": "/x/"})
-    assert (await socket.receive_json_from(timeout=3))["type"] == "mount"
+    assert (await socket.receive_json_from())["type"] == "mount"
 
     await socket.send_json_to({"type": "event", "event": "speak", "params": {}})
     frames = await receive_settled(
@@ -236,9 +236,9 @@ async def test_the_socket_sends_the_frames_a_server_push_queued():
     socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
     socket.scope.update(session=request.session, user=request.user, tenant=None)
     assert (await socket.connect())[0]
-    await socket.receive_json_from(timeout=3)
+    await socket.receive_json_from()
     await socket.send_json_to({"type": "mount", "view": f"{MOD}.AnnouncingView", "url": "/x/"})
-    assert (await socket.receive_json_from(timeout=3))["type"] == "mount"
+    assert (await socket.receive_json_from())["type"] == "mount"
 
     await get_channel_layer().group_send(
         "djust_db_notify_a11y_3629",
@@ -322,9 +322,9 @@ async def test_a_repeated_identical_message_changes_nothing_in_the_live_region()
     socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
     socket.scope.update(session=request.session, user=request.user, tenant=None)
     assert (await socket.connect())[0]
-    await socket.receive_json_from(timeout=3)
+    await socket.receive_json_from()
     await socket.send_json_to({"type": "mount", "view": f"{MOD}.LiveRegionView", "url": "/x/"})
-    assert (await socket.receive_json_from(timeout=3))["type"] == "mount"
+    assert (await socket.receive_json_from())["type"] == "mount"
 
     first = await _live_region_turn(socket, "save")
     second = await _live_region_turn(socket, "save")

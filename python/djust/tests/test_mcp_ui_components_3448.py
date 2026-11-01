@@ -76,14 +76,20 @@ def test_ui_component_kind_consistent_across_tools_and_suggest(mcp_server):
 
 
 def test_mcp_megabyte_query_is_bounded(mcp_server):
-    import time
     from djust.ai_discovery.catalog import load_catalog
+    from djust.tests._growth import assert_scales_linearly
 
     load_catalog()
     query = ("table filters searchable dropdown " * 40000)[:1_048_576]
-    start = time.process_time()
+    # "Bounded" means the query is cut to 512 characters before any work, so the cost
+    # must not grow with it. Judged by growth, not by seconds (#3711): 4x the query
+    # (256 KB -> 1 MB) must cost under 3x as much (a linear scan would cost ~4x).
+    assert_scales_linearly(
+        lambda scale: _call_tool(mcp_server, "list_ui_components", query=query[: 262_144 * scale]),
+        limit=3.0,
+        what="listing components for a long query",
+    )
     result = _call_tool(mcp_server, "list_ui_components", query=query)
-    assert time.process_time() - start < 1
     assert result["query"] == query[:512]
     assert (
         result["results"]

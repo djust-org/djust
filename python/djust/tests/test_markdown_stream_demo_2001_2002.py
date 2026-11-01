@@ -152,14 +152,14 @@ async def _connect_and_mount(view_suffix, url="/mdstream/"):
 
     connected, _ = await communicator.connect()
     assert connected, "WebsocketCommunicator must connect"
-    await communicator.receive_json_from(timeout=2)  # drain connect frame
+    await communicator.receive_json_from()  # drain connect frame
 
     await communicator.send_json_to(
         {"type": "mount", "view": f"{_MODULE}.{view_suffix}", "url": url}
     )
     # Drain until the mount frame.
     for _ in range(6):
-        frame = await communicator.receive_json_from(timeout=3)
+        frame = await communicator.receive_json_from()
         if frame.get("type") == "mount":
             return communicator, frame
     raise AssertionError("never received a mount frame")

@@ -140,7 +140,7 @@ async def _connect():
     communicator.scope["session"] = store
     communicator.scope["user"] = AnonymousUser()
     assert (await communicator.connect())[0]
-    await communicator.receive_json_from(timeout=3)
+    await communicator.receive_json_from()
     return communicator
 
 

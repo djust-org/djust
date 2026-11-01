@@ -165,11 +165,11 @@ async def test_login_required_ws_mount_closes_socket_after_redirect():
     communicator = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
     await _connect_and_mount(communicator)
 
-    nav = await communicator.receive_json_from(timeout=2)
+    nav = await communicator.receive_json_from()
     assert nav.get("type") == "navigate", f"expected a navigate redirect frame, got {nav!r}"
 
     # The auth failure must terminate the transport, not just nudge the UI.
-    out = await communicator.receive_output(timeout=2)
+    out = await communicator.receive_output()
     assert out["type"] == "websocket.close", f"socket not closed after auth redirect: {out!r}"
     assert out.get("code") == 4403
     await communicator.disconnect()
@@ -189,7 +189,7 @@ async def test_anonymous_cannot_dispatch_event_after_login_redirect():
     communicator = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
     await _connect_and_mount(communicator)
 
-    nav = await communicator.receive_json_from(timeout=2)
+    nav = await communicator.receive_json_from()
     assert nav.get("type") == "navigate"
 
     # A raw client ignores the navigate and tries to mutate state.
@@ -264,7 +264,7 @@ async def test_mount_batch_with_login_view_does_not_close_shared_socket():
             ],
         }
     )
-    resp = await communicator.receive_json_from(timeout=3)
+    resp = await communicator.receive_json_from()
     assert resp.get("type") == "mount_batch", f"got {resp!r}"
     # Public view survived; the login-required view is refused on its own
     # (refused[]: its container shows it, #3252) and navigates nothing.
@@ -277,7 +277,7 @@ async def test_mount_batch_with_login_view_does_not_close_shared_socket():
     # deterministically: a closed socket cannot answer a ping. Receiving a
     # pong proves the transport stayed open without racing a wall-clock window.
     await communicator.send_json_to({"type": "ping"})
-    pong = await communicator.receive_json_from(timeout=3)
+    pong = await communicator.receive_json_from()
     assert pong.get("type") == "pong", (
         "shared socket did not pong after the batch — it was likely closed "
         f"mid-batch (a websocket.close would suppress the pong); got {pong!r}"
@@ -332,7 +332,7 @@ async def test_mount_batch_with_objperm_denied_view_does_not_close_shared_socket
             ],
         }
     )
-    resp = await communicator.receive_json_from(timeout=3)
+    resp = await communicator.receive_json_from()
     assert resp.get("type") == "mount_batch", f"got {resp!r}"
     # Public view survived; the object-perm-denied view is refused on its own
     # (refused[], #3252), not reported as a failure.
@@ -347,7 +347,7 @@ async def test_mount_batch_with_objperm_denied_view_does_not_close_shared_socket
     # The shared socket must still be open (no mid-batch close): a closed socket
     # cannot pong. Deterministic openness probe, not a wall-clock window.
     await communicator.send_json_to({"type": "ping"})
-    pong = await communicator.receive_json_from(timeout=3)
+    pong = await communicator.receive_json_from()
     assert pong.get("type") == "pong", (
         "shared socket did not pong after a batched object-perm denial — it was "
         f"likely closed mid-batch (#1922 regression); got {pong!r}"
@@ -379,11 +379,11 @@ async def test_single_objperm_denied_mount_still_closes_socket():
         pass
     await communicator.send_json_to({"type": "mount", "view": _OBJPERM_PATH})
 
-    err = await communicator.receive_json_from(timeout=2)
+    err = await communicator.receive_json_from()
     assert err.get("type") == "error", f"expected an object-perm error frame, got {err!r}"
 
     # The denial must terminate the transport on the single-mount path.
-    out = await communicator.receive_output(timeout=2)
+    out = await communicator.receive_output()
     assert out["type"] == "websocket.close", f"socket not closed after object-perm denial: {out!r}"
     assert out.get("code") == 4403
     await communicator.disconnect()
@@ -402,7 +402,7 @@ async def test_auth_socket_is_not_subscribed_to_development_reload():
     try:
         connected, _ = await communicator.connect()
         assert connected
-        await communicator.receive_json_from(timeout=3)
+        await communicator.receive_json_from()
         layer = get_channel_layer()
         assert not layer.groups.get("djust_hotreload")
         probe = await layer.new_channel()
@@ -414,6 +414,6 @@ async def test_auth_socket_is_not_subscribed_to_development_reload():
         # in another xdist worker can make exactly this call at any time.
         await LiveViewConsumer.broadcast_reload("example.py")
         await communicator.send_json_to({"type": "ping"})
-        assert (await communicator.receive_json_from(timeout=3))["type"] == "pong"
+        assert (await communicator.receive_json_from())["type"] == "pong"
     finally:
         await communicator.disconnect()

@@ -76,7 +76,7 @@ async def _connect_and_mount(view_path: str):
     communicator.scope["session"] = _ScopeSession(session_key)
     connected, _ = await communicator.connect()
     assert connected
-    await communicator.receive_json_from(timeout=2)  # connect frame
+    await communicator.receive_json_from()  # connect frame
     await communicator.send_json_to({"type": "mount", "view": view_path, "url": "/room/"})
     mount_frame = await _receive_until(communicator, "mount")
     assert mount_frame.get("type") == "mount", mount_frame
@@ -102,11 +102,14 @@ class TestPingIsThePresenceHeartbeat:
                 uid = member.split("\x1f")[0]
                 backend = PresenceManager._backend()
                 # Age the heartbeat to just under the 60 s timeout.
-                backend._heartbeats[("room_2968", member)] = time.time() - 59
+                aged = time.time() - 59
+                backend._heartbeats[("room_2968", member)] = aged
                 await communicator.send_json_to({"type": "ping"})
                 pong = await _receive_until(communicator, "pong")
                 assert pong["type"] == "pong"
-                assert time.time() - _heartbeats("room_2968")[member] < 5
+                # The ping refreshed the heartbeat: it moved forward from the aged
+                # stamp (not "within 5 s of now", which asserts the runner's speed, #3711).
+                assert _heartbeats("room_2968")[member] > aged
                 # Still listed after the old heartbeat would have expired.
                 assert uid in {p["id"] for p in PresenceManager.list_presences("room_2968")}
             finally:

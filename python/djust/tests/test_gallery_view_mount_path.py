@@ -177,7 +177,7 @@ async def _mount(view_path: str, page_url: str):
     await communicator.send_json_to(
         {"type": "mount", "view": view_path, "url": page_url, "params": {}}
     )
-    return communicator, await communicator.receive_json_from(timeout=5)
+    return communicator, await communicator.receive_json_from()
 
 
 @_BASE

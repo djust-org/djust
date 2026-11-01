@@ -381,7 +381,7 @@ async def _ws_session(view_class, user, url, params=None):
     socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
     socket.scope.update(session=request.session, user=user, tenant=None)
     assert (await socket.connect())[0]
-    await socket.receive_json_from(timeout=3)
+    await socket.receive_json_from()
     await socket.send_json_to(
         {
             "type": "mount",
@@ -390,14 +390,14 @@ async def _ws_session(view_class, user, url, params=None):
             "params": params or {},
         }
     )
-    return socket, await socket.receive_json_from(timeout=5)
+    return socket, await socket.receive_json_from()
 
 
 async def _ws_event(socket, ref, event, params):
     await socket.send_json_to({"type": "event", "event": event, "params": params, "ref": ref})
     frames = []
     for _ in range(6):
-        frame = await socket.receive_json_from(timeout=5)
+        frame = await socket.receive_json_from()
         frames.append(frame)
         if frame.get("type") in {"patch", "html_update", "error", "noop"}:
             break
@@ -587,7 +587,7 @@ async def test_websocket_restore_after_http_get_reauthorizes(revoke, monkeypatch
         socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
         socket.scope.update(session=request.session, user=alice, tenant=None)
         assert (await socket.connect())[0]
-        await socket.receive_json_from(timeout=3)
+        await socket.receive_json_from()
         try:
             await socket.send_json_to(
                 {
@@ -597,7 +597,7 @@ async def test_websocket_restore_after_http_get_reauthorizes(revoke, monkeypatch
                     "has_prerendered": True,
                 }
             )
-            frame = await socket.receive_json_from(timeout=5)
+            frame = await socket.receive_json_from()
             if revoke:
                 assert frame["type"] == "error" and frame["error"] == DENIED, frame
                 return

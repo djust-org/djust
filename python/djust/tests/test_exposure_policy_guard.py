@@ -155,11 +155,11 @@ async def test_websocket_mounts_an_explicit_view():
         connected, _ = await comm.connect()
         assert connected
         try:
-            await comm.receive_json_from(timeout=5)
+            await comm.receive_json_from()
             await comm.send_json_to(
                 {"type": "mount", "view": f"{__name__}.ExplicitPolicyView", "url": "/x/"}
             )
-            response = await comm.receive_json_from(timeout=5)
+            response = await comm.receive_json_from()
             assert response["type"] == "mount", response
             assert "SHOWN" in response["html"]
             assert "EXPLICIT_POLICY_INTERNAL_SENTINEL" not in str(response)

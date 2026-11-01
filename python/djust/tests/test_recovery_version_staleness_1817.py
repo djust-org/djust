@@ -470,7 +470,7 @@ async def test_an_idle_connection_receives_no_unsolicited_frames():
 
         # Now sit idle. Anything that arrives was not asked for.
         idle_clean = await communicator.receive_nothing(timeout=1.5)
-        stray = None if idle_clean else await communicator.receive_json_from(timeout=1)
+        stray = None if idle_clean else await communicator.receive_json_from()
         assert idle_clean, (
             f"an unsolicited frame arrived at an idle connection: {stray!r}\n"
             "That is a #2215 producer. Whatever sent this is what bumps the "

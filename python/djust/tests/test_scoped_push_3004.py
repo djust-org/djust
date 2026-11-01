@@ -219,7 +219,7 @@ async def _connect(view, room):
     communicator.scope["session"] = _ScopeSession()
     connected, _ = await communicator.connect()
     assert connected
-    await communicator.receive_json_from(timeout=3)  # connect frame
+    await communicator.receive_json_from()  # connect frame
     await communicator.send_json_to({"type": "mount", "view": view, "url": f"/r/?room={room}"})
     frame = await _receive_until(communicator, "mount")
     assert frame.get("type") == "mount", frame

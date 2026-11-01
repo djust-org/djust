@@ -104,7 +104,7 @@ async def _connect(host="acme.example.com"):
     comm.scope["session"] = _Scope()
     connected, _ = await comm.connect()
     assert connected
-    await comm.receive_json_from(timeout=3)
+    await comm.receive_json_from()
     return comm
 
 

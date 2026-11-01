@@ -95,7 +95,7 @@ async def _connect():
     communicator = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
     connected, _ = await communicator.connect()
     assert connected
-    await communicator.receive_json_from(timeout=3)
+    await communicator.receive_json_from()
     await communicator.send_json_to({"type": "mount", "view": VIEW, "url": "/push/"})
     frame = await _receive_until(communicator, "mount")
     assert frame.get("type") == "mount", frame

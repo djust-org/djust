@@ -324,7 +324,7 @@ class TestUploadFrameRateLimit:
             # upload_burst=5: send 3 cancel frames (well within budget).
             for _ in range(3):
                 await communicator.send_to(bytes_data=_cancel_frame())
-                out = await communicator.receive_output(timeout=2)
+                out = await communicator.receive_output()
                 # Each legit frame yields a normal progress/cancelled response,
                 # never a close and never a rate_limit_exceeded.
                 assert out["type"] != "websocket.close", "legit upload frame caused disconnect"

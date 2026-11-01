@@ -450,7 +450,7 @@ async def test_websocket_restore_uses_the_latest_membership_and_rotates_lifetime
         socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
         socket.scope.update(session=initial.session, user=initial.user, tenant=None)
         assert (await socket.connect())[0]
-        await socket.receive_json_from(timeout=3)
+        await socket.receive_json_from()
         try:
             await socket.send_json_to(
                 {
@@ -460,7 +460,7 @@ async def test_websocket_restore_uses_the_latest_membership_and_rotates_lifetime
                     "has_prerendered": True,
                 }
             )
-            frame = await socket.receive_json_from(timeout=5)
+            frame = await socket.receive_json_from()
             assert frame["type"] == "mount", frame
             html = frame["html"]
             assert ids["p-42"] not in html and "Project 42" not in html
@@ -475,7 +475,7 @@ async def test_websocket_restore_uses_the_latest_membership_and_rotates_lifetime
                     "params": {"component_id": ids["p-42"], "value": "details"},
                 }
             )
-            refused = await socket.receive_json_from(timeout=5)
+            refused = await socket.receive_json_from()
             assert refused["type"] == "error", refused
             await socket.send_json_to(
                 {
@@ -487,7 +487,7 @@ async def test_websocket_restore_uses_the_latest_membership_and_rotates_lifetime
             )
             frames = []
             for _ in range(4):
-                frames.append(await socket.receive_json_from(timeout=5))
+                frames.append(await socket.receive_json_from())
                 if frames[-1]["type"] in {"patch", "html_update", "noop", "error"}:
                     break
             assert "p-87:details" in json.dumps(frames), frames

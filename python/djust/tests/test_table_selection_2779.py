@@ -93,7 +93,7 @@ async def _connect_and_mount(view_path: str, url: str = "/t/"):
 
     connected, _ = await communicator.connect()
     assert connected, "WebsocketCommunicator must connect"
-    await communicator.receive_json_from(timeout=2)  # drain connect frame
+    await communicator.receive_json_from()  # drain connect frame
 
     await communicator.send_json_to({"type": "mount", "view": view_path, "url": url})
     mount_frame = await _receive_until(communicator, "mount")
@@ -209,7 +209,7 @@ async def _change(communicator, tag: str, event: str, extra: Optional[Dict[str, 
     params = _client_change_params(tag)
     params.update(extra or {})
     await communicator.send_json_to({"type": "event", "event": event, "params": params, "ref": 1})
-    return await communicator.receive_json_from(timeout=3)
+    return await communicator.receive_json_from()
 
 
 def _sel(frame: Dict[str, Any]) -> str:
@@ -287,7 +287,7 @@ class TestRowSelectionOverWebSocket:
                     "ref": 2,
                 }
             )
-            sorted_resp = await communicator.receive_json_from(timeout=3)
+            sorted_resp = await communicator.receive_json_from()
             assert _sel(sorted_resp) == "1", sorted_resp
             assert " checked" in _row_checkbox(sorted_resp["html"], "1")
         finally:
@@ -300,7 +300,7 @@ class TestRowSelectionOverWebSocket:
             await communicator.send_json_to(
                 {"type": "event", "event": "not_a_handler", "params": {"component_id": "t1"}}
             )
-            resp = await communicator.receive_json_from(timeout=3)
+            resp = await communicator.receive_json_from()
         finally:
             await communicator.disconnect()
         assert resp.get("type") == "error", resp

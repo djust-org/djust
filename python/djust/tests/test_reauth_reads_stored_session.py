@@ -81,7 +81,7 @@ async def _mount(user, session):
     except Exception:
         pass
     await communicator.send_json_to({"type": "mount", "view": _VIEW_PATH})
-    mounted = await communicator.receive_json_from(timeout=2)
+    mounted = await communicator.receive_json_from()
     assert mounted.get("type") == "mount", mounted
     return communicator
 
@@ -97,7 +97,7 @@ async def _outputs_after_event(communicator) -> list[dict]:
     await communicator.send_json_to({"type": "event", "event": "mutate", "params": {}})
     outputs = []
     for _ in range(6):
-        output = await communicator.receive_output(timeout=2)
+        output = await communicator.receive_output()
         outputs.append(output)
         if output["type"] == "websocket.close":
             break

@@ -71,11 +71,11 @@ async def _mount(request, view_class, headers):
     socket.scope["session"] = SessionStore(request.session.session_key)
     socket.scope["user"] = AnonymousUser()
     assert (await socket.connect())[0]
-    await socket.receive_json_from(timeout=3)
+    await socket.receive_json_from()
     await socket.send_json_to(
         {"type": "mount", "view": __name__ + "." + view_class.__name__, "url": request.path}
     )
-    return socket, await socket.receive_json_from(timeout=3)
+    return socket, await socket.receive_json_from()
 
 
 @pytest.mark.parametrize("headers,tenant_id", [([(b"x-tenant-id", b"acme")], "acme"), ([], None)])
@@ -86,7 +86,7 @@ async def test_explicit_socket_mount_resolves_the_configured_tenant(headers, ten
         try:
             assert frame["type"] == "mount", frame
             await socket.send_json_to({"type": "event", "event": "bump", "params": {}})
-            reply = await socket.receive_json_from(timeout=3)
+            reply = await socket.receive_json_from()
             assert reply["type"] in {"patch", "html_update"}, reply
         finally:
             await socket.disconnect()
@@ -108,7 +108,7 @@ async def test_legacy_socket_mount_is_unchanged_under_tenancy():
         try:
             assert frame["type"] == "mount", frame
             await socket.send_json_to({"type": "event", "event": "bump", "params": {}})
-            assert (await socket.receive_json_from(timeout=3))["type"] in {"patch", "html_update"}
+            assert (await socket.receive_json_from())["type"] in {"patch", "html_update"}
         finally:
             await socket.disconnect()
 

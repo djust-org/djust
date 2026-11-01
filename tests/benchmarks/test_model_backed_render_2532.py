@@ -518,7 +518,7 @@ async def _drive(variant: str) -> List[PhaseRow]:
     comm = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
     connected, _ = await comm.connect()
     assert connected
-    await comm.receive_json_from(timeout=5)
+    await comm.receive_json_from()
 
     try:
         _reset_phase_counters()

@@ -16,10 +16,8 @@ scan) keeps the #3645 reading, the container accumulates.
 from __future__ import annotations
 
 import copy
-import time
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Tuple
 
 import pytest
 from django.conf import settings
@@ -31,6 +29,7 @@ from djust._accumulating_containers import (
     view_accumulating_container_ids,
 )
 from djust.decorators import event_handler
+from djust.tests._growth import assert_scales_linearly
 
 from .test_stream_only_handlers_3639 import drive as _drive_over_a_real_socket
 
@@ -422,17 +421,6 @@ class TestNestedContainers:
 # ---------------------------------------------------------------------------
 
 
-def _took(fn) -> float:
-    """The fastest of three runs: a scheduling pause inflates one run, never all three,
-    and a quadratic scan is slow in every one of them."""
-    best = float("inf")
-    for _ in range(3):
-        start = time.perf_counter()
-        fn()
-        best = min(best, time.perf_counter() - start)
-    return best
-
-
 #: A linear scan does about 4x the work on 4x the input; a quadratic one, 16x.
 GROWTH_LIMIT = 8.0
 #: CPU seconds under which the larger scan is bounded whatever the ratio says:
@@ -440,34 +428,15 @@ GROWTH_LIMIT = 8.0
 NOISE_FLOOR = 0.02
 
 
-def _cpu_growth(scan_at) -> Tuple[float, float, float]:
-    """How the scan's cost grows from ``scan_at(1)`` to ``scan_at(4)``.
-
-    CPU time of this thread, not wall-clock time: a loaded machine delays the scan
-    but does not make it do more work, so a fixed wall-clock limit fails under load
-    (#3647 cases measured 2.7-36s at a 5-minute load average of 10-20). The ratio
-    of two runs taken back to back also cancels most of what load does change
-    (clock speed, cache misses). Each size is measured three times, interleaved,
-    keeping the fastest.
-    """
-    small = big = float("inf")
-    for _ in range(3):
-        for factor in (1, 4):
-            start = time.thread_time()
-            scan_at(factor)
-            took = time.thread_time() - start
-            if factor == 1:
-                small = min(small, took)
-            else:
-                big = min(big, took)
-    return big / max(small, 1e-9), small, big
-
-
 def assert_linear(scan_at) -> None:
-    ratio, small, big = _cpu_growth(scan_at)
-    assert big < NOISE_FLOOR or ratio < GROWTH_LIMIT, (
-        f"4x the input cost {ratio:.1f}x the CPU time ({small:.4f}s -> {big:.4f}s)"
-    )
+    """The scan's cost grows from ``scan_at(1)`` to ``scan_at(4)`` in CPU time of this
+    thread (``djust.tests._growth``): a loaded machine delays the scan but does not
+    make it do more work, so a fixed wall-clock limit fails under load (#3647 cases
+    measured 2.7-36s at a 5-minute load average of 10-20), and the ratio of two runs
+    taken back to back cancels most of what load does change. Each size is measured
+    three times, interleaved, keeping the fastest (#3711 moved this into the shared
+    helper)."""
+    assert_scales_linearly(scan_at, limit=GROWTH_LIMIT, floor=NOISE_FLOOR, what="the scan")
 
 
 class TestTheScanIsBounded:
@@ -519,17 +488,31 @@ class TestTheScanIsBounded:
 
         assert_linear(scan_at)
 
-    def test_a_source_over_the_cap_is_not_scanned_and_accumulates_nothing(self, caplog):
+    def test_a_source_over_the_cap_is_not_scanned_and_accumulates_nothing(
+        self, monkeypatch, caplog
+    ):
         import logging
 
         from djust import _accumulating_containers as mod
 
+        # "Not scanned" is asserted as what it means (#3711): the scanner is never
+        # built for the oversized source, which a wall-clock bound only approximated.
+        scanned = []
+        real_scan = mod._Scan
+
+        def recording_scan(*args, **kwargs):
+            scanned.append(args[0])
+            return real_scan(*args, **kwargs)
+
+        monkeypatch.setattr(mod, "_Scan", recording_scan)
         page = container("{{ rows }}") + " " * (mod.MAX_SOURCE_CHARS + 1)
         with caplog.at_level(logging.WARNING, logger=mod.logger.name):
-            elapsed = _took(lambda: accumulating_container_ids(page, ("rows",)))
             assert accumulating_container_ids(page, ("rows",)) == ()
-        assert elapsed < 0.5
+        assert scanned == []
         assert any("too large" in r.getMessage() for r in caplog.records)
+        # Gate: a source within the cap IS scanned, so the recorder is wired in.
+        accumulating_container_ids(container("{{ rows }}"), ("rows",))
+        assert len(scanned) == 1
 
     def test_a_scan_that_outlasts_its_budget_accumulates_nothing(self, monkeypatch, caplog):
         import logging
