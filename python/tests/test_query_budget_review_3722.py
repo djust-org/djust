@@ -595,3 +595,31 @@ class TestUrlChangeJoinsAMountPhase:
         client.render()
         client.url_change({"a": "3"})  # a render closes it: a fresh phase of 1
         assert len(warned()) == 1
+
+
+@pytest.mark.django_db
+class TestTheEventMeasurementDoesNotLeakBetweenCalls:
+    def test_last_event_queries_is_per_call(self):
+        client = LiveViewTestClient(view(None)).mount()
+        client._measure_event_queries = True
+        client.send_event("plain")
+        assert client.last_event_queries == 9
+        client.send_event("nonexistent", raise_on_missing=False)  # returns before the handler
+        assert client.last_event_queries is None
+
+    def test_it_stays_unset_unless_asked_for(self):
+        client = LiveViewTestClient(view(None)).mount()
+        client.send_event("plain")
+        assert client.last_event_queries is None
+
+    def test_the_broad_event_key_never_calls_an_async_handler(self):
+        """It is skipped, not called: a coroutine that is never awaited is a bug of its own."""
+        import gc
+        import warnings
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            _smoke_fails([view({"event": 1})])
+            gc.collect()
+        never_awaited = [str(w.message) for w in caught if "was never awaited" in str(w.message)]
+        assert never_awaited == []
