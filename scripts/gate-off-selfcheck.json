@@ -1,5 +1,5 @@
 {
-  "_comment": "The harness gate-off'd with itself (#3714). Run: .venv/bin/python scripts/gate_off.py scripts/gate-off-selfcheck.json  (about 5 minutes). The RSS ceiling is deliberately NOT mutated here: with it gone the runaway-memory test allocates until the machine is out of memory (the #2730 hazard); it is covered by test_unbounded_allocation_is_reported_as_runaway_memory_with_the_measurement and by reading the one comparison.",
+  "_comment": "The harness gate-off'd with itself (#3714). Run: .venv/bin/python scripts/gate_off.py scripts/gate-off-selfcheck.json  (about 30 minutes: a mutant that breaks the restore or the lock makes later fixture runs wait out their deadlines). The RSS ceiling is deliberately NOT mutated here: with it gone the runaway-memory test allocates until the machine is out of memory (the #2730 hazard); it is covered by test_unbounded_allocation_is_reported_as_runaway_memory_with_the_measurement and by reading the one comparison. A mutant that disables a kill leaves the INNER harness's children (each in its own session) running after this outer run kills the inner pytest: afterwards run `pkill -f 'no:django tests/test_calc.py'`.",
   "root": ".",
   "command": [
     "{python}",
@@ -53,10 +53,10 @@
       "new": "    if False:"
     },
     {
-      "label": "harness: the restore is no longer in a finally",
+      "label": "harness: the restore is no longer performed in the finally",
       "file": "scripts/gate_off.py",
-      "old": "    finally:\n        _restore(path, saved)\n        del _ACTIVE[path]\n",
-      "new": "    finally:\n        pass\n"
+      "old": "        # ``landed`` can lag the replace by one signal; the bytes on disk are the truth.\n        if landed or path.read_bytes() != saved.data:\n            _restore(path, saved)\n",
+      "new": "        if False:\n            _restore(path, saved)\n"
     },
     {
       "label": "harness: restore preserves the original mtime (the copy2 hazard)",
@@ -100,6 +100,84 @@
       "file": "scripts/gate_off.py",
       "old": "        raise RuntimeError(f\"cannot sample RSS (is `ps` available? POSIX only): {exc}\") from exc\n",
       "new": "        return 0.0\n"
+    },
+    {
+      "label": "harness: the per-target lock is never taken",
+      "file": "scripts/gate_off.py",
+      "old": "        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)\n",
+      "new": "        pass\n"
+    },
+    {
+      "label": "harness: a stale journal is not recovered before the snapshot",
+      "file": "scripts/gate_off.py",
+      "old": "        _recover(path)\n",
+      "new": "        pass\n"
+    },
+    {
+      "label": "harness: the journal is not written before the mutation",
+      "file": "scripts/gate_off.py",
+      "old": "    _journal_write(path, saved, mutated)\n    _ACTIVE[path] = saved\n",
+      "new": "    _ACTIVE[path] = saved\n"
+    },
+    {
+      "label": "harness: a file edited since a killed run is overwritten instead of refused",
+      "file": "scripts/gate_off.py",
+      "old": "    elif current != saved.sha:",
+      "new": "    elif False:"
+    },
+    {
+      "label": "harness: a symlinked target is replaced by a regular file",
+      "file": "scripts/gate_off.py",
+      "old": "    path = (root / mutation.file).resolve()\n    cmd = mutation.command",
+      "new": "    path = root / mutation.file\n    cmd = mutation.command"
+    },
+    {
+      "label": "harness: an unwritable target is reported as a restore failure",
+      "file": "scripts/gate_off.py",
+      "old": "            if path.read_bytes() != saved.data:\n                raise\n",
+      "new": "            raise\n"
+    },
+    {
+      "label": "harness: a hang during collection is called a catch",
+      "file": "scripts/gate_off.py",
+      "old": "        if outcome.verdict and runner == \"pytest\":",
+      "new": "        if False:"
+    },
+    {
+      "label": "harness: a command that cannot start is a traceback",
+      "file": "scripts/gate_off.py",
+      "old": "            raise CommandNotRunnable(f\"cannot run {list(command)[:1]}: {exc}\") from exc\n",
+      "new": "            raise\n"
+    },
+    {
+      "label": "harness: the PRE-run bytecode clear is dropped",
+      "file": "scripts/gate_off.py",
+      "old": "        _clear_pycache(path)\n        if mutation.smoke:",
+      "new": "        if mutation.smoke:"
+    },
+    {
+      "label": "harness: the atexit failsafe is not registered",
+      "file": "scripts/gate_off.py",
+      "old": "atexit.register(_restore_all_failsafe)",
+      "new": "pass"
+    },
+    {
+      "label": "harness: the process group is not killed once the leader has exited",
+      "file": "scripts/gate_off.py",
+      "old": "            _kill_group(proc.pid)\n            proc.wait()",
+      "new": "            if proc.poll() is None:\n                _kill_group(proc.pid)\n            proc.wait()"
+    },
+    {
+      "label": "harness: exit 126/127 under runner=exit is a catch",
+      "file": "scripts/gate_off.py",
+      "old": "        if returncode in (126, 127):",
+      "new": "        if False:"
+    },
+    {
+      "label": "harness: no CRLF hint",
+      "file": "scripts/gate_off.py",
+      "old": "        if found == 0 and b\"\\r\\n\" in original",
+      "new": "        if False and b\"\\r\\n\" in original"
     }
   ]
 }

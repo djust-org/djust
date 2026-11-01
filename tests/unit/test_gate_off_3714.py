@@ -13,10 +13,12 @@ pins that the list cannot rot.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import importlib.util
 import json
 import os
+import py_compile
 import signal
 import subprocess
 import sys
@@ -106,6 +108,16 @@ def test_grow():
     assert calc.grow(3) == 3
 """
 
+
+@pytest.fixture(scope="module", autouse=True)
+def _gate_off_state_dir(tmp_path_factory):
+    """Locks and journals live in a state dir; never let a test touch the real one."""
+    patch = pytest.MonkeyPatch()
+    patch.setenv("GATE_OFF_STATE_DIR", str(tmp_path_factory.mktemp("gate-off-state")))
+    yield Path(os.environ["GATE_OFF_STATE_DIR"])
+    patch.undo()
+
+
 # ``-p no:django``: the parent's pytest-django exports DJANGO_SETTINGS_MODULE into the children
 COMMAND = [
     sys.executable,
@@ -149,6 +161,12 @@ def _mutations():
         _m("ambiguous: the text occurs many times", "return", "return None  #"),
         _m("import-break: raises at import", ADD, ADD + '\n\nraise RuntimeError("import-time")\n'),
         _m("syntax: does not compile", "return a + b", "return a +"),
+        _m(
+            "import-hang: the module spins at import",
+            "VALUE = 7\n",
+            "VALUE = 7\n\nwhile True:\n    pass\n",
+            deadline=3,
+        ),
         _m(
             "setup error: the fixture's factory raises",
             'def make():\n    return {"v": VALUE}',
@@ -232,6 +250,13 @@ def test_text_found_the_wrong_number_of_times_is_invalid(shared_run):
 def test_a_mutation_that_breaks_the_import_is_invalid_not_caught(shared_run):
     r = shared_run["results"]["import-break"]
     assert (r.status, r.kind) == (go.INVALID, "collection")
+
+
+def test_a_mutation_that_hangs_at_import_is_invalid_like_one_that_raises_at_import(shared_run):
+    """Rule (d): an import-time hang is not a catch; a loop that runs inside a test is."""
+    r = shared_run["results"]["import-hang"]
+    assert (r.status, r.kind) == (go.INVALID, "hung-at-import")
+    assert shared_run["results"]["hang"].kind == "hung"
 
 
 def test_a_mutation_that_does_not_compile_is_invalid_before_any_run(shared_run):
@@ -509,6 +534,335 @@ def test_an_unavailable_ps_refuses_to_run_unbounded(monkeypatch):
         go._group_rss_mb(1)
 
 
+# --------------------------------------------------------------------------- lock, journal, symlink
+
+
+HANG = {"label": "hang", "file": "calc.py", "old": "        i += 1\n", "new": "        i += 0\n"}
+CATCH = {"label": "caught", "file": "calc.py", "old": "return a + b", "new": "return a - b"}
+
+
+# The SECOND run gets a short deadline: if a harness mutation lets it run on A's mutant it
+# must end by itself (HUNG) instead of leaving an endless child behind.
+def _spec_file(tmp_path, root, name, mutations, **extra):
+    spec = tmp_path / name
+    spec.write_text(
+        json.dumps(
+            {
+                "root": str(root),
+                "command": COMMAND,
+                "deadline": 600,
+                "mutations": mutations,
+                **extra,
+            }
+        )
+    )
+    return spec
+
+
+def _start(spec):
+    return subprocess.Popen(
+        [sys.executable, str(SCRIPT), str(spec), "--no-control"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+
+def _wait_for_mutant(root, proc):
+    for _ in range(1200):
+        if b"i += 0" in (root / "calc.py").read_bytes() or proc.poll() is not None:
+            break
+        time.sleep(0.05)
+    assert b"i += 0" in (root / "calc.py").read_bytes(), "the mutation never reached the disk"
+
+
+def _children(pid):
+    out = subprocess.run(["pgrep", "-P", str(pid)], capture_output=True, text=True).stdout
+    return [int(p) for p in out.split()]
+
+
+def _wait_for_children(proc):
+    for _ in range(1200):
+        if _children(proc.pid) or proc.poll() is not None:
+            break
+        time.sleep(0.05)
+    return _children(proc.pid)
+
+
+def _kill_groups(pids):
+    for pid in pids:
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(pid, signal.SIGKILL)
+
+
+def _journal_of(root):
+    return go._journal_path((root / "calc.py").resolve())
+
+
+def test_a_second_run_on_a_file_that_is_mid_mutation_refuses_and_touches_nothing(
+    tmp_path, _gate_off_state_dir
+):
+    root = _fixture(tmp_path)
+    first = _start(_spec_file(tmp_path, root, "a.json", [HANG]))
+    try:
+        _wait_for_mutant(root, first)
+        mutant = (root / "calc.py").read_bytes()
+        second = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT),
+                str(_spec_file(tmp_path, root, "b.json", [CATCH], deadline=20)),
+                "--no-control",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        assert second.returncode == 4
+        assert "locked by another gate_off run" in second.stderr
+        assert "CAUGHT" not in second.stdout and "SURVIVED" not in second.stdout
+        assert (root / "calc.py").read_bytes() == mutant, "the refused run touched the file"
+    finally:
+        first.send_signal(signal.SIGTERM)
+        first.communicate(timeout=60)
+    assert (root / "calc.py").read_text() == CALC
+    assert not _journal_of(root).exists()
+
+
+def _kill_first_run_mid_mutation(tmp_path, root):
+    """SIGKILL a harness while it holds a mutant: nothing of ITS cleanup can run."""
+    first = _start(_spec_file(tmp_path, root, "a.json", [HANG]))
+    _wait_for_mutant(root, first)
+    orphans = _wait_for_children(first)
+    first.kill()
+    first.communicate(timeout=60)
+    _kill_groups(orphans)
+    assert b"i += 0" in (root / "calc.py").read_bytes(), "SIGKILL should leave the mutant behind"
+
+
+def test_a_run_after_a_sigkilled_run_restores_the_original_before_it_snapshots(
+    tmp_path, _gate_off_state_dir
+):
+    root = _fixture(tmp_path)
+    _kill_first_run_mid_mutation(tmp_path, root)
+    assert _journal_of(root).exists()
+    second = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            str(_spec_file(tmp_path, root, "b.json", [CATCH], deadline=20)),
+            "--no-control",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert second.returncode == 0, second.stdout + second.stderr
+    assert "recovered" in second.stderr and "stale journal" in second.stderr
+    assert "CAUGHT" in second.stdout
+    assert (root / "calc.py").read_text() == CALC
+    assert not _journal_of(root).exists()
+
+
+def test_a_stale_journal_for_a_file_edited_since_is_refused_not_overwritten(
+    tmp_path, _gate_off_state_dir
+):
+    root = _fixture(tmp_path)
+    _kill_first_run_mid_mutation(tmp_path, root)
+    edited = CALC + "\n# edited by hand after the killed run\n"
+    (root / "calc.py").write_text(edited)
+    second = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            str(_spec_file(tmp_path, root, "b.json", [CATCH], deadline=20)),
+            "--no-control",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert second.returncode == 4
+    assert "matches neither the original" in second.stderr
+    assert (root / "calc.py").read_text() == edited
+    _journal_of(root).unlink()
+
+
+def test_a_run_whose_original_already_matches_the_journal_just_drops_it(
+    tmp_path, _gate_off_state_dir
+):
+    root = _fixture(tmp_path)
+    saved = go._snapshot(root / "calc.py")
+    go._journal_write((root / "calc.py").resolve(), saved, b"mutant")
+    guard = go._acquire((root / "calc.py").resolve())
+    go._release(guard)
+    assert not _journal_of(root).exists()
+    assert (root / "calc.py").read_text() == CALC
+
+
+def test_acquire_refuses_a_target_that_is_already_held(tmp_path):
+    target = tmp_path / "f.py"
+    target.write_text("x")
+    target = target.resolve()
+    guard = go._acquire(target)
+    try:
+        with pytest.raises(go.TargetLocked):
+            go._acquire(target)
+    finally:
+        go._release(guard)
+    go._release(go._acquire(target))  # free again once released
+
+
+def test_an_unreadable_journal_is_refused(tmp_path, _gate_off_state_dir):
+    target = tmp_path / "f.py"
+    target.write_text("x")
+    target = target.resolve()
+    go._journal_path(target).write_text("{not json")
+    with pytest.raises(go.StaleJournal, match="cannot be read"):
+        go._acquire(target)
+    go._journal_path(target).unlink()
+    go._release(go._acquire(target))
+
+
+def test_a_symlinked_target_is_mutated_through_the_link_and_the_link_survives(tmp_path):
+    root = _fixture(tmp_path)
+    link = root / "calc_link.py"
+    link.symlink_to("calc.py")
+    results, _ = go.run_mutations(
+        [go.Mutation("caught: via the link", "calc_link.py", "return a + b", "return a - b")],
+        root=root,
+        command=COMMAND,
+        control=False,
+    )
+    assert results[0].status == go.CAUGHT
+    assert link.is_symlink() and os.readlink(link) == "calc.py"
+    assert (root / "calc.py").read_text() == CALC
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root ignores directory permissions")
+def test_an_unwritable_directory_is_invalid_and_not_a_restore_alarm(tmp_path):
+    root = _fixture(tmp_path)
+    os.chmod(root, 0o555)
+    try:
+        results, _ = go.run_mutations(
+            [_m("caught: add subtracts", "return a + b", "return a - b")],
+            root=root,
+            command=COMMAND,
+            control=False,
+        )
+    finally:
+        os.chmod(root, 0o755)
+    assert (results[0].status, results[0].kind) == (go.INVALID, "unwritable")
+    assert (root / "calc.py").read_text() == CALC
+    assert not go._ACTIVE
+
+
+def test_a_command_that_cannot_start_is_invalid_and_the_file_is_restored(tmp_path):
+    root = _fixture(tmp_path)
+    results, _ = go.run_mutations(
+        [_m("caught: add subtracts", "return a + b", "return a - b")],
+        root=root,
+        command=["no-such-binary-for-gate-off"],
+        control=False,
+    )
+    assert (results[0].status, results[0].kind) == (go.INVALID, "command-not-found")
+    assert (root / "calc.py").read_text() == CALC
+
+
+def test_a_command_that_cannot_start_stops_at_the_baseline(tmp_path):
+    root = _fixture(tmp_path)
+    results, baseline = go.run_mutations(
+        [_m("caught: add subtracts", "return a + b", "return a - b")],
+        root=root,
+        command=["no-such-binary-for-gate-off"],
+    )
+    assert results == [] and baseline.kind == "baseline"
+    assert "could not start" in baseline.detail
+
+
+def test_a_crlf_file_with_an_lf_mutation_text_says_why(tmp_path):
+    root = _fixture(tmp_path)
+    (root / "calc.py").write_bytes(CALC.replace("\n", "\r\n").encode())
+    results, _ = go.run_mutations(
+        [_m("crlf", "def add(a, b):\n    return a + b", "def add(a, b):\n    return a - b")],
+        root=root,
+        command=COMMAND,
+        control=False,
+    )
+    assert results[0].kind == "text-not-found" and "CRLF" in results[0].detail
+
+
+def test_a_stale_unchecked_hash_pyc_cannot_certify_a_mutation_that_never_ran(tmp_path):
+    """The PRE-run clear: bytecode of the ORIGINAL that Python trusts without looking at the source."""
+    root = _fixture(tmp_path)
+    pyc = importlib.util.cache_from_source(str(root / "calc.py"))
+    Path(pyc).parent.mkdir(exist_ok=True)
+    py_compile.compile(
+        str(root / "calc.py"),
+        cfile=pyc,
+        doraise=True,
+        invalidation_mode=py_compile.PycInvalidationMode.UNCHECKED_HASH,
+    )
+    results, _ = go.run_mutations(
+        [_m("caught: add subtracts", "return a + b", "return a - b")],
+        root=root,
+        command=COMMAND,
+        control=False,
+    )
+    assert results[0].status == go.CAUGHT, "a stale .pyc made the mutation look equivalent"
+
+
+def test_the_atexit_failsafe_restores_a_file_left_mutated_at_interpreter_exit(tmp_path):
+    target = tmp_path / "f.py"
+    target.write_text("original\n")
+    code = f"""
+import importlib.util, sys
+from pathlib import Path
+spec = importlib.util.spec_from_file_location("g", {str(SCRIPT)!r})
+g = importlib.util.module_from_spec(spec)
+sys.modules["g"] = g
+spec.loader.exec_module(g)
+p = Path({str(target.resolve())!r})
+saved = g._snapshot(p)
+g._ACTIVE[p] = saved
+g._journal_write(p, saved, b"mutant\\n")
+p.write_text("mutant\\n")
+"""
+    subprocess.run([sys.executable, "-c", code], check=True, timeout=60)
+    assert target.read_text() == "original\n"
+
+
+def _alive(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def test_the_whole_process_group_is_killed_even_after_the_leader_exited(tmp_path):
+    """A grandchild left behind by a clean exit must not outlive the run (no 200 s stall to notice)."""
+    pidfile = tmp_path / "child.pid"
+    code = (
+        "import subprocess, sys; "
+        "c = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(120)']); "
+        f"open({str(pidfile)!r}, 'w').write(str(c.pid))"
+    )
+    go._run_bounded([sys.executable, "-c", code], tmp_path, 60, 4096)
+    pid = int(pidfile.read_text())
+    try:
+        gone = False
+        for _ in range(200):
+            if not _alive(pid):
+                gone = True
+                break
+            time.sleep(0.05)
+        assert gone, "the grandchild survived the run"
+    finally:
+        with contextlib.suppress(ProcessLookupError):
+            os.kill(pid, signal.SIGKILL)
+
+
 # --------------------------------------------------------------------------- baseline and CLI
 
 
@@ -658,6 +1012,12 @@ def test_classify_names_the_first_failing_test():
 def test_classify_exit_runner_trusts_the_exit_status_only():
     assert go.classify(0, "", runner="exit").status == go.SURVIVED
     assert go.classify(101, "", runner="exit").status == go.CAUGHT
+
+
+@pytest.mark.parametrize("rc", [126, 127])
+def test_classify_exit_runner_does_not_call_a_missing_binary_a_catch(rc):
+    r = go.classify(rc, "", runner="exit")
+    assert (r.status, r.kind) == (go.INVALID, "not-executable")
 
 
 # --------------------------------------------------------------------------- the self-check list
