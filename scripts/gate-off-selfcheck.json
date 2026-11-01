@@ -1,0 +1,87 @@
+{
+  "_comment": "The harness gate-off'd with itself (#3714). Run: .venv/bin/python scripts/gate_off.py scripts/gate-off-selfcheck.json  (about 5 minutes). The RSS ceiling is deliberately NOT mutated here: with it gone the runaway-memory test allocates until the machine is out of memory (the #2730 hazard); it is covered by test_unbounded_allocation_is_reported_as_runaway_memory_with_the_measurement and by reading the one comparison.",
+  "root": ".",
+  "command": [
+    "{python}",
+    "-m",
+    "pytest",
+    "-q",
+    "-x",
+    "-p",
+    "no:cacheprovider",
+    "tests/unit/test_gate_off_3714.py",
+    "--deselect",
+    "tests/unit/test_gate_off_3714.py::test_every_selfcheck_mutation_text_still_applies"
+  ],
+  "deadline": 600,
+  "rss_mb": 4096,
+  "mutations": [
+    {
+      "label": "harness: the applied-check is dropped (a missing or ambiguous text is no longer INVALID)",
+      "file": "scripts/gate_off.py",
+      "old": "    if found != mutation.expect:",
+      "new": "    if False:"
+    },
+    {
+      "label": "harness: the no-op check is dropped",
+      "file": "scripts/gate_off.py",
+      "old": "    if mutated == original:",
+      "new": "    if False:"
+    },
+    {
+      "label": "harness: the compile check of a .py target is dropped",
+      "file": "scripts/gate_off.py",
+      "old": "    if path.suffix == \".py\":",
+      "new": "    if False:"
+    },
+    {
+      "label": "harness: pytest errors are no longer counted",
+      "file": "scripts/gate_off.py",
+      "old": "    failed, errors = counts.get(\"failed\", 0), counts.get(\"errors\", 0)",
+      "new": "    failed, errors = counts.get(\"failed\", 0), 0"
+    },
+    {
+      "label": "harness: a collection/import error is no longer INVALID",
+      "file": "scripts/gate_off.py",
+      "old": "    if _COLLECTION.search(output):",
+      "new": "    if False:"
+    },
+    {
+      "label": "harness: the restore hash is not verified",
+      "file": "scripts/gate_off.py",
+      "old": "    if got != saved.sha:",
+      "new": "    if False:"
+    },
+    {
+      "label": "harness: the restore is no longer in a finally",
+      "file": "scripts/gate_off.py",
+      "old": "    finally:\n        _restore(path, saved)\n        del _ACTIVE[path]\n",
+      "new": "    finally:\n        pass\n"
+    },
+    {
+      "label": "harness: restore preserves the original mtime (the copy2 hazard)",
+      "file": "scripts/gate_off.py",
+      "old": "    _write_atomic(path, saved.data, saved.mode)\n    _clear_pycache(path)\n",
+      "new": "    _write_atomic(path, saved.data, saved.mode)\n    os.utime(path, (1_000_000_000, 1_000_000_000))\n    _clear_pycache(path)\n"
+    },
+    {
+      "label": "harness: the stale-bytecode clear matches nothing",
+      "file": "scripts/gate_off.py",
+      "old": "    for entry in cache.glob(f\"{path.stem}.*.pyc\"):",
+      "new": "    for entry in cache.glob(f\"{path.stem}.nomatch\"):"
+    },
+    {
+      "label": "harness: children may write bytecode",
+      "file": "scripts/gate_off.py",
+      "old": "    env[\"PYTHONDONTWRITEBYTECODE\"] = \"1\"",
+      "new": "    env[\"PYTHONDONTWRITEBYTECODE\"] = \"0\""
+    },
+    {
+      "label": "harness: the deadline never fires (the run is only stopped by this self-check's own deadline)",
+      "file": "scripts/gate_off.py",
+      "old": "                if time.monotonic() - start > deadline:",
+      "new": "                if False:",
+      "deadline": 90
+    }
+  ]
+}

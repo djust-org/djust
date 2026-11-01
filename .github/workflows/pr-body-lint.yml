@@ -1,0 +1,50 @@
+name: PR body lint
+
+# Lints the PR body for unresolved placeholders (TBD, XXX, <N>, N tests, #NNN) and for
+# `#<number>` / `issuecomment-<id>` references that do not resolve in this repo (#3713;
+# the pattern is docs/patterns/unverified-claim.md). The logic is
+# scripts/check_pr_body.py, a pure function with the resolver injected; this job wires
+# the real `gh api` resolver.
+#
+# NON-GATING, on purpose (CLAUDE.md, v1.0.0rc4 finding #3 and the v1.0.2 gate rule):
+# a new CI job ships `continue-on-error: true` until it has run green on the runner
+# once, and it is NOT in the `test-summary` AND-condition in test.yml, so it cannot
+# block a merge. Promote it only after a green run, by adding it to that condition
+# AND removing `continue-on-error`.
+#
+# SECURITY: `pull_request`, not `pull_request_target`, and the PR body reaches the
+# script through an environment variable, never through ${{ }} interpolation into a
+# shell command (a body is attacker-controlled text).
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+
+concurrency:
+  group: pr-body-lint-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  pr-body-lint:
+    name: PR body has no placeholders or dangling references
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Lint the PR body
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: python scripts/check_pr_body.py --repo "$GITHUB_REPOSITORY" --body-env PR_BODY

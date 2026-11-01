@@ -1,0 +1,187 @@
+{
+  "_comment": "gate_off.py mutations of scripts/check_pr_body.py (#3713): each must turn tests/unit/test_check_pr_body_3713.py red. Run: .venv/bin/python scripts/gate_off.py scripts/check-pr-body-gateoff.json",
+  "root": ".",
+  "command": [
+    "{python}",
+    "-m",
+    "pytest",
+    "-q",
+    "-x",
+    "-p",
+    "no:cacheprovider",
+    "tests/unit/test_check_pr_body_3713.py",
+    "--deselect",
+    "tests/unit/test_check_pr_body_3713.py::test_every_gateoff_mutation_text_still_applies"
+  ],
+  "deadline": 300,
+  "mutations": [
+    {
+      "label": "TBD is no longer a placeholder",
+      "file": "scripts/check_pr_body.py",
+      "old": "(\"TBD\", re.compile(r\"\\bTBD\\b\"))",
+      "new": "(\"TBD\", re.compile(r\"\\bTBDx\\b\"))"
+    },
+    {
+      "label": "XXX is no longer a placeholder",
+      "file": "scripts/check_pr_body.py",
+      "old": "(\"XXX\", re.compile(r\"\\bXXX+\\b\"))",
+      "new": "(\"XXX\", re.compile(r\"\\bXXXx\\b\"))"
+    },
+    {
+      "label": "<N> is no longer a placeholder",
+      "file": "scripts/check_pr_body.py",
+      "old": "(\"<N>\", re.compile(r\"<N+>\"))",
+      "new": "(\"<N>\", re.compile(r\"<Nx>\"))"
+    },
+    {
+      "label": "N tests is no longer a placeholder",
+      "file": "scripts/check_pr_body.py",
+      "old": "(\"N tests\", re.compile(r\"\\bN tests?\\b\"))",
+      "new": "(\"N tests\", re.compile(r\"\\bN testsx\\b\"))"
+    },
+    {
+      "label": "#NNN is no longer a placeholder",
+      "file": "scripts/check_pr_body.py",
+      "old": "(\"#NNN\", re.compile(r\"#N+\\b\"))",
+      "new": "(\"#NNN\", re.compile(r\"#Nx\\b\"))"
+    },
+    {
+      "label": "fenced code is not masked",
+      "file": "scripts/check_pr_body.py",
+      "old": "    text = _mask_fences(text)\n",
+      "new": "    pass\n"
+    },
+    {
+      "label": "a longer fence is closed by any fence",
+      "file": "scripts/check_pr_body.py",
+      "old": "{%d,})[ \\t]*$\" % fence[1]",
+      "new": "{1,})[ \\t]*$\""
+    },
+    {
+      "label": "inline code is not masked",
+      "file": "scripts/check_pr_body.py",
+      "old": "    text = _INLINE_CODE.sub(lambda m: _blank(m.group(0)), text)\n",
+      "new": "    pass\n"
+    },
+    {
+      "label": "HTML comments are not masked",
+      "file": "scripts/check_pr_body.py",
+      "old": "    return _HTML_COMMENT.sub(lambda m: _blank(m.group(0)), text)",
+      "new": "    return text"
+    },
+    {
+      "label": "a slash glued to # is read as a reference (docs/#12)",
+      "file": "scripts/check_pr_body.py",
+      "old": "(?<![\\w/&#])#(\\d+)",
+      "new": "(?<![\\w&#])#(\\d+)"
+    },
+    {
+      "label": "a word glued to # is read as a reference (C#12)",
+      "file": "scripts/check_pr_body.py",
+      "old": "(?<![\\w/&#])#(\\d+)",
+      "new": "(?<![/&#])#(\\d+)"
+    },
+    {
+      "label": "an HTML entity is read as a reference",
+      "file": "scripts/check_pr_body.py",
+      "old": "(?<![\\w/&#])#(\\d+)",
+      "new": "(?<![\\w/#])#(\\d+)"
+    },
+    {
+      "label": "URLs are not blanked before the prose pass",
+      "file": "scripts/check_pr_body.py",
+      "old": "        plain = plain[: url.start()] + _blank(text) + plain[url.end() :]\n",
+      "new": "        pass\n"
+    },
+    {
+      "label": "link text is read as a reference",
+      "file": "scripts/check_pr_body.py",
+      "old": "    prose = _blank_link_text(plain)\n",
+      "new": "    prose = plain\n"
+    },
+    {
+      "label": "a comment link of this repo is not checked",
+      "file": "scripts/check_pr_body.py",
+      "old": "            comment = _COMMENT_REF.search(tail)\n",
+      "new": "            comment = None\n"
+    },
+    {
+      "label": "a bare issuecomment is not checked",
+      "file": "scripts/check_pr_body.py",
+      "old": "    for m in _COMMENT_REF.finditer(prose):",
+      "new": "    for m in ():"
+    },
+    {
+      "label": "the repo of a URL is compared case-sensitively",
+      "file": "scripts/check_pr_body.py",
+      "old": "/(?:issues|pull)/(\\d+)\", re.I)",
+      "new": "/(?:issues|pull)/(\\d+)\")"
+    },
+    {
+      "label": "a dangling reference is not a finding",
+      "file": "scripts/check_pr_body.py",
+      "old": "        (report.findings if verdict is False else report.unchecked).append(finding)",
+      "new": "        report.unchecked.append(finding)"
+    },
+    {
+      "label": "an unchecked lookup fails the run",
+      "file": "scripts/check_pr_body.py",
+      "old": "        (report.findings if verdict is False else report.unchecked).append(finding)",
+      "new": "        report.findings.append(finding)"
+    },
+    {
+      "label": "the ignore marker no longer applies to references",
+      "file": "scripts/check_pr_body.py",
+      "old": "    def reference(kind: str, ident: str, line: int, token: str, what: str) -> None:\n        if line in ignored:\n            return\n",
+      "new": "    def reference(kind: str, ident: str, line: int, token: str, what: str) -> None:\n"
+    },
+    {
+      "label": "the ignore marker no longer applies to placeholders",
+      "file": "scripts/check_pr_body.py",
+      "old": "            if line in ignored:\n                continue\n",
+      "new": "            pass\n"
+    },
+    {
+      "label": "a reference is looked up every time it appears",
+      "file": "scripts/check_pr_body.py",
+      "old": "        if (kind, ident) not in cache:",
+      "new": "        if True:"
+    },
+    {
+      "label": "the gh resolver treats every failure as 'does not exist'",
+      "file": "scripts/check_pr_body.py",
+      "old": "        return False if \"404\" in proc.stderr or \"Not Found\" in proc.stderr else None",
+      "new": "        return False"
+    },
+    {
+      "label": "a missing gh is not treated as unchecked",
+      "file": "scripts/check_pr_body.py",
+      "old": "        except (OSError, subprocess.TimeoutExpired):\n            return None\n",
+      "new": "        except subprocess.TimeoutExpired:\n            return None\n"
+    },
+    {
+      "label": "the exit status ignores findings",
+      "file": "scripts/check_pr_body.py",
+      "old": "    return 0 if report.ok else 1",
+      "new": "    return 0"
+    },
+    {
+      "label": "workflow: the job gates (continue-on-error dropped)",
+      "file": ".github/workflows/pr-body-lint.yml",
+      "old": "    continue-on-error: true\n",
+      "new": "    continue-on-error: false\n"
+    },
+    {
+      "label": "workflow: the PR body is interpolated into the shell",
+      "file": ".github/workflows/pr-body-lint.yml",
+      "old": "--body-env PR_BODY",
+      "new": "--body-file <(printf \"%s\" \"${{ github.event.pull_request.body }}\")"
+    },
+    {
+      "label": "workflow: the job is added to the aggregate gate",
+      "file": ".github/workflows/test.yml",
+      "old": "    needs: [benchmarks, rust-tests, python-tests,",
+      "new": "    needs: [pr-body-lint, benchmarks, rust-tests, python-tests,"
+    }
+  ]
+}
