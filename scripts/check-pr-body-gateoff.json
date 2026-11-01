@@ -30,8 +30,8 @@
     {
       "label": "<N> is no longer a placeholder",
       "file": "scripts/check_pr_body.py",
-      "old": "(\"<N>\", re.compile(r\"<N+>\"))",
-      "new": "(\"<N>\", re.compile(r\"<Nx>\"))"
+      "old": "(\"<N>\", re.compile(r\"(?<!\\w)<N+>\"))",
+      "new": "(\"<N>\", re.compile(r\"(?<!\\w)<Nx>\"))"
     },
     {
       "label": "N tests is no longer a placeholder",
@@ -144,7 +144,7 @@
     {
       "label": "a reference is looked up every time it appears",
       "file": "scripts/check_pr_body.py",
-      "old": "        if (kind, ident) not in cache:",
+      "old": "        if key not in cache:",
       "new": "        if True:"
     },
     {
@@ -172,16 +172,136 @@
       "new": "    continue-on-error: false\n"
     },
     {
-      "label": "workflow: the PR body is interpolated into the shell",
+      "label": "workflow: the trigger becomes pull_request_target",
       "file": ".github/workflows/pr-body-lint.yml",
-      "old": "--body-env PR_BODY",
-      "new": "--body-file <(printf \"%s\" \"${{ github.event.pull_request.body }}\")"
+      "old": "  pull_request:\n    types:",
+      "new": "  pull_request_target:\n    types:"
     },
     {
-      "label": "workflow: the job is added to the aggregate gate",
-      "file": ".github/workflows/test.yml",
-      "old": "    needs: [benchmarks, rust-tests, python-tests,",
-      "new": "    needs: [pr-body-lint, benchmarks, rust-tests, python-tests,"
+      "label": "workflow: an attacker-controlled branch name is interpolated into the shell",
+      "file": ".github/workflows/pr-body-lint.yml",
+      "old": "--body-env PR_BODY --annotate",
+      "new": "--body-env PR_BODY --annotate --repo-note \"${{ github.head_ref }}\""
+    },
+    {
+      "label": "workflow: the PR body is interpolated into the shell",
+      "file": ".github/workflows/pr-body-lint.yml",
+      "old": "--body-env PR_BODY --annotate",
+      "new": "--body-file <(printf \"%s\" \"${{ github.event.pull_request.body }}\") --annotate"
+    },
+    {
+      "label": "workflow: the token can write issues",
+      "file": ".github/workflows/pr-body-lint.yml",
+      "old": "  issues: read\n",
+      "new": "  issues: write\n"
+    },
+    {
+      "label": "workflow: the job has no time bound",
+      "file": ".github/workflows/pr-body-lint.yml",
+      "old": "    timeout-minutes: 5\n",
+      "new": ""
+    },
+    {
+      "label": "workflow: --annotate is dropped",
+      "file": ".github/workflows/pr-body-lint.yml",
+      "old": "--body-env PR_BODY --annotate",
+      "new": "--body-env PR_BODY"
+    },
+    {
+      "label": "a fence opened on a list-item line is not recognised",
+      "file": "scripts/check_pr_body.py",
+      "old": "(?:(?:[-*+]|\\d{1,9}[.)])[ \\t]+)*(?:(`{3,})",
+      "new": "(?:(?:xx)[ \\t]+)*(?:(`{3,})"
+    },
+    {
+      "label": "an inline triple-backtick span at line start opens a fence",
+      "file": "scripts/check_pr_body.py",
+      "old": "(?=[^`\\n]*$)|(~{3,})",
+      "new": "|(~{3,})"
+    },
+    {
+      "label": "a placeholder in a URL is not reported",
+      "file": "scripts/check_pr_body.py",
+      "old": "        for placeholder in _URL_PLACEHOLDER.finditer(text):",
+      "new": "        for placeholder in ():"
+    },
+    {
+      "label": "a single N path segment is not a URL placeholder",
+      "file": "scripts/check_pr_body.py",
+      "old": "|(?<=/)N(?=$|[/#?])",
+      "new": ""
+    },
+    {
+      "label": "the lookup cap is gone",
+      "file": "scripts/check_pr_body.py",
+      "old": "            if len(cache) >= max_lookups:",
+      "new": "            if False:"
+    },
+    {
+      "label": "the cap overflow is silent",
+      "file": "scripts/check_pr_body.py",
+      "old": "    if over_cap:\n        report.unchecked.append(",
+      "new": "    if False:\n        report.unchecked.append("
+    },
+    {
+      "label": "over-cap references are reported one by one",
+      "file": "scripts/check_pr_body.py",
+      "old": "        if (kind, ident) in over_cap:\n            return\n",
+      "new": ""
+    },
+    {
+      "label": "the markdown link-text pattern is unbounded and quadratic",
+      "file": "scripts/check_pr_body.py",
+      "old": "[^\\[\\]\\n]{0,300}",
+      "new": "[^\\]\\n]*"
+    },
+    {
+      "label": "the HTML anchor opener also consumes through the closing tag",
+      "file": "scripts/check_pr_body.py",
+      "old": "_A_OPEN = re.compile(r\"<a\\b[^<>]{0,500}>\", re.IGNORECASE)",
+      "new": "_A_OPEN = re.compile(r\"<a\\b[^>]*>(?:.*?</a)?\", re.IGNORECASE | re.DOTALL)"
+    },
+    {
+      "label": "<code> is not masked",
+      "file": "scripts/check_pr_body.py",
+      "old": "    text = _blank_spans(text, _CODE_OPEN, \"</code>\", keep_tags=False)\n",
+      "new": ""
+    },
+    {
+      "label": "<pre> is not masked",
+      "file": "scripts/check_pr_body.py",
+      "old": "    text = _blank_spans(text, _PRE_OPEN, \"</pre>\", keep_tags=False)\n",
+      "new": ""
+    },
+    {
+      "label": "List<N> is a placeholder",
+      "file": "scripts/check_pr_body.py",
+      "old": "(\"<N>\", re.compile(r\"(?<!\\w)<N+>\"))",
+      "new": "(\"<N>\", re.compile(r\"<N+>\"))"
+    },
+    {
+      "label": "reference-style link text is read as a reference",
+      "file": "scripts/check_pr_body.py",
+      "old": "\\](?=[(\\[])",
+      "new": "\\](?=[(])"
+    },
+    {
+      "label": "the repo's own owner/repo#N form is skipped",
+      "file": "scripts/check_pr_body.py",
+      "old": "    if repo:\n        own = re.compile(",
+      "new": "    if False:\n        own = re.compile("
+    },
+    {
+      "label": "an annotation can forge a workflow command",
+      "file": "scripts/check_pr_body.py",
+      "old": "    return str(finding).replace(\"::\", \": :\").replace(\"\\r\", \" \").replace(\"\\n\", \" \")",
+      "new": "    return str(finding)"
+    },
+    {
+      "label": "a missing gh in --pr mode is a traceback",
+      "file": "scripts/check_pr_body.py",
+      "old": "        except OSError as exc:\n            print(f\"pr-body-lint: could not run gh: {exc}\", file=sys.stderr)\n            return 2\n",
+      "new": "        except KeyError:\n            return 2\n"
     }
   ]
 }

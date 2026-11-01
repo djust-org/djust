@@ -10,22 +10,30 @@ claims about code, which stay with the differential-test habit.
 It fails on:
 
 (a) **unresolved placeholder tokens**: ``TBD``, ``XXX``, ``<N>``, ``N tests``,
-    ``#NNN`` (``#N``/``#TBD`` too), and
+    ``#NNN`` (``#N``/``#TBD`` too), also inside a URL (``.../pull/NNN``,
+    ``.../runs/XXXXXXXX``, ``#issuecomment-TBD``: the #3708 shape), and
 (b) **a reference that does not resolve in this repo**: ``#<number>``, a
     ``github.com/<this repo>/(issues|pull)/<number>`` URL, and an ``issuecomment-<id>``
     (bare, or in a URL for this repo).
 
 What it deliberately leaves alone, so a clean body stays clean:
 
-* fenced code blocks (``` and ~~~, an unterminated one runs to the end), inline code,
-  and HTML comments (the PR template's own prompts);
+* fenced code blocks (``` and ~~~, also one opened on a list-item line; an unterminated
+  one runs to the end), inline code, ``<code>`` / ``<pre>`` and HTML comments (the PR
+  template's own prompts); 4-space indented code is NOT recognised;
 * ``#`` inside any URL or anchor, the text of a link (``[#363](url)``,
   ``<a href=..>#363</a>``: the target is checked, not the label; Dependabot bodies are
   full of other repos' numbers this way), and ``owner/repo#N`` (another repo's number), a
   word glued to the ``#`` (``C#12``), and HTML entities (``&#35;``);
 * a line carrying ``pr-body-lint: ignore`` (for prose that means another repo's ``#N``).
 
-``Closes #N`` lines are ordinary references: they must resolve.
+``Closes #N`` lines are ordinary references: they must resolve. ``<this repo>#N`` is this
+repo's number and is checked.
+
+Bounded work: at most ``MAX_LOOKUPS`` (50) DISTINCT references are looked up per body (the
+token is shared with every other job and a body can hold thousands); the rest are reported
+as one ``too many references to check`` note under ``unchecked``, never skipped silently.
+Every pattern is linear in the body (a 64 KiB body of ``[`` or ``<a>`` is instant).
 
 The logic is a pure function over the text with the resolver injected
 (``check_body``); ``main`` wires the real ``gh api`` resolver. A lookup that could not
@@ -35,6 +43,10 @@ run: an outage must not look like a bad body.
 CLI::
 
     python scripts/check_pr_body.py --repo OWNER/REPO (--pr N | --body-file FILE | --body-env VAR)
+                                    [--annotate]
+
+``--annotate`` also prints GitHub ``::warning`` / ``::notice`` workflow commands, so findings
+show on the run summary even though the (non-gating) job is green.
 
 Exit status: 0 clean (or only unchecked), 1 findings, 2 usage / could not read the body.
 Not covered: review-comment links (``#discussion_r<id>``, ``#pullrequestreview-<id>``).
@@ -59,7 +71,7 @@ IGNORE_MARKER = "pr-body-lint: ignore"
 PLACEHOLDERS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("TBD", re.compile(r"\bTBD\b")),
     ("XXX", re.compile(r"\bXXX+\b")),
-    ("<N>", re.compile(r"<N+>")),
+    ("<N>", re.compile(r"(?<!\w)<N+>")),
     ("N tests", re.compile(r"\bN tests?\b")),
     ("#NNN", re.compile(r"#N+\b")),
 )
@@ -69,10 +81,19 @@ PLACEHOLDERS: tuple[tuple[str, re.Pattern[str]], ...] = (
 _NUMBER_REF = re.compile(r"(?<![\w/&#])#(\d+)\b")
 _COMMENT_REF = re.compile(r"\bissuecomment-(\d+)\b")
 _URL = re.compile(r"https?://[^\s<>\[\]()\"']+")
-_FENCE_OPEN = re.compile(r"^[ ]{0,3}(`{3,}|~{3,})")
+# A fence may sit on a list-item line (``- ```). A backtick fence's info string cannot contain
+# a backtick, so ``` ```code``` ``` at the start of a line is an inline span, not an opener.
+_FENCE_OPEN = re.compile(r"^[ \t]*(?:(?:[-*+]|\d{1,9}[.)])[ \t]+)*(?:(`{3,})(?=[^`\n]*$)|(~{3,}))")
+_URL_PLACEHOLDER = re.compile(
+    r"(?<![A-Za-z0-9])(?:N{2,}|X{3,}|TBD)(?![A-Za-z0-9])|(?<=/)N(?=$|[/#?])"
+)
+MAX_LOOKUPS = 50
 _INLINE_CODE = re.compile(r"(?<!`)(`+)(?!`)((?:(?!\n[ \t]*\n).)+?)(?<!`)\1(?!`)", re.DOTALL)
-_MD_LINK_TEXT = re.compile(r"\[([^\]\n]*)\](?=\()")
-_HTML_LINK = re.compile(r"(<a\b[^>]*>)(.*?)(</a\s*>)", re.DOTALL | re.IGNORECASE)
+# Bounded and ``[``-free inside, so a body of ``[[[[...`` is linear, not quadratic.
+_MD_LINK_TEXT = re.compile(r"\[([^\[\]\n]{0,300})\](?=[(\[])")
+_A_OPEN = re.compile(r"<a\b[^<>]{0,500}>", re.IGNORECASE)
+_CODE_OPEN = re.compile(r"<code\b[^<>]{0,500}>", re.IGNORECASE)
+_PRE_OPEN = re.compile(r"<pre\b[^<>]{0,500}>", re.IGNORECASE)
 _HTML_COMMENT = re.compile(r"<!--.*?(?:-->|\Z)", re.DOTALL)
 
 
@@ -84,7 +105,7 @@ class Finding:
     message: str
 
     def __str__(self) -> str:
-        return f"line {self.line}: {self.message}"
+        return f"line {self.line}: {self.message}" if self.line else self.message
 
 
 @dataclasses.dataclass
@@ -109,33 +130,61 @@ def _mask_fences(text: str) -> str:
         if fence is None:
             opened = _FENCE_OPEN.match(line)
             if opened:
-                fence = (opened.group(1)[0], len(opened.group(1)))
+                marker = opened.group(1) or opened.group(2)
+                fence = (marker[0], len(marker))
                 out.append(_blank(line))
             else:
                 out.append(line)
             continue
         out.append(_blank(line))
-        closing = re.match(r"^[ ]{0,3}([`~]{%d,})[ \t]*$" % fence[1], line)
+        closing = re.match(r"^[ \t]*([`~]{%d,})[ \t]*$" % fence[1], line)
         if closing and closing.group(1)[0] == fence[0]:
             fence = None
     return "\n".join(out)
 
 
+def _blank_spans(text: str, opener: re.Pattern[str], closer: str, *, keep_tags: bool) -> str:
+    """Blank what lies between ``opener`` and the next ``closer`` (case-insensitive), linearly.
+
+    ``keep_tags`` blanks only the text between the tags; otherwise the tags go too. An opener
+    with no closer after it ends the scan: nothing after it can have one either.
+    """
+    out: list[str] = []
+    lower = text.lower()
+    pos = 0
+    while True:
+        match = opener.search(text, pos)
+        if not match:
+            break
+        end = lower.find(closer, match.end())
+        if end == -1:
+            break
+        start, stop = (match.end(), end) if keep_tags else (match.start(), end + len(closer))
+        out.append(text[pos:start])
+        out.append(_blank(text[start:stop]))
+        pos = stop
+    out.append(text[pos:])
+    return "".join(out)
+
+
 def mask(text: str) -> str:
-    """The body with fenced code, inline code and HTML comments blanked out."""
+    """The body with fenced code, inline code, <code>/<pre> and HTML comments blanked out."""
     text = _mask_fences(text)
     text = _INLINE_CODE.sub(lambda m: _blank(m.group(0)), text)
+    text = _blank_spans(text, _CODE_OPEN, "</code>", keep_tags=False)
+    text = _blank_spans(text, _PRE_OPEN, "</pre>", keep_tags=False)
     return _HTML_COMMENT.sub(lambda m: _blank(m.group(0)), text)
 
 
 def _blank_link_text(text: str) -> str:
-    """Blank the TEXT of ``[text](url)`` and ``<a href=..>text</a>``: the target is the reference.
+    """Blank the TEXT of ``[text](url)``, ``[text][ref]`` and ``<a href=..>text</a>``.
 
-    Dependabot bodies are full of ``<a href="https://github.com/other/repo/issues/363">#363</a>``;
-    ``#363`` there names the other repo's issue, and the URL (checked separately) is what counts.
+    The target is the reference, not the label. Dependabot bodies are full of
+    ``<a href="https://github.com/other/repo/issues/363">#363</a>``; ``#363`` there names the
+    other repo's issue, and the URL (checked separately) is what counts.
     """
     text = _MD_LINK_TEXT.sub(lambda m: "[" + _blank(m.group(1)) + "]", text)
-    return _HTML_LINK.sub(lambda m: m.group(1) + _blank(m.group(2)) + m.group(3), text)
+    return _blank_spans(text, _A_OPEN, "</a", keep_tags=True)
 
 
 def _line_of(text: str, offset: int) -> int:
@@ -146,8 +195,14 @@ def _ignored_lines(original: str) -> set[int]:
     return {i for i, line in enumerate(original.split("\n"), 1) if IGNORE_MARKER in line}
 
 
-def check_body(body: str, resolve: Resolver, *, repo: str = "") -> Report:
-    """Lint ``body``. ``repo`` is ``owner/name``: URLs to it are checked, others are not."""
+def check_body(
+    body: str, resolve: Resolver, *, repo: str = "", max_lookups: int = MAX_LOOKUPS
+) -> Report:
+    """Lint ``body``. ``repo`` is ``owner/name``: URLs to it are checked, others are not.
+
+    At most ``max_lookups`` distinct references are resolved; the rest are summarised in one
+    ``unchecked`` note.
+    """
     report = Report()
     ignored = _ignored_lines(body)
     visible = mask(body)
@@ -157,16 +212,23 @@ def check_body(body: str, resolve: Resolver, *, repo: str = "") -> Report:
         else None
     )
     cache: dict[tuple[str, str], bool | None] = {}
+    over_cap: set[tuple[str, str]] = set()
 
     def lookup(kind: str, ident: str) -> bool | None:
-        if (kind, ident) not in cache:
-            cache[(kind, ident)] = resolve(kind, ident)
-        return cache[(kind, ident)]
+        key = (kind, ident)
+        if key not in cache:
+            if len(cache) >= max_lookups:
+                over_cap.add(key)
+                return None
+            cache[key] = resolve(kind, ident)
+        return cache[key]
 
     def reference(kind: str, ident: str, line: int, token: str, what: str) -> None:
         if line in ignored:
             return
         verdict = lookup(kind, ident)
+        if (kind, ident) in over_cap:
+            return
         if verdict is True:
             return
         finding = Finding(
@@ -193,6 +255,16 @@ def check_body(body: str, resolve: Resolver, *, repo: str = "") -> Report:
                 reference(
                     "comment", comment.group(1), line, comment.group(0), f"comment link {text}"
                 )
+        for placeholder in _URL_PLACEHOLDER.finditer(text):
+            if line not in ignored:
+                report.findings.append(
+                    Finding(
+                        "placeholder",
+                        line,
+                        placeholder.group(0),
+                        f"unresolved placeholder {placeholder.group(0)!r} in a URL",
+                    )
+                )
         plain = plain[: url.start()] + _blank(text) + plain[url.end() :]
 
     for name, pattern in PLACEHOLDERS:
@@ -206,8 +278,23 @@ def check_body(body: str, resolve: Resolver, *, repo: str = "") -> Report:
     prose = _blank_link_text(plain)
     for m in _NUMBER_REF.finditer(prose):
         reference("number", m.group(1), _line_of(prose, m.start()), m.group(0), m.group(0))
+    if repo:
+        own = re.compile(rf"(?<![\w/.-]){re.escape(repo)}#(\d+)\b", re.IGNORECASE)
+        for m in own.finditer(prose):
+            reference("number", m.group(1), _line_of(prose, m.start()), m.group(0), m.group(0))
     for m in _COMMENT_REF.finditer(prose):
         reference("comment", m.group(1), _line_of(prose, m.start()), m.group(0), m.group(0))
+
+    if over_cap:
+        report.unchecked.append(
+            Finding(
+                "too-many-references",
+                0,
+                "",
+                f"too many references to check: looked up the first {max_lookups} distinct "
+                f"references, {len(over_cap)} more were not checked",
+            )
+        )
 
     report.findings.sort(key=lambda f: (f.line, f.token))
     report.unchecked.sort(key=lambda f: (f.line, f.token))
@@ -239,18 +326,29 @@ def gh_resolver(repo: str) -> Resolver:
     return resolve
 
 
-def render(report: Report) -> str:
-    lines = [f"  FAIL  {f}" for f in report.findings]
-    lines += [f"  skip  {f}" for f in report.unchecked]
+def _safe(finding: Finding) -> str:
+    """One line, with no ``::`` that a runner could read as a workflow command."""
+    return str(finding).replace("::", ": :").replace("\r", " ").replace("\n", " ")
+
+
+def render(report: Report, *, annotate: bool = False) -> str:
+    lines = [f"  FAIL  {_safe(f)}" for f in report.findings]
+    lines += [f"  skip  {_safe(f)}" for f in report.unchecked]
     lines.append(
         f"pr-body-lint: {len(report.findings)} finding(s), {len(report.unchecked)} unchecked"
     )
+    if annotate:
+        for level, found in (("warning", report.findings), ("notice", report.unchecked)):
+            for f in found:
+                data = _safe(f).replace("%", "%25")
+                lines.append(f"::{level} title=pr-body-lint::{data}")
     return "\n".join(lines)
 
 
 def main(argv: Sequence[str] | None = None, *, resolver: Resolver | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--repo", required=True, help="OWNER/REPO the references must resolve in")
+    parser.add_argument("--annotate", action="store_true", help="also print ::warning commands")
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--pr", type=int, help="read the body of this PR with gh")
     source.add_argument("--body-file", type=Path, help="read the body from a file ('-' = stdin)")
@@ -258,22 +356,26 @@ def main(argv: Sequence[str] | None = None, *, resolver: Resolver | None = None)
     args = parser.parse_args(argv)
 
     if args.pr is not None:
-        proc = subprocess.run(
-            [
-                "gh",
-                "pr",
-                "view",
-                str(args.pr),
-                "--repo",
-                args.repo,
-                "--json",
-                "body",
-                "-q",
-                ".body",
-            ],
-            capture_output=True,
-            text=True,
-        )
+        try:
+            proc = subprocess.run(
+                [
+                    "gh",
+                    "pr",
+                    "view",
+                    str(args.pr),
+                    "--repo",
+                    args.repo,
+                    "--json",
+                    "body",
+                    "-q",
+                    ".body",
+                ],
+                capture_output=True,
+                text=True,
+            )
+        except OSError as exc:
+            print(f"pr-body-lint: could not run gh: {exc}", file=sys.stderr)
+            return 2
         if proc.returncode != 0:
             print(
                 f"pr-body-lint: could not read PR {args.pr}: {proc.stderr.strip()}", file=sys.stderr
@@ -289,7 +391,7 @@ def main(argv: Sequence[str] | None = None, *, resolver: Resolver | None = None)
         body = os.environ[args.body_env]
 
     report = check_body(body, resolver or gh_resolver(args.repo), repo=args.repo)
-    print(render(report))
+    print(render(report, annotate=args.annotate))
     return 0 if report.ok else 1
 
 

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -21,7 +22,6 @@ ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "check_pr_body.py"
 GATEOFF = ROOT / "scripts" / "check-pr-body-gateoff.json"
 WORKFLOW = ROOT / ".github" / "workflows" / "pr-body-lint.yml"
-TEST_YML = ROOT / ".github" / "workflows" / "test.yml"
 
 
 def _load():
@@ -276,6 +276,171 @@ def test_findings_are_sorted_by_line():
     assert [f.line for f in report.findings] == [1, 2, 3]
 
 
+# --------------------------------------------------------------------------- review follow-up
+
+
+def test_a_fence_opened_on_a_list_item_line_does_not_hide_the_rest_of_the_body():
+    body = "- ```\n  code TBD\n  ```\n\nTBD and #99999 after"
+    report = check(body)
+    assert [(f.line, f.token) for f in report.findings] == [(5, "#99999"), (5, "TBD")]
+
+
+def test_numbered_and_nested_list_fences_are_recognised_too():
+    body = "1. step\n   - ```\n     TBD\n     ```\nreal TBD\n"
+    assert [(f.line, f.token) for f in check(body).findings] == [(5, "TBD")]
+
+
+def test_a_triple_backtick_inline_span_at_line_start_is_not_a_fence():
+    assert [f.token for f in check("```code``` then TBD\nand TBD again").findings] == ["TBD", "TBD"]
+
+
+@pytest.mark.parametrize(
+    "url, token",
+    [
+        (f"https://github.com/{REPO}/pull/NNN", "NNN"),
+        (f"https://github.com/{REPO}/actions/runs/XXXXXXXX", "XXXXXXXX"),
+        (f"https://github.com/{REPO}/issues/42#issuecomment-TBD", "TBD"),
+        ("https://example.org/issues/N", "N"),
+        ("https://example.org/a?id=XXX", "XXX"),
+    ],
+)
+def test_a_placeholder_inside_a_url_is_reported(url, token):
+    """The #3708 shape: links to comments that did not exist yet."""
+    assert [(f.kind, f.token) for f in check(f"see {url} for it").findings] == [
+        ("placeholder", token)
+    ]
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://example.org/NASA/issues/1",
+        "https://example.org/Nx/Xx/TBDs",
+        "https://example.org/path/Name",
+        "https://github.com/acme/widgets/actions/runs/123456",
+        "https://example.org/a#diff-ABCDEF0123",
+    ],
+)
+def test_ordinary_urls_are_not_placeholders(url):
+    assert check(f"see {url} for it", Resolver(existing={("number", "123456")})).ok
+
+
+def test_a_placeholder_url_on_an_ignored_line_is_skipped():
+    assert check(f"https://github.com/{REPO}/pull/NNN pr-body-lint: ignore").ok
+
+
+def test_distinct_lookups_are_capped_and_the_overflow_is_one_visible_note():
+    resolver = Resolver(existing={("number", str(n)) for n in range(1, 1000)})
+    body = " ".join(f"#{n}" for n in range(1, 301))
+    report = check_with_cap(body, resolver, cap=50)
+    assert len(resolver.calls) == 50
+    assert report.ok
+    notes = [f for f in report.unchecked if f.kind == "too-many-references"]
+    assert len(notes) == 1
+    assert "250 more were not checked" in notes[0].message and "first 50" in notes[0].message
+    assert len(report.unchecked) == 1, "the overflow must not be reported one reference at a time"
+
+
+def check_with_cap(body, resolver, cap):
+    return cpb.check_body(body, resolver, repo=REPO, max_lookups=cap)
+
+
+def test_the_cap_counts_distinct_references_not_occurrences():
+    resolver = Resolver()
+    body = "#42 " * 500 + "#1 " * 500
+    assert cpb.check_body(body, resolver, repo=REPO, max_lookups=2).unchecked == []
+    assert resolver.calls == [("number", "42"), ("number", "1")]
+
+
+def test_the_default_cap_is_fifty():
+    assert cpb.MAX_LOOKUPS == 50
+    resolver = Resolver()
+    check(" ".join(f"#{n}" for n in range(2000, 2200)), resolver)
+    assert len(resolver.calls) == 50
+
+
+def test_a_finding_past_the_cap_is_not_silently_lost_when_it_is_a_placeholder():
+    body = " ".join(f"#{n}" for n in range(1, 100)) + " TBD"
+    assert [f.token for f in check(body).findings if f.kind == "placeholder"] == ["TBD"]
+
+
+@pytest.mark.parametrize(
+    "body",
+    ["[" * 65536, "<a>" * 21845, "<a" * 32768, "<code>" * 10922, "`` ` " * 13000, "[x][" * 16384],
+    ids=["brackets", "anchors", "anchor-openers", "code-tags", "backticks", "refs"],
+)
+def test_adversarial_bodies_are_linear_not_quadratic(body):
+    """Run in a subprocess with a generous bound: a quadratic pattern took 27 s on ``[`` * 65536."""
+    code = (
+        "import importlib.util, sys\n"
+        f"spec = importlib.util.spec_from_file_location('c', {str(SCRIPT)!r})\n"
+        "m = importlib.util.module_from_spec(spec); sys.modules['c'] = m; spec.loader.exec_module(m)\n"
+        "sys.exit(0 if m.check_body(sys.stdin.read(), lambda k, i: True, repo='a/b').ok else 1)\n"
+    )
+    done = subprocess.run([sys.executable, "-c", code], input=body, text=True, timeout=20)
+    assert done.returncode == 0
+
+
+def test_a_generic_type_parameter_is_not_the_n_placeholder():
+    assert check("a List<N> and Map<K, N>").ok
+    assert [f.token for f in check("range <N>").findings] == ["<N>"]
+
+
+def test_code_and_pre_html_are_masked():
+    body = "<code>#NNN TBD</code> <pre>\nTBD #99999\n</pre> but TBD"
+    assert [(f.line, f.token) for f in check(body).findings] == [(3, "TBD")]
+    assert check("<CODE>TBD</CODE>").ok
+
+
+def test_an_unclosed_code_tag_does_not_hide_the_rest():
+    assert [f.token for f in check("<code>never closed TBD").findings] == ["TBD"]
+
+
+def test_reference_style_link_text_is_a_label():
+    resolver = Resolver()
+    assert check("[#12][1] and [see #99999][ref]\n\n[1]: https://x.org", resolver).ok
+    assert resolver.calls == []
+
+
+def test_this_repos_own_owner_repo_form_is_checked():
+    report = check(f"see {REPO}#99999 and {REPO.upper()}#3714 and other/repo#99999")
+    assert [f.token for f in report.findings] == [f"{REPO}#99999"]
+
+
+def test_annotations_are_printed_and_cannot_forge_a_workflow_command(tmp_path, capsys):
+    body = tmp_path / "b.md"
+    # A URL of THIS repo is echoed into the message ("does not resolve"): attacker-controlled text.
+    body.write_text(f"Closes #NNN\nhttps://github.com/{REPO}/issues/99999::error::pwned%0Aboom\n")
+    assert (
+        cpb.main(["--repo", REPO, "--body-file", str(body), "--annotate"], resolver=Resolver()) == 1
+    )
+    lines = capsys.readouterr().out.splitlines()
+    annotations = [ln for ln in lines if ln.startswith("::")]
+    assert annotations and all(
+        ln.startswith("::warning title=pr-body-lint::") for ln in annotations
+    )
+    assert all("::" not in ln[len("::warning title=pr-body-lint::") :] for ln in annotations)
+    assert any("pwned" in ln for ln in annotations), "the hostile URL never reached the message"
+    assert not any("%0A" in ln for ln in annotations), "a raw %0A would split the command"
+    assert not any(ln.lstrip().startswith("::error") for ln in lines)
+
+
+def test_without_annotate_no_workflow_command_is_printed(tmp_path, capsys):
+    body = tmp_path / "b.md"
+    body.write_text("Closes #NNN\n")
+    cpb.main(["--repo", REPO, "--body-file", str(body)], resolver=Resolver())
+    assert not any(ln.startswith("::") for ln in capsys.readouterr().out.splitlines())
+
+
+def test_a_missing_gh_for_pr_mode_is_a_clean_exit_two(monkeypatch, capsys):
+    def boom(*a, **k):
+        raise FileNotFoundError("gh")
+
+    monkeypatch.setattr(cpb.subprocess, "run", boom)
+    assert cpb.main(["--repo", REPO, "--pr", "1"], resolver=Resolver()) == 2
+    assert "could not run gh" in capsys.readouterr().err
+
+
 # --------------------------------------------------------------------------- canary (#1459)
 
 SYNTHETIC_BAD = """\
@@ -380,28 +545,60 @@ def test_gh_resolver_reports_a_missing_gh_as_unchecked(monkeypatch):
 
 
 # --------------------------------------------------------------------------- the workflow
+#
+# What keeps this job from blocking a merge is ``continue-on-error`` here plus the branch
+# protection's required-checks list, which no test can see; the job lives in its own file, so
+# it can never appear in ``test.yml``'s ``test-summary.needs`` and asserting its absence there
+# would be vacuous. These tests pin what IS in this file: the trigger, the token, and that no
+# text an author controls reaches a shell.
+
+
+def _workflow():
+    return yaml.safe_load(WORKFLOW.read_text())
 
 
 def _job():
-    return yaml.safe_load(WORKFLOW.read_text())["jobs"]["pr-body-lint"]
+    return _workflow()["jobs"]["pr-body-lint"]
 
 
-def test_the_workflow_is_non_gating():
-    """rc4 finding #3: a new CI job is ``continue-on-error`` and out of the aggregate gate."""
-    assert _job()["continue-on-error"] is True
-    summary = yaml.safe_load(TEST_YML.read_text())["jobs"]["test-summary"]
-    assert "pr-body-lint" not in summary["needs"]
-    assert "pr-body-lint" not in "\n".join(s.get("run", "") for s in summary["steps"])
+def test_the_trigger_is_pull_request_and_only_pull_request():
+    """``pull_request_target`` would run with a writable token and secrets on a fork PR."""
+    wf = _workflow()
+    triggers = wf.get("on", wf.get(True))  # YAML 1.1 reads a bare ``on`` as True
+    assert set(triggers) == {"pull_request"}
+    assert set(triggers["pull_request"]["types"]) == {"opened", "edited", "reopened", "synchronize"}
 
 
-def test_the_workflow_passes_the_body_through_the_environment_not_the_shell():
-    """A PR body is attacker-controlled text: never ``${{ }}``-interpolate it into ``run:``."""
+def test_the_token_is_read_only():
+    wf = _workflow()
+    assert wf["permissions"] == {"contents": "read", "issues": "read", "pull-requests": "read"}
+    assert "permissions" not in _job(), "a job-level map could widen the workflow's"
+    assert "secrets." not in WORKFLOW.read_text().replace("secrets.GITHUB_TOKEN", "")
+
+
+def test_no_expression_is_interpolated_into_any_shell_command():
+    """A PR body, title or branch name is attacker-controlled text: never ``${{ }}`` into ``run:``."""
+    for step in _job()["steps"]:
+        assert "${{" not in step.get("run", ""), step
+        for value in step.get("with", {}).values():
+            assert "pull_request" not in str(value) and "head_ref" not in str(value), step
+
+
+def test_the_body_reaches_the_script_only_through_the_environment():
     job = _job()
     run = "\n".join(step.get("run", "") for step in job["steps"])
-    assert "github.event.pull_request" not in run
     env = {k: v for step in job["steps"] for k, v in step.get("env", {}).items()}
-    assert env["PR_BODY"] == "${{ github.event.pull_request.body }}"
-    assert "--body-env PR_BODY" in run
+    assert env == {
+        "GH_TOKEN": "${{ github.token }}",
+        "PR_BODY": "${{ github.event.pull_request.body }}",
+    }
+    assert "--body-env PR_BODY" in run and "--annotate" in run
+
+
+def test_the_job_is_non_gating_and_bounded():
+    job = _job()
+    assert job["continue-on-error"] is True
+    assert job["timeout-minutes"] <= 10
 
 
 # --------------------------------------------------------------------------- the gate-off list

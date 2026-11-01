@@ -47,4 +47,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           PR_BODY: ${{ github.event.pull_request.body }}
-        run: python scripts/check_pr_body.py --repo "$GITHUB_REPOSITORY" --body-env PR_BODY
+        run: python scripts/check_pr_body.py --repo "$GITHUB_REPOSITORY" --body-env PR_BODY --annotate
