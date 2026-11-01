@@ -61,8 +61,8 @@
     {
       "label": "harness: restore preserves the original mtime (the copy2 hazard)",
       "file": "scripts/gate_off.py",
-      "old": "    _write_atomic(path, saved.data, saved.mode)\n    _clear_pycache(path)\n",
-      "new": "    _write_atomic(path, saved.data, saved.mode)\n    os.utime(path, (1_000_000_000, 1_000_000_000))\n    _clear_pycache(path)\n"
+      "old": "        _write_atomic(path, saved.data, saved.mode)\n        _clear_pycache(path)\n",
+      "new": "        _write_atomic(path, saved.data, saved.mode)\n        os.utime(path, (1_000_000_000, 1_000_000_000))\n        _clear_pycache(path)\n"
     },
     {
       "label": "harness: the stale-bytecode clear matches nothing",
@@ -82,6 +82,24 @@
       "old": "                if time.monotonic() - start > deadline:",
       "new": "                if False:",
       "deadline": 90
+    },
+    {
+      "label": "harness: a failing restore write is swallowed instead of reported",
+      "file": "scripts/gate_off.py",
+      "old": "    except OSError as exc:\n        # A restore that fails must never be silent, whatever the cause.\n        raise RestoreError(f\"{path} could not be restored: {exc!r}\") from exc\n",
+      "new": "    except OSError:\n        return\n"
+    },
+    {
+      "label": "harness: a group that cannot be killed is swallowed",
+      "file": "scripts/gate_off.py",
+      "old": "    except ProcessLookupError:\n",
+      "new": "    except (ProcessLookupError, PermissionError):\n"
+    },
+    {
+      "label": "harness: an unavailable ps silently disables the RSS ceiling",
+      "file": "scripts/gate_off.py",
+      "old": "        raise RuntimeError(f\"cannot sample RSS (is `ps` available? POSIX only): {exc}\") from exc\n",
+      "new": "        return 0.0\n"
     }
   ]
 }

@@ -404,6 +404,111 @@ def test_the_file_is_restored_when_the_harness_is_signalled(tmp_path, sig, label
     assert sorted(p.name for p in root.iterdir() if p.is_file()) == ["calc.py"]
 
 
+# --------------------------------------------------------------------------- handlers that must not swallow
+
+
+def test_killing_a_group_that_is_already_gone_is_not_an_error():
+    proc = subprocess.Popen([sys.executable, "-c", "pass"], start_new_session=True)
+    proc.wait()
+    go._kill_group(proc.pid)  # ProcessLookupError is the normal case after a clean exit
+
+
+def test_a_group_that_cannot_be_killed_is_a_failure_not_a_shrug(monkeypatch):
+    def refuse(pgid, sig):
+        raise PermissionError("not ours")
+
+    monkeypatch.setattr(go.os, "killpg", refuse)
+    with pytest.raises(PermissionError):
+        go._kill_group(12345)
+
+
+def test_a_stale_pyc_that_cannot_be_deleted_propagates(tmp_path, monkeypatch):
+    cache = tmp_path / "__pycache__"
+    cache.mkdir()
+    (cache / "calc.cpython-0.pyc").write_bytes(b"stale")
+
+    def refuse(self, missing_ok=False):
+        raise PermissionError("read-only")
+
+    monkeypatch.setattr(go.Path, "unlink", refuse)
+    with pytest.raises(PermissionError):
+        go._clear_pycache(tmp_path / "calc.py")
+
+
+def test_a_failed_atomic_write_re_raises_the_original_error_and_leaves_no_temp_file(
+    tmp_path, monkeypatch
+):
+    target = tmp_path / "f.py"
+    target.write_text("original")
+
+    def boom(src, dst):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(go.os, "replace", boom)
+    with pytest.raises(OSError, match="disk full"):
+        go._write_atomic(target, b"new", 0o644)
+    assert target.read_text() == "original"
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["f.py"]
+
+
+def _failing_restore(real_write):
+    def failing_restore(path, data, mode):
+        if data == CALC.encode():  # only the restore writes the original bytes
+            raise OSError("cannot write")
+        real_write(path, data, mode)
+
+    return failing_restore
+
+
+def test_a_restore_that_raises_is_reported_as_a_restore_error(tmp_path, monkeypatch):
+    root = _fixture(tmp_path)
+    real_write = go._write_atomic
+    monkeypatch.setattr(go, "_write_atomic", _failing_restore(real_write))
+    with pytest.raises(go.RestoreError, match="could not be restored"):
+        go.run_mutations(
+            [_m("caught: add subtracts", "return a + b", "return a - b")],
+            root=root,
+            command=COMMAND,
+            control=False,
+        )
+    monkeypatch.setattr(go, "_write_atomic", real_write)
+    go._restore_all_failsafe()  # put the file back for the rest of the session
+    assert (root / "calc.py").read_text() == CALC
+    assert not go._ACTIVE
+
+
+def test_cli_exits_three_when_a_restore_raises(tmp_path, monkeypatch, capsys):
+    root = _fixture(tmp_path)
+    spec = tmp_path / "spec.json"
+    spec.write_text(
+        json.dumps(
+            {
+                "root": str(root),
+                "command": COMMAND,
+                "mutations": [
+                    {"label": "m", "file": "calc.py", "old": "return a + b", "new": "return a - b"}
+                ],
+            }
+        )
+    )
+    real_write = go._write_atomic
+    monkeypatch.setattr(go, "_write_atomic", _failing_restore(real_write))
+    assert go.main([str(spec), "--no-control"]) == 3
+    assert "RESTORE FAILED" in capsys.readouterr().err
+    monkeypatch.setattr(go, "_write_atomic", real_write)
+    go._restore_all_failsafe()
+    assert (root / "calc.py").read_text() == CALC
+
+
+def test_an_unavailable_ps_refuses_to_run_unbounded(monkeypatch):
+    def missing(*a, **k):
+        raise FileNotFoundError("ps")
+
+    monkeypatch.setattr(go.subprocess, "run", missing)
+    with pytest.raises(RuntimeError, match="cannot sample RSS"):
+        go._group_rss_mb(1)
+
+
 # --------------------------------------------------------------------------- baseline and CLI
 
 

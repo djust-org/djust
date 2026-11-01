@@ -217,8 +217,9 @@ def _group_rss_mb(pgid: int) -> float:
         out = subprocess.run(
             ["ps", "-A", "-o", "pgid=,rss="], capture_output=True, text=True, check=False
         ).stdout
-    except OSError:
-        return 0.0
+    except OSError as exc:
+        # Returning 0 here would silently turn the RSS ceiling off; refuse to run unbounded.
+        raise RuntimeError(f"cannot sample RSS (is `ps` available? POSIX only): {exc}") from exc
     kib = 0
     for line in out.splitlines():
         parts = line.split()
@@ -230,8 +231,10 @@ def _group_rss_mb(pgid: int) -> float:
 def _kill_group(pgid: int) -> None:
     try:
         os.killpg(pgid, signal.SIGKILL)
-    except (ProcessLookupError, PermissionError):
-        pass
+    except ProcessLookupError:
+        # The group is already gone (the normal case after a clean exit): nothing to kill.
+        # PermissionError is NOT swallowed: a group we cannot kill is a real failure.
+        return
 
 
 def _run_bounded(command: Sequence[str], cwd: Path, deadline: float, rss_mb: float) -> RunOutcome:
@@ -255,14 +258,14 @@ def _run_bounded(command: Sequence[str], cwd: Path, deadline: float, rss_mb: flo
                     proc.wait(timeout=POLL_SECONDS)
                     break
                 except subprocess.TimeoutExpired:
-                    pass
-                peak = max(peak, _group_rss_mb(proc.pid))
-                if peak > rss_mb:
-                    verdict = "RUNAWAY-MEMORY"
-                    break
-                if time.monotonic() - start > deadline:
-                    verdict = "HUNG"
-                    break
+                    # Not an error: the poll interval elapsed and the child is still running.
+                    peak = max(peak, _group_rss_mb(proc.pid))
+                    if peak > rss_mb:
+                        verdict = "RUNAWAY-MEMORY"
+                        break
+                    if time.monotonic() - start > deadline:
+                        verdict = "HUNG"
+                        break
         finally:
             # Whatever happened (verdict, SIGINT, an exception): nothing of the run survives.
             _kill_group(proc.pid)
@@ -305,10 +308,9 @@ def _write_atomic(path: Path, data: bytes, mode: int) -> None:
         os.chmod(tmp, mode)
         os.replace(tmp, path)
     except BaseException:
-        try:
-            os.unlink(tmp)
-        except FileNotFoundError:
-            pass
+        # Best-effort removal of OUR temp file; the original error is what matters and is
+        # re-raised. ``missing_ok``: the failure may be the temp file never having existed.
+        Path(tmp).unlink(missing_ok=True)
         raise
 
 
@@ -318,17 +320,20 @@ def _clear_pycache(path: Path) -> None:
     if not cache.is_dir():
         return
     for entry in cache.glob(f"{path.stem}.*.pyc"):
-        try:
-            entry.unlink()
-        except FileNotFoundError:
-            pass
+        # ``missing_ok`` is the only tolerance: a stale .pyc we cannot delete (permissions)
+        # could certify a mutation that never ran, so any other error propagates.
+        entry.unlink(missing_ok=True)
 
 
 def _restore(path: Path, saved: _Saved) -> None:
     """Put ``saved`` back and prove, by hash, that the file is byte-identical."""
-    _write_atomic(path, saved.data, saved.mode)
-    _clear_pycache(path)
-    got = _sha(path.read_bytes())
+    try:
+        _write_atomic(path, saved.data, saved.mode)
+        _clear_pycache(path)
+        got = _sha(path.read_bytes())
+    except OSError as exc:
+        # A restore that fails must never be silent, whatever the cause.
+        raise RestoreError(f"{path} could not be restored: {exc!r}") from exc
     if got != saved.sha:
         raise RestoreError(f"{path} was restored to sha256 {got}, expected {saved.sha}")
 
