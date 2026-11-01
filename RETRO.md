@@ -1299,7 +1299,7 @@ The first implementation required the file owner to be the current user's SID. O
 - **Leftovers and flakes:** #3704 closes the #3691 checklist; #3694, #3695 and #3708 fix the #3692/#3707 flakes (one framework bug, one test-isolation leak, four test-side races); #3712 fixes a fifth that appeared after the bucket was "done" (#3710).
 - **Not started:** the six component-tag parity issues (#3663, #3666, #3667, #3669, #3676, #3677), which need one canonical implementation chosen first.
 
-**Tests at close**: `Tests` on `main` at `9fdb7c0a6` (the #3708 merge) was **red**: one wall-clock test failed (#3710). The fix is PR #3712, open at the time of writing. The runs for the four earlier merges were green.
+**Tests at close**: `Tests` on `main` at `9fdb7c0a6` (the #3708 merge) was **red**: one wall-clock test failed (#3710). The fix, PR #3712, merged as `1f0f1b46b` and `Tests` on that commit was green. The runs for the four earlier merges were green.
 
 ### What We Learned
 
@@ -1364,7 +1364,7 @@ The per-PR reviews do not tag severities uniformly, so the middle rows count wha
 - [ ] GC pause attribution — Action Tracker #377 (GitHub #3715)
 - [ ] Follow-ups #3699, #3700, #3701, #3705, #3706 — Action Tracker #378–#382
 - [ ] Component-tag parity decision — Action Tracker #383 (GitHub #3663)
-- [ ] #3712 (the #3710 fix) merged
+- [x] #3712 (the #3710 fix) merged; `Tests` on main at `1f0f1b46b` green
 
 ## v1.3.0-9 — test git-env isolation (#3179)
 
