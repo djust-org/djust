@@ -2016,9 +2016,11 @@ def check_params_form_declarations(app_configs: Any, **kwargs: Any) -> list[Chec
     not a form class raises ``ImproperlyConfigured``, and a form whose
     ``__init__`` needs another argument raises ``TypeError``, both on the first
     request of the view. The verdicts are the runtime's own
-    (``form_class_problem`` / ``construction_problem``), so the check cannot
-    call a form usable that the request path then refuses. No view is
-    constructed and no form is instantiated.
+    (``form_class_problem`` / ``construction_problem``) for every failure
+    visible in the signature. No view is constructed and no form is
+    instantiated, so an ``__init__`` that raises, a positional-only ``data``
+    that the form's own ``super().__init__`` rejects, or a lazy object wrapping
+    a form class is not found here and still fails on the first request.
     """
     messages: list[CheckMessage] = []
     if _is_check_suppressed("djust.V023"):
@@ -2064,4 +2066,48 @@ def check_params_form_declarations(app_configs: Any, **kwargs: Any) -> list[Chec
                 fix_hint="Fix the `params_form` declaration of `%s`." % cls.__qualname__,
             )
         )
+    return messages
+
+
+@register("djust")
+def check_query_budget_declarations(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
+    """V024 (Error): a ``query_budget`` nothing can enforce (#3701).
+
+    The smoke test raises ``ValueError`` on it, the run-time meter logs it and
+    measures nothing, and ``djust_audit`` lists it as invalid; this reports it at
+    ``manage.py check``, before any of those run. The verdict is
+    ``djust._query_budget.declared_budget``, the one reader of the attribute: an
+    unknown key, a bool or negative number, a handler named in ``events`` that the
+    view does not have, or one a budget cannot be enforced on (``async def``,
+    ``@background``). No view is constructed.
+    """
+    messages: list[CheckMessage] = []
+    if _is_check_suppressed("djust.V024"):
+        return messages
+    try:
+        from djust._query_budget import declared_budget, is_declared
+        from djust.live_view import LiveView
+    except Exception:  # noqa: BLE001 — djust not importable/configured: nothing to check
+        return messages
+
+    candidates = set(_routed_liveview_classes()) | set(_walk_subclasses(LiveView))
+    for cls in sorted(candidates, key=lambda c: (c.__module__, c.__qualname__)):
+        if _is_framework_internal_class(cls) or not is_declared(cls):
+            continue
+        try:
+            declared_budget(cls)
+        except ValueError as exc:
+            messages.append(
+                DjustError(
+                    "%s.%s has an invalid query_budget: %s"
+                    % (cls.__module__, cls.__qualname__, exc),
+                    hint=(
+                        "An invalid query_budget is not measured at run time and fails the smoke "
+                        "test. Use an int, or a dict with 'mount', 'render', 'event' and 'events' "
+                        "({handler: n} for synchronous @event_handler methods of this view)."
+                    ),
+                    id="djust.V024",
+                    fix_hint="Fix the `query_budget` of `%s`." % cls.__qualname__,
+                )
+            )
     return messages

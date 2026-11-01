@@ -742,6 +742,35 @@ def _check_http_fallback_background_timeout(errors: list[CheckMessage]) -> None:
     )
 
 
+def _check_query_budget_mode(errors: list[CheckMessage]) -> None:
+    """C029 — ``LIVEVIEW_CONFIG['query_budget']`` is ``None``, ``"off"``, ``"warn"`` or ``"error"``.
+
+    Anything else (``True``, ``"WARN"``, ``1``) is read as ``"warn"`` by the
+    request path, which says so once in the log; a project that wrote
+    ``"query_budget": True`` meaning "on, as errors" would never learn it (#3701).
+    """
+    from .._query_budget import MODES, _shown, valid_mode
+    from ..config import config
+
+    if _is_check_suppressed("djust.C029"):
+        return
+    value = config.get("query_budget")
+    if valid_mode(value):
+        return
+    errors.append(
+        DjustError(
+            "LIVEVIEW_CONFIG['query_budget'] is %s; it must be None or one of %s."
+            % (_shown(value), ", ".join(repr(m) for m in MODES)),
+            hint=(
+                "djust reads any other value as 'warn'. 'warn' logs a phase over its "
+                "view's query_budget, 'error' raises QueryBudgetExceeded, 'off' never measures."
+            ),
+            id="djust.C029",
+            fix_hint='Set `LIVEVIEW_CONFIG[\'query_budget\']` to `"warn"`, `"error"` or `"off"`, or remove it.',
+        )
+    )
+
+
 def _check_liveview_middleware(errors: list[CheckMessage]) -> None:
     """C026 — every ``LIVEVIEW_MIDDLEWARE`` entry is an importable ``async def`` (ADR-044).
 
@@ -1387,6 +1416,9 @@ def check_configuration(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
 
     # C028 -- LIVEVIEW_CONFIG['http_fallback_background_timeout'] is not None or a number > 0
     _check_http_fallback_background_timeout(errors)
+
+    # C029 -- LIVEVIEW_CONFIG['query_budget'] is not None / "off" / "warn" / "error"
+    _check_query_budget_mode(errors)
 
     # C005 -- WebSocket routes missing AuthMiddlewareStack
     # A001 -- WebSocket routes missing AllowedHostsOriginValidator (#659)

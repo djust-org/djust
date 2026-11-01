@@ -28,7 +28,6 @@ from django import forms
 from asgiref.sync import sync_to_async
 from django.contrib.auth.models import User
 from django.contrib.sessions.backends.db import SessionStore
-from django.core.exceptions import ImproperlyConfigured
 from django.core.management import call_command
 from django.db import connection
 from django.test import override_settings
@@ -107,9 +106,9 @@ def warned(caplog):
 def _reset_invalid_warned():
     from djust import _query_budget
 
-    _query_budget._invalid_warned.clear()
+    _query_budget._reset_for_tests()
     yield
-    _query_budget._invalid_warned.clear()
+    _query_budget._reset_for_tests()
 
 
 # --------------------------------------------------------------------- parse --
@@ -501,10 +500,13 @@ class TestModes:
                 "costly"
             )
 
-    def test_an_unknown_mode_is_a_configuration_error(self):
+    def test_an_unknown_mode_never_fails_a_request(self, warned):
+        """It is C029 at startup; the request path reads it as ``warn`` and says so once."""
         with override_settings(LIVEVIEW_CONFIG={"query_budget": "loud"}):
-            with pytest.raises(ImproperlyConfigured, match="query_budget"):
-                LiveViewTestClient(view({"mount": 1})).mount()
+            LiveViewTestClient(view({"mount": 0}, spend_mount=1)).mount()
+        messages = warned()
+        assert any("LIVEVIEW_CONFIG['query_budget'] must be one of" in m for m in messages)
+        assert any("mount ran at least 1 queries" in m for m in messages)  # it measured, as warn
 
     def test_an_unknown_mode_is_not_read_for_a_view_without_a_budget(self):
         """Zero cost when unused includes not reading the knob."""
@@ -566,6 +568,39 @@ class TestZeroCostWhenUnused:
             client.send_event("cheap")
         assert entered, "no scope was entered"
         assert len(entered) == len(exited)
+
+    def test_a_scope_is_exited_explicitly_when_the_step_raises_too(self):
+        """The exception path is the one refcounting would otherwise be hiding."""
+        from django.db.backends.base.base import BaseDatabaseWrapper
+
+        real = BaseDatabaseWrapper.execute_wrapper
+        entered, exited = [], []
+
+        class Recording:
+            def __init__(self, scope):
+                self.scope = scope
+
+            def __enter__(self):
+                entered.append(1)
+                return self.scope.__enter__()
+
+            def __exit__(self, *exc):
+                exited.append(exc[0])
+                return self.scope.__exit__(*exc)
+
+        class Boom(Base):
+            query_budget = {"mount": 9}
+
+            def mount(self, request, **kwargs):
+                _queries(1)
+                raise RuntimeError("x")
+
+        with patch.object(
+            BaseDatabaseWrapper, "execute_wrapper", lambda self, w: Recording(real(self, w))
+        ):
+            with pytest.raises(RuntimeError):
+                LiveViewTestClient(Boom).mount()
+        assert entered == [1] and exited == [RuntimeError]
 
     def test_the_wrapper_is_removed_when_the_hop_fails(self):
         class Boom(Base):
@@ -989,14 +1024,15 @@ class TestAuditListing:
         audit = _audit_class(Widget, "LiveComponent")
         assert "query_budget" not in audit
 
-    def test_an_invalid_budget_is_listed_as_declared_not_hidden(self):
+    def test_an_invalid_budget_is_listed_as_invalid_with_its_reason(self):
         class Typo(LiveView):
             login_required = False
             template = "<div dj-root></div>"
             query_budget = {"mout": 1}
 
         audits = _audit_json(Typo)
-        assert audits["Typo"]["query_budget"] == {"mout": 1}
+        assert audits["Typo"]["query_budget"] is None
+        assert "'mout'" in audits["Typo"]["query_budget_error"]
 
 
 def test_the_config_key_is_declared_with_an_unset_default():

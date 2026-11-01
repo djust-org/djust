@@ -190,6 +190,12 @@ class LiveViewTestClient:
         self.events: List[Dict[str, Any]] = []
         self.patches: List[Any] = []
         self._mounted = False
+        # Set by ``LiveViewSmokeTest.test_smoke_event_queries``: when true,
+        # ``send_event`` counts the queries of the handler step alone (as the
+        # run-time meter does) into ``last_event_queries``. Off otherwise, so an
+        # ordinary test pays for no query capture.
+        self._measure_event_queries = False
+        self.last_event_queries: Optional[int] = None
         # Which branch the last mount() call took — set by mount(), read by
         # tests that want to assert which path was exercised (#2821). None
         # until mount() has been called at least once.
@@ -324,6 +330,10 @@ class LiveViewTestClient:
         transports, so a test can step a view from one URL to another and see a
         bad value become ``params_errors`` and a good one clear it (#3706).
 
+        It runs ``handle_params`` only: the real frame also re-checks object
+        permission and re-renders. Two calls with no ``render()`` between them
+        count as one mount phase for a ``query_budget``.
+
         Args:
             query_params: The new query string: a mapping (a list value is a
                 repeated key) or the text. Omitted means a URL with none.
@@ -394,6 +404,7 @@ class LiveViewTestClient:
         if not self._mounted or not self.view_instance:
             raise RuntimeError("View not mounted. Call client.mount() first.")
 
+        self.last_event_queries = None
         # Capture state before
         state_before = self.get_state()
 
@@ -464,7 +475,17 @@ class LiveViewTestClient:
         start_time = time.perf_counter()
         error = None
         try:
-            _run_step(self.view_instance, "event", handler, *call_args, **call_kwargs)
+            if self._measure_event_queries:
+                from django.db import connection
+                from django.test.utils import CaptureQueriesContext
+
+                with CaptureQueriesContext(connection) as captured:
+                    try:
+                        _run_step(self.view_instance, "event", handler, *call_args, **call_kwargs)
+                    finally:
+                        self.last_event_queries = len(captured)
+            else:
+                _run_step(self.view_instance, "event", handler, *call_args, **call_kwargs)
         except Exception as e:
             error = str(e)
 
@@ -2004,15 +2025,13 @@ class LiveViewSmokeTest:
         :meth:`test_smoke_event_queries`, and validated here as well, so a
         misspelt handler name fails whichever smoke test runs first.
         """
-        from ._query_budget import parse_budget, valid_count
+        from ._query_budget import declared_budget, is_declared, valid_count
 
         config = self.view_config.get(view_class, {})
         if "max_queries" in config:
             return {"total": (valid_count(config["max_queries"], "max_queries"), "view_config")}
-        raw = getattr(view_class, "query_budget", None)
-        parsed = parse_budget(raw)
-        self._resolve_event_budget(view_class)
-        if raw is None:
+        parsed = declared_budget(view_class)  # also rejects a misspelt or unmeasurable handler
+        if not is_declared(view_class):
             return {"total": (valid_count(self.max_queries, "max_queries"), "")}
         if parsed.total is not None:
             return {"total": (parsed.total, "query_budget")}
@@ -2029,28 +2048,25 @@ class LiveViewSmokeTest:
         """Return the event budget of *view_class* as ``{handler: (limit, source)}``.
 
         ``query_budget["events"][name]`` wins over ``query_budget["event"]``,
-        which covers every ``@event_handler`` of the view. A handler named in
-        ``events`` that the view does not have raises ``ValueError``: a budget
-        for a handler that cannot run would pass for protection.
+        which covers every ``@event_handler`` of the view that a budget can be
+        enforced on. A handler named in ``events`` that the view does not have, or
+        that is ``async def`` or ``@background`` (nothing measures it), raises
+        ``ValueError`` through ``declared_budget``, the reader the run-time meter,
+        ``manage.py check`` and ``djust_audit`` share: a budget for a handler that
+        cannot be measured would pass for protection. One covered only by the
+        broad ``event`` number is left out here and reported by
+        :meth:`test_smoke_event_queries` as not measured.
         """
-        from ._query_budget import parse_budget
+        from ._query_budget import declared_budget, event_handlers, handler_problem
 
-        parsed = parse_budget(getattr(view_class, "query_budget", None))
+        parsed = declared_budget(view_class)
         if parsed.event is None and not parsed.events:
             return {}
-        handlers = _get_handlers(view_class)
-        unknown = sorted(set(parsed.events) - set(handlers))
-        if unknown:
-            raise ValueError(
-                f"query_budget['events'] names {unknown[0]!r}, which is not an "
-                f"@event_handler of {view_class.__name__} "
-                f"(handlers: {', '.join(sorted(handlers)) or 'none'})"
-            )
         resolved: Dict[str, Tuple[int, str]] = {}
-        for name in handlers:
+        for name, function in event_handlers(view_class).items():
             if name in parsed.events:
                 resolved[name] = (parsed.events[name], f"query_budget['events'][{name!r}]")
-            elif parsed.event is not None:
+            elif parsed.event is not None and handler_problem(function) is None:
                 resolved[name] = (parsed.event, "query_budget['event']")
         return resolved
 
@@ -2134,8 +2150,9 @@ class LiveViewSmokeTest:
         an error when the view named the handler in ``events``, and a
         ``UserWarning`` when only the broad ``event`` number covers it.
         """
-        from django.db import connection
-        from django.test.utils import CaptureQueriesContext
+        import warnings
+
+        from ._query_budget import declared_budget, unmeasurable_handlers
 
         errors = []
         views = self._get_views()
@@ -2144,6 +2161,15 @@ class LiveViewSmokeTest:
             name = f"{view_class.__module__}.{view_class.__name__}"
             try:
                 budget = self._resolve_event_budget(view_class)
+                skipped = unmeasurable_handlers(view_class, declared_budget(view_class))
+                if skipped:
+                    warnings.warn(
+                        f"{name}: query_budget['event'] was not measured for "
+                        f"{', '.join(n for n, _ in skipped)}: "
+                        + "; ".join(f"{n} is {why}" for n, why in skipped),
+                        UserWarning,
+                        stacklevel=2,
+                    )
                 if not budget:
                     continue
                 handlers = _get_handlers(view_class)
@@ -2155,8 +2181,10 @@ class LiveViewSmokeTest:
                     ):
                         try:
                             client = self._make_client(view_class)
-                            with CaptureQueriesContext(connection) as captured:
-                                result = client.send_event(handler_name, **params)
+                            # The handler's own queries, as the run-time meter counts
+                            # them: not the per-event object-permission re-check.
+                            client._measure_event_queries = True
+                            result = client.send_event(handler_name, **params)
                         except Exception as exc:  # a payload the handler cannot take
                             last_error = f"{type(exc).__name__}: {exc}"
                             continue
@@ -2164,8 +2192,9 @@ class LiveViewSmokeTest:
                             succeeded = True
                         else:
                             last_error = str(result.get("error") or "")
-                        if len(captured) > worst:
-                            worst, worst_desc = len(captured), desc
+                        spent = client.last_event_queries or 0
+                        if spent > worst:
+                            worst, worst_desc = spent, desc
                     if worst > limit:
                         errors.append(
                             f"{name}.{handler_name}: ran {worst} queries "
@@ -2186,8 +2215,6 @@ class LiveViewSmokeTest:
                         else:
                             unmeasured.append(handler_name)
                 if unmeasured:
-                    import warnings
-
                     warnings.warn(
                         f"{name}: query_budget['event'] was not measured for "
                         f"{', '.join(sorted(unmeasured))}: no generated call to them succeeded. "
