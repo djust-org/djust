@@ -197,7 +197,7 @@ An int counts mount and first render together. A dict counts `"mount"` and
 that names one phase can spend up to `max_queries` on the other.
 `"mount"` includes `handle_params()` (a declared `params_form` too).
 Any key other than `"mount"`, `"render"`, `"event"` and `"events"` (a typo), and any value
-that is not a non-negative int (a `bool` included), fails the test with a `ValueError`
+that is not an int from 0 to 1,000,000 (a `bool` included), fails the test with a `ValueError`
 naming the view, instead of being ignored. A view over budget is reported by name with
 its count and where its limit came from, for example
 `shop.views.ProductListView: 5 queries (max 3, from query_budget)`.

@@ -817,7 +817,7 @@ V008 is broader than V006 and will flag any custom class instantiation, not just
 
 **Severity**: Error
 
-**What causes it**: A view's `query_budget` is a declaration nothing can enforce: an unknown dict key, a `bool`, a negative or non-int number, a malformed `events`, a handler named in `events` that the view does not have, or an `async def` / `@background` handler (a budget cannot be measured on either). `LiveViewSmokeTest` raises `ValueError` on it, the run-time meter logs it once and measures nothing, and `djust_audit` lists it as invalid.
+**What causes it**: A view's `query_budget` is a declaration nothing can enforce: an unknown dict key, a `bool`, a non-int, negative or over-1,000,000 number, a malformed `events`, a handler named in `events` that the view does not have, or an `async def` / `@background` handler (a budget cannot be measured on either). `LiveViewSmokeTest` raises `ValueError` on it, the run-time meter logs it once and measures nothing, and `djust_audit` lists it as invalid.
 
 **Fix**: Use an int, or a dict with `mount`, `render`, `event` and `events`; name only synchronous `@event_handler` methods in `events`. Suppress with `DJUST_CONFIG = {"suppress_checks": ["V024"]}`.
 
