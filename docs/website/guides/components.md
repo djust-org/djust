@@ -1018,9 +1018,7 @@ own class names.
 
 ### URLs in component attributes
 
-What a built-in component prints into a URL attribute (`<a href>`, `<form action>`, `<img src>`, `srcset`, a poster) depends on which library prints it. The two are NOT the same rule.
-
-**`djust_components`: the template tags (in both rendering engines, the Python tag under Django's engine and the native handler under `DjustTemplateBackend`) and the class-based components.** An allowlist:
+What a built-in component prints into a URL attribute (`<a href>`, `<form action>`, `<img src>`, `srcset`, a poster) is decided by one rule, an allowlist, in both libraries: `djust_components` (the template tags in both rendering engines, the Python tag under Django's engine and the native handler under `DjustTemplateBackend`, and the class-based components) and `djust_theming` (the `theme_*` tags and pages).
 
 | the value | what is printed |
 | --- | --- |
@@ -1033,9 +1031,11 @@ An entity or percent escape inside the scheme (`jav&#x61;script:`, `javascript%3
 
 The implementation is `djust.components.utils.url_attr` (one URL; `honor_safe=False` for the class components), `safe_url` (navigation sinks, no `data:` images) and `srcset_attr`. A new component that prints a caller-supplied URL must use one of them.
 
-**`djust_theming` (`theme_*` tags and pages) is different.** It refuses by DENYLIST: `javascript:`, `vbscript:`, `data:` and the obsolete `livescript:` and `mhtml:` become `#` (or raise, for a literal). It passes every other scheme the components allowlist would reject, among them `blob:`, `file:`, `view-source:`, `jar:`, `intent:`, `feed:`, `ws:`, `git:`, `ms-word:` and custom application schemes. None of those is a script scheme; whether the theming tags should move to the shared allowlist (which would break a legitimate custom scheme) is an open decision, so it is documented here rather than changed.
+**`djust_theming` (`theme_*` tags and pages) uses the same allowlist.** It used to keep a denylist of its own (`javascript:`, `vbscript:`, `data:`, `livescript:`, `mhtml:`), which let every scheme it did not name through: `blob:`, `file:`, `view-source:`, `jar:`, `intent:`, `feed:`, `ws:`, `git:`, `ms-word:` and custom application schemes. It now asks `djust.components.utils.url_allowed`, the decision `safe_url` makes, so the two libraries cannot disagree and a scheme added to (or refused by) the components list changes theming with it. Where a value comes from data (nav, sidebar and breadcrumb items, `url_pattern`, an avatar `src`, a page's `action` and links) a rejected URL renders as `#` and the rest of the component renders as before; a developer-supplied literal (`{% theme_button href=... %}`, or an `href` / `src` / `action` / `formaction` passed through `**attrs`) still raises `ValueError`. A `mark_safe` value gets no exemption in theming: it is checked like any other string. An avatar `src` may also be an inline `data:image/...` URI.
 
-`make template-library-url-sweep` (see [the template backend reference](../../TEMPLATE_BACKEND.md)) drives script-capable URLs through every parameter of every tag and driveable class component and `python/tests/test_url_scheme_sweep_3665.py` fails a PR that adds a sink without the check, because it derives the tags, parameters and classes from the code. It does not drive the descriptor components (their markup is the caller's template) or the gallery pages.
+**Consequence for theme authors:** a link whose scheme is not on the list above no longer renders in a `theme_*` tag or page. That includes `sms:`, `geo:`, `webcal:` and app deep links such as `myapp://record/42`; they were passed through before. The allowlist is deliberately not widened for theming. To link to one, write the `<a>` in your own template: the rule decides what the framework's own tags print, not what your templates print.
+
+`make template-library-url-sweep` (see [the template backend reference](../../TEMPLATE_BACKEND.md)) drives script and other non-navigation schemes (`javascript:`, `livescript:`, `blob:`, `file:`, custom schemes, ...) through every parameter of every tag, in both libraries, and every driveable class component, and `python/tests/test_url_scheme_sweep_3665.py` fails a PR that adds a sink without the check, because it derives the tags, parameters and classes from the code. It does not drive the descriptor components (their markup is the caller's template) or the gallery pages. `python/tests/test_theming_url_allowlist_3677.py` pins the set of theming sinks, so a new one is a visible decision.
 
 ## djust-theming
 
