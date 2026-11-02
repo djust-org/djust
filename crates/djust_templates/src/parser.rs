@@ -398,8 +398,15 @@ struct TagContextCache {
     table: Option<Vec<bool>>,
 }
 
+// `with`, not `try_with`: the slot holds a `Vec`, so it has a destructor and `with`
+// would panic if called after that destructor ran, i.e. from the destructor of another
+// thread-local during thread teardown. Parsing is only entered from a request or an
+// explicit call into the crate, never from a destructor, and no such path was found
+// (the sibling `WALK_RAW_BODIES` flag below is read the same way), so there is nothing
+// to test and the plain `with` keeps a logic error loud instead of silently falling
+// back to the slow scan.
 thread_local! {
-    static TAG_CONTEXT: std::cell::RefCell<Option<TagContextCache>> =
+    static TAG_CONTEXT:std::cell::RefCell<Option<TagContextCache>> =
         const { std::cell::RefCell::new(None) };
 }
 
@@ -6790,8 +6797,33 @@ mod tag_context_tests {
 
     #[test]
     fn matches_the_backward_walk_on_random_token_streams() {
-        const FRAGMENTS: [&str; 14] = [
-            "<", ">", "\"", "'", "<a ", "x", " ", "\n", "title=\"", "\">", "a>b", "<<", ">>", "",
+        // Single characters and short runs, plus the composites real markup produces:
+        // a closing `>` followed by a tag that is still open. A text token holding BOTH
+        // is what the restart-at-`>` logic exists for, and a generator of one-fragment
+        // tokens never makes it.
+        const FRAGMENTS: [&str; 22] = [
+            "<",
+            ">",
+            "\"",
+            "'",
+            "<a ",
+            "x",
+            " ",
+            "\n",
+            "title=\"",
+            "\">",
+            "a>b",
+            "<<",
+            ">>",
+            "",
+            "</p><div class=\"",
+            "</p><div ",
+            "<p>a</p><div ",
+            "a</p><b title='",
+            "x>y<a href=\"",
+            "> <div ",
+            "\">text<span ",
+            "<b title=\"a > b\" ",
         ];
         // A fixed-seed LCG: no dependency, and a failure reproduces.
         let mut seed: u64 = 0x3724;
@@ -6801,17 +6833,66 @@ mod tag_context_tests {
                 .wrapping_add(1442695040888963407);
             ((seed >> 33) as usize) % bound
         };
-        for _ in 0..3000 {
+        let mut text_tokens_with_gt_and_open_tag = 0;
+        for _ in 0..5000 {
             let len = next(18);
             let tokens: Vec<Token> = (0..len)
                 .map(|_| match next(4) {
                     0 => Token::Variable("v".into()),
                     1 => Token::Tag("if".into(), vec!["c".into()]),
-                    _ => text(FRAGMENTS[next(FRAGMENTS.len())]),
+                    _ => {
+                        // one to three fragments in a single text token
+                        let pieces = 1 + next(3);
+                        let joined: String = (0..pieces)
+                            .map(|_| FRAGMENTS[next(FRAGMENTS.len())])
+                            .collect();
+                        text(&joined)
+                    }
                 })
                 .collect();
+            for token in &tokens {
+                if let Token::Text(t) = token {
+                    if t.contains('>') && advance_html_tag_state(HtmlTagState::default(), t).in_tag
+                    {
+                        text_tokens_with_gt_and_open_tag += 1;
+                    }
+                }
+            }
             assert_matches_oracle(&tokens);
         }
+        // Non-vacuity: the corpus must reach the shape the restart logic is for.
+        assert!(
+            text_tokens_with_gt_and_open_tag > 1000,
+            "only {text_tokens_with_gt_and_open_tag} text tokens held a `>` and ended inside a tag"
+        );
+    }
+
+    /// `<p>a</p><div {% if y %}hidden{% endif %}>t</div>`: one text token holds a `>` AND
+    /// a trailing unclosed tag, so the `{% if %}` is inside the `<div`. Compared with the
+    /// oracle at every position, and checked at the node the parser builds.
+    #[test]
+    fn a_tag_opened_after_a_closing_tag_in_the_same_text_token_is_in_tag_context() {
+        let source = "<p>a</p><div {% if y %}hidden{% endif %}>t</div>";
+        let tokens = crate::lexer::tokenize(source).unwrap();
+        assert_matches_oracle(&tokens);
+        let if_at = tokens
+            .iter()
+            .position(|t| matches!(t, Token::Tag(name, _) if name == "if"))
+            .unwrap();
+        {
+            let _scope = TagContextScope::enter(&tokens);
+            assert!(is_inside_html_tag_at(&tokens, if_at));
+        }
+        assert!(oracle_inside_html_tag_at(&tokens, if_at));
+        let nodes = parse(&tokens).unwrap();
+        let in_tag_context = nodes
+            .iter()
+            .find_map(|n| match n.unlocated() {
+                Node::If { in_tag_context, .. } => Some(*in_tag_context),
+                _ => None,
+            })
+            .expect("the template has an If node");
+        assert!(in_tag_context, "the if is inside `<div ...>`");
     }
 
     #[test]

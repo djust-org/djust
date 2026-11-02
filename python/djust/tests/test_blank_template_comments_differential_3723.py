@@ -155,8 +155,8 @@ def test_blanking_matches_the_reference_on_random_templates():
     # One test over thousands of inputs, reporting the first disagreement. Seeded, so
     # a failure here reproduces.
     for source in _random_corpus():
-        assert _blank_template_comments(source) == _reference_blank_template_comments(source), (
-            repr(source)
+        assert _blank_template_comments(source) == _reference_blank_template_comments(source), repr(
+            source
         )
 
 
@@ -167,9 +167,7 @@ def test_the_corpus_reaches_the_branches_the_fix_touches():
     inputs = _CORPUS + _random_corpus()
     blanked = [s for s in inputs if _reference_blank_template_comments(s) != s]
     untouched = [
-        s
-        for s in inputs
-        if ("{#" in s or "{%" in s) and _reference_blank_template_comments(s) == s
+        s for s in inputs if ("{#" in s or "{%" in s) and _reference_blank_template_comments(s) == s
     ]
     assert len(blanked) > 200 and len(untouched) > 20
     assert any("\n" in s and "{% comment %}" in s for s in blanked)

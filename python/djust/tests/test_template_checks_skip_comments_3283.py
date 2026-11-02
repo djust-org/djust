@@ -6,9 +6,6 @@ the same pattern outside a comment must, and a finding after a comment keeps
 its line number.
 """
 
-import random
-import re
-
 import pytest
 
 from djust.checks import check_accessibility, check_inline_script_csp, check_templates
