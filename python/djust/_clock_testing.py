@@ -3,7 +3,7 @@
 import asyncio
 from concurrent.futures import Future
 from contextlib import contextmanager
-from typing import Any, Callable, Iterator
+from typing import Any, Callable, Coroutine, Iterator
 
 
 class ManualClock:
@@ -20,11 +20,28 @@ class ManualClock:
     def now(self) -> float:
         return self.value
 
-    async def sleep(self, seconds: float) -> None:
+    def sleep(self, seconds: float) -> Coroutine[Any, Any, None]:
+        """Sleep ``seconds`` of manual time, measured from THIS call (#3451).
+
+        The deadline is fixed here, not when the returned coroutine first runs.
+        A caller turns ``deadline - now()`` into ``seconds`` and then hands the
+        coroutine to ``asyncio.create_task``, whose first step runs later in the
+        same loop iteration or after it. If ``advance`` runs in between, a
+        deadline computed at the first step would be ``seconds`` past a clock that
+        has already moved: the sleeper would register beyond the time it was
+        asked to wake at, and nothing would ever wake it.
+        """
+        return self._sleep_until(seconds, self.value + seconds)
+
+    async def _sleep_until(self, seconds: float, deadline: float) -> None:
         if seconds <= 0:
             return
+        if deadline <= self.value + 1e-9:
+            # Time reached the deadline before this coroutine first ran, after the
+            # last ``settle`` looked for sleepers. Nobody is left to wake it.
+            return
         future = asyncio.get_running_loop().create_future()
-        entry = (self.value + seconds, future)
+        entry = (deadline, future)
         self.sleepers.append(entry)
         try:
             await future
