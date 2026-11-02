@@ -81,6 +81,16 @@ KNOWN_AUTHOR_NAMED = {
     ("djust.components.components.card.Card", "data"),
 }
 
+#: A class whose RUST implementation (``crates/djust_components/src/simple/avatar.rs``,
+#: ``image_src_attr``) mirrors ``url_attr`` but reads a value with a leading C0 control
+#: character (``\x01blob:...``) as having no scheme, where ``url_attr`` (Python's
+#: ``urlsplit`` strips it) refuses it. Found when the sweep started reading every
+#: non-navigation scheme (#3677). It is an ``<img src>`` and ``blob:`` is not a script
+#: scheme, so it is recorded here and not widened into the theming change. Delete the entry
+#: when the Rust mirror is fixed: ``test_the_known_rust_mirror_gap_still_occurs`` fails once
+#: it stops occurring.
+KNOWN_RUST_MIRROR_GAPS = {("djust.components.ui.avatar_simple.Avatar", "src", "blob-lead-control")}
+
 #: Renderable classes the sweep cannot drive generically, and why (the sweep DERIVES the
 #: set from the class; the pin makes a NEW undriven class a visible decision).
 UNDRIVEN = {
@@ -159,6 +169,18 @@ class TestScanner:
             '<div data-url="javascript:x">',
             '<div dj-href="javascript:x">',
             '<link rel="stylesheet" href="javascript:x">',
+            # not script schemes, not navigation schemes either (#3677)
+            '<a href="livescript:alert(1)">',
+            '<a href="blob:https://example.com/x">',
+            '<a href="  BLOB:x">',
+            '<a href="\x01file:///etc/passwd">',
+            '<a href="bl&#x09;ob:x">',
+            '<a href="bl\tob:x">',
+            '<a href="sms:+15551234567">',
+            '<a href="x-app://open/1">',
+            '<form action="intent://x#Intent;end">',
+            '<img src="blob:https://example.com/x">',
+            '<img srcset="/a.png 1x, file:///x 2x">',
         ],
     )
     def test_script_urls_are_found_where_a_browser_would_read_them(self, markup):
@@ -190,6 +212,16 @@ class TestScanner:
             '<link rel="manifest" href="data:application/json,{}">',
             '<!-- <a href="javascript:alert(1)"> -->',
             "<p>javascript:alert(1)</p>",
+            # the navigation schemes, and values that are not a scheme (#3677)
+            '<a href="ftp://example.com/x">',
+            '<a href="ftps://example.com/x">',
+            '<a href="\x01https://example.com/x">',  # a browser drops the leading control
+            '<a href="HTTPS://example.com/x">',
+            '<a href="foo bar:baz">',  # a space cannot be in a scheme
+            '<a href="1abc:x">',  # a scheme starts with a letter
+            '<a href="bl%6Fb:x">',  # percent in the scheme is not a scheme
+            '<a href="&amp;#x62;lob:x">',  # escaped once: the text "&#x62;lob:x" is a relative URL
+            '<div data-label="blob:x" data-id="file:///x" title="sms:+1">',
         ],
     )
     def test_safe_or_inert_values_are_not_flagged(self, markup):
@@ -246,10 +278,37 @@ class TestScanner:
             "relative",
             "mailto",
             "data-png",
+            "livescript",
+            "blob",
+            "blob-lead-control",
+            "blob-embedded-tab",
+            "file",
+            "custom",
+            "sms",
         ):
             assert family in labels, family
         assert all(url_sweep.MARK in payload for _, payload in url_sweep.PAYLOADS)
         assert len(labels) == len(url_sweep.PAYLOADS)
+
+    def test_the_scanners_allowlist_is_the_production_one(self):
+        """The scanner keeps its own copy (it must not use the rule under test as its
+        oracle); this is the place the two are compared, so a WIDENED production list
+        (which the issue forbids) fails here instead of widening the scanner with it."""
+        from djust.components.utils import _SAFE_URL_SCHEMES
+
+        assert url_sweep.NAVIGATION_SCHEMES == _SAFE_URL_SCHEMES
+
+    def test_every_non_navigation_payload_is_found_by_the_scanner_when_written_in_a_link(self):
+        """Presence before absence: the corpus members the theming change is judged by are
+        each flagged when placed in an ``href`` (the entity spelling is flagged only after a
+        browser decodes it, which is what ``attributes`` does)."""
+        for label, payload in url_sweep.NON_NAVIGATION:
+            assert self._flagged('<a href="%s">' % payload), label
+
+    def test_the_safe_corpus_is_not_flagged(self):
+        for label, payload in url_sweep.SAFE:
+            element = '<img src="%s">' if label.startswith("data-") else '<a href="%s">'
+            assert not self._flagged(element % payload.replace("&", "&amp;")), label
 
 
 # --------------------------------------------------------------------------- #
@@ -334,8 +393,18 @@ class TestTheSweep:
             h
             for h in runs["components"].get("component_holes", [])
             if (h[0], h[1]) not in KNOWN_AUTHOR_NAMED
+            and not any((h[0], h[1], label) in KNOWN_RUST_MIRROR_GAPS for label in h[-1])
         ]
         assert remaining == [], runs["components"]["stdout"][-3000:]
+
+    def test_the_known_rust_mirror_gap_still_occurs(self, runs):
+        """A pin that cannot rot: each recorded gap must still occur (else delete it)."""
+        seen = {
+            (h[0], h[1], label)
+            for h in runs["components"].get("component_holes", [])
+            for label in h[-1]
+        }
+        assert KNOWN_RUST_MIRROR_GAPS <= seen, sorted(KNOWN_RUST_MIRROR_GAPS - seen)
 
     def test_the_author_named_exceptions_are_still_exactly_those(self, runs):
         """A pin that cannot rot: each exception must still occur (else delete it)."""
@@ -392,6 +461,44 @@ class TestTheSweep:
         ):
             assert (tag, param) in reached, (tag, param)
         assert runs["tags"]["rendered_both"] > runs["tags"]["cells"] // 2
+
+    def test_every_theming_sink_the_sweep_reaches_is_one_the_theming_suite_drives(self, runs):
+        """#3677: theming's sinks are an enumerated set (``SINKS`` in
+        ``test_theming_url_allowlist_3677.py``), compared with what the sweep reaches.
+
+        A theming parameter that starts to print a caller's URL shows up here as reached
+        but not driven, and fails until it is added to that table (with its check).
+        """
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "theming_url_allowlist_3677", ROOT / "python/tests/test_theming_url_allowlist_3677.py"
+        )
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        driven = set(module.SINKS) | {("theme_components:theme_button", "href")}
+        reached = {
+            tuple(r)
+            for r in runs["tags"]["reached"]
+            if r[0].split(":", 1)[0]
+            in ("theme_tags", "theme_components", "theme_pages", "theme_form_tags")
+        }
+        assert reached <= driven, sorted(reached - driven)
+        # presence before absence: the sinks the sweep measured on main (#3677's list:
+        # buttons, nav, breadcrumb, avatar and every page's action / link) are reached
+        for tag, param in (
+            ("theme_components:theme_button", "href"),
+            ("theme_components:theme_nav", "items"),
+            ("theme_components:theme_nav_group", "items"),
+            ("theme_components:theme_nav_item", "url"),
+            ("theme_components:theme_breadcrumb", "items"),
+            ("theme_components:theme_avatar", "src"),
+            ("theme_pages:theme_login_page", "action"),
+            ("theme_pages:theme_login_page", "forgot_password_url"),
+            ("theme_pages:theme_register_page", "terms_url"),
+            ("theme_pages:theme_500_page", "retry_url"),
+        ):
+            assert (tag, param) in reached, (tag, param)
 
     def test_every_renderable_class_is_driven_or_pinned_as_undriven(self, runs):
         """ "Every class component" means every ``Component``, ``LiveComponent`` and
