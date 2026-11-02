@@ -47,17 +47,37 @@ TICK_S = 0.05
 #: A pause or stall over this many seconds is counted in the "over 1 s" tally: the
 #: shortest default wait a Channels communicator ever had (``connect()``, #3692).
 NOTABLE_S = 1.0
+#: A stall is only counted at all from this late. Timer slop and ordinary scheduling make
+#: nearly every 50 ms tick a few milliseconds late, so counting every late tick (the first
+#: version did: "of 7149") says nothing; ticks at least this late are the ones worth a number.
+STALL_COUNTED_S = 0.1
+
+#: What ``Recorder.current`` says outside a test, so a pause there is not blamed on the
+#: test that ran before it.
+BEFORE_FIRST_TEST = "(startup or collection, before the first test)"
+BETWEEN_TESTS = "(between tests)"
+AFTER_LAST_TEST = "(after the last test)"
 
 
 @dataclass
 class Worst:
+    """The worst of a kind of event, and how many reached ``floor`` and ``NOTABLE_S``.
+
+    ``seen`` counts every event (every gen-2 collection); ``counted`` only those of at
+    least ``floor`` seconds; ``over_notable`` those of at least ``NOTABLE_S``.
+    """
+
+    floor: float = 0.0
     seconds: float = 0.0
     when: str = ""
+    seen: int = 0
+    counted: int = 0
     over_notable: int = 0
-    count: int = 0
 
     def note(self, seconds: float, when: str) -> None:
-        self.count += 1
+        self.seen += 1
+        if seconds >= self.floor:
+            self.counted += 1
         if seconds >= NOTABLE_S:
             self.over_notable += 1
         if seconds > self.seconds:
@@ -66,10 +86,12 @@ class Worst:
 
     def as_dict(self) -> Dict[str, object]:
         return {
+            "floor": self.floor,
             "seconds": self.seconds,
             "when": self.when,
+            "seen": self.seen,
+            "counted": self.counted,
             "over_notable": self.over_notable,
-            "count": self.count,
         }
 
 
@@ -78,9 +100,9 @@ class Recorder:
     """The measurements of one process. Pure bookkeeping: clock and thread are injected."""
 
     clock: Callable[[], float] = time.perf_counter
-    current: str = "(collection, or between tests)"
+    current: str = BEFORE_FIRST_TEST
     gc_pause: Worst = field(default_factory=Worst)
-    stall: Worst = field(default_factory=Worst)
+    stall: Worst = field(default_factory=lambda: Worst(floor=STALL_COUNTED_S))
     _gc_start: Optional[float] = None
 
     # -- gc.callbacks ------------------------------------------------------------
@@ -100,7 +122,7 @@ class Recorder:
         """``gap`` is the time since the previous tick; the lateness is what is over TICK_S."""
         late = gap - TICK_S
         if late > 0:
-            self.stall.note(late, self.current)
+            self.stall.note(late, self.current)  # every late tick is "seen"; few are "counted"
 
     def snapshot(self) -> Dict[str, Dict[str, object]]:
         return {"gc": self.gc_pause.as_dict(), "stall": self.stall.as_dict()}
@@ -131,13 +153,22 @@ def format_line(who: str, data: Dict[str, Dict[str, object]]) -> str:
     gc_part = data["gc"]
     stall = data["stall"]
 
-    def part(label: str, worst: Dict[str, object]) -> str:
-        if not worst["count"]:
-            return f"{label}: none"
-        text = f"{label}: worst {worst['seconds']:.2f} s ({worst['over_notable']} over 1 s of {worst['count']})"
-        return f"{text} in {worst['when']}" if worst["seconds"] else text
-
-    return f"{who}: {part('gen-2 GC pause', gc_part)}; {part('stall', stall)}"
+    if not gc_part["seen"]:
+        gc_text = "gen-2 GC pause: none (no gen-2 collection ran)"
+    else:
+        gc_text = (
+            f"gen-2 GC pause: worst {gc_part['seconds']:.2f} s in {gc_part['when']}; "
+            f"{gc_part['seen']} collections, {gc_part['over_notable']} over {NOTABLE_S:g} s"
+        )
+    if not stall["seen"]:
+        stall_text = "stall: none"
+    else:
+        stall_text = (
+            f"stall: worst {stall['seconds']:.2f} s in {stall['when']}; "
+            f"{stall['counted']} ticks over {stall['floor']:g} s late, "
+            f"{stall['over_notable']} over {NOTABLE_S:g} s"
+        )
+    return f"{who}: {gc_text}; {stall_text}"
 
 
 class TimingReport:
@@ -172,7 +203,12 @@ class TimingReport:
     def pytest_runtest_logstart(self, nodeid: str, location: object) -> None:
         self.recorder.current = nodeid
 
+    def pytest_runtest_logfinish(self, nodeid: str, location: object) -> None:
+        # Not left on the last test's id: a pause between tests is not that test's.
+        self.recorder.current = BETWEEN_TESTS
+
     def pytest_sessionfinish(self, session: pytest.Session) -> None:
+        self.recorder.current = AFTER_LAST_TEST
         self.stop()
         if self.is_worker:
             self.config.workeroutput[WORKEROUTPUT_KEY] = self.recorder.snapshot()  # type: ignore[attr-defined]

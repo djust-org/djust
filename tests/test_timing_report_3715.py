@@ -32,10 +32,15 @@ from pathlib import Path
 import pytest
 
 from tests.timing_report import (
+    AFTER_LAST_TEST,
+    BEFORE_FIRST_TEST,
+    BETWEEN_TESTS,
     NOTABLE_S,
     SECTION,
+    STALL_COUNTED_S,
     TICK_S,
     Recorder,
+    TimingReport,
     Ticker,
     Worst,
     format_line,
@@ -66,7 +71,7 @@ def test_gen_2_pause_is_measured_from_its_start():
     rec.on_gc("stop", {"generation": 2})
     assert rec.gc_pause.seconds == pytest.approx(0.75)
     assert rec.gc_pause.when == "t::a"
-    assert rec.gc_pause.count == 1
+    assert rec.gc_pause.seen == 1
 
 
 def test_only_generation_2_is_a_pause():
@@ -76,7 +81,7 @@ def test_only_generation_2_is_a_pause():
         rec.on_gc("start", {"generation": generation})
         clock.now += 5
         rec.on_gc("stop", {"generation": generation})
-    assert rec.gc_pause.count == 0 and rec.gc_pause.seconds == 0
+    assert rec.gc_pause.seen == 0 and rec.gc_pause.seconds == 0
 
 
 def test_the_worst_pause_is_kept_with_the_test_that_had_it():
@@ -88,21 +93,21 @@ def test_the_worst_pause_is_kept_with_the_test_that_had_it():
         clock.now += took
         rec.on_gc("stop", {"generation": 2})
     assert (rec.gc_pause.seconds, rec.gc_pause.when) == (pytest.approx(1.5), "t::slow")
-    assert rec.gc_pause.count == 3
+    assert rec.gc_pause.seen == 3
     assert rec.gc_pause.over_notable == 1  # only the 1.5 s one reaches NOTABLE_S
 
 
 def test_a_stop_without_a_start_is_ignored():
     rec = Recorder(clock=FakeClock())
     rec.on_gc("stop", {"generation": 2})  # the plugin was installed mid-collection
-    assert rec.gc_pause.count == 0
+    assert rec.gc_pause.seen == 0
 
 
 def test_a_tick_on_time_is_not_a_stall_and_a_late_one_is_by_its_lateness():
     rec = Recorder(clock=FakeClock(), current="t::a")
     rec.on_tick(TICK_S)  # woke exactly when it should
     rec.on_tick(TICK_S - 0.01)  # (timer slop can be early)
-    assert rec.stall.count == 0
+    assert rec.stall.seen == 0
     rec.on_tick(TICK_S + 2.0)
     assert rec.stall.seconds == pytest.approx(2.0)
     assert rec.stall.when == "t::a"
@@ -124,13 +129,57 @@ def test_the_line_names_the_worst_pause_and_stall_with_their_tests():
     rec.stall.note(0.4, "t::stall")
     line = format_line("gw3", rec.snapshot())
     assert line.startswith("gw3: ")
-    assert "gen-2 GC pause: worst 2.50 s (1 over 1 s of 1) in t::gc" in line
-    assert "stall: worst 0.40 s (0 over 1 s of 1) in t::stall" in line
+    assert "gen-2 GC pause: worst 2.50 s in t::gc; 1 collections, 1 over 1 s" in line
+    assert "stall: worst 0.40 s in t::stall; 1 ticks over 0.1 s late, 0 over 1 s" in line
 
 
 def test_an_empty_recorder_reports_none_rather_than_a_zero():
     line = format_line("this process", Recorder(clock=FakeClock()).snapshot())
     assert "gen-2 GC pause: none" in line and "stall: none" in line
+
+
+def test_most_late_ticks_are_seen_but_only_the_worth_counting_ones_are_counted():
+    # Every 50 ms tick is a few ms late on a busy machine; "7149 late ticks" is no number.
+    rec = Recorder(clock=FakeClock(), current="t::a")
+    for _ in range(1000):
+        rec.on_tick(TICK_S + 0.004)  # 4 ms of ordinary slop
+    rec.on_tick(TICK_S + STALL_COUNTED_S)  # exactly at the floor
+    rec.on_tick(TICK_S + 1.5)
+    assert rec.stall.seen == 1002
+    assert rec.stall.counted == 2
+    assert rec.stall.over_notable == 1
+    line = format_line("p", rec.snapshot())
+    assert "2 ticks over 0.1 s late, 1 over 1 s" in line
+    assert "1002" not in line, "the count of every late tick is not reported"
+
+
+def test_a_gen_2_collection_counts_every_time_it_ran():
+    clock = FakeClock()
+    rec = Recorder(clock=clock)
+    for _ in range(4):
+        rec.on_gc("start", {"generation": 2})
+        clock.now += 0.01
+        rec.on_gc("stop", {"generation": 2})
+    assert rec.gc_pause.seen == rec.gc_pause.counted == 4
+    assert "4 collections" in format_line("p", rec.snapshot())
+
+
+def test_a_pause_outside_a_test_is_not_blamed_on_the_test_before_it():
+    plugin = TimingReport.__new__(TimingReport)
+    plugin.recorder = Recorder(clock=FakeClock())
+    assert plugin.recorder.current == BEFORE_FIRST_TEST
+    plugin.pytest_runtest_logstart("t::a", None)
+    assert plugin.recorder.current == "t::a"
+    plugin.pytest_runtest_logfinish("t::a", None)
+    assert plugin.recorder.current == BETWEEN_TESTS
+    assert len({BEFORE_FIRST_TEST, BETWEEN_TESTS, AFTER_LAST_TEST}) == 3
+
+
+def test_a_gen_2_collection_after_the_last_test_is_labelled_so(inner: pytest.Pytester):
+    inner.makepyfile(test_one="def test_one():\n    pass\n")
+    out = _run(inner).stdout.str()
+    line = next(line for line in out.splitlines() if line.startswith("this process:"))
+    assert "test_one.py::test_one" not in line.split("stall:")[0], line
 
 
 # ---------------------------------------------------------------------------
