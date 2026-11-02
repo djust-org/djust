@@ -407,6 +407,12 @@ def url_allowed(value: Any, *, image: bool = False) -> bool:
     fails to parse. With ``image=True`` an inline ``data:image/...`` URI is also
     allowed, for ``<img src>``. A marked-safe (``SafeData``) value is judged like any
     other string.
+
+    This only JUDGES the scheme. A caller that prints the value must also escape it:
+    ``safe_url`` does, and ``djust_theming`` hands its templates plain text (a
+    ``SafeData`` URL is converted first), because a template prints a ``SafeData``
+    raw and ``mark_safe("&#x6A;avascript:x")`` passes this check (it has no scheme
+    until a browser decodes the reference).
     """
     s = str(value).strip()
     if not s:

@@ -21,7 +21,7 @@ from urllib.parse import unquote
 
 from django import template
 from django.template import Context
-from django.utils.safestring import SafeString, mark_safe
+from django.utils.safestring import SafeData, SafeString, mark_safe
 
 from djust.components.utils import url_allowed
 
@@ -104,7 +104,7 @@ def theme_button(
             "theme_button: href= renders an <a>; it cannot be used with element='button'"
         )
     if href:
-        _check_url("href", href)
+        href = _check_url("href", href)
     if element == "a":
         if attrs.get("type") is not None:
             raise ValueError("theme_button: type= applies to a <button>, not an <a>")
@@ -336,23 +336,59 @@ _URL_ATTRS = frozenset({"href", "src", "action", "formaction"})
 
 # Every URL theming prints is judged by ``djust.components.utils.url_allowed``, the
 # allowlist decision ``safe_url`` / ``url_attr`` make for ``djust_components``. Theming
-# keeps no scheme list of its own (it had a denylist, which let every scheme it did not
-# name through: ``blob:``, ``file:``, ``intent:``, custom schemes ... #3677).
+# keeps no list of its own that decides whether a URL is allowed (it had a denylist,
+# which let every scheme it did not name through: ``blob:``, ``file:``, ``intent:``,
+# custom schemes ... #3677).
+#
+# The one remaining list is a SEVERITY, not a decision: these schemes in a
+# developer-supplied literal (``theme_button href=``, an ``**attrs`` URL) have always
+# raised ``ValueError`` rather than render, so they still do. Any other scheme the
+# allowlist rejects is rendered as ``#`` (with a warning) in those sinks, as it is in
+# the data-derived ones: before #3677 they rendered, and a page must not start to 500
+# on a ``webcal:`` or ``myapp://`` link that used to work.
+_RAISING_SCHEMES = ("javascript", "vbscript", "data", "livescript", "mhtml")
 
 
-def _check_url(name: str, value: Any) -> None:
-    """Refuse a URL whose scheme the shared allowlist rejects in ``name``.
+def _plain_url(value: Any) -> Any:
+    """A marked-safe URL as plain text, so the template escapes it.
 
-    For a developer-supplied literal (``theme_button href=``) and the ``**attrs``
-    passthrough: a loud error at development time. The allowlist reads the scheme the
-    way a browser does (case, leading space and control characters, tabs and newlines
-    inside the scheme), so ``"java\tscript:..."`` is still ``javascript:``.
+    ``safe_url`` escapes a ``mark_safe`` URL (it is judged and escaped like any other
+    string); theming prints the value through a template, which would print a
+    ``SafeData`` raw, and ``mark_safe("&#x6A;avascript:x")`` is a ``javascript:`` URL
+    to a browser. Anything with ``__html__`` is treated the same. A value that is
+    not marked safe is returned as it came.
     """
-    if not url_allowed(value):
+    if isinstance(value, SafeData) or hasattr(value, "__html__"):
+        return str.__str__(str(value))
+    return value
+
+
+def _raises_for_scheme(value: Any) -> bool:
+    """Whether ``value`` is one of the schemes a literal URL has always raised for."""
+    compact = "".join(ch for ch in str(value) if ord(ch) > 32 and ord(ch) != 127).lower()
+    return compact.startswith(tuple(f"{scheme}:" for scheme in _RAISING_SCHEMES))
+
+
+def _check_url(name: str, value: Any) -> Any:
+    """Return the URL for a developer-supplied literal or ``**attrs`` URL in ``name``.
+
+    A script-bearing scheme (:data:`_RAISING_SCHEMES`, read the way a browser reads it:
+    case, leading space and control characters, tabs and newlines inside the scheme)
+    raises ``ValueError``, a loud error at development time, as it always has. Any
+    other scheme the shared allowlist rejects (``sms:``, ``webcal:``, ``myapp://``,
+    ``blob:`` ...) is rendered as ``"#"`` and logged: these sinks rendered such a URL
+    before the allowlist, and a ``{% theme_button href=record.url %}`` whose data holds
+    one must not become a 500. A marked-safe value is returned as plain text.
+    """
+    if _raises_for_scheme(value):
         raise ValueError(
-            f"{name}= refuses a URL scheme other than http, https, ftp, ftps, mailto "
-            "and tel (a relative URL is fine)"
+            f"{name}= refuses a script-bearing URL (javascript:, vbscript:, data:, livescript:, mhtml:)"
         )
+    value = _plain_url(value)
+    if not url_allowed(value):
+        logger.warning("theming: %s= URL with a disallowed scheme rendered as '#'", name)
+        return "#"
+    return value
 
 
 def _neutralise_url(name: str, value: Any, *, image: bool = False) -> Any:
@@ -361,10 +397,14 @@ def _neutralise_url(name: str, value: Any, *, image: bool = False) -> Any:
     Data-derived URLs must not take the whole render down. The decision is
     :func:`djust.components.utils.url_allowed` (``image=True`` also allows an inline
     ``data:image/*`` URI, for image sources). Safe values retain single template
-    escaping; developer-supplied literals and passthrough attributes still raise via
-    :func:`_check_url`.
+    escaping; a marked-safe value is returned as plain text so the template escapes it
+    (:func:`_plain_url`). Developer-supplied literals and passthrough attributes go
+    through :func:`_check_url`, which raises for a script scheme.
     """
-    if value is not None and not url_allowed(value, image=image):
+    if value is None:
+        return value
+    value = _plain_url(value)
+    if not url_allowed(value, image=image):
         logger.debug("theming: %s= URL with a disallowed scheme rendered as '#'", name)
         return "#"
     return value
@@ -419,7 +459,9 @@ def _passthrough_attrs(attrs: dict[str, Any], skip: tuple[str, ...]) -> SafeStri
     Names are validated, because they are written into the tag as given: a
     name that is not a plain attribute identifier raises ``ValueError``, as
     does an ``on*`` event-handler attribute (inline script — use a ``dj-*``
-    binding) and a script-bearing ``href`` / ``src`` / ``action`` URL.
+    binding) and a script-bearing ``href`` / ``src`` / ``action`` /
+    ``formaction`` URL (:data:`_RAISING_SCHEMES`). Any other scheme the shared
+    allowlist rejects in one of those four renders as ``#`` (:func:`_check_url`).
     """
     from django.utils.html import escape
 
@@ -436,7 +478,7 @@ def _passthrough_attrs(attrs: dict[str, Any], skip: tuple[str, ...]) -> SafeStri
                 "use a dj-* binding (dj_click, dj_change ...)"
             )
         if name.lower() in _URL_ATTRS and value is not True:
-            _check_url(key, value)
+            value = _check_url(key, value)
         parts.append(name if value is True else f'{name}="{escape(value)}"')
     return mark_safe(" ".join(parts))
 

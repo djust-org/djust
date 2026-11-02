@@ -49,9 +49,11 @@ QUICK = (
 TEST_CORPUS = (
     "js", "js-embedded-tab", "js-lead-newline", "js-entity-hex", "js-percent-colon", "vbs",
     "data-html", "srcset-parens", "srcset-parens-data", "srcset-formfeed",
-    # not script schemes, not navigation schemes either (#3677): plain, obfuscated, and the
-    # ones a theme author might reach for (``sms:``, an app deep link)
-    "livescript", "blob", "blob-lead-control", "blob-embedded-tab", "file", "custom", "sms",
+    # not script schemes, not navigation schemes either (#3677): a plain one, one with an
+    # embedded tab, one with a leading control character and a custom application scheme.
+    # Every sink takes the same decision for every scheme, so the other spellings and
+    # schemes are driven per sink by ``test_theming_url_allowlist_3677.py`` instead.
+    "blob", "blob-lead-control", "blob-embedded-tab", "custom",
     "https", "relative", "mailto", "data-png",
 )  # fmt: skip
 
