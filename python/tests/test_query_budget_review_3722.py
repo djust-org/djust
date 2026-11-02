@@ -653,3 +653,82 @@ class TestTheEventMeasurementDoesNotLeakBetweenCalls:
             gc.collect()
         never_awaited = [str(w.message) for w in caught if "was never awaited" in str(w.message)]
         assert never_awaited == []
+
+
+HUGE = 10**5000  # str() of this raises past Python's digit limit
+
+
+class TestAnEnormousBudgetIsInvalidForEveryReader:
+    """``valid_count`` caps a budget at ``MAX_BUDGET``; each reader then reports it as invalid."""
+
+    def test_the_parser_rejects_it_and_the_cap_itself_is_accepted(self):
+        from djust._query_budget import MAX_BUDGET, parse_budget
+
+        assert parse_budget(MAX_BUDGET).total == MAX_BUDGET
+        for bad in (MAX_BUDGET + 1, 10**30, {"mount": HUGE}, {"events": {"plain": HUGE}}):
+            with pytest.raises(ValueError, match="at most 1000000"):
+                parse_budget(bad)
+
+    @pytest.mark.django_db
+    def test_the_smoke_test_raises(self):
+        for budget in (HUGE, {"mount": HUGE}, {"events": {"plain": HUGE}}):
+            assert "ValueError" in _smoke_fails([view(budget)], "test_smoke_queries")
+
+    @pytest.mark.django_db
+    def test_run_time_logs_it_once_and_measures_nothing(self, warned):
+        V = view({"mount": HUGE})
+        LiveViewTestClient(V).mount()
+        LiveViewTestClient(V).mount()
+        assert len(warned()) == 1 and "at most 1000000" in warned()[0]
+
+    @pytest.mark.parametrize(
+        "budget",
+        [HUGE, {"mount": HUGE}, {"events": {"plain": HUGE}}],
+        ids=["bare", "mount", "events"],
+    )
+    def test_the_audit_text_and_json_do_not_crash(self, budget):
+        V = view(budget)
+        audits, pretty = _audit(V)  # runs both the text and the --json output
+        assert audits[V.__name__]["query_budget"] is None
+        assert "at most 1000000" in audits[V.__name__]["query_budget_error"]
+        assert "Query budget: invalid" in pretty
+
+    @pytest.mark.parametrize("budget", [HUGE, {"mount": HUGE}], ids=["bare", "mount"])
+    def test_the_check_reports_it(self, budget):
+        from djust.checks.components import check_query_budget_declarations
+
+        V = view(budget)
+        messages = [m for m in check_query_budget_declarations(None) if V.__qualname__ in m.msg]
+        assert len(messages) == 1 and messages[0].id == "djust.V024"
+
+
+@pytest.mark.django_db
+class TestAClassAttributeReboundAfterImportIsReRead:
+    """``_budget_of`` caches per class but keys the cache on the declared object."""
+
+    def test_a_patched_budget_is_seen_by_the_next_hop(self, warned):
+        class Spends(view({"mount": 99})):
+            def mount(self, request, **kwargs):
+                _queries(2)
+                self.n = 0
+
+        LiveViewTestClient(Spends).mount()
+        assert warned() == []  # 2 <= 99, and the budget is now cached
+        with patch.object(Spends, "query_budget", {"mount": 1}):
+            LiveViewTestClient(Spends).mount()
+        assert len(warned()) == 1
+        assert "at least 2 queries, over its query_budget of 1" in warned()[0]
+
+    def test_an_invalid_patch_is_noticed_and_a_restore_is_valid_again(self, warned):
+        class Spends(view({"mount": 99})):
+            def mount(self, request, **kwargs):
+                _queries(2)
+                self.n = 0
+
+        LiveViewTestClient(Spends).mount()
+        with patch.object(Spends, "query_budget", {"mout": 1}):
+            LiveViewTestClient(Spends).mount()
+        assert any("invalid query_budget" in m for m in warned())
+        before = len(warned())
+        LiveViewTestClient(Spends).mount()  # restored: valid and within 99 again
+        assert len(warned()) == before

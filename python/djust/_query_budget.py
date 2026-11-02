@@ -106,11 +106,19 @@ class Budget(NamedTuple):
         return out
 
 
+#: The largest number a budget may name. A page that runs a million queries has no
+#: budget to speak of, and an int of thousands of digits crashes ``str()`` (Python's
+#: digit limit) wherever a reader prints it, so it is rejected as invalid instead.
+MAX_BUDGET = 1_000_000
+
+
 def valid_count(value: Any, label: str) -> int:
-    """``value`` as a budget number; ``ValueError`` when it is not a non-negative ``int``."""
+    """``value`` as a budget number; ``ValueError`` unless it is an ``int`` in ``0..MAX_BUDGET``."""
     # bool is an int subclass: ``query_budget = True`` is a mistake, not 1.
-    if type(value) is not int or value < 0:
-        raise ValueError(f"{label} must be a non-negative int, got {_shown(value)}")
+    if type(value) is not int or not 0 <= value <= MAX_BUDGET:
+        raise ValueError(
+            f"{label} must be a non-negative int of at most {MAX_BUDGET}, got {_shown(value)}"
+        )
     return value
 
 
