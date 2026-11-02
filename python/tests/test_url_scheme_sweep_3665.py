@@ -47,6 +47,7 @@ import pytest
 from django.template.library import import_library
 
 from scripts.lib.template_library_parity import url_sweep
+from tests.git_env import isolated_git_env
 
 pytestmark = pytest.mark.pr_tier
 
@@ -315,17 +316,16 @@ class TestScanner:
 # The sweep (subprocesses)
 
 
-def _env() -> dict[str, str]:
-    env = {k: v for k, v in os.environ.items() if k != "DJANGO_SETTINGS_MODULE"}
-    env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(ROOT / "python"), env.get("PYTHONPATH")]))
-    return env
-
-
 def _start(args: list[str]) -> subprocess.Popen[str]:
+    # The gate-off script runs git, so the child must not inherit the variables a git
+    # hook exports (GIT_DIR and friends aim git at the real repository, #2608, #3179).
+    env = isolated_git_env()
+    env.pop("DJANGO_SETTINGS_MODULE", None)
+    env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(ROOT / "python"), env.get("PYTHONPATH")]))
     return subprocess.Popen(
         [sys.executable, str(SCRIPT), *args],
         cwd=ROOT,
-        env=_env(),
+        env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
