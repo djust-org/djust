@@ -253,31 +253,38 @@ class TestEnumeration:
 
 
 class TestBareOperandRefusedLikeDjango:
-    @pytest.mark.parametrize("tag", TAGS, ids=IDS)
+    # One test per SHAPE, looping over the tags and reporting every mismatch together:
+    # a test id per tag x shape added ~2,600 ids with no entry in .test_durations and
+    # used over half the unrecorded-duration budget of tests/test_ci_python_test_shards.py.
     @pytest.mark.parametrize("shape", sorted(BARE), ids=sorted(BARE))
-    def test_a_bare_operand_is_refused_at_compile_time_with_djangos_message(
-        self, engines, tag, shape
-    ):
-        src = _call(tag, BARE[shape])
-        django = _compile(engines, "django", src)
-        rust = _compile(engines, "rust", src)
-        assert rust == django, (
-            f"{{% {tag['name']} {BARE[shape]} %}}: Django compiles to {django}, "
-            f"the Rust engine to {rust}"
-        )
-        if django[0] == "err":
-            assert django[1] == "TemplateSyntaxError", django
-            assert "Use key=value format" in django[2], django
+    def test_a_bare_operand_is_refused_at_compile_time_with_djangos_message(self, engines, shape):
+        problems = []
+        for tag in TAGS:
+            src = _call(tag, BARE[shape])
+            django = _compile(engines, "django", src)
+            rust = _compile(engines, "rust", src)
+            if rust != django:
+                problems.append(
+                    f"{{% {tag['name']} {BARE[shape]} %}}: Django compiles to {django}, "
+                    f"the Rust engine to {rust}"
+                )
+            elif django[0] == "err" and (
+                django[1] != "TemplateSyntaxError" or "Use key=value format" not in django[2]
+            ):
+                problems.append(f"{{% {tag['name']} {BARE[shape]} %}}: {django}")
+        assert not problems, "\n".join(problems)
 
-    @pytest.mark.parametrize("tag", TAGS, ids=IDS)
     @pytest.mark.parametrize("shape", sorted(KEYWORD), ids=sorted(KEYWORD))
-    def test_every_other_shape_compiles_as_it_does_under_django(self, engines, tag, shape):
+    def test_every_other_shape_compiles_as_it_does_under_django(self, engines, shape):
         """Keyword form unchanged: what the Rust engine accepted before is accepted now,
         and the one thing it accepts that Django refuses is the bare operand."""
-        src = _call(tag, KEYWORD[shape])
-        assert _compile(engines, "rust", src) == _compile(engines, "django", src), (
+        problems = [
             f"{{% {tag['name']} {KEYWORD[shape]} %}}"
-        )
+            for tag in TAGS
+            if _compile(engines, "rust", _call(tag, KEYWORD[shape]))
+            != _compile(engines, "django", _call(tag, KEYWORD[shape]))
+        ]
+        assert not problems, "Rust differs from Django for:\n" + "\n".join(problems)
 
     def test_the_sweep_sees_both_outcomes(self, engines):
         """Vacuity guard for the two classes above: Django refuses a bare variable on
@@ -561,6 +568,26 @@ class TestTheMechanism:
         with pytest.raises(TemplateSyntaxError, match="handler says no"):
             wrapped.validate_at_parse(['k="x"'])
         assert calls == [['k="x"']]
+
+    def test_with_argument_contract_is_the_only_caller_of_the_mechanisms(self):
+        """The one-entry-point claim is a pin, not prose: nothing outside
+        ``_positional_args`` calls ``with_positional_args`` or ``DjangoCheckedTagHandler``
+        directly, so a future raw theme tag cannot be registered unwrapped by copying a
+        neighbouring call."""
+        import pathlib
+        import re
+
+        import djust
+
+        root = pathlib.Path(djust.__file__).parent
+        callers = sorted(
+            str(path.relative_to(root))
+            for path in root.rglob("*.py")
+            if "tests" not in path.parts
+            and path.name != "_positional_args.py"
+            and re.search(r"\b(with_positional_args|DjangoCheckedTagHandler)\(", path.read_text())
+        )
+        assert callers == [], callers
 
     def test_simple_and_inclusion_tags_keep_the_positional_mechanism(self):
         """One entry point, two mechanisms, each tag gets exactly one: a ``simple_tag``

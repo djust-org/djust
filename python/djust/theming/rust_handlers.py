@@ -185,7 +185,7 @@ def register_with_rust_engine() -> None:
         )
         return
 
-    from djust._positional_args import with_positional_args
+    from djust._positional_args import with_argument_contract
 
     from .templatetags.theme_tags import register as _tag_library
 
@@ -196,6 +196,6 @@ def register_with_rust_engine() -> None:
         # is valid Django; name the positional tokens after the tag's own
         # parameters (#3664).
         register_tag_handler(
-            tag_name, with_positional_args(tag_name, ThemeTagHandler(tag_name), _tag_library)
+            tag_name, with_argument_contract(tag_name, ThemeTagHandler(tag_name), _tag_library)
         )
         logger.debug("Registered Rust theme tag handler: %s", tag_name)
