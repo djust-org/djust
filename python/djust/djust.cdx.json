@@ -1559,16 +1559,16 @@
       "version": "0.11.0"
     },
     {
-      "bom-ref": "rust:pkg:cargo/pulldown-cmark@0.13.5",
+      "bom-ref": "rust:pkg:cargo/pulldown-cmark@0.13.6",
       "licenses": [
         {
           "expression": "MIT"
         }
       ],
       "name": "pulldown-cmark",
-      "purl": "pkg:cargo/pulldown-cmark@0.13.5",
+      "purl": "pkg:cargo/pulldown-cmark@0.13.6",
       "type": "library",
-      "version": "0.13.5"
+      "version": "0.13.6"
     },
     {
       "bom-ref": "rust:pkg:cargo/pyo3-async-runtimes@0.29.0",
