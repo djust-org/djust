@@ -219,15 +219,27 @@ Two name shapes appear in this roadmap, with distinct meanings:
 
 | Priority | Task | Milestone |
 |---|---|---|
-| **P2** | #3699 — `TtydTerminalView`: `?rows=` / `?cols=` fall back to the class default on a non-integer and are clamped to a sane range | v1.3.0 |
-| **P3** | #3705 — Guard `gethostbyname_ex`, `gethostbyaddr` and `getnameinfo` in the doc-snippet `no_network`; the other `templates.py` scans use an incremental line counter, pinned by a growth test | v1.3.0 |
-| **P2** | #3711 — Sweep the 16 remaining absolute wall-clock bounds on compute or waits, and add a ratchet that counts them | v1.3.0 |
-| **P2** | #3709 — Ratchet on explicit sub-10 s communicator `timeout=` calls (the count may only fall), and convert the worst files to `receive_until` / `receive_settled` | v1.3.0 |
-| **P3** | #3715 — Each xdist worker prints its worst gen-2 GC pause and longest event-loop stall at session end | v1.3.0 |
-| **P3** | #3714 — `scripts/gate_off.py`: mutations as data in, CAUGHT / SURVIVED / INVALID out, restore by hash, bounded run; CLAUDE.md points at it | v1.3.0 |
-| **P3** | #3713 — PR-body lint for unresolved placeholders and `#N` / `issuecomment-` references that do not resolve; record the truncated `gh run view` log on the pattern page | v1.3.0 |
-| **P3** | #3706 — System checks for a `params_form` that is not a form class or whose `__init__` needs arguments; `LiveViewTestClient` drives `handle_params`; the new class attributes are reserved names under `exposure_policy = "explicit"` | v1.3.0 |
-| **P3** | #3701 — Run-time query-budget measurement per phase (warning, or error under `LIVEVIEW_CONFIG["query_budget"] = "error"`), event budgets checked by the fuzz tests, budgets listed in `djust_audit` | v1.3.0 |
+| ~~**P2**~~ | ~~#3699 — `TtydTerminalView`: `?rows=` / `?cols=` fall back to the class default on a non-integer and are clamped to a sane range~~ ✅ (#3719) | v1.3.0 |
+| ~~**P3**~~ | ~~#3705 — Guard `gethostbyname_ex`, `gethostbyaddr` and `getnameinfo` in the doc-snippet `no_network`; the other `templates.py` scans use an incremental line counter, pinned by a growth test~~ ✅ (#3719) | v1.3.0 |
+| ~~**P2**~~ | ~~#3711 — Sweep the 16 remaining absolute wall-clock bounds on compute or waits, and add a ratchet that counts them~~ ✅ (#3721) | v1.3.0 |
+| **P2** | #3709 — Ratchet on explicit sub-10 s communicator `timeout=` calls (the count may only fall), and convert the worst files to `receive_until` / `receive_settled` — **partly done** (#3721: the worst files converted, ratchet in; the remainder stays open) | v1.3.0 |
+| ~~**P3**~~ | ~~#3715 — Each xdist worker prints its worst gen-2 GC pause and longest event-loop stall at session end~~ ✅ (#3721) | v1.3.0 |
+| ~~**P3**~~ | ~~#3714 — `scripts/gate_off.py`: mutations as data in, CAUGHT / SURVIVED / INVALID out, restore by hash, bounded run; CLAUDE.md points at it~~ ✅ (#3720) | v1.3.0 |
+| ~~**P3**~~ | ~~#3713 — PR-body lint for unresolved placeholders and `#N` / `issuecomment-` references that do not resolve; record the truncated `gh run view` log on the pattern page~~ ✅ (#3720) | v1.3.0 |
+| **P3** | #3706 — System checks for a `params_form` that is not a form class or whose `__init__` needs arguments; `LiveViewTestClient` drives `handle_params`; the new class attributes are reserved names under `exposure_policy = "explicit"` — **partly done** (#3722: the checks and the test client; the remainder stays open) | v1.3.0 |
+| ~~**P3**~~ | ~~#3701 — Run-time query-budget measurement per phase (warning, or error under `LIVEVIEW_CONFIG["query_budget"] = "error"`), event budgets checked by the fuzz tests, budgets listed in `djust_audit`~~ ✅ (#3722) | v1.3.0 |
+
+### v1.3.0-17 — follow-ups of the v1.3.0-16 drain: two quadratic template functions, the double `get_context_data()` on GET, the kept test drains, the presence flake (drain bucket → ships in 1.3)
+
+*Kind:* four row groups, each a grouped PR or an investigation. **A, template perf:** the two functions the #3711 growth checks found quadratic. **B, render path:** the second `get_context_data()` pass on an HTTP GET. **C, test timing:** the try/pass drains #3721 kept, and tightening the ratchet over them. **D, investigation:** the presence-test flake, now seen three times, which may close without code.
+
+| Priority | Task | Milestone |
+|---|---|---|
+| **P2** | #3723 — `_blank_template_comments` finds each opener's end with one forward scan instead of a search to the end of the template per opener; the growth test that is now an `xfail` becomes a plain test | v1.3.0 |
+| **P2** | #3724 — `extract_template_variables` stops growing about n^2.9 with the number of blocks (not yet diagnosed); its growth test becomes a plain test | v1.3.0 |
+| **P2** | #3725 — An overriding `get_context_data()` runs once per HTTP GET: the render path takes the context the request path already computed; a counting test pins GET == 1 and WS mount == 1 | v1.3.0 |
+| **P3** | #3726 — Convert the kept try/pass drains in four live-auth and form-route test files to `receive_until` / `receive_settled` (keep `receive_nothing` where something must not arrive) and tighten the #3709 ratchet over them | v1.3.0 |
+| **P2** | #3451 — The presence test flake (`test_presence_timeout_retries_after_retirement_without_another_join`): diagnose between a runner stall over 30 s and a lost wake-up in the test, from the three failing logs; may close without code | v1.3.0 |
 
 ## Next: v1.2.1 — non-breaking fixes (drain)
 
