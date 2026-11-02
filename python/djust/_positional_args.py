@@ -230,6 +230,8 @@ def validate_with_django(name: str, compile_func: Callable[..., Any], args: List
     try:
         compile_func(parser, _token(name, args))
     except BodyReached:
+        # Control flow, not an error: the compile function reached the tag's body, so
+        # its arguments parsed and there is nothing to report.
         pass
     except BaseException as exc:
         _stamp(exc)
