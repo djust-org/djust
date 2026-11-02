@@ -235,11 +235,11 @@ Two name shapes appear in this roadmap, with distinct meanings:
 
 | Priority | Task | Milestone |
 |---|---|---|
-| **P2** | #3723 — `_blank_template_comments` finds each opener's end with one forward scan instead of a search to the end of the template per opener; the growth test that is now an `xfail` becomes a plain test | v1.3.0 |
-| **P2** | #3724 — `extract_template_variables` stops growing about n^2.9 with the number of blocks (not yet diagnosed); its growth test becomes a plain test | v1.3.0 |
-| **P2** | #3725 — An overriding `get_context_data()` runs once per HTTP GET: the render path takes the context the request path already computed; a counting test pins GET == 1 and WS mount == 1 | v1.3.0 |
-| **P3** | #3726 — Convert the kept try/pass drains in four live-auth and form-route test files to `receive_until` / `receive_settled` (keep `receive_nothing` where something must not arrive) and tighten the #3709 ratchet over them | v1.3.0 |
-| **P2** | #3451 — The presence test flake (`test_presence_timeout_retries_after_retirement_without_another_join`): diagnose between a runner stall over 30 s and a lost wake-up in the test, from the three failing logs; may close without code | v1.3.0 |
+| ~~**P2**~~ | ~~#3723 — `_blank_template_comments` finds each opener's end with one forward scan instead of a search to the end of the template per opener; the growth test that is now an `xfail` becomes a plain test~~ ✅ (#3731) | v1.3.0 |
+| ~~**P2**~~ | ~~#3724 — `extract_template_variables` stops growing about n^2.9 with the number of blocks (not yet diagnosed); its growth test becomes a plain test~~ ✅ (#3731) | v1.3.0 |
+| ~~**P2**~~ | ~~#3725 — An overriding `get_context_data()` runs once per HTTP GET: the render path takes the context the request path already computed; a counting test pins GET == 1 and WS mount == 1~~ ✅ (#3730) | v1.3.0 |
+| ~~**P3**~~ | ~~#3726 — Convert the kept try/pass drains in four live-auth and form-route test files to `receive_until` / `receive_settled` (keep `receive_nothing` where something must not arrive) and tighten the #3709 ratchet over them~~ ✅ (#3732) | v1.3.0 |
+| ~~**P2**~~ | ~~#3451 — The presence test flake (`test_presence_timeout_retries_after_retirement_without_another_join`): diagnose between a runner stall over 30 s and a lost wake-up in the test, from the three failing logs; may close without code~~ ✅ (#3738) | v1.3.0 |
 
 ## Next: v1.2.1 — non-breaking fixes (drain)
 
