@@ -257,16 +257,19 @@ a mount phase is reported once, when it first goes over, so its figure reads `at
 object-permission re-check is not counted in either). An int budget is the mount phase plus the
 first render that follows it.
 
-`"render"` is one `get_context_data()` pass, and each pass is judged on its own. **A budget has to
-allow for how many passes a page load makes.** Measured on an HTTP GET with the Django test
-client: a view that overrides `get_context_data()` has the override called **twice** by one GET,
-whether or not it calls `super()` (once in the request's turn body, once more from
-`_sync_state_to_rust()` during the render, which is called without `preloaded_context`). djust's own
-`_cached_context` short-circuit sits inside the stock `get_context_data()`, so only the work
-`super()` does is skipped the second time; a view with no override evaluates once. So an `int`
-budget (its window closes after the first render) and a `"render"` number under-report what the
-GET spends: 2 queries per pass is 4 on the page. A separate probe of the WebSocket mount ran it once.
-The double evaluation is a framework behaviour, not something the budget changes.
+`"render"` is one `get_context_data()` pass, and each pass is judged on its own. An HTTP GET
+makes one pass: the request evaluates the view's context once and the render that follows reads
+that context instead of evaluating it again, whether or not the view overrides
+`get_context_data()` or calls `super()`. (A GET used to call an overriding view's
+`get_context_data()` twice, so an `int` budget and the page's real cost differed by a factor of
+two: #3725.) A WebSocket or SSE mount makes one pass, and so does each event, which evaluates
+the context afresh because the handler changed state.
+
+Two paths still make more than one pass, and a budget has to allow for the passes they make:
+the HTTP POST fallback of a view on the default (legacy) exposure policy evaluates once to save
+the state and once to render (two passes, #3734), and the live mount of an explicit-exposure view
+whose page shell comes from `template_name` evaluates three times (#3733). Each pass is still judged against
+the `"render"` number on its own.
 
 Not measured, by design: `async def` handlers and hooks (they run on the event loop, outside
 the metered sync steps) and `@background` handlers (the work runs later, in `start_async`);

@@ -231,8 +231,8 @@ def _as_caller(user_id):
 
   | Request | Entries, in order |
   |---|---|
-  | HTTP page GET | `"auth"` (view-level), `"lifecycle"` (the `on_mount` chain, only when the view has one), `"mount"`, `"handle_params"`, `"auth"` (object check, when `get_object()` is overridden), `"render"`, `"render"` (the second render builds the diff baseline) |
-  | HTTP POST event, no saved state | `"auth"`, `"mount"`, `"handle_params"`, `"auth"`, `"event"`, `"render"`, `"render"` |
+  | HTTP page GET | `"auth"` (view-level), `"lifecycle"` (the `on_mount` chain, only when the view has one), `"mount"`, `"handle_params"`, `"auth"` (object check, when `get_object()` is overridden), `"render"` (one step: the GET's own `get_context_data()`; the render that follows reads that context instead of entering a second step, #3725) |
+  | HTTP POST event, no saved state | `"auth"`, `"mount"`, `"handle_params"`, `"auth"`, `"event"`, `"render"`, `"render"` (a legacy view evaluates once to save the state and once to render, #3734) |
   | HTTP POST event, saved state restored | `"auth"`, `"lifecycle"` (the private-state restore), `"auth"`, `"hook"` (`handle_restore()`), `"event"`, `"render"`, `"render"` |
 
   Each is one entry on the thread that runs it. Keep the wrapper cheap.

@@ -427,7 +427,17 @@ class SpendingGet(CountedGet):
     def get_context_data(self, **kwargs):
         GET_CALLS.append("spend")
         _queries(2)
-        return {"n": 1}
+        return {"n": self.n}
+
+    @event_handler()
+    def poke(self, **kwargs):
+        self.n += 1
+
+
+class SpendingGetTight(SpendingGet):
+    """The same two queries per pass against a render budget of 1: the control."""
+
+    query_budget = {"render": 1}
 
 
 class PlainGet(LiveView):
@@ -450,6 +460,7 @@ urlpatterns = [
     path("counted/", CountedGet.as_view()),
     path("countedsuper/", CountedGetSuper.as_view()),
     path("spending/", SpendingGet.as_view()),
+    path("spendingtight/", SpendingGetTight.as_view()),
 ]
 
 
@@ -457,8 +468,9 @@ urlpatterns = [
 class TestWhatThePhasesCountOnTheGet:
     """Measured, not assumed: the numbers the budget docs quote (finding 4).
 
-    These pin FRAMEWORK behaviour the docs describe, not this PR's: if the double
-    evaluation is fixed, update them together with the docs sentence.
+    These pin FRAMEWORK behaviour the docs describe, not this PR's: if it changes,
+    update them together with the docs sentence. An overriding ``get_context_data()``
+    used to run twice per GET (#3725); it runs once.
     """
 
     @pytest.fixture(autouse=True)
@@ -469,13 +481,13 @@ class TestWhatThePhasesCountOnTheGet:
         yield
         GET_CALLS.clear()
 
-    def test_an_overriding_get_context_data_runs_twice_on_one_get(self):
+    def test_an_overriding_get_context_data_runs_once_on_one_get(self):
         assert Client().get("/counted/").status_code == 200
-        assert len(GET_CALLS) == 2
+        assert len(GET_CALLS) == 1
 
-    def test_also_when_the_override_calls_super(self):
+    def test_also_once_when_the_override_calls_super(self):
         assert Client().get("/countedsuper/").status_code == 200
-        assert len(GET_CALLS) == 2  # the override runs twice; only super() short-circuits
+        assert len(GET_CALLS) == 1
 
     def test_a_view_with_no_override_evaluates_its_context_once(self):
         """The stock method short-circuits the second pass (``_cached_context``)."""
@@ -483,7 +495,8 @@ class TestWhatThePhasesCountOnTheGet:
         assert response.status_code == 200 and b"7" in response.content
         assert GET_CALLS == ["property"]
 
-    def test_no_preloaded_context_reaches_the_second_pass(self):
+    def test_the_render_reads_the_cached_context_not_a_preloaded_one(self):
+        """The render is handed no ``preloaded_context``; it reads the GET's cache itself."""
         from djust.mixins.rust_bridge import RustBridgeMixin
 
         seen = []
@@ -496,12 +509,33 @@ class TestWhatThePhasesCountOnTheGet:
         with patch.object(RustBridgeMixin, "_sync_state_to_rust", spy):
             Client().get("/counted/")
         assert seen and all(context is None for context in seen)
+        assert len(GET_CALLS) == 1  # and still no second evaluation
 
     def test_the_budget_counts_each_pass_separately(self, warned):
-        """So a GET can spend twice a ``render`` number without a warning."""
-        assert Client().get("/spending/").status_code == 200
-        assert GET_CALLS.count("spend") == 2
+        """Each ``get_context_data()`` pass is judged on its own, not summed.
+
+        A GET is one pass of 2 queries. The HTTP POST fallback of a legacy view
+        is two (one to save the state, one to render), so a request makes 4
+        queries across 2 passes: still within a render budget of 2 per pass. If
+        the meter summed a request's passes, that would warn. The control: the
+        same queries against a render budget of 1 DO warn.
+        """
+        client = Client()
+        assert client.get("/spending/").status_code == 200
+        assert GET_CALLS.count("spend") == 1
+        GET_CALLS.clear()
+        response = client.post(
+            "/spending/",
+            data=json.dumps({"event": "poke", "params": {}}),
+            content_type="application/json",
+            HTTP_X_DJUST_EVENT="poke",
+        )
+        assert response.status_code == 200, response.content
+        assert GET_CALLS.count("spend") >= 2, "the POST fallback should make several passes"
         assert warned() == []  # 2 queries per pass, within a render budget of 2
+
+        assert Client().get("/spendingtight/").status_code == 200
+        assert any("render ran 2 queries" in m for m in warned()), warned()
 
 
 @pytest.mark.django_db
