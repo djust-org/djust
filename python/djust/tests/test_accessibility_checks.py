@@ -1340,13 +1340,21 @@ class TestReviewFixes3685:
         html = '<ul class="%s"><li><i></i></li></ul>' % cls
         assert _scan(tmp_path, settings, html, "djust.Y006") == []
 
-    @pytest.mark.parametrize("unit", ["<!--", "<!-- x -->", "<!-"])
-    def test_unclosed_comment_openers_are_linear(self, unit):
+    #: ``(unit, openers at 1x)``. The base is sized per unit so the 4x run costs a few
+    #: milliseconds: ``<!-`` is three characters that are skipped almost for free, and at
+    #: 25 000 of them the large run cost 0.27 ms, 1.3x the helper's floor, so a loaded
+    #: runner could fail it on timer noise (3 of 300 runs with 24 busy processes on 12
+    #: cores).
+    @pytest.mark.parametrize(
+        "unit, count", [("<!--", 25_000), ("<!-- x -->", 25_000), ("<!-", 500_000)]
+    )
+    def test_unclosed_comment_openers_are_linear(self, unit, count):
         from djust.checks.accessibility import _blank_html_comments
 
         # Growth, not an absolute bound (#3711): 4x the openers under 10x the cost.
         assert_scales_linearly(
-            lambda scale: _blank_html_comments(unit * (25000 * scale)),
+            lambda scale: _blank_html_comments(unit * (count * scale)),
+            runs=5,
             what=f"blanking {unit!r} comments",
         )
 

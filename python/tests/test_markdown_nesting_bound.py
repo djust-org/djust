@@ -11,7 +11,6 @@ near the bound and render exactly as before.
 
 from __future__ import annotations
 
-import time
 from html.parser import HTMLParser
 
 import pytest
@@ -118,16 +117,24 @@ def test_template_tag_bounds_nested_quotes_through_a_live_view_render():
             self.body = page["body"]
 
     def mount_and_render(scale):
-        page["body"] = "> " * (20_000 * scale) + "tail"
+        page["body"] = "> " * (60_000 * scale) + "tail"
         client = LiveViewTestClient(_V)
         client.mount()
         return client.render_with_patches()[0]
 
-    # Growth, not an absolute bound (#3711): 4x the quotes (20 000 -> 80 000) must cost
-    # under 10x as much. The mount and render do work on other threads' behalf too, so
-    # the wall clock is the honest clock here.
+    # Growth, not an absolute bound (#3711): 4x the quotes (60 000 -> 240 000) must cost
+    # under 10x as much. This thread's CPU time, not the wall clock: the first version used
+    # the wall clock and failed 1 run in 418 with 24 busy processes on 12 cores (the big
+    # run's five samples were all stretched). The fixed cost of a mount dilutes growth, so
+    # the classes sit closer together than the default 10x assumes: real code measures
+    # ~3x for 4x the quotes and a quadratic replay of the same site (run it ``scale`` times)
+    # measures ~12x. At 20 000 quotes that replay read 9.7x against the default limit of 10,
+    # a 3% margin. The input is 3x larger now and the limit is 7x, midway between the two.
     assert_scales_linearly(
-        mount_and_render, clock=time.perf_counter, what="mounting and rendering nested quotes"
+        mount_and_render,
+        limit=7.0,
+        runs=5,
+        what="mounting and rendering nested quotes",
     )
     html = mount_and_render(4)
     assert "tail" in html
