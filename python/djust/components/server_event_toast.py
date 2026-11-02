@@ -24,7 +24,7 @@ class ServerEventToastMixin:
     In template::
 
         {% load djust_components %}
-        {% toast_container position="top-right" %}
+        {% server_toast_container position="top-right" %}
 
     Args for push_toast:
         message: Toast text content

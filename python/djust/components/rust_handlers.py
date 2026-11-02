@@ -280,39 +280,6 @@ class TimelineItemHandler:
 # ---------------------------------------------------------------------------
 
 
-class ToastContainerHandler:
-    ALLOWED_TYPES = {"info", "success", "warning", "error"}
-
-    def render(self, args: list[str], context: dict[str, object]) -> str:
-        toasts = context.get("toasts", [])
-        dismiss_event = "dismiss_toast"
-        if not toasts:
-            # `_safe`, like every other return in this module (#2379). This
-            # early return was the ONE of ~190 handler returns here that
-            # missed the module's own convention, and it was invisible until
-            # the bridge started escaping an unmarked return — the empty
-            # container would have rendered as visible `&lt;div …&gt;` text.
-            # Found by CALLING every handler, not by reading them (#1104).
-            return _safe('<div class="toast-container"></div>')
-        items = []
-        for t in cast("list[object]", toasts):
-            if not isinstance(t, dict):
-                continue
-            t_type = t.get("type", "info")
-            if t_type not in self.ALLOWED_TYPES:
-                t_type = "info"
-            t_id = conditional_escape(str(t.get("id", "")))
-            t_msg = conditional_escape(t.get("message", ""))
-            items.append(
-                f'<div class="toast toast-{t_type}">'
-                f'<span class="toast-message">{t_msg}</span>'
-                f'<button class="toast-close" dj-click="{conditional_escape(dismiss_event)}" '
-                f'data-value="{t_id}">&times;</button>'
-                f"</div>"
-            )
-        return _safe(f'<div class="toast-container">{"".join(items)}</div>')
-
-
 class TooltipHandler:
     def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
         # Tooltip is actually a block tag - but here used inline fallback
@@ -329,11 +296,12 @@ class TooltipHandler:
 
 class ProgressHandler:
     def render(self, args: list[str], context: dict[str, object]) -> str:
+        from djust.components.templatetags.djust_components import progress as _progress
+
         kw = _parse_args(args, context)
-        try:
-            value = max(0, min(100, int(cast("str | int | float", kw.get("value", 0)))))
-        except (ValueError, TypeError):
-            value = 0
+        # The Python tag's own clamp, so a ``value`` it refuses (``None``: TypeError, ``"abc"``:
+        # ValueError) is refused here and not drawn as 0% (#3667).
+        value = _progress(value=kw.get("value", 0))["value"]
         label = conditional_escape(kw.get("label", ""))
         size = conditional_escape(kw.get("size", "md"))
         color = conditional_escape(kw.get("color", "primary"))
@@ -371,7 +339,12 @@ class BadgeHandler:
 
 class PaginationHandler:
     def render(self, args: list[str], context: dict[str, object]) -> str:
+        from djust.components.templatetags.djust_components import pagination as _pagination
+
         kw = _parse_args(args, context)
+        # The Python tag first, for the page list it builds from these numbers: whatever it
+        # raises for them (``total_pages=None``: ``None + 1``) is raised here too (#3667).
+        _pagination(page=kw.get("page", 1), total_pages=kw.get("total_pages", 1))
         try:
             page = int(cast("str | int | float", kw.get("page", 1)))
             total_pages = int(cast("str | int | float", kw.get("total_pages", 1)))
@@ -1974,7 +1947,6 @@ class DataTableHandler:
 
 # Inline handlers: (tag_name, handler_instance)
 INLINE_HANDLERS = [
-    ("toast_container", ToastContainerHandler()),
     ("progress", ProgressHandler()),
     ("badge", BadgeHandler()),
     ("pagination", PaginationHandler()),
@@ -2013,6 +1985,42 @@ BLOCK_HANDLERS = [
 ]
 
 
+#: Tags whose Python tag takes an OBJECT, which the Rust engine cannot carry (#3666).
+#:
+#: A native handler is called with the operands the engine has already resolved to
+#: strings (scalars) or JSON (lists, dicts). A ``BoundField`` arrives as its widget
+#: HTML, a ``Form`` as its ``str``, a ``datetime`` as ``str(datetime)``, an element of
+#: a list as whatever ``str`` gives. The handler cannot read ``field.errors`` or
+#: ``user.get_full_name()`` from any of those, so ``{% field_error field=form.name %}``
+#: rendered nothing under the Rust engine and the Django node rendered the error.
+#:
+#: These tags therefore have no native handler. Each is registered as the generic
+#: ``{% load %}`` bridge handler (``template_libraries.LibraryTagHandler``): it receives the
+#: tag's operands as TOKENS and Django's own node resolves them against the render context,
+#: so the output is the Python tag's by construction. The bridge is registered here, not left
+#: to ``{% load djust_components %}``, so the tags keep working in a template that does not
+#: load the library (every other native tag does) and stay in the parity ratchet.
+#:
+#: The set is not a judgement call. ``scripts/lib/template_library_parity/objects.py`` derives
+#: it from the Python tags (it hands each parameter an object that records how it is used) and
+#: ``python/tests/test_native_handler_fidelity_3666_3667.py`` asserts it equals this set, in
+#: both directions: a new tag that reads an attribute of its argument cannot get a native
+#: handler, and a tag listed here that stopped doing so is reported.
+OBJECT_ARGUMENT_TAGS = frozenset(
+    {
+        "avatar_group",
+        "combobox",
+        "conversation_thread",
+        "field_error",
+        "form_errors",
+        "notification_popover",
+        "relative_time",
+        "rich_select",
+        "toast_container",
+    }
+)
+
+
 def register_with_rust_engine() -> None:
     """Register all component tag handlers with the Rust template engine.
 
@@ -2045,6 +2053,15 @@ def register_with_rust_engine() -> None:
     for tag_name, end_tag, handler in BLOCK_HANDLERS:
         register_block_tag_handler(
             tag_name, end_tag, with_argument_contract(tag_name, handler, _tag_library)
+        )
+
+    # Tags that take an object (#3666): the Python tag's own node, through the bridge.
+    from djust.template_libraries import LibraryTagHandler
+
+    for tag_name in sorted(OBJECT_ARGUMENT_TAGS):
+        register_tag_handler(
+            tag_name,
+            LibraryTagHandler("djust_components", tag_name, _tag_library.tags[tag_name]),
         )
 
     # Component system (v0.5.0): {% call %}, {% component %}, {% slot %},
@@ -2145,42 +2162,6 @@ class CodeBlockHandler:
         )
 
 
-class ComboboxHandler:
-    def render(self, args: list[str], context: dict[str, object]) -> str:
-        from djust.components.templatetags.djust_components import combobox as _cb
-
-        kwargs = _parse_args(args, context)
-        options_val = kwargs.get("options", "")
-        if isinstance(options_val, list):
-            options = options_val
-        else:
-            options = cast("list[object]", context.get(cast("str", options_val), []))
-        selected_val = kwargs.get("selected", None)
-        if isinstance(selected_val, str) and selected_val:
-            selected_val = context.get(selected_val, [])
-        return str(
-            _cb(
-                name=kwargs.get("name", ""),
-                label=kwargs.get("label", ""),
-                value=kwargs.get("value", ""),
-                placeholder=kwargs.get("placeholder", "Search…"),
-                options=options,
-                event=kwargs.get("event", ""),
-                search_event=kwargs.get("search_event", ""),
-                multiple=kwargs.get("multiple", False),
-                selected=selected_val,
-                required=kwargs.get("required", False),
-                error=kwargs.get("error", ""),
-                helper=kwargs.get("helper", ""),
-                describedby=kwargs.get("describedby", ""),
-                invalid=kwargs.get("invalid", False),
-                field=kwargs.get("field"),
-                id=kwargs.get("id", ""),
-                allow_free_text=kwargs.get("allow_free_text", False),
-            )
-        )
-
-
 class RatingHandler:
     def render(self, args: list[str], context: dict[str, object]) -> str:
         from djust.components.templatetags.djust_components import rating as _r
@@ -2245,6 +2226,10 @@ class NotificationCenterHandler:
         kwargs = _parse_args(args, context)
         notifs_key = kwargs.get("notifications", "notifications")
         notifs = context.get(notifs_key, []) if isinstance(notifs_key, str) else notifs_key
+        if notifs is None:
+            # ``notifications=None`` is an empty list to the Python tag; ``for n in None``
+            # raised here (#3667).
+            notifs = []
         unread = sum(
             1 for n in cast("list[object]", notifs) if isinstance(n, dict) and n.get("unread")
         )
@@ -2437,7 +2422,6 @@ class ContextMenuHandler:
 INLINE_HANDLERS.extend(
     [
         ("code_block", CodeBlockHandler()),
-        ("combobox", ComboboxHandler()),
         ("rating", RatingHandler()),
         ("copy_button", CopyButtonHandler()),
         ("kbd", KbdHandler()),
@@ -3265,34 +3249,6 @@ BLOCK_HANDLERS.extend(
 # ===========================================================================
 
 
-class RichSelectHandler:
-    """Inline handler for {% rich_select name=... options=... %}"""
-
-    def render(self, args: list[str], context: dict[str, object]) -> str:
-        from djust.components.templatetags.djust_components import rich_select as _rs
-
-        kwargs = _parse_args(args, context)
-        return str(
-            _rs(
-                name=kwargs.get("name", ""),
-                options=kwargs.get("options"),
-                value=kwargs.get("value", ""),
-                event=kwargs.get("event", ""),
-                placeholder=kwargs.get("placeholder", "Select..."),
-                disabled=kwargs.get("disabled", False),
-                searchable=kwargs.get("searchable", False),
-                label=kwargs.get("label", ""),
-                variant_map=kwargs.get("variant_map"),
-                id=kwargs.get("id", ""),
-                error=kwargs.get("error", ""),
-                helper=kwargs.get("helper", ""),
-                describedby=kwargs.get("describedby", ""),
-                invalid=kwargs.get("invalid", False),
-                field=kwargs.get("field"),
-            )
-        )
-
-
 class DataGridHandler:
     """Inline handler for {% data_grid columns=cols rows=rows %}"""
 
@@ -3321,7 +3277,6 @@ class DataGridHandler:
 
 INLINE_HANDLERS.extend(
     [
-        ("rich_select", RichSelectHandler()),
         ("data_grid", DataGridHandler()),
     ]
 )
@@ -3557,48 +3512,6 @@ class ResponsiveImageHandler:
         return _safe(f'<div class="{cls}"{style}>{placeholder_html}{img_tag}</div>')
 
 
-class RelativeTimeHandler:
-    """Inline handler for {% relative_time datetime=created_at %}"""
-
-    def render(self, args: list[str], context: dict[str, object]) -> str:
-        kw = _parse_args(args, context)
-        dt = kw.get("datetime", "")
-        auto_update = kw.get("auto_update", True)
-        interval = kw.get("interval", 60)
-        custom_class = conditional_escape(str(kw.get("custom_class", "")))
-
-        if isinstance(auto_update, str):
-            auto_update = auto_update.lower() not in ("false", "0", "")
-
-        cls = "dj-relative-time"
-        if custom_class:
-            cls += f" {custom_class}"
-
-        iso_val = ""
-        if dt:
-            if hasattr(dt, "isoformat"):
-                iso_val = dt.isoformat()
-            else:
-                iso_val = str(dt)
-
-        e_iso = conditional_escape(iso_val)
-        auto_str = "true" if auto_update else "false"
-
-        try:
-            interval_val = int(cast("str | int | float", interval))
-        except (ValueError, TypeError):
-            interval_val = 60
-
-        return _safe(
-            f'<time class="{cls}" '
-            f'datetime="{e_iso}" '
-            f'data-auto-update="{auto_str}" '
-            f'data-interval="{interval_val}">'
-            f"{e_iso}"
-            f"</time>"
-        )
-
-
 class CopyableTextHandler:
     """Block handler for {% copyable_text %}...{% endcopyable_text %}"""
 
@@ -3634,7 +3547,6 @@ INLINE_HANDLERS.extend(
         ("scroll_to_top", ScrollToTopHandler()),
         ("code_snippet", CodeSnippetHandler()),
         ("responsive_image", ResponsiveImageHandler()),
-        ("relative_time", RelativeTimeHandler()),
     ]
 )
 
@@ -3798,8 +3710,13 @@ class SliderHandler:
         min_val = int(cast("str | int | float", kw.get("min_val", kw.get("min", 0))))
         max_val = int(cast("str | int | float", kw.get("max_val", kw.get("max", 100))))
         step = int(cast("str | int | float", kw.get("step", 1)))
-        value = kw.get("value", min_val)
+        # ``int()`` of the value and of the range end, like the Python tag (#3667): a
+        # non-numeric one is a ValueError there and used to be echoed into the markup here.
+        value = kw.get("value", None)
+        value = min_val if value is None else int(cast("str | int | float", value))
         value_end = kw.get("value_end", None)
+        if value_end is not None:
+            value_end = int(cast("str | int | float", value_end))
         event = conditional_escape(kw.get("event", name))
         disabled = kw.get("disabled", False)
         show_ticks = kw.get("show_ticks", False)
@@ -4287,76 +4204,10 @@ class CurrencyInputHandler:
         )
 
 
-class FormErrorsHandler:
-    """Inline handler for {% form_errors form=form %}"""
-
-    def render(self, args: list[str], context: dict[str, object]) -> str:
-        kw = _parse_args(args, context)
-        form = kw.get("form", None)
-        if form is None:
-            form = context.get("form", None)
-        custom_class = conditional_escape(kw.get("custom_class", ""))
-
-        if form is None or not hasattr(form, "non_field_errors"):
-            return ""
-
-        errors = cast(Any, form).non_field_errors()
-        if not errors:
-            return ""
-
-        cls = "dj-form-errors"
-        if custom_class:
-            cls += f" {custom_class}"
-
-        items = []
-        for err in errors:
-            items.append(f'<li class="dj-form-errors__item">{conditional_escape(str(err))}</li>')
-
-        return _safe(
-            f'<div class="{cls}" role="alert">'
-            f'<ul class="dj-form-errors__list">{"".join(items)}</ul>'
-            f"</div>"
-        )
-
-
-class FieldErrorHandler:
-    """Inline handler for {% field_error field=form.email %}"""
-
-    def render(self, args: list[str], context: dict[str, object]) -> str:
-        kw = _parse_args(args, context)
-        field = kw.get("field", None)
-        custom_class = conditional_escape(kw.get("custom_class", ""))
-
-        if field is None:
-            return ""
-
-        if hasattr(field, "errors"):
-            errors = field.errors
-        else:
-            return ""
-
-        if not errors:
-            return ""
-
-        cls = "dj-field-error"
-        if custom_class:
-            cls += f" {custom_class}"
-
-        items = []
-        for err in errors:
-            items.append(
-                f'<span class="dj-field-error__message">{conditional_escape(str(err))}</span>'
-            )
-
-        return _safe(f'<div class="{cls}" role="alert">{"".join(items)}</div>')
-
-
 INLINE_HANDLERS.extend(
     [
         ("dependent_select", DependentSelectHandler()),
         ("currency_input", CurrencyInputHandler()),
-        ("form_errors", FormErrorsHandler()),
-        ("field_error", FieldErrorHandler()),
     ]
 )
 
@@ -4913,65 +4764,6 @@ BLOCK_HANDLERS.extend(
 # ===========================================================================
 
 
-class AvatarGroupHandler:
-    """Inline handler for {% avatar_group users=users max=5 %}"""
-
-    def render(self, args: list[str], context: dict[str, object]) -> str:
-        kw = _parse_args(args, context)
-        users = kw.get("users", [])
-        if isinstance(users, str):
-            users = []
-        max_display = int(cast("str | int | float", kw.get("max", 5)))
-        size = conditional_escape(str(kw.get("size", "md")))
-        custom_class = conditional_escape(str(kw.get("class", "")))
-
-        users_list = cast("list[object]", users)
-        visible = users_list[:max_display]
-        overflow = len(users_list) - max_display
-
-        parts = []
-        for i, user in enumerate(visible):
-            if isinstance(user, dict):
-                name = user.get("name", "")
-                src = user.get("avatar", "") or user.get("src", "")
-            elif hasattr(user, "get_full_name"):
-                name = user.get_full_name() or str(user)
-                src = getattr(user, "avatar", "")
-                if hasattr(src, "url"):
-                    src = src.url
-            else:
-                name = str(user)
-                src = ""
-            e_name = conditional_escape(str(name))
-            e_src = url_attr(src, image=True)
-            initials = conditional_escape("".join(w[0].upper() for w in str(name).split()[:2] if w))
-            z = len(visible) - i
-            if e_src:
-                parts.append(
-                    f'<span class="dj-avatar-group__item" title="{e_name}" '
-                    f'style="z-index:{z}">'
-                    f'<img src="{e_src}" alt="{e_name}" '
-                    f'class="dj-avatar-group__img"></span>'
-                )
-            else:
-                parts.append(
-                    f'<span class="dj-avatar-group__item '
-                    f'dj-avatar-group__initials" title="{e_name}" '
-                    f'style="z-index:{z}">{initials}</span>'
-                )
-
-        overflow_html = ""
-        if overflow > 0:
-            overflow_html = (
-                f'<span class="dj-avatar-group__item dj-avatar-group__overflow">+{overflow}</span>'
-            )
-
-        cls = f"dj-avatar-group dj-avatar-group--{size}"
-        if custom_class:
-            cls += f" {custom_class}"
-        return _safe(f'<div class="{cls}">{"".join(parts)}{overflow_html}</div>')
-
-
 class HoverCardHandler:
     """Block handler for {% hover_card trigger="@user" %}...{% endhover_card %}"""
 
@@ -4995,96 +4787,6 @@ class HoverCardHandler:
         )
 
 
-class NotificationPopoverHandler:
-    """Inline handler for {% notification_popover notifications=notifs %}"""
-
-    def render(self, args: list[str], context: dict[str, object]) -> str:
-        kw = _parse_args(args, context)
-        notifications = kw.get("notifications", [])
-        if isinstance(notifications, str):
-            notifications = []
-        unread_count = int(cast("str | int | float", kw.get("unread_count", 0)))
-        mark_read_event = conditional_escape(str(kw.get("mark_read_event", "mark_read")))
-        toggle_event = conditional_escape(str(kw.get("toggle_event", "toggle_notifications")))
-        is_open = kw.get("open", False)
-        custom_class = conditional_escape(str(kw.get("class", "")))
-        title = conditional_escape(str(kw.get("title", "Notifications")))
-
-        badge_html = ""
-        if unread_count > 0:
-            display = "99+" if unread_count > 99 else str(unread_count)
-            badge_html = f'<span class="dj-notif-popover__badge">{display}</span>'
-
-        open_cls = "dj-notif-popover--open" if is_open else ""
-        cls = f"dj-notif-popover {open_cls}"
-        if custom_class:
-            cls += f" {custom_class}"
-
-        bell_html = (
-            f'<button class="dj-notif-popover__bell" dj-click="{toggle_event}" '
-            f'aria-label="Notifications">'
-            f'<svg class="dj-notif-popover__icon" viewBox="0 0 24 24" fill="none" '
-            f'stroke="currentColor" stroke-width="2" stroke-linecap="round" '
-            f'stroke-linejoin="round" width="20" height="20">'
-            f'<path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>'
-            f'<path d="M13.73 21a2 2 0 0 1-3.46 0"/>'
-            f"</svg>"
-            f"{badge_html}"
-            f"</button>"
-        )
-
-        items_html = []
-        for notif in cast("list[object]", notifications):
-            if isinstance(notif, dict):
-                n_id = notif.get("id", "")
-                n_title = notif.get("title", "")
-                n_body = notif.get("body", notif.get("message", ""))
-                n_time = notif.get("time", "")
-                n_read = notif.get("read", False)
-            else:
-                n_id = getattr(notif, "id", "")
-                n_title = getattr(notif, "title", "")
-                n_body = getattr(notif, "body", getattr(notif, "message", ""))
-                n_time = getattr(notif, "time", "")
-                n_read = getattr(notif, "read", False)
-            e_n_id = conditional_escape(str(n_id))
-            e_n_title = conditional_escape(str(n_title))
-            e_n_body = conditional_escape(str(n_body))
-            e_n_time = conditional_escape(str(n_time))
-            read_cls = "dj-notif-popover__item--read" if n_read else ""
-            mark_attr = ""
-            if not n_read:
-                mark_attr = f' dj-click="{mark_read_event}" data-id="{e_n_id}"'
-            items_html.append(
-                f'<div class="dj-notif-popover__item {read_cls}"{mark_attr}>'
-                f'<div class="dj-notif-popover__item-title">{e_n_title}</div>'
-                f'<div class="dj-notif-popover__item-body">{e_n_body}</div>'
-                f'<div class="dj-notif-popover__item-time">{e_n_time}</div>'
-                f"</div>"
-            )
-
-        panel_html = ""
-        if is_open:
-            empty = ""
-            if not notifications:
-                empty = '<div class="dj-notif-popover__empty">No notifications</div>'
-            panel_html = (
-                f'<div class="dj-notif-popover__panel">'
-                f'<div class="dj-notif-popover__header">{title}</div>'
-                f"{''.join(items_html)}{empty}"
-                f"</div>"
-            )
-
-        return _safe(f'<div class="{cls}">{bell_html}{panel_html}</div>')
-
-
-INLINE_HANDLERS.extend(
-    [
-        ("avatar_group", AvatarGroupHandler()),
-        ("notification_popover", NotificationPopoverHandler()),
-    ]
-)
-
 BLOCK_HANDLERS.extend(
     [
         ("hover_card", "endhover_card", HoverCardHandler()),
@@ -5095,92 +4797,6 @@ BLOCK_HANDLERS.extend(
 # ===========================================================================
 # AI CHAT INTERFACE HANDLERS
 # ===========================================================================
-
-
-class ConversationThreadHandler:
-    """Inline handler for {% conversation_thread messages=... %}"""
-
-    def render(self, args: list[str], context: dict[str, object]) -> str:
-        kw = _parse_args(args, context)
-        messages = kw.get("messages", [])
-        stream_event = kw.get("stream_event", "new_message")
-        streaming = kw.get("streaming", False)
-        custom_class = kw.get("class", "")
-
-        e_stream = conditional_escape(str(stream_event))
-        e_class = conditional_escape(str(custom_class))
-
-        cls = "dj-chat-thread"
-        if e_class:
-            cls += f" {e_class}"
-
-        msgs_html = []
-        prev_sender = None
-        if not isinstance(messages, list):
-            messages = []
-        for msg in messages:
-            if isinstance(msg, dict):
-                sender = msg.get("sender", "user")
-                name = msg.get("name", "")
-                text = msg.get("text", "")
-                time = msg.get("time", "")
-            else:
-                sender = getattr(msg, "sender", "user")
-                name = getattr(msg, "name", "")
-                text = getattr(msg, "text", "")
-                time = getattr(msg, "time", "")
-
-            e_name = conditional_escape(str(name))
-            e_text = conditional_escape(str(text))
-            e_time = conditional_escape(str(time))
-
-            grouped = "dj-chat-msg--grouped" if sender == prev_sender else ""
-            side = "dj-chat-msg--ai" if sender == "ai" else "dj-chat-msg--user"
-
-            initials = str(name)[:1].upper() if name else "?"
-            avatar = (
-                f'<span class="dj-chat-avatar">{conditional_escape(initials)}</span>'
-                if sender != prev_sender
-                else '<span class="dj-chat-avatar dj-chat-avatar--hidden"></span>'
-            )
-
-            header = ""
-            if sender != prev_sender:
-                header = (
-                    f'<div class="dj-chat-msg__header">'
-                    f'<span class="dj-chat-msg__name">{e_name}</span>'
-                    f'<span class="dj-chat-msg__time">{e_time}</span>'
-                    f"</div>"
-                )
-
-            msgs_html.append(
-                f'<div class="dj-chat-msg {side} {grouped}">'
-                f"{avatar}"
-                f'<div class="dj-chat-bubble">'
-                f"{header}"
-                f'<div class="dj-chat-msg__text">{e_text}</div>'
-                f"</div></div>"
-            )
-            prev_sender = sender
-
-        streaming_html = ""
-        if streaming:
-            streaming_html = (
-                '<div class="dj-chat-msg dj-chat-msg--ai">'
-                '<span class="dj-chat-avatar">&#8943;</span>'
-                '<div class="dj-chat-bubble">'
-                '<div class="dj-chat-typing">'
-                '<span class="dj-chat-typing__dot"></span>'
-                '<span class="dj-chat-typing__dot"></span>'
-                '<span class="dj-chat-typing__dot"></span>'
-                "</div></div></div>"
-            )
-
-        return _safe(
-            f'<div class="{cls}" data-stream-event="{e_stream}">'
-            f"{''.join(msgs_html)}{streaming_html}"
-            f"</div>"
-        )
 
 
 class ThinkingIndicatorHandler:
@@ -5388,7 +5004,6 @@ class FeedbackWidgetHandler:
 
 INLINE_HANDLERS.extend(
     [
-        ("conversation_thread", ConversationThreadHandler()),
         ("thinking_indicator", ThinkingIndicatorHandler()),
         ("multimodal_input", MultimodalInputHandler()),
         ("feedback", FeedbackWidgetHandler()),
@@ -10157,12 +9772,9 @@ class ActivityFeedHandler:
         kw = _parse_args(args, context)
         events = kw.get("events", [])
         stream_event = kw.get("stream", "")
-        max_items = 50
-        try:
-            max_items = int(cast("str | int | float", kw.get("max", 50)))
-        except (ValueError, TypeError):
-            # Keep the default (50) if caller passed a non-int.
-            pass
+        # ``int()`` of what the caller passed, like the Python tag (#3667). A non-int used to
+        # keep the default here and is a TypeError / ValueError there.
+        max_items = int(cast("str | int | float", kw.get("max", 50)))
         custom_class = kw.get("class", "")
 
         if not isinstance(events, list):
@@ -10704,7 +10316,9 @@ class AnimatedNumberHandler:
         else:
             formatted = f"{int(val):,}"
         if separator != ",":
-            formatted = formatted.replace(",", str(separator))
+            # Not ``str(separator)``: ``str.replace`` refuses a non-str, which is what the
+            # Python tag raises for ``separator=None`` (#3667).
+            formatted = formatted.replace(",", cast("str", separator))
         e_formatted = conditional_escape(formatted)
 
         prefix_html = ""

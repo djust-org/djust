@@ -13,6 +13,7 @@ baseline ``scripts/template-library-parity-baseline.csv``::
     scripts/template-library-parity.py --repro TAG         print both outputs for TAG
     scripts/template-library-parity.py --self-compare      gate-off: Django vs Django
     scripts/template-library-parity.py --plant TAG         gate-off: plant a Python-only diff
+    scripts/template-library-parity.py --fidelity PATH     write what the fidelity tests derive (#3666, #3667)
 
 Exit codes: 0 the table equals the baseline (or the gate-off held); 1 it does
 not — a tag got WORSE (a regression), got BETTER (regenerate the baseline so
@@ -72,6 +73,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="gate-off: make the Python tag render one extra element; the ratchet must flag it",
     )
     parser.add_argument("--variant", help="with --repro: only this variant")
+    parser.add_argument(
+        "--fidelity",
+        type=Path,
+        metavar="PATH",
+        help=(
+            "write, as JSON, the facts python/tests/test_native_handler_fidelity_3666_3667.py "
+            "derives instead of restating: which tag parameters take objects, which variants "
+            "one engine rejects and the other renders, and which outputs leak a repr"
+        ),
+    )
     return parser
 
 
@@ -111,6 +122,27 @@ def _repro(audit: harness.Audit, tag: str, variant: str | None) -> int:
     return 0
 
 
+def _fidelity(path: Path, audit: harness.Audit) -> int:
+    """Write the measured facts the fidelity tests compare with the source (#3666, #3667)."""
+    from django.template import engines
+
+    from scripts.lib.template_library_parity import objects
+
+    payload = {
+        "object_parameters": objects.object_parameters(
+            harness.inventory(),
+            engines["django"],
+            lambda: harness.make_context(with_form=False),
+            harness.reset_ids,
+        ),
+        "one_engine_errors": harness.one_engine_errors(audit),
+        "repr_leaks": harness.repr_leaks(audit),
+        "measured_tags": sorted(audit.rows),
+    }
+    path.write_text(json.dumps(payload, indent=1, sort_keys=True) + "\n", encoding="utf-8")
+    return 0
+
+
 def _self_compare(audit: harness.Audit) -> int:
     def differs(row: classify.TagRow) -> bool:
         # UNEXERCISED is allowed here: a tag whose own output never appears is
@@ -136,7 +168,7 @@ def _self_compare(audit: harness.Audit) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    if args.write_baseline and (args.only or args.plant or args.self_compare):
+    if args.write_baseline and (args.only or args.plant or args.self_compare or args.fidelity):
         print("refusing to write a baseline from a restricted, planted or self-compared run")
         return 2
     only = set(filter(None, (args.only or "").split(","))) or None
@@ -153,6 +185,8 @@ def main(argv: list[str] | None = None) -> int:
         _write_json(args.json, audit)
     if args.repro:
         return _repro(audit, args.repro, args.variant)
+    if args.fidelity:
+        return _fidelity(args.fidelity, audit)
     if args.self_compare:
         return _self_compare(audit)
     if args.write_baseline:

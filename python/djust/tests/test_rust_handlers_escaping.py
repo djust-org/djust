@@ -116,13 +116,6 @@ IMG_CASES: list[tuple[str, Any, bool, list[str], Callable[[object], dict[str, ob
         lambda v: {"u": v},
     ),
     (
-        "avatar_group",
-        rh.AvatarGroupHandler(),
-        False,
-        ["users=users"],
-        lambda v: {"users": [{"name": "Ann Lee", "avatar": v}]},
-    ),
-    (
         "chat_bubble",
         rh.ChatBubbleHandler(),
         False,

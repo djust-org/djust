@@ -601,11 +601,6 @@ class TestEveryRegisteredHandlerIsAccountedFor:
             assert UNESCAPED_TAG.search(str(out)), (
                 f"{name} returned no markup here, so this row proves nothing: {out!r}"
             )
-        # `toast_container` needs no args but is a `tag`, and its EMPTY-list
-        # branch is the one that was missing the module's own `_safe()`.
-        _kind, toast = handlers["toast_container"]
-        assert hasattr(toast.render([], {}), "__html__")
-        assert hasattr(toast.render([], {"toasts": [{"id": "1", "message": "m"}]}), "__html__")
 
 
 #: Argument vectors a handler is plausibly called with — the shapes the Rust

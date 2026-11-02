@@ -66,6 +66,29 @@ SENTINEL = "PWNED"
 # The tags: enumerated from the library and the handler lists, never typed in
 
 
+_MECHANISMS = frozenset({"with_positional_args", "DjangoCheckedTagHandler"})
+
+
+def _mechanism_names(source: str) -> set[str]:
+    """The mechanism names a module's source refers to, however it reaches them.
+
+    Parsed, not matched as text: a call, a name passed around, an import under another
+    name (``from djust._positional_args import with_positional_args as wrap``) and an
+    attribute of the module (``_positional_args.with_positional_args``) all count.
+    """
+    import ast
+
+    found: set[str] = set()
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Name):
+            found.add(node.id)
+        elif isinstance(node, ast.Attribute):
+            found.add(node.attr)
+        elif isinstance(node, ast.alias):
+            found.add(node.name.rsplit(".", 1)[-1])
+    return found & _MECHANISMS
+
+
 def _handlers() -> dict[str, Any]:
     from djust.components import rust_handlers as component_handlers
 
@@ -571,23 +594,54 @@ class TestTheMechanism:
 
     def test_with_argument_contract_is_the_only_caller_of_the_mechanisms(self):
         """The one-entry-point claim is a pin, not prose: nothing outside
-        ``_positional_args`` calls ``with_positional_args`` or ``DjangoCheckedTagHandler``
-        directly, so a future raw theme tag cannot be registered unwrapped by copying a
-        neighbouring call."""
+        ``_positional_args`` names ``with_positional_args`` or ``DjangoCheckedTagHandler``,
+        so a future raw theme tag cannot be registered unwrapped by copying a neighbouring
+        call.
+
+        Found by parsing, not by a regular expression over the text, so the name is caught
+        however it is reached: called, passed around, imported under another name
+        (``from djust._positional_args import with_positional_args as wrap``) or read off the
+        module (``_positional_args.with_positional_args``). The scan EXCLUDES a test
+        directory by the path RELATIVE to the package, never the absolute one: a checkout
+        under a directory called ``tests`` has every file under it, and an absolute-path
+        filter would skip them all and pass.
+        """
         import pathlib
-        import re
 
         import djust
 
-        root = pathlib.Path(djust.__file__).parent
+        root = pathlib.Path(djust.__file__).resolve().parent
+        scanned = [
+            path
+            for path in sorted(root.rglob("*.py"))
+            if "tests" not in path.relative_to(root).parts and path.name != "_positional_args.py"
+        ]
+        # The scan must be able to see something: a filter that matched every file would
+        # pass an empty list of callers for the wrong reason.
+        assert len(scanned) > 50, f"scanned only {len(scanned)} files under {root}"
+        assert root / "components" / "rust_handlers.py" in scanned
+
         callers = sorted(
             str(path.relative_to(root))
-            for path in root.rglob("*.py")
-            if "tests" not in path.parts
-            and path.name != "_positional_args.py"
-            and re.search(r"\b(with_positional_args|DjangoCheckedTagHandler)\(", path.read_text())
+            for path in scanned
+            if _mechanism_names(path.read_text(encoding="utf-8"))
         )
         assert callers == [], callers
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            "with_positional_args('t', h, lib)",
+            "from djust._positional_args import with_positional_args as wrap\nwrap('t', h, lib)",
+            "import djust._positional_args as m\nm.DjangoCheckedTagHandler(h, 't', f)",
+            "handler_class = DjangoCheckedTagHandler",
+        ],
+    )
+    def test_the_pin_sees_every_way_to_reach_a_mechanism(self, source):
+        """Gate-off for the pin above, through the same function it uses: each way of reaching
+        a mechanism is reported, and a module that only reaches ``with_argument_contract`` is not."""
+        assert _mechanism_names(source)
+        assert not _mechanism_names("from djust._positional_args import with_argument_contract")
 
     def test_simple_and_inclusion_tags_keep_the_positional_mechanism(self):
         """One entry point, two mechanisms, each tag gets exactly one: a ``simple_tag``
