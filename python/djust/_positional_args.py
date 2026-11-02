@@ -34,10 +34,24 @@ Those are about keywords, not about positional use, and the native handlers have
 always been lenient there (``rust_only_keys`` in the parity baseline records
 it), so they are left as they were.
 
-Raw ``@register.tag`` tags have no positional parameters: their compile
-functions parse ``key=value`` only, and Django refuses a bare token. A native
-handler for one is left alone: a bare literal token is still ignored there, and a
-bare variable is still read as ``key=value`` pairs (tracked separately).
+Raw ``@register.tag`` tags have no positional parameters to map: their compile
+functions parse ``key=value`` only, and Django refuses a bare token
+(``Unexpected argument 'val'. Use key=value format.``). They need the opposite
+treatment, and the same reasoning: after the engine resolves the operands a bare
+variable whose VALUE is ``title=PWNED`` is the text ``title=PWNED``, a keyword, so
+a context value could set any parameter of a tag it was only passed to (#3676).
+The decision is again made at compilation, but there is nothing to rewrite, so the
+engine's ``validate_at_parse`` hook is used (the one the ``{% load %}`` bridge
+already uses): :class:`DjangoCheckedTagHandler` hands the tokens to the tag's own
+Django compile function, stopping where it asks for a body. Django says what it
+accepts and what it refuses, in its own words, so the Rust engine refuses exactly
+the templates Django refuses, whatever the tag's argument grammar is (a raw tag
+that legitimately takes a positional argument keeps working), and there is no
+per-tag list.
+
+:func:`with_argument_contract` is the one entry point: each native handler is
+wrapped by exactly one of the two mechanisms, chosen by what kind of Python tag it
+is.
 """
 
 from __future__ import annotations
@@ -192,3 +206,87 @@ def with_positional_args(tag_name: str, handler: Any, library: Any) -> Any:
     if spec is None:
         return handler
     return PositionalTagHandler(handler, spec)
+
+
+def validate_with_django(name: str, compile_func: Callable[..., Any], args: List[str]) -> None:
+    """Compile ``{% name args %}`` with Django's own compile function; raise what it raises.
+
+    The compile function gets a parser whose ``parse`` stops the run where the tag
+    asks for its body, so a block tag's arguments are checked and its body is not
+    (the body is the engine's to parse, and an error in it must not be hidden
+    behind, or replaced by, an argument error). The same technique as
+    ``LibraryBlockTagHandler.validate_at_parse``.
+    """
+    from djust.template_libraries import _parser, _stamp, _token
+
+    class BodyReached(Exception):
+        pass
+
+    def stop_at_body(*_args: Any, **_kwargs: Any) -> Any:
+        raise BodyReached
+
+    parser = _parser([])
+    parser.parse = stop_at_body  # type: ignore[method-assign]
+    try:
+        compile_func(parser, _token(name, args))
+    except BodyReached:
+        pass
+    except BaseException as exc:
+        _stamp(exc)
+        raise
+
+
+class DjangoCheckedTagHandler:
+    """A native handler of a raw ``@register.tag``, plus the engine's ``validate_at_parse`` hook.
+
+    The hook asks Django whether the tokens are valid for the tag (see
+    :func:`validate_with_django`). A handler that already has a validator keeps it,
+    and it runs first. Everything else the engine reads off a handler
+    (``RESOLVE_ARG_POSITIONS``, ``LAZY_BODY``, ...) is forwarded, and ``render`` takes
+    whichever signature the handler has (inline or block).
+    """
+
+    def __init__(self, handler: Any, name: str, compile_func: Callable[..., Any]) -> None:
+        self._handler = handler
+        self.name = name
+        self.compile_func = compile_func
+
+    def validate_at_parse(self, args: List[str]) -> None:
+        own = getattr(self._handler, "validate_at_parse", None)
+        if own is not None:
+            own(args)
+        validate_with_django(self.name, self.compile_func, args)
+
+    def render(self, *args: Any, **kwargs: Any) -> Any:
+        return self._handler.render(*args, **kwargs)
+
+    def __getattr__(self, name: str) -> Any:
+        # Only reached for names not found on the wrapper itself.
+        if name == "_handler":
+            raise AttributeError(name)
+        return getattr(self._handler, name)
+
+
+def with_argument_contract(tag_name: str, handler: Any, library: Any) -> Any:
+    """``handler``, wrapped so the native tag accepts exactly the arguments the Python tag does.
+
+    * ``simple_tag`` / ``inclusion_tag``: the Python tag's positional parameters are
+      named at compile time (#3664), :func:`with_positional_args`.
+    * a raw ``@register.tag``: the tokens are validated by Django's compile function
+      at compile time (#3676), :class:`DjangoCheckedTagHandler`.
+
+    ``library`` is the Django ``Library`` the Python tag lives in. A tag the library
+    does not have comes back unchanged.
+    """
+    from djust.template_libraries import _classify
+
+    compile_func = library.tags.get(tag_name)
+    if compile_func is None:
+        return handler
+    if _classify(compile_func) in _POSITIONAL_KINDS:
+        return with_positional_args(tag_name, handler, library)
+    if _classify(compile_func) == "raw":
+        return DjangoCheckedTagHandler(handler, tag_name, compile_func)
+    # ``simple_block_tag`` reads its arguments AFTER its body (``parse_bits`` follows
+    # ``parser.parse``), which the stop-at-body check never reaches: not covered.
+    return handler
