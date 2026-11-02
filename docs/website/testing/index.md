@@ -267,8 +267,8 @@ the context afresh because the handler changed state.
 
 Two paths still make more than one pass, and a budget has to allow for the passes they make:
 the HTTP POST fallback of a view on the default (legacy) exposure policy evaluates once to save
-the state and once to render (two passes), and the live mount of an explicit-exposure view whose
-page shell comes from `template_name` evaluates three times. Each pass is still judged against
+the state and once to render (two passes, #3734), and the live mount of an explicit-exposure view
+whose page shell comes from `template_name` evaluates three times (#3733). Each pass is still judged against
 the `"render"` number on its own.
 
 Not measured, by design: `async def` handlers and hooks (they run on the event loop, outside
