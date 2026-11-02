@@ -383,7 +383,7 @@ issue or be explicitly closed with a reason.
 | 341 | No gate ties a completed ROADMAP bucket to a RETRO.md entry — 14 buckets drifted; #2140 was a previous backfill of the same kind | Retro backfill v1.1.0-9..v1.2.0-5 | #2848 | Open | Suggested `scripts/check-retro-coverage.py`: parse ✅ milestone headings in ROADMAP.md, fail when RETRO.md has no entry |
 | 342 | False/stale claims in changelog fragments and PR bodies are unchecked — five instances across v1.2.0-1..3, one of which caused a regression (#2838) | Retro backfill v1.1.0-9..v1.2.0-5 | #2849 | Open | Extend the existing path/class reference checks (cf. #2652) to `changelog.d/*.md`; share `check-changelog-test-counts`' parser rather than adding a third |
 | 343 | **Rule row** — enumerate every caller of a shared cache/registry/dispatch and the invariant each needs before the first edit (v1.2.0-6 retro arc, rule 1) | Retro v1.2.0-6 | — | Closed | pattern: fix-reproduces-own-bug  fired: —  re-violated: — (rule created at v1.2.0-6; origin instances #2147, #2146, #2838 r1-r3, #2846 are recorded on the page, not counted as re-violations since the rule did not exist for them) **gate v1.3.0-11: DEMOTE** (no instance in v1.3.0-10, -11, -12); rule line removed from CLAUDE.md, page `docs/patterns/fix-reproduces-own-bug.md` is `wiki-only`. |
-| 344 | **Rule row** — verify a claim against the source before writing it, and cite path:line; delete a claim that cannot be checked (v1.2.0-6 retro arc, rule 2) | Retro v1.2.0-6 | — | Open | pattern: unverified-claim  fired: #3463, #3472, #3474, #3704, #3708  re-violated: #3473, #3692 (issue) (rule created at v1.2.0-6; the ten origin instances — #2838, #2546, #2534, #2554, #2573, #2607, #2843, #2147 — predate it) **gate v1.3.0-11/12: KEEP** (fired 2, missed 1). **gate v1.3.0-15: KEEP** (fired 2, missed 1, flat; three author-side violations, see #3713). |
+| 344 | **Rule row** — verify a claim against the source before writing it, and cite path:line; delete a claim that cannot be checked (v1.2.0-6 retro arc, rule 2) | Retro v1.2.0-6 | — | Open | pattern: unverified-claim  fired: #3463, #3472, #3474, #3704, #3708  re-violated: #3473, #3692 (issue) (rule created at v1.2.0-6; the ten origin instances — #2838, #2546, #2534, #2554, #2573, #2607, #2843, #2147 — predate it) **gate v1.3.0-11/12: KEEP** (fired 2, missed 1). **gate v1.3.0-15: KEEP** (fired 2, missed 1, flat; three author-side violations, see #3713). **gate v1.3.0-16: KEEP** (fired 1, missed 1, flat). Missed: #3721 stated that four files' kept drains were absence windows; the reviewer's recount disproved it. Fired: #3722 measured the reviewer's "GET runs `get_context_data` twice" claim before it was filed as #3725. fired: #3722  re-violated: #3721 |
 | 345 | **Rule row** — a Code Review stage is not complete until the review is POSTED to the PR, and a bucket until `RETRO.md` has its entry (v1.2.0-6 retro arc, rule 3) | Retro v1.2.0-6 | #2848 | Open | pattern: retro-dropout  fired: #3483 (check-retro-coverage caught the missing v1.3.0-4 entry)  re-violated: #3474 (rule created at v1.2.0-6; #2837/#2838 merged with no review artifact and 14 buckets drifted before it. Mechanical half now exists: `scripts/check-retro-coverage.py`) **gate v1.3.0-11/12: KEEP** (#3474's review findings were posted only inside its retro comment, not as a review; one miss). |
 | 346 | Python and Rust root locators disagree when a quoted attribute value contains `<… dj-root>` | PR #3023 | #3030 | Open | pattern: parallel-path-drift. Needs author markup or `\|safe`, so not reachable from autoescaped content |
 | 347 | dj-root vs dj-view root precedence: Python searches dj-root first, the Rust VDOM takes the first element | PR #3023 | #3031 | Open | pattern: parallel-path-drift. Predates #3023; T005 warns about the split layout |
@@ -412,17 +412,23 @@ issue or be explicitly closed with a reason.
 | 370 | WebSocket test teardown/receives use channels' 1 s default timeout (453 bare `.disconnect()` calls) and flake under machine load; give test communicators a generous default plus a gate against bare ones | Retro v1.3.0-10 / PR #3463 review | #3464 | Closed | #3463 fixed only the two files named in #3456/#3451 Closed by #3474: a session-scoped autouse fixture in the root `conftest.py` raises the four channels communicator defaults to 30 s. |
 | 371 | Windows `djust ai inventory` hand-off: compare the discovered `manage.py`'s owner SID and DACL with the current user (the #3454 marker rule is a heuristic) | Retro v1.3.0-10 / PR #3463 review | #3462 | Closed | Needs a native Windows CI job to test Closed by #3474: `python/djust/_windows_acl.py` checks the owner (TokenUser or TokenOwner) and the DACL; the `windows-ai-inventory` CI job runs the real API path. |
 | 372 | A release run blocked by the pre-release audit raises no alert: v1.2.4 sat unpublished ~4 days; v1.3.0rc9 and v1.2.5 were caught only because the runs were being watched | Retro v1.3.0-11 (PR #3471) / v1.3.0-12 | #3482 | Open | |
-| 373 | Sweep the 16 remaining absolute wall-clock bounds on compute or waits (the #3710 class) and add a ratchet that counts `perf_counter() - … < N` assertions | Retro v1.3.0-15 / PR #3712 | #3711 | Open | main run 41245126443 failed on one (`test_the_walk_is_linear_on_tag_soup`, 1.23 s against a 1.0 s bound; fixed in #3712) |
-| 374 | 475 explicit short `timeout=` calls on communicator `receive_*` still override the 30 s default | PR #3708 | #3709 | Open | Waits, not compute bounds; the sweep in #3711 covers the other half |
-| 375 | Optional mechanical gate for `unverified-claim`: lint the PR body for placeholders and unresolved `#N` / comment references; record the truncated-log instrument on the page | Retro v1.3.0-15 | #3713 | Open | pattern: unverified-claim. Row 344's gate came out KEEP; this is the cheaper hardening if it is wanted |
-| 376 | A shared `scripts/gate_off.py` (assert applied, count errors, deadline as caught, restore by hash) so each PR stops rewriting its own | Retro v1.3.0-15 / PR #3702 | #3714 | Open | All five agent PRs of the milestone wrote a throwaway harness |
-| 377 | Print each xdist worker's worst gen-2 GC pause and longest loop stall at session end so the next timing flake is attributable | PR #3708 | #3715 | Open | #3708's cause is measured locally on 3.12 only; CI logs carry no GC data |
-| 378 | `TtydTerminalView`: `?rows=` / `?cols=` raise `ValueError` on non-integers and accept unbounded sizes | PR #3698 | #3699 | Open | Outside the v1.3.0-15 rows; needs a call |
+| 373 | Sweep the 16 remaining absolute wall-clock bounds on compute or waits (the #3710 class) and add a ratchet that counts `perf_counter() - … < N` assertions | Retro v1.3.0-15 / PR #3712 | #3711 | Closed | main run 41245126443 failed on one (`test_the_walk_is_linear_on_tag_soup`, 1.23 s against a 1.0 s bound; fixed in #3712) Closed by PR #3721 (`22ebc4c91`): 31 absolute bounds converted to growth or ordering checks, plus a per-file ratchet that only falls. |
+| 374 | 475 explicit short `timeout=` calls on communicator `receive_*` still override the 30 s default | PR #3708 | #3709 | Open | Waits, not compute bounds; the sweep in #3711 covers the other half Partly done in PR #3721: 433 short waits in 156 files converted; the ratchet baseline holds 57 variable-timeout waits and 110 `wait_for`/`asyncio.timeout` sites. The remainder stays open; four files still carry try/pass drains (row 387). |
+| 375 | Optional mechanical gate for `unverified-claim`: lint the PR body for placeholders and unresolved `#N` / comment references; record the truncated-log instrument on the page | Retro v1.3.0-15 | #3713 | Closed | pattern: unverified-claim. Row 344's gate came out KEEP; this is the cheaper hardening if it is wanted Closed by PR #3720 (`869692224`): `scripts/check_pr_body.py` and a non-gating `pr-body-lint` workflow. Promoting it to a gate is not filed. |
+| 376 | A shared `scripts/gate_off.py` (assert applied, count errors, deadline as caught, restore by hash) so each PR stops rewriting its own | Retro v1.3.0-15 / PR #3702 | #3714 | Closed | All five agent PRs of the milestone wrote a throwaway harness Closed by PR #3720: `scripts/gate_off.py` with a 31-mutation self-check. |
+| 377 | Print each xdist worker's worst gen-2 GC pause and longest loop stall at session end so the next timing flake is attributable | PR #3708 | #3715 | Closed | #3708's cause is measured locally on 3.12 only; CI logs carry no GC data Closed by PR #3721: `tests/timing_report.py`. |
+| 378 | `TtydTerminalView`: `?rows=` / `?cols=` raise `ValueError` on non-integers and accept unbounded sizes | PR #3698 | #3699 | Closed | Outside the v1.3.0-15 rows; needs a call Closed by PR #3719 (`5621d74f3`): non-integers fall back to the default; sizes clamp to 500 rows / 1000 cols. |
 | 379 | `djust_audit --a11y`: a rendered-page pass (axe-core) for contrast, landmarks, heading order and names that exist only after render | PR #3702 | #3700 | Open | |
-| 380 | Query budgets beyond the smoke test: measure mount, render and event at run time; list budgets in `djust_audit` | PR #3702 | #3701 | Open | |
-| 381 | Finish the doc-snippet network guard and the per-match line-count idiom elsewhere; `_strip_verbatim_blocks` divergences and its quadratic unterminated opener | PR #3704 | #3705 | Open | |
-| 382 | `http_status_of_state` config-level map, `params_form` misconfiguration checks, test client | PR #3703 | #3706 | Open | |
+| 380 | Query budgets beyond the smoke test: measure mount, render and event at run time; list budgets in `djust_audit` | PR #3702 | #3701 | Closed | Closed by PR #3722 (`615905b63`); the issue was closed by hand because the PR body wrote `Closes #3701` inside backticks. |
+| 381 | Finish the doc-snippet network guard and the per-match line-count idiom elsewhere; `_strip_verbatim_blocks` divergences and its quadratic unterminated opener | PR #3704 | #3705 | Closed | Closed by PR #3719 for the scope the v1.3.0-16 row gave it (the network guard and the line counter). |
+| 382 | `http_status_of_state` config-level map, `params_form` misconfiguration checks, test client | PR #3703 | #3706 | Open | Partly done in PR #3722: V023 `params_form` checks and a test client that drives `handle_params`. The `http_status_of_state` config-level map is not part of it; issue #3706 stays open. |
 | 383 | Component-tag parity between the Django and Rust renderings: 117 of 208 tags differ; six issues need one canonical implementation chosen before code | Retro v1.3.0-15 | #3663 | Open | pattern: parallel-path-drift. Also #3666, #3667, #3669, #3676 (P1, parameter injection), #3677. Waiting on a decision, not started |
+| 384 | `_blank_template_comments` is quadratic in the number of `{% comment %}` openers (found by the growth check that replaced an absolute bound) | PR #3721 | #3723 | Open | A strict xfail cites it; remove the xfail when fixed |
+| 385 | `extract_template_variables` grows roughly n^2.9 with the number of blocks | PR #3721 | #3724 | Open | Same: a strict xfail cites it |
+| 386 | An overriding `get_context_data()` runs twice per HTTP GET and the second pass gets no `preloaded_context` | PR #3722 review | #3725 | Open | The author measured it before filing; the reviewer's claim alone was not enough |
+| 387 | Convert the remaining try/pass drains in four live-auth and form-route test files (they wait until a frame that does arrive) | PR #3721 | #3726 | Open | Part of row 374's remainder |
+| 388 | The presence test flaked on a PR run (#3451 reopened with two readings: a runner stall over 30 s, or a lost wake-up in the test) | PR #3719 | #3451 | Open | Not diagnosed |
+| 389 | Batch merges put main red twice: update each branch with main and rerun the cross-file gates (ratchets, shard coverage, floors) before merging the second and later PRs of a batch | Retro v1.3.0-16 | #3735 | Open | Decide whether it is a CLAUDE.md `Pipeline` rule or a change in the pipeline skill repo |
 
 ## Retro backfill — 14 un-retro'd drain buckets (v1.1.0-9 … v1.2.0-5)
 
@@ -1357,14 +1363,92 @@ The per-PR reviews do not tag severities uniformly, so the middle rows count wha
 
 ### Open Items
 
-- [ ] Wall-clock sweep and ratchet — Action Tracker #373 (GitHub #3711)
-- [ ] 475 short communicator timeouts — Action Tracker #374 (GitHub #3709)
-- [ ] PR-body lint for `unverified-claim` — Action Tracker #375 (GitHub #3713)
-- [ ] Shared gate-off helper — Action Tracker #376 (GitHub #3714)
-- [ ] GC pause attribution — Action Tracker #377 (GitHub #3715)
-- [ ] Follow-ups #3699, #3700, #3701, #3705, #3706 — Action Tracker #378–#382
+- [x] Wall-clock sweep and ratchet — Action Tracker #373 (GitHub #3711) — resolved in v1.3.0-16 (PR #3721)
+- [ ] 475 short communicator timeouts — Action Tracker #374 (GitHub #3709) — partly resolved in v1.3.0-16 (PR #3721)
+- [x] PR-body lint for `unverified-claim` — Action Tracker #375 (GitHub #3713) — resolved in v1.3.0-16 (PR #3720)
+- [x] Shared gate-off helper — Action Tracker #376 (GitHub #3714) — resolved in v1.3.0-16 (PR #3720)
+- [x] GC pause attribution — Action Tracker #377 (GitHub #3715) — resolved in v1.3.0-16 (PR #3721)
+- [ ] Follow-ups #3699, #3700, #3701, #3705, #3706 — Action Tracker #378–#382 — #3699, #3701, #3705 resolved in v1.3.0-16 (PRs #3719, #3722); #3706 partly (PR #3722); #3700 untouched
 - [ ] Component-tag parity decision — Action Tracker #383 (GitHub #3663)
 - [x] #3712 (the #3710 fix) merged; `Tests` on main at `1f0f1b46b` green
+
+## v1.3.0-16 — follow-ups of the v1.3.0-15 drain: the TTY parameter bug, test-timing debt, gate-off tooling, view-API leftovers (PRs #3718–#3722)
+
+**Date**: 2026-11-01
+**Scope**: The drain bucket opened by #3718 (nine rows), shipped as four grouped PRs, each reviewed in fresh context and re-reviewed.
+- **A, hardening (#3719):** `TtydTerminalView` `?rows=` / `?cols=` parsing and clamping (#3699); the doc-snippet network guard and a per-match line counter (#3705).
+- **B, test timing (#3721):** growth and ordering checks in place of absolute bounds, two ratchets, a GC and stall report (#3711, #3715; #3709 partly).
+- **C, process tooling (#3720):** `scripts/gate_off.py` and a non-gating PR-body lint (#3714, #3713).
+- **D, view API and budgets (#3722):** V023 `params_form` checks, a test client that drives `handle_params`, run-time query budgets with V024 / C029 and `djust_audit` output (#3701; #3706 partly).
+- **Not started:** #3700 (an axe-core dependency decision) and the six component-tag parity issues, which still need one canonical implementation chosen.
+
+**Tests at close**: `Tests` on `main` was **red twice** after the bucket merged, then green. `22ebc4c91` (the #3721 merge) failed five shards: the #3709 ratchet and the shard-duration coverage check (all four Python versions, each a deterministic cross-PR interaction) and the presence flake (#3451, py3.15 shard 3). Fixed by #3727 (`db885babf`), which itself failed one shard (py3.14 shard 4: a T017 settings leak, #3728). Fixed by #3729 (`15475e164`); `Tests` on that commit passed. The runs on `5621d74f3`, `869692224` and `615905b63` passed.
+
+### What We Learned
+
+**1. The shared gate-off helper took three review rounds to stop being able to damage the tree it protects (#3720).**
+The helper's job is to mutate source, run tests and restore it, so a defect in it can leave the tree mutated. The PR needed three review rounds, and the last was a re-review of a lock redesign (a directory `flock`, with the original bytes journalled outside the tree). The first-review comment carries two 🔴 marks and the first re-review four; I did not re-read them to classify each. The helper now has a 31-mutation self-check of its own.
+
+**Action taken**: Closed. `scripts/gate_off.py` is covered by `tests/unit/test_gate_off_3714.py` (66 functions) and `scripts/gate-off-selfcheck.json`; CLAUDE.md points at it (PR #3720, merged `869692224`).
+
+**2. Replacing absolute time bounds with growth checks found two real quadratic functions the bounds had been hiding (#3721).**
+`test_large_template` asserted `< 0.5` s for a template that costs about 6 ms. A bound that loose cannot see growth; the ratio check did: `_blank_template_comments` is quadratic in `{% comment %}` openers and `extract_template_variables` grows roughly n^2.9 with the block count. Both are recorded as strict xfails that cite the issues.
+
+**Action taken**: Open: tracked in Action Tracker #384 (GitHub #3723) and #385 (GitHub #3724).
+
+**3. A reviewer's claim and an author's statement were each wrong in a way only a measurement settled (#3722, #3721).**
+The #3722 reviewer wrote that an HTTP GET runs `get_context_data()` twice; the author measured it before filing, and it is true when the view overrides it (#3725). In #3721 the author wrote that four files' kept drains were absence windows; the reviewer's recount showed they were not, and three statements were corrected. The same rule caught one and missed the other.
+
+**Action taken**: Open: tracked in Action Tracker #386 (GitHub #3725); the rule row (Action Tracker #344) records fired #3722 and re-violated #3721, gate decision KEEP.
+
+**4. The presence flake appeared again on a PR run, with two candidate causes and no diagnosis (#3719).**
+`Tests` failed on the presence test (#3451, closed earlier by #3463). A rerun passed. I reopened #3451 with the two readings (a runner stall over 30 s, or a lost wake-up in the test) rather than retrying silently.
+
+**Action taken**: Open: tracked in Action Tracker #388 (GitHub #3451).
+
+**5. Four PRs that were green alone put main red twice (#3721, #3722, #3727).**
+They were squash-merged back to back. #3721's ratchet counts short communicator timeouts across every test file; #3722 had added a file with two. The shard-duration check crossed its 10% limit once both PRs' tests were collected. Each PR's CI ran on a tree that lacked the other's files. The fix for those (#3727) rebuilt `.test_durations`, which changed how tests are dealt to shards and exposed an older settings leak between two T017 tests (#3728, fixed in #3729 with a scan of every test root for `@override_settings` plus the `settings` fixture).
+
+**Action taken**: Open: tracked in Action Tracker #389 (GitHub #3735). The instances are closed: #3727 and #3729 (`15475e164`), both with `Tests` green on main.
+
+### Insights
+
+- #3721 changed 186 files (178 test files); its re-review asked for wording fixes and one follow-up, none blocking.
+- #3722's PR body wrote `Closes #3701` inside backticks, so GitHub did not close the issue; closed by hand after merge. The PR-body lint (#3720) is non-gating and was not extended to check for this.
+- #3722 pushed two small commits after the reviewed SHA; each had its own gate-off but no fresh review.
+- Nits left on purpose: #3720 (a raw `PermissionError` on an unreadable directory; the two specs exclude each other; a SIGKILLed run can leave a test child), #3721 (the matcher misses some disguised bounds), #3719 (non-ASCII digits fall back to the default).
+- Every one of the four PRs had at least one finding a green suite did not show.
+
+### Review Stats
+
+| Metric | #3719 | #3720 | #3721 | #3722 | Total |
+|--------|-------|-------|-------|-------|-------|
+| Review rounds (review + re-reviews) | 2 | 3 | 2 | 2 | 9 |
+| 🔴 / 🟡 marks in the first review comment | 1 / 5 | 2 / 2 | 1 / 4 | 1 / 1 | 5 / 12 |
+| CI failures on the PR | 1 (presence flake, #3451) | not recorded | not recorded | not recorded | 1 known on the PRs; 2 red runs on main after merge |
+| Findings by pattern class | not tallied | not tallied | `unverified-claim`×1 (the kept-drain statements) | `unverified-claim`×0 (fired once) | |
+
+The marker counts are occurrences of the emoji in the first review comment of each PR, so they can include a header or a "0 found" line; the per-PR reviews do not tag severities uniformly. Tests added are not totalled: #3720 added 66 + 61 test functions and #3722 added 220 cases; #3719 and #3721 did not record a count.
+
+### Process Improvements Applied
+
+**CLAUDE.md**: pointer sentences to `scripts/gate_off.py` and the PR-body lint (PR #3720).
+**Pipeline template**: none.
+**Checklist**: none.
+**Skills**: none.
+**Pattern pages**: `docs/patterns/wall-clock-assertion.md` (PR #3721) and `docs/patterns/unverified-claim.md` (this retro) gained instance rows.
+**Tests**: `python/tests/test_no_override_settings_with_fixture_3728.py` (PR #3729) pins the decorator-plus-fixture class.
+
+### Open Items
+
+- [ ] Quadratic template functions — Action Tracker #384, #385 (GitHub #3723, #3724)
+- [ ] Double `get_context_data()` on GET — Action Tracker #386 (GitHub #3725)
+- [ ] Remaining try/pass drains and communicator timeouts — Action Tracker #374, #387 (GitHub #3709, #3726)
+- [ ] Presence test flake — Action Tracker #388 (GitHub #3451)
+- [ ] Merge-order gate for batches — Action Tracker #389 (GitHub #3735)
+- [ ] `http_status_of_state` config map — Action Tracker #382 (GitHub #3706)
+- [ ] axe-core dependency decision — Action Tracker #379 (GitHub #3700)
+- [ ] Component-tag parity decision — Action Tracker #383 (GitHub #3663)
 
 ## v1.3.0-9 — test git-env isolation (#3179)
 

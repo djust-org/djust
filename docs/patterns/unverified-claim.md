@@ -35,6 +35,8 @@ cause a *code* defect rather than a documentation one.
 | #3692 | the issue's title and body said CI shards "ended silently"; the full logs showed real failures (read through a truncated view) | issue corrected, premise named in the retro | yes, missed |
 | #3704 | the renderer "reads HTML comments and script bodies as text" was written into code, three tests, docs and a changelog; the lexer is HTML-blind (`crates/djust_templates/src/lexer.rs:404-407`). Round 2: docs said "False positives: None known" | fresh-context review; a differential test against `djust._rust.render_template` | yes, fired |
 | #3708 | first PR body carried a placeholder count and pointed at comments that did not exist yet | reviewer caught it before merge | yes, fired |
+| #3721 | stated that four files' kept drains were absence windows; the reviewer's recount showed they were not | three statements corrected before merge | yes, missed |
+| #3722 | the reviewer's "an HTTP GET runs `get_context_data()` twice" was measured by the author before it was filed (#3725) | measured first | yes, fired |
 
 ## Detection
 
