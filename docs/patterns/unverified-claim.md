@@ -9,7 +9,7 @@ not be written.
 the #2652 symbol check (documented methods), `scripts/check-changelog-test-counts.py` (JS test
 counts), and for PR bodies `scripts/check_pr_body.py` (unresolved placeholders and `#N` /
 `issuecomment-<id>` references that do not resolve; a **non-gating** CI job, #3713) ·
-**candidate for mechanical gate**: yes, for claims about code (nothing covers those; the
+**candidate for mechanical gate**: yes (HARDEN at v1.3.0-17, #3739), for claims about code (nothing covers those; the
 differential-test habit does)
 **Origin**: the v1.2.0-6 retro (#2838) — the first instance of this class in this repo to
 cause a *code* defect rather than a documentation one.
@@ -37,6 +37,9 @@ cause a *code* defect rather than a documentation one.
 | #3708 | first PR body carried a placeholder count and pointed at comments that did not exist yet | reviewer caught it before merge | yes, fired |
 | #3721 | stated that four files' kept drains were absence windows; the reviewer's recount showed they were not | three statements corrected before merge | yes, missed |
 | #3722 | the reviewer's "an HTTP GET runs `get_context_data()` twice" was measured by the author before it was filed (#3725) | measured first | yes, fired |
+| #3731 | the PR body said the issue's 16 s at 1,600 blocks could not be reproduced; it reproduces (16.6 s on main) | the reviewer measured it; the body was corrected | yes, missed |
+| #3732 | the docstring and a changelog fragment said the baseline held one entry (three) and that every drain is counted per file (a few shapes were) | the ratchet was extended so the second claim became true; reasons became data pinned to BASELINE | yes, missed |
+| #3738 | the changelog fragment said 'This was the cause' for a failure never observed naturally | reworded to the best-supported explanation | yes, missed |
 
 ## Detection
 
