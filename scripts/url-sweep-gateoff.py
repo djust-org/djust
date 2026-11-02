@@ -44,6 +44,10 @@ UTILS = ROOT / "python/djust/components/utils.py"
 COMP = ROOT / "python/djust/components/components"
 SWEEP = ROOT / "scripts/lib/template_library_parity/url_sweep.py"
 
+THEMING = ROOT / "python/djust/theming/templatetags/theme_components.py"
+PAGES = ROOT / "python/djust/theming/templatetags/theme_pages.py"
+THEMING_TEST = "python/tests/test_theming_url_allowlist_3677.py"
+
 AVATAR = "python/tests/test_avatar_src_scheme_3665.py"
 SINKS = "python/tests/test_image_url_sinks_3665.py"
 SWEEPTEST = "python/tests/test_url_scheme_sweep_3665.py"
@@ -237,13 +241,142 @@ MUTATIONS: list[tuple[str, pathlib.Path, str, str, str, str]] = [
         AVATAR,
         "",
     ),
+    # --- #3677: theming judges URLs with the components allowlist, not a list of its own
     (
-        "theming denylist forgets livescript: and mhtml:",
-        ROOT / "python/djust/theming/templatetags/theme_components.py",
-        '_UNSAFE_URL_SCHEMES = ("javascript:", "vbscript:", "data:", "livescript:", "mhtml:")',
-        '_UNSAFE_URL_SCHEMES = ("javascript:", "vbscript:", "data:")',
-        "python/tests/test_theming_url_denylist_3665.py",
-        "",
+        "theming _neutralise_url: back to a denylist (the pre-#3677 rule)",
+        THEMING,
+        "    if not url_allowed(value, image=image):\n        logger.debug(",
+        '    if str(value).strip().lower().startswith(("javascript:", "vbscript:", "data:", "livescript:", "mhtml:")):\n        logger.debug(',
+        THEMING_TEST,
+        "TestEverySink",
+    ),
+    (
+        "theming _check_url (developer literals): neutralises only the three script schemes",
+        THEMING,
+        "    if not url_allowed(value):\n        logger.warning(",
+        '    if str(value).strip().lower().startswith(("javascript:", "vbscript:", "data:")):\n        logger.warning(',
+        THEMING_TEST,
+        "TestLiteralAndPassthroughSinks",
+    ),
+    (
+        "theming avatar: src not neutralised",
+        THEMING,
+        '    src = _neutralise_url("src", src, image=True)\n',
+        "    src = src\n",
+        THEMING_TEST,
+        "TestEverySink and theme_avatar",
+    ),
+    (
+        "theming lists (nav, nav_group, breadcrumb, sidebar_nav): item urls not neutralised",
+        THEMING,
+        "    return _map_item_attribute(items, name, lambda value: _neutralise_url(name, value))",
+        "    return items",
+        THEMING_TEST,
+        "TestEverySink and (nav or breadcrumb)",
+    ),
+    (
+        "theming pagination: the formatted url is not neutralised",
+        THEMING,
+        '        return _neutralise_url("url_pattern", url_pattern.format(page))',
+        "        return url_pattern.format(page)",
+        THEMING_TEST,
+        "TestEverySink and theme_pagination",
+    ),
+    (
+        "theming login page: the form action is not neutralised",
+        PAGES,
+        '    action = _neutralise_url("action", action)\n    forgot_password_url = _neutralise_url(',
+        "    forgot_password_url = _neutralise_url(",
+        THEMING_TEST,
+        "TestEverySink and theme_login_page",
+    ),
+    (
+        "theming: a marked-safe URL is printed raw (no longer made plain text)",
+        THEMING,
+        '    if isinstance(value, SafeData) or hasattr(value, "__html__"):\n        return str.__str__(str(value))\n    return value',
+        "    return value",
+        THEMING_TEST,
+        "marked_safe or plain_text",
+    ),
+    (
+        "theming literal sinks: every rejected scheme raises (the pre-fix branch behaviour)",
+        THEMING,
+        "    if not url_allowed(value):\n        logger.warning(",
+        '    if not url_allowed(value):\n        raise ValueError("refuses")\n        logger.warning(',
+        THEMING_TEST,
+        "TestLiteralAndPassthroughSinks",
+    ),
+    (
+        "theming literal sinks: a script scheme no longer raises",
+        THEMING,
+        "    if _raises_for_scheme(value):\n        raise ValueError(",
+        "    if False:\n        raise ValueError(",
+        THEMING_TEST,
+        "TestLiteralAndPassthroughSinks",
+    ),
+    (
+        "shared allowlist: a value urlsplit cannot parse is allowed",
+        UTILS,
+        "    except ValueError:\n        return False\n    if scheme and scheme not in _SAFE_URL_SCHEMES:",
+        "    except ValueError:\n        return True\n    if scheme and scheme not in _SAFE_URL_SCHEMES:",
+        THEMING_TEST,
+        "parser_cannot_read",
+    ),
+    (
+        "shared allowlist: an empty URL is rejected",
+        UTILS,
+        "    if not s:\n        return True\n    if image and _is_data_image(s):",
+        "    if not s:\n        return False\n    if image and _is_data_image(s):",
+        THEMING_TEST,
+        "empty_url",
+    ),
+    (
+        "template pin: a composite href is added to nav_item.html",
+        ROOT / "python/djust/theming/templates/djust_theming/components/nav_item.html",
+        '<a href="{{ url }}"\n',
+        '<a href="{{ url }}{{ attrs.x }}"\n',
+        THEMING_TEST,
+        "TestTheSinkSetIsPinned",
+    ),
+    (
+        "template pin: a ping attribute is added to nav_item.html",
+        ROOT / "python/djust/theming/templates/djust_theming/components/nav_item.html",
+        '<a href="{{ url }}"\n',
+        '<a href="{{ url }}" ping="{{ url }}"\n',
+        THEMING_TEST,
+        "TestTheSinkSetIsPinned",
+    ),
+    (
+        "template pin: an unexplained variable in the layout's URL attribute",
+        ROOT / "python/djust/theming/templates/djust_theming/layouts/base.html",
+        "href=\"{% static 'djust_theming/css/layouts.css' %}\"",
+        "href=\"{{ user_url }}{% static 'djust_theming/css/layouts.css' %}\"",
+        THEMING_TEST,
+        "TestTheSinkSetIsPinned",
+    ),
+    (
+        "shared allowlist: the scheme is no longer checked against it",
+        UTILS,
+        "    if scheme and scheme not in _SAFE_URL_SCHEMES:\n        return False",
+        "    if scheme and scheme not in _SAFE_URL_SCHEMES:\n        pass",
+        THEMING_TEST,
+        "TestEverySink",
+    ),
+    (
+        "shared allowlist widened (blob: accepted): the scanner's copy no longer agrees",
+        UTILS,
+        '_SAFE_URL_SCHEMES = frozenset({"http", "https", "mailto", "tel", "ftp", "ftps"})',
+        '_SAFE_URL_SCHEMES = frozenset({"http", "https", "mailto", "tel", "ftp", "ftps", "blob"})',
+        SWEEPTEST,
+        "allowlist_is_the_production_one",
+    ),
+    (
+        "scanner: only the three script schemes are read as dangerous (the pre-#3677 scanner)",
+        SWEEP,
+        "    if m and m.group(1) not in NAVIGATION_SCHEMES:\n        return m.group(1)",
+        "    if False:\n        return m.group(1)",
+        SWEEPTEST,
+        "Scanner",
     ),
     # --- the sweep must itself notice a reverted fix, through its own path
     (
@@ -356,7 +489,7 @@ def main(argv: list[str]) -> int:
         SWEEPTEST,
         "scripts/template-library-url-sweep.py",
         "scripts/url-sweep-gateoff.py",
-        "python/tests/test_theming_url_denylist_3665.py",
+        THEMING_TEST,
     )
     real = [m[1] for m in MUTATIONS]
     before = base.tree_digest(real)

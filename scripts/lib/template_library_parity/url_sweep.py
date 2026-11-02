@@ -17,8 +17,10 @@ What it does, for every tag of every library in :data:`SWEPT_LIBRARIES`:
    with none falls back to the Python tag).
 3. **Read the FINAL emitted attributes** of each output — every attribute of
    every element, not a list of "URL-looking" parameter names — and report each
-   whose browser-normalised value starts with ``javascript:``, ``vbscript:`` or
-   a non-image ``data:``, with the element and attribute it landed on.
+   whose browser-normalised value starts with any scheme but a navigation scheme
+   (:data:`NAVIGATION_SCHEMES`, #3677: ``livescript:``, ``blob:``, ``file:``, ... as
+   well as ``javascript:``, ``vbscript:`` and a non-image ``data:``), with the
+   element and attribute it landed on.
 
 The question is asked of the output, not of the sanitiser, so a tag that
 reaches its sink by a path no sanitiser guards is found whatever it is called.
@@ -91,6 +93,42 @@ DANGEROUS = (
     ("srcset-comma", "/a.png 1x,javascript:alert(%s) 2x" % MARK),
     ("srcset-formfeed", "/a.png 1x,\fjavascript:alert(%s) 2x" % MARK),
 )
+
+#: Schemes that are not script schemes in a current browser but are not navigation
+#: schemes either (#3677): ``djust.components.utils`` allows only
+#: :data:`NAVIGATION_SCHEMES`, so each of these must be neutralised exactly like
+#: ``javascript:``. Written in the forms a browser still reads as that scheme
+#: (case, leading space / C0 control, embedded tab or newline, a numeric entity).
+NON_NAVIGATION = (
+    ("livescript", "livescript:alert(%s)" % MARK),
+    ("livescript-mixed", "LiveScript:alert(%s)" % MARK),
+    ("mhtml", "mhtml:file://C:/%s.mht!x" % MARK),
+    ("blob", "blob:https://example.com/%s" % MARK),
+    ("blob-lead-space", "  blob:https://example.com/%s" % MARK),
+    ("blob-lead-control", "\x01blob:https://example.com/%s" % MARK),
+    ("blob-embedded-tab", "bl\tob:https://example.com/%s" % MARK),
+    ("blob-embedded-newline", "bl\nob:https://example.com/%s" % MARK),
+    ("blob-entity-hex", "&#x62;lob:https://example.com/%s" % MARK),
+    ("file", "file:///etc/%s" % MARK),
+    ("jar", "jar:https://example.com/a.jar!/%s" % MARK),
+    ("view-source", "view-source:https://example.com/%s" % MARK),
+    ("intent", "intent://example.com/%s#Intent;scheme=https;end" % MARK),
+    ("ms-word", "ms-word:ofe|u|https://example.com/%s.docx" % MARK),
+    ("custom", "x-%s-app://open/1" % MARK),
+    ("feed", "feed:https://example.com/%s.xml" % MARK),
+    ("ws", "ws://example.com/%s" % MARK),
+    ("git", "git://example.com/%s.git" % MARK),
+    ("sms", "sms:+15551234567?body=%s" % MARK),
+    ("geo", "geo:40.7,-74.0?q=%s" % MARK),
+)
+DANGEROUS = DANGEROUS + NON_NAVIGATION
+
+#: The schemes a navigation URL may carry. An INDEPENDENT copy of
+#: ``djust.components.utils._SAFE_URL_SCHEMES``: the scanner that decides whether an
+#: output is dangerous must not read the allowlist under test as its oracle (a widened
+#: production list would otherwise widen the scanner with it).
+#: ``python/tests/test_url_scheme_sweep_3665.py`` pins the two equal.
+NAVIGATION_SCHEMES = frozenset({"http", "https", "mailto", "tel", "ftp", "ftps"})
 
 #: Values every sink must keep. ``preserved`` is compared between the engines.
 SAFE = (
@@ -275,12 +313,27 @@ def spec_srcset(text: str) -> list[tuple[str, list[str]]]:
         candidates.append((url, descriptors))
 
 
+_C0_AND_SPACE = "".join(chr(c) for c in range(0x21))
+_TAB_NEWLINE = re.compile(r"[\t\n\r]")
+_SCHEME = re.compile(r"([a-z][a-z0-9+.-]*):")
+
+
 def scheme_of(value: str) -> str:
-    """The scheme a browser would act on, ``""`` for none."""
+    """The scheme a browser would act on that is not a navigation scheme, ``""`` for none.
+
+    ``javascript:`` / ``vbscript:`` / ``data:`` are found the lenient way (every control
+    character and space removed, as legacy engines did), so ``java<NUL>script:`` counts.
+    Any other scheme is read the way the URL standard reads it: leading and trailing C0
+    controls and spaces are dropped, tabs and newlines are removed anywhere, and what
+    precedes the first ``:`` is a scheme only if it is ``[a-z][a-z0-9+.-]*``. A scheme in
+    :data:`NAVIGATION_SCHEMES` is allowed, so it reads as ``""`` (#3677)."""
     probe = _STRIP.sub("", value).lower()
     for scheme in ("javascript:", "vbscript:", "data:"):
         if probe.startswith(scheme):
             return scheme[:-1]
+    m = _SCHEME.match(_TAB_NEWLINE.sub("", value.strip(_C0_AND_SPACE)).lower())
+    if m and m.group(1) not in NAVIGATION_SCHEMES:
+        return m.group(1)
     return ""
 
 
@@ -325,9 +378,10 @@ def is_url_attr(name: str) -> bool:
 
 
 def is_dangerous(attr: Attr) -> bool:
-    """Whether ``attr`` carries a script-capable URL.
+    """Whether ``attr`` carries a URL whose scheme is not a navigation scheme.
 
-    ``javascript:`` / ``vbscript:`` anywhere; ``data:`` unless it is an image
+    ``javascript:`` / ``vbscript:`` and every other scheme outside
+    :data:`NAVIGATION_SCHEMES` (#3677) anywhere; ``data:`` unless it is an image
     URI on an attribute that only ever loads an image (``<img src>``,
     ``poster``, ``srcset``) or the resource a ``<link>`` loads (a stylesheet,
     manifest or icon) — there ``data:`` is legitimate and runs no script.
