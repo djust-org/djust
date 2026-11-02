@@ -7,7 +7,10 @@ not be written.
 
 **Status**: `skill` · **gate**: partial — `scripts/check-doc-snippets.py` (doc figures),
 the #2652 symbol check (documented methods), `scripts/check-changelog-test-counts.py` (JS test
-counts) · **candidate for mechanical gate**: yes
+counts), and for PR bodies `scripts/check_pr_body.py` (unresolved placeholders and `#N` /
+`issuecomment-<id>` references that do not resolve; a **non-gating** CI job, #3713) ·
+**candidate for mechanical gate**: yes, for claims about code (nothing covers those; the
+differential-test habit does)
 **Origin**: the v1.2.0-6 retro (#2838) — the first instance of this class in this repo to
 cause a *code* defect rather than a documentation one.
 
@@ -38,8 +41,22 @@ cause a *code* defect rather than a documentation one.
 - **The three checkable shapes**: a path, a symbol, a count. All three are mechanically
   verifiable today for `docs/` and `README.md`; `changelog.d/*.md` and PR bodies are the
   uncovered surface, which is where seven of the ten above live (#2849 proposes closing it).
+  `scripts/check_pr_body.py` now covers the placeholder-and-dangling-reference half of the PR
+  body (`.github/workflows/pr-body-lint.yml`, non-gating: `continue-on-error: true` and not in
+  the `test-summary` AND-condition until it has run green on the runner once). It does not
+  cover a claim about code, which is what #3704 and #3692 were.
 - **Cite the line.** `path:line` makes the claim falsifiable by a reader in one grep; a bare
   claim makes it falsifiable only by re-deriving the whole analysis.
+- **Read the whole job log, not the CLI's view of it.** `gh run view --log-failed` and
+  `gh run view <run> --job <id> --log` print a truncated view of a long job: for the failed
+  shard of main run 41245126443 (job 124667567653, `python-tests (py3.13, shard 1/4)`) the first
+  printed 18,082 lines and the second 17,984, while the job-logs API returned 27,220, and only
+  the API output contains pytest's summary line (`1 failed, 12942 passed, 187 skipped`). A failed
+  shard read through the truncated view looks like a silent end; #3692's premise and #3473's
+  came from exactly that. Use
+  `gh api --allow-escape-sequences repos/<repo>/actions/jobs/<id>/logs` (job ids from
+  `gh run view <run> --json jobs`) before writing that a run "ended silently" or "no assertion
+  failed".
 - **For a count, count.** `check-changelog-test-counts` exists precisely because hand-counted
   test claims drift; note its own regex has a prose false-positive (#2839) — share one parser
   rather than adding a third.

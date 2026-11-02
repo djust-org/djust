@@ -1467,7 +1467,11 @@ over-deletion and every one a regression against `main`.
   **A gate-off harness must:** (a) `assert` the mutation text was found; (b)
   `assert` the mutated source differs from the original; (c) count *errors* as
   well as failures; and (d) refuse to report a number at all when the module
-  did not import. Reference implementation shape:
+  did not import. **Do not write this harness again: state the mutations as data
+  and run `scripts/gate_off.py` (#3714), which implements (a)-(d) here and the
+  bounded-run and restore rules in the paragraph further down; it cannot judge an
+  equivalent mutation or a shadowed mechanism; see its docstring.** Reference
+  implementation shape:
 
   ```python
   assert old in orig, f"MUTATION TEXT NOT FOUND for {label}"
@@ -1619,7 +1623,8 @@ itself** — and in two cases the premise was the *recommended fix*.
   mutation was equivalent, whether two mechanisms overlap, or whether coverage
   is genuinely missing — they look identical from the harness and have opposite
   remedies. When two mechanisms overlap, delete the redundant one rather than
-  testing around it.
+  testing around it. (`scripts/gate_off.py` reports a survivor as `SURVIVED` and
+  prints this question; it cannot answer it.)
 
 - **Grep for the SINK, not for the callers you expect.** Three PRs in this
   drain shipped with an incomplete set of call sites and were corrected only
@@ -1687,6 +1692,13 @@ number when the module did not import).
   input is not in the suite). Both outcomes stay distinguishable only if the
   harness survives to report them. Never `shutil.copy2` the original back
   after a mutation — it preserves mtime and cargo reuses the mutant.
+  `scripts/gate_off.py` does all of this (deadline, RSS ceiling, `HUNG` /
+  `RUNAWAY-MEMORY` reported as `CAUGHT` with the measurement, restore verified by
+  SHA-256, new inode and fresh mtime on every write, an `flock` on each target's
+  directory that refuses an overlapping run whatever its environment, and an
+  out-of-tree journal that restores a SIGKILLed run's mutant before the next run
+  snapshots it, provided both runs use the same journal directory, which defaults
+  to the user's `~/.cache/gate-off` regardless of `$HOME`; see its docstring).
 
 ## Process canonicalizations from the v1.2.0-6 retro arc (transport fidelity, wire versioning, check coverage)
 
