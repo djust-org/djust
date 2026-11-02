@@ -317,10 +317,10 @@ def uncovered_counts() -> Dict[str, int]:
 #: What the ratchet does not see, as totals at the time it was written. These only fall
 #: too: a class cannot grow quietly just because the per-file count above cannot see it.
 UNCOVERED_BASELINE: Dict[str, int] = {
-    "absence_drains": 8,
+    "absence_drains": 6,
     "absence_raises": 2,
     "variable_timeouts": 57,
-    "wait_for_short": 111,
+    "wait_for_short": 110,
 }
 
 

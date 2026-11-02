@@ -202,7 +202,7 @@ async def test_deferred_explicit_waits_for_storage(monkeypatch, quiet, outcome):
             started.set()
             if outcome == "failure":
                 raise RuntimeError("storage unavailable")
-            assert release.wait(3), "test storage gate timed out"
+            assert release.wait(30), "test storage gate timed out"
         return original(view, current_request)
 
     monkeypatch.setattr(session.runtime, "_save_explicit_root", save)
@@ -210,7 +210,7 @@ async def test_deferred_explicit_waits_for_storage(monkeypatch, quiet, outcome):
     try:
         await sse_event(session, request, "change", {"_activity": "panel", "quiet": quiet})
         task = asyncio.create_task(sse_event(session, request, "reveal", {}))
-        async with asyncio.timeout(2):
+        async with asyncio.timeout(30):
             while not started.is_set() and not task.done():
                 await asyncio.sleep(0.001)
         assert started.is_set(), "deferred dispatch skipped persistence"

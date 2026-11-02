@@ -99,10 +99,9 @@ async def test_reauth_on_closes_socket_when_user_logged_out_midsession():
             # Expect a navigate redirect then a websocket.close(4403).
             out_types = []
             for _ in range(4):
-                try:
-                    out = await communicator.receive_output(timeout=2)
-                except Exception:
-                    break
+                # Each output WILL arrive (the close is asserted below), so wait for it
+                # with the default, not 2 s (#3709): a 3.5 s stall per frame failed this.
+                out = await communicator.receive_output()
                 out_types.append(out["type"])
                 if out["type"] == "websocket.close":
                     assert out.get("code") == 4403
