@@ -213,6 +213,22 @@ Two name shapes appear in this roadmap, with distinct meanings:
 | **P1** | #3676 — Native raw `@register.tag` component handlers read a bare variable's value as `key=value` pairs (parameter injection; 117 of 136 tags). Needs a canonical implementation first | v1.3.0 |
 | **P2** | #3677 — The `djust_theming` URL sanitiser is a denylist; `djust_components` uses an allowlist. Needs a canonical implementation first | v1.3.0 |
 
+### v1.3.0-16 — follow-ups of the v1.3.0-15 drain: the TTY parameter bug, test-timing debt, gate-off tooling, view-API leftovers (drain bucket → ships in 1.3)
+
+*Kind:* four grouped PRs, each a theme. **A, hardening:** one bug and one low-severity idiom. **B, test timing:** the #3710 class and its ratchets. **C, process tooling:** a shared gate-off helper and a PR-body lint. **D, view API and budgets:** the follow-ups #3703 and #3702 left out on purpose. **Left out, and why:** #3700 needs a browser and axe-core as a dependency (a decision first); the component-tag parity rows stay in v1.3.0-15 (a canonical implementation first); #3632 is a design decision; #3500 and #3656–#3659 are 2.0 work. Inside D, the config-level `http_status_of_state` default needs a precedence rule decided before it is built, so it is not in the PR.
+
+| Priority | Task | Milestone |
+|---|---|---|
+| **P2** | #3699 — `TtydTerminalView`: `?rows=` / `?cols=` fall back to the class default on a non-integer and are clamped to a sane range | v1.3.0 |
+| **P3** | #3705 — Guard `gethostbyname_ex`, `gethostbyaddr` and `getnameinfo` in the doc-snippet `no_network`; the other `templates.py` scans use an incremental line counter, pinned by a growth test | v1.3.0 |
+| **P2** | #3711 — Sweep the 16 remaining absolute wall-clock bounds on compute or waits, and add a ratchet that counts them | v1.3.0 |
+| **P2** | #3709 — Ratchet on explicit sub-10 s communicator `timeout=` calls (the count may only fall), and convert the worst files to `receive_until` / `receive_settled` | v1.3.0 |
+| **P3** | #3715 — Each xdist worker prints its worst gen-2 GC pause and longest event-loop stall at session end | v1.3.0 |
+| **P3** | #3714 — `scripts/gate_off.py`: mutations as data in, CAUGHT / SURVIVED / INVALID out, restore by hash, bounded run; CLAUDE.md points at it | v1.3.0 |
+| **P3** | #3713 — PR-body lint for unresolved placeholders and `#N` / `issuecomment-` references that do not resolve; record the truncated `gh run view` log on the pattern page | v1.3.0 |
+| **P3** | #3706 — System checks for a `params_form` that is not a form class or whose `__init__` needs arguments; `LiveViewTestClient` drives `handle_params`; the new class attributes are reserved names under `exposure_policy = "explicit"` | v1.3.0 |
+| **P3** | #3701 — Run-time query-budget measurement per phase (warning, or error under `LIVEVIEW_CONFIG["query_budget"] = "error"`), event budgets checked by the fuzz tests, budgets listed in `djust_audit` | v1.3.0 |
+
 ## Next: v1.2.1 — non-breaking fixes (drain)
 
 > Planned 2026-09-24 from a triage of every open issue. **Policy:** non-breaking bug fixes ship in 1.2.1; anything breaking, new features, and parser/dependency upgrades go to 1.3. Issues split into a 1.2.1 part and a 1.3 part are marked. The ADR-034–038 stack (#2944, #2954) merges after 1.2.1 is cut. Already shipped toward 1.2.1 on `main`: #3009 (inline whitespace, #2999/#3010), the CSRF resolver (#2978), SerializerCache removal (#2992), the audit gate (#2989).
