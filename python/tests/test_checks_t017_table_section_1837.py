@@ -13,7 +13,6 @@ the bug class it claims to catch; the "does NOT fire" case pins the
 no-false-positive contract; the suppression cases pin the opt-out.
 """
 
-from django.test import override_settings
 
 from djust.checks import _DJ_TABLE_SECTION_ROOT_RE
 
@@ -138,14 +137,14 @@ class TestT017CheckIntegration:
         )
         assert t017 == []
 
-    @override_settings(DJUST_CONFIG={"suppress_checks": ["T017"]})
     def test_suppressed_short_id(self, tmp_path, settings):
         """T017 is suppressible via the short id form."""
+        settings.DJUST_CONFIG = {"suppress_checks": ["T017"]}
         t017 = _scan(tmp_path, settings, '<tbody dj-view="x.V"><tr><td>x</td></tr></tbody>')
         assert t017 == []
 
-    @override_settings(DJUST_CONFIG={"suppress_checks": ["djust.T017"]})
     def test_suppressed_qualified_id(self, tmp_path, settings):
         """T017 is suppressible via the fully-qualified id form."""
+        settings.DJUST_CONFIG = {"suppress_checks": ["djust.T017"]}
         t017 = _scan(tmp_path, settings, '<tbody dj-view="x.V"><tr><td>x</td></tr></tbody>')
         assert t017 == []
