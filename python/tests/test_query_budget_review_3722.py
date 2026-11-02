@@ -422,7 +422,23 @@ class SpendingGet(CountedGet):
         return {"n": 1}
 
 
+class PlainGet(LiveView):
+    """No override: the stock ``get_context_data`` and its ``_cached_context`` short-circuit."""
+
+    login_required = False
+    template = "<div dj-root>{{ counted }}</div>"
+
+    def mount(self, request, **kwargs):
+        self.n = 1
+
+    @property
+    def counted(self):
+        GET_CALLS.append("property")
+        return 7
+
+
 urlpatterns = [
+    path("plain/", PlainGet.as_view()),
     path("counted/", CountedGet.as_view()),
     path("countedsuper/", CountedGetSuper.as_view()),
     path("spending/", SpendingGet.as_view()),
@@ -452,6 +468,12 @@ class TestWhatThePhasesCountOnTheGet:
     def test_also_when_the_override_calls_super(self):
         assert Client().get("/countedsuper/").status_code == 200
         assert len(GET_CALLS) == 2  # the override runs twice; only super() short-circuits
+
+    def test_a_view_with_no_override_evaluates_its_context_once(self):
+        """The stock method short-circuits the second pass (``_cached_context``)."""
+        response = Client().get("/plain/")
+        assert response.status_code == 200 and b"7" in response.content
+        assert GET_CALLS == ["property"]
 
     def test_no_preloaded_context_reaches_the_second_pass(self):
         from djust.mixins.rust_bridge import RustBridgeMixin
