@@ -16,20 +16,23 @@ from asgiref.sync import sync_to_async
 from django.contrib.auth.models import Group
 
 from djust.tests import test_model_form_acceptance_adr035 as acc
+from djust.tests._ws_frames import has_type, receive_until
 
 
 async def _url_change(socket, uri):
+    """The frames a ``url_change`` produces, up to the one that answers it.
+
+    A ``url_change`` is always answered: a ``navigation`` (the redirect), a
+    ``patch`` / ``html_update`` or an ``error``. Every test below asserts on that
+    answer, so the wait is ``receive_until`` (a 10 s deadline that only a hung turn
+    reaches), not a short window that gives up when a runner stalls (#3726).
+    """
     await socket.send_json_to({"type": "url_change", "params": {}, "uri": uri})
-    frames = []
-    for _ in range(6):
-        try:
-            frame = await socket.receive_json_from(timeout=3)
-        except Exception:  # noqa: BLE001 -- no further frame
-            break
-        frames.append(frame)
-        if frame.get("type") in {"patch", "html_update", "error", "navigation"}:
-            break
-    return frames
+    return await receive_until(
+        socket,
+        has_type("patch", "html_update", "error", "navigation"),
+        what="the answer to the url_change",
+    )
 
 
 def _two_of_mine():

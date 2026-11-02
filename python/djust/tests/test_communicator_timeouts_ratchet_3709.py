@@ -8,60 +8,61 @@ that stalls longer than that (a stop-the-world GC pause was measured at 3.38 s,
 whose code is fine. #3692's flake 1 failed on exactly such a call.
 
 A wait for output that WILL arrive takes the default: ``await socket.receive_json_from()``
-or ``djust.tests._ws_frames.receive_until`` for "until this frame". The one legitimate
-short timeout is a window for ABSENCE ("nothing arrived within 0.1 s"), which
-``receive_nothing`` is for, or a ``receive_*`` in one of the absence idioms below.
+or ``djust.tests._ws_frames.receive_until`` (a 10 s deadline of its own, not the 30 s default)
+for "until this frame". The one legitimate short timeout is a window for ABSENCE ("nothing
+arrived within 0.1 s"), which ``receive_nothing`` is for, or a ``receive_*`` on the last line of
+a ``pytest.raises`` block.
 
 This is the ratchet. ``BASELINE`` is data: the count may only fall, and the test fails
 both ways, so a converted file cannot quietly regrow and a stale entry cannot linger.
-The set of waits is read off Channels' communicator classes at run time, not listed (a
-hand list lost ``connect`` once, #3692); ``receive_nothing`` is exempt by name.
+``BASELINE_REASONS`` carries the reason each entry is allowed, and a test pins the two to the
+same files, so no prose here needs to say how many there are. The set of waits is read off
+Channels' communicator classes at run time, not listed (a hand list lost ``connect`` once,
+#3692); ``receive_nothing`` is exempt by name.
 
-WHAT IT COVERS (counted per file, against ``BASELINE``):
+WHAT IT COVERS (counted per file, against ``BASELINE``). A timeout "reads as short" when it is a
+number under ``SHORT_S``: a literal, arithmetic on literals (``1 * 2``), a module-level
+constant bound to one (``T = 2``), or the value under ``"timeout"`` in a ``**{...}`` display.
 
-* ``await <x>.<communicator wait>(timeout=<number under SHORT_S>)``, as a keyword or in
-  the timeout's positional slot (``await socket.receive_json_from(timeout=3)``,
-  ``await comm.connect(2)``). The receiver's name is irrelevant: the METHOD makes it a
-  communicator wait.
+* ``await <x>.<communicator wait>(timeout=<short>)``, as a keyword or in the timeout's
+  positional slot (``await socket.receive_json_from(timeout=3)``, ``await comm.connect(2)``).
+  The receiver's name is irrelevant: the METHOD makes it a communicator wait.
+* ``await asyncio.wait_for(<communicator wait>, <short>)`` and ``async with
+  asyncio.timeout(<short>)`` around one, counted once at the wrapper.
 * a helper whose SHORT ``timeout`` default is forwarded to such a wait (``async def
   _receive_until(c, kind, *, timeout=3)``: every caller that says nothing gets 3 s), and
-  a call, in the same file, to such a helper with a short numeric ``timeout``.
+  a call, in the same file, to such a helper that passes a short ``timeout`` as a keyword or
+  in the helper's positional slot (``_recv(comm, 2)``).
 
-WHAT IT DELIBERATELY EXEMPTS (absence idioms, counted only in ``UNCOVERED_BASELINE``):
+A ``try: ... except: pass`` / ``break`` / ``continue`` DRAIN gets no exemption of its own
+(#3726): a drain is counted by the shapes above like any other wait. #3721 exempted them as
+"absence-shaped", and six were kept on that basis; four of the six read until a ``mount`` /
+close / navigation frame that DOES arrive in the positive case and then assert it did, so a
+runner that stalled past their 2-3 s window failed 68 tests (a 3.5 s delay on every outgoing
+frame reproduces it). Whether a drain is an absence window is a judgement the AST cannot make,
+so the genuine ones sit in ``BASELINE`` with their reason beside them. A new one therefore fails
+this test until it either waits for the frame that arrives (``receive_until`` /
+``receive_settled``), asserts the silence with ``receive_nothing``, or is added to ``BASELINE``
+with a reason a reviewer accepts.
+
+WHAT IT DELIBERATELY EXEMPTS (counted only in ``UNCOVERED_BASELINE``):
 
 * ``receive_nothing``;
-* the LAST statement of a ``with pytest.raises(...)`` / ``suppress(...)`` body;
-* a wait in a ``try`` body whose handlers do nothing but ``pass`` / ``break`` /
-  ``continue`` ("read until nothing more arrives"). A handler that re-raises, assigns,
-  asserts or returns makes the wait a real one and it is counted. Whether a ``pass`` /
-  ``break`` handler is an absence window is a judgement the AST cannot make, and the six
-  that are exempt today are NOT all windows. Two are: ``test_ws_auth_close_socket.py``
-  (after the 4403 redirect what arrives is a ``websocket.close``, which
-  ``receive_json_from`` rejects, and the assertion is that no handler ran) and
-  ``test_sync_turn_wrapper_more_hops_3637.py`` (the assertion is that no ``mount`` frame
-  arrived). Four are not: ``test_live_auth_event_holders_and_user_checks.py``,
-  ``test_live_auth_outside_declarations.py``, ``test_model_form_route_change_3125.py`` and
-  ``test_mount_object_permission_after_params.py`` read until a ``mount`` / close /
-  navigation frame that DOES arrive in the positive case, and then assert it did; under a
-  3.5 s delay on every outgoing frame they fail 68 tests, because the drain gives up after
-  2-3 s and the assertion finds nothing. They are kept (and counted in
-  ``UNCOVERED_BASELINE``) only because converting them needs the loop restructured to read
-  until the terminal frame with the default timeout; that is follow-up work, not a claim
-  that they are windows. A new drain needs the same judgement in review.
+* the LAST statement of a ``with pytest.raises(...)`` / ``suppress(...)`` body (the line
+  that is supposed to time out), whether a direct wait or one wrapped in ``wait_for``.
 
 WHAT IT DOES NOT SEE (totals in ``UNCOVERED_BASELINE``, which also only falls; derive the
 live numbers with :func:`uncovered_counts`, the PR description quotes them):
 
-* ``variable_timeouts``: a communicator wait whose ``timeout`` is a name or expression
-  (``timeout=remaining``, ``timeout=deadline``, a helper's parameter). Whether it is
-  short depends on a caller in another function or file, which this scan does not follow.
-  A helper IMPORTED from another module and called with a short literal is not seen either.
-* ``wait_for_short``: ``asyncio.wait_for(..., <10)`` and ``asyncio.timeout(<10)``, which
-  are not communicator waits at all (often a bound on a non-frame event).
-* ``**{"timeout": 3}``, ``getattr(sock, name)(timeout=1)``, and waits on objects that
-  are not Channels communicators.
-* ``test_ws_communicator_defaults_3464.py``'s own ``disconnect(timeout=0.01)`` is the one
-  deliberate ``BASELINE`` entry.
+* ``variable_timeouts``: a communicator wait whose ``timeout`` cannot be read as a number
+  (``timeout=remaining``, a helper's parameter, a call). Whether it is short depends on a
+  caller in another function or file, which this scan does not follow. A helper IMPORTED from
+  another module and called with a short literal is not seen either.
+* ``wait_for_short``: ``asyncio.wait_for(..., <10)`` and ``asyncio.timeout(<10)`` that do NOT
+  wrap a communicator wait (a bound on an event, a queue, a task). Those are not frame waits.
+* ``getattr(sock, name)(timeout=1)``, a wait reached through a variable
+  (``wait = comm.receive_output; await wait(timeout=1)``), a timeout that is a name rebound in
+  a function, and waits on objects that are not Channels communicators.
 """
 
 from __future__ import annotations
@@ -85,15 +86,32 @@ SHORT_S = 10
 #: The one communicator wait that is a window for absence.
 ABSENCE_WINDOWS = {"receive_nothing"}
 
-#: Test files that still carry explicit short communicator timeouts, and how many.
-#: A count only ever goes DOWN; an entry that reaches zero is deleted. Keyed by
-#: repo-relative path.
-#:
-#: The one entry is on purpose: ``test_ws_communicator_defaults_3464.py`` pins that an
-#: explicit timeout STILL WINS over the 30 s default, so it passes ``timeout=0.01`` to
-#: ``disconnect`` (converting it made that test fail, which is how it was found).
+#: Communicator methods that, when WRAPPED in ``asyncio.wait_for`` / ``asyncio.timeout``,
+#: are more likely something else with the same name (``asyncio.Event.wait``).
+WRAPPED_NOT_FRAME_WAITS = {"wait"}
+
+#: A positional index no call reaches (a helper whose ``timeout`` is keyword-only).
+_NO_SLOT = 10**6
+
+#: Test files that still carry short communicator timeouts, and how many. A count only
+#: ever goes DOWN; an entry that reaches zero is deleted. Keyed by repo-relative path. Each
+#: entry has a reason in ``BASELINE_REASONS`` (pinned by a test), and is on purpose.
 BASELINE: Dict[str, int] = {
+    "python/djust/tests/test_ws_auth_close_socket.py": 1,
     "python/djust/tests/test_ws_communicator_defaults_3464.py": 1,
+}
+
+BASELINE_REASONS: Dict[str, str] = {
+    "python/djust/tests/test_ws_auth_close_socket.py": (
+        "An absence window: after the 4403 redirect what arrives is a close, which "
+        "receive_json_from rejects, and the assertion is that no event handler ran. A stall "
+        "can end the window early and miss a late frame; it cannot fail a correct run."
+    ),
+    "python/djust/tests/test_ws_communicator_defaults_3464.py": (
+        "Pins that an explicit timeout STILL WINS over the 30 s default, so it passes "
+        "timeout=0.01 to disconnect (converting it made that test fail, which is how it "
+        "was found)."
+    ),
 }
 
 
@@ -118,37 +136,85 @@ def communicator_waits() -> Dict[str, int]:
     return found
 
 
-def _short_number(node: ast.AST) -> bool:
-    return (
-        isinstance(node, ast.Constant)
-        and isinstance(node.value, (int, float))
-        and not isinstance(node.value, bool)
-        and node.value < SHORT_S
-    )
+Consts = Dict[str, float]
 
 
-ABSENCE_RAISES = "raises"  # the raising line of a ``with pytest.raises(...)`` / ``suppress``
-ABSENCE_DRAIN = "drain"  # a ``try`` whose handlers only ``pass`` / ``break`` / ``continue``
+def _number(node: ast.AST, consts: Consts) -> Optional[float]:
+    """The numeric value of a timeout expression, if it can be read off the source.
+
+    A number, a module-level constant bound to one, ``-x``, and ``+ - * / //`` of those
+    (``timeout=1 * 2``, ``timeout=T``). Anything else (a parameter, a call, an attribute)
+    is ``None``: whether it is short depends on a caller this scan does not follow.
+    """
+    if isinstance(node, ast.Constant):
+        value = node.value
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return value
+        return None
+    if isinstance(node, ast.Name):
+        return consts.get(node.id)
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.USub, ast.UAdd)):
+        inner = _number(node.operand, consts)
+        if inner is None:
+            return None
+        return -inner if isinstance(node.op, ast.USub) else inner
+    if isinstance(node, ast.BinOp):
+        left, right = _number(node.left, consts), _number(node.right, consts)
+        if left is None or right is None:
+            return None
+        try:
+            if isinstance(node.op, ast.Add):
+                return left + right
+            if isinstance(node.op, ast.Sub):
+                return left - right
+            if isinstance(node.op, ast.Mult):
+                return left * right
+            if isinstance(node.op, ast.Div):
+                return left / right
+            if isinstance(node.op, ast.FloorDiv):
+                return left // right
+        except ZeroDivisionError:
+            return None
+    return None
 
 
-def _absence_kind(await_node: ast.AST, parents: Dict[ast.AST, ast.AST]) -> Optional[str]:
-    """Which absence idiom a wait is in, if any.
+def _short_number(node: ast.AST, consts: Consts) -> bool:
+    value = _number(node, consts)
+    return value is not None and value < SHORT_S
 
-    * ``raises``: the LAST statement of a ``with pytest.raises(...)`` / ``suppress(...)``
-      body (the line that is supposed to time out; anything before it is a plain wait).
-    * ``drain``: inside a ``try`` body whose handlers do nothing but ``pass``, ``break``
-      or ``continue`` ("read until nothing more arrives", "drain a frame if one was
-      sent"). A handler that re-raises, assigns, asserts or returns is a real handler,
-      so the wait inside it is NOT an absence window and is counted.
 
-    The walk stops at a function or lambda boundary: a ``def`` nested in a ``try`` body
+def _module_constants(tree: ast.AST) -> Consts:
+    """``NAME = <number>`` at module level (``T = 2``; later ones may build on earlier)."""
+    consts: Consts = {}
+    for stmt in getattr(tree, "body", []):
+        if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1:
+            target, value = stmt.targets[0], stmt.value
+        elif isinstance(stmt, ast.AnnAssign) and stmt.value is not None:
+            target, value = stmt.target, stmt.value
+        else:
+            continue
+        if isinstance(target, ast.Name):
+            number = _number(value, consts)
+            if number is not None:
+                consts[target.id] = number
+    return consts
+
+
+def _in_raises_block(await_node: ast.AST, parents: Dict[ast.AST, ast.AST]) -> bool:
+    """Is the wait the LAST statement of a ``with pytest.raises(...)`` / ``suppress(...)`` body?
+
+    That is the line that is supposed to time out; anything before it is a plain wait. A
+    ``try`` / ``except: pass`` drain is deliberately NOT an exemption (#3726, see the module
+    docstring).
+
+    The walk stops at a function or lambda boundary: a ``def`` nested in a ``with`` body
     is not guarded by it.
     """
     node = await_node
     while node in parents:
         child, node = node, parents[node]
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
-            return None
+            return False
         if isinstance(node, (ast.With, ast.AsyncWith)) and child in node.body:
             for item in node.items:
                 ctx = item.context_expr
@@ -156,21 +222,24 @@ def _absence_kind(await_node: ast.AST, parents: Dict[ast.AST, ast.AST]) -> Optio
                     func = ctx.func
                     name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
                     if name in ("raises", "suppress") and child is node.body[-1]:
-                        return ABSENCE_RAISES
-        if isinstance(node, ast.Try) and child in node.body and node.handlers:
-            only_nothing = all(
-                all(isinstance(s, (ast.Pass, ast.Break, ast.Continue)) for s in h.body)
-                for h in node.handlers
-            )
-            if only_nothing:
-                return ABSENCE_DRAIN
-    return None
+                        return True
+    return False
 
 
 def _timeout_args(call: ast.Call, index: int) -> List[ast.AST]:
-    keyword = next((k.value for k in call.keywords if k.arg == "timeout"), None)
-    positional = call.args[index] if index < len(call.args) else None
-    return [v for v in (keyword, positional) if v is not None]
+    """Every expression that can be the call's timeout.
+
+    The keyword, the positional slot, and the value under ``"timeout"`` in a ``**{...}`` display.
+    """
+    found = [k.value for k in call.keywords if k.arg == "timeout"]
+    if index < len(call.args):
+        found.append(call.args[index])
+    for keyword in call.keywords:
+        if keyword.arg is None and isinstance(keyword.value, ast.Dict):
+            for key, value in zip(keyword.value.keys, keyword.value.values):
+                if isinstance(key, ast.Constant) and key.value == "timeout":
+                    found.append(value)
+    return found
 
 
 def _parse(source: str) -> Optional[Tuple[ast.AST, Dict[ast.AST, ast.AST]]]:
@@ -179,6 +248,11 @@ def _parse(source: str) -> Optional[Tuple[ast.AST, Dict[ast.AST, ast.AST]]]:
     except SyntaxError:
         return None
     return tree, {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
+
+
+def _call_name(call: ast.Call) -> str:
+    func = call.func
+    return func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
 
 
 def _forwarding_helpers(tree: ast.AST, waits: Dict[str, int]) -> Dict[str, ast.AST]:
@@ -205,82 +279,173 @@ def _forwarding_helpers(tree: ast.AST, waits: Dict[str, int]) -> Dict[str, ast.A
     return found
 
 
-def _short_timeout_default(fn: ast.AST) -> bool:
+def _timeout_slot(fn: ast.AST) -> Optional[int]:
+    """The positional index of a helper's ``timeout`` parameter as a CALLER counts it
+    (``self`` / ``cls`` are not passed), or ``None`` when it is keyword-only."""
+    names = [a.arg for a in fn.args.args]  # type: ignore[attr-defined]
+    if "timeout" not in names:
+        return None
+    index = names.index("timeout")
+    return index - 1 if names and names[0] in ("self", "cls") else index
+
+
+def _short_timeout_default(fn: ast.AST, consts: Consts) -> bool:
     args = fn.args  # type: ignore[attr-defined]
     names = [a.arg for a in args.args + args.kwonlyargs]
     defaults = [None] * (len(args.args) - len(args.defaults)) + list(args.defaults)
     defaults += list(args.kw_defaults)
     default = dict(zip(names, defaults)).get("timeout")
-    return default is not None and _short_number(default)
+    return default is not None and _short_number(default, consts)
+
+
+def _is_communicator_wait(
+    node: ast.AST, waits: Dict[str, int], helpers: Dict[str, ast.AST]
+) -> bool:
+    if not isinstance(node, ast.Call):
+        return False
+    name = _call_name(node)
+    if isinstance(node.func, ast.Attribute) and name in waits:
+        # ``wait`` is Channels' generic "wait for the application" and is also the name of
+        # ``asyncio.Event.wait`` / ``asyncio.wait``: a bound on one of those is not a frame wait.
+        return name not in WRAPPED_NOT_FRAME_WAITS
+    return name in helpers
+
+
+def _awaits_in(body: List[ast.stmt]) -> List[ast.Await]:
+    """Every ``await`` in ``body``, not descending into nested functions."""
+    found: List[ast.Await] = []
+    stack: List[ast.AST] = list(body)
+    while stack:
+        node = stack.pop()
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            continue
+        if isinstance(node, ast.Await):
+            found.append(node)
+        stack.extend(ast.iter_child_nodes(node))
+    return found
+
+
+def _scan(tree: ast.AST, parents: Dict[ast.AST, ast.AST], waits: Dict[str, int]):
+    """The sites the per-file ratchet counts: ``(counted, inner)``.
+
+    ``counted`` are AST nodes (one site each, located by ``lineno``); ``inner`` are the
+    communicator-wait calls that a counted ``asyncio.wait_for`` / ``asyncio.timeout``
+    wrapper already accounts for, so the same wait is not counted twice.
+    """
+    consts = _module_constants(tree)
+    helpers = _forwarding_helpers(tree, waits)
+    counted: List[ast.AST] = []
+    inner: Set[ast.AST] = set()
+
+    for node in ast.walk(tree):
+        # ``await asyncio.wait_for(<communicator wait>, <short>)``
+        if isinstance(node, ast.Call) and _call_name(node) == "wait_for" and node.args:
+            wrapped = node.args[0]
+            bound = node.args[1:2] + [k.value for k in node.keywords if k.arg == "timeout"]
+            if (
+                _is_communicator_wait(wrapped, waits, helpers)
+                and any(_short_number(b, consts) for b in bound)
+                and not _in_raises_block(node, parents)
+            ):
+                counted.append(node)
+                inner.add(wrapped)  # type: ignore[arg-type]
+        # ``async with asyncio.timeout(<short>): ... await <communicator wait> ...``
+        if isinstance(node, ast.AsyncWith):
+            for item in node.items:
+                ctx = item.context_expr
+                if not (
+                    isinstance(ctx, ast.Call)
+                    and isinstance(ctx.func, ast.Attribute)
+                    and ctx.func.attr == "timeout"
+                    and any(_short_number(a, consts) for a in ctx.args)
+                    and not _in_raises_block(node, parents)
+                ):
+                    continue
+                waited = [
+                    a.value
+                    for a in _awaits_in(node.body)
+                    if _is_communicator_wait(a.value, waits, helpers)
+                ]
+                if waited:
+                    counted.append(ctx)
+                    inner.update(waited)
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Await) and isinstance(node.value, ast.Call):
+            call = node.value
+            if call in inner:
+                continue
+            if not isinstance(call.func, ast.Attribute) or call.func.attr not in waits:
+                continue
+            if _in_raises_block(node, parents):
+                continue
+            if any(_short_number(v, consts) for v in _timeout_args(call, waits[call.func.attr])):
+                counted.append(call)
+    for fn in helpers.values():
+        if _short_timeout_default(fn, consts):
+            counted.append(fn)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and node not in inner and _call_name(node) in helpers:
+            slot = _timeout_slot(helpers[_call_name(node)])
+            args = _timeout_args(node, _NO_SLOT if slot is None else slot)
+            if any(_short_number(v, consts) for v in args):
+                counted.append(node)
+    return counted, inner
 
 
 def find_short_waits(source: str, waits: Optional[Dict[str, int]] = None) -> List[int]:
     """Line numbers of the short communicator timeouts the ratchet counts.
 
-    Three shapes: an awaited communicator wait with a short numeric ``timeout`` outside
-    an absence idiom; a helper whose short ``timeout`` default is forwarded to a
-    communicator wait (the definition); and a call to such a helper in the same file
-    that passes a short numeric ``timeout`` itself.
+    * an awaited communicator wait whose ``timeout`` READS AS a number under ``SHORT_S``:
+      a literal, ``1 * 2``, a module constant, ``**{"timeout": 2}``, as a keyword or in the
+      timeout's positional slot, unless it is the last line of a ``pytest.raises`` block;
+    * a helper whose short ``timeout`` default is forwarded to a communicator wait (the
+      definition), and a call to such a helper in the same file that passes a short
+      ``timeout``, as a keyword or in the helper's positional slot;
+    * ``asyncio.wait_for(<communicator wait>, <short>)`` and ``async with
+      asyncio.timeout(<short>)`` around a communicator wait (counted once, at the wrapper).
     """
     waits = communicator_waits() if waits is None else waits
     parsed = _parse(source)
     if parsed is None:
         return []
     tree, parents = parsed
-    lines: Set[int] = set()
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Await) or not isinstance(node.value, ast.Call):
-            continue
-        call = node.value
-        if not isinstance(call.func, ast.Attribute) or call.func.attr not in waits:
-            continue
-        if _absence_kind(node, parents):
-            continue
-        if any(_short_number(v) for v in _timeout_args(call, waits[call.func.attr])):
-            lines.add(call.lineno)
-    helpers = _forwarding_helpers(tree, waits)
-    for fn in helpers.values():
-        if _short_timeout_default(fn):
-            lines.add(fn.lineno)
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Call):
-            func = node.func
-            name = func.id if isinstance(func, ast.Name) else getattr(func, "attr", None)
-            if name in helpers and any(
-                kw.arg == "timeout" and _short_number(kw.value) for kw in node.keywords
-            ):
-                lines.add(node.lineno)
-    return sorted(lines)
+    counted, _ = _scan(tree, parents, waits)
+    return sorted({node.lineno for node in counted})  # type: ignore[attr-defined]
 
 
 def _count_uncovered(source: str, waits: Dict[str, int]) -> Dict[str, int]:
     """What the ratchet deliberately or unavoidably does not count, in one file."""
-    out = {"absence_drains": 0, "absence_raises": 0, "variable_timeouts": 0, "wait_for_short": 0}
+    out = {"absence_raises": 0, "variable_timeouts": 0, "wait_for_short": 0}
     parsed = _parse(source)
     if parsed is None:
         return out
     tree, parents = parsed
+    consts = _module_constants(tree)
+    counted, inner = _scan(tree, parents, waits)
+    accounted = set(counted) | inner
     for node in ast.walk(tree):
         if isinstance(node, ast.Await) and isinstance(node.value, ast.Call):
             call = node.value
+            if call in accounted:
+                continue
             if isinstance(call.func, ast.Attribute) and call.func.attr in waits:
                 args = _timeout_args(call, waits[call.func.attr])
-                kind = _absence_kind(node, parents)
-                if kind and any(_short_number(v) for v in args):
-                    out["absence_drains" if kind == ABSENCE_DRAIN else "absence_raises"] += 1
-                elif args and not any(isinstance(v, ast.Constant) for v in args):
+                if _in_raises_block(node, parents) and any(_short_number(v, consts) for v in args):
+                    out["absence_raises"] += 1
+                elif args and all(_number(v, consts) is None for v in args):
                     out["variable_timeouts"] += 1
-        if isinstance(node, ast.Call):
+        if isinstance(node, ast.Call) and node not in accounted:
             func = node.func
             name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
             if name == "wait_for":
                 args = [a for a in node.args[1:2]] + [
                     k.value for k in node.keywords if k.arg == "timeout"
                 ]
-                if any(_short_number(a) for a in args):
+                if any(_short_number(a, consts) for a in args):
                     out["wait_for_short"] += 1
             elif name == "timeout" and isinstance(func, ast.Attribute):
-                if any(_short_number(a) for a in node.args):
+                if any(_short_number(a, consts) for a in node.args):
                     out["wait_for_short"] += 1
     return out
 
@@ -309,7 +474,7 @@ def live_counts() -> Dict[str, int]:
 def uncovered_counts() -> Dict[str, int]:
     """Totals, over the live tree, of the short waits the per-file ratchet does NOT count.
 
-    ``absence_drains`` / ``absence_raises``: short waits in an absence idiom (exempt).
+    ``absence_raises``: short waits on the last line of a ``pytest.raises`` block (exempt).
     ``variable_timeouts``: communicator waits whose ``timeout`` is a name or expression
     (a helper's parameter, ``remaining``, ``deadline``): whether it is short depends on
     a caller this scan does not follow. ``wait_for_short``: ``asyncio.wait_for(...,
@@ -326,10 +491,9 @@ def uncovered_counts() -> Dict[str, int]:
 #: What the ratchet does not see, as totals at the time it was written. These only fall
 #: too: a class cannot grow quietly just because the per-file count above cannot see it.
 UNCOVERED_BASELINE: Dict[str, int] = {
-    "absence_drains": 6,
     "absence_raises": 2,
-    "variable_timeouts": 57,
-    "wait_for_short": 110,
+    "variable_timeouts": 53,
+    "wait_for_short": 107,
 }
 
 
@@ -381,6 +545,11 @@ def test_what_the_ratchet_does_not_see_only_falls_too():
 def test_the_baseline_is_the_data_it_claims_to_be():
     assert all(isinstance(n, int) and n > 0 for n in BASELINE.values())
     assert all(path.startswith(("python/", "tests/")) for path in BASELINE)
+
+
+def test_every_baseline_entry_has_a_reason_and_every_reason_an_entry():
+    assert set(BASELINE_REASONS) == set(BASELINE)
+    assert all(reason.strip() for reason in BASELINE_REASONS.values())
 
 
 def test_the_waits_are_derived_from_channels_and_exclude_the_absence_window():
@@ -478,6 +647,114 @@ async def test_a(socket):
         await socket.receive_json_from(timeout=3)
         await socket.receive_nothing()
 """,
+    "a try/except-pass drain (#3726)": """
+async def test_a(socket):
+    try:
+        await socket.receive_json_from(timeout=1)
+    except Exception:
+        pass
+""",
+    "a read-until-it-times-out loop whose handler breaks (#3726)": """
+async def test_a(socket):
+    for _ in range(4):
+        try:
+            frame = await socket.receive_json_from(timeout=2)
+        except Exception:
+            break
+""",
+    "a loop whose handler continues (#3726)": """
+async def test_a(socket):
+    for _ in range(4):
+        try:
+            frame = await socket.receive_output(timeout=2)
+        except asyncio.TimeoutError:
+            continue
+""",
+    "the drain this ratchet exists for: a loop that waits for a mount that arrives (#3726)": """
+async def _ws(communicator):
+    outputs = []
+    try:
+        while True:
+            out = await communicator.receive_output(timeout=2)
+            outputs.append(out)
+            if '"type": "mount"' in (out.get("text") or ""):
+                break
+    except (asyncio.TimeoutError, asyncio.CancelledError):
+        pass
+    return outputs
+""",
+    "a helper called with a positional short literal (#3726)": """
+async def _recv(communicator, timeout):
+    return await communicator.receive_json_from(timeout=timeout)
+
+async def test_a(socket):
+    await _recv(socket, 2)
+""",
+    "a method helper called with a positional short literal (#3726)": """
+class T:
+    async def _recv(self, communicator, timeout):
+        return await communicator.receive_json_from(timeout=timeout)
+
+    async def test_a(self, socket):
+        await self._recv(socket, 2)
+""",
+    "arithmetic on literals (#3726)": """
+async def test_a(socket):
+    await socket.receive_output(timeout=1 * 2)
+""",
+    "a module constant (#3726)": """
+T = 2
+
+async def test_a(socket):
+    await socket.receive_output(timeout=T)
+""",
+    "a module constant built from another (#3726)": """
+BASE = 1
+T = BASE + 1
+
+async def test_a(socket):
+    await socket.receive_output(timeout=T)
+""",
+    "a ** display carrying the timeout (#3726)": """
+async def test_a(socket):
+    await socket.receive_output(**{"timeout": 2})
+""",
+    "asyncio.wait_for with a positional bound (#3726)": """
+async def test_a(socket):
+    await asyncio.wait_for(socket.receive_output(), 2)
+""",
+    "asyncio.wait_for with a keyword bound (#3726)": """
+async def test_a(socket):
+    await asyncio.wait_for(socket.receive_json_from(), timeout=3)
+""",
+    "asyncio.wait_for around a wait that is short itself, counted once (#3726)": """
+async def test_a(socket):
+    await asyncio.wait_for(socket.receive_from(timeout=1), timeout=1)
+""",
+    "asyncio.wait_for around disconnect (#3726)": """
+async def test_a(socket):
+    await asyncio.wait_for(socket.disconnect(), timeout=1)
+""",
+    "asyncio.wait_for around a forwarding helper (#3726)": """
+async def _recv(communicator, *, timeout=30):
+    return await communicator.receive_json_from(timeout=timeout)
+
+async def test_a(socket):
+    await asyncio.wait_for(_recv(socket), 2)
+""",
+    "an asyncio.timeout block around a wait (#3726)": """
+async def test_a(socket):
+    async with asyncio.timeout(2):
+        await socket.receive_output()
+""",
+    "the security-import drain shape: wait_for in a try that breaks (#3726)": """
+async def test_a(comm):
+    for _ in range(3):
+        try:
+            await asyncio.wait_for(comm.receive_from(), timeout=1)
+        except BaseException:
+            break
+""",
     "just under the line": """
 async def test_a(socket):
     await socket.receive_json_from(timeout=9.9)
@@ -509,28 +786,58 @@ def test_a(release):
 async def test_a(socket):
     await socket.receive_json_from(timeout=WAIT_S)
 """,
-    "an unrelated awaited call with a timeout": """
+    "asyncio.wait_for around an Event, not a frame (#3726)": """
+async def test_a(done):
+    await asyncio.wait_for(done.wait(), 1)
+""",
+    "asyncio.wait_for around a queue (#3726)": """
+async def test_a(queue):
+    await asyncio.wait_for(queue.get(), 1)
+""",
+    "asyncio.wait_for with a generous bound (#3726)": """
 async def test_a(socket):
-    await asyncio.wait_for(socket.receive_json_from(), timeout=3)
+    await asyncio.wait_for(socket.receive_output(), 30)
+""",
+    "an asyncio.timeout block around something that is not a frame (#3726)": """
+async def test_a(queue):
+    async with asyncio.timeout(2):
+        await queue.get()
+""",
+    "a module constant that is generous (#3726)": """
+T = 30
+
+async def test_a(socket):
+    await socket.receive_output(timeout=T)
+""",
+    "arithmetic that is generous (#3726)": """
+async def test_a(socket):
+    await socket.receive_output(timeout=10 * 3)
+""",
+    "a helper called with a generous positional literal (#3726)": """
+async def _recv(communicator, timeout):
+    return await communicator.receive_json_from(timeout=timeout)
+
+async def test_a(socket):
+    await _recv(socket, 30)
+""",
+    "a timeout that is a parameter, not readable as a number (#3726)": """
+async def test_a(socket, remaining):
+    await socket.receive_output(timeout=remaining)
+""",
+    "wait_for around a wait on the last line of a pytest.raises block (#3726)": """
+async def test_a(socket):
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(socket.receive_output(), 1)
+""",
+    "an asyncio.timeout block as the last line of a pytest.raises block (#3726)": """
+async def test_a(socket):
+    with pytest.raises(asyncio.TimeoutError):
+        async with asyncio.timeout(1):
+            await socket.receive_output()
 """,
     "a disconnect with only its code": """
 async def test_a(socket):
     await socket.disconnect(1000)
-""",
-    "an absence window under try/except": """
-async def test_a(socket):
-    try:
-        await socket.receive_json_from(timeout=1)
-    except Exception:
-        pass
-""",
-    "a read-until-nothing loop (handler breaks)": """
-async def test_a(socket):
-    for _ in range(4):
-        try:
-            frame = await socket.receive_json_from(timeout=2)
-        except Exception:
-            break
 """,
     "a helper whose long default is forwarded": """
 async def _receive_until(communicator, wanted, *, tries=8, timeout=30):
@@ -625,3 +932,53 @@ def test_the_positions_are_a_pair_of_ints():
     assert all(isinstance(i, int) and i >= 0 for i in waits.values())
     pair: Tuple[str, int] = next(iter(waits.items()))
     assert isinstance(pair[0], str)
+
+
+# --------------------------------------------------------------------------- #
+# A counted wait is counted ONCE, and what is not counted lands in the aggregates
+# --------------------------------------------------------------------------- #
+
+
+def _uncovered(source):
+    return _count_uncovered(source, communicator_waits())
+
+
+@pytest.mark.parametrize("source", CAUGHT.values(), ids=CAUGHT.keys())
+def test_a_counted_shape_is_not_also_in_the_aggregates(source):
+    """A site is counted per file OR in ``UNCOVERED_BASELINE``, never both.
+
+    (A forwarding helper's own ``receive_json_from(timeout=timeout)`` is a variable timeout by
+    design: whether it is short depends on its callers, which are what is counted.)
+    """
+    expected = {"absence_raises": 0, "variable_timeouts": 0, "wait_for_short": 0}
+    if "timeout=timeout" in source:
+        expected["variable_timeouts"] = 1
+    assert _uncovered(source) == expected
+
+
+def test_a_bound_on_something_that_is_not_a_frame_is_an_aggregate_not_a_file_count():
+    source = """
+async def test_a(done):
+    await asyncio.wait_for(done.wait(), 1)
+"""
+    assert find_short_waits(source) == []
+    assert _uncovered(source)["wait_for_short"] == 1
+
+
+def test_a_timeout_that_cannot_be_read_is_an_aggregate_not_a_file_count():
+    source = """
+async def test_a(socket, remaining):
+    await socket.receive_output(timeout=remaining)
+"""
+    assert find_short_waits(source) == []
+    assert _uncovered(source)["variable_timeouts"] == 1
+
+
+def test_a_wait_on_the_last_line_of_a_raises_block_is_the_absence_aggregate():
+    source = """
+async def test_a(socket):
+    with pytest.raises(asyncio.TimeoutError):
+        await socket.receive_output(timeout=1)
+"""
+    assert find_short_waits(source) == []
+    assert _uncovered(source)["absence_raises"] == 1
