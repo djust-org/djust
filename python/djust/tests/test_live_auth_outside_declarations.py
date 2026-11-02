@@ -79,6 +79,7 @@ from djust.auth.core import (  # noqa: E402
 )
 from djust.auth.mixins import LoginRequiredLiveViewMixin  # noqa: E402
 from djust.decorators import event_handler  # noqa: E402
+from djust.tests._ws_frames import receive_until  # noqa: E402
 
 try:
     from django.contrib.auth.decorators import login_not_required  # Django 5.1+
@@ -454,8 +455,27 @@ def _with_user(app, user_cls):
     return mw
 
 
+def _mount_or_close(frames):
+    """Nothing more is coming for a mount: the view mounted, or the socket closed."""
+    return any(f.get("type") in ("mount", "websocket.close") for f in frames)
+
+
 async def _ws(user_cls, view_name, event=None):
-    """Mount ``view_name`` over the real consumer, optionally send one event."""
+    """Mount ``view_name`` over the real consumer; optionally send one event after it.
+
+    Returns the frames received, each decoded (a close is the raw ASGI message,
+    whose ``type`` is ``websocket.close``). The mount is always answered, by
+    ``mount`` or by the close that refuses it, so the wait for it is
+    ``receive_until`` (a 10 s deadline that only a hung turn reaches): a 2 s window
+    here gave up when a runner stalled and left the assertions a list with neither
+    (#3726).
+
+    ``event`` is sent whatever the mount's answer was, as a raw client does that
+    ignores a refusal. Nothing is waited for after it: ``disconnect()`` below is the
+    barrier, because Channels hands the consumer its messages in order and
+    ``disconnect()`` returns only after the application finished, i.e. after the
+    event was dispatched or dropped. A caller then asserts on what the event did.
+    """
     from channels.testing import WebsocketCommunicator
 
     from djust.websocket import LiveViewConsumer
@@ -467,22 +487,14 @@ async def _ws(user_cls, view_name, event=None):
     await communicator.send_json_to(
         {"type": "mount", "view": f"{_MOD}.{view_name}", "params": {}, "url": "/x/"}
     )
-    outputs = []
-    try:
-        while True:
-            out = await communicator.receive_output(timeout=2)
-            outputs.append(out)
-            if out.get("type") == "websocket.close":
-                break
-            if '"type": "mount"' in (out.get("text") or ""):
-                if event is None:
-                    break
-                await communicator.send_json_to(
-                    {"type": "event", "event": event, "params": {}, "ref": 1}
-                )
-                event = None
-    except (asyncio.TimeoutError, asyncio.CancelledError):
-        pass
+    outputs = await receive_until(
+        communicator,
+        _mount_or_close,
+        allow_close=True,
+        what="the mount or the close that refuses it",
+    )
+    if event is not None:
+        await communicator.send_json_to({"type": "event", "event": event, "params": {}, "ref": 1})
     try:
         await communicator.disconnect()
     except (asyncio.TimeoutError, asyncio.CancelledError):
@@ -491,7 +503,7 @@ async def _ws(user_cls, view_name, event=None):
 
 
 def _frames(outputs):
-    return [json.loads(o["text"]) for o in outputs if o.get("text")]
+    return [o for o in outputs if o.get("type") != "websocket.close"]
 
 
 def _close_code(outputs):

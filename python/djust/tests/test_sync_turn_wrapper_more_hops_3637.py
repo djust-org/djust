@@ -36,6 +36,7 @@ from djust.config import config as djust_config
 from djust.decorators import event_handler
 from djust.hooks import on_mount
 from djust.presence import PresenceMixin
+from djust.tests._ws_frames import drain_extra, has_type, receive_until
 
 pytest.importorskip("channels")
 
@@ -759,12 +760,19 @@ async def test_a_wrapper_that_raises_refuses_a_socket_mount_instead_of_mounting(
     with override_settings(LIVEVIEW_ALLOWED_MODULES=[MOD]):
         comm = await _open("AuthProbeView")
         try:
-            frames = []
-            for _ in range(6):
-                try:
-                    frames.append(await comm.receive_json_from(timeout=3))
-                except (asyncio.TimeoutError, Exception):  # noqa: BLE001 - socket closed
-                    break
+            # The refusal ANSWERS with an ``error`` frame. Wait for it with
+            # ``receive_until``, so the assertion below cannot run against an empty list when
+            # a runner is slow (#3726). Only then is there an absence to check:
+            # ``drain_extra`` is the short quiet window in which no ``mount`` may follow. A
+            # stall can make that window miss a late ``mount``; it cannot fail a correct run.
+            frames = await receive_until(
+                comm,
+                has_type("error", "mount"),
+                allow_close=True,
+                what="the error frame that refuses the mount",
+            )
+            assert frames[-1].get("type") == "error", frames
+            frames += await drain_extra(comm)
         finally:
             with contextlib.suppress(asyncio.CancelledError):
                 await comm.disconnect()
