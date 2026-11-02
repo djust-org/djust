@@ -414,9 +414,9 @@ class TestPerformance:
         strict=True,
         reason=(
             "extract_template_variables is super-linear in the number of blocks: about 6x "
-            "per doubling at 100-200 blocks and 8x at 800-1600 (measured in #3711). The "
-            "absolute bound this file used to assert (0.5 s at 100 blocks, which costs "
-            "~6 ms) could not see it."
+            "per doubling at 100-200 blocks and 8x at 800-1600, roughly n^2.9 (#3724). "
+            "The absolute bound this file used to assert (0.5 s at 100 blocks, which costs "
+            "~6 ms) could not see it. strict: a fix XPASSes and fails, so the marker goes."
         ),
     )
     def test_large_template_is_linear(self):
