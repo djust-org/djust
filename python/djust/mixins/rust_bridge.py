@@ -338,6 +338,10 @@ class RustBridgeMixin:
 
         def get_context_data(self, **kwargs: Any) -> Dict[str, Any]: ...
 
+        def _context_for_render(
+            self, preloaded_context: Optional[Dict[str, Any]] = None
+        ) -> Dict[str, Any]: ...
+
         def _apply_context_processors(
             self, context: Dict[str, Any], request: Any
         ) -> Dict[str, Any]: ...
@@ -907,13 +911,10 @@ class RustBridgeMixin:
             # Per-render, before anything is formatted (#2209, #2221).
             self._apply_render_env()
 
-            from ..sync_turn import run_sync_step
-
-            full_context = (
-                preloaded_context
-                if preloaded_context is not None
-                else run_sync_step(self, "render", self.get_context_data)
-            )
+            # One place decides: preloaded, the GET's cached context, or a
+            # fresh evaluation (#3725). Calling ``self.get_context_data`` here
+            # ran an overriding view's body a second time on every GET.
+            full_context = self._context_for_render(preloaded_context)
 
             # Context keys that are a temporary attribute under another name (#3647);
             # before the normalize pass below, which copies what it converts.

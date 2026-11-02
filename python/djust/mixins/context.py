@@ -275,6 +275,50 @@ class ContextMixin:
             self, items: Any, template_content: str, variable_name: str
         ) -> List[Any]: ...
 
+    def _context_for_render(
+        self, preloaded_context: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """The context a render pass starts from, without evaluating it twice (#3725).
+
+        The one place the render path decides where its context comes from,
+        in this order:
+
+        1. ``preloaded_context``: the caller already has it (the async path
+           awaited it).
+        2. ``self._cached_context``: the HTTP GET evaluated ``get_context_data()``
+           once (``RequestMixin._get_turn_body``) and cached it for exactly this
+           render, to keep QuerySets and the view's own work from running again.
+           The stock ``get_context_data()`` honours that cache itself, but the
+           short-circuit sits inside the stock method, so a view that defines
+           its own ``get_context_data()`` ran its whole body a second time.
+           Reading the cache here, before the method is reached, serves both.
+           A legacy view gets a shallow copy of the cached dict; an explicit
+           view gets a fresh render context rebuilt from it (provider
+           ownership intact).
+        3. A real evaluation, in the sync-turn ``render`` step. This is every
+           render after the GET: an event handler changed state, so the context
+           must be computed again. The GET clears the cache when it finishes
+           for that reason.
+        """
+        if preloaded_context is not None:
+            return preloaded_context
+        cached = getattr(self, "_cached_context", None)
+        if cached is not None:
+            from .._exposure import uses_legacy_exposure
+
+            if uses_legacy_exposure(self):
+                # A copy: the render adds keys to the dict it is handed and
+                # replaces models in it with their serialized form. The cache
+                # stays what the view returned, because the page shell reads
+                # RAW values from it for its sidecar (``_set_shell_sidecar``,
+                # #2589). Every evaluation returned a fresh dict before this
+                # read the cache; a copy keeps that for a view with its own method.
+                return dict(cached)
+            return self._get_explicit_context_data()
+        from ..sync_turn import run_sync_step
+
+        return run_sync_step(self, "render", self.get_context_data)
+
     def get_context_data(self, **kwargs: Any) -> Dict[str, Any]:
         """
         Get the context data for rendering. Override to customize context.

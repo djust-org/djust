@@ -670,6 +670,10 @@ class TemplateMixin:
 
         def get_context_data(self, **kwargs: Any) -> Dict[str, Any]: ...
 
+        def _context_for_render(
+            self, preloaded_context: Optional[Dict[str, Any]] = None
+        ) -> Dict[str, Any]: ...
+
         def _apply_context_processors(
             self, context: Dict[str, Any], request: Any
         ) -> Dict[str, Any]: ...
@@ -1781,9 +1785,9 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                 for key, value in json_compatible_context.items():
                     safe_keys.extend(_collect_safe_keys(value, key))
             else:
-                from ..sync_turn import run_sync_step
-
-                context = run_sync_step(self, "render", self.get_context_data)
+                # Same decision as the dj-root render above (#3725): a cached
+                # context is read, not evaluated a second time.
+                context = self._context_for_render()
                 context = self._apply_context_processors(context, request)
 
                 from django.http import HttpRequest
