@@ -435,7 +435,9 @@ def _blank_template_comments(content: str) -> str:
     the original source.
 
     Linear in the template: a search that fails once cannot succeed later, so an
-    unterminated opener is remembered rather than re-searched for each repeat.
+    unterminated opener is remembered rather than re-searched for each repeat, and
+    the end of the opener's line is found by a cursor that only moves forward
+    rather than by a search to the end of the template for every opener (#3723).
     """
     if "{#" not in content and "{%" not in content:
         return content
@@ -445,6 +447,10 @@ def _blank_template_comments(content: str) -> str:
     no_endcomment = False
     # Per opener kind: no closer exists on the current line before this offset.
     dead_until = {True: -1, False: -1}
+    # The first "\n" at or after the last place it was searched from: -2 before the
+    # first search, -1 when there is none. ``position`` never moves back, so a hit at
+    # or past it is still the first newline after it, and a miss stays a miss.
+    newline = -2
     while True:
         opener = _COMMENT_OPENER.search(content, position)
         if opener is None:
@@ -453,9 +459,9 @@ def _blank_template_comments(content: str) -> str:
         inline = opener.group(0) == "{#"
         if position <= dead_until[inline]:
             continue
-        line_end = content.find("\n", position)
-        if line_end == -1:
-            line_end = len(content)
+        if newline != -1 and newline < position:
+            newline = content.find("\n", position)
+        line_end = len(content) if newline == -1 else newline
         closer = content.find("#}" if inline else "%}", position, line_end)
         if closer == -1:
             dead_until[inline] = line_end
