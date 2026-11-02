@@ -27,27 +27,22 @@ WHAT IT COVERS (counted per file, against ``BASELINE``):
   _receive_until(c, kind, *, timeout=3)``: every caller that says nothing gets 3 s), and
   a call, in the same file, to such a helper with a short numeric ``timeout``.
 
-WHAT IT DELIBERATELY EXEMPTS (absence idioms, counted only in ``UNCOVERED_BASELINE``):
+WHAT IT DELIBERATELY EXEMPTS (counted only in ``UNCOVERED_BASELINE``):
 
 * ``receive_nothing``;
-* the LAST statement of a ``with pytest.raises(...)`` / ``suppress(...)`` body;
-* a wait in a ``try`` body whose handlers do nothing but ``pass`` / ``break`` /
-  ``continue`` ("read until nothing more arrives"). A handler that re-raises, assigns,
-  asserts or returns makes the wait a real one and it is counted. Whether a ``pass`` /
-  ``break`` handler is an absence window is a judgement the AST cannot make, and the six
-  that are exempt today are NOT all windows. Two are: ``test_ws_auth_close_socket.py``
-  (after the 4403 redirect what arrives is a ``websocket.close``, which
-  ``receive_json_from`` rejects, and the assertion is that no handler ran) and
-  ``test_sync_turn_wrapper_more_hops_3637.py`` (the assertion is that no ``mount`` frame
-  arrived). Four are not: ``test_live_auth_event_holders_and_user_checks.py``,
-  ``test_live_auth_outside_declarations.py``, ``test_model_form_route_change_3125.py`` and
-  ``test_mount_object_permission_after_params.py`` read until a ``mount`` / close /
-  navigation frame that DOES arrive in the positive case, and then assert it did; under a
-  3.5 s delay on every outgoing frame they fail 68 tests, because the drain gives up after
-  2-3 s and the assertion finds nothing. They are kept (and counted in
-  ``UNCOVERED_BASELINE``) only because converting them needs the loop restructured to read
-  until the terminal frame with the default timeout; that is follow-up work, not a claim
-  that they are windows. A new drain needs the same judgement in review.
+* the LAST statement of a ``with pytest.raises(...)`` / ``suppress(...)`` body (the line
+  that is supposed to time out).
+
+A ``try: ... except: pass`` / ``break`` / ``continue`` DRAIN is NOT exempt any more (#3726).
+#3721 exempted them as "absence-shaped", and six were kept on that basis; four of the six
+read until a ``mount`` / close / navigation frame that DOES arrive in the positive case and
+then assert it did, so a runner that stalled past their 2-3 s window failed 68 tests (a
+3.5 s delay on every outgoing frame reproduces it). Whether a drain is an absence window is
+a judgement the AST cannot make, so every drain is counted and the genuine ones sit in
+``BASELINE`` with their reason beside them. A new drain therefore fails this test until it
+either waits for the frame that arrives (``receive_until`` / ``receive_settled``), asserts
+the silence with ``receive_nothing``, or is added to ``BASELINE`` with a reason a reviewer
+accepts.
 
 WHAT IT DOES NOT SEE (totals in ``UNCOVERED_BASELINE``, which also only falls; derive the
 live numbers with :func:`uncovered_counts`, the PR description quotes them):
@@ -89,10 +84,26 @@ ABSENCE_WINDOWS = {"receive_nothing"}
 #: A count only ever goes DOWN; an entry that reaches zero is deleted. Keyed by
 #: repo-relative path.
 #:
-#: The one entry is on purpose: ``test_ws_communicator_defaults_3464.py`` pins that an
-#: explicit timeout STILL WINS over the 30 s default, so it passes ``timeout=0.01`` to
-#: ``disconnect`` (converting it made that test fail, which is how it was found).
+#: Every entry is on purpose, and its reason sits here:
+#:
+#: * ``test_ws_communicator_defaults_3464.py`` pins that an explicit timeout STILL WINS
+#:   over the 30 s default, so it passes ``timeout=0.01`` to ``disconnect`` (converting it
+#:   made that test fail, which is how it was found).
+#: * ``test_sync_turn_wrapper_more_hops_3637.py`` (1) is a genuine absence window: the
+#:   assertion is that NO ``mount`` frame arrived after a wrapper that raises refused the
+#:   mount. A stall can end the window early and miss a late ``mount``; it cannot fail a
+#:   correct run.
+#: * ``test_ws_auth_close_socket.py`` (1) is a genuine absence window: after the 4403
+#:   redirect what arrives is a close, which ``receive_json_from`` rejects, and the
+#:   assertion is that no event handler ran.
+#:
+#: The four other drains #3721 kept (``test_live_auth_event_holders_and_user_checks``,
+#: ``test_live_auth_outside_declarations``, ``test_model_form_route_change_3125``,
+#: ``test_mount_object_permission_after_params``) waited for frames that DO arrive and
+#: were converted in #3726; they are not here, and a drain like them is a regression.
 BASELINE: Dict[str, int] = {
+    "python/djust/tests/test_sync_turn_wrapper_more_hops_3637.py": 1,
+    "python/djust/tests/test_ws_auth_close_socket.py": 1,
     "python/djust/tests/test_ws_communicator_defaults_3464.py": 1,
 }
 
@@ -127,28 +138,21 @@ def _short_number(node: ast.AST) -> bool:
     )
 
 
-ABSENCE_RAISES = "raises"  # the raising line of a ``with pytest.raises(...)`` / ``suppress``
-ABSENCE_DRAIN = "drain"  # a ``try`` whose handlers only ``pass`` / ``break`` / ``continue``
+def _in_raises_block(await_node: ast.AST, parents: Dict[ast.AST, ast.AST]) -> bool:
+    """Is the wait the LAST statement of a ``with pytest.raises(...)`` / ``suppress(...)`` body?
 
+    That is the line that is supposed to time out; anything before it is a plain wait. A
+    ``try`` / ``except: pass`` drain is deliberately NOT an exemption (#3726, see the module
+    docstring).
 
-def _absence_kind(await_node: ast.AST, parents: Dict[ast.AST, ast.AST]) -> Optional[str]:
-    """Which absence idiom a wait is in, if any.
-
-    * ``raises``: the LAST statement of a ``with pytest.raises(...)`` / ``suppress(...)``
-      body (the line that is supposed to time out; anything before it is a plain wait).
-    * ``drain``: inside a ``try`` body whose handlers do nothing but ``pass``, ``break``
-      or ``continue`` ("read until nothing more arrives", "drain a frame if one was
-      sent"). A handler that re-raises, assigns, asserts or returns is a real handler,
-      so the wait inside it is NOT an absence window and is counted.
-
-    The walk stops at a function or lambda boundary: a ``def`` nested in a ``try`` body
+    The walk stops at a function or lambda boundary: a ``def`` nested in a ``with`` body
     is not guarded by it.
     """
     node = await_node
     while node in parents:
         child, node = node, parents[node]
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
-            return None
+            return False
         if isinstance(node, (ast.With, ast.AsyncWith)) and child in node.body:
             for item in node.items:
                 ctx = item.context_expr
@@ -156,15 +160,8 @@ def _absence_kind(await_node: ast.AST, parents: Dict[ast.AST, ast.AST]) -> Optio
                     func = ctx.func
                     name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
                     if name in ("raises", "suppress") and child is node.body[-1]:
-                        return ABSENCE_RAISES
-        if isinstance(node, ast.Try) and child in node.body and node.handlers:
-            only_nothing = all(
-                all(isinstance(s, (ast.Pass, ast.Break, ast.Continue)) for s in h.body)
-                for h in node.handlers
-            )
-            if only_nothing:
-                return ABSENCE_DRAIN
-    return None
+                        return True
+    return False
 
 
 def _timeout_args(call: ast.Call, index: int) -> List[ast.AST]:
@@ -218,7 +215,7 @@ def find_short_waits(source: str, waits: Optional[Dict[str, int]] = None) -> Lis
     """Line numbers of the short communicator timeouts the ratchet counts.
 
     Three shapes: an awaited communicator wait with a short numeric ``timeout`` outside
-    an absence idiom; a helper whose short ``timeout`` default is forwarded to a
+    the last line of a ``pytest.raises`` block; a helper whose short ``timeout`` default is forwarded to a
     communicator wait (the definition); and a call to such a helper in the same file
     that passes a short numeric ``timeout`` itself.
     """
@@ -234,7 +231,7 @@ def find_short_waits(source: str, waits: Optional[Dict[str, int]] = None) -> Lis
         call = node.value
         if not isinstance(call.func, ast.Attribute) or call.func.attr not in waits:
             continue
-        if _absence_kind(node, parents):
+        if _in_raises_block(node, parents):
             continue
         if any(_short_number(v) for v in _timeout_args(call, waits[call.func.attr])):
             lines.add(call.lineno)
@@ -255,7 +252,7 @@ def find_short_waits(source: str, waits: Optional[Dict[str, int]] = None) -> Lis
 
 def _count_uncovered(source: str, waits: Dict[str, int]) -> Dict[str, int]:
     """What the ratchet deliberately or unavoidably does not count, in one file."""
-    out = {"absence_drains": 0, "absence_raises": 0, "variable_timeouts": 0, "wait_for_short": 0}
+    out = {"absence_raises": 0, "variable_timeouts": 0, "wait_for_short": 0}
     parsed = _parse(source)
     if parsed is None:
         return out
@@ -265,9 +262,8 @@ def _count_uncovered(source: str, waits: Dict[str, int]) -> Dict[str, int]:
             call = node.value
             if isinstance(call.func, ast.Attribute) and call.func.attr in waits:
                 args = _timeout_args(call, waits[call.func.attr])
-                kind = _absence_kind(node, parents)
-                if kind and any(_short_number(v) for v in args):
-                    out["absence_drains" if kind == ABSENCE_DRAIN else "absence_raises"] += 1
+                if _in_raises_block(node, parents) and any(_short_number(v) for v in args):
+                    out["absence_raises"] += 1
                 elif args and not any(isinstance(v, ast.Constant) for v in args):
                     out["variable_timeouts"] += 1
         if isinstance(node, ast.Call):
@@ -309,7 +305,7 @@ def live_counts() -> Dict[str, int]:
 def uncovered_counts() -> Dict[str, int]:
     """Totals, over the live tree, of the short waits the per-file ratchet does NOT count.
 
-    ``absence_drains`` / ``absence_raises``: short waits in an absence idiom (exempt).
+    ``absence_raises``: short waits on the last line of a ``pytest.raises`` block (exempt).
     ``variable_timeouts``: communicator waits whose ``timeout`` is a name or expression
     (a helper's parameter, ``remaining``, ``deadline``): whether it is short depends on
     a caller this scan does not follow. ``wait_for_short``: ``asyncio.wait_for(...,
@@ -326,7 +322,6 @@ def uncovered_counts() -> Dict[str, int]:
 #: What the ratchet does not see, as totals at the time it was written. These only fall
 #: too: a class cannot grow quietly just because the per-file count above cannot see it.
 UNCOVERED_BASELINE: Dict[str, int] = {
-    "absence_drains": 6,
     "absence_raises": 2,
     "variable_timeouts": 57,
     "wait_for_short": 110,
@@ -478,6 +473,42 @@ async def test_a(socket):
         await socket.receive_json_from(timeout=3)
         await socket.receive_nothing()
 """,
+    "a try/except-pass drain (#3726)": """
+async def test_a(socket):
+    try:
+        await socket.receive_json_from(timeout=1)
+    except Exception:
+        pass
+""",
+    "a read-until-it-times-out loop whose handler breaks (#3726)": """
+async def test_a(socket):
+    for _ in range(4):
+        try:
+            frame = await socket.receive_json_from(timeout=2)
+        except Exception:
+            break
+""",
+    "a loop whose handler continues (#3726)": """
+async def test_a(socket):
+    for _ in range(4):
+        try:
+            frame = await socket.receive_output(timeout=2)
+        except asyncio.TimeoutError:
+            continue
+""",
+    "the drain this ratchet exists for: a loop that waits for a mount that arrives (#3726)": """
+async def _ws(communicator):
+    outputs = []
+    try:
+        while True:
+            out = await communicator.receive_output(timeout=2)
+            outputs.append(out)
+            if '"type": "mount"' in (out.get("text") or ""):
+                break
+    except (asyncio.TimeoutError, asyncio.CancelledError):
+        pass
+    return outputs
+""",
     "just under the line": """
 async def test_a(socket):
     await socket.receive_json_from(timeout=9.9)
@@ -516,21 +547,6 @@ async def test_a(socket):
     "a disconnect with only its code": """
 async def test_a(socket):
     await socket.disconnect(1000)
-""",
-    "an absence window under try/except": """
-async def test_a(socket):
-    try:
-        await socket.receive_json_from(timeout=1)
-    except Exception:
-        pass
-""",
-    "a read-until-nothing loop (handler breaks)": """
-async def test_a(socket):
-    for _ in range(4):
-        try:
-            frame = await socket.receive_json_from(timeout=2)
-        except Exception:
-            break
 """,
     "a helper whose long default is forwarded": """
 async def _receive_until(communicator, wanted, *, tries=8, timeout=30):

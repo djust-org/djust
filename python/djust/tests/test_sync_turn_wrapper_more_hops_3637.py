@@ -760,6 +760,10 @@ async def test_a_wrapper_that_raises_refuses_a_socket_mount_instead_of_mounting(
         comm = await _open("AuthProbeView")
         try:
             frames = []
+            # An absence window, kept on purpose (#3726): the assertion below is that NO
+            # ``mount`` frame arrived. The loop ends on a close (which
+            # ``receive_json_from`` rejects) or on silence. A stall can only end the window early and miss a
+            # late ``mount``; it cannot fail a correct run.
             for _ in range(6):
                 try:
                     frames.append(await comm.receive_json_from(timeout=3))

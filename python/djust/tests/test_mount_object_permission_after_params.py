@@ -38,6 +38,7 @@ pytest.importorskip("channels")
 from django.test import RequestFactory, override_settings  # noqa: E402
 
 from djust import LiveView  # noqa: E402
+from djust.tests._ws_frames import has_type, receive_until  # noqa: E402
 
 DOCS = {1: "OWN-DOC-CONTENT", 2: "OTHER-USER-DOC-CONTENT"}
 
@@ -121,7 +122,15 @@ def _authed_middleware(app):
 
 
 async def _ws_mount(frame):
-    """Mount over the real consumer; return every output until close/timeout."""
+    """Mount over the real consumer; return the frames up to the mount or the close.
+
+    Either one ends the conversation: a refused mount closes the socket (4403) and
+    an allowed one answers with ``mount``. Both ARRIVE, so the wait is for the
+    default timeout (``receive_until``), not a short window that gives up on a
+    slow runner and leaves the assertions below a list with neither (#3726). A
+    close is returned as the raw ASGI message (its ``type`` is
+    ``websocket.close``).
+    """
     from channels.testing import WebsocketCommunicator
 
     from djust.websocket import LiveViewConsumer
@@ -131,17 +140,12 @@ async def _ws_mount(frame):
     assert connected
     await communicator.receive_json_from()  # connect ack
     await communicator.send_json_to(frame)
-    outputs = []
-    try:
-        while True:
-            out = await communicator.receive_output(timeout=2)
-            outputs.append(out)
-            if out.get("type") == "websocket.close":
-                break
-            if '"type": "mount"' in (out.get("text") or ""):
-                break
-    except (asyncio.TimeoutError, asyncio.CancelledError):
-        pass
+    outputs = await receive_until(
+        communicator,
+        has_type("mount", "websocket.close"),
+        allow_close=True,
+        what="the mount or the close that refuses it",
+    )
     try:
         await communicator.disconnect()
     except (asyncio.TimeoutError, asyncio.CancelledError):
@@ -166,7 +170,7 @@ class TestWebSocketMount:
 
         assert DOCS[2] not in text, f"denied document rendered on mount: {outputs!r}"
         assert "permission_denied" in text, f"no permission_denied frame: {outputs!r}"
-        assert not any('"type": "mount"' in (o.get("text") or "") for o in outputs), outputs
+        assert not any(o.get("type") == "mount" for o in outputs), outputs
         closes = [o for o in outputs if o.get("type") == "websocket.close"]
         assert closes and closes[-1].get("code") == 4403, f"socket not closed 4403: {outputs!r}"
 
