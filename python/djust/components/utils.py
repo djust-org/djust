@@ -23,6 +23,7 @@ __all__ = [
     "safe_css_ratio",
     "safe_url",
     "unique_ids",
+    "url_allowed",
     "url_attr",
 ]
 
@@ -385,23 +386,52 @@ def safe_url(value: Any) -> str:
     s = str(value).strip()
     if not s:
         return ""
-    try:
-        scheme = urlsplit(s).scheme.lower()
-    except ValueError:
-        return "#"
-    probe = _CTRL_WS_RE.sub("", s).lower()
-    if scheme and scheme not in _SAFE_URL_SCHEMES:
-        return "#"
-    # Belt-and-suspenders: catch parser-evasion where the obfuscated value has
-    # an empty/odd urlsplit scheme but a browser would still see a bad scheme.
-    if probe.startswith(("javascript:", "vbscript:", "data:")):
+    if not url_allowed(s):
         return "#"
     escaped: str = conditional_escape(s)
     return escaped
 
 
+def url_allowed(value: Any, *, image: bool = False) -> bool:
+    """Whether ``value`` may be printed into an ``href``/``action``/``src``.
+
+    This is the allowlist decision :func:`safe_url` makes, without the escaping or
+    the ``"#"`` substitution, so a caller that must keep the original value (a
+    template that escapes it once itself) applies the SAME rule instead of writing a
+    second one. ``djust_theming`` is that caller (#3677).
+
+    ``True`` for an empty value, a relative / anchor / query / scheme-less URL and an
+    absolute URL whose scheme is in :data:`_SAFE_URL_SCHEMES`. ``False`` for any other
+    scheme (``javascript:``, ``livescript:``, ``blob:``, ``file:``, custom schemes, ...)
+    including case-folded and control-character-obfuscated forms, and for a value that
+    fails to parse. With ``image=True`` an inline ``data:image/...`` URI is also
+    allowed, for ``<img src>``. A marked-safe (``SafeData``) value is judged like any
+    other string.
+    """
+    s = str(value).strip()
+    if not s:
+        return True
+    if image and _is_data_image(s):
+        return True
+    try:
+        scheme = urlsplit(s).scheme.lower()
+    except ValueError:
+        return False
+    if scheme and scheme not in _SAFE_URL_SCHEMES:
+        return False
+    # Belt-and-suspenders: catch parser-evasion where the obfuscated value has
+    # an empty/odd urlsplit scheme but a browser would still see a bad scheme.
+    probe = _CTRL_WS_RE.sub("", s).lower()
+    return not probe.startswith(("javascript:", "vbscript:", "data:"))
+
+
 # Image sources may legitimately be inline ``data:image/...`` URIs.
 _DATA_IMAGE_RE = re.compile(r"^data:image/[a-z0-9.+-]+[;,]")
+
+
+def _is_data_image(value: Any) -> bool:
+    """Whether ``value`` is an inline ``data:image/...`` URI (control chars ignored)."""
+    return bool(_DATA_IMAGE_RE.match(_CTRL_WS_RE.sub("", str(value)).lower()))
 
 
 def unique_ids(items: Any) -> bool:
@@ -437,11 +467,9 @@ def url_attr(value: Any, *, image: bool = False, honor_safe: bool = True) -> str
         return ""
     if honor_safe and isinstance(value, SafeData):
         return str(value)
-    if image:
-        probe = _CTRL_WS_RE.sub("", str(value)).lower()
-        if _DATA_IMAGE_RE.match(probe):
-            escaped: str = conditional_escape(str(value).strip())
-            return escaped
+    if image and _is_data_image(value):
+        escaped: str = conditional_escape(str(value).strip())
+        return escaped
     return safe_url(value)
 
 

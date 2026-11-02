@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """URL-scheme sweep: every parameter of every djust template tag, both engines (#3665).
 
-Drives ``javascript:`` / ``vbscript:`` / ``data:`` payloads (plain, case-folded,
+Drives ``javascript:`` / ``vbscript:`` / ``data:`` and other non-navigation scheme (``livescript:``,
+``blob:``, ``file:``, ...; #3677) payloads (plain, case-folded,
 whitespace-, control-character-, entity- and percent-obfuscated) through EVERY
 parameter each tag can read, whatever it is named, in four argument shapes,
 through Django's engine (the Python tag) and ``DjustTemplateBackend`` (the Rust
@@ -39,7 +40,7 @@ from scripts.lib.template_library_parity import harness  # noqa: E402
 QUICK = (
     "js", "js-upper", "js-embedded-tab", "js-lead-newline", "js-entity-hex", "js-percent-colon",
     "vbs", "data-html", "data-svg", "srcset-parens", "srcset-comma",
-    "https", "relative", "anchor", "mailto", "data-png",
+    "livescript", "blob", "custom", "https", "relative", "anchor", "mailto", "data-png",
 )  # fmt: skip
 
 #: What ``python/tests/test_url_scheme_sweep_3665.py`` runs: the plain attack, the
@@ -47,8 +48,11 @@ QUICK = (
 #: other script schemes, the ``srcset`` list forms, and the values that must survive.
 TEST_CORPUS = (
     "js", "js-embedded-tab", "js-lead-newline", "js-entity-hex", "js-percent-colon", "vbs",
-    "data-html", "srcset-parens", "srcset-parens-data", "srcset-formfeed", "https", "relative",
-    "mailto", "data-png",
+    "data-html", "srcset-parens", "srcset-parens-data", "srcset-formfeed",
+    # not script schemes, not navigation schemes either (#3677): plain, obfuscated, and the
+    # ones a theme author might reach for (``sms:``, an app deep link)
+    "livescript", "blob", "blob-lead-control", "blob-embedded-tab", "file", "custom", "sms",
+    "https", "relative", "mailto", "data-png",
 )  # fmt: skip
 
 

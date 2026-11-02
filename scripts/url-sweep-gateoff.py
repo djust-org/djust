@@ -44,6 +44,10 @@ UTILS = ROOT / "python/djust/components/utils.py"
 COMP = ROOT / "python/djust/components/components"
 SWEEP = ROOT / "scripts/lib/template_library_parity/url_sweep.py"
 
+THEMING = ROOT / "python/djust/theming/templatetags/theme_components.py"
+PAGES = ROOT / "python/djust/theming/templatetags/theme_pages.py"
+THEMING_TEST = "python/tests/test_theming_url_allowlist_3677.py"
+
 AVATAR = "python/tests/test_avatar_src_scheme_3665.py"
 SINKS = "python/tests/test_image_url_sinks_3665.py"
 SWEEPTEST = "python/tests/test_url_scheme_sweep_3665.py"
@@ -237,13 +241,78 @@ MUTATIONS: list[tuple[str, pathlib.Path, str, str, str, str]] = [
         AVATAR,
         "",
     ),
+    # --- #3677: theming judges URLs with the components allowlist, not a list of its own
     (
-        "theming denylist forgets livescript: and mhtml:",
-        ROOT / "python/djust/theming/templatetags/theme_components.py",
-        '_UNSAFE_URL_SCHEMES = ("javascript:", "vbscript:", "data:", "livescript:", "mhtml:")',
-        '_UNSAFE_URL_SCHEMES = ("javascript:", "vbscript:", "data:")',
-        "python/tests/test_theming_url_denylist_3665.py",
-        "",
+        "theming _neutralise_url: back to a denylist (the pre-#3677 rule)",
+        THEMING,
+        "    if value is not None and not url_allowed(value, image=image):",
+        '    if value is not None and str(value).strip().lower().startswith(("javascript:", "vbscript:", "data:", "livescript:", "mhtml:")):',
+        THEMING_TEST,
+        "TestEverySink",
+    ),
+    (
+        "theming _check_url (developer literals): back to a denylist",
+        THEMING,
+        "    if not url_allowed(value):\n        raise ValueError(",
+        '    if str(value).strip().lower().startswith(("javascript:", "vbscript:", "data:")):\n        raise ValueError(',
+        THEMING_TEST,
+        "TestDeveloperLiteralsStillRaise",
+    ),
+    (
+        "theming avatar: src not neutralised",
+        THEMING,
+        '    src = _neutralise_url("src", src, image=True)\n',
+        "    src = src\n",
+        THEMING_TEST,
+        "TestEverySink and theme_avatar",
+    ),
+    (
+        "theming lists (nav, nav_group, breadcrumb, sidebar_nav): item urls not neutralised",
+        THEMING,
+        "    return _map_item_attribute(items, name, lambda value: _neutralise_url(name, value))",
+        "    return items",
+        THEMING_TEST,
+        "TestEverySink and (nav or breadcrumb)",
+    ),
+    (
+        "theming pagination: the formatted url is not neutralised",
+        THEMING,
+        '        return _neutralise_url("url_pattern", url_pattern.format(page))',
+        "        return url_pattern.format(page)",
+        THEMING_TEST,
+        "TestEverySink and theme_pagination",
+    ),
+    (
+        "theming login page: the form action is not neutralised",
+        PAGES,
+        '    action = _neutralise_url("action", action)\n    forgot_password_url = _neutralise_url(',
+        "    forgot_password_url = _neutralise_url(",
+        THEMING_TEST,
+        "TestEverySink and theme_login_page",
+    ),
+    (
+        "shared allowlist: the scheme is no longer checked against it",
+        UTILS,
+        "    if scheme and scheme not in _SAFE_URL_SCHEMES:\n        return False",
+        "    if scheme and scheme not in _SAFE_URL_SCHEMES:\n        pass",
+        THEMING_TEST,
+        "TestEverySink",
+    ),
+    (
+        "shared allowlist widened (blob: accepted): the scanner's copy no longer agrees",
+        UTILS,
+        '_SAFE_URL_SCHEMES = frozenset({"http", "https", "mailto", "tel", "ftp", "ftps"})',
+        '_SAFE_URL_SCHEMES = frozenset({"http", "https", "mailto", "tel", "ftp", "ftps", "blob"})',
+        SWEEPTEST,
+        "allowlist_is_the_production_one",
+    ),
+    (
+        "scanner: only the three script schemes are read as dangerous (the pre-#3677 scanner)",
+        SWEEP,
+        "    if m and m.group(1) not in NAVIGATION_SCHEMES:\n        return m.group(1)",
+        "    if False:\n        return m.group(1)",
+        SWEEPTEST,
+        "Scanner",
     ),
     # --- the sweep must itself notice a reverted fix, through its own path
     (
@@ -356,7 +425,7 @@ def main(argv: list[str]) -> int:
         SWEEPTEST,
         "scripts/template-library-url-sweep.py",
         "scripts/url-sweep-gateoff.py",
-        "python/tests/test_theming_url_denylist_3665.py",
+        THEMING_TEST,
     )
     real = [m[1] for m in MUTATIONS]
     before = base.tree_digest(real)

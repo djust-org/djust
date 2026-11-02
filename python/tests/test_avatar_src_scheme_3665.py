@@ -40,6 +40,7 @@ ENCODED = (
     "js-entity-nosemi",
     "js-entity-colon",
     "js-percent-colon",
+    "blob-entity-hex",
 )
 NOT_IMAGES = [d for d in url_sweep.DANGEROUS if d[0] != "data-svg"]
 LOAD = "{% load djust_components %}"

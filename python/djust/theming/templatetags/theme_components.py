@@ -23,6 +23,8 @@ from django import template
 from django.template import Context
 from django.utils.safestring import SafeString, mark_safe
 
+from djust.components.utils import url_allowed
+
 from ..manager import get_theme_config
 from ..template_resolver import resolve_component_template
 
@@ -332,40 +334,37 @@ _ATTR_NAME_RE = re.compile(r"[A-Za-z][A-Za-z0-9-]*")
 # Attributes whose value is a URL the browser will navigate to or load.
 _URL_ATTRS = frozenset({"href", "src", "action", "formaction"})
 
-# ``livescript:`` (Netscape) and ``mhtml:`` (Internet Explorer) are obsolete and dead in
-# every current browser; neither has a legitimate use in an href, so they are refused
-# alongside the live script schemes (#3665 review).
-_UNSAFE_URL_SCHEMES = ("javascript:", "vbscript:", "data:", "livescript:", "mhtml:")
-
-
-def _has_unsafe_url_scheme(value: Any, *, image: bool = False) -> bool:
-    """Apply the theming denylist after stripping scheme obfuscation."""
-    compact = "".join(ch for ch in str(value) if ord(ch) > 32 and ord(ch) != 127).lower()
-    if image and compact.startswith("data:image/"):
-        return False
-    return compact.startswith(_UNSAFE_URL_SCHEMES)
+# Every URL theming prints is judged by ``djust.components.utils.url_allowed``, the
+# allowlist decision ``safe_url`` / ``url_attr`` make for ``djust_components``. Theming
+# keeps no scheme list of its own (it had a denylist, which let every scheme it did not
+# name through: ``blob:``, ``file:``, ``intent:``, custom schemes ... #3677).
 
 
 def _check_url(name: str, value: Any) -> None:
-    """Refuse a script-bearing URL scheme in ``name``.
+    """Refuse a URL whose scheme the shared allowlist rejects in ``name``.
 
-    Browsers drop tabs, newlines and other control characters inside a URL
-    scheme and ignore leading whitespace, so ``"java\tscript:..."`` is still
-    ``javascript:``. Strip those before looking at the scheme.
+    For a developer-supplied literal (``theme_button href=``) and the ``**attrs``
+    passthrough: a loud error at development time. The allowlist reads the scheme the
+    way a browser does (case, leading space and control characters, tabs and newlines
+    inside the scheme), so ``"java\tscript:..."`` is still ``javascript:``.
     """
-    if _has_unsafe_url_scheme(value):
-        raise ValueError(f"{name}= refuses javascript:, vbscript: and data: URLs")
+    if not url_allowed(value):
+        raise ValueError(
+            f"{name}= refuses a URL scheme other than http, https, ftp, ftps, mailto "
+            "and tel (a relative URL is fine)"
+        )
 
 
 def _neutralise_url(name: str, value: Any, *, image: bool = False) -> Any:
-    """Return ``value`` unchanged, or ``"#"`` for a script-bearing scheme.
+    """Return ``value`` unchanged, or ``"#"`` for a scheme the shared allowlist rejects.
 
-    Data-derived URLs must not take the whole render down. Use the same
-    denylist as :func:`_check_url`, allowing ``data:image/*`` for image sources.
-    Safe values retain single template escaping; developer-supplied literals
-    and passthrough attributes still raise via :func:`_check_url`.
+    Data-derived URLs must not take the whole render down. The decision is
+    :func:`djust.components.utils.url_allowed` (``image=True`` also allows an inline
+    ``data:image/*`` URI, for image sources). Safe values retain single template
+    escaping; developer-supplied literals and passthrough attributes still raise via
+    :func:`_check_url`.
     """
-    if value is not None and _has_unsafe_url_scheme(value, image=image):
+    if value is not None and not url_allowed(value, image=image):
         logger.debug("theming: %s= URL with a disallowed scheme rendered as '#'", name)
         return "#"
     return value
