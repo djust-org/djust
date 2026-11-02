@@ -62,11 +62,15 @@ _EMBEDDED_TEMPLATE_DIRS = ("management", "scaffolding")
 
 def _findings_in_text(source: str, first_line: int = 1) -> list[tuple[int, str]]:
     findings = []
+    # Newlines are counted between one finding and the next, not from the start of
+    # the source for each (O(source x findings), #3705).
+    line, counted_to = first_line, 0
     for match in _MULTILINE_COMMENT_RE.finditer(source):
         body = match.group(1)
         if "\n" not in body:
             continue  # single-line: Django handles it correctly
-        line = first_line + source[: match.start()].count("\n")
+        line += source.count("\n", counted_to, match.start())
+        counted_to = match.start()
         first = body.strip().splitlines()[0][:60] if body.strip() else ""
         findings.append((line, first))
     return findings
