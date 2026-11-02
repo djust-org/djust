@@ -412,6 +412,7 @@ class TestPerformance:
 
     @pytest.mark.xfail(
         strict=True,
+        raises=AssertionError,  # the growth assertion, not an ImportError or a rename
         reason=(
             "extract_template_variables is super-linear in the number of blocks: about 6x "
             "per doubling at 100-200 blocks and 8x at 800-1600, roughly n^2.9 (#3724). "

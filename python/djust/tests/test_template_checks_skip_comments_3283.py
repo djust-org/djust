@@ -153,6 +153,7 @@ def test_blanking_keeps_every_line_break_the_scans_split_on():
 _QUADRATIC_NEWLINE_SEARCH = pytest.mark.xfail(
     reason="_blank_template_comments re-searches for a newline per opener: quadratic (#3723)",
     strict=True,
+    raises=AssertionError,  # the growth assertion, not an ImportError or a rename
 )
 
 

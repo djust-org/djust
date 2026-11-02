@@ -33,12 +33,21 @@ WHAT IT DELIBERATELY EXEMPTS (absence idioms, counted only in ``UNCOVERED_BASELI
 * the LAST statement of a ``with pytest.raises(...)`` / ``suppress(...)`` body;
 * a wait in a ``try`` body whose handlers do nothing but ``pass`` / ``break`` /
   ``continue`` ("read until nothing more arrives"). A handler that re-raises, assigns,
-  asserts or returns makes the wait a real one and it is counted. A ``pass`` handler is
-  still a judgement the AST cannot make: ``try: receive_json_from(timeout=1) / except
-  Exception: pass`` is an absence window when what arrives may be a ``websocket.close``
-  (``test_ws_auth_close_socket.py``), and a plain wait when it drains a connect ack that
-  always comes. #3721 converted the second kind and kept the first; a new one needs
-  the same judgement in review.
+  asserts or returns makes the wait a real one and it is counted. Whether a ``pass`` /
+  ``break`` handler is an absence window is a judgement the AST cannot make, and the six
+  that are exempt today are NOT all windows. Two are: ``test_ws_auth_close_socket.py``
+  (after the 4403 redirect what arrives is a ``websocket.close``, which
+  ``receive_json_from`` rejects, and the assertion is that no handler ran) and
+  ``test_sync_turn_wrapper_more_hops_3637.py`` (the assertion is that no ``mount`` frame
+  arrived). Four are not: ``test_live_auth_event_holders_and_user_checks.py``,
+  ``test_live_auth_outside_declarations.py``, ``test_model_form_route_change_3125.py`` and
+  ``test_mount_object_permission_after_params.py`` read until a ``mount`` / close /
+  navigation frame that DOES arrive in the positive case, and then assert it did; under a
+  3.5 s delay on every outgoing frame they fail 68 tests, because the drain gives up after
+  2-3 s and the assertion finds nothing. They are kept (and counted in
+  ``UNCOVERED_BASELINE``) only because converting them needs the loop restructured to read
+  until the terminal frame with the default timeout; that is follow-up work, not a claim
+  that they are windows. A new drain needs the same judgement in review.
 
 WHAT IT DOES NOT SEE (totals in ``UNCOVERED_BASELINE``, which also only falls; derive the
 live numbers with :func:`uncovered_counts`, the PR description quotes them):
