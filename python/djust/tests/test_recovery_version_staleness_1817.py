@@ -174,7 +174,7 @@ async def _connect_and_mount(view_suffix, url):
 
     connected, _ = await communicator.connect()
     assert connected, "WebsocketCommunicator must connect"
-    await _recv(communicator, 2)  # drain connect frame
+    await _recv(communicator, 30)  # drain connect frame
 
     await communicator.send_json_to(
         {"type": "mount", "view": f"{__name__}.{view_suffix}", "url": url}
@@ -257,7 +257,7 @@ async def test_time_travel_jump_recovery_version_is_current():
         # time_travel_state frame. Capture the render frame's version.
         jump_render = None
         for _ in range(8):
-            frame = await _recv(communicator, 3)
+            frame = await _recv(communicator, 30)
             if frame.get("type") in ("patch", "html_update"):
                 jump_render = frame
                 break

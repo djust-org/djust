@@ -24,8 +24,8 @@ async def _url_change(socket, uri):
 
     A ``url_change`` is always answered: a ``navigation`` (the redirect), a
     ``patch`` / ``html_update`` or an ``error``. Every test below asserts on that
-    answer, so the wait is for it with the default timeout (``receive_until``),
-    not a short window that gives up when a runner stalls (#3726).
+    answer, so the wait is ``receive_until`` (a 10 s deadline that only a hung turn
+    reaches), not a short window that gives up when a runner stalls (#3726).
     """
     await socket.send_json_to({"type": "url_change", "params": {}, "uri": uri})
     return await receive_until(

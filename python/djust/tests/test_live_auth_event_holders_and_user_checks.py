@@ -465,8 +465,8 @@ async def _ws(user_cls, view_name, events=()):
 
     Returns the frames received, each decoded (a close is the raw ASGI message,
     whose ``type`` is ``websocket.close``). The mount, and each event, is always
-    answered, so the waits take the default timeout (``receive_until``): a short
-    window here gave up when a runner stalled and left the assertions a list with
+    answered, so the waits are ``receive_until`` (a 10 s deadline that only a hung
+    turn reaches): a short window here gave up when a runner stalled and left the assertions a list with
     nothing in it (#3726).
     """
     from channels.testing import WebsocketCommunicator

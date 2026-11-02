@@ -125,10 +125,10 @@ async def _ws_mount(frame):
     """Mount over the real consumer; return the frames up to the mount or the close.
 
     Either one ends the conversation: a refused mount closes the socket (4403) and
-    an allowed one answers with ``mount``. Both ARRIVE, so the wait is for the
-    default timeout (``receive_until``), not a short window that gives up on a
-    slow runner and leaves the assertions below a list with neither (#3726). A
-    close is returned as the raw ASGI message (its ``type`` is
+    an allowed one answers with ``mount``. Both ARRIVE, so the wait is
+    ``receive_until`` (a 10 s deadline that only a hung turn reaches), not a short
+    window that gives up on a slow runner and leaves the assertions below a list with
+    neither (#3726). A close is returned as the raw ASGI message (its ``type`` is
     ``websocket.close``).
     """
     from channels.testing import WebsocketCommunicator
