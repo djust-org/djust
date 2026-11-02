@@ -8709,7 +8709,7 @@ mod tests {
     #[test]
     fn test_if_in_attribute_with_gt_in_value() {
         // Fix for review issue #2: bare > inside an attribute value must not
-        // trick is_inside_html_tag() into thinking we are outside the tag.
+        // trick is_inside_html_tag_at() into thinking we are outside the tag.
         // e.g. title="a > b {% if show %}text{% endif %}" with show=False
         // must produce title="a > b " not title="a > b <!--dj-if-->".
         let template = r#"<div title="a > b {% if show %}text{% endif %}"></div>"#;

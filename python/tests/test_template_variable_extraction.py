@@ -395,8 +395,7 @@ class TestPerformance:
         100 ms bound flaked on busy runners and the 500 ms replacement still asserted a
         claim about the machine. Doubling the blocks (100 -> 200) must cost under 25x as
         much. That is a catastrophic-regression guard (exponential, or a factor worse
-        than today's), NOT a linearity claim: today it is ~6x per doubling, see
-        ``test_large_template_is_linear``. For tight perf tracking use
+        than today's), NOT a linearity claim: see ``test_large_template_is_linear``. For tight perf tracking use
         ``pytest-benchmark`` runs in CI.
         """
         templates = {scale: self._template(100 * scale) for scale in (1, 2)}
@@ -410,19 +409,29 @@ class TestPerformance:
         # Verify we got results
         assert len(extract_template_variables(templates[1])) > 0
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,  # the growth assertion, not an ImportError or a rename
-        reason=(
-            "extract_template_variables is super-linear in the number of blocks: about 6x "
-            "per doubling at 100-200 blocks and 8x at 800-1600, roughly n^2.9 (#3724). "
-            "The absolute bound this file used to assert (0.5 s at 100 blocks, which costs "
-            "~6 ms) could not see it. strict: a fix XPASSes and fails, so the marker goes."
-        ),
+    @pytest.mark.parametrize(
+        "block",
+        [
+            pytest.param(None, id="for-loops"),
+            pytest.param("{% if x %}{{ y }}{% endif %}", id="if-var"),
+            pytest.param("\n  {{ y.name }}\n  {% if c %}shown{% endif %}\n", id="whitespace-sep"),
+        ],
     )
-    def test_large_template_is_linear(self):
-        """Four times the blocks (100 -> 400) must cost under ten times as much."""
-        templates = {scale: self._template(100 * scale) for scale in (1, 4)}
+    def test_large_template_is_linear(self, block):
+        """Four times the blocks must cost under ten times as much.
+
+        It cost ~7x per doubling (roughly n^2.9) until #3724: ``is_inside_html_tag_at``
+        walked back over every preceding token for each ``{{ }}`` and ``{% if %}``
+        whenever the text between tags held no ``>``, which is every template whose
+        blocks are separated by whitespace, as the default shape's are. The ``if-var``
+        shape is the issue's reproduction (no text at all between tags), and
+        ``whitespace-sep`` has text between tags that still never holds a ``>``.
+        """
+        build = self._template if block is None else (lambda n: block * n)
+        # The shapes with less text per block need more of them before the old walk's
+        # token-by-token cost rises above the clock's noise.
+        base = {None: 100, "{% if x %}{{ y }}{% endif %}": 3200}.get(block, 400)
+        templates = {scale: build(base * scale) for scale in (1, 4)}
         assert_scales_linearly(
             lambda scale: extract_template_variables(templates[scale]),
             what="extracting template variables",
