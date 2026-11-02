@@ -2029,19 +2029,23 @@ def register_with_rust_engine() -> None:
         # Django template engine with {% load djust_components %})
         return
 
-    # Positional arguments (#3664): the Python tags are ``simple_tag`` /
-    # ``inclusion_tag``, so ``{% dj_tag "Python" %}`` is valid; a native handler
-    # reads ``key=value`` strings, so each one is wrapped to name its positional
-    # tokens after the Python tag's own parameters.
-    from djust._positional_args import with_positional_args
+    # Arguments (#3664, #3676): a native handler reads ``key=value`` strings, so
+    # each one is wrapped to take exactly the arguments its Python tag takes.
+    # A ``simple_tag`` / ``inclusion_tag`` accepts positional ones
+    # (``{% dj_tag "Python" %}``), named at compile time after the tag's own
+    # parameters; a raw ``@register.tag`` accepts what its compile function
+    # accepts, and Django refuses a bare ``{% alert val %}``, so does the engine.
+    from djust._positional_args import with_argument_contract
 
     from .templatetags.djust_components import register as _tag_library
 
     for tag_name, handler in INLINE_HANDLERS:
-        register_tag_handler(tag_name, with_positional_args(tag_name, handler, _tag_library))
+        register_tag_handler(tag_name, with_argument_contract(tag_name, handler, _tag_library))
 
     for tag_name, end_tag, handler in BLOCK_HANDLERS:
-        register_block_tag_handler(tag_name, end_tag, handler)
+        register_block_tag_handler(
+            tag_name, end_tag, with_argument_contract(tag_name, handler, _tag_library)
+        )
 
     # Component system (v0.5.0): {% call %}, {% component %}, {% slot %},
     # {% render_slot %}. Registered here so the tags are available without
