@@ -429,7 +429,7 @@ async def _ws_mounted():
     communicator.scope["user"] = AnonymousUser()
     connected, _ = await communicator.connect()
     assert connected
-    await communicator.receive_json_from(timeout=3)
+    await communicator.receive_json_from()
     await communicator.send_json_to({"type": "mount", "view": MOD + ".Page", "url": "/page/"})
     for _ in range(8):
         frame = await communicator.receive_json_from(timeout=10)
@@ -548,7 +548,7 @@ async def _ws_sticky_page():
     communicator.scope["user"] = AnonymousUser()
     connected, _ = await communicator.connect()
     assert connected
-    await communicator.receive_json_from(timeout=3)
+    await communicator.receive_json_from()
     await communicator.send_json_to(
         {"type": "mount", "view": MOD + ".StickyPage", "url": "/sticky/"}
     )
@@ -695,7 +695,7 @@ async def _ws_push_page():
     communicator.scope["user"] = AnonymousUser()
     connected, _ = await communicator.connect()
     assert connected
-    await communicator.receive_json_from(timeout=3)
+    await communicator.receive_json_from()
     await communicator.send_json_to({"type": "mount", "view": MOD + ".PushPage", "url": "/push/"})
     for _ in range(8):
         frame = await communicator.receive_json_from(timeout=10)

@@ -91,7 +91,7 @@ class HomeView(LiveView):
 # ---------------------------------------------------------------------------
 
 
-async def _receive_until(communicator, wanted_type, *, tries=6, timeout=3):
+async def _receive_until(communicator, wanted_type, *, tries=6, timeout=30):
     """Drain frames until one whose ``type`` == ``wanted_type`` (or return last seen)."""
     last = None
     for _ in range(tries):
@@ -126,7 +126,7 @@ async def _connect_and_mount(view_path: str, url: str):
 
     connected, _ = await communicator.connect()
     assert connected, "WebsocketCommunicator must connect"
-    await communicator.receive_json_from(timeout=2)  # drain connect frame
+    await communicator.receive_json_from()  # drain connect frame
 
     await communicator.send_json_to({"type": "mount", "view": view_path, "url": url})
     mount_resp = await _receive_until(communicator, "mount")
@@ -176,7 +176,7 @@ async def test_embedded_sticky_child_event_produces_update_not_noop():
                 "ref": 1,
             }
         )
-        resp = await communicator.receive_json_from(timeout=3)
+        resp = await communicator.receive_json_from()
 
         assert resp.get("type") != "noop", (
             "Embedded sticky-child event returned a bare noop — no patch/HTML was "
@@ -224,7 +224,7 @@ async def test_notifications_view_dismiss_works_standalone_control():
         await communicator.send_json_to(
             {"type": "event", "event": "dismiss", "params": {"id": 1}, "ref": 1}
         )
-        resp = await communicator.receive_json_from(timeout=3)
+        resp = await communicator.receive_json_from()
 
         assert resp.get("type") != "noop", (
             "Standalone NotificationsView.dismiss must NOT noop — the handler "

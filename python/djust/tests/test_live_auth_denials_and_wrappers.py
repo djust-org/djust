@@ -387,7 +387,7 @@ async def _next_output(communicator):
     while await communicator.receive_nothing(timeout=0.05, interval=0.01):
         if loop.time() >= deadline:
             raise asyncio.TimeoutError
-    return await communicator.receive_output(timeout=3)
+    return await communicator.receive_output()
 
 
 async def _ws(user_cls, view_name, event=None, url="/x/"):

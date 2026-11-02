@@ -120,7 +120,7 @@ async def _drive(events, *, candidate=False):
     with patched, override_settings(LIVEVIEW_ALLOWED_MODULES=[MODULE]):
         connected, _ = await communicator.connect()
         assert connected
-        await communicator.receive_json_from(timeout=2)
+        await communicator.receive_json_from()
         await communicator.send_json_to({"type": "mount", "view": f"{MODULE}.Feed", "url": "/"})
         mounted = await _receive_until(communicator, "mount")
         assert all(f"BODY{i}" in mounted["html"] for i in range(5))

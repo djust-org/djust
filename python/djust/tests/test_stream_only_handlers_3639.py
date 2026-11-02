@@ -144,13 +144,13 @@ async def drive(view_name, events, *, module=None):
     with override_settings(LIVEVIEW_ALLOWED_MODULES=[module]):
         connected, _ = await communicator.connect()
         assert connected
-        await communicator.receive_json_from(timeout=2)
+        await communicator.receive_json_from()
         await communicator.send_json_to(
             {"type": "mount", "view": f"{module}.{view_name}", "url": "/"}
         )
         mounted = None
         for _ in range(8):
-            mounted = await communicator.receive_json_from(timeout=3)
+            mounted = await communicator.receive_json_from()
             if mounted.get("type") == "mount":
                 break
         assert mounted and mounted.get("type") == "mount", mounted
@@ -159,7 +159,7 @@ async def drive(view_name, events, *, module=None):
                 {"type": "event", "event": event, "params": {}, "ref": ref}
             )
             for _ in range(8):
-                frame = await communicator.receive_json_from(timeout=3)
+                frame = await communicator.receive_json_from()
                 if frame.get("type") in ("patch", "noop", "html_update", "error"):
                     break
             frames.append(frame)

@@ -11,6 +11,7 @@ from django.core.management import call_command
 from django.core.exceptions import ImproperlyConfigured
 
 from djust.audit_ast import AST_FINDING_CODES, run_ast_audit
+from djust.tests._growth import assert_scales_linearly
 
 
 def _tree(tmp_path, files):
@@ -793,12 +794,14 @@ class TestReviewRegressions:
         "css-font-face-nesting",
     ],
 )
-def test_adversarial_scan_completes_under_two_seconds(case):
-    import gc
-    import time
+def test_adversarial_scan_is_linear(case):
     from djust.audit_ui import scan_ui, _scan_stylesheet
 
-    size = 524288 if case == "table" else 1048576
+    # Growth, not an absolute bound (#3711): the case is scanned at 1/16 and at 1/4 of
+    # its original size (1 MB; 512 KB for the table, which costs more per byte), and
+    # four times the input must cost under ten times as much. A pathological
+    # (super-linear) scan is ~16x; a stalled runner moves neither size's best of three.
+    full_size = 524288 if case == "table" else 1048576
     units = {
         "div": "<div>",
         "html-comment": "<!-- ",
@@ -822,32 +825,20 @@ def test_adversarial_scan_completes_under_two_seconds(case):
         "html-noqa": "{# djust: noqa",
     }.get(case, "")
     suffix = {"table": "{% endfor %}</table>", "css-letters-block": "}"}.get(case, "")
-    remaining = size - len(prefix) - len(suffix)
     unit = units[case]
-    source = prefix + unit * (remaining // len(unit)) + " " * (remaining % len(unit)) + suffix
 
-    def scan():
+    def build(size):
+        remaining = size - len(prefix) - len(suffix)
+        return prefix + unit * (remaining // len(unit)) + " " * (remaining % len(unit)) + suffix
+
+    def scan(source):
         if case.startswith("css-"):
             return _scan_stylesheet("app.css", source)
         return scan_ui(".", {"app/templates/page.html": source}, {"page.html"}).findings
 
-    # A loaded CI runner can push one sample over the bound (a GC pass, a
-    # preempted core). A slow sample is retried, up to three in all, with the
-    # collector off, and the best one counts: noise only adds time, while a
-    # pathological (super-linear) scan of 1 MB stays far over 2 s every time.
-    elapsed = float("inf")
-    for _ in range(3):
-        gc.collect()
-        gc.disable()
-        try:
-            start = time.process_time()
-            findings = scan()
-            elapsed = min(elapsed, time.process_time() - start)
-        finally:
-            gc.enable()
-        if elapsed < 2:
-            break
-    assert elapsed < 2, (case, elapsed)
+    sources = {1: build(full_size // 16), 4: build(full_size // 4)}
+    assert_scales_linearly(lambda scale: scan(sources[scale]), what=case)
+    findings = scan(sources[4])
     if case == "table":
         assert [f.code for f in findings] == ["X101"]
     elif case == "css-normal":
@@ -1520,15 +1511,22 @@ class TestReviewFixes3687:
     """Findings from the PR #3702 review."""
 
     def test_many_style_attributes_on_one_tag_scan_in_linear_time(self):
-        import time
-
         from djust.audit_ui import scan_ui
 
         # `attrs.count("\n", 0, ...)` per attribute made this quadratic (21 s at 80k).
-        source = "<div dj-root " + 'style="a" ' * 40000 + ">x</div>"
-        start = time.process_time()
-        scan_ui(".", {"app/templates/page.html": source}, {"page.html"})
-        assert time.process_time() - start < 2.0
+        # Growth, not an absolute bound (#3711): 4x the attributes under 10x the cost.
+        assert_scales_linearly(
+            lambda scale: scan_ui(
+                ".",
+                {
+                    "app/templates/page.html": "<div dj-root "
+                    + 'style="a" ' * (10000 * scale)
+                    + ">x</div>"
+                },
+                {"page.html"},
+            ),
+            what="scanning style attributes on one tag",
+        )
 
     def test_style_attributes_on_different_lines_of_one_tag_report_their_own_lines(self, tmp_path):
         _tree(

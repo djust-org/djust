@@ -117,9 +117,9 @@ async def connect(session_key, view):
     comm.scope["user"] = AnonymousUser()
     connected, _ = await comm.connect()
     assert connected
-    await comm.receive_json_from(timeout=5)
+    await comm.receive_json_from()
     await comm.send_json_to({"type": "mount", "view": f"{MODULE}.{view}", "url": PATH})
-    frame = await comm.receive_json_from(timeout=5)
+    frame = await comm.receive_json_from()
     assert frame["type"] == "mount", frame
     return comm
 
@@ -127,7 +127,7 @@ async def connect(session_key, view):
 async def event_reply(comm, event, **params):
     await comm.send_json_to({"type": "event", "event": event, "params": params})
     while True:
-        frame = await comm.receive_json_from(timeout=5)
+        frame = await comm.receive_json_from()
         if frame.get("type") in {"embedded_update", "error", "patch", "html_update", "noop"}:
             return frame
 

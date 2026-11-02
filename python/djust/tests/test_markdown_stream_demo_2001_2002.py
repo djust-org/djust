@@ -152,14 +152,14 @@ async def _connect_and_mount(view_suffix, url="/mdstream/"):
 
     connected, _ = await communicator.connect()
     assert connected, "WebsocketCommunicator must connect"
-    await communicator.receive_json_from(timeout=2)  # drain connect frame
+    await communicator.receive_json_from()  # drain connect frame
 
     await communicator.send_json_to(
         {"type": "mount", "view": f"{_MODULE}.{view_suffix}", "url": url}
     )
     # Drain until the mount frame.
     for _ in range(6):
-        frame = await communicator.receive_json_from(timeout=3)
+        frame = await communicator.receive_json_from()
         if frame.get("type") == "mount":
             return communicator, frame
     raise AssertionError("never received a mount frame")
@@ -169,7 +169,7 @@ def _is_done_op(frame):
     return frame.get("type") == "stream" and frame.get("ops", [{}])[0].get("op") == "done"
 
 
-async def _drain_until_done(communicator, tries=40, timeout=3):
+async def _drain_until_done(communicator, tries=40, timeout=30):
     """Collect frames until the ``stream_done`` sentinel arrives.
 
     Stops AT the ``done`` op — never lets ``receive_json_from`` time out, which

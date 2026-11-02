@@ -203,16 +203,25 @@ def test_class_snippets_use_public_constructor_signatures():
 
 def test_suggest_megabyte_intent_is_bounded():
     import json
-    import time
     from djust.ai_discovery.catalog import load_catalog, search
     from djust.ai_discovery.runner import render_suggest
+    from djust.tests._growth import assert_scales_linearly
 
     load_catalog()
     intent = ("table filters searchable dropdown " * 40000)[:1_048_576]
-    start = time.process_time()
+    # "Bounded" means the intent is cut to 512 characters before any work, so the cost
+    # must not grow with it. Judged by growth, not by seconds (#3711): 4x the intent
+    # (256 KB -> 1 MB) must cost under 3x as much (a linear scan would cost ~4x).
+    assert_scales_linearly(
+        lambda scale: (
+            search(intent[: 262_144 * scale]),
+            render_suggest(intent[: 262_144 * scale], 5, as_json=True),
+        ),
+        limit=3.0,
+        what="suggesting from a long intent",
+    )
     actual = search(intent)
     payload = json.loads(render_suggest(intent, 5, as_json=True))
-    assert time.process_time() - start < 1
     assert actual == search(intent[:512])
     assert payload["intent"] == intent[:512]
 

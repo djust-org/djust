@@ -235,7 +235,7 @@ class TestOtherTransports:
         communicator.scope["session"] = _Scope()
         connected, _ = await communicator.connect()
         assert connected
-        await communicator.receive_json_from(timeout=2)
+        await communicator.receive_json_from()
         await communicator.send_json_to(
             {
                 "type": "mount",
@@ -246,7 +246,7 @@ class TestOtherTransports:
         )
         frame = None
         for _ in range(10):
-            frame = await communicator.receive_json_from(timeout=3)
+            frame = await communicator.receive_json_from()
             if frame.get("type") in {"mount", "error"}:
                 break
         assert frame is not None and frame["type"] == "mount", frame

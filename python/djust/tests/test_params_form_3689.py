@@ -684,7 +684,7 @@ async def _connect(view_name, *, params=None, url="/list/"):
     communicator.scope["session"] = _ScopeSession(key)
     connected, _ = await communicator.connect()
     assert connected
-    await communicator.receive_json_from(timeout=2)  # connect frame
+    await communicator.receive_json_from()  # connect frame
     await communicator.send_json_to(
         {"type": "mount", "view": f"{__name__}.{view_name}", "url": url, "params": params or {}}
     )

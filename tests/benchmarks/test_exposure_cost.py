@@ -211,11 +211,11 @@ async def _connect(session_key: str, policy: str):
     comm.scope["user"] = AnonymousUser()
     connected, _ = await comm.connect()
     assert connected
-    await comm.receive_json_from(timeout=5)  # connect ack
+    await comm.receive_json_from()  # connect ack
     await comm.send_json_to(
         {"type": "mount", "view": f"{__name__}.{VIEWS[policy].__name__}", "url": PATH}
     )
-    frame = await comm.receive_json_from(timeout=5)
+    frame = await comm.receive_json_from()
     assert frame["type"] == "mount", frame
     return comm, frame
 
@@ -267,7 +267,7 @@ def test_ws_event(benchmark, staged, policy):
     async def _event() -> Dict[str, Any]:
         await comm.send_json_to({"type": "event", "event": "increment", "params": {}})
         while True:
-            frame = await comm.receive_json_from(timeout=5)
+            frame = await comm.receive_json_from()
             if frame.get("type") in {"patch", "html_update", "error"}:
                 replies.append(frame["type"])
                 return frame

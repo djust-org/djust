@@ -183,7 +183,7 @@ async def test_native_signed_mount_roundtrip_retains_ids_and_dispatches_to_corre
                     "params": {"component_id": identity, "value": "edit"},
                 }
             )
-            response = await second.receive_json_from(timeout=3)
+            response = await second.receive_json_from()
             assert response["type"] == "html_update"
             assert "project:edit" in response["html"]
         finally:
@@ -266,7 +266,7 @@ async def test_signed_transport_rejects_invalid_binding_restore_and_mounts_fresh
                     "params": {"component_id": old_id, "value": "edit"},
                 }
             )
-            rejected = await socket.receive_json_from(timeout=3)
+            rejected = await socket.receive_json_from()
             assert rejected["type"] == "error"
             assert "Component not found" in json.dumps(rejected)
         finally:

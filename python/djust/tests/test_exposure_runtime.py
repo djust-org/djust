@@ -336,11 +336,11 @@ async def test_real_websocket_persists_reconnects_and_refuses_deleted_session(
         comm.scope["user"] = AnonymousUser()
         connected, _ = await comm.connect()
         assert connected
-        await comm.receive_json_from(timeout=5)
+        await comm.receive_json_from()
         await comm.send_json_to(
             {"type": "mount", "view": __name__ + "." + view_name, "url": request.path}
         )
-        frame = await comm.receive_json_from(timeout=5)
+        frame = await comm.receive_json_from()
         assert frame["type"] == "mount", frame
         assert "SENTINEL" not in json.dumps(frame)
         return comm, frame
@@ -357,7 +357,7 @@ async def test_real_websocket_persists_reconnects_and_refuses_deleted_session(
         try:
             assert ">5<" in frame["html"]
             await comm.send_json_to({"type": "event", "event": "increment", "params": {}})
-            reply = await comm.receive_json_from(timeout=5)
+            reply = await comm.receive_json_from()
             assert reply["type"] in {"patch", "html_update"}, reply
             assert "SENTINEL" not in json.dumps(reply)
         finally:
@@ -368,10 +368,10 @@ async def test_real_websocket_persists_reconnects_and_refuses_deleted_session(
             assert ">6<" in frame["html"]
             await sync_to_async(SessionStore(request.session.session_key).delete)()
             await comm.send_json_to({"type": "event", "event": "increment", "params": {}})
-            reply = await comm.receive_json_from(timeout=5)
+            reply = await comm.receive_json_from()
             assert reply["type"] == "error", reply
             assert "SENTINEL" not in json.dumps(reply)
-            closed = await comm.receive_output(timeout=5)
+            closed = await comm.receive_output()
             assert closed == {"type": "websocket.close", "code": 4403}
         finally:
             await comm.disconnect()

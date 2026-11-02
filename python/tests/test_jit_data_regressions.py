@@ -241,9 +241,9 @@ async def test_websocket_model_list(data_rows):
         try:
             connected, _ = await communicator.connect()
             assert connected
-            await communicator.receive_json_from(timeout=5)
+            await communicator.receive_json_from()
             await communicator.send_json_to({"type": "mount", "view": f"{__name__}.DataListView"})
-            message = await communicator.receive_json_from(timeout=5)
+            message = await communicator.receive_json_from()
             assert message["type"] == "mount", message
             assert_list_html(message["html"])
         finally:

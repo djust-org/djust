@@ -218,11 +218,11 @@ async def test_new_socket_mount_serves_the_edit(project):
             session=await sync_to_async(_session)(), user=AnonymousUser(), tenant=None
         )
         assert (await socket.connect())[0]
-        await socket.receive_json_from(timeout=3)
+        await socket.receive_json_from()
         await socket.send_json_to(
             {"type": "mount", "view": project.names.views + ".PageView", "url": "/page/"}
         )
-        frame = await socket.receive_json_from(timeout=5)
+        frame = await socket.receive_json_from()
         await socket.disconnect()
     assert frame["type"] == "mount", frame
     assert "LABEL-v2" in frame["html"], frame["html"]

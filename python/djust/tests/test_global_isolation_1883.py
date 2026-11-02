@@ -267,7 +267,7 @@ _TT_MOD = "djust.tests.test_recovery_version_staleness_1817"
 _ARM_REF = 1
 
 
-async def _recv_until(comm, wanted, *, ref=None, tries=8, timeout=3):
+async def _recv_until(comm, wanted, *, ref=None, tries=8, timeout=30):
     """Drain frames until one of ``wanted`` type (and matching ``ref``, if given).
 
     ``ref`` matters more than it looks. A hot-reload broadcast is not its own
@@ -326,7 +326,7 @@ async def _drive_jump_with_stale_layer_sender(reset_layer: bool):
     comm.scope["session"] = _S(key)
     ok, _ = await comm.connect()
     assert ok
-    await comm.receive_json_from(timeout=2)  # connect frame
+    await comm.receive_json_from()  # connect frame
 
     await comm.send_json_to({"type": "mount", "view": f"{_TT_MOD}._TTRecoveryView", "url": "/tt/"})
     mount = await _recv_until(comm, "mount")
@@ -346,7 +346,7 @@ async def _drive_jump_with_stale_layer_sender(reset_layer: bool):
     await comm.send_json_to({"type": "time_travel_jump", "index": 0, "which": "before"})
     v_jump = None
     for _ in range(8):
-        f = await comm.receive_json_from(timeout=3)
+        f = await comm.receive_json_from()
         if f.get("type") in ("patch", "html_update"):
             v_jump = f["version"]
             break

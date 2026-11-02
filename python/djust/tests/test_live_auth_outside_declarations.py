@@ -463,10 +463,7 @@ async def _ws(user_cls, view_name, event=None):
     communicator = WebsocketCommunicator(_with_user(LiveViewConsumer.as_asgi(), user_cls), "/ws/")
     connected, _ = await communicator.connect()
     assert connected
-    try:
-        await communicator.receive_json_from(timeout=2)  # connect ack
-    except (asyncio.TimeoutError, asyncio.CancelledError):
-        pass
+    await communicator.receive_json_from()  # connect ack
     await communicator.send_json_to(
         {"type": "mount", "view": f"{_MOD}.{view_name}", "params": {}, "url": "/x/"}
     )

@@ -168,7 +168,7 @@ async def _connect(user=None):
     communicator.scope["session"] = SessionStore(await sync_to_async(_fresh_key)())
     communicator.scope["user"] = user or AnonymousUser()
     assert (await communicator.connect())[0]
-    await communicator.receive_json_from(timeout=3)
+    await communicator.receive_json_from()
     return communicator
 
 
@@ -176,7 +176,7 @@ async def _outputs(communicator, quiet=0.5):
     """Every frame (and a close) until the socket is quiet."""
     seen = []
     while not await communicator.receive_nothing(timeout=quiet):
-        output = await communicator.receive_output(timeout=3)
+        output = await communicator.receive_output()
         if output["type"] == "websocket.close":
             seen.append({"type": "websocket.close", "code": output.get("code")})
         else:

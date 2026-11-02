@@ -371,7 +371,7 @@ async def _ws_connect(session_key=None):
     communicator.scope["user"] = AnonymousUser()
     connected, _ = await communicator.connect()
     assert connected
-    await communicator.receive_json_from(timeout=2)  # connect ack
+    await communicator.receive_json_from()  # connect ack
     return communicator
 
 
@@ -460,7 +460,7 @@ async def test_a_view_the_mount_refuses_gets_neither_hook():
         )
         seen = []
         while not seen or seen[-1]["type"] != "websocket.close":
-            seen.append(await communicator.receive_output(timeout=5))
+            seen.append(await communicator.receive_output())
         assert all(_kind(o) != "mount" for o in seen), seen
     finally:
         await _close(communicator)

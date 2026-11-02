@@ -221,10 +221,7 @@ def _authed_middleware(app):
 
 
 async def _drain_handshake(communicator):
-    try:
-        await communicator.receive_json_from(timeout=2)
-    except Exception:
-        pass
+    await communicator.receive_json_from()
 
 
 @pytest.fixture
@@ -376,7 +373,7 @@ class TestWebSocketMountSequence:
         await _drain_handshake(communicator)
         await communicator.send_json_to({"type": "mount", "view": _PUBLIC_PATH, "url": "/pub/"})
 
-        resp = await communicator.receive_json_from(timeout=3)
+        resp = await communicator.receive_json_from()
         assert resp.get("type") == "mount", f"expected a mount frame, got {resp!r}"
         assert "pub:7" in (resp.get("html") or ""), f"mount() state missing: {resp!r}"
         await communicator.disconnect()
@@ -395,9 +392,9 @@ class TestWebSocketMountSequence:
         await _drain_handshake(communicator)
         await communicator.send_json_to({"type": "mount", "view": _LOGIN_PATH, "url": "/secret/"})
 
-        nav = await communicator.receive_json_from(timeout=2)
+        nav = await communicator.receive_json_from()
         assert nav.get("type") == "navigate", f"expected navigate redirect, got {nav!r}"
-        out = await communicator.receive_output(timeout=2)
+        out = await communicator.receive_output()
         assert out["type"] == "websocket.close" and out.get("code") == 4403, (
             f"socket not closed 4403 after auth redirect: {out!r}"
         )
@@ -427,9 +424,9 @@ class TestWebSocketMountSequence:
             await communicator.send_json_to(
                 {"type": "mount", "view": _LOGIN_PATH, "url": "/secret/"}
             )
-            nav = await communicator.receive_json_from(timeout=2)
+            nav = await communicator.receive_json_from()
             assert nav.get("type") == "navigate", f"{attempt}: {nav!r}"
-            out = await communicator.receive_output(timeout=2)
+            out = await communicator.receive_output()
             assert out["type"] == "websocket.close" and out.get("code") == 4403, (
                 f"{attempt}: socket not closed 4403 after auth redirect: {out!r}"
             )
@@ -449,9 +446,9 @@ class TestWebSocketMountSequence:
         await _drain_handshake(communicator)
         await communicator.send_json_to({"type": "mount", "view": _OBJ_DENIED_PATH, "url": "/obj/"})
 
-        err = await communicator.receive_json_from(timeout=2)
+        err = await communicator.receive_json_from()
         assert err.get("type") == "error", f"expected object-perm error frame, got {err!r}"
-        out = await communicator.receive_output(timeout=2)
+        out = await communicator.receive_output()
         assert out["type"] == "websocket.close" and out.get("code") == 4403, (
             f"socket not closed 4403 after object-perm denial: {out!r}"
         )
@@ -473,7 +470,7 @@ class TestWebSocketMountSequence:
         await communicator.send_json_to(
             {"type": "mount", "view": _STICKY_PARENT_PATH, "url": "/dash/"}
         )
-        resp = await communicator.receive_json_from(timeout=3)
+        resp = await communicator.receive_json_from()
         assert resp.get("type") == "mount", f"sticky-parent mount failed: {resp!r}"
         html = resp.get("html") or ""
         assert "parent" in html and "child:3" in html, (
@@ -510,7 +507,7 @@ class TestWebSocketMountSequence:
                 },
             }
         )
-        resp = await communicator.receive_json_from(timeout=3)
+        resp = await communicator.receive_json_from()
         assert resp.get("type") == "mount", f"snapshot-restore mount failed: {resp!r}"
         await communicator.disconnect()
 
