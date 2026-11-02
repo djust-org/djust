@@ -241,6 +241,17 @@ Two name shapes appear in this roadmap, with distinct meanings:
 | ~~**P3**~~ | ~~#3726 — Convert the kept try/pass drains in four live-auth and form-route test files to `receive_until` / `receive_settled` (keep `receive_nothing` where something must not arrive) and tighten the #3709 ratchet over them~~ ✅ (#3732) | v1.3.0 |
 | ~~**P2**~~ | ~~#3451 — The presence test flake (`test_presence_timeout_retries_after_retirement_without_another_join`): diagnose between a runner stall over 30 s and a lost wake-up in the test, from the three failing logs; may close without code~~ ✅ (#3738) | v1.3.0 |
 
+### v1.3.0-18 — native component-handler parity: parameter injection, URL schemes, object arguments, lenient input (drain bucket → ships in 1.3)
+
+*Kind:* one security-first bucket from the component-tag parity audit (#3655 / #3660). **A, theming URLs:** the denylist sanitiser. **B, raw-tag parse:** bare operands read as `key=value`. **C, handler fidelity:** Form/BoundField arguments and invalid input. **Deferred by decision (2026-11-02):** #3663 (117 of 208 tags render different markup per engine) and #3669 (`dj-*` attributes differ on 12 tags) stay open; each touches 100+ tags or needs a call on which engine's markup wins.
+
+| Priority | Task | Milestone |
+|---|---|---|
+| **P1** | #3676 — Native raw `@register.tag` handlers refuse a bare operand at parse time with Django's message (`Unexpected argument 'val'. Use key=value format.`), so a variable's value is never read as `key=value` pairs (117 of 136 tags) | v1.3.0 |
+| **P2** | #3677 — `djust_theming` sanitises URLs with the `djust_components` allowlist (`safe_url` / `url_attr`), not a denylist; the #3675 sweep runs over the theming tags as a regression net | v1.3.0 |
+| **P2** | #3666 — `Form` / `BoundField` arguments reach the native Rust component handlers (`{% field_error field=form.name %}` renders the same under both engines) | v1.3.0 |
+| **P2** | #3667 — Native Rust handlers raise the errors the Python tags raise for invalid input, and the leaked method repr in `notification_popover` is fixed | v1.3.0 |
+
 ## Next: v1.2.1 — non-breaking fixes (drain)
 
 > Planned 2026-09-24 from a triage of every open issue. **Policy:** non-breaking bug fixes ship in 1.2.1; anything breaking, new features, and parser/dependency upgrades go to 1.3. Issues split into a 1.2.1 part and a 1.3 part are marked. The ADR-034–038 stack (#2944, #2954) merges after 1.2.1 is cut. Already shipped toward 1.2.1 on `main`: #3009 (inline whitespace, #2999/#3010), the CSRF resolver (#2978), SerializerCache removal (#2992), the audit gate (#2989).
