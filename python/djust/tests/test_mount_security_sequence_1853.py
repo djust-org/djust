@@ -221,10 +221,7 @@ def _authed_middleware(app):
 
 
 async def _drain_handshake(communicator):
-    try:
-        await communicator.receive_json_from(timeout=2)
-    except Exception:
-        pass
+    await communicator.receive_json_from()
 
 
 @pytest.fixture

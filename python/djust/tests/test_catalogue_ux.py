@@ -260,10 +260,7 @@ async def _mount(component_name: str):
     communicator = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
     connected, _ = await communicator.connect()
     assert connected
-    try:
-        await communicator.receive_json_from(timeout=3)
-    except Exception:  # noqa: BLE001
-        pass
+    await communicator.receive_json_from()
     await communicator.send_json_to(
         {
             "type": "mount",

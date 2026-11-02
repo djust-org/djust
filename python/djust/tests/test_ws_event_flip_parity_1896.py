@@ -45,7 +45,7 @@ from ._ws_frames import drain_extra, has_type, receive_until
 # ---------------------------------------------------------------------------
 
 
-async def _receive_until(communicator, wanted_type, *, tries=8, timeout=3):
+async def _receive_until(communicator, wanted_type, *, tries=8, timeout=30):
     """Drain frames until one whose ``type`` == ``wanted_type`` (or last seen)."""
     last = None
     for _ in range(tries):

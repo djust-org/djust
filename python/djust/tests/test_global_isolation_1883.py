@@ -267,7 +267,7 @@ _TT_MOD = "djust.tests.test_recovery_version_staleness_1817"
 _ARM_REF = 1
 
 
-async def _recv_until(comm, wanted, *, ref=None, tries=8, timeout=3):
+async def _recv_until(comm, wanted, *, ref=None, tries=8, timeout=30):
     """Drain frames until one of ``wanted`` type (and matching ``ref``, if given).
 
     ``ref`` matters more than it looks. A hot-reload broadcast is not its own

@@ -146,10 +146,7 @@ async def _connect_and_mount(communicator):
     connected, _ = await communicator.connect()
     assert connected
     # Drain the initial connect/handshake frame if one is sent.
-    try:
-        await communicator.receive_json_from(timeout=2)
-    except Exception:
-        pass
+    await communicator.receive_json_from()
     await communicator.send_json_to({"type": "mount", "view": _VIEW_PATH})
 
 
@@ -194,7 +191,10 @@ async def test_anonymous_cannot_dispatch_event_after_login_redirect():
 
     # A raw client ignores the navigate and tries to mutate state.
     await communicator.send_json_to({"type": "event", "event": "do_mutation", "params": {}})
-    # Give the consumer a chance to (wrongly) process it.
+    # Give the consumer a chance to (wrongly) process it. The short timeout is the point:
+    # after the redirect the socket is closed (4403), so what arrives is a close, which
+    # ``receive_json_from`` rejects, or nothing; both end the window. (#3709: an absence
+    # window, not a wait for a frame that will arrive.)
     try:
         await communicator.receive_json_from(timeout=1)
     except Exception:
@@ -251,10 +251,7 @@ async def test_mount_batch_with_login_view_does_not_close_shared_socket():
     communicator = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
     connected, _ = await communicator.connect()
     assert connected
-    try:
-        await communicator.receive_json_from(timeout=2)
-    except Exception:
-        pass
+    await communicator.receive_json_from()
     await communicator.send_json_to(
         {
             "type": "mount_batch",
@@ -319,10 +316,7 @@ async def test_mount_batch_with_objperm_denied_view_does_not_close_shared_socket
     communicator = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
     connected, _ = await communicator.connect()
     assert connected
-    try:
-        await communicator.receive_json_from(timeout=2)
-    except Exception:
-        pass
+    await communicator.receive_json_from()
     await communicator.send_json_to(
         {
             "type": "mount_batch",
@@ -373,10 +367,7 @@ async def test_single_objperm_denied_mount_still_closes_socket():
     communicator = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
     connected, _ = await communicator.connect()
     assert connected
-    try:
-        await communicator.receive_json_from(timeout=2)
-    except Exception:
-        pass
+    await communicator.receive_json_from()
     await communicator.send_json_to({"type": "mount", "view": _OBJPERM_PATH})
 
     err = await communicator.receive_json_from()

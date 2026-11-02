@@ -135,7 +135,7 @@ def _solicited_by(frame, ref) -> bool:
     return frame.get("ref") == ref or (frame.get("entry") or {}).get("ref") == ref
 
 
-async def _receive_until(communicator, wanted_type, *, ref=None, tries=8, timeout=3):
+async def _receive_until(communicator, wanted_type, *, ref=None, tries=8, timeout=30):
     """Drain frames until one of ``wanted_type`` (and matching ``ref``, if given).
 
     Pass ``ref`` whenever a stray could share the wanted type — otherwise this

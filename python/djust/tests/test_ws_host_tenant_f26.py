@@ -117,10 +117,7 @@ class TestHttpWsTenantParity:
         )
         connected, _ = await communicator.connect()
         assert connected
-        try:
-            await communicator.receive_json_from(timeout=2)
-        except Exception:
-            pass
+        await communicator.receive_json_from()
         await communicator.send_json_to({"type": "mount", "view": _VIEW_PATH})
         mount_resp = await communicator.receive_json_from()
         assert mount_resp.get("type") != "navigate", f"unexpected redirect: {mount_resp!r}"

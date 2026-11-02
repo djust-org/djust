@@ -91,7 +91,7 @@ class _RoundTripView(LiveView):
 # --------------------------------------------------------------------------- #
 # 1. Framework contract — real WebsocketCommunicator, second mount = cache HIT
 # --------------------------------------------------------------------------- #
-async def _receive_until(communicator, wanted_type, *, tries=5, timeout=3):
+async def _receive_until(communicator, wanted_type, *, tries=5, timeout=30):
     last = None
     for _ in range(tries):
         last = await communicator.receive_json_from(timeout=timeout)

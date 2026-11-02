@@ -50,10 +50,7 @@ async def _mount(component_name: str):
     connected, _ = await communicator.connect()
     assert connected, "the WebSocket did not accept the connection"
 
-    try:
-        await communicator.receive_json_from(timeout=3)  # connect ack
-    except Exception:  # noqa: BLE001 — absent on some transports
-        pass
+    await communicator.receive_json_from()  # connect ack
 
     await communicator.send_json_to(
         {

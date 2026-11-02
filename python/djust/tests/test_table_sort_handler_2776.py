@@ -67,7 +67,7 @@ _ROWS = [
 # ---------------------------------------------------------------------------
 
 
-async def _receive_until(communicator, wanted_type, *, tries=8, timeout=3):
+async def _receive_until(communicator, wanted_type, *, tries=8, timeout=30):
     last = None
     for _ in range(tries):
         last = await communicator.receive_json_from(timeout=timeout)

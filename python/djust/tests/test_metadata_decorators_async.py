@@ -139,10 +139,7 @@ async def test_decorated_async_handlers_run_over_the_socket(settings):
     communicator = WebsocketCommunicator(app, "/ws/")
     connected, _ = await communicator.connect()
     assert connected
-    try:
-        await communicator.receive_json_from(timeout=2)
-    except Exception:
-        pass
+    await communicator.receive_json_from()
     await communicator.send_json_to({"type": "mount", "view": f"{__name__}._AsyncHandlersView"})
     assert (await communicator.receive_json_from()).get("type") == "mount"
     await _event(communicator, "guarded")

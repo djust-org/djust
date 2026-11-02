@@ -260,16 +260,10 @@ async def _connect_and_mount():
     connected, _ = await communicator.connect()
     assert connected
     # Drain the initial connect/ack frame.
-    try:
-        await communicator.receive_json_from(timeout=2)
-    except Exception:
-        pass
+    await communicator.receive_json_from()
     await communicator.send_json_to({"type": "mount", "view": _UPLOAD_VIEW_PATH})
     # Drain the mount response.
-    try:
-        await communicator.receive_output(timeout=2)
-    except Exception:
-        pass
+    await communicator.receive_output()
     return communicator
 
 

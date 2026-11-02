@@ -99,7 +99,7 @@ class _WSHvrView(LiveView):
         self.count += 1
 
 
-async def _receive_until(communicator, wanted_type, *, tries=6, timeout=3):
+async def _receive_until(communicator, wanted_type, *, tries=6, timeout=30):
     """Drain frames until one whose ``type`` == ``wanted_type`` (or return last seen)."""
     last = None
     for _ in range(tries):

@@ -76,10 +76,7 @@ async def _mount(user, session):
     communicator = WebsocketCommunicator(app, "/ws/")
     connected, _ = await communicator.connect()
     assert connected
-    try:
-        await communicator.receive_json_from(timeout=2)
-    except Exception:
-        pass
+    await communicator.receive_json_from()
     await communicator.send_json_to({"type": "mount", "view": _VIEW_PATH})
     mounted = await communicator.receive_json_from()
     assert mounted.get("type") == "mount", mounted

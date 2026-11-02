@@ -37,7 +37,7 @@ class _AsyncParamsView(LiveView):
         self.loaded = f"loaded-{tab}"
 
 
-async def _receive_until(communicator, predicate, *, tries=10, timeout=3):
+async def _receive_until(communicator, predicate, *, tries=10, timeout=30):
     seen = []
     for _ in range(tries):
         frame = await communicator.receive_json_from(timeout=timeout)

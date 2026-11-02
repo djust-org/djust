@@ -502,10 +502,7 @@ async def test_ws_event_save_block_writes_through_to_session(generous_save_timeo
         )
         # Drain any frames sent in response (state diff / push / etc.).
         # We don't care about the response shape — only the session write.
-        try:
-            await communicator.receive_json_from(timeout=3)
-        except Exception:  # noqa: BLE001 — response timing is incidental here
-            pass
+        await communicator.receive_json_from()
 
         await communicator.disconnect()
 
@@ -610,10 +607,7 @@ async def test_ws_event_save_block_skipped_when_state_snapshot_opt_out():
                 "ref": 1,
             }
         )
-        try:
-            await communicator.receive_json_from(timeout=3)
-        except Exception:  # noqa: BLE001
-            pass
+        await communicator.receive_json_from()
 
         await communicator.disconnect()
 

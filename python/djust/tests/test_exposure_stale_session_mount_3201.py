@@ -10,6 +10,7 @@ These tests drive the real ``LiveViewConsumer`` over a ``WebsocketCommunicator``
 with a real DB session store, like ``test_exposure_runtime``.
 """
 
+import datetime
 import json
 
 import pytest
@@ -293,6 +294,7 @@ async def test_replacement_session_expires_with_the_state_lifetime(staged):
 
     key = await _persisted_then_deleted_session_key()
     before = await sync_to_async(_session_rows)()
+    opened = timezone.now()
     with override_settings(DJUST_SERVER_STATE_MAX_AGE=600), _settings():
         comm = await _connect(SessionStore(key))
         try:
@@ -300,10 +302,14 @@ async def test_replacement_session_expires_with_the_state_lifetime(staged):
             assert frame["type"] == "mount", frame
         finally:
             await comm.disconnect()
+    closed = timezone.now()
     [created] = await sync_to_async(_session_rows)() - before
     row = await sync_to_async(Session.objects.get)(session_key=created)
-    remaining = (row.expire_date - timezone.now()).total_seconds()
-    assert 0 < remaining <= 600, remaining
+    # The row was written between the two clock readings, with the state lifetime from
+    # the moment it was written: an ordering, not "remaining time under N" measured
+    # against a clock a stalled runner moves (#3711).
+    lifetime = datetime.timedelta(seconds=600)
+    assert opened + lifetime <= row.expire_date <= closed + lifetime, row.expire_date
 
 
 async def test_vanished_cached_db_session_mounts_fresh(staged):

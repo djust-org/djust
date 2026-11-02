@@ -502,10 +502,7 @@ async def _ws_mount(user, view_cls, url):
     socket = WebsocketCommunicator(_scoped(LiveViewConsumer.as_asgi(), user), "/ws/")
     connected, _ = await socket.connect()
     assert connected
-    try:
-        await socket.receive_json_from(timeout=2)
-    except Exception:  # noqa: BLE001 - the connect ack is optional here
-        pass
+    await socket.receive_json_from()
     await socket.send_json_to({"type": "mount", "view": f"{MOD}.{view_cls.__name__}", "url": url})
     frame = await socket.receive_json_from()
     closed = None

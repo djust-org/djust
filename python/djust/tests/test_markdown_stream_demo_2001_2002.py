@@ -169,7 +169,7 @@ def _is_done_op(frame):
     return frame.get("type") == "stream" and frame.get("ops", [{}])[0].get("op") == "done"
 
 
-async def _drain_until_done(communicator, tries=40, timeout=3):
+async def _drain_until_done(communicator, tries=40, timeout=30):
     """Collect frames until the ``stream_done`` sentinel arrives.
 
     Stops AT the ``done`` op — never lets ``receive_json_from`` time out, which

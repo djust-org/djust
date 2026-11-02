@@ -241,7 +241,7 @@ class TestWebsocketMountPath:
                 )
                 # First response may be an ack or the mount payload; drain once.
                 try:
-                    response = await communicator.receive_json_from(timeout=2)
+                    response = await communicator.receive_json_from()
                 except Exception:  # pragma: no cover - network sentinel
                     response = {}
                 await communicator.disconnect()

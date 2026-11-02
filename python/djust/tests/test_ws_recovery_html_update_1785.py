@@ -46,7 +46,7 @@ class _WSForceFullView(LiveView):
         self._force_full_html = True
 
 
-async def _receive_until(communicator, wanted_type, *, tries=5, timeout=3):
+async def _receive_until(communicator, wanted_type, *, tries=5, timeout=30):
     """Drain frames until one whose ``type`` == ``wanted_type`` (or return last seen)."""
     last = None
     for _ in range(tries):

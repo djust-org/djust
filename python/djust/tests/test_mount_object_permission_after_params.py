@@ -129,10 +129,7 @@ async def _ws_mount(frame):
     communicator = WebsocketCommunicator(_authed_middleware(LiveViewConsumer.as_asgi()), "/ws/")
     connected, _ = await communicator.connect()
     assert connected
-    try:
-        await communicator.receive_json_from(timeout=2)  # connect ack
-    except (asyncio.TimeoutError, asyncio.CancelledError):
-        pass
+    await communicator.receive_json_from()  # connect ack
     await communicator.send_json_to(frame)
     outputs = []
     try:

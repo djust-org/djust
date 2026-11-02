@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import pytest
 
@@ -59,24 +59,44 @@ _CLOCK_FUNCS = {
 }
 _LOOP_GETTERS = {"get_event_loop", "get_running_loop", "new_event_loop"}
 _PRESERVING = {"min", "max", "round", "abs", "float", "int", "sum"}
+_WALL_CLOCK_ATTRS = {"now", "utcnow", "today"}  # datetime.now(), timezone.now()
 
 
-def _is_clock_call(node: ast.AST) -> bool:
-    if not isinstance(node, ast.Call):
-        return False
-    func = node.func
-    if isinstance(func, ast.Name):
-        return func.id in _CLOCK_FUNCS - {"time"}
-    if not isinstance(func, ast.Attribute) or func.attr not in _CLOCK_FUNCS:
-        return False
-    owner = func.value
-    if isinstance(owner, ast.Name):
-        return owner.id in {"time", "_time", "_t"} or "loop" in owner.id.lower()
-    if isinstance(owner, ast.Call):  # asyncio.get_running_loop().time()
-        getter = owner.func
-        name = getter.attr if isinstance(getter, ast.Attribute) else getattr(getter, "id", "")
-        return name in _LOOP_GETTERS
-    return False
+class _Imports:
+    """How this module spells the clocks: ``from time import perf_counter as pc``,
+    ``import time as t``, ``from time import time``, ``from datetime import datetime as dt``,
+    ``from django.utils.timezone import now``. The unaliased spellings are always known."""
+
+    def __init__(self, tree: ast.AST) -> None:
+        self.time_functions: set[str] = set(_CLOCK_FUNCS - {"time"})
+        self.time_modules: set[str] = {"time", "_time", "_t"}
+        self.datetime_names: set[str] = {"datetime", "timezone", "dt"}
+        self.now_functions: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    bound = alias.asname or alias.name.split(".")[0]
+                    if alias.name == "time":
+                        self.time_modules.add(bound)
+                    if alias.name == "datetime":
+                        self.datetime_names.add(bound)
+            elif isinstance(node, ast.ImportFrom):
+                module = node.module or ""
+                for alias in node.names:
+                    bound = alias.asname or alias.name
+                    if module == "time" and alias.name in _CLOCK_FUNCS:
+                        self.time_functions.add(bound)
+                    elif module == "datetime" and alias.name == "datetime":
+                        self.datetime_names.add(bound)
+                    elif module.endswith("timezone") and alias.name == "now":
+                        self.now_functions.add(bound)
+                    elif module == "django.utils" and alias.name == "timezone":
+                        self.datetime_names.add(bound)
+
+
+def _getter_name(call: ast.Call) -> str:
+    func = call.func
+    return func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
 
 
 def _stronger(a: Optional[str], b: Optional[str]) -> Optional[str]:
@@ -98,19 +118,61 @@ def _is_number(node: ast.AST) -> bool:
 class _Scope:
     """What each name in one function is: a clock reading, a duration, or neither."""
 
-    def __init__(self, returns_duration: set[str]) -> None:
+    def __init__(self, returns_duration: set[str], imports: Optional[_Imports] = None) -> None:
         self.env: Dict[str, str] = {}
         self.returns_duration = returns_duration
+        self.imports = imports or _Imports(ast.parse(""))
+        #: names bound to an event loop: ``lp = asyncio.get_running_loop()``
+        self.loop_names: set[str] = set()
+
+    def is_clock_call(self, node: ast.AST) -> bool:
+        if not isinstance(node, ast.Call):
+            return False
+        func, imports = node.func, self.imports
+        if isinstance(func, ast.Name):
+            return func.id in imports.time_functions or func.id in imports.now_functions
+        if not isinstance(func, ast.Attribute):
+            return False
+        owner = func.value
+        if (
+            func.attr in _WALL_CLOCK_ATTRS
+        ):  # datetime.now(), timezone.now(), datetime.datetime.now()
+            if isinstance(owner, ast.Name):
+                return owner.id in imports.datetime_names
+            return isinstance(owner, ast.Attribute) and owner.attr == "datetime"
+        if func.attr not in _CLOCK_FUNCS:
+            return False
+        if isinstance(owner, ast.Name):
+            return (
+                owner.id in imports.time_modules
+                or owner.id in self.loop_names
+                or "loop" in owner.id.lower()
+            )
+        if isinstance(owner, ast.Attribute):  # self.loop.time()
+            return "loop" in owner.attr.lower()
+        if isinstance(owner, ast.Call):  # asyncio.get_running_loop().time()
+            return _getter_name(owner) in _LOOP_GETTERS
+        return False
 
     def kind(self, node: ast.AST) -> Optional[str]:
-        if _is_clock_call(node):
+        if self.is_clock_call(node):
             return CLOCK
         if isinstance(node, ast.Name):
             return self.env.get(node.id)
+        if isinstance(node, ast.NamedExpr):  # (elapsed := clock() - start)
+            kind = self.kind(node.value)
+            if kind:
+                self.env[node.target.id] = _stronger(self.env.get(node.target.id), kind) or kind
+            return kind
         if isinstance(node, ast.Call):
             func = node.func
-            if isinstance(func, ast.Name) and func.id in self.returns_duration:
-                return DURATION
+            if isinstance(func, ast.Attribute) and func.attr == "total_seconds":
+                return self.kind(func.value)  # (end - start).total_seconds()
+            if (
+                isinstance(func, (ast.Name, ast.Attribute))
+                and _getter_name(node) in self.returns_duration
+            ):
+                return DURATION  # ``_took(fn)`` and ``self._took(fn)``
             if isinstance(func, ast.Name) and func.id in _PRESERVING:
                 kinds = [self.kind(a) for a in node.args]
                 return DURATION if DURATION in kinds else (CLOCK if CLOCK in kinds else None)
@@ -164,18 +226,23 @@ class _Scope:
             return self.static(node.operand)
         if isinstance(node, ast.BinOp):
             return self.static(node.left) and self.static(node.right)
+        if isinstance(node, ast.Call) and _getter_name(node) == "timedelta":
+            return all(self.static(a) for a in node.args) and all(
+                self.static(k.value) for k in node.keywords
+            )
         return False
 
 
-def _returns_duration(tree: ast.AST) -> set[str]:
-    """Names of functions that return a measured duration (a ``_took(fn)`` helper)."""
+def _returns_duration(tree: ast.AST, imports: Optional[_Imports] = None) -> set[str]:
+    """Names of functions and methods that return a measured duration (``_took(fn)``,
+    ``self._took(fn)``)."""
     found: set[str] = set()
     for _ in range(3):  # a helper can build on another
         before = len(found)
         for fn in ast.walk(tree):
             if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
-            scope = _Scope(found)
+            scope = _Scope(found, imports)
             _learn(fn, scope)
             for node in ast.walk(fn):
                 if isinstance(node, ast.Return) and node.value is not None:
@@ -189,6 +256,15 @@ def _returns_duration(tree: ast.AST) -> set[str]:
 def _learn(fn: ast.AST, scope: _Scope) -> None:
     """Fill ``scope.env`` from every assignment in ``fn`` until nothing changes."""
     assigns = [n for n in ast.walk(fn) if isinstance(n, (ast.Assign, ast.AugAssign, ast.AnnAssign))]
+    for node in assigns:  # ``lp = asyncio.get_running_loop()``
+        if (
+            node.value is not None
+            and isinstance(node.value, ast.Call)
+            and _getter_name(node.value) in _LOOP_GETTERS
+        ):
+            for target in node.targets if isinstance(node, ast.Assign) else [node.target]:
+                if isinstance(target, ast.Name):
+                    scope.loop_names.add(target.id)
     changed = True
     while changed:
         changed = False
@@ -218,30 +294,101 @@ def find_bounds(source: str) -> List[int]:
         tree = ast.parse(source)
     except SyntaxError:
         return []
-    helpers = _returns_duration(tree)
+    imports = _Imports(tree)
+    helpers = _returns_duration(tree, imports)
     lines: set[int] = set()
-    for fn in ast.walk(tree):
-        if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            continue
-        scope = _Scope(helpers)
-        _learn(fn, scope)
-        for node in ast.walk(fn):
-            if not isinstance(node, ast.Assert):
-                continue
-            for cmp_ in ast.walk(node.test):
-                if not isinstance(cmp_, ast.Compare):
-                    continue
-                operands = [cmp_.left, *cmp_.comparators]
-                for op, lo, hi in zip(cmp_.ops, operands, operands[1:]):
-                    if isinstance(op, (ast.Lt, ast.LtE)):
-                        measured, bound = lo, hi
-                    elif isinstance(op, (ast.Gt, ast.GtE)):
-                        measured, bound = hi, lo
-                    else:
-                        continue
-                    if scope.kind(measured) == DURATION and scope.static(bound):
+    module_level = ast.Module(
+        body=[
+            s
+            for s in tree.body  # type: ignore[attr-defined]
+            if not isinstance(s, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+        ],
+        type_ignores=[],
+    )
+    scopes = [module_level] + [
+        fn for fn in ast.walk(tree) if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef))
+    ]
+    for root in scopes:
+        scope = _Scope(helpers, imports)
+        _learn(root, scope)
+        for node in ast.walk(root):
+            for test, negated in _guards(node):
+                for cmp_, flipped in _compares(test, negated):
+                    if _bounds_a_duration(cmp_, scope, flipped):
                         lines.add(node.lineno)
+            for measured, bound in _assertion_pairs(node):
+                if scope.kind(measured) == DURATION and scope.static(bound):
+                    lines.add(node.lineno)
     return sorted(lines)
+
+
+_RAISERS = {"fail", "skip", "xfail"}
+
+
+def _guards(node: ast.AST) -> List[Tuple[ast.AST, bool]]:
+    """``(expression, negated)`` pairs that a statement asserts or refuses.
+
+    ``assert e`` and ``self.assertTrue(e)`` assert it; ``self.assertFalse(e)`` asserts its
+    negation; ``if e: raise ...`` / ``if e: pytest.fail(...)`` refuses ``e``, which is
+    ``assert not e``.
+    """
+    if isinstance(node, ast.Assert):
+        return [(node.test, False)]
+    if (
+        isinstance(node, ast.Call)
+        and _getter_name(node) in ("assertTrue", "assertFalse")
+        and node.args
+    ):
+        return [(node.args[0], _getter_name(node) == "assertFalse")]
+    if isinstance(node, ast.If):
+        refuses = any(
+            isinstance(n, ast.Raise) or (isinstance(n, ast.Call) and _getter_name(n) in _RAISERS)
+            for stmt in node.body
+            for n in ast.walk(stmt)
+        )
+        if refuses:
+            return [(node.test, True)]
+    return []
+
+
+def _compares(expr: ast.AST, negated: bool):
+    """Every comparison in ``expr`` with whether an odd number of ``not`` surrounds it."""
+    if isinstance(expr, ast.Compare):
+        yield expr, negated
+        for operand in [expr.left, *expr.comparators]:
+            yield from _compares(operand, negated)
+    elif isinstance(expr, ast.UnaryOp) and isinstance(expr.op, ast.Not):
+        yield from _compares(expr.operand, not negated)
+    else:
+        for child in ast.iter_child_nodes(expr):
+            yield from _compares(child, negated)
+
+
+def _bounds_a_duration(cmp_: ast.Compare, scope: _Scope, negated: bool) -> bool:
+    operands = [cmp_.left, *cmp_.comparators]
+    for op, lo, hi in zip(cmp_.ops, operands, operands[1:]):
+        upper = isinstance(op, (ast.Lt, ast.LtE))
+        lower = isinstance(op, (ast.Gt, ast.GtE))
+        if not (upper or lower):
+            continue
+        if negated:
+            upper, lower = lower, upper  # ``not a > b`` is ``a <= b``
+        measured, bound = (lo, hi) if upper else (hi, lo)
+        if scope.kind(measured) == DURATION and scope.static(bound):
+            return True
+    return False
+
+
+def _assertion_pairs(node: ast.AST) -> List[Tuple[ast.AST, ast.AST]]:
+    """``(measured, bound)`` of ``self.assertLess(a, b)`` and its siblings."""
+    if not isinstance(node, ast.Call) or len(node.args) < 2:
+        return []
+    name = _getter_name(node)
+    if name in ("assertLess", "assertLessEqual"):
+        return [(node.args[0], node.args[1])]
+    if name in ("assertGreater", "assertGreaterEqual"):
+        return [(node.args[1], node.args[0])]
+    return []
 
 
 def _collected_test_files() -> List[Path]:
@@ -342,6 +489,158 @@ async def test_a():
     await work()
     elapsed = loop.time() - t0
     assert elapsed < 2.0
+""",
+    "datetime.now() difference": """
+from datetime import datetime
+
+def test_a():
+    start = datetime.now()
+    work()
+    assert (datetime.now() - start).total_seconds() < 2
+""",
+    "timezone.now() against a timedelta": """
+from datetime import timedelta
+from django.utils import timezone
+
+def test_a():
+    start = timezone.now()
+    work()
+    assert timezone.now() - start < timedelta(seconds=2)
+""",
+    "datetime imported under an alias": """
+from datetime import datetime as when
+
+def test_a():
+    start = when.now()
+    work()
+    elapsed = when.now() - start
+    assert elapsed.total_seconds() <= 1.5
+""",
+    "datetime.datetime.now()": """
+import datetime
+
+def test_a():
+    start = datetime.datetime.now()
+    work()
+    assert (datetime.datetime.now() - start).total_seconds() < 2
+""",
+    "self.loop.time()": """
+class TestA:
+    async def test_a(self):
+        t0 = self.loop.time()
+        await work()
+        assert self.loop.time() - t0 < 2
+""",
+    "a loop bound to a name": """
+async def test_a():
+    lp = asyncio.get_running_loop()
+    t0 = lp.time()
+    await work()
+    assert lp.time() - t0 < 2
+""",
+    "perf_counter imported under an alias": """
+from time import perf_counter as pc
+
+def test_a():
+    t0 = pc()
+    work()
+    assert pc() - t0 < 1
+""",
+    "time imported under an alias": """
+import time as t
+
+def test_a():
+    t0 = t.perf_counter()
+    work()
+    assert t.perf_counter() - t0 < 1
+""",
+    "from time import time": """
+from time import time
+
+def test_a():
+    t0 = time()
+    work()
+    assert time() - t0 < 1
+""",
+    "from time import time as now": """
+from time import time as now
+
+def test_a():
+    t0 = now()
+    work()
+    assert now() - t0 < 1
+""",
+    "assertLess": """
+class TestA(TestCase):
+    def test_a(self):
+        t0 = time.perf_counter()
+        work()
+        self.assertLess(time.perf_counter() - t0, 2)
+""",
+    "assertLessEqual": """
+class TestA(TestCase):
+    def test_a(self):
+        t0 = time.perf_counter()
+        work()
+        self.assertLessEqual(time.perf_counter() - t0, 2)
+""",
+    "assertGreater with the bound first": """
+class TestA(TestCase):
+    def test_a(self):
+        t0 = time.perf_counter()
+        work()
+        self.assertGreater(2, time.perf_counter() - t0)
+""",
+    "assertTrue of a comparison": """
+class TestA(TestCase):
+    def test_a(self):
+        t0 = time.perf_counter()
+        work()
+        self.assertTrue(time.perf_counter() - t0 < 2)
+""",
+    "if elapsed > N: raise": """
+def test_a():
+    t0 = time.perf_counter()
+    work()
+    elapsed = time.perf_counter() - t0
+    if elapsed > 2:
+        raise AssertionError("slow")
+""",
+    "if elapsed > N: pytest.fail": """
+def test_a():
+    t0 = time.perf_counter()
+    work()
+    if time.perf_counter() - t0 > 2:
+        pytest.fail("slow")
+""",
+    "assert not elapsed > N": """
+def test_a():
+    t0 = time.perf_counter()
+    work()
+    assert not time.perf_counter() - t0 > 2
+""",
+    "a module-level assert": """
+import time
+
+START = time.perf_counter()
+work()
+assert time.perf_counter() - START < 2
+""",
+    "a helper that is a method": """
+class TestA:
+    def _took(self, fn):
+        start = time.perf_counter()
+        fn()
+        return time.perf_counter() - start
+
+    def test_a(self):
+        assert self._took(work) < 0.5
+""",
+    "a walrus": """
+def test_a():
+    t0 = time.perf_counter()
+    work()
+    assert (elapsed := time.perf_counter() - t0) < 2
 """,
     "best of three": """
 def test_a():
@@ -453,6 +752,34 @@ def test_a():
     a = time.perf_counter() - s0
     b = time.perf_counter() - s1
     assert a < b
+""",
+    "assertGreater is a lower bound": """
+class TestA(TestCase):
+    def test_a(self):
+        t0 = time.perf_counter()
+        time.sleep(0.1)
+        self.assertGreater(time.perf_counter() - t0, 0.1)
+""",
+    "an if that only reports": """
+def test_a():
+    t0 = time.perf_counter()
+    work()
+    if time.perf_counter() - t0 > 2:
+        print("slow")
+""",
+    "a deadline through an aliased clock": """
+from time import monotonic as now
+
+def test_a():
+    deadline = now() + 10
+    while not done():
+        assert now() < deadline
+""",
+    "a datetime compared with a stored instant": """
+from datetime import datetime
+
+def test_a():
+    assert datetime.now() > expires_at
 """,
     "a timestamp compared with a stored instant": """
 def test_a():

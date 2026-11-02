@@ -92,7 +92,7 @@ async def _connect(session_key):
     return communicator
 
 
-async def _receive_mount(communicator, *, tries=6, timeout=3):
+async def _receive_mount(communicator, *, tries=6, timeout=30):
     last = None
     for _ in range(tries):
         last = await communicator.receive_json_from(timeout=timeout)

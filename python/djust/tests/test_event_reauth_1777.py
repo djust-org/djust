@@ -77,10 +77,7 @@ async def _connect_and_mount():
     communicator = WebsocketCommunicator(app, "/ws/")
     connected, _ = await communicator.connect()
     assert connected
-    try:
-        await communicator.receive_json_from(timeout=2)
-    except Exception:
-        pass
+    await communicator.receive_json_from()
     await communicator.send_json_to({"type": "mount", "view": _VIEW_PATH})
     # Drain the mount response (should be a real mount, not a redirect).
     mount_resp = await communicator.receive_json_from()
@@ -129,10 +126,7 @@ async def test_reauth_off_default_dispatches_event_normally():
         with patch("channels.auth.get_user", AsyncMock(return_value=AnonymousUser())) as gu:
             communicator = await _connect_and_mount()
             await communicator.send_json_to({"type": "event", "event": "do_mutation", "params": {}})
-            try:
-                await communicator.receive_json_from(timeout=2)
-            except Exception:
-                pass
+            await communicator.receive_json_from()
             assert _HANDLER_RAN is True, "handler did not run with reauth off (default)"
             gu.assert_not_called()
             await communicator.disconnect()

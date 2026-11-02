@@ -78,7 +78,7 @@ def pool(request, monkeypatch):
     _SEEN.clear()
 
 
-async def _receive_until(communicator, wanted, *, tries=8, timeout=5):
+async def _receive_until(communicator, wanted, *, tries=8, timeout=30):
     last = None
     for _ in range(tries):
         last = await communicator.receive_json_from(timeout=timeout)
@@ -164,7 +164,7 @@ async def test_async_and_sync_hooks_in_one_drained_turn(pool):
     assert len(_SEEN["sync_hook"]) == 1
 
 
-async def _receive_until_text(communicator, text, *, tries=8, timeout=5):
+async def _receive_until_text(communicator, text, *, tries=8, timeout=30):
     last = None
     for _ in range(tries):
         last = await communicator.receive_json_from(timeout=timeout)
