@@ -128,6 +128,14 @@ Running `djust_audit` with no mode flags walks every `LiveView` and
 - Event handlers and their decorators (`@event_handler`, `@debounce`,
   `@throttle`, `@rate_limit`, `@cache`, `@optimistic`, etc.)
 - Config flags (`tick_interval`, `temporary_assigns`, `use_actors`)
+- The view's declared [`query_budget`](../testing/index.md#per-view-query-budgets), or
+  that it has none (`Query budget: (none)`; `"query_budget": null` in `--json`). A view
+  that spends on the database without a limit is as visible as one that has one. The
+  listing goes through the same reader as the smoke test and the run-time meter, so an
+  invalid declaration (an unknown key, a bool, a misspelt or `async def` / `@background`
+  handler in `events`) is listed as `Query budget: invalid: <reason>`, with
+  `"query_budget": null` and a `"query_budget_error"` string in `--json`, and never as a
+  budget. `manage.py check` reports the same declaration as V024.
 
 This is the "what does my app actually expose" report. Run it when you're
 onboarding a new codebase, preparing for a security review, or diffing

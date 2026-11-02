@@ -55,6 +55,8 @@ import functools
 import logging
 from typing import Any, Callable, ContextManager, Optional, Tuple, TypeVar
 
+from ._query_budget import budgeted, hop
+
 logger = logging.getLogger(__name__)
 
 __all__ = [
@@ -134,17 +136,38 @@ def _is_async(fn: Callable[..., Any]) -> bool:
     return is_async_hook(fn)
 
 
+def _meter(view: Any, step: str, fn: Callable[..., Any]) -> Any:
+    """The query-budget meter for this hop, or ``None`` (``djust._query_budget``).
+
+    ``None`` is the answer for every view that declares no ``query_budget``
+    (``hop`` reads one class attribute and returns).
+    """
+    return hop(view, step, fn)
+
+
 def run_sync_step(view: Any, step: str, fn: Callable[..., _T], /, *args: Any, **kwargs: Any) -> _T:
-    """Call ``fn(*args, **kwargs)`` on this thread inside the configured wrapper."""
+    """Call ``fn(*args, **kwargs)`` on this thread inside the configured wrapper.
+
+    A view that declares a ``query_budget`` also has the hop's queries counted
+    here (``djust._query_budget``), inside the wrapper so a transaction the
+    wrapper opens is not charged to the step.
+    """
     wrapper = _wrapper()
-    if wrapper is None or _active_step.get() is not None or _is_async(fn):
+    meter = _meter(view, step, fn)
+    if (wrapper is None and meter is None) or _active_step.get() is not None or _is_async(fn):
         return fn(*args, **kwargs)
     from .turns import current_turn
 
     token = _active_step.set(step)
     try:
+        if wrapper is None:
+            with meter:
+                return fn(*args, **kwargs)
         with wrapper(view, step, current_turn()):
-            return fn(*args, **kwargs)
+            if meter is None:
+                return fn(*args, **kwargs)
+            with meter:
+                return fn(*args, **kwargs)
     finally:
         _active_step.reset(token)
 
@@ -152,11 +175,11 @@ def run_sync_step(view: Any, step: str, fn: Callable[..., _T], /, *args: Any, **
 def sync_step(view: Any, step: str, fn: Callable[..., _T]) -> Callable[..., _T]:
     """``fn`` as a callable that runs inside the wrapper (for ``sync_to_async``).
 
-    Returns ``fn`` itself when no wrapper is configured, and when ``fn`` is an
-    ``async def`` (not a sync step; ``sync_to_async`` then refuses it exactly as
-    it does with no wrapper).
+    Returns ``fn`` itself when no wrapper is configured and ``view`` declares no
+    ``query_budget``, and when ``fn`` is an ``async def`` (not a sync step;
+    ``sync_to_async`` then refuses it exactly as it does with no wrapper).
     """
-    if _wrapper() is None or _is_async(fn):
+    if (_wrapper() is None and not budgeted(view)) or _is_async(fn):
         return fn
 
     @functools.wraps(fn)
@@ -182,6 +205,10 @@ def run_guarded_step(
     each caller already treats a non-``PermissionDenied`` failure as a denial.
     """
     if _wrapper() is None or _active_step.get() is not None or _is_async(fn):
+        # No wrapper to suppress anything: the step is run bare, or only metered
+        # when ``view`` declares a ``query_budget``.
+        if budgeted(view):
+            return run_sync_step(view, step, fn, *args, **kwargs)
         return fn(*args, **kwargs)
     completed: list = []
 
@@ -201,9 +228,10 @@ def run_guarded_step(
 def guarded_step(view: Any, step: str, fn: Callable[..., _T]) -> Callable[..., _T]:
     """``fn`` as a callable that runs through :func:`run_guarded_step`.
 
-    Returns ``fn`` itself when no wrapper is configured or ``fn`` is ``async def``.
+    Returns ``fn`` itself when no wrapper is configured and ``view`` declares no
+    ``query_budget``, or ``fn`` is ``async def``.
     """
-    if _wrapper() is None or _is_async(fn):
+    if (_wrapper() is None and not budgeted(view)) or _is_async(fn):
         return fn
 
     @functools.wraps(fn)

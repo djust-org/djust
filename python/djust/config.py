@@ -108,6 +108,13 @@ class LiveViewConfig:
         # for a view: handler, mount, handle_params, start_async callback,
         # get_context_data. None (default) = no wrapper. See djust.sync_turn.
         "sync_turn_wrapper": None,
+        # Run-time measurement of ``LiveView.query_budget`` (#3701): None
+        # (default) = log a warning for a phase over its budget while DEBUG is
+        # on or under pytest, nothing otherwise; "warn" / "error" = measure
+        # regardless of DEBUG and log / raise QueryBudgetExceeded; "off" =
+        # never. A view that declares no query_budget is never measured. See
+        # djust._query_budget.
+        "query_budget": None,
         # With worker_threads on: True (default) pins each WebSocket session to
         # one pool thread; False gives it a lane, its calls one at a time and
         # in order on any free thread of the pool, so a slow hop of one session

@@ -156,6 +156,13 @@ _FRAMEWORK_INTERNAL_ATTRS: frozenset = frozenset(
         "static_assigns_count",
         "static_render",
         "query_budget",
+        # View options of the page-status / declared-URL-params work (#3688,
+        # #3689). Class attributes like ``query_budget``; an instance that
+        # assigns one (``self.state_attribute = ...``) must not publish it as
+        # reactive state (#3706).
+        "http_status_of_state",
+        "state_attribute",
+        "params_form",
         "template",
         "template_name",
         "base_template",
@@ -739,14 +746,16 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
     # (the default) keeps ``handle_params`` receiving the raw dict.
     params_form: Optional[type] = None
 
-    # Per-view query budget for ``LiveViewSmokeTest`` (#3686). ``None`` (the
-    # default) leaves the view on the smoke test's class-wide ``max_queries``.
-    # An int caps mount + first render combined; a dict caps the two phases
-    # on their own: ``{"mount": 2, "render": 1}``. A budget the smoke test
-    # cannot enforce (any other key, a bool, a negative number) is reported
-    # as an error rather than ignored. Tests read it; nothing at request time
-    # does. ``view_config[View]["max_queries"]`` overrides it per test class.
-    query_budget: Optional[Union[int, Dict[str, int]]] = None
+    # Per-view query budget (#3686, #3701). ``None`` (the default) leaves the
+    # view on the smoke test's class-wide ``max_queries`` and measures nothing
+    # at run time. An int caps mount + first render combined; a dict caps the
+    # phases on their own: ``{"mount": 2, "render": 1, "event": 3,
+    # "events": {"export": 20}}``. ``LiveViewSmokeTest`` enforces it, and with
+    # ``DEBUG`` on a view that declares one is measured per phase while it runs
+    # (``djust._query_budget``). A budget nothing can enforce (any other key, a
+    # bool, a negative number) is an error, not ignored.
+    # ``view_config[View]["max_queries"]`` overrides mount/render per test class.
+    query_budget: Optional[Union[int, Dict[str, Any]]] = None
 
     # Authentication & authorization
     login_required: Optional[bool] = None  # True = must be authenticated
