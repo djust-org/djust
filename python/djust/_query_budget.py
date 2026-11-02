@@ -218,8 +218,9 @@ def valid_mode(value: Any) -> bool:
     return value is None or (isinstance(value, str) and value in MODES)
 
 
-#: Whether the invalid-mode log line was written (once per process).
-_mode_warned = False
+#: Log lines already written, once per process ("mode": the invalid-config line).
+#: A set, not a rebound flag: nothing needs a ``global`` statement.
+_logged_once: set = set()
 
 
 def mode() -> str:
@@ -232,7 +233,6 @@ def mode() -> str:
     value is a configuration mistake that ``manage.py check`` reports (C029); a
     request never fails over it: it is read as ``"warn"`` and said once.
     """
-    global _mode_warned
     from django.conf import settings
 
     from .config import config
@@ -243,8 +243,8 @@ def mode() -> str:
 
         return "warn" if (getattr(settings, "DEBUG", False) or _running_under_pytest()) else "off"
     if not valid_mode(configured):
-        if not _mode_warned:
-            _mode_warned = True
+        if "mode" not in _logged_once:
+            _logged_once.add("mode")
             logger.warning(
                 "LIVEVIEW_CONFIG['query_budget'] must be one of %s, got %s; using 'warn'.",
                 ", ".join(repr(m) for m in MODES),
@@ -283,11 +283,10 @@ _unreferenceable: "weakref.WeakSet[type]" = weakref.WeakSet()
 
 def _reset_for_tests() -> None:
     """Forget what was parsed and logged (tests build many classes and read the log)."""
-    global _mode_warned
     _class_state.clear()
     _unreferenceable.clear()
     _tallies.clear()
-    _mode_warned = False
+    _logged_once.clear()
 
 
 def budgeted(view: Any) -> bool:

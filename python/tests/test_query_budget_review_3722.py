@@ -303,6 +303,14 @@ class TestAnInvalidConfigValue:
         messages = warned()
         assert sum("LIVEVIEW_CONFIG['query_budget']" in m for m in messages) == 1
 
+    def test_the_invalid_value_is_logged_once_across_many_calls(self, warned):
+        """The gate: ``mode()`` runs on every metered hop, and says it once."""
+        from djust._query_budget import mode
+
+        with override_settings(LIVEVIEW_CONFIG={"query_budget": "WARN"}):
+            assert [mode() for _ in range(5)] == ["warn"] * 5
+        assert len([m for m in warned() if "LIVEVIEW_CONFIG['query_budget']" in m]) == 1
+
     def test_the_check_can_be_suppressed(self, settings):
         from djust.checks.configuration import check_configuration
 
