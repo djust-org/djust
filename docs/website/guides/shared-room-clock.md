@@ -194,6 +194,9 @@ when a table change can supply the doorbell directly.
 `executor`, to run due beats without wall-clock waits. That executor runs sync
 callbacks inline **only in tests**. `advance` jumps time, so use interval-sized
 advances for normal beats and a large jump to exercise late-beat handling.
+`sleep(seconds)` measures from the moment it is called, not from when the
+returned coroutine first runs, so an `advance` that lands between the two still
+wakes it; a custom `time_source` must do the same.
 The helpers require a serving-loop registration supplied by a real WebSocket
 consumer; engine-only tests can use the internal loop registry explicitly.
 
