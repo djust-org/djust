@@ -834,7 +834,7 @@ async def _connect(view_name, url):
     communicator.scope["session"] = _ScopeSession(key)
     connected, _ = await communicator.connect()
     assert connected
-    await communicator.receive_json_from(timeout=2)
+    await communicator.receive_json_from()
     await communicator.send_json_to(
         {"type": "mount", "view": f"{__name__}.{view_name}", "url": url, "params": {}}
     )
@@ -875,7 +875,7 @@ class TestWebSocket:
         communicator.scope["session"] = _ScopeSession(key)
         connected, _ = await communicator.connect()
         assert connected
-        await communicator.receive_json_from(timeout=2)
+        await communicator.receive_json_from()
         await communicator.send_json_to(
             {
                 "type": "mount",
