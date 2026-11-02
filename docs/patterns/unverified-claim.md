@@ -9,8 +9,9 @@ not be written.
 the #2652 symbol check (documented methods), `scripts/check-changelog-test-counts.py` (JS test
 counts), and for PR bodies `scripts/check_pr_body.py` (unresolved placeholders and `#N` /
 `issuecomment-<id>` references that do not resolve; a **non-gating** CI job, #3713) ·
-**candidate for mechanical gate**: yes (HARDEN at v1.3.0-17, #3739), for claims about code (nothing covers those; the
-differential-test habit does)
+**candidate for mechanical gate**: no. HARDEN at v1.3.0-17 proposed one (#3739); the maintainer declined it because the
+reviewer caught all three misses. The reviewer brief (Step 3b in `.pipeline-templates/feature-state.json` and
+`bugfix-state.json`) now names measured, 'every/never/only' and 'the cause' claims. Revisit if one gets past review.
 **Origin**: the v1.2.0-6 retro (#2838) — the first instance of this class in this repo to
 cause a *code* defect rather than a documentation one.
 
