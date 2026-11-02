@@ -146,6 +146,34 @@ class _Plain(LiveView):
 urlpatterns.append(path("plain/", _Plain.as_view()))
 
 
+def _make_empty(name: str, policy: str):
+    """An override that returns an EMPTY dict: falsy, but a real context, so served from the cache."""
+
+    def get_context_data(self, **kwargs):
+        _stamp(self)
+        return {}
+
+    cls = type(
+        name,
+        (_Base,),
+        {
+            "exposure_policy": policy,
+            "template": '<div dj-root dj-view="' + MOD + "." + name + '">static</div>',
+            "mount": lambda self, request, **kwargs: None,
+            "get_context_data": get_context_data,
+        },
+    )
+    globals()[name] = cls
+    return cls
+
+
+EMPTY = {
+    name: _make_empty(name, policy)
+    for name, policy in (("E_legacy", "legacy"), ("E_explicit", "explicit"))
+}
+urlpatterns.extend(path(n.lower() + "/", v.as_view()) for n, v in EMPTY.items())
+
+
 class _ModelShell(LiveView):
     """An override that returns a FRESH dict holding a raw model, rendered in a page shell.
 
@@ -232,6 +260,19 @@ def test_the_page_carries_the_value_the_one_call_computed(name):
     assert "102" not in html, "a second evaluation of get_context_data reached the page"
     if name.endswith("_shell"):
         assert "shell=[101]" in html, html
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("name", list(EMPTY))
+def test_an_override_that_returns_an_empty_dict_runs_once(name):
+    """The cache is "set", not "truthy": ``{}`` is a context the GET already evaluated.
+
+    ``if cached:`` would treat it as absent and call the override again.
+    """
+    response = Client().get("/" + name.lower() + "/")
+    assert response.status_code == 200, response.content[:300]
+    assert len(CALLS) == 1, f"{name}: the override ran {len(CALLS)} times on one GET"
+    assert "static" in response.content.decode()
 
 
 @pytest.mark.django_db
@@ -347,7 +388,7 @@ async def test_a_websocket_mount_runs_the_override_once(name):
 @pytest.mark.xfail(
     strict=True,
     reason=(
-        "#3725 sibling, not fixed here: an EXPLICIT view whose page shell comes from "
+        "#3725 sibling, tracked in #3733 and not fixed here: an EXPLICIT view whose page shell comes from "
         "template_name evaluates the override three times on a live mount "
         "(runtime._reconstruct_explicit_page_shell renders the full page with no cached "
         "context, then the root renders again). Delete this marker when it is one."
