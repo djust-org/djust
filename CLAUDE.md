@@ -1723,6 +1723,11 @@ Three rules from the v1.2.0-6 drain (PRs #2835-#2846, eight issues: #2821, #2823
   `static/djust/src/`; never hand-merge `client.js` / `client.min.js` / `client-sizes.json`
 - merge: squash (main carries no PR merge commits); drain PRs merge with `--admin`,
   since the author cannot approve their own PR and human review is at the milestone level
+  **A batch merges one PR at a time (#3735):** for the second and later PRs of a batch, wait for
+  main's `Tests` to finish green on the previous merge commit before squashing the next (or `git merge
+  origin/main` into the branch and wait for CI on that merged tree). Cross-file gates — a ratchet over
+  every test file, shard-duration coverage, a count or floor, a settings-leak scan — pass alone and fail
+  together; four back-to-back merges put main red twice in v1.3.0-16 (#3727, #3729)
 - release: squash-merge the release PR first, then tag `main` with `make release`; never tag
   `release/*` (the squash leaves the tag unreachable from main — #3149, v1.3.0rc3 / #3131)
 

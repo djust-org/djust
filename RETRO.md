@@ -428,7 +428,7 @@ issue or be explicitly closed with a reason.
 | 386 | An overriding `get_context_data()` runs twice per HTTP GET and the second pass gets no `preloaded_context` | PR #3722 review | #3725 | Closed | Closed by PR #3730 (`8e9f41289`): 8 GET shapes went from 2 calls to 1. Same-class paths left open: rows 390 and 391. |
 | 387 | Convert the remaining try/pass drains in four live-auth and form-route test files (they wait until a frame that does arrive) | PR #3721 | #3726 | Closed | Closed by PR #3732 (`0490bac1f`): 68 failures of 291 under a 3.5 s per-frame stall went to 0 of 304. Matcher residuals: row 392. |
 | 388 | The presence test flaked on a PR run (#3451 reopened with two readings: a runner stall over 30 s, or a lost wake-up in the test) | PR #3719 | #3451 | Closed | Closed by PR #3738 (`59e234ebc`): a lost wake-up in `ManualClock.sleep` that matches the failing runs' log signature when the window is widened. The natural failure was never observed (0 in 1,200 runs), so this is the best-supported cause, not a proven one; reopen #3451 if it recurs. |
-| 389 | Batch merges put main red twice: update each branch with main and rerun the cross-file gates (ratchets, shard coverage, floors) before merging the second and later PRs of a batch | Retro v1.3.0-16 | #3735 | Open | Decide whether it is a CLAUDE.md `Pipeline` rule or a change in the pipeline skill repo |
+| 389 | Batch merges put main red twice: update each branch with main and rerun the cross-file gates (ratchets, shard coverage, floors) before merging the second and later PRs of a batch | Retro v1.3.0-16 | #3735 | Closed | Decide whether it is a CLAUDE.md `Pipeline` rule or a change in the pipeline skill repo Decided by the maintainer: a CLAUDE.md rule (Pipeline block, `merge` line): merge a batch one PR at a time, waiting for main's `Tests` between merges. |
 | 390 | Explicit-exposure view with a `template_name` shell: `get_context_data()` still runs 3 times on a live mount (WS and SSE) | PR #3730 | #3733 | Open | Same class as #3725; pinned as a strict xfail citing the issue |
 | 391 | Legacy exposure: the HTTP POST fallback runs `get_context_data()` 2 times | PR #3730 | #3734 | Open | The GET is once and the POST twice, so a query budget differs per transport until this lands |
 | 392 | Residual blind spots in the communicator-timeout ratchet matcher (`wait_for(comm.wait(), 1)`, `asyncio.wait`, bare `timeout(2)`, shadowed constants, `shield`) and a stale pattern-page sentence | PR #3732 re-review | #3737 | Open | Part of row 374's remainder |
@@ -1449,7 +1449,7 @@ The marker counts are occurrences of the emoji in the first review comment of ea
 - [x] Double `get_context_data()` on GET — Action Tracker #386 (GitHub #3725) — resolved in v1.3.0-17 (PR #3730; siblings #3733, #3734 open)
 - [ ] Remaining try/pass drains and communicator timeouts — Action Tracker #374, #387 (GitHub #3709, #3726) — #3726 resolved in v1.3.0-17 (PR #3732); #3709 remainder open
 - [x] Presence test flake — Action Tracker #388 (GitHub #3451) — resolved in v1.3.0-17 (PR #3738); reopen if it recurs
-- [ ] Merge-order gate for batches — Action Tracker #389 (GitHub #3735)
+- [x] Merge-order gate for batches — Action Tracker #389 (GitHub #3735) — closed: CLAUDE.md rule
 - [ ] `http_status_of_state` config map — Action Tracker #382 (GitHub #3706)
 - [ ] axe-core dependency decision — Action Tracker #379 (GitHub #3700)
 - [ ] Component-tag parity decision — Action Tracker #383 (GitHub #3663)
@@ -1525,7 +1525,7 @@ Counts are what each review comment lists, not a re-read of each finding; the re
 - [ ] Same-class `get_context_data()` paths — Action Tracker #390, #391 (GitHub #3733, #3734)
 - [ ] Ratchet matcher residuals and the rest of #3709 — Action Tracker #392, #374 (GitHub #3737, #3709)
 - [x] `unverified-claim` mechanical gate — declined, reviewer brief extended (Action Tracker #393, GitHub #3739)
-- [ ] Merge-order gate for batches — Action Tracker #389 (GitHub #3735)
+- [x] Merge-order gate for batches — Action Tracker #389 (GitHub #3735) — closed: CLAUDE.md rule
 - [ ] `http_status_of_state` config map — Action Tracker #382 (GitHub #3706)
 - [ ] axe-core dependency decision — Action Tracker #379 (GitHub #3700)
 - [ ] Component-tag parity decision — Action Tracker #383 (GitHub #3663)
