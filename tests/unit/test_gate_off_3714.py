@@ -694,23 +694,19 @@ def test_a_run_whose_original_already_matches_the_journal_just_drops_it(
     root = _fixture(tmp_path)
     saved = go._snapshot(root / "calc.py")
     go._journal_write((root / "calc.py").resolve(), saved, b"mutant")
-    guard = go._acquire((root / "calc.py").resolve())
-    go._release(guard)
+    go._recover((root / "calc.py").resolve())
     assert not _journal_of(root).exists()
     assert (root / "calc.py").read_text() == CALC
 
 
-def test_acquire_refuses_a_target_that_is_already_held(tmp_path):
-    target = tmp_path / "f.py"
-    target.write_text("x")
-    target = target.resolve()
-    guard = go._acquire(target)
+def test_lock_dir_refuses_a_directory_that_is_already_held(tmp_path):
+    guard = go._lock_dir(tmp_path.resolve())
     try:
-        with pytest.raises(go.TargetLocked):
-            go._acquire(target)
+        with pytest.raises(go.TargetLocked, match="locked by another gate_off run"):
+            go._lock_dir(tmp_path.resolve())
     finally:
         go._release(guard)
-    go._release(go._acquire(target))  # free again once released
+    go._release(go._lock_dir(tmp_path.resolve()))  # free again once released
 
 
 def test_an_unreadable_journal_is_refused(tmp_path, _gate_off_state_dir):
@@ -719,9 +715,152 @@ def test_an_unreadable_journal_is_refused(tmp_path, _gate_off_state_dir):
     target = target.resolve()
     go._journal_path(target).write_text("{not json")
     with pytest.raises(go.StaleJournal, match="cannot be read"):
-        go._acquire(target)
+        go._recover(target)
     go._journal_path(target).unlink()
-    go._release(go._acquire(target))
+
+
+# -- the lock does not depend on the environment, and it covers EVERY target ---------------
+
+ONE, TWO = "one/fx/calc.py", "two/fx/calc.py"  # _fixture() puts the files in <dir>/fx
+SLEEP = ["{python}", "-c", "import time; time.sleep(600)"]
+QUICK = ["{python}", "-c", "pass"]
+
+
+def _two_roots(tmp_path):
+    """Two fixture trees whose target files share a basename (``calc.py``) but not a directory."""
+    one, two = _fixture(tmp_path / "one"), _fixture(tmp_path / "two")
+    (two / "calc.py").write_text(CALC + "\n# the second tree differs\n")
+    return one, two
+
+
+def _sleeper_spec(tmp_path, name, files, command=SLEEP, **extra):
+    """A run that mutates ``files`` then sits in ``command`` (runner=exit: no pytest needed)."""
+    spec = tmp_path / name
+    spec.write_text(
+        json.dumps(
+            {
+                "root": str(tmp_path),
+                "runner": "exit",
+                "command": command,
+                "deadline": 600,
+                "mutations": [
+                    {"label": f"m-{f}", "file": f, "old": "return a + b", "new": "return a - b"}
+                    for f in files
+                ],
+                **extra,
+            }
+        )
+    )
+    return spec
+
+
+def _wait_until_changed(path, original, proc):
+    for _ in range(1200):
+        if path.read_bytes() != original or proc.poll() is not None:
+            break
+        time.sleep(0.05)
+    assert path.read_bytes() != original, "the mutation never reached the disk"
+
+
+def _stop(proc):
+    proc.send_signal(signal.SIGTERM)
+    proc.communicate(timeout=60)
+
+
+def _run_cli(spec, env=None):
+    return subprocess.run(
+        [sys.executable, str(SCRIPT), str(spec), "--no-control"],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        env=env,
+    )
+
+
+def test_the_lock_holds_even_when_the_second_run_uses_another_state_dir_and_home(
+    tmp_path, _gate_off_state_dir
+):
+    """The original corruption needed overlapping runs that did not share a lock directory."""
+    one, _ = _two_roots(tmp_path)
+    first = _start(_sleeper_spec(tmp_path, "a.json", [ONE]))
+    try:
+        _wait_until_changed(one / "calc.py", CALC.encode(), first)
+        mutant = (one / "calc.py").read_bytes()
+        other = tmp_path / "elsewhere"
+        env = {
+            **os.environ,
+            "GATE_OFF_STATE_DIR": str(other / "state"),
+            "HOME": str(other),
+            "XDG_CACHE_HOME": str(other / "cache"),
+        }
+        second = _run_cli(_sleeper_spec(tmp_path, "b.json", [ONE], QUICK), env)
+        assert second.returncode == 4, second.stdout + second.stderr
+        assert "locked by another gate_off run" in second.stderr
+        assert (one / "calc.py").read_bytes() == mutant, "the refused run touched the file"
+    finally:
+        _stop(first)
+    assert (one / "calc.py").read_text() == CALC
+
+
+def test_the_default_state_dir_does_not_depend_on_home_or_xdg(tmp_path, monkeypatch):
+    monkeypatch.delenv("GATE_OFF_STATE_DIR", raising=False)
+    before = go._default_state_dir()
+    monkeypatch.setenv("HOME", str(tmp_path / "other-home"))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "other-cache"))
+    assert go._default_state_dir() == before
+    assert before.parts[-2:] == (".cache", "gate-off")
+    assert "other-home" not in str(before) and "other-cache" not in str(before)
+
+
+def test_two_files_with_the_same_basename_in_different_directories_do_not_share_a_lock(tmp_path):
+    one, two = _two_roots(tmp_path)
+    first = _start(_sleeper_spec(tmp_path, "a.json", [ONE]))
+    try:
+        _wait_until_changed(one / "calc.py", CALC.encode(), first)
+        second = _run_cli(_sleeper_spec(tmp_path, "b.json", [TWO], QUICK))
+        assert second.returncode == 1, second.stdout + second.stderr  # ran: SURVIVED (exit 0)
+        assert "locked" not in second.stderr
+        assert "SURVIVED" in second.stdout
+    finally:
+        _stop(first)
+    assert (one / "calc.py").read_text() == CALC
+    assert (two / "calc.py").read_text() == CALC + "\n# the second tree differs\n"
+
+
+def test_a_journal_is_keyed_on_the_full_path_not_the_basename(tmp_path, _gate_off_state_dir):
+    """A journal left on one/calc.py must not be applied to, or block, two/calc.py."""
+    one, two = _two_roots(tmp_path)
+    first = _start(_sleeper_spec(tmp_path, "a.json", [ONE]))
+    _wait_until_changed(one / "calc.py", CALC.encode(), first)
+    orphans = _wait_for_children(first)
+    first.kill()
+    first.communicate(timeout=60)
+    _kill_groups(orphans)
+    journal_one = go._journal_path((one / "calc.py").resolve())
+    journal_two = go._journal_path((two / "calc.py").resolve())
+    assert journal_one.exists() and journal_one != journal_two
+    second = _run_cli(_sleeper_spec(tmp_path, "b.json", [TWO], QUICK))
+    assert second.returncode == 1, second.stdout + second.stderr  # ran, not refused
+    assert journal_one.exists(), "the other tree's journal was consumed"
+    assert (two / "calc.py").read_text() == CALC + "\n# the second tree differs\n"
+    third = _run_cli(_sleeper_spec(tmp_path, "c.json", [ONE], QUICK))
+    assert "recovered" in third.stderr
+    assert (one / "calc.py").read_text() == CALC
+    assert not journal_one.exists()
+
+
+def test_every_target_of_a_multi_file_spec_is_locked_not_just_the_first(tmp_path):
+    """The lint's own spec mutates three files: a run touching the 2nd or 3rd must be refused."""
+    one, two = _two_roots(tmp_path)
+    first = _start(_sleeper_spec(tmp_path, "a.json", [ONE, TWO]))
+    try:
+        _wait_until_changed(one / "calc.py", CALC.encode(), first)
+        second = _run_cli(_sleeper_spec(tmp_path, "b.json", [TWO], QUICK))
+        assert second.returncode == 4, second.stdout + second.stderr
+        assert "locked by another gate_off run" in second.stderr
+    finally:
+        _stop(first)
+    assert (two / "calc.py").read_text() == CALC + "\n# the second tree differs\n"
 
 
 def test_a_symlinked_target_is_mutated_through_the_link_and_the_link_survives(tmp_path):

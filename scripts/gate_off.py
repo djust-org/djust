@@ -55,15 +55,25 @@ gate-off'd with itself: ``scripts/gate-off-selfcheck.json``):
   ``finally`` (also on SIGINT, SIGTERM, SIGHUP and ``atexit``), then verified by SHA-256.
   A restore that does not match raises ``RestoreError`` and exits 3. A symlinked target is
   resolved first: the real file is mutated and the link is left alone.
-* Two runs can never mutate the same file at once, and a killed run cannot leave a mutant
-  that the next run adopts as the original. Before the first byte is written the harness
-  holds an exclusive ``flock`` on a per-target lock and writes a journal (the original bytes
-  and the mutant's hash), both in a state directory OUTSIDE the tree (``$GATE_OFF_STATE_DIR``,
-  else ``$XDG_CACHE_HOME/gate-off``, else ``~/.cache/gate-off``). A run that finds the lock
-  held exits 4 without touching anything. A run that finds a journal but no lock holder (the
-  previous run was SIGKILLed) restores the original from the journal BEFORE it snapshots the
-  file, or exits 4 if the file matches neither the original nor the mutant (it was edited
-  since). The journal is deleted only after a verified restore.
+* Overlapping runs are refused, and a killed run is recovered, with two mechanisms that do
+  not share a failure mode:
+
+  - MUTUAL EXCLUSION does not depend on the environment. Before anything runs, the harness
+    holds an exclusive ``flock`` on the DIRECTORY of every target (the directory's inode, not
+    the file's: the mutation replaces the file with a new inode, so a lock on the file itself
+    would not survive it). A run that finds one held exits 4 without touching anything. The
+    lock is per directory, so two files of one directory exclude each other; files in
+    different directories (even with the same basename) do not.
+  - RECOVERY needs the same journal directory. Before the first byte is written the harness
+    writes a journal (the original bytes and the mutant's hash) keyed on the target's full
+    resolved path, OUTSIDE the tree: ``$GATE_OFF_STATE_DIR`` if set, else ``.cache/gate-off``
+    in the user's home as the user database gives it (NOT ``$HOME`` or ``$XDG_CACHE_HOME``).
+    A run that finds a journal but no lock holder (the previous run was SIGKILLed) restores
+    the original from it BEFORE it snapshots the file, or exits 4 if the file matches neither
+    the original nor the mutant (it was edited since). Only a run killed under one explicit
+    ``$GATE_OFF_STATE_DIR`` and followed by a run under another can miss its journal and
+    adopt the mutant; ``git status`` after a SIGKILL is still the backstop.
+  The journal is deleted only after a verified restore.
 * Writes go to a temp file in the same directory and ``os.replace`` into place: a new
   inode, a fresh mtime (never the original's, which cargo and ``.pyc`` validation would
   treat as already built from the mutant) and mode preserved. Nothing is ``cp``'d over a
@@ -88,6 +98,7 @@ import fcntl
 import hashlib
 import json
 import os
+import pwd
 import re
 import shlex
 import signal
@@ -380,14 +391,24 @@ def _restore(path: Path, saved: _Saved) -> None:
         raise RestoreError(f"{path} was restored to sha256 {got}, expected {saved.sha}")
 
 
+def _default_state_dir() -> Path:
+    """``~/.cache/gate-off`` from the user database, not from ``$HOME`` / ``$XDG_CACHE_HOME``.
+
+    Two runs under different environments (an agent sandbox with its own ``HOME``) must still
+    find each other's journals.
+    """
+    try:
+        home = Path(pwd.getpwuid(os.getuid()).pw_dir)
+    except KeyError:
+        # No passwd entry (a bare container uid): the environment is all there is.
+        home = Path.home()
+    return home / ".cache" / "gate-off"
+
+
 def _state_dir() -> Path:
-    """Where locks and journals live: OUTSIDE the tree, so a mutant can never shadow them."""
+    """Where journals live: OUTSIDE the tree, so a mutant can never shadow them."""
     override = os.environ.get("GATE_OFF_STATE_DIR")
-    base = (
-        Path(override)
-        if override
-        else Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "gate-off"
-    )
+    base = Path(override) if override else _default_state_dir()
     base.mkdir(parents=True, exist_ok=True, mode=0o700)
     return base
 
@@ -406,7 +427,7 @@ class _Guard:
     fd: int
 
 
-#: Targets this process holds the lock for.
+#: Directories this process holds the lock for.
 _GUARDS: dict[Path, _Guard] = {}
 
 
@@ -452,25 +473,23 @@ def _recover(path: Path) -> None:
     journal.unlink(missing_ok=True)
 
 
-def _acquire(path: Path) -> _Guard:
-    """Take the per-target lock (refusing if held), then recover a stale journal."""
-    lock_path = _state_dir() / f"{_key(path)}.lock"
-    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+def _lock_dir(directory: Path) -> _Guard:
+    """Take an exclusive, non-blocking ``flock`` on ``directory`` (refuse if it is held).
+
+    The lock is on the directory's inode, which the mutation's ``os.replace`` never changes,
+    and it does not depend on any environment variable or state directory.
+    """
+    fd = os.open(directory, os.O_RDONLY)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError as exc:
         os.close(fd)
         raise TargetLocked(
-            f"{path} is locked by another gate_off run ({lock_path}); it may be mutated right "
+            f"{directory} is locked by another gate_off run; a file in it may be mutated right "
             "now, so this run refuses to start. Wait for it, or stop it and re-run."
         ) from exc
-    guard = _Guard(path, fd)
-    try:
-        _recover(path)
-    except BaseException:
-        os.close(fd)
-        raise
-    _GUARDS[path] = guard
+    guard = _Guard(directory, fd)
+    _GUARDS[directory] = guard
     return guard
 
 
@@ -572,20 +591,23 @@ def run_mutations(
 ) -> tuple[list[Result], Result | None]:
     """Run every mutation. Returns (results, baseline problem or None).
 
-    Every target is locked (and a stale journal reconciled) before anything runs; a held lock
-    raises ``TargetLocked``. When ``control`` is true the unmutated tree then runs first for
+    The directory of every target is locked, and each target's stale journal reconciled,
+    before anything runs; a held lock raises ``TargetLocked``. When ``control`` is true the unmutated tree then runs first for
     every distinct command; a baseline that is not green means no mutation can be judged and
     none is run.
     """
     root = Path(root).resolve()
     results: list[Result] = []
     targets = sorted({(root / m.file).resolve() for m in mutations if (root / m.file).is_file()})
+    directories = sorted({target.parent for target in targets})
     guards: list[_Guard] = []
 
     with _TerminationAsExit():
         try:
+            for directory in directories:
+                guards.append(_lock_dir(directory))
             for target in targets:
-                guards.append(_acquire(target))
+                _recover(target)
 
             if control:
                 problem = _baseline(mutations, root, command, deadline, rss_mb, runner)

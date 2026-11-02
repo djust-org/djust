@@ -102,7 +102,7 @@
       "new": "        return 0.0\n"
     },
     {
-      "label": "harness: the per-target lock is never taken",
+      "label": "harness: the directory lock is never taken",
       "file": "scripts/gate_off.py",
       "old": "        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)\n",
       "new": "        pass\n"
@@ -110,8 +110,8 @@
     {
       "label": "harness: a stale journal is not recovered before the snapshot",
       "file": "scripts/gate_off.py",
-      "old": "        _recover(path)\n",
-      "new": "        pass\n"
+      "old": "                _recover(target)\n",
+      "new": "                pass\n"
     },
     {
       "label": "harness: the journal is not written before the mutation",
@@ -178,6 +178,30 @@
       "file": "scripts/gate_off.py",
       "old": "        if found == 0 and b\"\\r\\n\" in original",
       "new": "        if False and b\"\\r\\n\" in original"
+    },
+    {
+      "label": "harness: only the first target directory of a multi-file spec is locked",
+      "file": "scripts/gate_off.py",
+      "old": "            for directory in directories:\n",
+      "new": "            for directory in directories[:1]:\n"
+    },
+    {
+      "label": "harness: the lock is too coarse (two trees with the same basename share it)",
+      "file": "scripts/gate_off.py",
+      "old": "    fd = os.open(directory, os.O_RDONLY)\n",
+      "new": "    fd = os.open(directory.parent.parent, os.O_RDONLY)\n"
+    },
+    {
+      "label": "harness: the journal is keyed on the basename only",
+      "file": "scripts/gate_off.py",
+      "old": "    return hashlib.sha256(str(path).encode()).hexdigest()[:32]",
+      "new": "    return hashlib.sha256(path.name.encode()).hexdigest()[:32]"
+    },
+    {
+      "label": "harness: the default state dir is derived from $HOME again",
+      "file": "scripts/gate_off.py",
+      "old": "        home = Path(pwd.getpwuid(os.getuid()).pw_dir)\n",
+      "new": "        home = Path.home()\n"
     }
   ]
 }
