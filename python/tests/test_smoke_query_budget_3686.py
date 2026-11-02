@@ -168,12 +168,14 @@ class TestPhaseBudget:
 class TestBudgetValidation:
     """A budget the test cannot enforce is rejected, not silently ignored."""
 
-    @pytest.mark.parametrize("key", ["event", "events", "mout", "total"])
+    @pytest.mark.parametrize("key", ["mout", "total", "queries"])
     def test_unsupported_dict_key_is_rejected(self, key):
         msg = _fails([_with_budget(FewMountQueries, {"mount": 3, key: 1})])
         assert "ValueError" in msg
         assert "query_budget" in msg and repr(key) in msg
-        assert "'mount'" in msg and "'render'" in msg
+        # The message lists what IS supported; "event" / "events" joined in #3701.
+        for supported in ("'mount'", "'render'", "'event'", "'events'"):
+            assert supported in msg
 
     @pytest.mark.parametrize("bad", [True, False, -1, 2.5, "3", None.__class__, [3]])
     def test_non_int_or_negative_budget_is_rejected(self, bad):
@@ -193,7 +195,7 @@ class TestBudgetValidation:
         _run([_with_budget(FewMountQueries, {})], max_queries=3)
 
     def test_a_misconfigured_view_does_not_hide_a_second_view_over_budget(self):
-        bad = _with_budget(FewMountQueries, {"event": 1})
+        bad = _with_budget(FewMountQueries, {"mout": 1})
         over = _with_budget(ManyMountQueries, 2)
         msg = _fails([bad, over])
         assert "2/2 views" in msg

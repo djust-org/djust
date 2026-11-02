@@ -22,10 +22,12 @@ LiveViewTestClient(view_class, request_factory=None, user=None)
 
 ### Methods
 
-#### `mount(via_websocket=True, **params) -> LiveViewTestClient`
+#### `mount(via_websocket=True, *, query_params=None, **params) -> LiveViewTestClient`
 
-Initialize the view. Calls `mount()` on the LiveView. The default
-`via_websocket=True` mounts as the WebSocket path does; pass
+Initialize the view. Calls `mount()` on the LiveView, then `handle_params(params, uri)`,
+the order the HTTP GET and the socket mount run them in, with an empty dict when there is
+no query string. A view that declares `params_form` therefore gets its form here too. The
+default `via_websocket=True` mounts as the WebSocket path does; pass
 `via_websocket=False` to exercise the HTTP-prerender branch instead. No
 login or permission check runs here.
 
@@ -34,9 +36,22 @@ client = LiveViewTestClient(MyView)
 client.mount()                        # No URL params
 client.mount(item_id=5)               # With URL kwargs
 client.mount(page=2, query="test")    # Multiple params
+client.mount(query_params={"page": "2", "tag": ["a", "b"]})  # the query string
+client.mount(query_params="page=2&tag=a&tag=b")                  # the same, as text
 ```
 
-Returns `self` for chaining.
+`query_params` is the URL's query string (`request.GET` and `handle_params()` see it); the
+other keyword arguments are `mount()`'s URL kwargs. A mapping's list value is a repeated
+key. Returns `self` for chaining.
+
+---
+
+#### `url_change(query_params=None) -> LiveViewTestClient`
+
+Send the `url_change` frame a `live_patch` or a back/forward produces: calls
+`handle_params(params, uri)` on the mounted view with the new query string, through the same
+`params_form` decision as the real transports. Raises `RuntimeError` if the view is not
+mounted. Returns `self` for chaining.
 
 ---
 
@@ -214,7 +229,7 @@ Auto-discover all `LiveView` subclasses in an app and run smoke tests.
 | `max_queries` | `int`  | `50`    | Fail if mounting + rendering a view exceeds this many DB queries (a view's own `query_budget` or `view_config` `max_queries` takes precedence) |
 | `fuzz`        | `bool` | `True`  | Send XSS and type-mismatch payloads to handlers                             |
 | `skip_views`  | `list` | `[]`    | View classes to skip                                                        |
-| `view_config` | `dict` | `{}`    | Per-view setup: `{ViewClass: {"mount_params": {...}, "user": user, "max_queries": 8}}` |
+| `view_config` | `dict` | `{}`    | Per-view setup: `{ViewClass: {"mount_params": {...}, "user": user, "max_queries": 8, "event_params": {"handler": {...}}}}` |
 
 ### Example
 
@@ -233,7 +248,7 @@ This auto-discovers all `LiveView` subclasses in `myapp` and:
 
 1. Mounts each view
 2. Asserts it renders without raising
-3. Checks DB query counts stay under each view's budget: `view_config[View]["max_queries"]`, else the view's [`query_budget`](liveview.md#class-attributes), else `max_queries`
+3. Checks DB query counts stay under each view's budget: `view_config[View]["max_queries"]`, else the view's [`query_budget`](liveview.md#class-attributes), else `max_queries`; `test_smoke_event_queries` checks the event budgets (`query_budget["event"]` / `["events"]`) of the handlers that declare one
 4. If `fuzz=True`, sends malformed payloads and asserts no uncaught exceptions
 
 The fuzzer sends events only to `@event_handler` handlers, the ones dispatch

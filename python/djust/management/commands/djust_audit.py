@@ -300,7 +300,38 @@ def _audit_class(
     if template_vars is not None:
         result["template_vars"] = template_vars
 
+    # The declared query budget (#3701), read by the same ``declared_budget`` as
+    # the smoke test, the run-time meter and the system check, so the listing says
+    # what they enforce: the normalized budget (JSON-safe), or None plus the reason
+    # it is invalid (a bad declaration never crashes the audit, and is never shown
+    # as a budget).
+    if cls_type == "LiveView":
+        from djust._query_budget import declared_budget, is_declared
+
+        result["query_budget"] = None
+        if is_declared(cls):
+            try:
+                result["query_budget"] = declared_budget(cls).declared()
+            except ValueError as exc:
+                result["query_budget_error"] = str(exc)[:300]
+
     return result
+
+
+def _describe_query_budget(audit: dict[str, Any]) -> str:
+    """The ``Query budget:`` line for the report."""
+    if audit.get("query_budget_error"):
+        return "invalid: %s" % audit["query_budget_error"]
+    budget = audit.get("query_budget")
+    if budget is None:
+        return "(none)"
+    if not isinstance(budget, dict):
+        return "%s (mount + first render)" % (budget,)
+    parts = ["%s %s" % (key, budget[key]) for key in ("mount", "render", "event") if key in budget]
+    events = budget.get("events")
+    if events:
+        parts.append("events " + ", ".join("%s %s" % (name, n) for name, n in events.items()))
+    return ", ".join(parts) if parts else "(empty)"
 
 
 def _extract_vars(cls: type) -> Optional[Any]:
@@ -1034,6 +1065,9 @@ class Command(BaseCommand):
                     self.stdout.write("    Mixins:     %s" % ", ".join(audit["mixins"]))
                 else:
                     self.stdout.write("    Mixins:     (none)")
+
+                if "query_budget" in audit:
+                    self.stdout.write("    Query budget: %s" % _describe_query_budget(audit))
 
                 # Config flags
                 config = audit["config"]

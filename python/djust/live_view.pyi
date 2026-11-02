@@ -54,7 +54,7 @@ class LiveView(
 
     template_name: Optional[str] = None
     template: Optional[str] = None
-    query_budget: Optional[Union[int, Dict[str, int]]] = None
+    query_budget: Optional[Union[int, Dict[str, Any]]] = None
     exposure_policy: str = "legacy"
     http_status_of_state: Mapping[str, int] = {}
     state_attribute: str = "state"

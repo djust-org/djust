@@ -104,6 +104,40 @@ def _call_hook(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
         return pool.submit(context.run, asyncio.run, run()).result()
 
 
+def _path_with_query(query_params: Any) -> str:
+    """The request path a test mounts at: ``/`` plus the optional query string.
+
+    ``query_params`` is a mapping (a list value is a repeated key) or the query
+    string itself, with or without its leading ``?``.
+    """
+    if not query_params:
+        return "/"
+    if isinstance(query_params, str):
+        text = query_params.lstrip("?")
+    else:
+        from urllib.parse import urlencode
+
+        text = urlencode(query_params, doseq=True)
+    return "/?" + text if text else "/"
+
+
+def _mount_and_apply_params(view: Any, request: Any, mount_kwargs: Dict[str, Any]) -> None:
+    """``mount()`` then the params hook, the order every transport runs them in.
+
+    The HTTP GET, the socket mount and the fallback POST all call
+    ``handle_params`` right after ``mount()``, with an empty dict when the URL
+    has no query string. This is the one place the test client does the same,
+    through ``mixins.request._run_http_handle_params`` (what the GET calls) and
+    so through the shared ``djust._params_form`` decision: a view that declares
+    ``params_form`` gets its form here exactly as it does in production (#3706).
+    """
+    from ._view_hooks import call_hook_sync
+    from .mixins.request import _run_http_handle_params
+
+    call_hook_sync(view.mount, request, **mount_kwargs)
+    _run_http_handle_params(view, request)
+
+
 class NoHandlerFoundError(Exception):
     """Raised by :meth:`LiveViewTestClient.send_event` when no handler exists
     for the requested event name (#2823).
@@ -156,6 +190,12 @@ class LiveViewTestClient:
         self.events: List[Dict[str, Any]] = []
         self.patches: List[Any] = []
         self._mounted = False
+        # Set by ``LiveViewSmokeTest.test_smoke_event_queries``: when true,
+        # ``send_event`` counts the queries of the handler step alone (as the
+        # run-time meter does) into ``last_event_queries``. Off otherwise, so an
+        # ordinary test pays for no query capture.
+        self._measure_event_queries = False
+        self.last_event_queries: Optional[int] = None
         # Which branch the last mount() call took — set by mount(), read by
         # tests that want to assert which path was exercised (#2821). None
         # until mount() has been called at least once.
@@ -174,7 +214,13 @@ class LiveViewTestClient:
         # the process-wide state backend still holds (#2821 review).
         self._synthetic_ws_session_id = f"testclient-{uuid4().hex}"
 
-    def mount(self, via_websocket: bool = True, **params: Any) -> "LiveViewTestClient":
+    def mount(
+        self,
+        via_websocket: bool = True,
+        *,
+        query_params: Any = None,
+        **params: Any,
+    ) -> "LiveViewTestClient":
         """
         Initialize the view with optional params.
 
@@ -203,6 +249,12 @@ class LiveViewTestClient:
             via_websocket: If True (default), stamp WS-mount identity
                 attributes on the view instance before calling its
                 ``mount()``. If False, mount as a bare HTTP-prerender view.
+            query_params: The URL's query string, for ``handle_params()`` and
+                ``request.GET``: a mapping (a list value is a repeated key) or
+                the text (``"page=2&tag=a"``). ``mount()`` is followed by
+                ``handle_params(params, uri)`` exactly as the HTTP GET and the
+                socket mount do it, with an empty dict when this is omitted, and
+                through the same ``params_form`` decision (#3706).
             **params: Parameters to pass to mount() (like URL kwargs)
 
         Returns:
@@ -211,12 +263,13 @@ class LiveViewTestClient:
         Example:
             client.mount(item_id=123, mode='edit')
             client.mount(via_websocket=False)  # HTTP-prerender branch only
+            client.mount(query_params={"page": "2"})  # a params_form view
         """
         # Create the view instance
         self.view_instance = self.view_class()
 
         # Create a mock request
-        request = self.request_factory.get("/")
+        request = self.request_factory.get(_path_with_query(query_params))
         if self.user:
             request.user = self.user
         else:
@@ -254,10 +307,8 @@ class LiveViewTestClient:
         if hasattr(self.view_instance, "_initialize_temporary_assigns"):
             self.view_instance._initialize_temporary_assigns()
 
-        # Call mount
-        from ._view_hooks import call_hook_sync
-
-        call_hook_sync(self.view_instance.mount, request, **params)
+        # mount(), then handle_params() the way the transports do (#3706)
+        _mount_and_apply_params(self.view_instance, request, params)
 
         self._mounted = True
         self.events.append(
@@ -269,6 +320,39 @@ class LiveViewTestClient:
             }
         )
 
+        return self
+
+    def url_change(self, query_params: Any = None) -> "LiveViewTestClient":
+        """Send the ``url_change`` frame a ``live_patch`` or a popstate produces.
+
+        Calls ``handle_params(params, uri)`` on the mounted view with the new
+        query string, through the same ``params_form`` decision as the real
+        transports, so a test can step a view from one URL to another and see a
+        bad value become ``params_errors`` and a good one clear it (#3706).
+
+        It runs ``handle_params`` only: the real frame also re-checks object
+        permission and re-renders. Two calls with no ``render()`` between them
+        count as one mount phase for a ``query_budget``.
+
+        Args:
+            query_params: The new query string: a mapping (a list value is a
+                repeated key) or the text. Omitted means a URL with none.
+
+        Returns:
+            self for method chaining
+
+        Raises:
+            RuntimeError: If view not mounted
+        """
+        self._require_mounted()
+        from ._params_form import run_handle_params_sync
+        from .mixins.request import _http_url_params
+
+        request = self.request_factory.get(_path_with_query(query_params))
+        run_handle_params_sync(
+            self.view_instance, _http_url_params(request), request.get_full_path()
+        )
+        self.events.append({"type": "url_change", "params": query_params, "timestamp": time.time()})
         return self
 
     def send_event(
@@ -320,6 +404,7 @@ class LiveViewTestClient:
         if not self._mounted or not self.view_instance:
             raise RuntimeError("View not mounted. Call client.mount() first.")
 
+        self.last_event_queries = None
         # Capture state before
         state_before = self.get_state()
 
@@ -390,7 +475,17 @@ class LiveViewTestClient:
         start_time = time.perf_counter()
         error = None
         try:
-            _run_step(self.view_instance, "event", handler, *call_args, **call_kwargs)
+            if self._measure_event_queries:
+                from django.db import connection
+                from django.test.utils import CaptureQueriesContext
+
+                with CaptureQueriesContext(connection) as captured:
+                    try:
+                        _run_step(self.view_instance, "event", handler, *call_args, **call_kwargs)
+                    finally:
+                        self.last_event_queries = len(captured)
+            else:
+                _run_step(self.view_instance, "event", handler, *call_args, **call_kwargs)
         except Exception as e:
             error = str(e)
 
@@ -656,9 +751,7 @@ class LiveViewTestClient:
         instance._websocket_query_string = request.META.get("QUERY_STRING", "")
         if hasattr(instance, "_initialize_temporary_assigns"):
             instance._initialize_temporary_assigns()
-        from ._view_hooks import call_hook_sync
-
-        call_hook_sync(instance.mount, request, **mount_kwargs)
+        _mount_and_apply_params(instance, request, mount_kwargs)
         return instance
 
     @staticmethod
@@ -1852,14 +1945,18 @@ class LiveViewSmokeTest:
             }
 
     A view can also declare its own budget next to the code that spends it
-    (``query_budget = 3`` on the view, or ``{"mount": 2, "render": 1}``); see
-    :attr:`djust.LiveView.query_budget`.
+    (``query_budget = 3`` on the view, or ``{"mount": 2, "render": 1,
+    "events": {"search": 2}}``); see :attr:`djust.LiveView.query_budget`. The
+    same declaration is measured at run time in ``DEBUG`` (``djust._query_budget``).
 
     What it tests:
         - test_smoke_render: Each view mounts and renders without exceptions
         - test_smoke_queries: Each view stays within its query budget:
           ``view_config[View]["max_queries"]``, else ``View.query_budget``,
           else the class-wide ``max_queries``
+        - test_smoke_event_queries: Each handler with an event budget
+          (``query_budget["event"]`` / ``["events"]``) stays within it, over
+          ``view_config[View]["event_params"]`` and the fuzz payloads
         - test_fuzz_xss: XSS payloads don't appear unescaped in output
         - test_fuzz_no_unhandled_crash: Fuzz payloads don't escape send_event()
         - test_fuzz_handlers_succeed: Handlers handle all fuzz input gracefully (no exceptions)
@@ -1923,37 +2020,55 @@ class LiveViewSmokeTest:
         ``"mount"`` / ``"render"`` (a dict budget, each phase measured on
         its own; a phase the dict leaves out falls back to ``max_queries``).
         A budget the smoke test cannot enforce raises ``ValueError``: an
-        unenforced budget would read as protection and give none.
+        unenforced budget would read as protection and give none. The
+        ``"event"`` / ``"events"`` keys are enforced by
+        :meth:`test_smoke_event_queries`, and validated here as well, so a
+        misspelt handler name fails whichever smoke test runs first.
         """
-
-        def valid(value: Any, label: str) -> int:
-            # bool is an int subclass: ``query_budget = True`` is a mistake, not 1.
-            if type(value) is not int or value < 0:
-                raise ValueError(f"{label} must be a non-negative int, got {value!r}")
-            return value
+        from ._query_budget import declared_budget, is_declared, valid_count
 
         config = self.view_config.get(view_class, {})
         if "max_queries" in config:
-            return {"total": (valid(config["max_queries"], "max_queries"), "view_config")}
-        budget = getattr(view_class, "query_budget", None)
-        if budget is None:
-            return {"total": (valid(self.max_queries, "max_queries"), "")}
-        if isinstance(budget, dict):
-            unsupported = sorted(set(budget) - {"mount", "render"}, key=repr)
-            if unsupported:
-                raise ValueError(
-                    f"query_budget key {unsupported[0]!r} is not supported: the smoke test "
-                    "measures only 'mount' and 'render'. Use an int, or a dict with those keys."
-                )
-            return {
-                phase: (
-                    (valid(budget[phase], f"query_budget[{phase!r}]"), f"query_budget[{phase!r}]")
-                    if phase in budget
-                    else (valid(self.max_queries, "max_queries"), "max_queries")
-                )
-                for phase in ("mount", "render")
-            }
-        return {"total": (valid(budget, "query_budget"), "query_budget")}
+            return {"total": (valid_count(config["max_queries"], "max_queries"), "view_config")}
+        parsed = declared_budget(view_class)  # also rejects a misspelt or unmeasurable handler
+        if not is_declared(view_class):
+            return {"total": (valid_count(self.max_queries, "max_queries"), "")}
+        if parsed.total is not None:
+            return {"total": (parsed.total, "query_budget")}
+        resolved: Dict[str, Tuple[int, str]] = {}
+        for phase in ("mount", "render"):
+            declared = getattr(parsed, phase)
+            if declared is not None:
+                resolved[phase] = (declared, f"query_budget[{phase!r}]")
+            else:
+                resolved[phase] = (valid_count(self.max_queries, "max_queries"), "max_queries")
+        return resolved
+
+    def _resolve_event_budget(self, view_class: Type[Any]) -> Dict[str, Tuple[int, str]]:
+        """Return the event budget of *view_class* as ``{handler: (limit, source)}``.
+
+        ``query_budget["events"][name]`` wins over ``query_budget["event"]``,
+        which covers every ``@event_handler`` of the view that a budget can be
+        enforced on. A handler named in ``events`` that the view does not have, or
+        that is ``async def`` or ``@background`` (nothing measures it), raises
+        ``ValueError`` through ``declared_budget``, the reader the run-time meter,
+        ``manage.py check`` and ``djust_audit`` share: a budget for a handler that
+        cannot be measured would pass for protection. One covered only by the
+        broad ``event`` number is left out here and reported by
+        :meth:`test_smoke_event_queries` as not measured.
+        """
+        from ._query_budget import declared_budget, event_handlers, handler_problem
+
+        parsed = declared_budget(view_class)
+        if parsed.event is None and not parsed.events:
+            return {}
+        resolved: Dict[str, Tuple[int, str]] = {}
+        for name, function in event_handlers(view_class).items():
+            if name in parsed.events:
+                resolved[name] = (parsed.events[name], f"query_budget['events'][{name!r}]")
+            elif parsed.event is not None and handler_problem(function) is None:
+                resolved[name] = (parsed.event, "query_budget['event']")
+        return resolved
 
     def test_smoke_queries(self) -> None:
         """Every discovered view mounts and renders within its query budget."""
@@ -1998,6 +2113,121 @@ class LiveViewSmokeTest:
         if errors:
             raise AssertionError(
                 f"Query threshold exceeded for {len(errors)}/{len(views)} views:\n"
+                + "\n".join(f"  - {e}" for e in errors)
+            )
+
+    def _event_payloads(
+        self, view_class: Type[Any], handler_name: str, handler_meta: Dict[str, Any]
+    ) -> Iterator[Tuple[str, Dict[str, Any]]]:
+        """The parameter sets an event budget is measured over.
+
+        ``view_config[View]["event_params"][handler]`` (a dict, or a list of
+        dicts) first: a handler that needs a real object id fails every
+        generated payload before it queries, and only parameters the test
+        author supplies reach its query. Then the payloads the fuzz tests use.
+        """
+        given = self.view_config.get(view_class, {}).get("event_params", {}).get(handler_name)
+        if given is not None:
+            sets = [given] if isinstance(given, dict) else given
+            if not isinstance(sets, list) or not all(isinstance(item, dict) for item in sets):
+                raise ValueError(
+                    f"view_config event_params for {handler_name!r} must be a dict or a "
+                    f"list of dicts, got {given!r}"
+                )
+            for index, params in enumerate(sets):
+                yield f"event_params[{index}]", params
+        yield from _make_fuzz_params(handler_meta)
+
+    def test_smoke_event_queries(self) -> None:
+        """Every handler with an event budget stays within it.
+
+        Runs whether or not ``fuzz`` is on: a budget the suite accepted but
+        skipped would read as protection and give none. Each budgeted handler
+        is called with the supplied ``event_params`` and the generated fuzz
+        payloads, each on a freshly mounted view; the most queries any call
+        ran is compared with the budget. A handler none of whose calls
+        succeeded was not measured (it failed before doing its work): that is
+        an error when the view named the handler in ``events``, and a
+        ``UserWarning`` when only the broad ``event`` number covers it.
+        """
+        import warnings
+
+        from ._query_budget import declared_budget, unmeasurable_handlers
+
+        errors = []
+        views = self._get_views()
+
+        for view_class in views:
+            name = f"{view_class.__module__}.{view_class.__name__}"
+            try:
+                budget = self._resolve_event_budget(view_class)
+                skipped = unmeasurable_handlers(view_class, declared_budget(view_class))
+                if skipped:
+                    warnings.warn(
+                        f"{name}: query_budget['event'] was not measured for "
+                        f"{', '.join(n for n, _ in skipped)}: "
+                        + "; ".join(f"{n} is {why}" for n, why in skipped),
+                        UserWarning,
+                        stacklevel=2,
+                    )
+                if not budget:
+                    continue
+                handlers = _get_handlers(view_class)
+                unmeasured = []
+                for handler_name, (limit, source) in budget.items():
+                    worst, worst_desc, succeeded, last_error = 0, "", False, ""
+                    for desc, params in self._event_payloads(
+                        view_class, handler_name, handlers[handler_name]
+                    ):
+                        try:
+                            client = self._make_client(view_class)
+                            # The handler's own queries, as the run-time meter counts
+                            # them: not the per-event object-permission re-check.
+                            client._measure_event_queries = True
+                            result = client.send_event(handler_name, **params)
+                        except Exception as exc:  # a payload the handler cannot take
+                            last_error = f"{type(exc).__name__}: {exc}"
+                            continue
+                        if result["success"]:
+                            succeeded = True
+                        else:
+                            last_error = str(result.get("error") or "")
+                        spent = client.last_event_queries or 0
+                        if spent > worst:
+                            worst, worst_desc = spent, desc
+                    if worst > limit:
+                        errors.append(
+                            f"{name}.{handler_name}: ran {worst} queries "
+                            f"(max {limit}, from {source}) [{worst_desc}]"
+                        )
+                    elif not succeeded:
+                        # A handler the view NAMED in ``events`` must be measured:
+                        # that budget would otherwise pass for protection. One
+                        # covered only by the broad ``event`` number is measured
+                        # where it can be and reported where it cannot.
+                        if source.startswith("query_budget['events']"):
+                            errors.append(
+                                f"{name}.{handler_name}: no call succeeded, so its event budget "
+                                f"was not measured ({last_error or 'no payload to send'}). Give "
+                                f"view_config[{view_class.__name__}]['event_params']"
+                                f"[{handler_name!r}] parameters the handler accepts."
+                            )
+                        else:
+                            unmeasured.append(handler_name)
+                if unmeasured:
+                    warnings.warn(
+                        f"{name}: query_budget['event'] was not measured for "
+                        f"{', '.join(sorted(unmeasured))}: no generated call to them succeeded. "
+                        "Give view_config[View]['event_params'][handler] parameters they accept.",
+                        UserWarning,
+                        stacklevel=2,
+                    )
+            except Exception as e:
+                errors.append(f"{name}: {type(e).__name__}: {e}")
+
+        if errors:
+            raise AssertionError(
+                f"Event query budget exceeded for {len(errors)}/{len(views)} views:\n"
                 + "\n".join(f"  - {e}" for e in errors)
             )
 

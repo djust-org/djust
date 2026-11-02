@@ -197,13 +197,13 @@ Each check has an ID such as `djust.V004`: a family letter and a number. The the
 | --- | --- | --- |
 | `A` | Audit / static security checks | A100 to A107 |
 | `B` | Vendored assets and SBOMs | B001 to B014 |
-| `C` | Configuration | C020 to C026 |
+| `C` | Configuration | C020 to C029 |
 | `D` | Database notifications | none |
 | `Q` | Code quality | Q004 |
 | `S` | Security | S013 |
 | `T` | Templates | T019 to T022; T023 to T025 (main) |
 | `U` | Update notice | none |
-| `V` | Validation of LiveView classes and handlers | V016 to V021 |
+| `V` | Validation of LiveView classes and handlers | V016 to V024 |
 | `Y` | Accessibility | none |
 
 ### Checks that matter for generated code

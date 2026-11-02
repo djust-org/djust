@@ -45,6 +45,9 @@ class ProductListView(LiveView):
         self.page = int(params.get("page", 1))
         self.products = self.fetch_products()
 
+    def fetch_products(self):
+        return []  # your query, filtered by self.category and self.page
+
     @event_handler()
     def filter_by_category(self, category="all", **kwargs):
         self.live_patch(params={"category": category, "page": 1})
@@ -179,11 +182,50 @@ Things to know:
 
 - It is opt-in. A view without `params_form` keeps receiving the raw dict.
 - Only the declared fields reach `handle_params()`; any other query key is dropped.
-- The form is built with `data=` only, so it cannot take required constructor arguments.
+- The form is built with `data=` only, so it cannot take required constructor arguments;
+  `manage.py check` reports one that does (V023).
 - A `ModelChoiceField` is fine: validation runs on a worker thread on the socket paths.
 - With `exposure_policy = "explicit"` the view declares what it renders, so declare
   `params_errors = state(default_factory=dict)` and pass it to `get_context_data()`.
-- A `params_form` that is not a form class raises `ImproperlyConfigured`.
+- A `params_form` that is not a form class raises `ImproperlyConfigured` on the first
+  request; `manage.py check` reports it first (V023).
+- `params_form`, `http_status_of_state` and `state_attribute` are framework class
+  attributes: an `exposure_policy = "explicit"` view cannot declare a `state()` field
+  under those names, and a legacy view that assigns one on the instance does not publish
+  it as state.
+
+**Testing a view with `params_form`.** `LiveViewTestClient` calls `handle_params()` after
+`mount()` the way the transports do, through the same form. Give the first call a query
+string with `query_params`, and step to another URL with `url_change()`:
+
+```python
+from django import forms
+
+from djust import LiveView
+from djust.testing import LiveViewTestClient
+
+
+class PageParams(forms.Form):
+    page = forms.IntegerField(min_value=1, required=False, initial=1)
+
+
+class PagedView(LiveView):
+    template = "<div dj-root>{{ page }}</div>"
+    params_form = PageParams
+
+    def mount(self, request, **kwargs):
+        self.page = 0
+
+    def handle_params(self, params, uri):
+        self.page = params["page"]
+
+
+client = LiveViewTestClient(PagedView).mount(query_params={"page": "3"})
+assert client.view_instance.page == 3
+client.url_change({"page": "abc"})  # a bad value: the initial values, plus the message
+assert client.view_instance.page == 1
+assert "page" in client.view_instance.params_errors
+```
 
 ## Template Directives
 
@@ -688,6 +730,9 @@ class DashboardView(LiveView):  # navigation is built in — no NavigationMixin 
         if tab in self.VALID_TABS:
             self.active_tab = tab
         self._load_tab_data()
+
+    def _load_tab_data(self):
+        pass  # load what the active tab shows
 ```
 
 **Why it works:**
