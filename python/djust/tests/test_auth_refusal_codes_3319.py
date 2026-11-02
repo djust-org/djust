@@ -90,7 +90,7 @@ async def _open(user, session):
     socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
     socket.scope.update(session=session, user=user, tenant=None)
     assert (await socket.connect())[0]
-    await socket.receive_json_from(timeout=3)
+    await socket.receive_json_from()
     return socket
 
 
@@ -111,7 +111,7 @@ async def test_ws_revoked_event_frame_carries_code(monkeypatch):
             await socket.send_json_to(
                 {"type": "mount", "view": __name__ + ".ExplicitView", "url": "/a/"}
             )
-            assert (await socket.receive_json_from(timeout=3))["type"] == "mount"
+            assert (await socket.receive_json_from())["type"] == "mount"
             await sync_to_async(request.session.delete)()
             await socket.send_json_to({"type": "event", "event": "bump", "params": {}})
             frames, closes = await _frames(socket, has_type("error"))
@@ -139,7 +139,7 @@ async def test_ws_handler_permission_denied_frame_carries_code(monkeypatch):
             await socket.send_json_to(
                 {"type": "mount", "view": __name__ + ".GuardedHandlerView", "url": "/g/"}
             )
-            assert (await socket.receive_json_from(timeout=3))["type"] == "mount"
+            assert (await socket.receive_json_from())["type"] == "mount"
             await socket.send_json_to({"type": "event", "event": "purge", "params": {}})
             frames, closes = await _frames(socket, has_type("error"))
         finally:

@@ -352,7 +352,7 @@ async def test_native_ws_observation_uses_normal_noop_or_render_path(changes_sta
                     },
                 }
             )
-            response = await socket.receive_json_from(timeout=3)
+            response = await socket.receive_json_from()
             assert response["type"] == ("html_update" if changes_state else "noop"), response
             if changes_state:
                 assert "opened" in response["html"]
@@ -409,7 +409,7 @@ async def test_signed_resume_rotates_observation_lifetime_and_first_report_stays
                         },
                     }
                 )
-                response = await socket.receive_json_from(timeout=3)
+                response = await socket.receive_json_from()
                 assert response["type"] == "noop", response
                 assert len(observations) == count
         finally:

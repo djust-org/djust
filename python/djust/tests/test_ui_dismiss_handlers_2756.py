@@ -56,7 +56,7 @@ _FRAMEWORKS = ("bootstrap5", "tailwind", "plain")
 # ---------------------------------------------------------------------------
 
 
-async def _receive_until(communicator, wanted_type, *, tries=8, timeout=3):
+async def _receive_until(communicator, wanted_type, *, tries=8, timeout=30):
     last = None
     for _ in range(tries):
         last = await communicator.receive_json_from(timeout=timeout)
@@ -89,7 +89,7 @@ async def _connect_and_mount(view_path: str, url: str = "/ui/"):
 
     connected, _ = await communicator.connect()
     assert connected, "WebsocketCommunicator must connect"
-    await communicator.receive_json_from(timeout=2)  # drain connect frame
+    await communicator.receive_json_from()  # drain connect frame
 
     await communicator.send_json_to({"type": "mount", "view": view_path, "url": url})
     mount_frame = await _receive_until(communicator, "mount")
@@ -139,7 +139,7 @@ async def _dismiss_over_ws(view_name: str, component_id: str):
                 "ref": 1,
             }
         )
-        resp = await communicator.receive_json_from(timeout=3)
+        resp = await communicator.receive_json_from()
         await communicator.disconnect()
         return resp
 
@@ -166,7 +166,7 @@ class TestDismissOverWebSocket:
             await communicator.send_json_to(
                 {"type": "event", "event": "not_a_handler", "params": {"component_id": "a1"}}
             )
-            resp = await communicator.receive_json_from(timeout=3)
+            resp = await communicator.receive_json_from()
             await communicator.disconnect()
         assert resp.get("type") == "error", resp
 

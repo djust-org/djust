@@ -31,6 +31,7 @@ from django.test import RequestFactory, override_settings
 from djust import LiveView
 from djust.mixins import template as template_mod
 from djust.mixins.template import TemplateMixin
+from djust.tests._growth import assert_scales_linearly
 from djust.utils import clear_template_dirs_cache
 
 _DJ_ID_RE = re.compile(r'\s*dj-id="[^"]*"')
@@ -462,19 +463,23 @@ class TestRootOpenRegex:
         m = template_mod._search_dj_root_open(html, template_mod._DJ_ROOT_RE)
         assert m and html[m.end() :] == "<p>r</p></div>"
 
-    def test_tag_soup_without_gt_is_linear(self):
-        """The unquoted units exclude ``<``: 200 KB of ``<div <div ...`` used to
-        take over a minute (quadratic); it must now be near-instant."""
-        import time
-
-        for soup in (
-            "<div " * 40_000,
+    @pytest.mark.parametrize(
+        "prefix, unit, count",
+        [
+            ("", "<div ", 10_000),
             # An unclosed tag with many attribute names (review of #3023):
             # quadratic before the closes-first lookahead.
-            "<a" + " dj-root" * 20_000,
-            "<a" + " dj-view" * 20_000,
-        ):
-            t0 = time.perf_counter()
+            ("<a", " dj-root", 5_000),
+            ("<a", " dj-view", 5_000),
+        ],
+    )
+    def test_tag_soup_without_gt_is_linear(self, prefix, unit, count):
+        """The unquoted units exclude ``<``: 200 KB of ``<div <div ...`` used to
+        take over a minute (quadratic). Judged by growth, not by seconds (#3711):
+        four times the soup must cost under ten times as much."""
+
+        def search(scale):
+            soup = prefix + unit * (count * scale)
             for pattern in (
                 template_mod._DJ_ROOT_RE,
                 template_mod._DJ_VIEW_RE,
@@ -482,7 +487,8 @@ class TestRootOpenRegex:
             ):
                 assert pattern.search(soup) is None
             TemplateMixin._stamp_dj_view(soup, "a.B")
-            assert time.perf_counter() - t0 < 2.0, soup[:20]
+
+        assert_scales_linearly(search, what="tag soup without a '>'")
 
     def test_dj_view_regex_rejects_view_prefixed_attributes(self):
         for html in ("<body dj-view-transitions>", "<div dj-viewport-top='x'>"):

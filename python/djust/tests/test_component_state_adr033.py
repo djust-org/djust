@@ -346,7 +346,7 @@ class _ScopeSession:
         self.session_key = key
 
 
-async def _receive_until(communicator, wanted_type, *, tries=8, timeout=3):
+async def _receive_until(communicator, wanted_type, *, tries=8, timeout=30):
     last = None
     for _ in range(tries):
         last = await communicator.receive_json_from(timeout=timeout)
@@ -372,7 +372,7 @@ async def _connect_and_mount(view_path: str, url: str = "/adr033/"):
     communicator.scope["session"] = _ScopeSession(session_key)
     connected, _ = await communicator.connect()
     assert connected
-    await communicator.receive_json_from(timeout=2)  # connect frame
+    await communicator.receive_json_from()  # connect frame
     await communicator.send_json_to({"type": "mount", "view": view_path, "url": url})
     mount_frame = await _receive_until(communicator, "mount")
     assert mount_frame.get("type") == "mount", mount_frame
@@ -392,7 +392,7 @@ class TestWebSocketFrame:
                 await communicator.send_json_to(
                     {"type": "event", "event": "set_rating", "params": {"value": "2"}, "ref": 1}
                 )
-                updated = await communicator.receive_json_from(timeout=5)
+                updated = await communicator.receive_json_from()
                 assert updated.get("type") in ("patch", "html_update", "html_recovery"), (
                     f"a state write must re-render, not noop: {updated!r}"
                 )

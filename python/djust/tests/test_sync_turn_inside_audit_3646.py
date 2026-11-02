@@ -388,7 +388,7 @@ async def _ws_session(view_name: str, url: str, actions=(), settle: float = 0.4)
     communicator.scope["user"] = AnonymousUser()
     connected, _ = await communicator.connect()
     assert connected
-    await communicator.receive_json_from(timeout=3)
+    await communicator.receive_json_from()
 
     async def until(*types):
         for _ in range(12):

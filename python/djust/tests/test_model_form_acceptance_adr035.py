@@ -615,7 +615,7 @@ async def _connect(user, session):
     socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
     socket.scope.update(session=session, user=user, tenant=None)
     assert (await socket.connect())[0]
-    await socket.receive_json_from(timeout=3)
+    await socket.receive_json_from()
     return socket
 
 
@@ -628,14 +628,14 @@ async def _mount(socket, view, url, prerendered=False):
             "has_prerendered": prerendered,
         }
     )
-    return await socket.receive_json_from(timeout=5)
+    return await socket.receive_json_from()
 
 
 async def _event(socket, ref, event, params):
     await socket.send_json_to({"type": "event", "event": event, "params": params, "ref": ref})
     frames = []
     for _ in range(6):
-        frame = await socket.receive_json_from(timeout=5)
+        frame = await socket.receive_json_from()
         frames.append(frame)
         if frame.get("type") in {"patch", "html_update", "error", "noop"}:
             break

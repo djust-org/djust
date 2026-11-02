@@ -632,12 +632,12 @@ async def _connect_mount_and_get_consumer(view_path: str, url: str = "/mh-1915/"
 
     connected, _ = await communicator.connect()
     assert connected, "WebsocketCommunicator must connect"
-    await communicator.receive_json_from(timeout=2)  # drain connect frame
+    await communicator.receive_json_from()  # drain connect frame
 
     await communicator.send_json_to({"type": "mount", "view": view_path, "url": url})
     mount_frame = None
     for _ in range(8):
-        mount_frame = await communicator.receive_json_from(timeout=3)
+        mount_frame = await communicator.receive_json_from()
         if mount_frame.get("type") == "mount":
             break
     assert mount_frame and mount_frame.get("type") == "mount", (

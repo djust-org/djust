@@ -178,7 +178,7 @@ async def test_real_websocket_strict_positional_and_rejection(actor_mode):
         socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
         socket.scope.update(session=request.session, user=request.user, tenant=None)
         assert (await socket.connect())[0]
-        await socket.receive_json_from(timeout=3)
+        await socket.receive_json_from()
         try:
             await socket.send_json_to(
                 {
@@ -188,7 +188,7 @@ async def test_real_websocket_strict_positional_and_rejection(actor_mode):
                     "url": request.path,
                 }
             )
-            mounted = await socket.receive_json_from(timeout=3)
+            mounted = await socket.receive_json_from()
             assert mounted["type"] == "mount"
             contracts = mounted["parameter_contracts"]
             assert contracts["version"] == 1
@@ -203,7 +203,7 @@ async def test_real_websocket_strict_positional_and_rejection(actor_mode):
                         "ref": 7,
                     }
                 )
-                frame = await socket.receive_json_from(timeout=3)
+                frame = await socket.receive_json_from()
                 if expected == "error":
                     assert frame["type"] == "error", frame
                     assert "SECRET_INVALID" not in json.dumps(frame)
@@ -216,7 +216,7 @@ async def test_real_websocket_strict_positional_and_rejection(actor_mode):
                     )
                     assert frame["parameter_contract_view"] == expected_view
                     await socket.send_json_to({"type": "request_html"})
-                    recovery = await socket.receive_json_from(timeout=3)
+                    recovery = await socket.receive_json_from()
                     assert recovery["type"] == "html_recovery"
                     assert recovery["version"] == frame["version"]
                     assert "7:2026-09-21" in recovery["html"]

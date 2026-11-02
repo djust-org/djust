@@ -91,13 +91,13 @@ async def _ws(host, session, *, event=None, between=None):
     communicator.scope["session"] = session
     connected, _ = await communicator.connect()
     assert connected
-    await communicator.receive_json_from(timeout=2)
+    await communicator.receive_json_from()
     await communicator.send_json_to(
         {"type": "mount", "view": f"{__name__}._SecretView", "url": _URL}
     )
     frame = None
     for _ in range(6):
-        frame = await communicator.receive_json_from(timeout=3)
+        frame = await communicator.receive_json_from()
         if frame.get("type") in ("mount", "error", "navigate"):
             break
     assert frame is not None and frame.get("type") == "mount", frame
@@ -106,7 +106,7 @@ async def _ws(host, session, *, event=None, between=None):
     if event:
         await communicator.send_json_to({"type": "event", "event": event, "params": {}})
         for _ in range(6):
-            reply = await communicator.receive_json_from(timeout=3)
+            reply = await communicator.receive_json_from()
             if reply.get("type") in ("patch", "html_update", "diff", "noop", "error"):
                 break
     await communicator.disconnect()

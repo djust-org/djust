@@ -99,7 +99,7 @@ class _WSHvrView(LiveView):
         self.count += 1
 
 
-async def _receive_until(communicator, wanted_type, *, tries=6, timeout=3):
+async def _receive_until(communicator, wanted_type, *, tries=6, timeout=30):
     """Drain frames until one whose ``type`` == ``wanted_type`` (or return last seen)."""
     last = None
     for _ in range(tries):
@@ -136,7 +136,7 @@ async def _connect_and_mount(view_suffix="_WSVersionView", url="/version/"):
 
     connected, _ = await communicator.connect()
     assert connected, "WebsocketCommunicator must connect"
-    await communicator.receive_json_from(timeout=2)  # drain connect frame
+    await communicator.receive_json_from()  # drain connect frame
 
     await communicator.send_json_to(
         {

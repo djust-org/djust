@@ -274,17 +274,17 @@ async def test_real_websocket(view):
         socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
         socket.scope.update(session=request.session, user=request.user, tenant=None)
         assert (await socket.connect())[0]
-        await socket.receive_json_from(timeout=3)
+        await socket.receive_json_from()
         try:
             await socket.send_json_to(
                 {"type": "mount", "view": __name__ + "." + view, "url": request.path}
             )
-            assert (await socket.receive_json_from(timeout=3))["type"] == "mount"
+            assert (await socket.receive_json_from())["type"] == "mount"
             for ref, (handler, payload, expected) in enumerate(MATRIX, 1):
                 await socket.send_json_to(
                     {"type": "event", "event": handler, "params": payload, "ref": ref}
                 )
-                frame = await socket.receive_json_from(timeout=3)
+                frame = await socket.receive_json_from()
                 assert (frame["type"] == "error") is (expected is REJECT), (handler, frame)
                 outcomes.append(_take())
         finally:

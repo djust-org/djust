@@ -83,12 +83,12 @@ async def test_notify_released_event_runs_its_start_async_work(event):
         socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
         socket.scope.update(session=session, user=AnonymousUser(), tenant=None)
         assert (await socket.connect())[0]
-        await socket.receive_json_from(timeout=3)
+        await socket.receive_json_from()
         try:
             await socket.send_json_to(
                 {"type": "mount", "view": __name__ + ".NotifyAsyncView", "url": "/n/"}
             )
-            assert (await socket.receive_json_from(timeout=3))["type"] == "mount"
+            assert (await socket.receive_json_from())["type"] == "mount"
             await socket.send_json_to(
                 {"type": "event", "event": event, "params": {"_activity": "panel"}}
             )

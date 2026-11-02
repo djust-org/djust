@@ -50,10 +50,7 @@ async def _mount(component_name: str):
     connected, _ = await communicator.connect()
     assert connected, "the WebSocket did not accept the connection"
 
-    try:
-        await communicator.receive_json_from(timeout=3)  # connect ack
-    except Exception:  # noqa: BLE001 — absent on some transports
-        pass
+    await communicator.receive_json_from()  # connect ack
 
     await communicator.send_json_to(
         {
@@ -62,7 +59,7 @@ async def _mount(component_name: str):
             "params": {"component_name": component_name},
         }
     )
-    return communicator, await communicator.receive_json_from(timeout=5)
+    return communicator, await communicator.receive_json_from()
 
 
 def _html_of(payload: dict) -> str:
@@ -123,7 +120,7 @@ async def test_accordion_toggle_reaches_the_server():
                 "ref": 1,
             }
         )
-        updated = await communicator.receive_json_from(timeout=5)
+        updated = await communicator.receive_json_from()
     finally:
         await communicator.disconnect()
 
@@ -251,7 +248,7 @@ async def test_interactive_component_answers_its_event(component, event, params)
         await communicator.send_json_to(
             {"type": "event", "event": event, "params": params, "ref": 1}
         )
-        response = await communicator.receive_json_from(timeout=5)
+        response = await communicator.receive_json_from()
     finally:
         await communicator.disconnect()
 
@@ -294,7 +291,7 @@ async def test_accordion_toggle_patches_only_the_preview(params):
         await communicator.send_json_to(
             {"type": "event", "event": "accordion_toggle", "params": params, "ref": 1}
         )
-        updated = await communicator.receive_json_from(timeout=5)
+        updated = await communicator.receive_json_from()
     finally:
         await communicator.disconnect()
 
@@ -332,7 +329,7 @@ async def test_demo_events_answer_over_the_wire(component, event, params):
                 "ref": 1,
             }
         )
-        updated = await communicator.receive_json_from(timeout=5)
+        updated = await communicator.receive_json_from()
     finally:
         await communicator.disconnect()
     assert updated.get("type") != "error", updated

@@ -111,7 +111,7 @@ class HomeView(LiveView):
 # ---------------------------------------------------------------------------
 
 
-async def _receive_until(communicator, wanted_type, *, tries=6, timeout=3):
+async def _receive_until(communicator, wanted_type, *, tries=6, timeout=30):
     """Drain frames until one whose ``type`` == ``wanted_type`` (or return last seen)."""
     last = None
     for _ in range(tries):
@@ -146,7 +146,7 @@ async def _connect_and_mount(view_path: str, url: str):
 
     connected, _ = await communicator.connect()
     assert connected, "WebsocketCommunicator must connect"
-    await communicator.receive_json_from(timeout=2)  # drain connect frame
+    await communicator.receive_json_from()  # drain connect frame
 
     await communicator.send_json_to({"type": "mount", "view": view_path, "url": url})
     mount_resp = await _receive_until(communicator, "mount")
@@ -267,7 +267,7 @@ async def test_parent_event_then_recovery_preserves_sticky_child_drift():
         await communicator.send_json_to(
             {"type": "event", "event": "refresh", "params": {}, "ref": 2}
         )
-        parent_resp = await communicator.receive_json_from(timeout=3)
+        parent_resp = await communicator.receive_json_from()
 
         # The parent re-render must reflect the drifted child, not mount defaults.
         # The frame may be a patch (with html) or html_update; check whichever HTML

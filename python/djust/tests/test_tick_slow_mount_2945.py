@@ -50,7 +50,7 @@ async def _socket():
     socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
     socket.scope.update(session=await sync_to_async(_session)(), user=AnonymousUser(), tenant=None)
     assert (await socket.connect())[0]
-    await socket.receive_json_from(timeout=3)
+    await socket.receive_json_from()
     return socket
 
 
@@ -64,8 +64,8 @@ async def test_tick_shorter_than_mount_still_ticks():
             await socket.send_json_to(
                 {"type": "mount", "view": __name__ + ".SlowMountTickView", "url": "/t/"}
             )
-            assert (await socket.receive_json_from(timeout=3))["type"] == "mount"
-            frame = await socket.receive_json_from(timeout=3)
+            assert (await socket.receive_json_from())["type"] == "mount"
+            frame = await socket.receive_json_from()
             assert frame.get("source") == "tick", frame
             assert TICKS, "handle_tick never ran"
         finally:
@@ -94,7 +94,7 @@ async def test_tick_does_not_run_before_mount_finishes():
             await socket.send_json_to(
                 {"type": "mount", "view": __name__ + ".Probe2945", "url": "/t/"}
             )
-            assert (await socket.receive_json_from(timeout=3))["type"] == "mount"
+            assert (await socket.receive_json_from())["type"] == "mount"
             assert seen_during_mount == [0]
         finally:
             await socket.disconnect()

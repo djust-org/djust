@@ -72,7 +72,7 @@ def _reset():
     _SEEN.clear()
 
 
-async def _receive_until(communicator, wanted, *, tries=8, timeout=5):
+async def _receive_until(communicator, wanted, *, tries=8, timeout=30):
     last = None
     for _ in range(tries):
         last = await communicator.receive_json_from(timeout=timeout)
@@ -89,7 +89,7 @@ async def _ws_mount(view, url="/m/", params=None):
     comm = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
     connected, _ = await comm.connect()
     assert connected
-    await comm.receive_json_from(timeout=3)
+    await comm.receive_json_from()
     frame = {"type": "mount", "view": f"{_MODULE}.{view}", "url": url}
     if params is not None:
         frame["params"] = params

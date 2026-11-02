@@ -232,7 +232,7 @@ class TestWebsocketMountPath:
                 connected, _ = await communicator.connect()
                 assert connected
                 # Consume the initial connect frame
-                await communicator.receive_json_from(timeout=2)
+                await communicator.receive_json_from()
                 await communicator.send_json_to(
                     {
                         "type": "mount",
@@ -241,7 +241,7 @@ class TestWebsocketMountPath:
                 )
                 # First response may be an ack or the mount payload; drain once.
                 try:
-                    response = await communicator.receive_json_from(timeout=2)
+                    response = await communicator.receive_json_from()
                 except Exception:  # pragma: no cover - network sentinel
                     response = {}
                 await communicator.disconnect()

@@ -195,7 +195,14 @@ _APP = textwrap.dedent(
                     await send({"type": "lifespan.shutdown.complete"})
                     return
         if scope["path"] == "/block":
-            time.sleep(1.5)  # blocks THIS loop only
+            # Blocks THIS loop only, until the test says go (#3711: an ordering, not a
+            # 1.5 s sleep raced against a wall-clock bound). The cap only ends a hung run.
+            flags = os.environ["MLAPP_FLAGS"]
+            open(os.path.join(flags, "blocking"), "w").close()
+            for _ in range(1250):
+                if os.path.exists(os.path.join(flags, "release")):
+                    break
+                time.sleep(0.02)
         if scope["path"] == "/hang":
             await asyncio.sleep(60)  # an in-flight request that never ends
         body = threading.current_thread().name.encode()
@@ -215,7 +222,12 @@ def _free_port():
 def _start(tmp_path, loops, extra_env=None, extra_args=()):
     (tmp_path / "mlapp.py").write_text(_APP)
     port = _free_port()
-    env = {**os.environ, "PYTHONPATH": REPO_PYTHON, **(extra_env or {})}
+    env = {
+        **os.environ,
+        "PYTHONPATH": REPO_PYTHON,
+        "MLAPP_FLAGS": str(tmp_path),
+        **(extra_env or {}),
+    }
     env.pop("DJANGO_SETTINGS_MODULE", None)
     proc = subprocess.Popen(
         [
@@ -278,22 +290,29 @@ def _stop(proc, sig=signal.SIGTERM, timeout=20):
 def test_two_loops_share_one_socket_run_lifespan_each_and_stop_gracefully(tmp_path, sig):
     proc, port = _start(tmp_path, 2)
     _wait_up(proc, port)
-    # A request that blocks its loop for 1.5 s; while it does, the other loop
-    # must still answer on the same port.
+    # A request that blocks its loop until released; while it is blocked, the other
+    # loop must still answer on the same port. The ordering is the assertion: the
+    # second answer arrives while the first request has not been answered. (If the
+    # second request queued behind the blocked loop, it would never be answered
+    # before the release, and the call below would time out instead.)
     result = {}
 
     def blocked():
-        result["blocked"] = _get(port, "/block")
+        result["blocked"] = _get(port, "/block", timeout=30)
 
     t = threading.Thread(target=blocked)
     t.start()
-    time.sleep(0.3)
-    started = time.monotonic()
-    other = _get(port, timeout=5)
-    elapsed = time.monotonic() - started
-    t.join(10)
+    try:
+        deadline = time.monotonic() + 20
+        while not (tmp_path / "blocking").exists():
+            assert time.monotonic() < deadline, "the /block request never reached the app"
+            time.sleep(0.02)
+        other = _get(port, timeout=20)
+        assert "blocked" not in result, "the blocked request was answered before the release"
+    finally:
+        (tmp_path / "release").write_text("go")
+        t.join(30)
     assert {result["blocked"], other} == {"djust-loop-0", "djust-loop-1"}, (result, other)
-    assert elapsed < 1.0, "the second loop did not accept while the first was blocked"
 
     code, out = _stop(proc, sig)
     assert code == 0, out

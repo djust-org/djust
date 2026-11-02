@@ -68,7 +68,7 @@ class _KanbanView(LiveView):
         self._kanban_version += 1
 
 
-async def _receive_until(communicator, wanted_types, *, tries=6, timeout=3):
+async def _receive_until(communicator, wanted_types, *, tries=6, timeout=30):
     last = None
     for _ in range(tries):
         last = await communicator.receive_json_from(timeout=timeout)
@@ -99,7 +99,7 @@ async def _mounted_communicator():
     communicator.scope["session"] = _ScopeSession(session_key)
     connected, _ = await communicator.connect()
     assert connected
-    await communicator.receive_json_from(timeout=2)  # connect frame
+    await communicator.receive_json_from()  # connect frame
     await communicator.send_json_to(
         {"type": "mount", "view": f"{__name__}._KanbanView", "url": "/kanban/"}
     )
@@ -190,7 +190,7 @@ async def _mounted(view_name, url):
     communicator.scope["session"] = _ScopeSession(session_key)
     connected, _ = await communicator.connect()
     assert connected
-    await communicator.receive_json_from(timeout=2)
+    await communicator.receive_json_from()
     await communicator.send_json_to({"type": "mount", "view": view_name, "url": url})
     mount_resp = await _receive_until(communicator, {"mount"})
     assert mount_resp.get("type") == "mount", mount_resp

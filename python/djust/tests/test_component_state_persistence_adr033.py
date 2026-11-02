@@ -237,7 +237,7 @@ class _ScopeSession:
 async def _mount(communicator, view_path, url):
     await communicator.send_json_to({"type": "mount", "view": view_path, "url": url})
     for _ in range(8):
-        frame = await communicator.receive_json_from(timeout=3)
+        frame = await communicator.receive_json_from()
         if frame.get("type") == "mount":
             return frame
     raise AssertionError("no mount frame")
@@ -268,13 +268,13 @@ async def test_reconnect_restores_the_written_value(generous_save_timeout):
         first = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
         first.scope["session"] = _ScopeSession(session_key)
         assert (await first.connect())[0]
-        await first.receive_json_from(timeout=2)
+        await first.receive_json_from()
         mounted = await _mount(first, f"{_ALLOWED}.RatingView", "/rating/")
         assert _full_stars(mounted["html"]) == 4
         await first.send_json_to(
             {"type": "event", "event": "set_rating", "params": {"value": "5"}, "ref": 1}
         )
-        updated = await first.receive_json_from(timeout=5)
+        updated = await first.receive_json_from()
         assert updated.get("type") in ("patch", "html_update", "html_recovery"), updated
         await first.disconnect()
 
@@ -285,7 +285,7 @@ async def test_reconnect_restores_the_written_value(generous_save_timeout):
         second = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
         second.scope["session"] = _ScopeSession(session_key)
         assert (await second.connect())[0]
-        await second.receive_json_from(timeout=2)
+        await second.receive_json_from()
         remounted = await _mount(second, f"{_ALLOWED}.RatingView", "/rating/")
         try:
             assert _full_stars(remounted.get("html", "")) == 5, remounted

@@ -196,13 +196,13 @@ async def test_the_framework_restore_path_re_attaches_the_handle_before_renderin
         communicator.scope["session"] = _ScopeSession(session_key)
         connected, _ = await communicator.connect()
         assert connected
-        await communicator.receive_json_from(timeout=2)  # drain connect frame
+        await communicator.receive_json_from()  # drain connect frame
         await communicator.send_json_to(
             {"type": "mount", "view": f"{__name__}._DatetimeRestoreView", "url": url}
         )
         frame = None
         for _ in range(5):
-            frame = await communicator.receive_json_from(timeout=3)
+            frame = await communicator.receive_json_from()
             if frame.get("type") == "mount":
                 break
         await communicator.disconnect()

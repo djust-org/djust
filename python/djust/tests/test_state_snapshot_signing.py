@@ -88,11 +88,11 @@ async def _connect(session_key):
 
     connected, _ = await communicator.connect()
     assert connected, "WebsocketCommunicator must connect"
-    await communicator.receive_json_from(timeout=2)  # drain connect frame
+    await communicator.receive_json_from()  # drain connect frame
     return communicator
 
 
-async def _receive_mount(communicator, *, tries=6, timeout=3):
+async def _receive_mount(communicator, *, tries=6, timeout=30):
     last = None
     for _ in range(tries):
         last = await communicator.receive_json_from(timeout=timeout)

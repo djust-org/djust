@@ -344,10 +344,10 @@ async def _connect(view, host, room):
     comm.scope["session"] = _ScopeSession()
     connected, _ = await comm.connect()
     assert connected
-    await comm.receive_json_from(timeout=3)
+    await comm.receive_json_from()
     await comm.send_json_to({"type": "mount", "view": view, "url": f"/r/?room={room}"})
     for _ in range(8):
-        frame = await comm.receive_json_from(timeout=3)
+        frame = await comm.receive_json_from()
         if frame.get("type") == "mount":
             return comm
     raise AssertionError(f"no mount frame: {frame!r}")

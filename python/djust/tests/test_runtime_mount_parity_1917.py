@@ -155,7 +155,7 @@ async def _connect_and_bootstrap_consumer(url: str = "/parity-1917/"):
 
     connected, _ = await communicator.connect()
     assert connected, "WebsocketCommunicator must connect"
-    await communicator.receive_json_from(timeout=2)  # drain connect frame
+    await communicator.receive_json_from()  # drain connect frame
 
     with _ALLOWLIST:
         await communicator.send_json_to(
@@ -163,7 +163,7 @@ async def _connect_and_bootstrap_consumer(url: str = "/parity-1917/"):
         )
         mount_frame = None
         for _ in range(8):
-            mount_frame = await communicator.receive_json_from(timeout=3)
+            mount_frame = await communicator.receive_json_from()
             if mount_frame.get("type") == "mount":
                 break
     assert mount_frame and mount_frame.get("type") == "mount"

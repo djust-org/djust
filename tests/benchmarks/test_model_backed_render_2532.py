@@ -427,7 +427,7 @@ _TERMINAL_FRAMES = ("noop", "html_update", "error")
 
 
 async def _recv_until(
-    comm: Any, wanted: str, *, ref: Optional[int] = None, tries: int = 8, timeout: float = 5.0
+    comm: Any, wanted: str, *, ref: Optional[int] = None, tries: int = 8, timeout: float = 30
 ) -> Dict[str, Any]:
     """Drain frames until ``wanted`` (or a terminal ``noop`` / ``html_update`` /
     ``error``) with a matching ``ref``. Lifted from
@@ -518,7 +518,7 @@ async def _drive(variant: str) -> List[PhaseRow]:
     comm = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
     connected, _ = await comm.connect()
     assert connected
-    await comm.receive_json_from(timeout=5)
+    await comm.receive_json_from()
 
     try:
         _reset_phase_counters()

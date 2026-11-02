@@ -8,12 +8,11 @@ its line number.
 
 import pytest
 
-import time
-
 from djust.checks import check_accessibility, check_inline_script_csp, check_templates
 from djust.checks.assets import check_undeclared_origins
 from djust.checks.configuration import _check_manual_client_js, _check_tailwind_cdn_in_production
 from djust.checks.utils import _blank_template_comments
+from djust.tests._growth import LIMIT, assert_scales_linearly
 
 
 def _write(settings, tmp_path, html, name="page.html"):
@@ -141,21 +140,43 @@ def test_blanking_keeps_every_line_break_the_scans_split_on():
     assert len(_blank_template_comments(source).splitlines()) == len(source.splitlines())
 
 
+# ``content.find("\n", position)`` runs to the end of a template that has no newline
+# once per ``{% comment %}`` opener: a memchr per opener, so the blanking costs ~4x per
+# doubling of the openers (0.07 s at 20k, 1 s at 80k). The absolute ``< 2`` bound this
+# test used to assert could not see it; the growth check measures it. Tracked in #3723.
+#
+# ``strict=True``: the day #3723 is fixed this XPASSes and fails the run, which tells
+# whoever fixed it to drop the marker. That is only safe if the check fails every time
+# today, so these two params judge against a limit of 6x (linear is ~4x, a fixed
+# function passes it; the quadratic one measures 12-14x, twice the limit) instead of
+# the default 10x, which a lucky run could squeak under.
+_QUADRATIC_NEWLINE_SEARCH = pytest.mark.xfail(
+    reason="_blank_template_comments re-searches for a newline per opener: quadratic (#3723)",
+    strict=True,
+    raises=AssertionError,  # the growth assertion, not an ImportError or a rename
+)
+
+
 @pytest.mark.parametrize(
-    "source",
+    "unit, count, tail, limit",
     [
-        "{# x " * 50_000,
-        "{% comment %}" * 20_000,
-        "{# x {% comment %}" * 20_000,
-        "{% comment " * 30_000,
-        "{# x\n" * 50_000 + "#}",
+        ("{# x ", 12_500, "", LIMIT),
+        pytest.param("{% comment %}", 10_000, "", 6.0, marks=_QUADRATIC_NEWLINE_SEARCH),
+        pytest.param("{# x {% comment %}", 10_000, "", 6.0, marks=_QUADRATIC_NEWLINE_SEARCH),
+        ("{% comment ", 7_500, "", LIMIT),
+        ("{# x\n", 12_500, "#}", LIMIT),
     ],
     ids=["hash", "comment-open", "mixed", "comment-no-close", "hash-lines"],
 )
-def test_blanking_is_linear_on_unterminated_openers(source):
-    start = time.perf_counter()
-    _blank_template_comments(source)
-    assert time.perf_counter() - start < 2
+def test_blanking_is_linear_on_unterminated_openers(unit, count, tail, limit):
+    # Growth, not an absolute bound (#3711): four times the openers must cost under
+    # ``limit`` times as much (linear ~4x, quadratic ~16x), so a stalled runner cannot
+    # fail it.
+    assert_scales_linearly(
+        lambda scale: _blank_template_comments(unit * (count * scale) + tail),
+        limit=limit,
+        what="blanking template comments",
+    )
 
 
 # -- the sibling scanners that read template source (C010, C012, B010) ----------

@@ -92,7 +92,7 @@ async def _connect(tag):
     communicator.scope["session"] = _ScopeSession()
     connected, _ = await communicator.connect(timeout=10)
     assert connected
-    await communicator.receive_json_from(timeout=5)  # connect frame
+    await communicator.receive_json_from()  # connect frame
     await communicator.send_json_to(
         {"type": "mount", "view": f"{__name__}._LaneView", "url": f"/lanes/?tag={tag}"}
     )
@@ -181,7 +181,9 @@ async def test_lanes_a_slow_connection_holds_up_only_itself(pool):
     # C ran on the other thread, while A's handler was still running.
     assert a_start[3] < c_start[3] < a_end[3]
     assert c_start[2] != a_start[2]
-    assert c_latency < 0.6, c_latency
+    # No bound on ``c_latency`` (#3711): ``a_start < c_start < a_end`` above IS the claim
+    # (C's handler began while A's was still running), as an ordering, and a stalled
+    # runner stretches the latency without changing it.
 
 
 @pytest.mark.django_db(transaction=True)

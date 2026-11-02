@@ -71,7 +71,7 @@ async def _connect():
     communicator = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
     connected, _ = await communicator.connect()
     assert connected
-    await communicator.receive_json_from(timeout=2)  # connect ack
+    await communicator.receive_json_from()  # connect ack
     return communicator
 
 
@@ -81,7 +81,7 @@ async def _mount(room: str):
         {"type": "mount", "view": _path(), "url": f"/chat/{room}/", "params": {"room": room}}
     )
     for _ in range(8):
-        frame = await communicator.receive_json_from(timeout=3)
+        frame = await communicator.receive_json_from()
         if frame.get("type") == "mount":
             return communicator
     raise AssertionError("no mount frame")
@@ -172,7 +172,7 @@ async def test_live_redirect_leaves_the_old_rooms_group():
                 }
             )
             for _ in range(8):
-                if (await a.receive_json_from(timeout=3)).get("type") == "mount":
+                if (await a.receive_json_from()).get("type") == "mount":
                     break
             await drain_extra(a)
             assert _members(_group("chat:r1")) == []

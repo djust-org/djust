@@ -77,13 +77,10 @@ async def _connect_and_mount():
     communicator = WebsocketCommunicator(app, "/ws/")
     connected, _ = await communicator.connect()
     assert connected
-    try:
-        await communicator.receive_json_from(timeout=2)
-    except Exception:
-        pass
+    await communicator.receive_json_from()
     await communicator.send_json_to({"type": "mount", "view": _VIEW_PATH})
     # Drain the mount response (should be a real mount, not a redirect).
-    mount_resp = await communicator.receive_json_from(timeout=2)
+    mount_resp = await communicator.receive_json_from()
     assert mount_resp.get("type") != "navigate", f"unexpected mount redirect: {mount_resp!r}"
     return communicator
 
@@ -102,10 +99,9 @@ async def test_reauth_on_closes_socket_when_user_logged_out_midsession():
             # Expect a navigate redirect then a websocket.close(4403).
             out_types = []
             for _ in range(4):
-                try:
-                    out = await communicator.receive_output(timeout=2)
-                except Exception:
-                    break
+                # Each output WILL arrive (the close is asserted below), so wait for it
+                # with the default, not 2 s (#3709): a 3.5 s stall per frame failed this.
+                out = await communicator.receive_output()
                 out_types.append(out["type"])
                 if out["type"] == "websocket.close":
                     assert out.get("code") == 4403
@@ -129,10 +125,7 @@ async def test_reauth_off_default_dispatches_event_normally():
         with patch("channels.auth.get_user", AsyncMock(return_value=AnonymousUser())) as gu:
             communicator = await _connect_and_mount()
             await communicator.send_json_to({"type": "event", "event": "do_mutation", "params": {}})
-            try:
-                await communicator.receive_json_from(timeout=2)
-            except Exception:
-                pass
+            await communicator.receive_json_from()
             assert _HANDLER_RAN is True, "handler did not run with reauth off (default)"
             gu.assert_not_called()
             await communicator.disconnect()

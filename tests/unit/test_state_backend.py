@@ -785,9 +785,9 @@ class TestHealthCheck:
 
         result = backend.health_check()
 
-        # Latency should be measurable (not zero, but reasonable)
+        # Latency should be measurable (not zero). No upper bound (#3711): "under a
+        # second" asserts how fast the Redis server and the runner are, not the check.
         assert result["latency_ms"] > 0
-        assert result["latency_ms"] < 1000  # Should be under 1 second
 
     def test_redis_health_check_connection_error(self):
         """Test Redis health check reports unhealthy on connection error."""
