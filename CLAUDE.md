@@ -1694,9 +1694,11 @@ number when the module did not import).
   after a mutation — it preserves mtime and cargo reuses the mutant.
   `scripts/gate_off.py` does all of this (deadline, RSS ceiling, `HUNG` /
   `RUNAWAY-MEMORY` reported as `CAUGHT` with the measurement, restore verified by
-  SHA-256, new inode and fresh mtime on every write, a per-target `flock` plus an
-  out-of-tree journal so an overlapping or SIGKILLed run can never leave a mutant
-  that the next run adopts as the original).
+  SHA-256, new inode and fresh mtime on every write, an `flock` on each target's
+  directory that refuses an overlapping run whatever its environment, and an
+  out-of-tree journal that restores a SIGKILLed run's mutant before the next run
+  snapshots it, provided both runs use the same journal directory, which defaults
+  to the user's `~/.cache/gate-off` regardless of `$HOME`; see its docstring).
 
 ## Process canonicalizations from the v1.2.0-6 retro arc (transport fidelity, wire versioning, check coverage)
 
