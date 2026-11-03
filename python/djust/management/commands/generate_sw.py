@@ -134,7 +134,9 @@ class Command(BaseCommand):
         assets = [
             "%sdjust/client.js" % static_url,
         ]
-        if getattr(settings, "DEBUG", False):
+        from djust.config import debug_panel_enabled
+
+        if debug_panel_enabled():
             assets.append("%sdjust/debug-panel.js" % static_url)
         return assets
 

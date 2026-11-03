@@ -150,6 +150,11 @@ class LiveViewConfig:
         "websocket_compression": True,
         # Debug settings
         "debug_vdom": False,  # Enable detailed VDOM patching debug logs
+        # DEBUG-only browser debug panel (debug-panel.js/.css, its toolbar
+        # button and the per-event ``_debug`` payload). Set False to keep the
+        # rest of the DEBUG tooling (client-dev.js hot reload, error overlay)
+        # without the panel. Read through ``debug_panel_enabled()``.
+        "debug_panel": True,
         "debug_panel_max_history": 50,  # Maximum number of events/patches to keep in debug panel history
         "debug_auto_open_on_error": False,  # Auto-open debug panel on first error/warning (DEBUG mode only)
         # Colocated JS hook namespacing (Phoenix 1.1 parity).
@@ -953,4 +958,31 @@ def template_auto_call_enabled() -> bool:
         return bool(get_config().get("template_auto_call", True))
     except Exception:  # pragma: no cover - defensive
         logger.debug("[djust] template_auto_call flag read failed; defaulting ON")
+        return True
+
+
+def debug_panel_enabled() -> bool:
+    """Whether the browser debug panel is served on this request's pages.
+
+    The single reader of ``LIVEVIEW_CONFIG['debug_panel']`` (also read from
+    ``DJUST_CONFIG``). The panel needs ``settings.DEBUG``; with DEBUG on, only
+    ``False`` turns it off, so the default keeps the panel. Every panel entry
+    point consults this: the ``debug-panel.js`` / ``debug-panel.css`` /
+    ``window.DJUST_DEBUG_INFO`` injection (``mixins/post_processing.py``), the
+    per-event ``_debug`` payload on WebSocket (``websocket.py``) and HTTP
+    (``mixins/request.py``) responses, and the service-worker precache list
+    (``management/commands/generate_sw.py``). A config read that raises keeps
+    the default.
+    """
+    try:
+        from django.conf import settings
+
+        if not getattr(settings, "DEBUG", False):
+            return False
+    except Exception:  # pragma: no cover - defensive
+        return False
+    try:
+        return get_config().get("debug_panel", True) is not False
+    except Exception:  # pragma: no cover - defensive
+        logger.debug("[djust] debug_panel read failed; keeping the default")
         return True

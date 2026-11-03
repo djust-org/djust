@@ -2321,10 +2321,10 @@ class RequestMixin:
             cache_request_id = params.get("_cacheRequestId")
 
             # Inject debug info for the debug panel (HTTP-only mode)
-            from django.conf import settings as _settings
+            from ..config import debug_panel_enabled
 
             def _inject_debug(resp_data: Dict[str, Any]) -> None:
-                if _settings.DEBUG:
+                if debug_panel_enabled():
                     try:
                         debug_info = self.get_debug_update()
                         debug_info["_eventName"] = event_name
