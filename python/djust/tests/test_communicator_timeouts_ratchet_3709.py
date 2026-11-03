@@ -23,12 +23,23 @@ Channels' communicator classes at run time, not listed (a hand list lost ``conne
 WHAT IT COVERS (counted per file, against ``BASELINE``). A timeout "reads as short" when it is a
 number under ``SHORT_S``: a literal, arithmetic on literals (``1 * 2``), a module-level
 constant bound to one (``T = 2``), or the value under ``"timeout"`` in a ``**{...}`` display.
+A module constant is NOT read where a function around the call rebinds the name (a parameter, an
+assignment, a ``for`` / ``with`` / ``except`` target): that ``T`` is the function's own (#3737).
 
 * ``await <x>.<communicator wait>(timeout=<short>)``, as a keyword or in the timeout's
   positional slot (``await socket.receive_json_from(timeout=3)``, ``await comm.connect(2)``).
   The receiver's name is irrelevant: the METHOD makes it a communicator wait.
 * ``await asyncio.wait_for(<communicator wait>, <short>)`` and ``async with
-  asyncio.timeout(<short>)`` around one, counted once at the wrapper.
+  asyncio.timeout(<short>)`` around one, counted once at the wrapper. ``from asyncio import
+  timeout`` / ``wait_for`` (and an ``as`` alias) are the same calls; ``asyncio.shield(<wait>)``,
+  ``ensure_future(<wait>)`` / ``create_task(<wait>)`` and a variable assigned from one, in the
+  same function, are looked through (#3737).
+* ``wait`` is the one communicator method that is also the name of ``asyncio.Event.wait`` and
+  ``asyncio.wait``. ``await <x>.wait(timeout=<short>)`` is counted unless ``<x>`` is ``asyncio``
+  (``asyncio.wait({task}, timeout=1)`` bounds tasks, not a frame). Wrapped in ``wait_for`` /
+  ``timeout``, ``<x>.wait()`` is counted only when the file binds ``<x>`` to a communicator
+  (``comm = WebsocketCommunicator(...)``, ``async with ... as comm``, or an annotation naming
+  one): a fixture's ``wait()`` is not known to be one and is in ``wait_for_short`` (#3737).
 * a helper whose SHORT ``timeout`` default is forwarded to such a wait (``async def
   _receive_until(c, kind, *, timeout=3)``: every caller that says nothing gets 3 s), and
   a call, in the same file, to such a helper that passes a short ``timeout`` as a keyword or
@@ -44,6 +55,10 @@ so the genuine ones sit in ``BASELINE`` with their reason beside them. A new one
 this test until it either waits for the frame that arrives (``receive_until`` /
 ``receive_settled``), asserts the silence with ``receive_nothing``, or is added to ``BASELINE``
 with a reason a reviewer accepts.
+
+WHAT IT READS: every ``test_*.py`` / ``*_test.py`` under ``python/`` and ``tests/``, and every
+module in a ``tests`` directory (``djust/tests/_ws_frames.py``, ``tests/conftest.py``): a
+helper's short wait reaches every test that calls it (#3709).
 
 WHAT IT DELIBERATELY EXEMPTS (counted only in ``UNCOVERED_BASELINE``):
 
@@ -61,8 +76,9 @@ live numbers with :func:`uncovered_counts`, the PR description quotes them):
 * ``wait_for_short``: ``asyncio.wait_for(..., <10)`` and ``asyncio.timeout(<10)`` that do NOT
   wrap a communicator wait (a bound on an event, a queue, a task). Those are not frame waits.
 * ``getattr(sock, name)(timeout=1)``, a wait reached through a variable
-  (``wait = comm.receive_output; await wait(timeout=1)``), a timeout that is a name rebound in
-  a function, and waits on objects that are not Channels communicators.
+  (``wait = comm.receive_output; await wait(timeout=1)``), a ``task`` variable assigned in
+  another function or reassigned conditionally in a way a plain scan cannot order, and waits on
+  objects that are not Channels communicators.
 """
 
 from __future__ import annotations
@@ -178,9 +194,66 @@ def _number(node: ast.AST, consts: Consts) -> Optional[float]:
     return None
 
 
-def _short_number(node: ast.AST, consts: Consts) -> bool:
+def _short_number(
+    node: ast.AST, consts: Consts, parents: Optional[Dict[ast.AST, ast.AST]] = None
+) -> bool:
+    if parents is not None:
+        consts = _scoped_consts(node, consts, parents)
     value = _number(node, consts)
     return value is not None and value < SHORT_S
+
+
+def _function_bindings(fn: ast.AST) -> Set[str]:
+    """Names a function (or lambda) binds in ITS OWN scope: parameters, assignment, ``for`` /
+    ``with`` / ``except`` targets, imports and nested ``def`` / ``class`` names. Not what a
+    nested function binds, and not a name declared ``global``."""
+    args = fn.args  # type: ignore[attr-defined]
+    names = {a.arg for a in args.posonlyargs + args.args + args.kwonlyargs}
+    names.update(a.arg for a in (args.vararg, args.kwarg) if a is not None)
+    if isinstance(fn, ast.Lambda):
+        return names
+    declared_global: Set[str] = set()
+    stack: List[ast.AST] = list(fn.body)  # type: ignore[attr-defined]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            names.add(node.name)
+            continue
+        if isinstance(node, ast.Lambda):
+            continue
+        if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
+            names.add(node.id)
+        elif isinstance(node, ast.ExceptHandler) and node.name:
+            names.add(node.name)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            names.update((a.asname or a.name).split(".")[0] for a in node.names)
+        elif isinstance(node, ast.Global):
+            declared_global.update(node.names)
+        stack.extend(ast.iter_child_nodes(node))
+    return names - declared_global
+
+
+def _scoped_consts(node: ast.AST, consts: Consts, parents: Dict[ast.AST, ast.AST]) -> Consts:
+    """``consts`` without the names a function around ``node`` rebinds.
+
+    ``T = 2`` at module level is not the ``T`` of ``def f(socket, T)`` or of a ``T`` assigned
+    inside the function (#3737). A default value is evaluated outside the function, so it is
+    not inside this scope.
+    """
+    if not consts or not any(isinstance(n, ast.Name) and n.id in consts for n in ast.walk(node)):
+        return consts
+    shadowed: Set[str] = set()
+    child = node
+    while child in parents:
+        parent = parents[child]
+        if isinstance(parent, (ast.FunctionDef, ast.AsyncFunctionDef)) and child in parent.body:
+            shadowed |= _function_bindings(parent)
+        elif isinstance(parent, ast.Lambda) and child is parent.body:
+            shadowed |= _function_bindings(parent)
+        child = parent
+    if not shadowed & consts.keys():
+        return consts
+    return {k: v for k, v in consts.items() if k not in shadowed}
 
 
 def _module_constants(tree: ast.AST) -> Consts:
@@ -289,26 +362,193 @@ def _timeout_slot(fn: ast.AST) -> Optional[int]:
     return index - 1 if names and names[0] in ("self", "cls") else index
 
 
-def _short_timeout_default(fn: ast.AST, consts: Consts) -> bool:
+def _short_timeout_default(
+    fn: ast.AST, consts: Consts, parents: Optional[Dict[ast.AST, ast.AST]] = None
+) -> bool:
     args = fn.args  # type: ignore[attr-defined]
     names = [a.arg for a in args.args + args.kwonlyargs]
     defaults = [None] * (len(args.args) - len(args.defaults)) + list(args.defaults)
     defaults += list(args.kw_defaults)
     default = dict(zip(names, defaults)).get("timeout")
-    return default is not None and _short_number(default, consts)
+    return default is not None and _short_number(default, consts, parents)
+
+
+def _terminal_name(node: ast.AST) -> str:
+    """``comm`` for ``comm`` and ``self.comm`` alike: the last name of a receiver."""
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    return getattr(node, "id", "")
+
+
+def _is_communicator_annotation(node: Optional[ast.AST]) -> bool:
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value.endswith("Communicator")
+    return node is not None and _terminal_name(node).endswith("Communicator")
+
+
+def _communicator_names(tree: ast.AST) -> Set[str]:
+    """Names this file binds to a Channels communicator, so ``<name>.wait()`` is known to be
+    ``ApplicationCommunicator.wait`` and not ``asyncio.Event.wait`` (#3737).
+
+    ``comm = WebsocketCommunicator(...)``, ``self.comm = ...``, ``async with
+    HttpCommunicator(...) as comm``, and a parameter or variable annotated
+    ``WebsocketCommunicator``. Only what the file says: a receiver that arrives as a fixture is
+    not known, and a ``wait()`` on it stays out of the per-file count (it is in
+    ``wait_for_short``).
+    """
+    found: Set[str] = set()
+
+    def bind(target: ast.AST) -> None:
+        if isinstance(target, (ast.Tuple, ast.List)):
+            for element in target.elts:
+                bind(element)
+        else:
+            name = _terminal_name(target)
+            if name:
+                found.add(name)
+
+    def builds_one(value: Optional[ast.AST]) -> bool:
+        return isinstance(value, ast.Call) and _call_name(value).endswith("Communicator")
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and builds_one(node.value):
+            for target in node.targets:
+                bind(target)
+        elif isinstance(node, ast.AnnAssign):
+            if _is_communicator_annotation(node.annotation) or builds_one(node.value):
+                bind(node.target)
+        elif isinstance(node, ast.arg):
+            if _is_communicator_annotation(node.annotation):
+                found.add(node.arg)
+        elif isinstance(node, (ast.With, ast.AsyncWith)):
+            for item in node.items:
+                if item.optional_vars is not None and builds_one(item.context_expr):
+                    bind(item.optional_vars)
+    return found
+
+
+def _asyncio_aliases(tree: ast.AST) -> Dict[str, str]:
+    """``{local name: asyncio name}`` for ``from asyncio import timeout as limit`` (#3737).
+
+    A bare ``timeout(2)`` or ``wait_for(...)`` is ``asyncio``'s only when the file imported it
+    from there: ``timeout`` is also an ordinary variable.
+    """
+    found: Dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module in ("asyncio", "asyncio.timeouts"):
+            for alias in node.names:
+                found[alias.asname or alias.name] = alias.name
+    return found
+
+
+def _asyncio_name(call: ast.Call, aliases: Dict[str, str]) -> str:
+    """The ``asyncio`` function a call is, by name: ``wait_for`` for ``asyncio.wait_for(...)``
+    and for ``bounded(...)`` after ``from asyncio import wait_for as bounded``. An attribute is
+    taken by its name; a bare name only through an import."""
+    func = call.func
+    if isinstance(func, ast.Attribute):
+        return func.attr
+    if isinstance(func, ast.Name):
+        return aliases.get(func.id, func.id if func.id == "wait_for" else "")
+    return ""
+
+
+#: Calls that hand back the SAME awaitable (or a task running it), so a ``wait_for`` around one
+#: bounds the wait inside it: ``asyncio.shield(<wait>)``, ``asyncio.ensure_future(<wait>)``,
+#: ``asyncio.create_task(<wait>)`` / ``loop.create_task(<wait>)``.
+_TRANSPARENT_WRAPPERS = {"shield", "ensure_future", "create_task"}
+
+
+def _enclosing_scope(node: ast.AST, parents: Dict[ast.AST, ast.AST]) -> ast.AST:
+    while node in parents:
+        node = parents[node]
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.Module)):
+            return node
+    return node
+
+
+def _scope_assignments(scope: ast.AST) -> Dict[str, List[ast.AST]]:
+    """``{name: [value, ...]}`` for ``name = <value>`` directly in one scope, not in a nested
+    function: how ``task = create_task(<wait>)`` is resolved at ``wait_for(task, 2)``."""
+    found: Dict[str, List[ast.AST]] = {}
+    body = getattr(scope, "body", [])
+    stack: List[ast.AST] = list(body) if isinstance(body, list) else [body]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)):
+            continue
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    found.setdefault(target.id, []).append(node.value)
+        stack.extend(ast.iter_child_nodes(node))
+    return found
+
+
+def _bounded_calls(
+    expr: ast.AST, scope_assignments: Dict[str, List[ast.AST]], depth: int = 0
+) -> List[ast.Call]:
+    """The calls ``expr`` stands for once ``shield`` / ``ensure_future`` / ``create_task`` and a
+    variable assigned from one are looked through (#3737)."""
+    if depth > 3:
+        return []
+    if isinstance(expr, ast.Call):
+        if _call_name(expr) in _TRANSPARENT_WRAPPERS and expr.args:
+            return _bounded_calls(expr.args[0], scope_assignments, depth + 1)
+        return [expr]
+    if isinstance(expr, ast.Name):
+        found: List[ast.Call] = []
+        for value in scope_assignments.get(expr.id, []):
+            found.extend(_bounded_calls(value, scope_assignments, depth + 1))
+        return found
+    return []
 
 
 def _is_communicator_wait(
-    node: ast.AST, waits: Dict[str, int], helpers: Dict[str, ast.AST]
+    node: ast.AST,
+    waits: Dict[str, int],
+    helpers: Dict[str, ast.AST],
+    communicators: Optional[Set[str]] = None,
 ) -> bool:
     if not isinstance(node, ast.Call):
         return False
     name = _call_name(node)
     if isinstance(node.func, ast.Attribute) and name in waits:
-        # ``wait`` is Channels' generic "wait for the application" and is also the name of
-        # ``asyncio.Event.wait`` / ``asyncio.wait``: a bound on one of those is not a frame wait.
-        return name not in WRAPPED_NOT_FRAME_WAITS
+        if name in WRAPPED_NOT_FRAME_WAITS:
+            # ``wait`` is Channels' generic "wait for the application" and is also the name of
+            # ``asyncio.Event.wait`` and ``asyncio.wait``: it is a frame wait only on a receiver
+            # the file binds to a communicator (#3737).
+            return _terminal_name(node.func.value) in (communicators or set())
+        return True
     return name in helpers
+
+
+def _wrapped_waits(
+    wrapped: ast.AST,
+    parents: Dict[ast.AST, ast.AST],
+    waits: Dict[str, int],
+    helpers: Dict[str, ast.AST],
+    communicators: Set[str],
+) -> List[ast.Call]:
+    """The communicator waits a ``wait_for`` argument stands for."""
+    scope = _enclosing_scope(wrapped, parents)
+    return [
+        call
+        for call in _bounded_calls(wrapped, _scope_assignments(scope))
+        if _is_communicator_wait(call, waits, helpers, communicators)
+    ]
+
+
+def _is_task_set_wait(call: ast.Call) -> bool:
+    """``asyncio.wait({task}, timeout=1)`` bounds a set of tasks: it is not a frame wait, though
+    ``wait`` is also the name of ``ApplicationCommunicator.wait`` (#3737)."""
+    func = call.func
+    if not (isinstance(func, ast.Attribute) and func.attr in WRAPPED_NOT_FRAME_WAITS):
+        return False
+    root: ast.AST = func.value
+    while isinstance(root, ast.Attribute):
+        root = root.value
+    return isinstance(root, ast.Name) and root.id in ("asyncio", "futures", "concurrent")
 
 
 def _awaits_in(body: List[ast.stmt]) -> List[ast.Await]:
@@ -325,6 +565,16 @@ def _awaits_in(body: List[ast.stmt]) -> List[ast.Await]:
     return found
 
 
+def _is_timeout_block(ctx: ast.AST, aliases: Dict[str, str]) -> bool:
+    """``asyncio.timeout(...)``, or ``timeout(...)`` / an alias imported from ``asyncio``."""
+    if not isinstance(ctx, ast.Call):
+        return False
+    func = ctx.func
+    if isinstance(func, ast.Attribute):
+        return func.attr == "timeout"
+    return isinstance(func, ast.Name) and aliases.get(func.id) == "timeout"
+
+
 def _scan(tree: ast.AST, parents: Dict[ast.AST, ast.AST], waits: Dict[str, int]):
     """The sites the per-file ratchet counts: ``(counted, inner)``.
 
@@ -334,37 +584,38 @@ def _scan(tree: ast.AST, parents: Dict[ast.AST, ast.AST], waits: Dict[str, int])
     """
     consts = _module_constants(tree)
     helpers = _forwarding_helpers(tree, waits)
+    communicators = _communicator_names(tree)
+    aliases = _asyncio_aliases(tree)
     counted: List[ast.AST] = []
     inner: Set[ast.AST] = set()
 
     for node in ast.walk(tree):
-        # ``await asyncio.wait_for(<communicator wait>, <short>)``
-        if isinstance(node, ast.Call) and _call_name(node) == "wait_for" and node.args:
-            wrapped = node.args[0]
+        # ``await asyncio.wait_for(<communicator wait>, <short>)``, through ``shield`` /
+        # ``create_task`` / a task variable (#3737)
+        if isinstance(node, ast.Call) and node.args and _asyncio_name(node, aliases) == "wait_for":
             bound = node.args[1:2] + [k.value for k in node.keywords if k.arg == "timeout"]
+            waited = _wrapped_waits(node.args[0], parents, waits, helpers, communicators)
             if (
-                _is_communicator_wait(wrapped, waits, helpers)
-                and any(_short_number(b, consts) for b in bound)
+                waited
+                and any(_short_number(b, consts, parents) for b in bound)
                 and not _in_raises_block(node, parents)
             ):
                 counted.append(node)
-                inner.add(wrapped)  # type: ignore[arg-type]
+                inner.update(waited)
         # ``async with asyncio.timeout(<short>): ... await <communicator wait> ...``
         if isinstance(node, ast.AsyncWith):
             for item in node.items:
                 ctx = item.context_expr
                 if not (
-                    isinstance(ctx, ast.Call)
-                    and isinstance(ctx.func, ast.Attribute)
-                    and ctx.func.attr == "timeout"
-                    and any(_short_number(a, consts) for a in ctx.args)
+                    _is_timeout_block(ctx, aliases)
+                    and any(_short_number(a, consts, parents) for a in ctx.args)  # type: ignore[attr-defined]
                     and not _in_raises_block(node, parents)
                 ):
                     continue
                 waited = [
                     a.value
                     for a in _awaits_in(node.body)
-                    if _is_communicator_wait(a.value, waits, helpers)
+                    if _is_communicator_wait(a.value, waits, helpers, communicators)
                 ]
                 if waited:
                     counted.append(ctx)
@@ -377,18 +628,21 @@ def _scan(tree: ast.AST, parents: Dict[ast.AST, ast.AST], waits: Dict[str, int])
                 continue
             if not isinstance(call.func, ast.Attribute) or call.func.attr not in waits:
                 continue
+            if _is_task_set_wait(call):
+                continue
             if _in_raises_block(node, parents):
                 continue
-            if any(_short_number(v, consts) for v in _timeout_args(call, waits[call.func.attr])):
+            args = _timeout_args(call, waits[call.func.attr])
+            if any(_short_number(v, consts, parents) for v in args):
                 counted.append(call)
     for fn in helpers.values():
-        if _short_timeout_default(fn, consts):
+        if _short_timeout_default(fn, consts, parents):
             counted.append(fn)
     for node in ast.walk(tree):
         if isinstance(node, ast.Call) and node not in inner and _call_name(node) in helpers:
             slot = _timeout_slot(helpers[_call_name(node)])
             args = _timeout_args(node, _NO_SLOT if slot is None else slot)
-            if any(_short_number(v, consts) for v in args):
+            if any(_short_number(v, consts, parents) for v in args):
                 counted.append(node)
     return counted, inner
 
@@ -422,6 +676,7 @@ def _count_uncovered(source: str, waits: Dict[str, int]) -> Dict[str, int]:
         return out
     tree, parents = parsed
     consts = _module_constants(tree)
+    aliases = _asyncio_aliases(tree)
     counted, inner = _scan(tree, parents, waits)
     accounted = set(counted) | inner
     for node in ast.walk(tree):
@@ -429,34 +684,51 @@ def _count_uncovered(source: str, waits: Dict[str, int]) -> Dict[str, int]:
             call = node.value
             if call in accounted:
                 continue
-            if isinstance(call.func, ast.Attribute) and call.func.attr in waits:
+            if (
+                isinstance(call.func, ast.Attribute)
+                and call.func.attr in waits
+                and not _is_task_set_wait(call)
+            ):
                 args = _timeout_args(call, waits[call.func.attr])
-                if _in_raises_block(node, parents) and any(_short_number(v, consts) for v in args):
+                short = any(_short_number(v, consts, parents) for v in args)
+                if _in_raises_block(node, parents) and short:
                     out["absence_raises"] += 1
-                elif args and all(_number(v, consts) is None for v in args):
+                elif args and all(
+                    _number(v, _scoped_consts(v, consts, parents)) is None for v in args
+                ):
                     out["variable_timeouts"] += 1
         if isinstance(node, ast.Call) and node not in accounted:
-            func = node.func
-            name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
+            name = _asyncio_name(node, aliases)
             if name == "wait_for":
                 args = [a for a in node.args[1:2]] + [
                     k.value for k in node.keywords if k.arg == "timeout"
                 ]
-                if any(_short_number(a, consts) for a in args):
+                if any(_short_number(a, consts, parents) for a in args):
                     out["wait_for_short"] += 1
-            elif name == "timeout" and isinstance(func, ast.Attribute):
-                if any(_short_number(a, consts) for a in node.args):
+            elif name == "timeout" and _is_timeout_block(node, aliases):
+                if any(_short_number(a, consts, parents) for a in node.args):
                     out["wait_for_short"] += 1
     return out
 
 
 def _collected_test_files() -> List[Path]:
+    """The test files pytest collects, and the helper modules in a ``tests`` directory they call.
+
+    A helper (``djust/tests/_ws_frames.py``, a ``conftest.py``) is where a short wait reaches every
+    test that uses it, and it is not named ``test_*``: its two ``receive_output(timeout=3)`` sat
+    outside the ratchet while every test file was converted (#3709).
+    """
     files = []
     for root in ROOTS:
         for path in (REPO / root).rglob("*.py"):
-            if SKIP_PARTS & set(path.relative_to(REPO).parts):
+            parts = path.relative_to(REPO).parts
+            if SKIP_PARTS & set(parts):
                 continue
-            if path.name.startswith("test_") or path.name.endswith("_test.py"):
+            if (
+                path.name.startswith("test_")
+                or path.name.endswith("_test.py")
+                or "tests" in parts[:-1]
+            ):
                 files.append(path)
     return sorted(files)
 
@@ -492,7 +764,7 @@ def uncovered_counts() -> Dict[str, int]:
 #: too: a class cannot grow quietly just because the per-file count above cannot see it.
 UNCOVERED_BASELINE: Dict[str, int] = {
     "absence_raises": 2,
-    "variable_timeouts": 53,
+    "variable_timeouts": 52,
     "wait_for_short": 107,
 }
 
@@ -564,6 +836,7 @@ def test_the_waits_are_derived_from_channels_and_exclude_the_absence_window():
 def test_the_walk_reads_the_test_files_it_claims_to():
     paths = {p.relative_to(REPO).as_posix() for p in _collected_test_files()}
     assert "python/djust/tests/test_ws_communicator_defaults_3464.py" in paths
+    assert "python/djust/tests/_ws_frames.py" in paths, "a helper module is not scanned"
     assert len(paths) > 500, "the scan found far fewer test files than the suite has"
 
 
@@ -759,6 +1032,96 @@ async def test_a(comm):
 async def test_a(socket):
     await socket.receive_json_from(timeout=9.9)
 """,
+    # --- the blind spots the PR #3732 re-review found (#3737) ---------------------------
+    "wait_for around wait() on a communicator the file constructs (#3737)": """
+async def test_a(app):
+    comm = WebsocketCommunicator(app, "/ws/")
+    await asyncio.wait_for(comm.wait(), 1)
+""",
+    "wait_for around wait() on an attribute bound to a communicator (#3737)": """
+class T:
+    async def setup(self, app):
+        self.comm = WebsocketCommunicator(app, "/ws/")
+
+    async def test_a(self):
+        await asyncio.wait_for(self.comm.wait(), timeout=1)
+""",
+    "wait_for around wait() on a parameter annotated as a communicator (#3737)": """
+async def test_a(comm: WebsocketCommunicator):
+    await asyncio.wait_for(comm.wait(), 1)
+""",
+    "wait_for around wait() on a communicator opened by async with (#3737)": """
+async def test_a(app):
+    async with HttpCommunicator(app, "GET", "/") as comm:
+        await asyncio.wait_for(comm.wait(), 1)
+""",
+    "an asyncio.timeout block around wait() on a constructed communicator (#3737)": """
+async def test_a(app):
+    comm = WebsocketCommunicator(app, "/ws/")
+    async with asyncio.timeout(2):
+        await comm.wait()
+""",
+    "from asyncio import timeout, then async with timeout(2) (#3737)": """
+from asyncio import timeout
+
+async def test_a(socket):
+    async with timeout(2):
+        await socket.receive_output()
+""",
+    "from asyncio import timeout as an alias (#3737)": """
+from asyncio import timeout as limit
+
+async def test_a(socket):
+    async with limit(2):
+        await socket.receive_output()
+""",
+    "from asyncio import wait_for as an alias (#3737)": """
+from asyncio import wait_for as bounded
+
+async def test_a(socket):
+    await bounded(socket.receive_output(), 2)
+""",
+    "wait_for around asyncio.shield around a wait (#3737)": """
+async def test_a(socket):
+    await asyncio.wait_for(asyncio.shield(socket.receive_output()), 2)
+""",
+    "wait_for around a task variable made from a wait (#3737)": """
+async def test_a(socket):
+    task = asyncio.ensure_future(socket.receive_output())
+    await asyncio.wait_for(task, 2)
+""",
+    "wait_for around a task variable made by create_task (#3737)": """
+async def test_a(socket):
+    task = asyncio.create_task(socket.receive_json_from())
+    frame = await asyncio.wait_for(task, timeout=3)
+""",
+    "wait_for around a coroutine variable (#3737)": """
+async def test_a(socket):
+    pending = socket.receive_output()
+    await asyncio.wait_for(pending, 2)
+""",
+    "wait_for around a shielded task variable (#3737)": """
+async def test_a(socket):
+    task = asyncio.create_task(socket.receive_output())
+    await asyncio.wait_for(asyncio.shield(task), 2)
+""",
+    "a module constant used where another function shadows it (#3737)": """
+T = 2
+
+async def other(socket, T):
+    await socket.receive_output(timeout=T)
+
+async def test_a(socket):
+    await socket.receive_output(timeout=T)
+""",
+    "a module constant that a function assigns through a global declaration (#3737)": """
+T = 2
+
+async def test_a(socket):
+    global T
+    T = 2
+    await socket.receive_output(timeout=T)
+""",
 }
 
 NOT_CAUGHT = {
@@ -852,6 +1215,84 @@ async def test_a(socket):
 async def test_a(socket):
     with contextlib.suppress(asyncio.TimeoutError):
         await socket.receive_from(timeout=0.5)
+""",
+    # --- the blind spots the PR #3732 re-review found (#3737) ---------------------------
+    "asyncio.wait on a set of tasks is not a communicator wait (#3737)": """
+async def test_a(task):
+    await asyncio.wait({task}, timeout=1)
+""",
+    "asyncio.wait on a list with a positional bound is not one either (#3737)": """
+async def test_a(tasks):
+    await asyncio.wait(tasks, timeout=0.5)
+""",
+    "wait_for around wait() on a receiver nothing says is a communicator (#3737)": """
+async def test_a(done):
+    await asyncio.wait_for(done.wait(), 1)
+""",
+    "wait_for around wait() on an asyncio.Event the file constructs (#3737)": """
+async def test_a():
+    done = asyncio.Event()
+    await asyncio.wait_for(done.wait(), 1)
+""",
+    "wait_for around a generous bound on a constructed communicator (#3737)": """
+async def test_a(app):
+    comm = WebsocketCommunicator(app, "/ws/")
+    await asyncio.wait_for(comm.wait(), 30)
+""",
+    "from asyncio import timeout around something that is not a frame (#3737)": """
+from asyncio import timeout
+
+async def test_a(queue):
+    async with timeout(2):
+        await queue.get()
+""",
+    "a bare timeout() that was not imported from asyncio is not asyncio.timeout (#3737)": """
+async def test_a(socket):
+    async with timeout(2):
+        await socket.receive_output()
+""",
+    "a module constant shadowed by a parameter (#3737)": """
+T = 2
+
+async def test_a(socket, T):
+    await socket.receive_output(timeout=T)
+""",
+    "a module constant shadowed by a local assignment (#3737)": """
+T = 2
+
+async def test_a(socket):
+    T = pick()
+    await socket.receive_output(timeout=T)
+""",
+    "a module constant shadowed by a loop variable (#3737)": """
+T = 2
+
+async def test_a(socket, values):
+    for T in values:
+        await socket.receive_output(timeout=T)
+""",
+    "a module constant shadowed by an enclosing function's parameter (#3737)": """
+T = 2
+
+def make(T):
+    async def test_a(socket):
+        await socket.receive_output(timeout=T)
+    return test_a
+""",
+    "a module constant shadowed by a keyword-only parameter (#3737)": """
+T = 2
+
+async def test_a(socket, *, T):
+    await socket.receive_output(timeout=T)
+""",
+    "wait_for around a shielded wait with a generous bound (#3737)": """
+async def test_a(socket):
+    await asyncio.wait_for(asyncio.shield(socket.receive_output()), 30)
+""",
+    "wait_for around a task variable made from something that is not a frame (#3737)": """
+async def test_a(queue):
+    task = asyncio.create_task(queue.get())
+    await asyncio.wait_for(task, 2)
 """,
 }
 
@@ -951,7 +1392,8 @@ def test_a_counted_shape_is_not_also_in_the_aggregates(source):
     design: whether it is short depends on its callers, which are what is counted.)
     """
     expected = {"absence_raises": 0, "variable_timeouts": 0, "wait_for_short": 0}
-    if "timeout=timeout" in source:
+    if "timeout=timeout" in source or "async def other(socket, T)" in source:
+        # the shadowed ``T`` in ``other`` cannot be read as a number: a variable timeout
         expected["variable_timeouts"] = 1
     assert _uncovered(source) == expected
 
@@ -972,6 +1414,17 @@ async def test_a(socket, remaining):
 """
     assert find_short_waits(source) == []
     assert _uncovered(source)["variable_timeouts"] == 1
+
+
+def test_asyncio_wait_on_tasks_is_in_no_aggregate_not_even_with_a_variable_timeout():
+    """``asyncio.wait`` is not a frame wait (#3737): it is not a "variable communicator timeout"
+    either, so it must not inflate ``UNCOVERED_BASELINE``."""
+    source = """
+async def test_a(tasks, remaining):
+    await asyncio.wait(tasks, timeout=remaining)
+"""
+    assert find_short_waits(source) == []
+    assert _uncovered(source) == {"absence_raises": 0, "variable_timeouts": 0, "wait_for_short": 0}
 
 
 def test_a_wait_on_the_last_line_of_a_raises_block_is_the_absence_aggregate():

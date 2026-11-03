@@ -81,7 +81,7 @@ async def receive_until(
         if remaining <= 0:
             raise AssertionError(f"waited {timeout}s for {what}; received {frames!r}")
         if not await socket.receive_nothing(timeout=min(remaining, 0.05), interval=0.01):
-            frames.append(_decode(await socket.receive_output(timeout=3)))
+            frames.append(_decode(await socket.receive_output()))
     return frames
 
 
@@ -150,7 +150,7 @@ async def drain_extra(socket, quiet: float = TRAILING_QUIET_S) -> List[Frame]:
     deadline = loop.time() + WAIT_S
     frames: List[Frame] = []
     while loop.time() < deadline and not await socket.receive_nothing(timeout=quiet, interval=0.01):
-        frame = _decode(await socket.receive_output(timeout=3))
+        frame = _decode(await socket.receive_output())
         frames.append(frame)
         if frame.get("type") == "websocket.close":
             break
