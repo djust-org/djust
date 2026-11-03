@@ -207,11 +207,11 @@ Two name shapes appear in this roadmap, with distinct meanings:
 | ~~**P2**~~ | ~~Close the low-severity review leftovers from #3535, #3652 and #3678 (tidy-up checklist)~~ ✅ (#3704) | v1.3.0 |
 | ~~**P2**~~ | ~~#3692 — `main`'s `python-tests` flakes: `target_id` on push frames (#3694), pool-config leak (#3695), and the four timing races (test-side only)~~ ✅ (#3708) | v1.3.0 |
 | **P2** | #3663 — `djust_components` / `theme_tags`: the same tag renders different markup under the Django engine and the native Rust handler (117 of 208 tags). Needs a canonical implementation first | v1.3.0 |
-| **P2** | #3666 — Form and `BoundField` arguments do not reach the native Rust component handlers. Needs a canonical implementation first | v1.3.0 |
-| **P2** | #3667 — Native Rust component handlers swallow invalid input the Python tags reject. Needs a canonical implementation first | v1.3.0 |
+| ~~**P2**~~ | ~~#3666 — Form and `BoundField` arguments do not reach the native Rust component handlers. Needs a canonical implementation first~~ ✅ (#3753) | v1.3.0 |
+| ~~**P2**~~ | ~~#3667 — Native Rust component handlers swallow invalid input the Python tags reject. Needs a canonical implementation first~~ ✅ (#3753) | v1.3.0 |
 | **P2** | #3669 — Event-wiring (`dj-*`) attributes differ between the Django and Rust renderings of 12 component tags. Needs a canonical implementation first | v1.3.0 |
-| **P1** | #3676 — Native raw `@register.tag` component handlers read a bare variable's value as `key=value` pairs (parameter injection; 117 of 136 tags). Needs a canonical implementation first | v1.3.0 |
-| **P2** | #3677 — The `djust_theming` URL sanitiser is a denylist; `djust_components` uses an allowlist. Needs a canonical implementation first | v1.3.0 |
+| ~~**P1**~~ | ~~#3676 — Native raw `@register.tag` component handlers read a bare variable's value as `key=value` pairs (parameter injection; 117 of 136 tags). Needs a canonical implementation first~~ ✅ (#3746) | v1.3.0 |
+| ~~**P2**~~ | ~~#3677 — The `djust_theming` URL sanitiser is a denylist; `djust_components` uses an allowlist. Needs a canonical implementation first~~ ✅ (#3747) | v1.3.0 |
 
 ### v1.3.0-16 — follow-ups of the v1.3.0-15 drain: the TTY parameter bug, test-timing debt, gate-off tooling, view-API leftovers (drain bucket → ships in 1.3)
 
@@ -247,10 +247,10 @@ Two name shapes appear in this roadmap, with distinct meanings:
 
 | Priority | Task | Milestone |
 |---|---|---|
-| **P1** | #3676 — Native raw `@register.tag` handlers refuse a bare operand at parse time with Django's message (`Unexpected argument 'val'. Use key=value format.`), so a variable's value is never read as `key=value` pairs (117 of 136 tags) | v1.3.0 |
-| **P2** | #3677 — `djust_theming` sanitises URLs with the `djust_components` allowlist (`safe_url` / `url_attr`), not a denylist; the #3675 sweep runs over the theming tags as a regression net | v1.3.0 |
-| **P2** | #3666 — `Form` / `BoundField` arguments reach the native Rust component handlers (`{% field_error field=form.name %}` renders the same under both engines) | v1.3.0 |
-| **P2** | #3667 — Native Rust handlers raise the errors the Python tags raise for invalid input, and the leaked method repr in `notification_popover` is fixed | v1.3.0 |
+| ~~**P1**~~ | ~~#3676 — Native raw `@register.tag` handlers refuse a bare operand at parse time with Django's message (`Unexpected argument 'val'. Use key=value format.`), so a variable's value is never read as `key=value` pairs (117 of 136 tags)~~ ✅ (#3746) | v1.3.0 |
+| ~~**P2**~~ | ~~#3677 — `djust_theming` sanitises URLs with the `djust_components` allowlist (`safe_url` / `url_attr`), not a denylist; the #3675 sweep runs over the theming tags as a regression net~~ ✅ (#3747) | v1.3.0 |
+| ~~**P2**~~ | ~~#3666 — `Form` / `BoundField` arguments reach the native Rust component handlers (`{% field_error field=form.name %}` renders the same under both engines)~~ ✅ (#3753) | v1.3.0 |
+| ~~**P2**~~ | ~~#3667 — Native Rust handlers raise the errors the Python tags raise for invalid input, and the leaked method repr in `notification_popover` is fixed~~ ✅ (#3753) | v1.3.0 |
 
 ## Next: v1.2.1 — non-breaking fixes (drain)
 

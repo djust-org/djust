@@ -41,6 +41,8 @@ cause a *code* defect rather than a documentation one.
 | #3731 | the PR body said the issue's 16 s at 1,600 blocks could not be reproduced; it reproduces (16.6 s on main) | the reviewer measured it; the body was corrected | yes, missed |
 | #3732 | the docstring and a changelog fragment said the baseline held one entry (three) and that every drain is counted per file (a few shapes were) | the ratchet was extended so the second claim became true; reasons became data pinned to BASELINE | yes, missed |
 | #3738 | the changelog fragment said 'This was the cause' for a failure never observed naturally | reworded to the best-supported explanation | yes, missed |
+| #3747 | the changelog and `docs/website/guides/components.md` said the theming and components URL rules 'cannot disagree', and `changelog.d/3665.security.md` kept saying theming passes every scheme the allowlist rejects after the allowlist change; a `mark_safe` URL still printed raw | all three corrected before merge; the `mark_safe` case was fixed, not documented around | yes, missed |
+| #3753 | 'unknown keywords stay lenient' (false for six of nine tags), 'eight of nine within 12% of the old handlers' (re-measured +14 to 16% on `field_error`), and a test described as checking the docs name 'exactly' the refusing tags (it checks one direction) | corrected in the docs, changelog fragment and PR body before merge | yes, missed |
 
 ## Detection
 
