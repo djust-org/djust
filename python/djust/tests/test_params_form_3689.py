@@ -826,12 +826,18 @@ class TestValidationRunsOffTheEventLoop:
         from django.contrib.auth.models import Group
 
         group = await sync_to_async(Group.objects.create)(name="staff")
-        communicator, mount, frames = await _connect(
-            "GroupView", params={"group": str(group.pk)}, url="/group/"
-        )
-        assert mount["type"] == "mount", frames
-        assert "staff|0" in mount["html"]
-        await communicator.disconnect()
+        try:
+            communicator, mount, frames = await _connect(
+                "GroupView", params={"group": str(group.pk)}, url="/group/"
+            )
+            assert mount["type"] == "mount", frames
+            assert "staff|0" in mount["html"]
+            await communicator.disconnect()
+        finally:
+            # ``sync_to_async`` runs ``create`` on another thread's connection, outside the
+            # test's transaction, so the row is NOT rolled back and every later test in the
+            # worker sees a ``staff`` group (``test_admin_list_lookups`` counts groups).
+            await sync_to_async(Group.objects.filter(pk=group.pk).delete)()
 
     async def test_a_model_choice_field_rejects_an_unknown_pk_on_url_change(self):
         communicator, mount, _ = await _connect("GroupView", url="/group/")
@@ -840,6 +846,17 @@ class TestValidationRunsOffTheEventLoop:
         assert frame["type"] != "error", frame
         assert "none|1" in _text(frame), frame
         await communicator.disconnect()
+
+
+def test_the_group_the_socket_mount_test_creates_does_not_outlive_it():
+    """Placed after ``TestValidationRunsOffTheEventLoop``: nothing it created may remain.
+
+    ``test_admin_list_lookups`` counts groups, and a leaked ``staff`` row made it fail
+    on main after the shard dealing changed.
+    """
+    from django.contrib.auth.models import Group
+
+    assert not Group.objects.filter(name="staff").exists()
 
 
 class TestModelChoiceFieldOverHttp:
