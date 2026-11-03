@@ -29,10 +29,17 @@ with its messages:
   renders, because it only notices at the Python call; this raises the same
   refusal at compilation, as a ``TemplateSyntaxError``.)
 
-``parse_bits`` also rejects unknown keywords and missing required arguments.
-Those are about keywords, not about positional use, and the native handlers have
-always been lenient there (``rust_only_keys`` in the parity baseline records
-it), so they are left as they were.
+* ``'<tag>' did not receive value(s) for the argument(s): '<param>'``: a required
+  parameter that no positional or keyword argument supplies (#3667). The native
+  handlers used to render with it absent: ``{% data_table %}`` and an argument-less
+  ``{% toast_container %}`` rendered under the Rust engine while Django refused both. The check is a transcription of the end of ``parse_bits``,
+  quirk included (:func:`missing_arguments`).
+
+``parse_bits`` also rejects unknown keywords. That one is NOT mirrored: the native
+handlers have always accepted keys the Python tag does not declare
+(``rust_only_keys`` in the parity baseline records which tags and which keys), and
+some read them on purpose, so a template that works today keeps working. It is the
+one leniency of this module that is documented rather than removed.
 
 Raw ``@register.tag`` tags have no positional parameters to map: their compile
 functions parse ``key=value`` only, and Django refuses a bare token
@@ -81,6 +88,12 @@ class PositionalSpec:
     has_varargs: bool
     #: ``simple_tag`` takes a trailing ``as <var>``; ``inclusion_tag`` does not.
     takes_as_var: bool
+    #: How many of ``params`` have a default. Django drops that many from the END of the
+    #: parameters still unhandled when it decides which are missing (see
+    #: :func:`missing_arguments`), so the count has to travel with the spec.
+    num_defaults: int = 0
+    #: Keyword-only parameters that have no default: required, and only by keyword.
+    kwonly_required: Tuple[str, ...] = ()
 
 
 def _closure(func: Callable[..., Any]) -> Dict[str, Any]:
@@ -116,7 +129,35 @@ def positional_spec(tag_name: str, compile_func: Callable[..., Any]) -> Optional
         params=tuple(params),
         has_varargs=spec.varargs is not None,
         takes_as_var=kind == "simple_tag",
+        num_defaults=len(spec.defaults or ()),
+        kwonly_required=tuple(
+            name for name in spec.kwonlyargs if name not in (spec.kwonlydefaults or {})
+        ),
     )
+
+
+def missing_arguments(spec: PositionalSpec, bits: List[str]) -> List[str]:
+    """The parameters Django would report as not given a value, in Django's order.
+
+    A transcription of the end of ``parse_bits``, quirk included: the parameters still
+    unhandled lose as many from the END as the tag has defaults, whichever were given.
+    Reproducing that is the point: "the tag Django refuses" is Django's, and a version
+    that is stricter in one corner is a template that works under one engine only.
+    """
+    unhandled = list(spec.params)
+    unhandled_kwonly = list(spec.kwonly_required)
+    for bit in bits:
+        match = kwarg_re.match(bit)
+        if match and match[1]:
+            if match[1] in unhandled:
+                unhandled.remove(match[1])
+            elif match[1] in unhandled_kwonly:
+                unhandled_kwonly.remove(match[1])
+        elif unhandled:
+            unhandled.pop(0)
+    if spec.num_defaults:
+        unhandled = unhandled[: -spec.num_defaults]
+    return unhandled + unhandled_kwonly
 
 
 def rewrite_positional(spec: PositionalSpec, args: List[str]) -> List[str]:
@@ -164,6 +205,13 @@ def rewrite_positional(spec: PositionalSpec, args: List[str]) -> List[str]:
         else:
             raise TemplateSyntaxError("'%s' received too many positional arguments" % spec.name)
         position += 1
+    missing = missing_arguments(spec, bits)
+    if missing:
+        # Django's wording; the native handlers used to render with the parameter absent (#3667).
+        raise TemplateSyntaxError(
+            "'%s' did not receive value(s) for the argument(s): %s"
+            % (spec.name, ", ".join("'%s'" % name for name in missing))
+        )
     return rewritten + tail
 
 

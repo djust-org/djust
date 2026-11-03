@@ -170,13 +170,7 @@ IDS = [f"{t['label']}:{t['name']}" for t in WITH_PARAMS]
 #: this table the vacuity check below would be silenced for them; with it each entry is a
 #: claim ``test_the_exemption_is_still_true`` re-proves, so it cannot outlive its reason.
 NO_OBSERVABLE_ARGUMENT = {
-    "form_errors": "takes a Form object, which never reaches a native handler (#3666)",
-    "field_error": "takes a BoundField object, which never reaches a native handler (#3666)",
     "theme_framework_overrides": "renders nothing unless a CSS-framework theme pack is active",
-    "toast_container": (
-        "its handler ignores its arguments, keyword or positional, and reads the context "
-        "variable `toasts` (a keyword-form difference from the Python tag, #3663)"
-    ),
 }
 
 #: Values to try, in order, for a parameter whose ``variants.token`` the Django tag rejects

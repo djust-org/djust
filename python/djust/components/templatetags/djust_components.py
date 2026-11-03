@@ -81,6 +81,20 @@ def _resolve(value: Any, context: Any) -> Any:
     return value
 
 
+def _item_attr(item: Any, name: str, default: Any = "") -> Any:
+    """``getattr(item, name, default)`` that reads DATA: a callable attribute is not a value.
+
+    A list item that is not a dict is read by attribute (``notif.title``). A ``str`` item has
+    a ``title`` too, the METHOD ``str.title``, so ``{% notification_popover
+    notifications=names %}`` rendered ``<built-in method title of str object at 0x...>`` into
+    the page (#3667). A method is not what a caller meant by "the title of this item", so it
+    reads as absent. (Django's own ``{{ item.title }}`` would CALL it; that is how a bare name
+    would come out titlecased as the notification title, which is no more meant.)
+    """
+    value = getattr(item, name, default)
+    return default if callable(value) else value
+
+
 def _parse_kv_args(bits: Any, parser: Any) -> Any:
     """Parse key=value arguments from template tag tokens."""
     kwargs = {}
@@ -6844,11 +6858,11 @@ class NotificationPopoverNode(template.Node):
                 n_time = notif.get("time", "")
                 n_read = notif.get("read", False)
             else:
-                n_id = getattr(notif, "id", "")
-                n_title = getattr(notif, "title", "")
-                n_body = getattr(notif, "body", getattr(notif, "message", ""))
-                n_time = getattr(notif, "time", "")
-                n_read = getattr(notif, "read", False)
+                n_id = _item_attr(notif, "id")
+                n_title = _item_attr(notif, "title")
+                n_body = _item_attr(notif, "body", _item_attr(notif, "message"))
+                n_time = _item_attr(notif, "time")
+                n_read = _item_attr(notif, "read", False)
             e_n_id = conditional_escape(str(n_id))
             e_n_title = conditional_escape(str(n_title))
             e_n_body = conditional_escape(str(n_body))
@@ -6919,10 +6933,10 @@ class ConversationThreadNode(template.Node):
                 text = msg.get("text", "")
                 time = msg.get("time", "")
             else:
-                sender = getattr(msg, "sender", "user")
-                name = getattr(msg, "name", "")
-                text = getattr(msg, "text", "")
-                time = getattr(msg, "time", "")
+                sender = _item_attr(msg, "sender", "user")
+                name = _item_attr(msg, "name")
+                text = _item_attr(msg, "text")
+                time = _item_attr(msg, "time")
 
             e_name = conditional_escape(str(name))
             e_text = conditional_escape(str(text))

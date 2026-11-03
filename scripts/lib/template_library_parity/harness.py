@@ -600,3 +600,58 @@ def run_audit(
         audit.rows[key] = classify.classify_tag(results, passed, max(passed, len(info.readable())))
         audit.detail[key] = records
     return audit
+
+
+# --------------------------------------------------------------------------- #
+# Facts the fidelity tests derive (#3666, #3667)
+
+
+def one_engine_errors(audit: Audit) -> list[dict[str, str]]:
+    """Every variant that exactly one engine rejected: the rows #3667 is about.
+
+    ``side`` is the engine that raised. ``kind`` says why, from the Python tag's own
+    words: ``unexpected-keyword`` (the native handler accepts a key the Python tag does
+    not declare; deliberately lenient, see ``rust_only_keys``), ``missing-required``
+    (a required parameter nobody supplied) or ``invalid-value`` (the tag raised while
+    rendering: ``int(None)``, ``int("abc")``, ``for n in None``).
+    """
+    rows = []
+    for key, records in sorted(audit.detail.items()):
+        for record in records:
+            if (record.python[0] == "err") == (record.rust[0] == "err"):
+                continue
+            side = "python" if record.python[0] == "err" else "rust"
+            text = (record.python if side == "python" else record.rust)[1]
+            if "unexpected keyword argument" in text:
+                kind = "unexpected-keyword"
+            elif "did not receive value(s) for the argument(s)" in text:
+                kind = "missing-required"
+            else:
+                kind = "invalid-value"
+            rows.append(
+                {"tag": key, "variant": record.variant, "side": side, "kind": kind, "error": text}
+            )
+    return rows
+
+
+#: A Python repr leaking into markup: a bound method, a function, an object's default repr.
+_REPR_LEAK = re.compile(r"built-in method|bound method|object at 0x|&lt;function|<function")
+
+
+def repr_leaks(audit: Audit) -> list[dict[str, str]]:
+    """Every output, of either engine, with a Python repr in it (``<built-in method title ...>``)."""
+    leaks = []
+    for key, records in sorted(audit.detail.items()):
+        for record in records:
+            for side, (status, out) in (("python", record.python), ("rust", record.rust)):
+                found = _REPR_LEAK.search(out) if status == "ok" else None
+                if found:
+                    leaks.append(
+                        {
+                            "tag": key,
+                            "variant": record.variant,
+                            "side": side,
+                            "excerpt": out[max(0, found.start() - 30) : found.end() + 40],
+                        }
+                    )
+    return leaks
