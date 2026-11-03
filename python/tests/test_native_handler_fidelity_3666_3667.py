@@ -28,22 +28,32 @@ What each class proves:
 * ``TestMissingArguments``: ``missing_arguments`` against Django's real ``parse_bits`` over a
   grid of signatures and calls, quirk included.
 
+* ``TestTypeDispatch`` (#3756): the tags that branch on a value's TYPE (``json_viewer``:
+  ``isinstance``) read no attribute, so the recorder cannot see them. ``typed_values.py``
+  finds them by rendering the Python tag on a value and on the stand-in the engine would hand
+  a handler; the tests pin ``json_viewer`` against Django over every type, a seeded random
+  tree of mixed types, and the set of tags still wrong for a realistic type.
+
 The facts that cannot be known without rendering the whole library (``OBJECT_ARGUMENT_TAGS``
 derivation, the one-engine-error table, the repr scan) come from ONE subprocess, the way the
 parity ratchet does it: that process replaces ``uuid`` and ``datetime`` and must not be a
 pytest worker.
 
-Refs #3666, #3667, #3655, #3663, #3664, #3676, #1468, #1646, #1125.
+Refs #3666, #3667, #3756, #3655, #3663, #3664, #3676, #1468, #1646, #1125.
 """
 
 from __future__ import annotations
 
 import datetime
+import decimal
 import json
 import os
+import pathlib
+import random
 import re
 import subprocess
 import sys
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -157,10 +167,10 @@ class TestObjectArguments:
 
         measured = {key.split("|")[0].split(":", 1)[1] for key in facts["object_parameters"]}
         assert measured, "the measurement found no object-taking tag: it is not looking"
-        assert measured == set(rust_handlers.OBJECT_ARGUMENT_TAGS), (
-            "tags the Python library reads an attribute of, not in OBJECT_ARGUMENT_TAGS: "
-            f"{sorted(measured - rust_handlers.OBJECT_ARGUMENT_TAGS)}; listed but measured as "
-            f"taking no object: {sorted(rust_handlers.OBJECT_ARGUMENT_TAGS - measured)}"
+        assert measured == set(rust_handlers.ATTRIBUTE_ARGUMENT_TAGS), (
+            "tags the Python library reads an attribute of, not in ATTRIBUTE_ARGUMENT_TAGS: "
+            f"{sorted(measured - rust_handlers.ATTRIBUTE_ARGUMENT_TAGS)}; listed but measured as "
+            f"taking no object: {sorted(rust_handlers.ATTRIBUTE_ARGUMENT_TAGS - measured)}"
         )
 
     def test_no_object_taking_tag_keeps_a_native_handler_class(self):
@@ -294,6 +304,32 @@ class TestObjectArguments:
             "{% toast_container toasts %}",
             lambda: {"toasts": [Item(id="t1", type="info", message="Saved it")]},
             "Saved it",
+        ),
+        (
+            "json_viewer: datetime",
+            "{% json_viewer data=when %}",
+            lambda: {
+                "when": datetime.datetime(2024, 3, 15, 11, 0, 0, tzinfo=datetime.timezone.utc)
+            },
+            '<span class="dj-json__value">2024-03-15 11:00:00+00:00</span>',
+        ),
+        (
+            "json_viewer: date",
+            "{% json_viewer data=when %}",
+            lambda: {"when": datetime.date(2024, 3, 15)},
+            '<span class="dj-json__value">2024-03-15</span>',
+        ),
+        (
+            "json_viewer: Decimal",
+            "{% json_viewer data=amount %}",
+            lambda: {"amount": decimal.Decimal("1.5")},
+            '<span class="dj-json__value">1.5</span>',
+        ),
+        (
+            "json_viewer: nested in a dict",
+            "{% json_viewer data=row %}",
+            lambda: {"row": {"when": datetime.date(2024, 3, 15), "n": decimal.Decimal("2")}},
+            '<span class="dj-json__value">2024-03-15</span>',
         ),
         (
             "toast_container: dicts",
@@ -760,3 +796,167 @@ class TestMissingArguments:
                     problems.append(f"{label} {call!r}: ours {missing}, Django {refused}")
         assert agreed > 25, f"only {agreed} cases compared"
         assert not problems, "\n".join(problems)
+
+
+# --------------------------------------------------------------------------- #
+# #3756: tags that dispatch on a value's TYPE
+
+
+#: The types a template realistically passes where a tag takes a scalar or an object. The
+#: others measured (``tuple``, ``UUID``, ``bytes``, ``set``, ``frozenset``) are reported by the
+#: PR for #3756 but not pinned here: a tuple in a ``class=`` slot or a UUID in a ``count=`` slot
+#: is not an input anyone writes, and a pin over them would be 495 rows nobody can act on.
+REALISTIC_TYPES = frozenset(
+    {
+        "datetime",
+        "naive datetime",
+        "date",
+        "time",
+        "timedelta",
+        "Decimal",
+        "Enum",
+        "IntEnum",
+        "Path",
+    }
+)
+
+#: ``tag`` -> why the Python tag still renders a realistic value differently from the Rust
+#: handler, with the engines in agreement on the value's stand-in (so it IS the lost type).
+#: Each is a temporal or path value in a CSS-class / URL attribute slot. Equality in both
+#: directions: a tag that stops being wrong must be removed from here, and a new one must be
+#: looked at rather than appended.
+KNOWN_TYPE_LOSS = {
+    "map_picker": "attribution_url: a Path where the tag expects a URL string",
+    "theme_mode_toggle": "button_class: a date / datetime / time as a CSS class",
+    "theme_preset_selector": "dropdown_class: a date / datetime / time as a CSS class",
+    "theme_switcher": "button_class, dropdown_class: a date / datetime / time as a CSS class",
+}
+
+
+class TestTypeDispatch:
+    """``json_viewer`` branches on ``isinstance`` and reads no attribute, so the recorder that
+    found the nine attribute-reading tags could not see it (#3756)."""
+
+    TYPES = {
+        "datetime": lambda: datetime.datetime(2024, 3, 15, 11, 0, 0, tzinfo=datetime.timezone.utc),
+        "naive datetime": lambda: datetime.datetime(2024, 3, 15, 11, 0, 0),
+        "date": lambda: datetime.date(2024, 3, 15),
+        "time": lambda: datetime.time(11, 30),
+        "timedelta": lambda: datetime.timedelta(minutes=90),
+        "Decimal": lambda: decimal.Decimal("1.5"),
+        "UUID": lambda: uuid.UUID(int=7),
+        "bytes": lambda: b"ab",
+        "Path": lambda: pathlib.PurePosixPath("/a/b"),
+        "tuple": lambda: (1, 2),
+        "set": lambda: {1},
+        "float": lambda: 2.5,
+        "bool": lambda: True,
+        "int": lambda: 3,
+        "None": lambda: None,
+        "str": lambda: "x",
+    }
+
+    @pytest.mark.parametrize("label", sorted(TYPES))
+    def test_json_viewer_renders_every_type_like_django(self, engines, label):
+        src = "{% load djust_components %}{% json_viewer data=v %}"
+        django = _render(engines, "django", src, {"v": self.TYPES[label]()})
+        rust = _render(engines, "rust", src, {"v": self.TYPES[label]()})
+        assert django[0] == "ok", django
+        assert rust == django, f"{label}:\n  django {django}\n  rust   {rust}"
+
+    def test_the_reported_cells(self, engines):
+        """The three the issue measured, stated outright: no type modifier for a non-JSON scalar."""
+        src = "{% load djust_components %}{% json_viewer data=v %}"
+        for label, expect in (
+            ("datetime", '<span class="dj-json__value">2024-03-15 11:00:00+00:00</span>'),
+            ("date", '<span class="dj-json__value">2024-03-15</span>'),
+            ("Decimal", '<span class="dj-json__value">1.5</span>'),
+        ):
+            rust = _render(engines, "rust", src, {"v": self.TYPES[label]()})
+            assert expect in rust[1], (label, rust[1][:300])
+
+    def test_random_nested_values_render_like_django(self, engines):
+        """Seeded random trees of dicts / lists / mixed scalar types: the curated table above
+        samples top-level values, and the dispatch recurses."""
+        rng = random.Random(3756)
+        leaves = [self.TYPES[k] for k in ("datetime", "date", "Decimal", "UUID", "int", "float")]
+        leaves += [lambda: "s<b>", lambda: None, lambda: True, lambda: 0, lambda: ""]
+
+        def tree(depth: int) -> Any:
+            roll = rng.random()
+            if depth == 0 or roll < 0.4:
+                return rng.choice(leaves)()
+            if roll < 0.7:
+                return [tree(depth - 1) for _ in range(rng.randint(0, 3))]
+            return {f"k{i}": tree(depth - 1) for i in range(rng.randint(0, 3))}
+
+        src = "{% load djust_components %}{% json_viewer data=v collapsed_depth=9 %}"
+        bad = []
+        for _ in range(150):
+            value = tree(3)
+            django = _render(engines, "django", src, {"v": value})
+            rust = _render(engines, "rust", src, {"v": value})
+            if rust != django:
+                bad.append(f"{value!r}\n  django {django}\n  rust   {rust}")
+        assert not bad, f"{len(bad)} mismatches:\n" + "\n".join(bad[:3])
+
+    def test_json_viewer_is_bridged_not_native(self):
+        from djust.components import rust_handlers
+
+        assert "json_viewer" in rust_handlers.TYPE_ARGUMENT_TAGS
+        assert "json_viewer" in rust_handlers.OBJECT_ARGUMENT_TAGS
+        registered = {name for name, _ in rust_handlers.INLINE_HANDLERS}
+        assert "json_viewer" not in registered
+        assert not hasattr(rust_handlers, "JsonViewerHandler")
+
+    def test_the_measurement_finds_the_tag_it_was_written_for(self, facts):
+        """Looking is not the same as finding: the derivation must report ``json_viewer`` as
+        type-sensitive for the issue's three types, or it would pass over an empty table."""
+        typed = facts["typed_values"]
+        assert typed["cells"] > 10000, typed["cells"]
+        cells = {
+            (d["tag"], d["param"], d["type"])
+            for d in typed["dispatches"]
+            if d["tag"].endswith("json_viewer")
+        }
+        for label in ("datetime", "date", "Decimal"):
+            assert ("djust_components:json_viewer", "data", label) in cells, sorted(cells)
+
+    def test_every_type_sensitive_tag_of_a_realistic_type_is_bridged_or_known(self, facts):
+        """Both directions. A tag whose Python output depends on a realistic value's type, where
+        the engines agree on the stand-in and still disagree on the value, must be bridged
+        (``TYPE_ARGUMENT_TAGS`` / ``ATTRIBUTE_ARGUMENT_TAGS``) or be in ``KNOWN_TYPE_LOSS``.
+        And ``KNOWN_TYPE_LOSS`` may only name tags that are still wrong."""
+        from djust.components import rust_handlers
+
+        bridged = set(rust_handlers.OBJECT_ARGUMENT_TAGS)
+        lost = {
+            d["tag"].split(":", 1)[1]
+            for d in facts["typed_values"]["dispatches"]
+            if d["type"] in REALISTIC_TYPES and d["isolated"] and not d["rust_agrees"]
+        }
+        assert not lost & bridged, f"bridged and still wrong: {sorted(lost & bridged)}"
+        assert lost == set(KNOWN_TYPE_LOSS), (
+            f"type loss not recorded: {sorted(lost - set(KNOWN_TYPE_LOSS))}; "
+            f"recorded but no longer lost: {sorted(set(KNOWN_TYPE_LOSS) - lost)}"
+        )
+
+    def test_a_bridged_tag_agrees_with_django_for_every_realistic_type(self, facts):
+        """The bridge is Django's own node, so a bridged tag differs from Django for no type a
+        template realistically passes. This is the gate: it would fail if ``json_viewer`` had
+        kept its native handler.
+
+        Restricted to ``REALISTIC_TYPES`` because the bridge is not exact for an exotic ITERABLE:
+        a ``bytes`` given to ``avatar_group users=`` reaches the node as the engine's wrapper,
+        which cannot be sliced (``users[:5]``), where Django slices the real ``bytes``
+        (named in the PR for #3756, not changed here)."""
+        from djust.components import rust_handlers
+
+        wrong = sorted(
+            (d["tag"], d["param"], d["type"])
+            for d in facts["typed_values"]["dispatches"]
+            if d["tag"].split(":", 1)[1] in rust_handlers.OBJECT_ARGUMENT_TAGS
+            and d["type"] in REALISTIC_TYPES
+            and not d["rust_agrees"]
+        )
+        assert not wrong, wrong[:10]

@@ -126,9 +126,16 @@ def _fidelity(path: Path, audit: harness.Audit) -> int:
     """Write the measured facts the fidelity tests compare with the source (#3666, #3667)."""
     from django.template import engines
 
-    from scripts.lib.template_library_parity import objects
+    from scripts.lib.template_library_parity import objects, typed_values
 
     payload = {
+        "typed_values": typed_values.differences(
+            harness.inventory(),
+            engines["django"],
+            engines["djust"],
+            lambda: harness.make_context(with_form=False),
+            harness.reset_ids,
+        ),
         "object_parameters": objects.object_parameters(
             harness.inventory(),
             engines["django"],

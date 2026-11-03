@@ -1862,6 +1862,23 @@ def render_form_value(value: Any) -> Any:
     return None
 
 
+def _is_form_object(value: Any) -> bool:
+    """Is ``value`` a Django ``Form`` or ``BoundField``? (#3755)
+
+    Asked by the Rust engine (``context::live_handle_is_form_object``) before it hands
+    a live, ITERABLE object to a bridged Python tag. The engine keeps an iterable
+    behind its ``TemplateObject`` wrapper because the leaf floor cannot see inside a
+    container; this family is the exception, and the decision lives here so the type
+    list is stated once. It adds no exposure: such an object reached the value stack
+    from a form the raw-Python sidecar already hands the same tag live under its own
+    name, and everything reachable from a field is reachable from that form.
+    """
+    from django.forms import BaseForm
+    from django.forms.boundfield import BoundField
+
+    return isinstance(value, (BaseForm, BoundField))
+
+
 def _crosses_as_encoded(value: Any) -> bool:
     """Does ``impl FromPyObject for Value`` model this object as ``Encoded``?
 

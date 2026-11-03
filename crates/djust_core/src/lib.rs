@@ -3949,9 +3949,37 @@ fn is_django_queryset(ob: &Bound<'_, PyAny>) -> bool {
 ///   before/after, not a side effect of a length fix (CLAUDE.md #1079).
 fn list_repr_is_this_objects_own_spelling(ob: &Bound<'_, PyAny>) -> bool {
     if ob.is_instance_of::<PyList>() {
-        return true;
+        return !list_subclass_spells_itself(ob);
     }
     is_django_queryset(ob)
+}
+
+/// Does this `list` SUBCLASS spell itself — is `str(o)` something other than the
+/// list display? (#3755, the list half of #2899.)
+///
+/// A Django `ErrorList` IS a `list` (`UserList, list`) and renders as its
+/// `<ul class="errorlist">…</ul>` markup: `{{ form.name.errors }}` is that HTML on
+/// Django, and `['This field is required.']` on an engine that treats every `list`
+/// instance as a plain list. The rule is the dict one ([`dict_subclass_spells_itself`]),
+/// asked of the same two dunders and compared by identity against `list`'s own slots:
+/// a subclass that inherits both (`class L(list)`, `RequestScopedList`) resolves to
+/// the SAME wrapper object and is a list to the engine; one that overrides either
+/// crosses as the carrier, whose `{{ v }}` is `str(o)` (and, via `__html__`, safe when
+/// the object says so) and whose `{% for %}` / `|length` / item sinks read the items
+/// and the live object. An exact `list` costs one type check and no lookup.
+pub fn list_subclass_spells_itself(ob: &Bound<'_, PyAny>) -> bool {
+    if ob.is_exact_instance_of::<PyList>() {
+        return false;
+    }
+    let list_ty = ob.py().get_type::<PyList>();
+    let ty = ob.get_type();
+    let overrides = |name: &str| -> bool {
+        match (ty.getattr(name), list_ty.getattr(name)) {
+            (Ok(own), Ok(base)) => !own.is(&base),
+            _ => true,
+        }
+    };
+    overrides("__str__") || overrides("__repr__")
 }
 
 fn bounded_sequence_items<'py>(ob: &Bound<'py, PyAny>) -> Option<Vec<Bound<'py, PyAny>>> {
@@ -5908,7 +5936,9 @@ pub fn value_into_handler_pyobject(py: Python<'_>, value: Value) -> PyResult<Bou
                 return Ok(temporal);
             }
             if let Some(handle) = encoded.live.as_ref() {
-                if !encoded.iterable {
+                // Not iterable, or a Django form object (#3755): a `BoundField`
+                // iterates its subwidgets, and the wrapper below has no `errors`.
+                if !encoded.iterable || context::live_handle_is_form_object(py, handle.bind(py)) {
                     // `protect_sidecar_strict` answering `None` is the floor
                     // failing to enforce: fall to the wrapper, which can only
                     // ever expose `Encoded`'s measured facts.

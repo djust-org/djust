@@ -19,6 +19,23 @@ from djust.serialization import django_json_datetime
 JSONValue = Union[str, int, float, bool, None, List[Any], Dict[str, Any]]
 
 
+def _spells_itself(value: Any) -> bool:
+    """Is ``value`` a ``dict`` / ``list`` subclass whose ``str()`` is not the container display?
+
+    The Python half of the engine's ``dict_subclass_spells_itself`` /
+    ``list_subclass_spells_itself``: compared by identity against the builtin's own slots,
+    so a subclass that inherits both ``__str__`` and ``__repr__`` (a bare ``class D(dict)``)
+    is a plain container and one that overrides either is not.
+    """
+    for base in (dict, list):
+        if isinstance(value, base):
+            cls = type(value)
+            return cls is not base and (
+                cls.__str__ is not base.__str__ or cls.__repr__ is not base.__repr__
+            )
+    return False
+
+
 def serialize_value(
     value: Any,
     *,
@@ -93,6 +110,29 @@ def serialize_value(
                     return None
             return None
 
+    # Django Form / BoundField.
+    #
+    # With ``for_render=True`` the object itself crosses to the engine. The
+    # native render API takes Python objects (see the top of this function), and
+    # a ``Form`` is one whose behaviour IS its type: iterating it yields
+    # ``BoundField``s, ``form|length`` is 0 (no ``__len__``), ``{{ form }}`` is its
+    # ``as_div`` HTML, and ``f.errors`` / ``f.field.required`` read live
+    # attributes. ``render_form_value``'s ``{name: SafeString}`` snapshot keeps
+    # only the widget HTML, so ``{% for f in form %}`` iterated the KEYS,
+    # ``{{ f.errors }}`` and ``{% field_error field=f %}`` rendered empty (#3755).
+    # The engine already knows how to carry an object that way (a handle-bearing
+    # ``Value::Encoded``, ADR-027: the ``{% for %}`` / ``{% with %}`` binding takes
+    # the live object with it).
+    #
+    # The JSON-state paths (``normalize_django_value``, the LiveView bridge) still
+    # need a plain value and keep ``render_form_value``.
+    if for_render:
+        from django.forms import BaseForm
+        from django.forms.boundfield import BoundField
+
+        if isinstance(value, (BaseForm, BoundField)):
+            return value
+
     # Django Form / BoundField — render to SafeString HTML so that
     # {{ form.field_name }} produces widget HTML. Must come before dict check.
     from djust.serialization import render_form_value
@@ -113,6 +153,15 @@ def serialize_value(
     # dict and `rust_bridge` carries the raw object in its own sidecar.
     if isinstance(value, MultiValueDict):
         return cast(JSONValue, value)
+
+    # A ``dict`` / ``list`` SUBCLASS that spells itself (Django's ``ErrorDict`` /
+    # ``ErrorList``: ``str(o)`` is the ``<ul class="errorlist">`` markup) crosses as
+    # itself with ``for_render=True``: rebuilding it as a plain container loses the
+    # spelling Django renders for ``{{ errors }}`` (#3755). The engine owns the rule
+    # (``dict_subclass_spells_itself`` / ``list_subclass_spells_itself``), so what it
+    # keeps as a carrier is exactly what is passed through here.
+    if for_render and _spells_itself(value):
+        return value
 
     # Handle dict - recursively serialize
     if isinstance(value, dict):
