@@ -424,9 +424,12 @@ class PostProcessingMixin:
         nonce = get_csp_nonce(getattr(self, "request", None))
         nonce_attr = f' nonce="{escape(nonce)}"' if nonce else ""
 
+        from ..config import debug_panel_enabled
+
+        panel_enabled = debug_panel_enabled()
         debug_info_script = ""
         debug_css_link = ""
-        if settings.DEBUG:
+        if panel_enabled:
             from ..security import escape_json_for_script
 
             debug_info = self.get_debug_info()
@@ -495,12 +498,15 @@ class PostProcessingMixin:
         if settings.DEBUG:
             # debug-panel.js MUST load before client-dev.js so that
             # DjustDebugPanel is defined when client-dev.js calls
-            # initDebugPanel() (fixes #193 and #196).
-            try:
-                debug_panel_js_url = static("djust/debug-panel.js")
-            except (ValueError, AttributeError):
-                debug_panel_js_url = "/static/djust/debug-panel.js"
-            script += f'\n        <script src="{debug_panel_js_url}" defer data-turbo-track="reload"></script>'
+            # initDebugPanel() (fixes #193 and #196). With the panel off
+            # (``debug_panel: False``) client-dev.js still loads for hot
+            # reload; its initDebugPanel() skips when DjustDebugPanel is absent.
+            if panel_enabled:
+                try:
+                    debug_panel_js_url = static("djust/debug-panel.js")
+                except (ValueError, AttributeError):
+                    debug_panel_js_url = "/static/djust/debug-panel.js"
+                script += f'\n        <script src="{debug_panel_js_url}" defer data-turbo-track="reload"></script>'
 
             try:
                 client_dev_js_url = static("djust/client-dev.js")

@@ -2478,9 +2478,10 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         Handler metadata is static and only sent on initial mount via
         get_debug_info() / window.DJUST_DEBUG_INFO.
         """
-        from django.conf import settings
+        from .config import debug_panel_enabled
 
-        if not getattr(settings, "DEBUG", False):
+        # DEBUG and ``debug_panel`` (on by default) — no panel, no payload.
+        if not debug_panel_enabled():
             return
 
         # The debug payload (dir() + getattr + json.dumps per attribute) adds
