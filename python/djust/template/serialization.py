@@ -20,18 +20,26 @@ JSONValue = Union[str, int, float, bool, None, List[Any], Dict[str, Any]]
 
 
 def _spells_itself(value: Any) -> bool:
-    """Is ``value`` a ``dict`` / ``list`` subclass whose ``str()`` is not the container display?
+    """Is ``value`` a ``dict`` / ``list`` subclass that renders itself as markup? (#3755)
 
     The Python half of the engine's ``dict_subclass_spells_itself`` /
-    ``list_subclass_spells_itself``: compared by identity against the builtin's own slots,
-    so a subclass that inherits both ``__str__`` and ``__repr__`` (a bare ``class D(dict)``)
-    is a plain container and one that overrides either is not.
+    ``list_subclass_spells_itself``, narrowed to the subclasses that define ``__html__``
+    (Django's ``ErrorList`` / ``ErrorDict``, whose ``str()`` is the ``<ul class="errorlist">``
+    markup). The engine's rule is wider — any override of ``__str__`` / ``__repr__``, so an
+    ``OrderedDict`` nested in a value is already a carrier — and the wider rule is NOT applied
+    here: rebuilding a top-level ``OrderedDict`` / ``defaultdict`` / user mapping as a plain
+    dict is what this function has always done, and it also recurses into the values (a
+    ``FieldFile`` becomes its URL), which a raw pass-through would stop doing. Compared by
+    identity against the builtin's own slots, so a subclass that inherits both ``__str__`` and
+    ``__repr__`` is a plain container whatever it defines.
     """
     for base in (dict, list):
         if isinstance(value, base):
             cls = type(value)
-            return cls is not base and (
-                cls.__str__ is not base.__str__ or cls.__repr__ is not base.__repr__
+            return (
+                cls is not base
+                and hasattr(cls, "__html__")
+                and (cls.__str__ is not base.__str__ or cls.__repr__ is not base.__repr__)
             )
     return False
 
@@ -154,12 +162,11 @@ def serialize_value(
     if isinstance(value, MultiValueDict):
         return cast(JSONValue, value)
 
-    # A ``dict`` / ``list`` SUBCLASS that spells itself (Django's ``ErrorDict`` /
-    # ``ErrorList``: ``str(o)`` is the ``<ul class="errorlist">`` markup) crosses as
-    # itself with ``for_render=True``: rebuilding it as a plain container loses the
-    # spelling Django renders for ``{{ errors }}`` (#3755). The engine owns the rule
-    # (``dict_subclass_spells_itself`` / ``list_subclass_spells_itself``), so what it
-    # keeps as a carrier is exactly what is passed through here.
+    # A ``dict`` / ``list`` SUBCLASS that renders itself as markup (Django's ``ErrorDict`` /
+    # ``ErrorList``: ``str(o)`` is the ``<ul class="errorlist">`` markup) crosses as itself
+    # with ``for_render=True``: rebuilding it as a plain container loses the spelling Django
+    # renders for ``{{ errors }}`` (#3755). See ``_spells_itself`` for why this is narrower
+    # than the engine's own rule.
     if for_render and _spells_itself(value):
         return value
 

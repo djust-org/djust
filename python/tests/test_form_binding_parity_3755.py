@@ -368,37 +368,46 @@ class TestTheLayers:
             rust = _render(engines, "rust", body, {"errs": errs})
             assert rust == django, (body, django, rust)
 
-    def test_an_errordict_and_an_ordereddict_keep_their_own_spelling(self, engines):
+    def test_an_errordict_keeps_its_own_spelling(self, engines):
         """The dict half, on the same Python path: ``serialize_value`` rebuilt any ``dict``
         subclass as a plain dict, so a top-level ``form.errors`` printed ``{...}``."""
-        import collections
-
-        context = {"errs": _invalid().errors, "od": collections.OrderedDict(a=1, b=2)}
+        context = {"errs": _invalid().errors}
         for body in (
             "{{ errs }}",
             "{% for k in errs %}{{ k }},{% endfor %}",
             "{{ errs.email }}",
-            "{{ od }}",
-            "{% for k, v in od.items %}{{ k }}={{ v }};{% endfor %}",
-            "{{ od.a }}{{ od|length }}",
+            "{{ errs|length }}",
+            "{% if errs %}T{% else %}F{% endif %}",
         ):
             django = _render(engines, "django", body, context)
             rust = _render(engines, "rust", body, context)
             assert django[0] == "ok" and rust == django, (body, django, rust)
 
-    def test_serialize_value_passes_only_respelling_containers_through(self):
+    def test_serialize_value_passes_only_markup_rendering_containers_through(self):
+        """Narrower than the engine's rule on purpose (see ``_spells_itself``): a top-level
+        ``OrderedDict`` or a ``str``-overriding list WITHOUT ``__html__`` is rebuilt as before,
+        and its values are still converted (a ``FieldFile`` becomes its URL)."""
+        import collections
+
         from djust.request_scoped import RequestScopedList
         from djust.template.serialization import serialize_value
 
         class Plain(dict):
             pass
 
-        plain, scoped = Plain(a=1), RequestScopedList([1, 2])
+        class Spelt(list):
+            def __str__(self) -> str:
+                return "custom"
+
         errs = _invalid()["name"].errors
         assert serialize_value(errs, for_render=True) is errs
         assert serialize_value(errs) is not errs  # the JSON helper still rebuilds
-        assert type(serialize_value(plain, for_render=True)) is dict
-        assert type(serialize_value(scoped, for_render=True)) is list
+        errors = _invalid().errors
+        assert serialize_value(errors, for_render=True) is errors
+        assert type(serialize_value(Plain(a=1), for_render=True)) is dict
+        assert type(serialize_value(RequestScopedList([1, 2]), for_render=True)) is list
+        assert type(serialize_value(Spelt([1]), for_render=True)) is list
+        assert type(serialize_value(collections.OrderedDict(a=1), for_render=True)) is dict
 
     def test_list_subclasses_that_do_not_respell_stay_lists(self):
         """The rule is the dict one (#2899): override ``__str__`` / ``__repr__`` or be a list.
