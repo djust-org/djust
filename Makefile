@@ -378,6 +378,31 @@ test-nightly: ## Run nightly/exhaustive differential tests (-m nightly)
 	@echo "$(GREEN)Running nightly differential tests...$(NC)"
 	@PYTHONPATH=. $(PYTHON) -m pytest tests/ python/tests/ python/djust/tests/ -m nightly
 
+# The whole-tree meta tests: gates that read every test file (or the shard and
+# parity configuration built from them), so they pass on a PR's own tree and can
+# fail on the merge of two PRs (#3757; main went red on a54278ebd after a
+# hand-picked list left tests/test_git_env_guard_3179.py out). This is the ONE
+# place the list lives. tests/test_merge_gates_3757.py derives the tree scanners
+# from the test files and fails when one is neither listed here nor excluded, with
+# a reason, in that module. Run it on a scratch merge of the PR with main, before
+# merging (CLAUDE.md, "merge").
+MERGE_GATES := \
+	tests/test_changelog_fragment_references.py \
+	tests/test_ci_python_test_shards.py \
+	tests/test_corpus_shards.py \
+	tests/test_git_env_guard_3179.py \
+	tests/test_merge_gates_3757.py \
+	tests/test_reset_fixture_hygiene_2234.py \
+	python/djust/tests/test_communicator_timeouts_ratchet_3709.py \
+	python/djust/tests/test_no_absolute_time_bounds_3711.py \
+	python/tests/test_no_override_settings_with_fixture_3728.py \
+	python/tests/test_no_reported_crash_signals_2701.py \
+	python/tests/test_template_library_parity_3663.py
+
+.PHONY: merge-gates
+merge-gates: ## Run the whole-tree meta tests (run on a scratch merge of a PR with main before merging; #3757)
+	@PYTHONPATH=python:. $(PYTHON) -m pytest $(MERGE_GATES) -q -p no:cacheprovider --durations=5
+
 .PHONY: test-harness
 test-harness: ## Validate and time doctor scenarios and CI shard collection
 	@PYTHONPATH=. $(PYTHON) -m pytest python/djust/tests/test_make_doctor_2061.py \
