@@ -162,11 +162,17 @@ fn is_data_image(probe: &str) -> bool {
     subtype_len > 0 && matches!(rest[subtype_len..].chars().next(), Some(';') | Some(','))
 }
 
-/// The lowercased scheme of `s`, parsed the way `urllib.parse.urlsplit` does
-/// (tab / CR / LF removed; a letter followed by letters, digits, `+`, `-`, `.`
-/// before the first `:`).
+/// The lowercased scheme of `s`, parsed the way `urllib.parse.urlsplit` does:
+/// leading C0 control characters and space (`U+0000`..=`U+0020`) are stripped,
+/// then tab / CR / LF are removed everywhere, then the scheme is a letter followed
+/// by letters, digits, `+`, `-`, `.` before the first `:`.
+///
+/// The leading strip is what makes `"\x01blob:..."` read as `blob`, as it does for
+/// Python and for a browser (#3748); without it the control character fails the
+/// leading-letter test and the value is taken to have no scheme at all.
 fn url_scheme(s: &str) -> Option<String> {
     let cleaned: String = s
+        .trim_start_matches(|c: char| (c as u32) <= 0x20)
         .chars()
         .filter(|c| !matches!(c, '\t' | '\r' | '\n'))
         .collect();
@@ -205,6 +211,45 @@ mod escaping_tests {
             let html = img(src);
             assert!(html.contains(r##"<img src="#" "##), "{src:?} -> {html}");
         }
+    }
+
+    /// #3748: a leading C0 control character other than tab / CR / LF made `url_scheme`
+    /// read "no scheme" (the control character fails the leading-letter test), so a
+    /// non-navigation scheme reached `<img src>` raw. Python's `urlsplit` (and a
+    /// browser) strip every leading C0 control and space first.
+    #[test]
+    fn leading_c0_control_does_not_hide_a_non_navigation_scheme() {
+        let controls: Vec<char> = (0u32..=0x20).filter_map(char::from_u32).collect();
+        for scheme in [
+            "blob:https://e.com/x",
+            "file:///etc/x",
+            "intent://e.com/x#Intent;end",
+        ] {
+            for c in &controls {
+                for src in [
+                    format!("{c}{scheme}"),
+                    format!("{c}{c}{scheme}"),
+                    format!(" {c} {scheme}"),
+                    format!("{c}{}", scheme.to_ascii_uppercase()),
+                ] {
+                    let html = img(&src);
+                    assert!(html.contains(r##"<img src="#" "##), "{src:?} -> {html}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn leading_c0_control_is_only_stripped_to_read_the_scheme() {
+        // a navigation URL behind a leading control is still a navigation URL, and a
+        // relative one is still relative; the value itself is printed as given
+        assert!(img("\u{1}https://e.com/a.png").contains("https://e.com/a.png"));
+        assert!(img("\u{1}/rel/a.png").contains("/rel/a.png"));
+        assert_eq!(url_scheme("\u{1}blob:x").as_deref(), Some("blob"));
+        assert_eq!(url_scheme("\u{1} \t\nBlob:x").as_deref(), Some("blob"));
+        // only LEADING controls are stripped, and only up to U+0020
+        assert_eq!(url_scheme("a\u{1}b:x"), None);
+        assert_eq!(url_scheme("!blob:x"), None);
     }
 
     #[test]

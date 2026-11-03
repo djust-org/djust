@@ -11,19 +11,20 @@ Falling back to:
     djust_theming/components/{component}.html
 """
 
+import inspect
 import logging
 import re
 import uuid
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 
 from typing import Any, Optional
 from urllib.parse import unquote
 
 from django import template
 from django.template import Context
-from django.utils.safestring import SafeData, SafeString, mark_safe
+from django.utils.safestring import SafeString, mark_safe
 
-from djust.components.utils import url_allowed
+from djust.components.utils import _srcset_candidates, url_allowed
 
 from ..manager import get_theme_config
 from ..template_resolver import resolve_component_template
@@ -334,6 +335,39 @@ _ATTR_NAME_RE = re.compile(r"[A-Za-z][A-Za-z0-9-]*")
 # Attributes whose value is a URL the browser will navigate to or load.
 _URL_ATTRS = frozenset({"href", "src", "action", "formaction"})
 
+# The other attributes a caller can pass through (``**attrs``) that are JUDGED (#3749, #3765).
+# An EXPLICIT set, decided name by name, never a pattern over names: a ``data-*`` / ``dj-*``
+# attribute is author-defined, and a heuristic ("the name contains link / location / image")
+# rewrote values that are not URLs (``data_action="toggle:menu"``, ``icon="mdi:home"``) to ``#``.
+# Unlike :data:`_URL_ATTRS` these have never raised: a rejected scheme renders ``#`` (and a
+# warning), so a page that printed one before does not start to 500.
+#
+# * ``ping`` (a list of URLs the browser POSTs to), ``srcset`` (a list of candidates), ``poster``,
+#   ``data`` (``<object>``), ``background`` (legacy table / body image): the browser follows or
+#   loads them. ``srcset`` and ``ping`` are judged entry by entry (:func:`_check_url_list`).
+# * ``dj-navigate`` / ``dj-patch`` / ``dj-patch-reload``: the framework's own URL-valued
+#   directives, the same attribute ``nav_item.html`` prints from a judged ``url``. The client
+#   also guards them (``safeNavigationTarget``), so this is consistency, not the only defence.
+_QUIET_URL_ATTRS = frozenset(
+    {"ping", "srcset", "poster", "data", "background", "dj-navigate", "dj-patch", "dj-patch-reload"}
+)
+# Attributes whose NAME is a URL attribute in HTML but that are deliberately NOT judged: no
+# browser follows them on the elements these tags print, or they are obsolete or metadata (a
+# citation, an icon NAME, a microdata identifier), so they are printed as written. The decision
+# is recorded, name by name, with its reason, in ``UNJUDGED_PASSTHROUGH`` in
+# ``python/tests/test_theming_url_hardening_3749.py``, which pins that every name the sweep
+# scanner reads as a URL is either judged here or decided there. Every ``data-*`` / ``dj-*`` name
+# other than the framework's own directives (``data-url``, ``dj-action``, ``data-imageurl`` ...)
+# is the page author's own attribute, read by the author's own script, and is printed as written.
+# The ones that only ever LOAD AN IMAGE, where an inline ``data:image/...`` URI is fine.
+_IMAGE_URL_ATTRS = frozenset({"poster", "srcset"})
+
+
+def _is_url_attribute(name: str) -> bool:
+    """Whether the (hyphenated, lower-case) pass-through attribute ``name`` is judged."""
+    return name in _URL_ATTRS or name in _QUIET_URL_ATTRS
+
+
 # Every URL theming prints is judged by ``djust.components.utils.url_allowed``, the
 # allowlist decision ``safe_url`` / ``url_attr`` make for ``djust_components``. Theming
 # keeps no list of its own that decides whether a URL is allowed (it had a denylist,
@@ -350,17 +384,22 @@ _RAISING_SCHEMES = ("javascript", "vbscript", "data", "livescript", "mhtml")
 
 
 def _plain_url(value: Any) -> Any:
-    """A marked-safe URL as plain text, so the template escapes it.
+    """``value`` as the plain text that is both JUDGED and PRINTED (``None`` stays ``None``).
 
-    ``safe_url`` escapes a ``mark_safe`` URL (it is judged and escaped like any other
-    string); theming prints the value through a template, which would print a
-    ``SafeData`` raw, and ``mark_safe("&#x6A;avascript:x")`` is a ``javascript:`` URL
-    to a browser. Anything with ``__html__`` is treated the same. A value that is
-    not marked safe is returned as it came.
+    A value is converted to text exactly ONCE, here: the check and the template then see the
+    same string. Judging ``str(value)`` and leaving the object for the template to stringify
+    again lets an object whose ``__str__`` answers differently the second time (a lazy value, a
+    cached or time-dependent one) pass the check and print something else (#3765).
+
+    A marked-safe URL becomes ordinary text, so the template escapes it: ``safe_url`` escapes a
+    ``mark_safe`` URL, and theming prints the value through a template, which prints a
+    ``SafeData`` raw; ``mark_safe("&#x6A;avascript:x")`` is a ``javascript:`` URL to a browser.
+    The same holds for anything with ``__html__`` and for a value that is not text but PRINTS as
+    marked-safe text (a lazy proxy, ``lazy(lambda: mark_safe(...), str)()``, #3749).
     """
-    if isinstance(value, SafeData) or hasattr(value, "__html__"):
-        return str.__str__(str(value))
-    return value
+    if value is None or type(value) is str:
+        return value
+    return str.__str__(str(value))
 
 
 def _raises_for_scheme(value: Any) -> bool:
@@ -380,11 +419,11 @@ def _check_url(name: str, value: Any) -> Any:
     before the allowlist, and a ``{% theme_button href=record.url %}`` whose data holds
     one must not become a 500. A marked-safe value is returned as plain text.
     """
+    value = _plain_url(value)
     if _raises_for_scheme(value):
         raise ValueError(
             f"{name}= refuses a script-bearing URL (javascript:, vbscript:, data:, livescript:, mhtml:)"
         )
-    value = _plain_url(value)
     if not url_allowed(value):
         logger.warning("theming: %s= URL with a disallowed scheme rendered as '#'", name)
         return "#"
@@ -410,13 +449,102 @@ def _neutralise_url(name: str, value: Any, *, image: bool = False) -> Any:
     return value
 
 
+def _check_url_list(name: str, value: Any, *, image: bool = False) -> str:
+    """``value`` of a list-valued attribute (``srcset``, ``ping``) with each URL judged.
+
+    An entry the allowlist rejects becomes ``"#"`` (and is logged); the others stay, so one
+    bad entry does not take the good ones with it. ``srcset`` is split the way the HTML spec
+    splits it (:func:`djust.components.utils._srcset_candidates`, the parse the
+    ``djust_components`` ``srcset`` sinks use), ``ping`` on ASCII whitespace. Returns plain
+    text, which the caller escapes once.
+    """
+    text = str(_plain_url(value))
+    if name == "srcset":
+        parts = []
+        for url, descriptors in _srcset_candidates(text):
+            if not url_allowed(url, image=True):
+                logger.warning("theming: %s= URL with a disallowed scheme rendered as '#'", name)
+                url = "#"
+            parts.append(" ".join([url, *descriptors]))
+        return ", ".join(parts)
+    kept = []
+    for url in (u for u in re.split(r"[\t\n\f\r ]+", text) if u):
+        if not url_allowed(url, image=image):
+            logger.warning("theming: %s= URL with a disallowed scheme rendered as '#'", name)
+            url = "#"
+        kept.append(url)
+    return " ".join(kept)
+
+
+def _resolve_callable(value: Any) -> Any:
+    """What the template engine makes of ``value`` when it prints ``{{ item.url }}``.
+
+    The engine CALLS a callable it finds while resolving a variable, ONCE, and prints
+    ``str`` of the result; a check that runs before the template sees the callable, not what
+    it returns, and judged ``"<bound method ...>"`` (no scheme, so allowed) while the engine
+    then printed ``javascript:...`` (#3749). This resolves the value by the engine's own rules
+    (``django.template.base.Variable._resolve_lookup``): a ``do_not_call_in_templates`` value
+    is left as it is (the engine prints it), an ``alters_data`` one is never called (the
+    engine prints ``string_if_invalid``), and one that needs arguments is left to the engine,
+    which prints ``string_if_invalid`` for it.
+
+    The caller replaces the item's value with the result, so the template does not call it
+    again, and the result must be something the engine will NOT call again: a result that is
+    itself callable (``lambda: (lambda: "javascript:...")``) is written back as the text the
+    engine would have printed for it, ``str(result)`` (#3765). One call, then text.
+    """
+    if not callable(value) or getattr(value, "do_not_call_in_templates", False):
+        return value
+    if getattr(value, "alters_data", False):
+        return value
+    try:
+        result = value()
+    except TypeError:
+        try:
+            inspect.signature(value).bind()
+        except (TypeError, ValueError):
+            return value  # it needs arguments: the engine renders string_if_invalid
+        raise
+    except Exception as exc:
+        if getattr(exc, "silent_variable_failure", False):
+            return value  # the engine renders string_if_invalid for it
+        raise
+    return str(result) if callable(result) else result
+
+
+def _neutralise_passthrough_url(name: str, value: Any, *, image: bool = False) -> Any:
+    """A pass-through URL attribute other than ``href`` / ``src`` / ``action`` / ``formaction``.
+
+    ``"#"`` (and a warning) for a scheme the shared allowlist rejects, whatever it is; these
+    attributes never raised, so a script scheme does not raise here either. The value is
+    returned as plain text (:func:`_plain_url`), which the caller escapes, and that text is
+    the one that was judged.
+    """
+    value = _plain_url(value)
+    if not url_allowed(value, image=image):
+        logger.warning("theming: %s= URL with a disallowed scheme rendered as '#'", name)
+        return "#"
+    return value
+
+
 class _ItemAttributeProxy:
-    """Override one template-visible attribute without modifying its object."""
+    """Override one template-visible value of an item without modifying the item.
+
+    The engine reads ``item.url`` by a SUBSCRIPT first and an ATTRIBUTE second, so both are
+    answered here: ``proxy["url"]`` and ``proxy.url`` return the checked value, and every
+    other key or attribute is the item's own (a subscript the item does not support raises
+    what the item raises, which sends the engine on to the attribute).
+    """
 
     def __init__(self, item: Any, name: str, value: Any) -> None:
         self._item = item
         self._name = name
         self._value = value
+
+    def __getitem__(self, key: Any) -> Any:
+        if key == self._name:
+            return self._value
+        return self._item[key]
 
     def __getattr__(self, name: str) -> Any:
         if name == self._name:
@@ -424,19 +552,43 @@ class _ItemAttributeProxy:
         return getattr(self._item, name)
 
 
+_MISSING = object()
+
+
+def _lookup(item: Any, name: str) -> Any:
+    """``item.<name>`` as the template engine resolves it: ``item[name]`` first, for ANY object
+    that supports a subscript, then ``getattr`` (``Variable._resolve_lookup``, the same
+    exceptions). :data:`_MISSING` when neither finds it. Reading the attribute first, or only
+    for a non-``Mapping``, judges a value the engine does not print (#3765)."""
+    try:
+        return item[name]
+    except (TypeError, AttributeError, KeyError, ValueError, IndexError):
+        pass
+    try:
+        return getattr(item, name)
+    except (TypeError, AttributeError):
+        return _MISSING
+
+
 def _map_item_attribute(items: Any, name: str, transform: Callable[[Any], Any]) -> Any:
-    """Copy changed dicts, proxy changed objects and materialise item iterables."""
+    """Copy changed dicts, proxy changed objects and materialise item iterables.
+
+    The value is looked up (:func:`_lookup`) and resolved (:func:`_resolve_callable`) the way
+    the template engine will resolve ``{{ item.<name> }}`` BEFORE it is transformed, so the
+    transform judges what is printed.
+    """
     if items is None or isinstance(items, (str, bytes)):
         return items
-    if isinstance(items, dict):
-        value = items.get(name)
-        safe = transform(value)
-        return {**items, name: safe} if safe is not value else items
-    missing = object()
-    value = getattr(items, name, missing)
-    if value is not missing:
-        safe = transform(value)
-        return _ItemAttributeProxy(items, name, safe) if safe is not value else items
+    value = _lookup(items, name)
+    if value is not _MISSING:
+        safe = transform(_resolve_callable(value))
+        if safe is value:
+            return items
+        if isinstance(items, dict):
+            return {**items, name: safe}
+        return _ItemAttributeProxy(items, name, safe)
+    if isinstance(items, Mapping):  # a mapping without the key: nothing to check, not a list
+        return items
     if isinstance(items, Iterable):
         return [_map_item_attribute(item, name, transform) for item in items]
     return items
@@ -462,6 +614,11 @@ def _passthrough_attrs(attrs: dict[str, Any], skip: tuple[str, ...]) -> SafeStri
     binding) and a script-bearing ``href`` / ``src`` / ``action`` /
     ``formaction`` URL (:data:`_RAISING_SCHEMES`). Any other scheme the shared
     allowlist rejects in one of those four renders as ``#`` (:func:`_check_url`).
+
+    Every other attribute that holds a URL (:func:`_is_url_attribute`: ``ping``,
+    ``poster``, ``srcset``, ``data``, ``dj-navigate`` ...) is judged by the same allowlist
+    and renders ``#`` for a scheme it rejects, never raising (#3749). A value that is a
+    LIST of URLs (``srcset``, ``ping``) is judged entry by entry.
     """
     from django.utils.html import escape
 
@@ -477,8 +634,14 @@ def _passthrough_attrs(attrs: dict[str, Any], skip: tuple[str, ...]) -> SafeStri
                 f"{key!r}: inline event-handler attributes are not passed through; "
                 "use a dj-* binding (dj_click, dj_change ...)"
             )
-        if name.lower() in _URL_ATTRS and value is not True:
+        lowered = name.lower()
+        if lowered in _URL_ATTRS and value is not True:
             value = _check_url(key, value)
+        elif value is not True and _is_url_attribute(lowered):
+            if lowered in ("srcset", "ping"):
+                value = _check_url_list(lowered, value, image=lowered in _IMAGE_URL_ATTRS)
+            else:
+                value = _neutralise_passthrough_url(key, value, image=lowered in _IMAGE_URL_ATTRS)
         parts.append(name if value is True else f'{name}="{escape(value)}"')
     return mark_safe(" ".join(parts))
 

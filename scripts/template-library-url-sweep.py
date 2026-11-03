@@ -53,7 +53,8 @@ TEST_CORPUS = (
     # embedded tab, one with a leading control character and a custom application scheme.
     # Every sink takes the same decision for every scheme, so the other spellings and
     # schemes are driven per sink by ``test_theming_url_allowlist_3677.py`` instead.
-    "blob", "blob-lead-control", "blob-embedded-tab", "custom",
+    "blob", "blob-lead-control", "blob-lead-nul", "blob-embedded-tab", "file-lead-control",
+    "intent-lead-control", "custom",
     "https", "relative", "mailto", "data-png",
 )  # fmt: skip
 

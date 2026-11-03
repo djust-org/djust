@@ -82,15 +82,13 @@ KNOWN_AUTHOR_NAMED = {
     ("djust.components.components.card.Card", "data"),
 }
 
-#: A class whose RUST implementation (``crates/djust_components/src/simple/avatar.rs``,
-#: ``image_src_attr``) mirrors ``url_attr`` but reads a value with a leading C0 control
-#: character (``\x01blob:...``) as having no scheme, where ``url_attr`` (Python's
-#: ``urlsplit`` strips it) refuses it. Found when the sweep started reading every
-#: non-navigation scheme (#3677). It is an ``<img src>`` and ``blob:`` is not a script
-#: scheme, so it is recorded here and not widened into the theming change. Delete the entry
-#: when the Rust mirror is fixed: ``test_the_known_rust_mirror_gap_still_occurs`` fails once
-#: it stops occurring.
-KNOWN_RUST_MIRROR_GAPS = {("djust.components.ui.avatar_simple.Avatar", "src", "blob-lead-control")}
+#: Gaps in a RUST mirror of ``url_attr``: ``(class, parameter, payload label)`` for a payload one
+#: Rust component still lets through where the Python rule refuses it. Empty since #3748: the
+#: avatar's ``url_scheme`` read a value with a leading C0 control character (``\x01blob:...``) as
+#: having no scheme, where Python's ``urlsplit`` (and a browser) strip it first, and now strips
+#: it too. The mechanism stays, with ``test_the_known_rust_mirror_gap_still_occurs``: an entry
+#: added here is a recorded decision, and the test fails once it stops occurring.
+KNOWN_RUST_MIRROR_GAPS: set[tuple[str, str, str]] = set()
 
 #: Renderable classes the sweep cannot drive generically, and why (the sweep DERIVES the
 #: set from the class; the pin makes a NEW undriven class a visible decision).
@@ -282,8 +280,11 @@ class TestScanner:
             "livescript",
             "blob",
             "blob-lead-control",
+            "blob-lead-nul",
             "blob-embedded-tab",
             "file",
+            "file-lead-control",
+            "intent-lead-control",
             "custom",
             "sms",
         ):
@@ -374,8 +375,33 @@ def runs(tmp_path_factory: pytest.TempPathFactory) -> dict[str, dict]:
                 proc.kill()
 
 
+def _hardening():
+    """``test_theming_url_hardening_3749.py`` (loaded by path: ``python/tests`` is not a package)."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "theming_url_hardening_3749", ROOT / "python/tests/test_theming_url_hardening_3749.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _decided_unjudged(hole) -> bool:
+    """A hole on a pass-through name that theming DECIDED not to judge (#3765).
+
+    ``(engine, tag, param, element, "attr:class")`` where ``tag`` is one of the tags that print
+    ``**attrs`` and ``param`` a name in ``UNJUDGED_PASSTHROUGH`` (a citation URL no browser
+    follows, an icon name, an author-defined ``data-*``). Anything else is a hole."""
+    module = _hardening()
+    tag = hole[1].split(":", 1)[1] if ":" in hole[1] else hole[1]
+    return tag in module.PASSTHROUGH_TAGS and hole[2] in module.UNJUDGED_PASSTHROUGH
+
+
 def _holes(run: dict) -> list[str]:
-    return ["%s %s.%s <%s %s>" % tuple(h[:5]) for h in run.get("holes", [])]
+    return [
+        "%s %s.%s <%s %s>" % tuple(h[:5]) for h in run.get("holes", []) if not _decided_unjudged(h)
+    ]
 
 
 class TestTheSweep:
@@ -387,6 +413,21 @@ class TestTheSweep:
     def test_no_tag_emits_a_script_url_in_either_engine(self, runs):
         """The #3665 contract, over every parameter of every tag, not the URL-named ones."""
         assert _holes(runs["tags"]) == [], runs["tags"]["stdout"][-3000:]
+
+    def test_the_decided_unjudged_pass_through_names_still_occur(self, runs):
+        """A pin that cannot rot: each decision in ``UNJUDGED_PASSTHROUGH`` is a name the sweep
+        still sees printed with a payload on one of the pass-through tags (else delete it), and
+        no other name is excused."""
+        module = _hardening()
+        seen = {
+            h[2]
+            for h in runs["tags"].get("holes", [])
+            if h[1].split(":", 1)[1] in module.PASSTHROUGH_TAGS
+            and h[2] in module.UNJUDGED_PASSTHROUGH
+        }
+        assert seen == set(module.UNJUDGED_PASSTHROUGH), sorted(
+            set(module.UNJUDGED_PASSTHROUGH) ^ seen
+        )
 
     def test_no_class_component_emits_a_script_url(self, runs):
         remaining = [
@@ -477,6 +518,14 @@ class TestTheSweep:
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         driven = set(module.SINKS) | {("theme_components:theme_button", "href")}
+        # #3749: the attributes a ``**attrs`` tag prints under any name it is given; the sweep
+        # drives each URL attribute the scanner reads through every such tag
+        hardening_module = _hardening()
+        driven |= {
+            ("theme_components:%s" % tag, attr)
+            for tag in hardening_module.PASSTHROUGH_TAGS
+            for attr in hardening_module.DRIVEN_ATTRS
+        }
         reached = {
             tuple(r)
             for r in runs["tags"]["reached"]
@@ -497,6 +546,13 @@ class TestTheSweep:
             ("theme_pages:theme_login_page", "forgot_password_url"),
             ("theme_pages:theme_register_page", "terms_url"),
             ("theme_pages:theme_500_page", "retry_url"),
+            # the pass-through attributes (#3749), under the name a caller writes
+            ("theme_components:theme_input", "ping"),
+            ("theme_components:theme_input", "srcset"),
+            ("theme_components:theme_button", "poster"),
+            ("theme_components:theme_button", "dj_navigate"),
+            ("theme_components:theme_select", "data_url"),
+            ("theme_components:theme_progress", "cite"),
         ):
             assert (tag, param) in reached, (tag, param)
 
