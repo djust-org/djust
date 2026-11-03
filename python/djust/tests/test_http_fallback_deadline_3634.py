@@ -29,6 +29,7 @@ import json
 import logging
 import sys
 import threading
+import time
 import warnings
 from contextvars import ContextVar
 from unittest import mock
@@ -865,7 +866,8 @@ class TestConcurrentPostsCannotOvershootTheCap:
     CAP = 4
     POSTS = 12
 
-    def _concurrent_posts(self, event="kick_sync"):
+    def _concurrent_posts(self, event="kick_sync", on_started=None):
+        """Fire ``POSTS`` real POSTs at once; ``on_started`` runs once they are all running."""
         barrier = threading.Barrier(self.POSTS)
         prepared = []
         for _ in range(self.POSTS):
@@ -888,12 +890,54 @@ class TestConcurrentPostsCannotOvershootTheCap:
         threads = [threading.Thread(target=fire, args=pair) for pair in prepared]
         for thread in threads:
             thread.start()
+        if on_started is not None:
+            on_started()
         for thread in threads:
             thread.join(30)
         return statuses
 
-    def test_no_more_than_the_cap_start_and_the_rest_are_refused(self, monkeypatch):
+    def _burst_held_open(self, monkeypatch, reserve=None):
+        """A burst in which no slot can be released before every POST has asked for one.
+
+        The budget is long, so no worker is abandoned and no POST gives up its
+        reservation; the admitted callbacks block on ``RELEASE``, which the test
+        sets only after the last POST has had its answer from the reservation.
+        Every slot a POST holds is therefore still held when the next POST asks,
+        and how many are admitted is decided by the cap alone, never by scheduling
+        or by a worker finishing early. (The earlier version of this test used a
+        0.05 s budget: a worker abandoned before its callback began ended at once
+        and gave its slot back, so under load a fifth POST was legitimately
+        admitted: #3762.) Returns ``(outcomes, held_when_all_asked, statuses)``.
+        """
         monkeypatch.setattr(request_mixin, "_HTTP_BACKGROUND_MAX_ABANDONED", self.CAP)
+        real_reserve = reserve or request_mixin._reserve_worker_slot
+        outcomes: list = []
+        asked_all = threading.Event()
+        lock = threading.Lock()
+
+        def recording_reserve():
+            held = real_reserve()
+            with lock:
+                outcomes.append("admitted" if held is None else "refused")
+                if len(outcomes) == self.POSTS:
+                    asked_all.set()
+            return held
+
+        monkeypatch.setattr(request_mixin, "_reserve_worker_slot", recording_reserve)
+        held_when_all_asked = []
+
+        def release_once_everyone_has_asked():
+            assert asked_all.wait(20), "a POST never reached the reservation: %r" % outcomes
+            held_when_all_asked.append(request_mixin._WORKERS_RESERVED)
+            RELEASE.set()
+
+        cfg = {"view_state_in_session": False, KEY: 60}
+        with override_settings(LIVEVIEW_CONFIG=cfg):
+            statuses = self._concurrent_posts(on_started=release_once_everyone_has_asked)
+        _join_workers()
+        return outcomes, held_when_all_asked, statuses
+
+    def test_no_more_than_the_cap_start_and_the_rest_are_refused(self, monkeypatch):
         started = []
         original = Watching._hang_sync
 
@@ -902,22 +946,45 @@ class TestConcurrentPostsCannotOvershootTheCap:
             return original(view)
 
         monkeypatch.setattr(Watching, "_hang_sync", counting)
-        with SHORT:
-            statuses = self._concurrent_posts()
-            assert statuses == [200] * self.POSTS
-            results = [e for e in LOG if e[0] == "result"]
-            refused = [e for e in results if "not started" in e[4]]
-            # A slot is reserved on the request thread, under a lock, before any worker
-            # runs: how many POSTs were refused does not depend on scheduling, and it
-            # is the cap's invariant. (`started` is NOT: the budget here is 0.05 s and
-            # a worker abandoned before its coroutine began cancels its task without
-            # running the callback, so under load fewer than CAP callbacks may start.)
-            assert len(results) == self.POSTS
-            assert len(refused) == self.POSTS - self.CAP, results
-            assert len(_workers()) <= self.CAP
-        assert all(e[3] == "TimeoutError" for e in results)
-        _join_workers()  # every admitted worker has now begun or been cancelled
-        assert len(started) <= self.CAP, "a worker was started past the cap"
+        outcomes, held, statuses = self._burst_held_open(monkeypatch)
+        assert statuses == [200] * self.POSTS
+        # A slot is reserved on the request thread, under a lock, before any worker
+        # runs, and every slot is still held while the last POST asks: the split is
+        # the cap's invariant and nothing else can move it.
+        assert outcomes.count("admitted") == self.CAP, outcomes
+        assert outcomes.count("refused") == self.POSTS - self.CAP, outcomes
+        assert held == [self.CAP], "slots held when the last POST asked: %r" % held
+        results = [e for e in LOG if e[0] == "result"]
+        assert len(results) == self.POSTS
+        refused = [e for e in results if "not started" in e[4]]
+        assert len(refused) == self.POSTS - self.CAP, results
+        assert all(e[3] == "TimeoutError" for e in refused)
+        assert len(started) == self.CAP, (
+            "a worker was started past the cap, or an admitted one never ran"
+        )
+
+    def test_the_burst_can_see_an_overshoot_when_the_reservation_is_not_atomic(self, monkeypatch):
+        """Gate-off sibling: the same burst against a check-then-reserve that is not one step.
+
+        The window between looking at the count and taking the slot is what the
+        lock in ``_reserve_worker_slot`` closes. With the window open every POST
+        passes the check, so the burst above would read ``POSTS`` admitted, not
+        ``CAP``: the assertion distinguishes the two.
+        """
+
+        def racy_reserve():
+            with request_mixin._ABANDONED_LOCK:
+                held = len(request_mixin._ABANDONED_WORKERS) + request_mixin._WORKERS_RESERVED
+            if held >= self.CAP:
+                return held
+            time.sleep(0.05)  # the window an unguarded check-then-reserve leaves open
+            with request_mixin._ABANDONED_LOCK:
+                request_mixin._WORKERS_RESERVED += 1
+            return None
+
+        outcomes, held, statuses = self._burst_held_open(monkeypatch, reserve=racy_reserve)
+        assert statuses == [200] * self.POSTS
+        assert outcomes.count("admitted") > self.CAP, outcomes
 
     def test_slots_of_tasks_that_finish_are_released_under_concurrency(self, monkeypatch):
         monkeypatch.setattr(request_mixin, "_HTTP_BACKGROUND_MAX_ABANDONED", self.CAP)
