@@ -82,15 +82,13 @@ KNOWN_AUTHOR_NAMED = {
     ("djust.components.components.card.Card", "data"),
 }
 
-#: A class whose RUST implementation (``crates/djust_components/src/simple/avatar.rs``,
-#: ``image_src_attr``) mirrors ``url_attr`` but reads a value with a leading C0 control
-#: character (``\x01blob:...``) as having no scheme, where ``url_attr`` (Python's
-#: ``urlsplit`` strips it) refuses it. Found when the sweep started reading every
-#: non-navigation scheme (#3677). It is an ``<img src>`` and ``blob:`` is not a script
-#: scheme, so it is recorded here and not widened into the theming change. Delete the entry
-#: when the Rust mirror is fixed: ``test_the_known_rust_mirror_gap_still_occurs`` fails once
-#: it stops occurring.
-KNOWN_RUST_MIRROR_GAPS = {("djust.components.ui.avatar_simple.Avatar", "src", "blob-lead-control")}
+#: Gaps in a RUST mirror of ``url_attr``: ``(class, parameter, payload label)`` for a payload one
+#: Rust component still lets through where the Python rule refuses it. Empty since #3748: the
+#: avatar's ``url_scheme`` read a value with a leading C0 control character (``\x01blob:...``) as
+#: having no scheme, where Python's ``urlsplit`` (and a browser) strip it first, and now strips
+#: it too. The mechanism stays, with ``test_the_known_rust_mirror_gap_still_occurs``: an entry
+#: added here is a recorded decision, and the test fails once it stops occurring.
+KNOWN_RUST_MIRROR_GAPS: set[tuple[str, str, str]] = set()
 
 #: Renderable classes the sweep cannot drive generically, and why (the sweep DERIVES the
 #: set from the class; the pin makes a NEW undriven class a visible decision).
@@ -282,8 +280,11 @@ class TestScanner:
             "livescript",
             "blob",
             "blob-lead-control",
+            "blob-lead-nul",
             "blob-embedded-tab",
             "file",
+            "file-lead-control",
+            "intent-lead-control",
             "custom",
             "sms",
         ):
@@ -477,6 +478,18 @@ class TestTheSweep:
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         driven = set(module.SINKS) | {("theme_components:theme_button", "href")}
+        # #3749: the attributes a ``**attrs`` tag prints under any name it is given; the sweep
+        # drives each URL attribute the scanner reads through every such tag
+        hardening = importlib.util.spec_from_file_location(
+            "theming_url_hardening_3749", ROOT / "python/tests/test_theming_url_hardening_3749.py"
+        )
+        hardening_module = importlib.util.module_from_spec(hardening)
+        hardening.loader.exec_module(hardening_module)
+        driven |= {
+            ("theme_components:%s" % tag, attr)
+            for tag in hardening_module.PASSTHROUGH_TAGS
+            for attr in hardening_module.PASSTHROUGH_ATTRS + ["href", "src", "action", "formaction"]
+        }
         reached = {
             tuple(r)
             for r in runs["tags"]["reached"]
@@ -497,6 +510,13 @@ class TestTheSweep:
             ("theme_pages:theme_login_page", "forgot_password_url"),
             ("theme_pages:theme_register_page", "terms_url"),
             ("theme_pages:theme_500_page", "retry_url"),
+            # the pass-through attributes (#3749), under the name a caller writes
+            ("theme_components:theme_input", "ping"),
+            ("theme_components:theme_input", "srcset"),
+            ("theme_components:theme_button", "poster"),
+            ("theme_components:theme_button", "dj_navigate"),
+            ("theme_components:theme_select", "data_url"),
+            ("theme_components:theme_progress", "cite"),
         ):
             assert (tag, param) in reached, (tag, param)
 

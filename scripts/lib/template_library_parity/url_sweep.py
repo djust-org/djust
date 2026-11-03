@@ -106,6 +106,11 @@ NON_NAVIGATION = (
     ("blob", "blob:https://example.com/%s" % MARK),
     ("blob-lead-space", "  blob:https://example.com/%s" % MARK),
     ("blob-lead-control", "\x01blob:https://example.com/%s" % MARK),
+    # a leading C0 control (or NUL) is stripped by ``urlsplit`` and by a browser before the
+    # scheme is read, for EVERY scheme, not only ``blob`` (#3748: the Rust avatar missed it)
+    ("blob-lead-nul", "\x00blob:https://example.com/%s" % MARK),
+    ("file-lead-control", "\x01file:///etc/%s" % MARK),
+    ("intent-lead-control", "\x1fintent://example.com/%s#Intent;scheme=https;end" % MARK),
     ("blob-embedded-tab", "bl\tob:https://example.com/%s" % MARK),
     ("blob-embedded-newline", "bl\nob:https://example.com/%s" % MARK),
     ("blob-entity-hex", "&#x62;lob:https://example.com/%s" % MARK),
@@ -159,6 +164,27 @@ KEYREF = "keyref"
 #: opt-out, the same contract as ``{{ x|safe }}``). Recorded, never a hole.
 SAFE_SHAPE = "scalar_safe"
 KEYREF_KEY = "u"
+
+
+def passthrough_params() -> tuple[str, ...]:
+    """The attribute names a tag that takes ``**attrs`` / ``**kwargs`` is driven with, in
+    addition to its named parameters (#3749).
+
+    A ``**attrs`` tag has no parameter NAMED like a URL, but it may print any name it is
+    given (``{% theme_input name="q" ping=u %}`` -> ``<input ping="...">``), so each URL
+    attribute the scanner reads is a parameter such a tag can have. Derived from
+    :data:`URL_ATTRS` (an XML name cannot be a keyword, so ``xlink:href`` is not here) plus one
+    author-defined name of each family the scanner reads (``dj-*`` and ``data-*``). A tag that
+    ignores them is driven for nothing and costs a render; one that prints them is a sink.
+    """
+    names = {a.replace("-", "_") for a in URL_ATTRS if ":" not in a}
+    return tuple(sorted(names | {"dj_navigate", "dj_src", "data_url"}))
+
+
+def takes_varkw(info: variants.TagInfo) -> bool:
+    """Whether the tag's Python signature has a ``**kwargs`` parameter."""
+    return any(s[2] == "VAR_KEYWORD" for s in info.sig)
+
 
 #: Keys a dict argument is given beyond the ones the tag's own source reads: the
 #: names URLs travel under, so a tag that reads one through a helper this
@@ -633,6 +659,15 @@ def calls_for(
     for name in names:
         for shape in (*shapes, SAFE_SHAPE):
             yield name, shape, typical_args(info, name) + ["%s=p_%s" % (name, shape)]
+    if takes_varkw(info):
+        for extra in passthrough_params():
+            if extra in names:
+                continue
+            # an attribute VALUE is a scalar (a list or a dict is not what a caller writes
+            # after ``ping=``), so only the plain and the marked-safe shapes are driven
+            for shape in ("scalar", SAFE_SHAPE):
+                if shape == SAFE_SHAPE or shape in shapes:
+                    yield extra, shape, typical_args(info, extra) + ["%s=p_%s" % (extra, shape)]
     if names:
         keyref = [
             "%s=%s" % (n, "p_keyref_list" if variants.kind_of(n) == "list" else "p_keyref_str")
@@ -681,7 +716,9 @@ def run_sweep(
                 rust_keys=base.rust_keys,
             )
         names = variants.passed_names(info)
-        sweep.driven[key] = list(names)
+        sweep.driven[key] = list(names) + (
+            [x for x in passthrough_params() if x not in names] if takes_varkw(info) else []
+        )
         if not names:
             sweep.no_params.append(key)
             continue

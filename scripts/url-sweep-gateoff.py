@@ -47,6 +47,8 @@ SWEEP = ROOT / "scripts/lib/template_library_parity/url_sweep.py"
 THEMING = ROOT / "python/djust/theming/templatetags/theme_components.py"
 PAGES = ROOT / "python/djust/theming/templatetags/theme_pages.py"
 THEMING_TEST = "python/tests/test_theming_url_allowlist_3677.py"
+HARDENING_TEST = "python/tests/test_theming_url_hardening_3749.py"
+AVATAR_RS = ROOT / "crates/djust_components/src/simple/avatar.rs"
 
 AVATAR = "python/tests/test_avatar_src_scheme_3665.py"
 SINKS = "python/tests/test_image_url_sinks_3665.py"
@@ -293,8 +295,8 @@ MUTATIONS: list[tuple[str, pathlib.Path, str, str, str, str]] = [
     (
         "theming: a marked-safe URL is printed raw (no longer made plain text)",
         THEMING,
-        '    if isinstance(value, SafeData) or hasattr(value, "__html__"):\n        return str.__str__(str(value))\n    return value',
-        "    return value",
+        '    if isinstance(value, SafeData) or hasattr(value, "__html__"):\n        return str.__str__(str(value))\n    if value is not None',
+        "    if value is not None",
         THEMING_TEST,
         "marked_safe or plain_text",
     ),
@@ -377,6 +379,111 @@ MUTATIONS: list[tuple[str, pathlib.Path, str, str, str, str]] = [
         "    if False:\n        return m.group(1)",
         SWEEPTEST,
         "Scanner",
+    ),
+    # --- #3749: a callable item url, the lazy marked-safe value, the **attrs pass-through
+    (
+        "theming items (dict): the callable url is judged as a callable, not as what it returns",
+        THEMING,
+        "        safe = transform(_resolve_callable(value))\n        if safe is value:",
+        "        safe = transform(value)\n        if safe is value:",
+        HARDENING_TEST,
+        "TestCallableUrl and dict-callable",
+    ),
+    (
+        "theming items (object): the callable url is judged as a callable, not as what it returns",
+        THEMING,
+        "        safe = transform(_resolve_callable(value))\n        return _ItemAttributeProxy",
+        "        safe = transform(value)\n        return _ItemAttributeProxy",
+        HARDENING_TEST,
+        "TestCallableUrl and object-method",
+    ),
+    (
+        "theming items: a mapping that is not a dict is iterated past instead of read",
+        THEMING,
+        "    if isinstance(items, Mapping):\n        value = items.get(name)",
+        "    if isinstance(items, dict):\n        value = items.get(name)",
+        HARDENING_TEST,
+        "TestCallableUrl and mapping-not-a-dict",
+    ),
+    (
+        "theming _resolve_callable: an alters_data callable is called (the engine never does)",
+        THEMING,
+        '    if getattr(value, "alters_data", False):\n        return value\n    try:',
+        "    try:",
+        HARDENING_TEST,
+        "alters_data",
+    ),
+    (
+        "theming _resolve_callable: a do_not_call_in_templates value is called",
+        THEMING,
+        '    if not callable(value) or getattr(value, "do_not_call_in_templates", False):',
+        "    if not callable(value):",
+        HARDENING_TEST,
+        "do_not_call",
+    ),
+    (
+        "theming _plain_url: a lazy value that prints as marked-safe text stays a proxy",
+        THEMING,
+        "    if value is not None and not isinstance(value, str):\n        text = str(value)",
+        "    if False:\n        text = str(value)",
+        HARDENING_TEST,
+        "lazy",
+    ),
+    (
+        "theming pass-through: URL attributes other than href/src/action/formaction are not judged",
+        THEMING,
+        "        elif value is not True and _is_url_attribute(lowered):",
+        "        elif False:",
+        HARDENING_TEST,
+        "TestEveryPassthroughTagAndAttribute or TestEveryPayloadThroughOneTag",
+    ),
+    (
+        "theming pass-through: a srcset / ping list is judged as ONE url",
+        THEMING,
+        '            if lowered in ("srcset", "ping"):',
+        "            if False:",
+        HARDENING_TEST,
+        "TestListValuedAttributes",
+    ),
+    (
+        "theming pass-through: a data:image URI is kept where no image loads (ping)",
+        THEMING,
+        '        if not url_allowed(url, image=image):\n            logger.warning("theming: %s= URL with a disallowed scheme rendered as \'#\'", name)\n            url = "#"\n        kept.append(url)',
+        '        if not url_allowed(url, image=True):\n            logger.warning("theming: %s= URL with a disallowed scheme rendered as \'#\'", name)\n            url = "#"\n        kept.append(url)',
+        HARDENING_TEST,
+        "data_image_is_not_kept",
+    ),
+    (
+        "theming pass-through: a custom dj-*/data-* url attribute is not recognised by name",
+        THEMING,
+        '    return bool(words & _CUSTOM_ATTR_URL_WORDS) and "event" not in words',
+        "    return False",
+        HARDENING_TEST,
+        "custom_attribute or ThePassthroughSet",
+    ),
+    (
+        "theming pass-through: the production set drops ping (the scanner's list no longer agrees)",
+        THEMING,
+        '"data", "poster", "background", "cite", "longdesc", "manifest", "ping", "codebase",',
+        '"data", "poster", "background", "cite", "longdesc", "manifest", "codebase",',
+        HARDENING_TEST,
+        "production_judges_exactly",
+    ),
+    (
+        "theming pin: another tag starts printing arbitrary **attrs (theme_badge)",
+        THEMING,
+        '        "variant": variant,\n        "attrs": remaining_attrs,\n        "css_prefix": _css_prefix(),\n        **slots,\n    }\n    return mark_safe(tmpl.render(ctx))\n\n\n_ASSERTIVE_ALERT_VARIANTS',
+        '        "variant": variant,\n        "attrs": remaining_attrs,\n        "css_prefix": _css_prefix(),\n        "x": _passthrough_attrs(attrs, skip=()),\n        **slots,\n    }\n    return mark_safe(tmpl.render(ctx))\n\n\n_ASSERTIVE_ALERT_VARIANTS',
+        HARDENING_TEST,
+        "ThePassthroughSetIsPinned",
+    ),
+    (
+        "sweep (tags): the pass-through attribute names are no longer driven, the SWEEP must go red",
+        SWEEP,
+        '    return any(s[2] == "VAR_KEYWORD" for s in info.sig)',
+        "    return False",
+        SWEEPTEST,
+        "theming_sink",
     ),
     # --- the sweep must itself notice a reverted fix, through its own path
     (
@@ -490,6 +597,7 @@ def main(argv: list[str]) -> int:
         "scripts/template-library-url-sweep.py",
         "scripts/url-sweep-gateoff.py",
         THEMING_TEST,
+        HARDENING_TEST,
     )
     real = [m[1] for m in MUTATIONS]
     before = base.tree_digest(real)
