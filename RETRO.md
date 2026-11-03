@@ -383,7 +383,7 @@ issue or be explicitly closed with a reason.
 | 341 | No gate ties a completed ROADMAP bucket to a RETRO.md entry — 14 buckets drifted; #2140 was a previous backfill of the same kind | Retro backfill v1.1.0-9..v1.2.0-5 | #2848 | Open | Suggested `scripts/check-retro-coverage.py`: parse ✅ milestone headings in ROADMAP.md, fail when RETRO.md has no entry |
 | 342 | False/stale claims in changelog fragments and PR bodies are unchecked — five instances across v1.2.0-1..3, one of which caused a regression (#2838) | Retro backfill v1.1.0-9..v1.2.0-5 | #2849 | Open | Extend the existing path/class reference checks (cf. #2652) to `changelog.d/*.md`; share `check-changelog-test-counts`' parser rather than adding a third |
 | 343 | **Rule row** — enumerate every caller of a shared cache/registry/dispatch and the invariant each needs before the first edit (v1.2.0-6 retro arc, rule 1) | Retro v1.2.0-6 | — | Closed | pattern: fix-reproduces-own-bug  fired: —  re-violated: — (rule created at v1.2.0-6; origin instances #2147, #2146, #2838 r1-r3, #2846 are recorded on the page, not counted as re-violations since the rule did not exist for them) **gate v1.3.0-11: DEMOTE** (no instance in v1.3.0-10, -11, -12); rule line removed from CLAUDE.md, page `docs/patterns/fix-reproduces-own-bug.md` is `wiki-only`. |
-| 344 | **Rule row** — verify a claim against the source before writing it, and cite path:line; delete a claim that cannot be checked (v1.2.0-6 retro arc, rule 2) | Retro v1.2.0-6 | — | Open | pattern: unverified-claim  fired: #3463, #3472, #3474, #3704, #3708  re-violated: #3473, #3692 (issue) (rule created at v1.2.0-6; the ten origin instances — #2838, #2546, #2534, #2554, #2573, #2607, #2843, #2147 — predate it) **gate v1.3.0-11/12: KEEP** (fired 2, missed 1). **gate v1.3.0-15: KEEP** (fired 2, missed 1, flat; three author-side violations, see #3713). **gate v1.3.0-16: KEEP** (fired 1, missed 1, flat). Missed: #3721 stated that four files' kept drains were absence windows; the reviewer's recount disproved it. Fired: #3722 measured the reviewer's "GET runs `get_context_data` twice" claim before it was filed as #3725. fired: #3722  re-violated: #3721 **gate v1.3.0-17: HARDEN** (fired 0, missed 3: #3731 stated the issue's 16 s figure could not be reproduced, #3732 stated a baseline count and 'every drain is counted' that were false, #3738 wrote 'This was the cause' for an unobserved failure; each caught only by the reviewer). Mechanical gate proposed in row 393, then declined: the reviewer is the gate, with Step 3b added to its brief (#3739). fired: none  re-violated: #3731, #3732, #3738 |
+| 344 | **Rule row** — verify a claim against the source before writing it, and cite path:line; delete a claim that cannot be checked (v1.2.0-6 retro arc, rule 2) | Retro v1.2.0-6 | — | Open | pattern: unverified-claim  fired: #3463, #3472, #3474, #3704, #3708  re-violated: #3473, #3692 (issue) (rule created at v1.2.0-6; the ten origin instances — #2838, #2546, #2534, #2554, #2573, #2607, #2843, #2147 — predate it) **gate v1.3.0-11/12: KEEP** (fired 2, missed 1). **gate v1.3.0-15: KEEP** (fired 2, missed 1, flat; three author-side violations, see #3713). **gate v1.3.0-16: KEEP** (fired 1, missed 1, flat). Missed: #3721 stated that four files' kept drains were absence windows; the reviewer's recount disproved it. Fired: #3722 measured the reviewer's "GET runs `get_context_data` twice" claim before it was filed as #3725. fired: #3722  re-violated: #3721 **gate v1.3.0-17: HARDEN** (fired 0, missed 3: #3731 stated the issue's 16 s figure could not be reproduced, #3732 stated a baseline count and 'every drain is counted' that were false, #3738 wrote 'This was the cause' for an unobserved failure; each caught only by the reviewer). Mechanical gate proposed in row 393, then declined: the reviewer is the gate, with Step 3b added to its brief (#3739). fired: none  re-violated: #3731, #3732, #3738 **gate v1.3.0-18: HARDEN by count** (fired 0, missed 2: #3747 and #3753 each shipped author-side statements the code did not support, five in all, each caught by the reviewer). No new row: the mechanical gate was declined at #3739 and that decision's revisit condition (a claim of this kind gets past review) did not occur this bucket; Step 3b is in the reviewer brief. fired: none  re-violated: #3747, #3753 |
 | 345 | **Rule row** — a Code Review stage is not complete until the review is POSTED to the PR, and a bucket until `RETRO.md` has its entry (v1.2.0-6 retro arc, rule 3) | Retro v1.2.0-6 | #2848 | Open | pattern: retro-dropout  fired: #3483 (check-retro-coverage caught the missing v1.3.0-4 entry)  re-violated: #3474 (rule created at v1.2.0-6; #2837/#2838 merged with no review artifact and 14 buckets drifted before it. Mechanical half now exists: `scripts/check-retro-coverage.py`) **gate v1.3.0-11/12: KEEP** (#3474's review findings were posted only inside its retro comment, not as a review; one miss). |
 | 346 | Python and Rust root locators disagree when a quoted attribute value contains `<… dj-root>` | PR #3023 | #3030 | Open | pattern: parallel-path-drift. Needs author markup or `\|safe`, so not reachable from autoescaped content |
 | 347 | dj-root vs dj-view root precedence: Python searches dj-root first, the Rust VDOM takes the first element | PR #3023 | #3031 | Open | pattern: parallel-path-drift. Predates #3023; T005 warns about the split layout |
@@ -418,11 +418,11 @@ issue or be explicitly closed with a reason.
 | 376 | A shared `scripts/gate_off.py` (assert applied, count errors, deadline as caught, restore by hash) so each PR stops rewriting its own | Retro v1.3.0-15 / PR #3702 | #3714 | Closed | All five agent PRs of the milestone wrote a throwaway harness Closed by PR #3720: `scripts/gate_off.py` with a 31-mutation self-check. |
 | 377 | Print each xdist worker's worst gen-2 GC pause and longest loop stall at session end so the next timing flake is attributable | PR #3708 | #3715 | Closed | #3708's cause is measured locally on 3.12 only; CI logs carry no GC data Closed by PR #3721: `tests/timing_report.py`. |
 | 378 | `TtydTerminalView`: `?rows=` / `?cols=` raise `ValueError` on non-integers and accept unbounded sizes | PR #3698 | #3699 | Closed | Outside the v1.3.0-15 rows; needs a call Closed by PR #3719 (`5621d74f3`): non-integers fall back to the default; sizes clamp to 500 rows / 1000 cols. |
-| 379 | `djust_audit --a11y`: a rendered-page pass (axe-core) for contrast, landmarks, heading order and names that exist only after render | PR #3702 | #3700 | Open | |
+| 379 | `djust_audit --a11y`: a rendered-page pass (axe-core) for contrast, landmarks, heading order and names that exist only after render | PR #3702 | #3700 | Open | Decision 2026-11-02: keep parked (a browser and axe-core dependency; no demand yet). Reopen the design when there is demand. |
 | 380 | Query budgets beyond the smoke test: measure mount, render and event at run time; list budgets in `djust_audit` | PR #3702 | #3701 | Closed | Closed by PR #3722 (`615905b63`); the issue was closed by hand because the PR body wrote `Closes #3701` inside backticks. |
 | 381 | Finish the doc-snippet network guard and the per-match line-count idiom elsewhere; `_strip_verbatim_blocks` divergences and its quadratic unterminated opener | PR #3704 | #3705 | Closed | Closed by PR #3719 for the scope the v1.3.0-16 row gave it (the network guard and the line counter). |
 | 382 | `http_status_of_state` config-level map, `params_form` misconfiguration checks, test client | PR #3703 | #3706 | Open | Partly done in PR #3722: V023 `params_form` checks and a test client that drives `handle_params`. The `http_status_of_state` config-level map is not part of it; issue #3706 stays open. |
-| 383 | Component-tag parity between the Django and Rust renderings: 117 of 208 tags differ; six issues need one canonical implementation chosen before code | Retro v1.3.0-15 | #3663 | Open | pattern: parallel-path-drift. Also #3666, #3667, #3669, #3676 (P1, parameter injection), #3677. Waiting on a decision, not started |
+| 383 | Component-tag parity between the Django and Rust renderings: 117 of 208 tags differ; six issues need one canonical implementation chosen before code | Retro v1.3.0-15 | #3663 | Open | pattern: parallel-path-drift. Decision 2026-11-02: drain four of the six (#3676, #3677, #3666, #3667: merged in v1.3.0-18); **#3663 and #3669 deferred**: each touches 100+ tags or needs a call on which engine's markup wins. Not started |
 | 384 | `_blank_template_comments` is quadratic in the number of `{% comment %}` openers (found by the growth check that replaced an absolute bound) | PR #3721 | #3723 | Closed | Closed by PR #3731 (`967ff6c02`): one forward scan; the growth test is a plain test now. |
 | 385 | `extract_template_variables` grows roughly n^2.9 with the number of blocks | PR #3721 | #3724 | Closed | Closed by PR #3731: the time was in the parser's `is_inside_html_tag_at`, not the variable walk; a per-parse table built in one forward pass. Reviewer measured 16.6 s to 0.012 s at 1,600 blocks. |
 | 386 | An overriding `get_context_data()` runs twice per HTTP GET and the second pass gets no `preloaded_context` | PR #3722 review | #3725 | Closed | Closed by PR #3730 (`8e9f41289`): 8 GET shapes went from 2 calls to 1. Same-class paths left open: rows 390 and 391. |
@@ -433,6 +433,12 @@ issue or be explicitly closed with a reason.
 | 391 | Legacy exposure: the HTTP POST fallback runs `get_context_data()` 2 times | PR #3730 | #3734 | Open | The GET is once and the POST twice, so a query budget differs per transport until this lands |
 | 392 | Residual blind spots in the communicator-timeout ratchet matcher (`wait_for(comm.wait(), 1)`, `asyncio.wait`, bare `timeout(2)`, shadowed constants, `shield`) and a stale pattern-page sentence | PR #3732 re-review | #3737 | Open | Part of row 374's remainder |
 | 393 | `unverified-claim` gate came out HARDEN: propose a mechanical check for measured and causal claims in PR bodies and changelog fragments | Retro v1.3.0-17 | #3739 | Closed | pattern: unverified-claim. Decided by the maintainer: no mechanical gate. The reviewer caught 3 of 3 and the review stage is mandatory, so the reviewer is the gate. Added Step 3b to the Code Review brief in `.pipeline-templates/feature-state.json` and `bugfix-state.json` (check every measured, 'every/never/only' and 'the cause' claim against its source). Revisit with a Claims-table lint (`check_pr_body.py`) if a claim of this kind gets past review |
+| 394 | A make target runs the cross-file gates on a scratch merge: main went red on `a54278ebd` after a hand-picked list missed `tests/test_git_env_guard_3179.py` | Retro v1.3.0-18 | #3757 | Open | pattern: parallel-path-drift. Derive the set from the whole-tree meta tests, not from memory; CLAUDE.md `merge` line then says `make merge-gates` |
+| 395 | Rust `Avatar` `url_scheme()` does not strip leading C0 controls (`\x01blob:` reaches `<img src>`), and `markdown.rs` `neutralise_url` is a three-scheme denylist | PR #3747 | #3748 | Open | pattern: parallel-path-drift (a Rust mirror of `safe_url`). Reachable only through `components/ui/avatar_simple.py` and markdown links, not theming |
+| 396 | `djust_theming`: a callable `url` skips neutralisation, `**attrs` leaves `ping`/`data`/`poster`/`srcset`/`dj-navigate` unchecked, a lazy proxy to a `SafeString` prints raw | PR #3747 | #3749 | Open | Same behaviour on main, so none is a regression |
+| 397 | Flake: `test_debug_panel.py::TestDebugInfoInjection::test_debug_info_injected_when_debug_true` failed once in shard 4/4 and passed on re-run | PR #3747 | #3751 | Open | Cause unknown; not reproduced by a serial replay of the worker's order. Make the assertion name the URL it saw if it recurs |
+| 398 | A `Form` or `BoundField` bound by `{% for %}` / `{% with %}` inside a template still reaches a tag as its `str` | PR #3753 | #3755 | Open | The rest of #3666, which `#3753` closed for its own repro |
+| 399 | `json_viewer` renders a `datetime`/`date` quoted in Rust and plain in Django (a `Decimal` gets a different class): a type dispatch the attribute-read detection cannot see | PR #3753 | #3756 | Open | |
 
 ## Retro backfill — 14 un-retro'd drain buckets (v1.1.0-9 … v1.2.0-5)
 
@@ -1529,6 +1535,92 @@ Counts are what each review comment lists, not a re-read of each finding; the re
 - [ ] `http_status_of_state` config map — Action Tracker #382 (GitHub #3706)
 - [ ] axe-core dependency decision — Action Tracker #379 (GitHub #3700)
 - [ ] Component-tag parity decision — Action Tracker #383 (GitHub #3663)
+
+## v1.3.0-18 — component-tag parity, security first: raw-tag parameter injection, theming URL schemes, object arguments, lenient input (PRs #3746, #3747, #3752–#3754, #3758)
+
+**Date**: 2026-11-02
+**Scope**: Four of the six component-tag parity issues (#3663 and #3669 deferred by decision), plus a security-advisory bump and a red-main fix that surfaced on the way. Each code PR was reviewed in fresh context and re-reviewed; merged one at a time, with main's `Tests` checked between merges.
+- **A, raw-tag parse (#3746, #3676):** a bare operand on a native raw `@register.tag` handler is refused at compile time with Django's message, through Django's own compile function (the existing `validate_at_parse` hook), so a variable's value is never read as `key=value` pairs. Measured: 134 native raw handlers, 125 refused by Django, 117 injectable before; nine tags accept a bare token because their compile function never reads arguments.
+- **B, theming URLs (#3747, #3677):** `djust_theming` sanitises URLs with the `djust_components` allowlist and the denylist is deleted; a `mark_safe` URL is escaped like any other; schemes main accepted that the allowlist rejects (`sms:`, `webcal:`, `myapp://`) render `#` instead of raising.
+- **C, handler fidelity (#3753, #3666 and #3667):** nine object-taking tags use the Python tag's own node (found by rendering every parameter of all 208 native tags); missing required parameters and invalid values raise what the Python tag raises; the `notification_popover` method repr is gone. 34 one-engine-error rows on main became 16, all unknown-keyword.
+- **D, on the way:** `pulldown-cmark` 0.13.6 for RUSTSEC-2026-0433, which had `security-scan` red on main since 2026-10-28 (#3752); the URL sweep test's subprocess got an isolated git environment after #3747 turned main red (#3754); a leaked `staff` group from a test that creates rows through `sync_to_async` turned main red again after #3753 and is fixed in #3758.
+- **Not started, by decision:** #3663 and #3669; #3700 stays parked.
+
+**Tests at close**: main's `Tests` run on each merge commit: `781ae90f7` (#3746) red only in `security-scan` (RUSTSEC-2026-0433); `a54278ebd` (#3747) **red** (git-env guard, shard 1/4 on all four Python versions; fixed by #3754); `30ea6cd57` (#3754) red only in `security-scan`; `9413124c2` (#3752) green, the first run with `security-scan` green since 2026-10-28; `384fabfc4` (#3753) **red** in two jobs (a real group leak, fixed by #3758, and a `/app/static/` failure that passed on re-run, #3751); `68634be26` (#3758) green. Two red runs of main after merge in this bucket, against none in v1.3.0-17 and two in v1.3.0-16.
+
+### What We Learned
+
+**1. Main went red after #3747 although the cross-file gates were run on a scratch merge, because the list of gates is hand-picked (#3747, #3754).**
+`tests/test_git_env_guard_3179.py` failed in shard 1/4 on all four Python versions after the merge, because the sweep test spawned a script that runs git without an isolated environment. I ran the shard test, the communicator ratchet, the settings scan and the PR's tests, not that guard. I have not established why the PR's own CI passed it. One of the two earlier red runs (v1.3.0-16) was the same class: a whole-tree test that passes alone and fails against another PR's files.
+
+**Action taken**: Open: tracked in Action Tracker #394 (GitHub #3757).
+
+**1b. Main went red a second time, after #3753, from a test that had been leaking a row since #3703 (#3758).**
+`test_params_form_3689.py::test_a_model_choice_field_queries_on_the_socket_mount` creates `Group(name="staff")` through `sync_to_async`, which runs on another thread's connection outside the test's transaction, so the row stays for every later test in the worker; `test_admin_list_lookups.py` counts groups and failed five tests in `python-tests (py3.12, shard 2/4)` when the shard dealing put it after the polluter. Replaying that CI worker's exact test order serially reproduced it; a binary search over the 3,256 earlier ids named the test. The same run also had `python-tests (py3.13, shard 1/4)` fail (`djust_asset` render got `/app/static/`), which a serial replay did not reproduce; both jobs passed on re-run.
+
+**Action taken**: Closed: `python/djust/tests/test_params_form_3689.py` (#3758, `68634be26`) deletes the group in a `finally` and a guard test follows the class. The static-prefix flake is tracked in Action Tracker #397 (GitHub #3751) with a second sighting.
+
+**2. The `unverified-claim` count is HARDEN again (fired 0, missed 2), and the reviewer caught all five statements (#3747, #3753).**
+#3747 shipped a changelog fragment that became false and a doc line saying two libraries 'cannot disagree' (a `mark_safe` URL still printed raw); #3753 shipped 'unknown keywords stay lenient' (false for six of nine tags), 'eight of nine within 12%' (not reproducible: +14 to 16%) and a test described as checking the docs name 'exactly' the refusing tags (it checked one direction). The maintainer declined a mechanical gate last bucket (#3739) with a revisit condition: a claim of this kind gets past review. None did. The reviewer briefs I wrote for this bucket named the check by hand; whether the `.pipeline-templates` Step 3b line does the same job has not been tested.
+
+**Action taken**: Closed: counts recorded on Action Tracker #344 (gate v1.3.0-18), the decision of #3739 stands, `docs/patterns/unverified-claim.md` has the two instance rows.
+
+**3. A regenerated ratchet baseline must be diffed per row by the reviewer, and the reviewer did (#3753).**
+The author regenerated the parity baseline after the ratchet flagged rows WORSE. The first reviewer classified every moved row (16 of 208 changed; replaying the old CSV flags 9 as WORSE: six lose one or two variants that Rust rendered while Python raised, so they now raise in both engines, `slider` loses eight for the same reason, and two drop a count only because the keys came from the deleted handler classes) and found no real regression. Nothing in the reviewer brief asked for that.
+
+**Action taken**: Added Step 3c to the Code Review brief in `.pipeline-templates/feature-state.json` and `bugfix-state.json`: if a baseline, snapshot or ratchet file changed, diff it per row and classify every row that moved.
+
+**4. Following a security change to its Rust mirror found a gap the Python fix cannot reach (#3747).**
+The theming fix is on the Python allowlist; the review found the Rust `Avatar` does not strip a leading control character (so `\x01blob:` reaches `<img src>`) and `markdown.rs` is a three-scheme denylist. Neither is reachable from theming. This is the `parallel-path-drift` class again, on a mirrored function rather than a parallel call.
+
+**Action taken**: Open: tracked in Action Tracker #395 (GitHub #3748).
+
+**5. In #3747 and #3753 the claims in docs and changelog fragments were as wrong as the code (#3747, #3753).**
+The eight 🟡 in those two PRs mixed code (a 500 on data, a `mark_safe` bypass, the template-loader requirement), coverage gaps and statements the code did not support (the 3665 fragment, 'cannot disagree', 'unknown keywords stay lenient', the half-closed #3666). Changelog fragments and `docs/TEMPLATE_BACKEND.md` are where unverified measurements land; I did not count how many findings fell on each side.
+
+**Action taken**: Closed: the instance rows for #3747 and #3753 are in `docs/patterns/unverified-claim.md`, and the count is recorded on rule row #344.
+
+### Insights
+
+- A CI-only ordering failure is cheapest to find by replaying the failing xdist worker's exact test order serially (taken from the job log) and then bisecting the prefix: 12 runs named the polluter in #3758. It did not work for the static-prefix failure, which ran on python 3.13 and did not reproduce on 3.12. Both red jobs on `384fabfc4` passed on re-run of the same commit, so a re-run alone would have hidden the group leak, which was real.
+- A new test in a file whose changelog fragment pins the file's test count fails the fragment check: I hit it in #3758 (`3689.added.md` said 52, the file had 53).
+- Test ids with no `.test_durations` entry are a shared budget: #3746 added 2,970 and took the unrecorded fraction from 0.46% to 5.71% of the 10% limit; the review caught it and it became 444 ids. The brief for #3753 said to keep ids modest and it added 19.
+- A lockfile bump needs the SBOM regenerated in the same commit: #3752's first push failed the `vendor` check (`python/djust/djust.cdx.json` listed 0.13.5). CI caught it; `make version` already does it, `cargo update` does not.
+- `maturin build` in a worktree picked rustc 1.94 against a lockfile that needs 1.95; the implementer built with `cargo rustc`.
+- The fix agents resumed with the review's findings each time rather than being replaced.
+- Two of my own statements needed correcting: an invented explanation in the #3754 body (replaced with 'not established'), and a `12%` figure that survived my first correction in the changelog fragment and the PR body.
+- Left on purpose: the `conversation_thread` `_item_attr` gate-off survivor (equivalent, no test exercises it).
+
+### Review Stats
+
+| Metric | #3746 | #3747 | #3753 | #3752 | #3754 | Total |
+|--------|-------|-------|-------|-------|-------|-------|
+| Review rounds (review + re-reviews) | 2 | 2 | 2 | CI only | CI only | 6 |
+| 🔴 / 🟡 listed in the first review | 0 / 2 | 0 / 4 | 0 / 4 | n/a | n/a | 0 / 10 |
+| CI failures on the PR | 0 (one CodeQL finding) | 1 (shard 4/4, passed on re-run, #3751) | 0 | 1 (`vendor`: SBOM) | 0 | 2 |
+| Red runs of main after merge | 0 | 1 (git-env guard, #3754) | 1 (group leak, #3758; plus a flake that passed on re-run) | 0 | 0 | 2 |
+| Findings by pattern class | `new`: shard duration budget ×1, `parallel-path-drift` ×1 (the pin's entry point) | `unverified-claim` ×2, `parallel-path-drift` ×1 (Rust mirror) | `unverified-claim` ×3 | | | |
+
+`new`: the unrecorded-duration budget (#3746) is a single instance and sits in Insights; it gets a pattern page if it recurs.
+
+### Process Improvements Applied
+
+**CLAUDE.md**: none this PR (the one-PR-at-a-time merge rule landed in #3744).
+**Pipeline template**: `.pipeline-templates/feature-state.json` and `bugfix-state.json`: Step 3c (diff a changed ratchet or baseline per row).
+**Checklist**: none.
+**Skills**: none.
+**Pattern pages**: `unverified-claim.md` and `parallel-path-drift.md` gained instance rows.
+
+### Open Items
+
+- [ ] Make target for the cross-file gates on a scratch merge — Action Tracker #394 (GitHub #3757)
+- [ ] Rust mirrors of the URL allowlist (`Avatar`, `markdown.rs`) — Action Tracker #395 (GitHub #3748)
+- [ ] Theming callable `url`, `**attrs`, lazy proxy — Action Tracker #396 (GitHub #3749)
+- [ ] `test_debug_panel` flake — Action Tracker #397 (GitHub #3751)
+- [ ] `{% for %}` / `{% with %}`-bound objects — Action Tracker #398 (GitHub #3755)
+- [ ] `json_viewer` type dispatch — Action Tracker #399 (GitHub #3756)
+- [ ] Component-tag parity, the deferred #3663 and #3669 — Action Tracker #383
+
 
 ## v1.3.0-9 — test git-env isolation (#3179)
 

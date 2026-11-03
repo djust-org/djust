@@ -23,6 +23,7 @@ structural gate for one specific twin · **candidate for mechanical gate**: yes
 | #2129, #2135, #1468, #1200 | the "tautology" family: tests that pass while the bug executes | gate-off discipline (revert the fix; confirm red) | yes, fired |
 | #3694 | the offloaded push turn built its frame outside the slot stand-in's `send_json`, so a push to a side-mounted view lost `target_id` | stamp `target_id` where the frame text is built | yes, missed |
 | #3703 | `handle_params` had three call sites (HTTP, WS/SSE mount, `url_change`) | one helper, pinned by an AST scan of every framework module | yes, fired |
+| #3747 | the URL allowlist fix covered the Python `safe_url`; the Rust `Avatar` `url_scheme()` does not strip a leading C0 control, and `markdown.rs` `neutralise_url` is a three-scheme denylist (#3748) | tracked; not reachable from theming | yes, missed |
 
 ## Detection
 
