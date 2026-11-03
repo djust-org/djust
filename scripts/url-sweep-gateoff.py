@@ -499,7 +499,7 @@ MUTATIONS: list[tuple[str, pathlib.Path, str, str, str, str]] = [
         "review 4: an HTML URL-named attribute decided not to be judged (icon) is judged again",
         THEMING,
         "    return name in _URL_ATTRS or name in _QUIET_URL_ATTRS",
-        "    return name in _URL_ATTRS or name in _QUIET_URL_ATTRS or name in _UNJUDGED_URL_LIKE_ATTRS",
+        '    return name in _URL_ATTRS or name in _QUIET_URL_ATTRS or name in ("cite", "icon", "longdesc", "archive")',
         HARDENING_TEST,
         "TestAnUnjudgedNameIsPrintedAsWritten or every_other_name",
     ),

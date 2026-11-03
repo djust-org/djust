@@ -351,18 +351,14 @@ _URL_ATTRS = frozenset({"href", "src", "action", "formaction"})
 _QUIET_URL_ATTRS = frozenset(
     {"ping", "srcset", "poster", "data", "background", "dj-navigate", "dj-patch", "dj-patch-reload"}
 )
-# Attributes whose NAME is a URL attribute in HTML but that no browser follows on the elements
-# these tags print, or that are obsolete / metadata (a citation, an icon NAME, a microdata
-# identifier): printed as written. Decided, not forgotten: ``python/tests/test_theming_url_review_3765.py``
-# pins that every name the sweep scanner reads as a URL is in exactly one of these sets.
-# Every other ``data-*`` / ``dj-*`` name (``data-url``, ``dj-action``, ``data-imageurl`` ...) is the
-# page author's own attribute, read by the author's own script, and is printed as written too.
-_UNJUDGED_URL_LIKE_ATTRS = frozenset(
-    {
-        "cite", "longdesc", "manifest", "codebase", "usemap", "icon", "profile", "archive",
-        "classid", "itemid", "itemtype",
-    }
-)  # fmt: skip
+# Attributes whose NAME is a URL attribute in HTML but that are deliberately NOT judged: no
+# browser follows them on the elements these tags print, or they are obsolete or metadata (a
+# citation, an icon NAME, a microdata identifier), so they are printed as written. The decision
+# is recorded, name by name, with its reason, in ``UNJUDGED_PASSTHROUGH`` in
+# ``python/tests/test_theming_url_hardening_3749.py``, which pins that every name the sweep
+# scanner reads as a URL is either judged here or decided there. Every ``data-*`` / ``dj-*`` name
+# other than the framework's own directives (``data-url``, ``dj-action``, ``data-imageurl`` ...)
+# is the page author's own attribute, read by the author's own script, and is printed as written.
 # The ones that only ever LOAD AN IMAGE, where an inline ``data:image/...`` URI is fine.
 _IMAGE_URL_ATTRS = frozenset({"poster", "srcset"})
 

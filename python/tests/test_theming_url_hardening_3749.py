@@ -355,6 +355,10 @@ UNJUDGED_PASSTHROUGH = {
     "data_url": "author-defined `data-*`: the page author's own script reads it",
 }
 
+#: The HTML URL-named attributes among them (all but the author-defined ``data_url`` sample), in
+#: the form the scanner lists them: the decision record that production's comment points to.
+DECIDED_NOT_A_URL = {a for a in UNJUDGED_PASSTHROUGH if a != "data_url"}
+
 #: Every name the sweep drives through the pass-through tags (judged or not), plus the four that
 #: have always been judged (and raise for a script scheme).
 DRIVEN_ATTRS = sorted(
@@ -668,7 +672,7 @@ class TestThePassthroughSetIsPinned:
 
         scanner = {a for a in url_sweep.URL_ATTRS if ":" not in a}
         judged = set(tc._URL_ATTRS) | set(tc._QUIET_URL_ATTRS)
-        decided_not = set(tc._UNJUDGED_URL_LIKE_ATTRS)
+        decided_not = DECIDED_NOT_A_URL
         assert scanner == (judged & scanner) | decided_not, sorted(
             scanner ^ ((judged & scanner) | decided_not)
         )
@@ -685,8 +689,8 @@ class TestThePassthroughSetIsPinned:
         assert names(PASSTHROUGH_ATTRS) == set(tc._QUIET_URL_ATTRS), sorted(
             names(PASSTHROUGH_ATTRS) ^ set(tc._QUIET_URL_ATTRS)
         )
-        production_unjudged = {a for a in UNJUDGED_PASSTHROUGH if a != "data_url"}
-        assert production_unjudged == set(tc._UNJUDGED_URL_LIKE_ATTRS)
+        # the decision table names no judged attribute (``data_url`` is the author-defined sample)
+        assert not {a.replace("_", "-") for a in UNJUDGED_PASSTHROUGH} & set(tc._QUIET_URL_ATTRS)
 
     @pytest.mark.parametrize("name", ["dj-navigate", "dj-patch", "dj-patch-reload", "ping", "data"])
     def test_a_judged_name_is_judged(self, name):
