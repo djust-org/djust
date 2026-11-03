@@ -1727,7 +1727,9 @@ Three rules from the v1.2.0-6 drain (PRs #2835-#2846, eight issues: #2821, #2823
   main's `Tests` to finish green on the previous merge commit before squashing the next (or `git merge
   origin/main` into the branch and wait for CI on that merged tree). Cross-file gates — a ratchet over
   every test file, shard-duration coverage, a count or floor, a settings-leak scan — pass alone and fail
-  together; four back-to-back merges put main red twice in v1.3.0-16 (#3727, #3729)
+  together; four back-to-back merges put main red twice in v1.3.0-16 (#3727, #3729). Run `make merge-gates`
+  on the scratch merge: it runs the whole-tree meta tests from one list (`MERGE_GATES` in the `Makefile`),
+  and `tests/test_merge_gates_3757.py` fails when a new tree-scanning test is neither on it nor excluded
 - release: squash-merge the release PR first, then tag `main` with `make release`; never tag
   `release/*` (the squash leaves the tag unreachable from main — #3149, v1.3.0rc3 / #3131)
 
