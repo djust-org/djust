@@ -14,11 +14,12 @@ same hole for every URL the tags are handed by name):
    so is a callable ``items`` on a section.
 2. **The attributes ``theme_button`` / ``theme_input`` / ``theme_select`` / ``theme_progress``
    pass through.** ``href`` / ``src`` / ``action`` / ``formaction`` were judged; ``ping``,
-   ``poster``, ``srcset``, ``data``, ``background``, ``cite``, ``longdesc``, ``manifest``,
-   ``icon``, ``profile``, ``archive``, ``classid``, ``codebase``, ``usemap``, ``itemid``,
-   ``itemtype`` and a ``data-*`` / ``dj-*`` attribute whose name says it is a URL
-   (``dj-navigate``) were printed as written. The set is derived from the sweep scanner's own
-   list of URL attributes, which this file pins equal to production's.
+   ``poster``, ``srcset``, ``data``, ``background`` and the framework's own ``dj-navigate`` /
+   ``dj-patch`` / ``dj-patch-reload`` were printed as written and are judged now. The set is an
+   EXPLICIT one (PR #3765 narrowed a first version that judged any ``data-*`` / ``dj-*`` name
+   containing ``link`` / ``image`` ...): every name the sweep scanner reads as a URL is either
+   judged or in ``UNJUDGED_PASSTHROUGH`` with the reason, and the two tables are pinned against
+   production and the scanner.
 3. **A lazy value that is marked safe** (``lazy(lambda: mark_safe(...), str)()``) is not an
    instance of ``SafeData`` but prints raw: it is converted to plain text like a ``SafeString``.
 
@@ -326,11 +327,38 @@ PASSTHROUGH_TAGS = {
     "theme_progress": "{% theme_progress value=1 ATTR=u %}",
 }
 
-#: Attribute names a caller may write (``dj_navigate`` -> ``dj-navigate``).
+#: The pass-through attributes theming JUDGES besides ``href`` / ``src`` / ``action`` /
+#: ``formaction`` (an explicit set, decided name by name, #3765), written as a caller writes
+#: them (``dj_navigate`` -> ``dj-navigate``). ``ping`` / ``srcset`` are lists of URLs, ``poster`` /
+#: ``data`` / ``background`` are fetched by a browser, ``dj-navigate`` / ``dj-patch`` /
+#: ``dj-patch-reload`` are the framework's own URL-valued directives.
 PASSTHROUGH_ATTRS = sorted(
-    {a.replace("-", "_") for a in url_sweep.URL_ATTRS if ":" not in a}
-    - {"href", "src", "action", "formaction"}
-    | {"dj_navigate", "data_url", "dj_src"}
+    ["ping", "srcset", "poster", "data", "background", "dj_navigate", "dj_patch", "dj_patch_reload"]
+)
+
+#: Names the sweep scanner reads as URL attributes that theming deliberately does NOT judge, with
+#: the decision. HTML URL attributes that no browser follows on the elements these tags print
+#: (a citation, an obsolete object attribute, an icon NAME, a microdata identifier), and
+#: ``data-url``, one author-defined name of the ``data-*`` family: all printed as written.
+UNJUDGED_PASSTHROUGH = {
+    "cite": "a citation URL no browser follows; also used as text (`Smith: 2020`)",
+    "longdesc": "obsolete; modern browsers do not follow it",
+    "manifest": "obsolete AppCache attribute of <html>",
+    "codebase": "obsolete <object>/<applet> attribute",
+    "usemap": "a fragment reference to a <map>, not a fetch",
+    "icon": "an icon NAME in design systems (`mdi:home`); obsolete <menuitem> attribute in HTML",
+    "profile": "obsolete <head> attribute",
+    "archive": "obsolete <object>/<applet> attribute",
+    "classid": "obsolete <object> attribute",
+    "itemid": "a microdata identifier, not fetched",
+    "itemtype": "a microdata vocabulary identifier, not fetched",
+    "data_url": "author-defined `data-*`: the page author's own script reads it",
+}
+
+#: Every name the sweep drives through the pass-through tags (judged or not), plus the four that
+#: have always been judged (and raise for a script scheme).
+DRIVEN_ATTRS = sorted(
+    {*PASSTHROUGH_ATTRS, *UNJUDGED_PASSTHROUGH, "href", "src", "action", "formaction"}
 )
 
 
@@ -471,7 +499,7 @@ class TestListValuedAttributes:
 
     def test_a_data_image_is_not_kept_where_no_image_loads(self, engine):
         uri = "data:image/png;base64,iVBORw0KGgo="
-        for attr in ("ping", "data", "cite", "manifest"):
+        for attr in ("ping", "data", "background"):
             assert uri not in _passthrough(engine, "theme_button", attr, uri), attr
 
     @pytest.mark.parametrize(
@@ -522,11 +550,18 @@ class TestMarkedSafeLazyValues:
         assert out == "&#x6A;avascript:x"
         assert not isinstance(out, SafeData) and not hasattr(out, "__html__")
 
-    @pytest.mark.parametrize("value", [None, "", "/ok/", 3])
-    def test_plain_url_leaves_everything_else_alone(self, value):
+    @pytest.mark.parametrize("value", [None, "", "/ok/"])
+    def test_plain_url_leaves_text_and_none_alone(self, value):
         from djust.theming.templatetags.theme_components import _plain_url
 
         assert _plain_url(value) is value
+
+    def test_plain_url_converts_anything_else_to_text_once(self):
+        """The text that is judged is the text that is printed (#3765): an int is its digits."""
+        from djust.theming.templatetags.theme_components import _plain_url
+
+        out = _plain_url(3)
+        assert out == "3" and type(out) is str
 
 
 # --------------------------------------------------------------------------- #
@@ -624,41 +659,77 @@ class TestThePassthroughSetIsPinned:
         names = {Path(p).name for p in printers}
         assert names == {"button.html", "input.html", "select.html", "progress.html"}, printers
 
-    def test_production_judges_exactly_the_scanners_url_attributes(self):
-        """The scanner keeps its own list (it must not use production as its oracle); this
-        is where they are compared, so a widened scanner list or a dropped production one fails."""
+    def test_every_url_attribute_the_scanner_reads_is_judged_or_decided_not_to_be(self):
+        """The scanner keeps its own list (it must not use production as its oracle); this is
+        where the two are compared. Each name it reads as a URL is either judged by production
+        or in ``UNJUDGED_PASSTHROUGH`` with a reason, so a name added to the scanner (or dropped
+        from production) is a decision made here, not a silent gap."""
         from djust.theming.templatetags import theme_components as tc
 
         scanner = {a for a in url_sweep.URL_ATTRS if ":" not in a}
-        production = set(tc._URL_ATTRS) | set(tc._PASSTHROUGH_URL_ATTRS) | {"srcset"}
-        assert production == scanner, sorted(production ^ scanner)
-        assert set(tc._CUSTOM_ATTR_URL_WORDS) == set(url_sweep._URL_WORDS), sorted(
-            set(tc._CUSTOM_ATTR_URL_WORDS) ^ set(url_sweep._URL_WORDS)
+        judged = set(tc._URL_ATTRS) | set(tc._QUIET_URL_ATTRS)
+        decided_not = set(tc._UNJUDGED_URL_LIKE_ATTRS)
+        assert scanner == (judged & scanner) | decided_not, sorted(
+            scanner ^ ((judged & scanner) | decided_not)
         )
+        assert not judged & decided_not
+        # what production judges beyond the scanner's list: the framework's own directives
+        assert judged - scanner == {"dj-navigate", "dj-patch", "dj-patch-reload"}, sorted(
+            judged - scanner
+        )
+
+    def test_the_judged_and_unjudged_tables_of_this_file_are_production(self):
+        from djust.theming.templatetags import theme_components as tc
+
+        names = lambda attrs: {a.replace("_", "-") for a in attrs}  # noqa: E731
+        assert names(PASSTHROUGH_ATTRS) == set(tc._QUIET_URL_ATTRS), sorted(
+            names(PASSTHROUGH_ATTRS) ^ set(tc._QUIET_URL_ATTRS)
+        )
+        production_unjudged = {a for a in UNJUDGED_PASSTHROUGH if a != "data_url"}
+        assert production_unjudged == set(tc._UNJUDGED_URL_LIKE_ATTRS)
+
+    @pytest.mark.parametrize("name", ["dj-navigate", "dj-patch", "dj-patch-reload", "ping", "data"])
+    def test_a_judged_name_is_judged(self, name):
+        from djust.theming.templatetags import theme_components as tc
+
+        assert tc._is_url_attribute(name) is True
 
     @pytest.mark.parametrize(
         "name",
         [
-            "dj-navigate",
-            "data-url",
-            "data-href",
-            "data-image-src",
-            "dj-redirect",
-            "data-avatar",
+            # the author-defined families: the author's own attribute, read by the author's script
+            "data-url", "data-href", "data-link", "data-location", "data-image", "data-action",
+            "data-imageurl", "data-srcset", "data-bg", "dj-action", "dj-redirect",
+            "dj-navigatetarget", "dj-src", "data-dj-src",
+            # HTML names decided not to be judged
+            *UNJUDGED_PASSTHROUGH,
+            # not URLs at all
+            "dj-click", "data-id", "data-value", "aria-label", "title", "name",
         ],
-    )
-    def test_a_custom_attribute_whose_name_says_url_is_judged(self, name):
+    )  # fmt: skip
+    def test_every_other_name_is_not_judged(self, name):
         from djust.theming.templatetags import theme_components as tc
 
-        assert tc._is_url_attribute(name) is True
-        assert url_sweep.is_url_attr(name) is True
+        assert tc._is_url_attribute(name.replace("_", "-")) is False
 
-    @pytest.mark.parametrize(
-        "name",
-        ["dj-click", "data-id", "data-value", "data-click-event", "aria-label", "title", "name"],
+
+@pytest.mark.parametrize("attr", sorted(set(UNJUDGED_PASSTHROUGH)))
+class TestAnUnjudgedNameIsPrintedAsWritten:
+    """The decision, executed: a value shaped like ``word:rest`` on a name decided not to be a
+    URL attribute renders unchanged (a citation, an icon name, a namespaced id)."""
+
+    @pytest.mark.parametrize("value", ["mdi:home", "Smith: 2020", "toggle:menu", "blob:x"])
+    def test_it_renders_unchanged(self, engine, attr, value):
+        html = _passthrough(engine, "theme_input", attr, value)
+        assert '%s="%s"' % (attr.replace("_", "-"), value) in html, html
+
+
+def test_data_is_judged_on_purpose():
+    """``data`` is the ``<object>`` fetch attribute and #3749 names it, so ``data="x:y"`` (a scheme
+    the allowlist does not know) renders ``#``, like ``href="x:y"``. The one pinned name on which
+    that is a visible change: flip it here, in ``_QUIET_URL_ATTRS`` and in the changelog together."""
+    html = _passthrough(engines["django"], "theme_input", "data", "x:y")
+    assert 'data="#"' in html, html
+    assert 'data="/object.pdf"' in _passthrough(
+        engines["django"], "theme_input", "data", "/object.pdf"
     )
-    def test_an_opaque_attribute_is_not(self, name):
-        from djust.theming.templatetags import theme_components as tc
-
-        assert tc._is_url_attribute(name) is False
-        assert url_sweep.is_url_attr(name) is False

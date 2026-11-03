@@ -375,8 +375,33 @@ def runs(tmp_path_factory: pytest.TempPathFactory) -> dict[str, dict]:
                 proc.kill()
 
 
+def _hardening():
+    """``test_theming_url_hardening_3749.py`` (loaded by path: ``python/tests`` is not a package)."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "theming_url_hardening_3749", ROOT / "python/tests/test_theming_url_hardening_3749.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _decided_unjudged(hole) -> bool:
+    """A hole on a pass-through name that theming DECIDED not to judge (#3765).
+
+    ``(engine, tag, param, element, "attr:class")`` where ``tag`` is one of the tags that print
+    ``**attrs`` and ``param`` a name in ``UNJUDGED_PASSTHROUGH`` (a citation URL no browser
+    follows, an icon name, an author-defined ``data-*``). Anything else is a hole."""
+    module = _hardening()
+    tag = hole[1].split(":", 1)[1] if ":" in hole[1] else hole[1]
+    return tag in module.PASSTHROUGH_TAGS and hole[2] in module.UNJUDGED_PASSTHROUGH
+
+
 def _holes(run: dict) -> list[str]:
-    return ["%s %s.%s <%s %s>" % tuple(h[:5]) for h in run.get("holes", [])]
+    return [
+        "%s %s.%s <%s %s>" % tuple(h[:5]) for h in run.get("holes", []) if not _decided_unjudged(h)
+    ]
 
 
 class TestTheSweep:
@@ -388,6 +413,21 @@ class TestTheSweep:
     def test_no_tag_emits_a_script_url_in_either_engine(self, runs):
         """The #3665 contract, over every parameter of every tag, not the URL-named ones."""
         assert _holes(runs["tags"]) == [], runs["tags"]["stdout"][-3000:]
+
+    def test_the_decided_unjudged_pass_through_names_still_occur(self, runs):
+        """A pin that cannot rot: each decision in ``UNJUDGED_PASSTHROUGH`` is a name the sweep
+        still sees printed with a payload on one of the pass-through tags (else delete it), and
+        no other name is excused."""
+        module = _hardening()
+        seen = {
+            h[2]
+            for h in runs["tags"].get("holes", [])
+            if h[1].split(":", 1)[1] in module.PASSTHROUGH_TAGS
+            and h[2] in module.UNJUDGED_PASSTHROUGH
+        }
+        assert seen == set(module.UNJUDGED_PASSTHROUGH), sorted(
+            set(module.UNJUDGED_PASSTHROUGH) ^ seen
+        )
 
     def test_no_class_component_emits_a_script_url(self, runs):
         remaining = [
@@ -480,15 +520,11 @@ class TestTheSweep:
         driven = set(module.SINKS) | {("theme_components:theme_button", "href")}
         # #3749: the attributes a ``**attrs`` tag prints under any name it is given; the sweep
         # drives each URL attribute the scanner reads through every such tag
-        hardening = importlib.util.spec_from_file_location(
-            "theming_url_hardening_3749", ROOT / "python/tests/test_theming_url_hardening_3749.py"
-        )
-        hardening_module = importlib.util.module_from_spec(hardening)
-        hardening.loader.exec_module(hardening_module)
+        hardening_module = _hardening()
         driven |= {
             ("theme_components:%s" % tag, attr)
             for tag in hardening_module.PASSTHROUGH_TAGS
-            for attr in hardening_module.PASSTHROUGH_ATTRS + ["href", "src", "action", "formaction"]
+            for attr in hardening_module.DRIVEN_ATTRS
         }
         reached = {
             tuple(r)

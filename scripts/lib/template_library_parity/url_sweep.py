@@ -173,12 +173,13 @@ def passthrough_params() -> tuple[str, ...]:
     A ``**attrs`` tag has no parameter NAMED like a URL, but it may print any name it is
     given (``{% theme_input name="q" ping=u %}`` -> ``<input ping="...">``), so each URL
     attribute the scanner reads is a parameter such a tag can have. Derived from
-    :data:`URL_ATTRS` (an XML name cannot be a keyword, so ``xlink:href`` is not here) plus one
-    author-defined name of each family the scanner reads (``dj-*`` and ``data-*``). A tag that
-    ignores them is driven for nothing and costs a render; one that prints them is a sink.
+    :data:`URL_ATTRS` (an XML name cannot be a keyword, so ``xlink:href`` is not here), the
+    framework's own URL-valued directives (``dj-navigate``, ``dj-patch``, ``dj-patch-reload``)
+    and one author-defined ``data-*`` name the scanner reads (``data-url``). A tag that ignores
+    them is driven for nothing and costs a render; one that prints them is a sink.
     """
     names = {a.replace("-", "_") for a in URL_ATTRS if ":" not in a}
-    return tuple(sorted(names | {"dj_navigate", "dj_src", "data_url"}))
+    return tuple(sorted(names | {"dj_navigate", "dj_patch", "dj_patch_reload", "data_url"}))
 
 
 def takes_varkw(info: variants.TagInfo) -> bool:
