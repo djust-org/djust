@@ -86,6 +86,9 @@ def _mechanism_names(source: str) -> set[str]:
             found.add(node.attr)
         elif isinstance(node, ast.alias):
             found.add(node.name.rsplit(".", 1)[-1])
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+            # ``getattr(module, "with_positional_args")``
+            found.add(node.value)
     return found & _MECHANISMS
 
 
@@ -635,6 +638,7 @@ class TestTheMechanism:
             "from djust._positional_args import with_positional_args as wrap\nwrap('t', h, lib)",
             "import djust._positional_args as m\nm.DjangoCheckedTagHandler(h, 't', f)",
             "handler_class = DjangoCheckedTagHandler",
+            "import djust._positional_args as m\ngetattr(m, 'with_positional_args')('t', h, lib)",
         ],
     )
     def test_the_pin_sees_every_way_to_reach_a_mechanism(self, source):

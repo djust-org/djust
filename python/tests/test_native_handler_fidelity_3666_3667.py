@@ -499,6 +499,192 @@ class TestInvalidInput:
         assert len(facts["measured_tags"]) > 100, "the scan measured too little to mean anything"
 
 
+class TestTheScannersFindWhatTheyLookFor:
+    """Canaries: ``repr_leaks`` and ``one_engine_errors`` report on a hand-made audit, so a
+    scanner that found nothing (a broken pattern, a renamed field) cannot pass for a clean
+    library. The tests above only ever see the real, clean output."""
+
+    @staticmethod
+    def _audit(python: tuple[str, str], rust: tuple[str, str]) -> harness.Audit:
+        record = harness.VariantRecord("v", "src", "DIFFERENT", python, rust)
+        return harness.Audit(detail={"lib:tag": [record]})
+
+    @pytest.mark.parametrize(
+        "leak",
+        [
+            "&lt;built-in method title of str object at 0xADDR&gt;",
+            "<bound method Foo.bar of <Foo object at 0xADDR>>",
+            "x <function <lambda> at 0xADDR> y",
+            "&lt;function f at 0xADDR&gt;",
+        ],
+    )
+    def test_repr_leaks_reports_each_shape_on_the_engine_that_has_it(self, leak):
+        for side in ("python", "rust"):
+            outputs = {"python": ("ok", "clean"), "rust": ("ok", "clean")}
+            outputs[side] = ("ok", "<div>" + leak + "</div>")
+            found = harness.repr_leaks(self._audit(outputs["python"], outputs["rust"]))
+            assert [f["side"] for f in found] == [side], (leak, found)
+
+    def test_repr_leaks_ignores_clean_output_and_a_rejected_render(self):
+        assert harness.repr_leaks(self._audit(("ok", "<b>fine</b>"), ("ok", "<b>fine</b>"))) == []
+        # An error message that mentions a method is an error, not leaked markup.
+        assert harness.repr_leaks(self._audit(("err", "built-in method"), ("ok", "fine"))) == []
+
+    @pytest.mark.parametrize(
+        "message, kind",
+        [
+            (
+                "TemplateSyntaxError: 'x' received unexpected keyword argument 'k'",
+                "unexpected-keyword",
+            ),
+            (
+                "TemplateSyntaxError: 'x' did not receive value(s) for the argument(s): 'a'",
+                "missing-required",
+            ),
+            ("TypeError: int() argument must be a string", "invalid-value"),
+        ],
+    )
+    def test_one_engine_errors_classifies_and_names_the_side(self, message, kind):
+        [row] = harness.one_engine_errors(self._audit(("err", message), ("ok", "rendered")))
+        assert (row["kind"], row["side"]) == (kind, "python")
+        [row] = harness.one_engine_errors(self._audit(("ok", "rendered"), ("err", message)))
+        assert row["side"] == "rust"
+        assert harness.one_engine_errors(self._audit(("err", message), ("err", message))) == []
+        assert harness.one_engine_errors(self._audit(("ok", "a"), ("ok", "b"))) == []
+
+
+class TestBridgedTagsAreDjangos:
+    """What the object tags inherit by being the Python tag's own node (#3753 review)."""
+
+    def test_unknown_keywords_are_refused_exactly_where_the_python_tag_refuses_them(self, engines):
+        """A tag that was native accepted any keyword; the bridged tag accepts the keywords
+        the Python tag does. Derived per tag from the Python tag's signature: a
+        ``simple_tag`` / ``inclusion_tag`` without ``**kwargs`` refuses, a raw tag that reads
+        ``key=value`` pairs ignores. Both engines agree for every one of the nine."""
+        import inspect
+
+        from djust.components import rust_handlers
+        from djust.template_libraries import _classify
+
+        library = import_library(COMPONENTS)
+        derived_refusing = set()
+        for tag in sorted(rust_handlers.OBJECT_ARGUMENT_TAGS):
+            func = library.tags[tag]
+            if _classify(func) in ("simple_tag", "inclusion_tag"):
+                params = inspect.signature(inspect.unwrap(func)).parameters.values()
+                if not any(p.kind is p.VAR_KEYWORD for p in params):
+                    derived_refusing.add(tag)
+        observed_refusing = set()
+        problems = []
+        for tag in sorted(rust_handlers.OBJECT_ARGUMENT_TAGS):
+            src = "{% load djust_components %}{% " + tag + " zz_unknown_kw=1 %}"
+            django = _render(engines, "django", src, {})
+            rust = _render(engines, "rust", src, {})
+            if django != rust:
+                problems.append(f"{tag}:\n  django {django}\n  rust   {rust}")
+            if django[0] == "err" and "unexpected keyword argument" in django[2]:
+                observed_refusing.add(tag)
+        assert not problems, "\n".join(problems)
+        assert observed_refusing == derived_refusing, (observed_refusing, derived_refusing)
+        assert observed_refusing, (
+            "no object tag refuses an unknown keyword: the probe is not looking"
+        )
+        # The documentation names the refusing tags; it must not fall behind the measurement.
+        docs = (ROOT / "docs" / "TEMPLATE_BACKEND.md").read_text(encoding="utf-8")
+        section = docs[docs.index("**Unknown keywords on the bridged tags") :].split("\n\n", 1)[0]
+        assert all(f"`{tag}`" in section for tag in observed_refusing), (
+            sorted(observed_refusing),
+            section[:300],
+        )
+
+    NO_APP_DIRS = r"""
+import json, os, sys, types
+import django
+from django.conf import settings
+
+os.environ.pop("DJANGO_SETTINGS_MODULE", None)
+urls = types.ModuleType("u")
+urls.urlpatterns = []
+sys.modules["u"] = urls
+settings.configure(
+    DEBUG=False, SECRET_KEY="x", USE_TZ=True,
+    INSTALLED_APPS=["django.contrib.contenttypes", "django.contrib.auth", "djust",
+                    "djust.theming", "djust.components"],
+    DATABASES={"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}},
+    TEMPLATES=[
+        {"BACKEND": "django.template.backends.django.DjangoTemplates", "NAME": "django",
+         "DIRS": [], "APP_DIRS": False, "OPTIONS": {}},
+        {"BACKEND": "djust.template.backend.DjustTemplateBackend", "NAME": "djust",
+         "DIRS": [], "APP_DIRS": False, "OPTIONS": {}},
+    ],
+    ROOT_URLCONF="u",
+)
+django.setup()
+from django.template import engines
+
+CASES = {
+    "toast_container": ("{% toast_container toasts=t %}", {"t": [{"id": "1", "type": "info", "message": "m"}]}),
+    "progress": ("{% progress value=3 %}", {}),
+    "field_error": ("{% field_error field=none %}", {"none": None}),
+    "avatar_group": ("{% avatar_group users=u %}", {"u": [{"name": "A B"}]}),
+}
+out = {}
+for label, (body, ctx) in CASES.items():
+    for name in ("django", "djust"):
+        try:
+            engines[name].from_string("{% load djust_components %}" + body).render(dict(ctx))
+            out[label + "|" + name] = "ok"
+        except Exception as exc:
+            out[label + "|" + name] = type(exc).__name__
+print(json.dumps(out))
+"""
+
+    def test_print_css_hides_the_classes_the_bridged_toast_emits(self):
+        """The bridged ``toast_container`` emits ``dj-toast-container`` / ``dj-toast``, not the
+        native handler's ``toast-container`` / ``toast``; the print stylesheet that hides toasts
+        has to name the ones that are rendered. Read from the template, not typed here."""
+        template = (
+            ROOT / "python/djust/components/templates/djust_components/toast.html"
+        ).read_text(encoding="utf-8")
+        emitted = set(re.findall(r'class="(dj-toast(?:-container)?)[ "]', template))
+        assert emitted == {"dj-toast", "dj-toast-container"}, emitted
+        css = (ROOT / "python/djust/theming/static/djust_theming/css/print.css").read_text(
+            encoding="utf-8"
+        )
+        hidden = set(
+            re.findall(r"^\s*\.([\w-]+),?\s*$", css.split("display: none !important")[0], re.M)
+        )
+        assert emitted <= hidden, sorted(emitted - hidden)
+
+    def test_an_inclusion_tag_needs_the_template_loader_in_both_engines(self, tmp_path):
+        """``toast_container`` is the one inclusion tag of the nine: its node loads
+        ``djust_components/toast.html``. With no ``APP_DIRS`` and no ``DIRS`` the Python tag
+        fails with ``TemplateDoesNotExist`` under Django's own engine too, so this is the tag's
+        contract, not something the bridge added; the native handlers (and the bridged tags that
+        are not inclusion tags) need no template file. Measured in a fresh process because the
+        engines are configured by settings."""
+        script = tmp_path / "no_app_dirs.py"
+        script.write_text(self.NO_APP_DIRS, encoding="utf-8")
+        env = {k: v for k, v in os.environ.items() if k != "DJANGO_SETTINGS_MODULE"}
+        env["PYTHONPATH"] = os.pathsep.join(
+            filter(None, [str(ROOT / "python"), env.get("PYTHONPATH")])
+        )
+        proc = subprocess.run(
+            [sys.executable, str(script)],
+            cwd=tmp_path,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        assert proc.returncode == 0, proc.stderr[-1500:]
+        result = json.loads(proc.stdout.strip().splitlines()[-1])
+        assert result["toast_container|django"] == "TemplateDoesNotExist", result
+        assert result["toast_container|djust"] == result["toast_container|django"], result
+        for tag in ("progress", "field_error", "avatar_group"):
+            assert result[tag + "|djust"] == "ok", result
+
+
 # --------------------------------------------------------------------------- #
 
 

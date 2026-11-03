@@ -2001,11 +2001,15 @@ BLOCK_HANDLERS = [
 #: to ``{% load djust_components %}``, so the tags keep working in a template that does not
 #: load the library (every other native tag does) and stay in the parity ratchet.
 #:
-#: The set is not a judgement call. ``scripts/lib/template_library_parity/objects.py`` derives
-#: it from the Python tags (it hands each parameter an object that records how it is used) and
+#: The set is not a judgement call, within one question: which tags READ AN ATTRIBUTE of an
+#: argument. ``scripts/lib/template_library_parity/objects.py`` derives that from the Python
+#: tags (it hands each parameter an object that records how it is used) and
 #: ``python/tests/test_native_handler_fidelity_3666_3667.py`` asserts it equals this set, in
 #: both directions: a new tag that reads an attribute of its argument cannot get a native
-#: handler, and a tag listed here that stopped doing so is reported.
+#: handler, and a tag listed here that stopped doing so is reported. A tag that dispatches on a
+#: value's TYPE instead (``json_viewer``: ``isinstance``) reads no attribute and is not seen by
+#: that measurement (#3756); a ``Form`` bound by ``{% for %}`` / ``{% with %}`` is lost before
+#: any tag runs (#3755).
 OBJECT_ARGUMENT_TAGS = frozenset(
     {
         "avatar_group",
