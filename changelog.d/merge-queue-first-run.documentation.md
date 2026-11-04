@@ -1,0 +1,1 @@
+- Recorded in `docs/testing-strategy.md` what the first real merge-queue run confirmed (`base_sha`, `base_ref`, scope classification) and the review and push settings on `main`.
