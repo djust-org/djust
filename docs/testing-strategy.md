@@ -162,6 +162,16 @@ A test-only change still runs the whole Python matrix, JavaScript, the benchmark
 the browser jobs. The script is fail-open: an empty change set, a failed diff, an
 unexpected path or a missing sha all mean a full run.
 
+**Merge-queue diff.** What `merge_group.base_sha` means for a grouped queue is not
+verified (it might be the group's own parent, so `base_sha..head_sha` would cover only
+the last PR and a [code PR, docs PR] group could read as docs-only). For `merge_group`
+the script therefore classifies the union of two diffs, both ending at `head_sha`:
+from `base_sha`, and from `merge-base(head_sha, origin/<base_ref>)` (`base_ref` is in
+the payload). The union can only add files, so it can only make a run bigger; a
+missing `base_ref` or an unfetched branch runs everything. The `changes` step logs both
+file lists, and notes when they differ, so the first real queue run shows what
+`base_sha` was.
+
 **How a skip is accepted and a failure still blocks.** `test-summary` takes one of two
 paths, chosen by `changes`. If `changes` succeeded and said `docs_only`, a dedicated
 step requires every gated job to report exactly `skipped`. Otherwise the existing
@@ -183,7 +193,12 @@ reports success there, because the PR passed it to be queued.
 (setup, call and teardown together) runs longer than 20 minutes, pytest writes every
 thread's stack to the job log, naming the test, and carries on; nothing fails. The value
 is above three times the slowest test recorded in `.test_durations`, and
-`tests/test_ci_hang_dump_3800.py` fails when a recorded test outgrows it.
+`tests/test_ci_hang_dump_3800.py` fails when a recorded test outgrows it. The
+`python-tests` job also has `timeout-minutes: 45` (about 3x the slowest shard in the
+last five green main runs, 15.4 minutes), so a hung shard ends in bounded time instead
+of GitHub's 360-minute default; it must stay above the dump threshold so the dump can
+fire first. Neither is a diagnosis on its own: the dump needs a hang longer than 20
+minutes, the timeout only bounds it.
 
 ## Measurements and next improvements
 

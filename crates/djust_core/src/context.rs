@@ -131,6 +131,42 @@ pub(crate) fn protect_sidecar_strict<'py>(
     protect.call1((obj,)).ok()
 }
 
+/// [`protect_sidecar_strict`] for a TEMPLATE AUTHOR's walk (#3790): the floor
+/// `Context::walk_live` applies after every segment.
+///
+/// Two floors, one leaf. `_protect_sidecar_value` proxies a `Model` / `Manager` /
+/// `QuerySet`; `_protect_sidecar_walk` is that PLUS the objects that hold a model's
+/// values behind a plain `dict` / attribute (a model `Form` and its `BoundField`s), where the
+/// leaf floor cannot see a floor field because the value is already a string
+/// (`{{ form.initial.password }}`, `{{ form.password.value }}`).
+///
+/// They are different calls on purpose. [`protect_sidecar_strict`] is also what
+/// [`crate::value_into_handler_pyobject`] hands a live object to a bridged
+/// Python TAG with, and that code is the application's own: djust's `bound_field.value()`
+/// component readers and every third-party form tag must get the real `BoundField`, or
+/// a form rendering a `User`'s `is_staff` checkbox would draw it unchecked and a save
+/// would silently demote the user. The wrapper the walk needs is for a path a
+/// TEMPLATE spells, not for a Python function that receives the object.
+///
+/// Falls back to the leaf floor when `_protect_sidecar_walk` is absent from an
+/// importable `djust.serialization` (a stub, or a version skew): never weaker than
+/// before; the only thing missing is the form arm.
+pub(crate) fn protect_sidecar_walk_strict<'py>(
+    py: Python<'py>,
+    obj: pyo3::Bound<'py, pyo3::PyAny>,
+) -> Option<pyo3::Bound<'py, pyo3::PyAny>> {
+    let Ok(module) = py.import("djust.serialization") else {
+        return Some(obj);
+    };
+    let Ok(protect) = module
+        .getattr("_protect_sidecar_walk")
+        .or_else(|_| module.getattr("_protect_sidecar_value"))
+    else {
+        return Some(obj);
+    };
+    protect.call1((obj,)).ok()
+}
+
 /// Is this live handle a Django `Form` / `BoundField` (#3755)?
 ///
 /// [`crate::value_into_handler_pyobject`] hands a live handle to a bridged Python
@@ -2809,19 +2845,31 @@ impl Context {
     /// Floor enforcement is INDEPENDENT of the `auto_call` kill-switch
     /// (`{{ p.user.password }}` leaks via pure getattr, no call), so this runs
     /// regardless of `self.auto_call`. It is idempotent (wrapping a proxy
-    /// returns it unchanged) and fail-safe: any error returns the value
-    /// unwrapped rather than crashing the render.
+    /// returns it unchanged). A floor that RAISES drops the value (the cell
+    /// renders empty) rather than handing the raw object on (#3790); only an
+    /// interpreter with no `djust.serialization` at all passes it through.
     fn protect_sidecar<'py>(
         &self,
         py: Python<'py>,
         obj: pyo3::Bound<'py, pyo3::PyAny>,
     ) -> pyo3::Bound<'py, pyo3::PyAny> {
-        match py
-            .import("djust.serialization")
-            .and_then(|m| m.getattr("_protect_sidecar_value"))
-            .and_then(|f| f.call1((obj.clone(),)))
-        {
-            Ok(wrapped) => wrapped,
+        // The WALK's floor (#3790): `_protect_sidecar_walk` is the leaf floor plus the
+        // model-form arms, and falls back to the leaf when the name is absent.
+        match py.import("djust.serialization").and_then(|m| {
+            m.getattr("_protect_sidecar_walk")
+                .or_else(|_| m.getattr("_protect_sidecar_value"))
+        }) {
+            Ok(protect) => match protect.call1((obj,)) {
+                Ok(wrapped) => wrapped,
+                // The floor RAN and raised (#3790): the form arms read a form's instance and its
+                // field set, which can raise for an exotic object. Handing the raw object on is
+                // handing the next segment the very thing the floor exists to hold back, so the
+                // value is dropped instead (`None`: the next segment finds nothing, and the cell
+                // renders empty). The ABSENT-floor arm below still passes the object through.
+                Err(_) => py.None().into_bound(py),
+            },
+            // No `djust.serialization` on this interpreter (an embedder): no floor to fail
+            // closed about.
             Err(_) => obj,
         }
     }
@@ -2852,7 +2900,7 @@ impl Context {
         py: Python<'py>,
         obj: pyo3::Bound<'py, pyo3::PyAny>,
     ) -> Option<pyo3::Bound<'py, pyo3::PyAny>> {
-        protect_sidecar_strict(py, obj)
+        protect_sidecar_walk_strict(py, obj)
     }
 
     /// Django-parity callable handling for one resolved attribute

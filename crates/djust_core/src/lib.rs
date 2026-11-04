@@ -4318,6 +4318,13 @@ impl<'py> FromPyObject<'_, 'py> for Value {
             // claimed anything the denylist governs, so a model cannot reach
             // this arm and cannot have its floor fields dumped by it. That
             // ordering is asserted structurally rather than left to reading.
+            // #3790: a Django form / BoundField keeps the walk-FLOORED object as its live
+            // handle, so every sink that reads the handle (iteration, `in`, a slice, an index,
+            // `==`, a loop variable's own walk) reads the floor and not the real field.
+            //
+            // Shadows `ob` (as a `Bound`) so the two call sites below keep their spelling: the
+            // structural pin on `opaque_value` having exactly one caller reads that text.
+            let ob = floored_form_handle(&ob.to_owned());
             if let Some(encoded) = opaque_value(&ob.to_owned()) {
                 return Ok(Value::Encoded(Box::new(encoded)));
             }
@@ -4340,6 +4347,32 @@ impl<'py> FromPyObject<'_, 'py> for Value {
             ))))
         }
     }
+}
+
+/// The object a Django `Form` / `BoundField` is carried by (#3790): the walk-floored proxy of it
+/// (`djust.serialization._protect_sidecar_walk`), or the object itself when there is nothing to
+/// floor (not a form object, or a form with no floor field to hide).
+///
+/// WHY HERE. A template reaches a real `BoundField` of a floor field by more routes than a path
+/// segment: a loop variable, `{% for f in form %}`, `visible_fields`, `get_context().fields`, a
+/// slice, a `{% with %}` alias. Every one of them goes through this conversion, and every sink that
+/// reads the carried object afterwards (`consume_live_items`, `live_contains`, `live_get_item`,
+/// `live_get_slice`, `live_eq`, the walk of a loop variable) reads `Encoded::live`. Substituting the
+/// floored object once, here, is the one place that holds them all; guarding each sink was the
+/// chain of point fixes that kept leaving the neighbour.
+///
+/// The floor failing to enforce (it raised) drops the value: an EMPTY STRING is returned in its place
+/// (it renders nothing, iterates to nothing, is falsy, and has no field to walk to). It is returned
+/// here, not as an early `return` from the conversion, because the structural reader of the fallback
+/// block counts that block's exits (`scripts/filter-parity-differential.py::_fallback_arms`); and not
+/// `None`, which this arm would carry as a one-element `Encoded` that `{% for %}` refuses.
+fn floored_form_handle<'py>(ob: &Bound<'py, PyAny>) -> Bound<'py, PyAny> {
+    // Forms and fields iterate; nothing else this concerns does. A type check, no Python call.
+    if !type_defines_iter(ob) || !context::live_handle_is_form_object(ob.py(), ob) {
+        return ob.clone();
+    }
+    context::protect_sidecar_walk_strict(ob.py(), ob.clone())
+        .unwrap_or_else(|| pyo3::types::PyString::new(ob.py(), "").into_any())
 }
 
 /// The most items the conversion will read out of ANY object, sized or not

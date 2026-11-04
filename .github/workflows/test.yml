@@ -112,13 +112,14 @@ jobs:
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           MG_BASE_SHA: ${{ github.event.merge_group.base_sha }}
           MG_HEAD_SHA: ${{ github.event.merge_group.head_sha }}
+          MG_BASE_REF: ${{ github.event.merge_group.base_ref }}
         run: |
           set -euo pipefail
           case "$EVENT_NAME" in
             pull_request)
               python3 scripts/ci-change-scope.py --event pull_request --base "$PR_BASE_SHA" --head "$PR_HEAD_SHA" ;;
             merge_group)
-              python3 scripts/ci-change-scope.py --event merge_group --base "$MG_BASE_SHA" --head "$MG_HEAD_SHA" ;;
+              python3 scripts/ci-change-scope.py --event merge_group --base "$MG_BASE_SHA" --head "$MG_HEAD_SHA" --base-ref "$MG_BASE_REF" ;;
             *)
               echo "event $EVENT_NAME is not scoped -- running everything"
               { echo "docs_only=false"; echo "rust_skip=false"; } >> "$GITHUB_OUTPUT" ;;
@@ -333,6 +334,15 @@ jobs:
   # they are per-checkout, not per-shard, and would be 4x duplicated work.
   python-tests:
     runs-on: ubuntu-latest
+    # A hung shard must end in bounded time with a clear "exceeded the maximum
+    # execution time" instead of GitHub's 360-minute default (#3800). Slowest
+    # python-tests cell over the last five green main runs (85 cells): 15.4
+    # min, a push run, i.e. with the slow tier and every interpreter. 45 min is
+    # about 3x that, so growth and a slow runner do not trip it. It must stay
+    # above faulthandler_timeout (20 min) so the stack dump can fire first;
+    # tests/test_ci_hang_dump_3800.py pins both. This does NOT make #3800
+    # diagnosable on its own: it bounds the hang, the dump names the test.
+    timeout-minutes: 45
     # 3.15 is a release candidate (#3255), so a red 3.15 cell is a signal to
     # read, not a merge blocker: with this job-level `continue-on-error` a
     # failed 3.15 shard shows red in the run but `needs.python-tests.result`
