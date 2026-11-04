@@ -111,6 +111,17 @@ def _theme_form(engine, form, **config) -> str:
         return _render(engine, "{% theme_form form %}", {"form": form})
 
 
+@pytest.fixture
+def validator_off(monkeypatch):
+    """Let a hostile ``css_prefix`` reach the tags: ``get_theme_config()`` refuses one (#3779).
+
+    The loader is the first line of defence; the ``format_html`` in ``theme_form`` is the second.
+    The tests that use this fixture pin the second line, which a refusing loader would otherwise
+    hide (they would pass because the render raised, not because the prefix was escaped).
+    """
+    monkeypatch.setattr("djust.theming._config._validate_css_prefix", lambda value: value)
+
+
 class TestHostileFormValues:
     @pytest.mark.parametrize("label", sorted(BREAKOUTS))
     def test_a_field_name_cannot_break_out_of_label_for_or_the_help_id(self, engine, label):
@@ -133,13 +144,15 @@ class TestHostileFormValues:
         assert _breakout_findings(html) == [], html
 
     @pytest.mark.parametrize("label", sorted(BREAKOUTS))
-    def test_a_configured_css_prefix_cannot_break_out_of_a_class(self, engine, label):
+    def test_a_configured_css_prefix_cannot_break_out_of_a_class(
+        self, engine, label, validator_off
+    ):
         form = _form("name")
         html = _theme_form(engine, form, css_prefix=BREAKOUTS[label])
         assert _breakout_findings(html) == [], html
 
     @pytest.mark.parametrize("label", sorted(BREAKOUTS))
-    def test_every_line_that_prints_the_css_prefix_escapes_it(self, engine, label):
+    def test_every_line_that_prints_the_css_prefix_escapes_it(self, engine, label, validator_off):
         """The legend (a fieldset widget), the field-error span and the form-level alert too."""
 
         class Mixed(forms.Form):
@@ -154,7 +167,7 @@ class TestHostileFormValues:
         assert _breakout_findings(html) == [], html
 
     @pytest.mark.parametrize("label", sorted(BREAKOUTS))
-    def test_form_errors_print_the_css_prefix_escaped_too(self, engine, label):
+    def test_form_errors_print_the_css_prefix_escaped_too(self, engine, label, validator_off):
         form = _form("name", data={"name": "x"})
         assert form.is_valid()
         form.add_error(None, "Bad")
