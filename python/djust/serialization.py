@@ -2247,10 +2247,6 @@ class _SidecarBoundFieldProxy:
         return hash(object.__getattribute__(self, "_bf"))
 
 
-#: The two form proxies. A tag's own Python is handed what is behind one (``unwrap_form_proxy``).
-_FORM_PROXY_TYPES = (_SidecarFormProxy, _SidecarFormSetProxy, _SidecarBoundFieldProxy)
-
-
 def unwrap_form_proxy(value: Any) -> Any:
     """The real ``Form`` / ``BoundField`` behind a form proxy; anything else is itself.
 
