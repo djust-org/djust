@@ -135,6 +135,56 @@ review finds shared/transitive impact the selector cannot see, force full checks
 DJUST_PREPUSH_FULL=1 bash scripts/pre-push-pytest.sh
 ```
 
+## CI change scope and the merge queue
+
+`.github/workflows/test.yml` listens to `merge_group` (so GitHub's merge queue can
+run it; the queue itself is a repository setting) and starts with a `changes` job
+that runs `scripts/ci-change-scope.py` on `pull_request` and `merge_group` events.
+Push, dispatch and the nightly run always run everything. The script classifies the
+changed files and the expensive jobs read two outputs:
+
+| class | paths |
+|---|---|
+| DOCS | root-level `*.md` (`CHANGELOG.md`, `RETRO.md`, ...), `docs/**`, `changelog.d/**` |
+| TEST_PY | `*.py` under `tests/`, `python/tests/`, `python/djust/tests/` |
+
+| change set | `docs_only` | `rust_skip` | skipped |
+|---|---|---|---|
+| only DOCS | true | true | every job |
+| only DOCS and TEST_PY | false | true | `rust-tests` only |
+| anything else | false | false | nothing |
+
+"Anything else" includes workflow files, `scripts/`, `pyproject.toml`, `uv.lock`,
+`Cargo.*`, `crates/`, `python/djust/` source, `.test_durations`, a nested `*.md`
+(`python/djust/**/README.md`), and any non-`.py` file in a test tree: the one Rust
+read into the Python test tree is `python/tests/fixtures/root_selection_3031.json`.
+A test-only change still runs the whole Python matrix, JavaScript, the benchmarks and
+the browser jobs. The script is fail-open: an empty change set, a failed diff, an
+unexpected path or a missing sha all mean a full run.
+
+**How a skip is accepted and a failure still blocks.** `test-summary` takes one of two
+paths, chosen by `changes`. If `changes` succeeded and said `docs_only`, a dedicated
+step requires every gated job to report exactly `skipped`. Otherwise the existing
+AND-chain runs and requires `success` from each job; the only skip it tolerates is
+`rust-tests`, and only with `changes` succeeded and `rust_skip == true`. If `changes`
+itself fails, its dependants are skipped, and a skip that `changes` did not vouch for
+fails the gate. `tests/test_ci_change_scope.py` executes both bash blocks over these
+cases.
+
+Two things differ from a pull request. `paths-ignore` is not evaluated for
+`merge_group`, so a docs-only queue entry starts the workflow and the `changes` job does
+the skipping (a docs-only *pull request* is still handled by `paths-ignore` and
+`test-summary-docs-shim.yml`). The queue has no PR labels, so it runs 3.12 only and the
+fast tier, like an unlabelled PR; the push to main after the merge still runs the full
+matrix and the slow tier. `external-pr-gate.yml` also listens to `merge_group` and
+reports success there, because the PR passed it to be queued.
+
+**Hang dumps.** The Python shard step passes `-o faulthandler_timeout=1200`. If one test
+(setup, call and teardown together) runs longer than 20 minutes, pytest writes every
+thread's stack to the job log, naming the test, and carries on; nothing fails. The value
+is above three times the slowest test recorded in `.test_durations`, and
+`tests/test_ci_hang_dump_3800.py` fails when a recorded test outgrows it.
+
 ## Measurements and next improvements
 
 Main `0aa117d6` [CI run 37083226366](https://github.com/djust-org/djust/actions/runs/37083226366)
