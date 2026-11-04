@@ -5,7 +5,7 @@ from typing import Any, Iterator
 from django.conf import settings
 from django.core.checks import CheckMessage, Error, Warning, register, Tags
 
-from ._config import get_theme_config, parse_preset_names
+from ._config import _merged_theme_config, get_theme_config, parse_preset_names
 from .accessibility import AccessibilityValidator
 from ._registry_accessor import get_registry
 from .a11y_exemptions import A11Y_EXEMPTIONS, CONTRAST_PAIRS, DERIVED_TEXT_TOKENS
@@ -135,14 +135,15 @@ def check_css_prefix(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
     import re
 
     errors: list[CheckMessage] = []
-    config = get_theme_config()
-    prefix = config.get("css_prefix", "")
+    # The unvalidated config: ``get_theme_config()`` raises on a prefix this check exists to
+    # report (#3779), which would turn E004 into a traceback.
+    prefix = _merged_theme_config().get("css_prefix", "")
 
     if not prefix:
         return errors
 
     # Security: reject characters that could break CSS selectors or inject HTML
-    if not re.match(r"^[a-zA-Z][a-zA-Z0-9-]*$", prefix):
+    if not isinstance(prefix, str) or not re.fullmatch(r"[a-zA-Z][a-zA-Z0-9-]*", prefix):
         errors.append(
             Error(
                 f'css_prefix "{prefix}" contains invalid characters. '

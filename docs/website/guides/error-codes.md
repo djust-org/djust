@@ -2154,6 +2154,8 @@ The processor is optional. `{% theme_head %}`, `{% theme_switcher %}` and `{% th
 
 **Fix**: Use a prefix like `"djt-"` or `"myapp-"`.
 
+Independently of this check, `get_theme_config()` raises `ImproperlyConfigured` for a `css_prefix` that holds anything but ASCII letters, digits, underscores and hyphens, because the prefix is printed into the theme's `<style>` blocks (#3779).
+
 ---
 
 ### djust_theming.W001: Preset fails WCAG AA contrast
