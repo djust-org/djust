@@ -17,7 +17,7 @@ import re
 import uuid
 from collections.abc import Callable, Iterable, Mapping
 from decimal import Decimal
-from typing import Any, Optional
+from typing import Any, Optional, Tuple
 from urllib.parse import unquote
 
 from django import template
@@ -1420,13 +1420,17 @@ def _icon_size(value: Any) -> str:
     """
     if value is None:
         return _ICON_DEFAULT_SIZE
+    parsed: Optional[Tuple[Optional[Decimal], str]] = None
     try:
         match = _ICON_SIZE_RE.fullmatch(_icon_size_text(value))
-        number = _icon_size_number(match.group(1)) if match is not None else None
+        if match is not None:
+            parsed = (_icon_size_number(match.group(1)), (match.group(2) or "").lower())
     except Exception:  # noqa: BLE001 - any failure to get a number is bad data: warn, use the default
-        match = number = None
-    if match is not None and number is not None and 0 < number <= _ICON_SIZE_MAX:
-        return format(number.normalize(), "f") + (match.group(2) or "").lower()
+        parsed = None
+    if parsed is not None:
+        number, unit = parsed
+        if number is not None and 0 < number <= _ICON_SIZE_MAX:
+            return format(number.normalize(), "f") + unit
     logger.warning(
         "theming: theme_icon size= (a %s) is not a number or CSS length; rendering size %s",
         type(value).__name__,
