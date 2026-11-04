@@ -2839,14 +2839,14 @@ impl Context {
             return Ok(CallOutcome::AsIs(obj));
         }
         // `do_not_call_in_templates` → use as-is (Model classes,
-        // enums.Choices set this).
-        if attr_is_truthy(&obj, "do_not_call_in_templates") {
-            return Ok(CallOutcome::AsIs(obj));
-        }
-        // `alters_data` → refuse: never call, expression renders empty
-        // (Django stamps Model.save/delete, QuerySet.delete/update, …).
-        if attr_is_truthy(&obj, "alters_data") {
-            return Ok(CallOutcome::Empty);
+        // enums.Choices set this); `alters_data` → refuse: never call,
+        // expression renders empty (Django stamps Model.save/delete,
+        // QuerySet.delete/update, …). One statement of the rule, shared with
+        // the queryset serializer (#3772).
+        match template_call_guard(&obj) {
+            TemplateCallGuard::UseAsIs => return Ok(CallOutcome::AsIs(obj)),
+            TemplateCallGuard::AltersData => return Ok(CallOutcome::Empty),
+            TemplateCallGuard::Callable => {}
         }
         warn_once_on_orm_autocall(py, &obj, path);
         match obj.call0() {
@@ -3461,6 +3461,57 @@ fn name_in_dir(obj: &pyo3::Bound<'_, pyo3::PyAny>, name: &str) -> PyResult<bool>
         }
     }
     Ok(false)
+}
+
+/// What a template may do with a callable it has just resolved — Django's
+/// `Variable._resolve_lookup` callable block, stated ONCE (#3772).
+///
+/// Two sites in the Rust tree decide this and they are not the same walk: the
+/// sidecar / live-handle walk ([`Context::maybe_call`]) and the queryset
+/// serializer behind `DjustTemplateBackend.render` and the LiveView queryset
+/// JIT (`serialize_object_with_paths` in `djust_live`). The second one
+/// `call0()`-ed every callable leaf with NO guard, so `{{ users.delete }}`
+/// deleted every row while `_rust.render_template` — which has no JIT step and
+/// only the first walk — was inert (#3772). Both now ask this function, so the
+/// rule cannot drift between them (#1646).
+///
+/// The order is Django's: `do_not_call_in_templates` is tested FIRST, so a
+/// callable carrying both markers is used as-is rather than refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TemplateCallGuard {
+    /// No marker: Django calls it with no arguments.
+    Callable,
+    /// `do_not_call_in_templates` — use the object itself (a Model class, an
+    /// `enums.Choices`), never call it.
+    UseAsIs,
+    /// `alters_data` — never call it; the expression is `string_if_invalid`.
+    AltersData,
+}
+
+impl TemplateCallGuard {
+    /// May a template call it? Only when no marker forbids it.
+    pub fn may_call(self) -> bool {
+        self == TemplateCallGuard::Callable
+    }
+}
+
+/// Classify a resolved callable for a template, reading
+/// `do_not_call_in_templates` then `alters_data` exactly as Django does
+/// (`getattr(obj, name, False)`; a missing attribute or a raising descriptor is
+/// falsy).
+///
+/// Reads the markers off the object it is GIVEN. For a bound method that is
+/// the function's attribute (`QuerySet.delete.alters_data`), which Django
+/// stamps on `Model.save/delete`, `QuerySet.delete/update/create/…` and the
+/// related-manager mutators.
+pub fn template_call_guard(obj: &pyo3::Bound<'_, pyo3::PyAny>) -> TemplateCallGuard {
+    if attr_is_truthy(obj, "do_not_call_in_templates") {
+        TemplateCallGuard::UseAsIs
+    } else if attr_is_truthy(obj, "alters_data") {
+        TemplateCallGuard::AltersData
+    } else {
+        TemplateCallGuard::Callable
+    }
 }
 
 /// Truthiness of an optional attribute (`getattr(obj, name, False)` +
