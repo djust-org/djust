@@ -439,23 +439,112 @@ class TestEveryShapeThatHoldsAForm:
 
 @pytest.mark.django_db
 class TestTheLimit:
-    def test_a_form_past_the_scan_depth_is_still_flattened(self):
-        from djust.serialization import _FORM_SCAN_DEPTH, holds_form
-
+    @staticmethod
+    def _wrapped(depth: int) -> Any:
         value: Any = _invalid()
-        for _ in range(_FORM_SCAN_DEPTH + 1):
+        for _ in range(depth):
             value = [value]
-        assert holds_form(value) is False
-        shallow = _invalid()
-        for _ in range(_FORM_SCAN_DEPTH):
-            shallow = [shallow]
-        assert holds_form(shallow) is True
+        return value
+
+    def test_the_boundary_is_four_containers_not_the_constant(self):
+        """The documented limit is a LITERAL four: a test written in terms of
+        ``_FORM_SCAN_DEPTH`` follows the constant wherever it is moved and pins nothing."""
+        from djust.serialization import holds_form
+
+        for depth in range(0, 5):
+            assert holds_form(self._wrapped(depth)) is True, depth
+        for depth in (5, 6, 9):
+            assert holds_form(self._wrapped(depth)) is False, depth
+
+    @pytest.mark.django_db
+    def test_four_deep_renders_and_five_deep_stays_flattened(self):
+        """Rendered, not only classified: the 4-deep form answers ``.errors`` from the sidecar,
+        the 5-deep one is the flattened dict of widget HTML it always was (``.errors`` empty)."""
+
+        wrapped = self._wrapped
+
+        class V(LiveView):
+            template = _page("[{{ deep4.0.0.0.0.name.errors }}][{{ deep5.0.0.0.0.0.name.errors }}]")
+
+            def mount(self, request, **kwargs):
+                self.deep4 = wrapped(4)
+                self.deep5 = wrapped(5)
+
+        client = LiveViewTestClient(V)
+        client.mount()
+        out = _inner(client.render())
+        assert out.startswith("[<ul") and REQUIRED in out.split("][")[0], out
+        assert out.endswith("[]"), out  # five deep: flattened, nothing to read
 
     def test_plain_data_is_not_claimed(self):
         from djust.serialization import holds_form
 
         for value in ("s", 3, None, [1, {"a": [2]}], {"a": (1, 2)}, {"a": object()}, set()):
             assert holds_form(value) is False
+
+
+@pytest.mark.django_db
+class TestAManagementFormHeldDirectly:
+    """Pins TODAY's behaviour (#3799, docs/SECURE_DEFAULTS.md): a view that keeps
+    ``formset.management_form`` as an attribute used to flatten it (no data readable); it now
+    reaches the template as the plain ``Form`` it is, with no pinned floor, so ``{{ mf.data }}``
+    prints the formset's whole submitted data, exactly as the plain backend does. The formset's OWN
+    ``management_form`` (reached through the formset) stays floored. When #3799 is resolved this
+    test flips: update it and the doc together."""
+
+    def _world(self):
+        from django.contrib.auth import get_user_model
+        from django.contrib.auth.forms import UserChangeForm
+        from django.forms import modelformset_factory
+
+        User = get_user_model()
+        user = User.objects.create_user("mf-user", "mf@example.com", "pw-3767")
+        data = {
+            "form-TOTAL_FORMS": "1",
+            "form-INITIAL_FORMS": "1",
+            "form-MIN_NUM_FORMS": "0",
+            "form-MAX_NUM_FORMS": "1000",
+            "form-0-id": str(user.pk),
+            "form-0-username": user.username,
+            "form-0-password": user.password,
+            "form-0-email": "mf@example.com",
+            "form-0-date_joined": "2020-01-01 00:00:00",
+        }
+        FormSet = modelformset_factory(User, form=UserChangeForm, extra=0)
+        fs = FormSet(data, queryset=User.objects.filter(pk=user.pk))
+        assert fs.is_valid(), fs.errors
+        return user, fs
+
+    def _live(self, src, attrs):
+        class V(LiveView):
+            template = _page(src)
+
+            def mount(self, request, **kwargs):
+                for name, value in attrs().items():
+                    setattr(self, name, value)
+
+        client = LiveViewTestClient(V)
+        client.mount()
+        return _inner(client.render())
+
+    def test_held_directly_it_is_readable_as_on_the_plain_backend(self):
+        from djust.template.backend import DjustTemplateBackend
+
+        user, fs = self._world()
+        tail = user.password[-12:]
+        held = self._live("{{ mf.data }}", lambda: {"mf": fs.management_form})
+        plain = DjustTemplateBackend(
+            {"NAME": "mf-3767", "DIRS": [], "APP_DIRS": True, "OPTIONS": {}}
+        ).from_string("{{ mf.data }}")
+        assert tail in held, "pinned: a directly held management form is a plain Form (#3799)"
+        assert tail in plain.render({"mf": fs.management_form})
+
+    def test_through_the_formset_it_stays_floored(self):
+        user, fs = self._world()
+        out = self._live(
+            "{{ fs.management_form.data }}{{ fs.0.initial }}{{ fs.0.data }}", lambda: {"fs": fs}
+        )
+        assert user.password[-12:] not in out and "mf-user" in out
 
 
 # --------------------------------------------------------------------------- #
