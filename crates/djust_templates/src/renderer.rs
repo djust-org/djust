@@ -1364,7 +1364,15 @@ fn call_custom_tag(
 /// typed Python values (#3756). Leading underscores: Django's own variable syntax refuses such a
 /// name, so no template can spell it, and `python/djust/components/rust_handlers.py`
 /// (`TYPED_ARGS_KEY`) is the one reader.
-const TYPED_ARGS_KEY: &str = "__djust_typed_args__";
+///
+/// The key is RESERVED (#3773): it is the engine's, never the application's. A context key of this
+/// name (a top-level dict key in the view's context, or a raw-Python sidecar object) is removed
+/// before any handler is called, at [`bridged_context_map`] for the flat map and at
+/// `registry::build_py_context` / `build_py_context_memo` for the sidecar and the live frames, and
+/// only [`call_custom_tag`] puts the key back, from [`typed_operands`]. Without the removal, a
+/// template whose operands are all literals produces an empty `typed_operands`, nothing is
+/// inserted, and the application's value would stand in for the engine's.
+pub(crate) const TYPED_ARGS_KEY: &str = "__djust_typed_args__";
 
 /// Each `key=<expression>` operand of an inline tag, resolved to a [`Value`] through
 /// [`get_value`] and keyed by `key` (#3756).
@@ -2813,6 +2821,8 @@ impl djust_core::context::BlockSuperSource for DeferredBlockSuper {
 /// alone: the lazy object replaces only the scope's own, EMPTY `block`.
 fn bridged_context_map(context: &Context) -> Result<BridgedContextMap> {
     let mut map = context.to_hashmap();
+    // #3773: the typed-operand channel is the engine's. See `TYPED_ARGS_KEY`.
+    map.remove(TYPED_ARGS_KEY);
     let mut guard = None;
     if let Some((lazy_block, lazy_guard)) = context.lazy_block_value()? {
         let scope_block =
