@@ -22,6 +22,7 @@ without being the one a test author thought of is still caught.
 
 from __future__ import annotations
 
+import html as html_lib
 import re
 from typing import Any, Callable
 
@@ -360,6 +361,72 @@ class TestEachMarkerIsHonouredByTheSerializer3772:
         before = world.snapshot()
         render("{% for u in users %}{{ u.widget }}{% endfor %}", {"users": User.objects.all()})
         assert world.snapshot() != before, "the harness never reached the callable"
+
+
+HEX = re.compile(r"0x[0-9a-f]+")
+
+
+def _marked(*markers: str) -> Callable:
+    """A zero-argument callable answering ``"CALLED"``, carrying ``markers``."""
+
+    def fn():
+        return "CALLED"
+
+    for marker in markers:
+        setattr(fn, marker, True)
+    return fn
+
+
+#: Markers -> what Django renders for ``{{ fn }}``. Asserted against Django
+#: below, not assumed: ``do_not_call_in_templates`` is read FIRST, so a callable
+#: with BOTH markers is used as-is (its repr), where ``alters_data`` alone is
+#: refused (empty) and no marker is called.
+ORDER_CASES = [
+    pytest.param((), "CALLED", id="no-marker"),
+    pytest.param(("alters_data",), "", id="alters_data-only"),
+    pytest.param(("do_not_call_in_templates",), "<function>", id="do_not_call-only"),
+    pytest.param(("alters_data", "do_not_call_in_templates"), "<function>", id="both-markers"),
+]
+
+
+def _spell(out: str) -> str:
+    """A function's repr carries a module-qualified name and an address."""
+    scrubbed = HEX.sub("0x…", html_lib.unescape(out))
+    # The qualified name holds `<locals>`, so match up to the address.
+    return re.sub(r"<function .*? at 0x…>", "<function>", scrubbed)
+
+
+class TestTheMarkerOrderIsDjangos3772:
+    """The ORDER of the two marker reads, which no other test can see: a
+    refused callable and a used-as-is one both stay un-called, so only the
+    RENDERED TEXT tells ``alters_data``-first from ``do_not_call_in_templates``-
+    first. A swapped order passed the whole matrix above (reviewer, #3776).
+
+    Through ``Context::maybe_call`` (the walk every entry shares) with Django's
+    own engine as the control. The rule is also asserted on the Rust function
+    directly: ``crates/djust_core/tests/test_template_call_guard_3772.rs``.
+    """
+
+    @pytest.mark.parametrize(("markers", "expected"), ORDER_CASES)
+    def test_django_is_the_control(self, markers, expected) -> None:
+        assert _spell(django_render("{{ fn }}", {"fn": _marked(*markers)})) == expected
+
+    # Not the LiveView entry: a bare function stored as a VIEW ATTRIBUTE is not
+    # a context value there (it renders empty for every marker, unmarked
+    # included — measured, and unrelated to this change). The LiveView path
+    # shares `maybe_call` with the two entries below.
+    @pytest.mark.parametrize("render", [ENGINES[0], ENGINES[2]])
+    @pytest.mark.parametrize(("markers", "expected"), ORDER_CASES)
+    def test_the_rust_engine_renders_what_django_renders(self, render, markers, expected) -> None:
+        assert _spell(render("{{ fn }}", {"fn": _marked(*markers)})) == expected
+
+    @pytest.mark.parametrize(("markers", "expected"), ORDER_CASES)
+    def test_the_dotted_walk_agrees(self, markers, expected) -> None:
+        """The same rule one segment down, where ``walk_live`` applies it after
+        a getattr rather than at the root."""
+        holder = type("Holder", (), {"fn": staticmethod(_marked(*markers))})()
+        assert _spell(raw_render("{{ h.fn }}", {"h": holder})) == expected
+        assert _spell(django_render("{{ h.fn }}", {"h": holder})) == expected
 
 
 @pytest.mark.django_db
