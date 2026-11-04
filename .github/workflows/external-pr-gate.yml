@@ -30,13 +30,25 @@ on:
     types: [opened, reopened, synchronize, ready_for_review]
   pull_request_review:
     types: [submitted, dismissed]
+  # Merge queue. `external PRs require a maintainer approval` is a REQUIRED
+  # check, and a required check that is never reported on the queue's temporary
+  # `gh-readonly-queue/...` branch stalls every queue entry. A PR can only
+  # ENTER the queue once its required checks passed -- for an external author
+  # that means a maintainer already approved -- so on this event the job just
+  # reports success. The real check below needs a PR payload, which a
+  # `merge_group` event does not have.
+  merge_group:
+    types: [checks_requested]
 
 permissions:
   contents: read
   pull-requests: read
 
+# `merge_group` has neither a PR number nor `github.event.number`; without the
+# `github.sha` fallback every queue entry would share the group
+# `external-pr-gate-` and cancel the others (cancel-in-progress is true).
 concurrency:
-  group: external-pr-gate-${{ github.event.pull_request.number || github.event.number }}
+  group: external-pr-gate-${{ github.event.pull_request.number || github.event.number || github.sha }}
   cancel-in-progress: true
 
 jobs:
@@ -44,7 +56,12 @@ jobs:
     name: external PRs require a maintainer approval
     runs-on: ubuntu-latest
     steps:
+      - name: Merge queue entry -- the PR was gated before it was queued
+        if: github.event_name == 'merge_group'
+        run: echo "merge_group entry - the PR passed this gate to be queued, nothing to re-check."
+
       - name: Check author permission, then require an approval if external
+        if: github.event_name != 'merge_group'
         uses: actions/github-script@v7
         with:
           script: |

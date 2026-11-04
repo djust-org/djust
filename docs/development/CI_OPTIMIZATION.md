@@ -167,6 +167,20 @@ coverage. The original cache still coordinates workers inside the owning shard.
 A local instrumented run of all six real readers with two workers passed and
 recorded exactly one full-sweep subprocess; the corpus generator was unchanged.
 
+A second fixture is shared the same way (`SHARED_FIXTURES` in `tests/corpus_shards.py`,
+#3781): the module-scoped `runs` fixture of `python/tests/test_url_scheme_sweep_3665.py`,
+which starts four subprocess sweeps. Pytest-split used to deal its sixteen readers over
+all four shards, and every shard that held one ran the whole sweep, so a run paid for it
+four times. Because `runs` is a generic name, the registry restricts it to that module; a
+`runs` fixture anywhere else is left to the ordinary splitter. The collection probe
+reports every unit under `shared_units`, the shard guard requires each unit to sit whole
+in one shard, and it fails if the URL-sweep unit is not recognised in the real tree (a
+renamed module or fixture would silently un-share it). The recorded durations of those
+readers still come from runs where every shard ran the sweep, so they over-state the
+sweep (about 1150 s charged for one sweep that takes about 380 s); refresh
+`.test_durations` from the first `main` run after this lands
+(`make test-durations-from-ci RUN=<id>`) to correct the balance.
+
 The first grouped run passed but took 7m22s versus the 7m23s parent run. Its
 max-only cost estimate ignored a second reader waiting 137 seconds for the sweep;
 the final allocator includes that occupied worker time. Compare the next
