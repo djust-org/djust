@@ -702,6 +702,12 @@ def serialize_context(
     fails internally it permits no names, so the model ships as an empty dict (still no field
     leaves).
 
+    The walk is bounded (#3814). A container, or a model row (class and primary key), that the
+    walk is already inside of becomes ``str(obj)``, so a list that holds itself and a
+    ``ManyToManyField("self")`` that comes back to where it started end at the first return;
+    nesting past 128 levels (a chain of distinct rows) becomes ``str(obj)`` too. A ``render()``
+    that returns something other than a ``str`` falls back to ``str(obj)``.
+
     Args:
         context: Template context dictionary
 

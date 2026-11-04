@@ -4518,6 +4518,9 @@ fn serialize_queryset_py(
 /// - Django models: `model_to_dict` plus four fixed `get_*` methods, every name
 ///   held to the serialization gate (the floor) and every method to the same
 ///   call guard (#3778). Not used by any production path; see #3778.
+/// - The walk is bounded (#3814): a container or model row it is already
+///   inside of, or anything past `SERIALIZE_CONTEXT_MAX_DEPTH` levels, crosses
+///   as `str(obj)`. A `render()` that returns a non-`str` does too.
 /// - Django types (datetime, UUID): convert to strings
 /// - `Decimal`: **converts to a float, not a string** (#2214). The branch below
 ///   intends a string and is dead, because `extract::<f64>()` above it honours
@@ -4536,9 +4539,10 @@ fn serialize_context_py(py: Python, context: &Bound<'_, PyDict>) -> PyResult<Py<
         // Snapshotted before recursing (#2510, round 4) — same shape as
         // every other site this bug class was found in.
         let pairs: Vec<(Bound<'_, PyAny>, Bound<'_, PyAny>)> = context.iter().collect();
+        let mut walk = SerializeWalk::default();
         for (key, value) in pairs {
             let key_str: String = key.extract()?;
-            let serialized_value = serialize_python_value(py, &value)?;
+            let serialized_value = serialize_nested(py, &value, &mut walk)?;
             result_dict.set_item(key_str, serialized_value)?;
         }
 
@@ -4546,8 +4550,89 @@ fn serialize_context_py(py: Python, context: &Bound<'_, PyDict>) -> PyResult<Py<
     })
 }
 
-/// Recursively serialize a Python value to JSON-compatible form
-fn serialize_python_value(py: Python, value: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
+/// How many levels [`serialize_python_value`] descends before an element crosses as `str(obj)`
+/// instead (#3814). A level is one container, one model, or one model's dict, so a hop through a
+/// related manager (model -> its dict -> the manager's list -> the next model) is three.
+///
+/// The all-fields model arm has no field paths to bound it, so a RELATION is unbounded: with
+/// `Person.friends = ManyToManyField("self")` and A <-> B, `model_to_dict(a)` holds `[b]`, whose
+/// `model_to_dict` holds `[a']` (a FRESH instance each time, so no identity check ends it), and the
+/// recursion ran until the stack overflowed (`Fatal Python error: Segmentation fault`, which
+/// `guard_panic` cannot catch: it is the process's stack, not a panic). A cycle is ended by
+/// [`SerializeWalk`]; this ceiling is what bounds a chain of DISTINCT rows (a long `next` link).
+/// It is sized by frame cost, not by data: far below `djust_core::MAX_CONVERSION_DEPTH` (1000,
+/// CPython's own `repr` limit), because a level here carries a `String`, a `Vec` and a Python
+/// call's worth of locals, and nothing a context holds is meant to nest related rows this deep.
+const SERIALIZE_CONTEXT_MAX_DEPTH: usize = 128;
+
+/// What a [`SerializeWalk`] remembers about an object it is inside of.
+#[derive(PartialEq)]
+enum WalkKey {
+    /// A list, tuple or dict, by address: a container that holds itself is the same object.
+    Container(usize),
+    /// A model row, by class and primary key: a relation hands back a FRESH instance of the row
+    /// it came from, so the address says nothing and the row is what repeats.
+    Row(usize, String),
+}
+
+/// The objects [`serialize_python_value`] is currently inside of, and how deep it is (#3814).
+#[derive(Default)]
+struct SerializeWalk {
+    inside: Vec<WalkKey>,
+    depth: usize,
+}
+
+/// [`serialize_python_value`] one level down, or `str(value)` when going down is unsafe: past
+/// [`SERIALIZE_CONTEXT_MAX_DEPTH`], or into a container the walk is already inside of (a list that
+/// holds itself). Every recursive step goes through here, so no arm can forget the check (#1646).
+fn serialize_nested(
+    py: Python,
+    value: &Bound<'_, PyAny>,
+    walk: &mut SerializeWalk,
+) -> PyResult<Py<PyAny>> {
+    let key = (value.cast::<PyList>().is_ok()
+        || value.cast::<PyTuple>().is_ok()
+        || value.cast::<PyDict>().is_ok())
+    .then(|| WalkKey::Container(value.as_ptr() as usize));
+    if walk.depth >= SERIALIZE_CONTEXT_MAX_DEPTH
+        || key.as_ref().is_some_and(|k| walk.inside.contains(k))
+    {
+        let str_repr = value.str()?.to_string();
+        return Ok(str_repr.into_pyobject(py)?.to_owned().into_any().unbind());
+    }
+    walk.depth += 1;
+    let pushed = key.is_some();
+    if let Some(key) = key {
+        walk.inside.push(key);
+    }
+    let out = serialize_python_value(py, value, walk);
+    if pushed {
+        walk.inside.pop();
+    }
+    walk.depth -= 1;
+    out
+}
+
+/// The model row `value` is, as a [`WalkKey`]: its class and its primary key (its address when it
+/// has none, an unsaved row).
+fn row_key(value: &Bound<'_, PyAny>) -> WalkKey {
+    let class = value.get_type().as_ptr() as usize;
+    match value.getattr("pk") {
+        Ok(pk) if !pk.is_none() => match pk.str() {
+            Ok(text) => WalkKey::Row(class, text.to_string()),
+            Err(_) => WalkKey::Container(value.as_ptr() as usize),
+        },
+        _ => WalkKey::Container(value.as_ptr() as usize),
+    }
+}
+
+/// Recursively serialize a Python value to JSON-compatible form. Recurse through
+/// [`serialize_nested`], never by calling this directly: it is what keeps the walk bounded (#3814).
+fn serialize_python_value(
+    py: Python,
+    value: &Bound<'_, PyAny>,
+    walk: &mut SerializeWalk,
+) -> PyResult<Py<PyAny>> {
     // Fast path: None
     if value.is_none() {
         return Ok(py.None());
@@ -4567,7 +4652,7 @@ fn serialize_python_value(py: Python, value: &Bound<'_, PyAny>) -> PyResult<Py<P
         let raw: Vec<Bound<'_, PyAny>> = list.iter().collect();
         let result_list = PyList::empty(py);
         for item in raw {
-            let serialized = serialize_python_value(py, &item)?;
+            let serialized = serialize_nested(py, &item, walk)?;
             result_list.append(serialized)?;
         }
         return Ok(result_list.into());
@@ -4577,7 +4662,7 @@ fn serialize_python_value(py: Python, value: &Bound<'_, PyAny>) -> PyResult<Py<P
         let raw: Vec<Bound<'_, PyAny>> = tuple.iter().collect();
         let result_list = PyList::empty(py);
         for item in raw {
-            let serialized = serialize_python_value(py, &item)?;
+            let serialized = serialize_nested(py, &item, walk)?;
             result_list.append(serialized)?;
         }
         return Ok(result_list.into());
@@ -4590,7 +4675,7 @@ fn serialize_python_value(py: Python, value: &Bound<'_, PyAny>) -> PyResult<Py<P
         let result_dict = PyDict::new(py);
         for (k, v) in pairs {
             let key_str: String = k.extract()?;
-            let serialized = serialize_python_value(py, &v)?;
+            let serialized = serialize_nested(py, &v, walk)?;
             result_dict.set_item(key_str, serialized)?;
         }
         return Ok(result_dict.into());
@@ -4601,7 +4686,7 @@ fn serialize_python_value(py: Python, value: &Bound<'_, PyAny>) -> PyResult<Py<P
         // Call list() on the QuerySet to force evaluation
         if let Ok(list_fn) = py.eval(c"list", None, None) {
             if let Ok(as_list) = list_fn.call1((value,)) {
-                return serialize_python_value(py, &as_list);
+                return serialize_nested(py, &as_list, walk);
             }
         }
     }
@@ -4668,11 +4753,17 @@ fn serialize_python_value(py: Python, value: &Bound<'_, PyAny>) -> PyResult<Py<P
         {
             match render_method.call0() {
                 Ok(rendered) => {
-                    // Wrap in {"render": ...} dict
-                    let wrapper = PyDict::new(py);
-                    let rendered_str: String = rendered.extract()?;
-                    wrapper.set_item("render", rendered_str)?;
-                    return Ok(wrapper.into());
+                    // Wrap in {"render": ...} dict. A `render()` that returns something other than
+                    // a `str` (an int, a list, `None`) is a render that did not produce markup:
+                    // it falls back to `str(value)` exactly as a raising one does, and does NOT
+                    // raise `TypeError` out of this function (#3814).
+                    if let Ok(rendered_str) = rendered.extract::<String>() {
+                        let wrapper = PyDict::new(py);
+                        wrapper.set_item("render", rendered_str)?;
+                        return Ok(wrapper.into());
+                    }
+                    let str_repr = value.str()?.to_string();
+                    return Ok(str_repr.into_pyobject(py)?.to_owned().into_any().unbind());
                 }
                 Err(_) => {
                     // Render failed, fallback to str()
@@ -4713,7 +4804,7 @@ fn serialize_python_value(py: Python, value: &Bound<'_, PyAny>) -> PyResult<Py<P
     // the gate cannot be resolved the model falls through to `str()` rather
     // than shipping ungated fields (the queryset serializer's own rule).
     if value.hasattr("_meta")? {
-        if let Some(serialized) = serialize_model_gated(py, value) {
+        if let Some(serialized) = serialize_model_gated(py, value, walk) {
             return serialized;
         }
     }
@@ -4732,7 +4823,16 @@ fn serialize_python_value(py: Python, value: &Bound<'_, PyAny>) -> PyResult<Py<P
 /// ungated dict. A name the gate refuses is dropped from the dict, as the
 /// queryset serializer drops it; a method that is refused, or raises, is simply
 /// absent. Nothing here logs an exception (ADR-038).
-fn serialize_model_gated(py: Python, value: &Bound<'_, PyAny>) -> Option<PyResult<Py<PyAny>>> {
+///
+/// A row the walk is already inside of (the other end of a symmetrical relation, a
+/// `ManyToManyField("self")` that comes back to where it started) is also "did not apply": it
+/// crosses as `str(row)`, and it is checked BEFORE `model_to_dict` runs, which is the query that
+/// would fetch the next ring of the cycle (#3814).
+fn serialize_model_gated(
+    py: Python,
+    value: &Bound<'_, PyAny>,
+    walk: &mut SerializeWalk,
+) -> Option<PyResult<Py<PyAny>>> {
     // Called with these names, in this order, only when permitted. Specific,
     // known get_* methods: calling every get_* method can recurse forever.
     const METHODS: [&str; 4] = [
@@ -4742,6 +4842,10 @@ fn serialize_model_gated(py: Python, value: &Bound<'_, PyAny>) -> Option<PyResul
         "get_username",
     ];
 
+    let row = row_key(value);
+    if walk.inside.contains(&row) {
+        return None;
+    }
     let gate = resolve_attr_gate(py).ok()?;
     let model_to_dict = py
         .import("django.forms.models")
@@ -4782,8 +4886,11 @@ fn serialize_model_gated(py: Python, value: &Bound<'_, PyAny>) -> Option<PyResul
         }
     }
 
-    // Recursively serialize the enhanced dict
-    Some(serialize_python_value(py, result_dict.as_any()))
+    // Recursively serialize the enhanced dict, with this row marked as one the walk is inside of.
+    walk.inside.push(row);
+    let serialized = serialize_nested(py, result_dict.as_any(), walk);
+    walk.inside.pop();
+    Some(serialized)
 }
 
 /// Build a tree structure from flat field paths for efficient nested traversal
