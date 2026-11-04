@@ -5,6 +5,7 @@ from typing import Any, Dict, Optional
 
 from django.utils.html import conditional_escape
 from djust import Component
+from djust._html import attr_name
 
 
 class Button(Component):
@@ -163,7 +164,7 @@ class Button(Component):
 
         # Add data attributes
         for k, v in self.data.items():
-            attrs.append(f'data-{html.escape(k)}="{html.escape(str(v))}"')
+            attrs.append(f'{attr_name("data-" + str(k))}="{html.escape(str(v))}"')
 
         # Add onclick (use sparingly)
         if self.onclick and not self.disabled and not self.loading:

@@ -30,16 +30,15 @@ Refs #3774, #3766, #3775, #1859, #1468, #1197.
 
 from __future__ import annotations
 
-import importlib
-import inspect
 import re
-from html.parser import HTMLParser
 from pathlib import Path
 
+import payload_sweep_3774 as sweepmod
 import pytest
-from django.template import Context, Node, NodeList
+from django.template import Node
 from django.utils.html import conditional_escape
 from django.utils.safestring import mark_safe
+from payload_drivers_3774 import DRIVERS
 
 from scripts.lib import safe_markup_audit as audit
 from scripts.lib.safe_markup_taint import find_unsafe_markup
@@ -94,7 +93,10 @@ class TestTheAuditRulesCanFail:
     }
 
     def _audited(self):
-        return {("a.py", "f"): _entry(1), ("b.py", "g"): _entry(2)}
+        return {
+            ("a.py", "f"): _entry(1, evidence=[("a.py", "needle")]),
+            ("b.py", "g"): _entry(2, evidence=[("b.py", "needle")]),
+        }
 
     def test_a_clean_baseline_has_no_problems(self):
         problems = audit.reconcile(self.FOUND, self._audited())
@@ -127,13 +129,62 @@ class TestTheAuditRulesCanFail:
         assert problems["no_evidence"] == [("a.py", "f")]
 
     def test_evidence_that_is_not_in_the_file_is_reported(self, tmp_path):
-        (tmp_path / "f.py").write_text("x = needle\n")
-        ok = {("a.py", "f"): _entry(1, evidence=[("f.py", "needle")])}
-        gone = {("a.py", "f"): _entry(1, evidence=[("f.py", "needle"), ("f.py", "absent")])}
-        nofile = {("a.py", "f"): _entry(1, evidence=[("nope.py", "needle")])}
+        (tmp_path / "f.py").write_text("def f():\n    x = needle\n")
+        key = ("f.py", "f")
+        ok = {key: _entry(1, evidence=[("f.py", "needle")])}
+        gone = {key: _entry(1, evidence=[("f.py", "needle"), ("f.py", "absent")])}
+        nofile = {key: _entry(1, evidence=[("nope.py", "needle")])}
         assert audit.missing_evidence(ok, tmp_path) == []
-        assert audit.missing_evidence(gone, tmp_path) == [(("a.py", "f"), "f.py", "absent")]
-        assert audit.missing_evidence(nofile, tmp_path) == [(("a.py", "f"), "nope.py", "needle")]
+        assert audit.missing_evidence(gone, tmp_path) == [(key, "f.py", "absent", "f")]
+        assert audit.missing_evidence(nofile, tmp_path) == [(key, "nope.py", "needle", "<module>")]
+
+    def test_evidence_is_the_audited_functions_own_code_not_the_file(self, tmp_path):
+        """Review of #3821: a file-wide substring check passed when the escape that mattered was
+        deleted from the audited function but a twin of it survived elsewhere in the file."""
+        (tmp_path / "m.py").write_text(
+            "def other():\n"
+            "    e_name = conditional_escape(name)\n"
+            "\n"
+            "def audited():\n"
+            "    e_name = name\n"
+        )
+        key = ("m.py", "audited")
+        entry = {key: _entry(1, evidence=[("m.py", "e_name = conditional_escape(name)")])}
+        assert audit.missing_evidence(entry, tmp_path) == [
+            (key, "m.py", "e_name = conditional_escape(name)", "audited")
+        ]
+
+    def test_a_comment_or_a_docstring_is_not_evidence(self, tmp_path):
+        (tmp_path / "m.py").write_text(
+            "def audited():\n"
+            '    """e_name = conditional_escape(name)"""\n'
+            "    # e_name = conditional_escape(name)\n"
+            "    e_name = name  # e_name = conditional_escape(name)\n"
+        )
+        key = ("m.py", "audited")
+        entry = {key: _entry(1, evidence=[("m.py", "conditional_escape(name)")])}
+        assert len(audit.missing_evidence(entry, tmp_path)) == 1
+
+    def test_code_in_the_scope_is_evidence_and_a_named_scope_is_honoured(self, tmp_path):
+        (tmp_path / "m.py").write_text(
+            "def helper():\n    return escape(v)\n\ndef audited():\n    return helper()\n"
+        )
+        key = ("m.py", "audited")
+        own = [("m.py", "return helper()")]
+        scoped = [("m.py", "return escape(v)", "helper")]
+        wrong_scope = [("m.py", "return escape(v)")]
+        assert audit.missing_evidence({key: _entry(1, evidence=own)}, tmp_path) == []
+        assert audit.missing_evidence({key: _entry(1, evidence=scoped)}, tmp_path) == []
+        assert len(audit.missing_evidence({key: _entry(1, evidence=wrong_scope)}, tmp_path)) == 1
+
+    def test_an_entry_needs_one_literal_in_its_own_body(self):
+        found = {("a.py", "f"): ["f:3 mark_safe() <- x"]}
+        helper_only = {("a.py", "f"): _entry(1, evidence=[("a.py", "needle", "helper")])}
+        other_file = {("a.py", "f"): _entry(1, evidence=[("elsewhere.py", "needle")])}
+        own = {("a.py", "f"): _entry(1, evidence=[("a.py", "needle"), ("a.py", "x", "helper")])}
+        assert audit.reconcile(found, helper_only)["no_own_evidence"] == [("a.py", "f")]
+        assert audit.reconcile(found, other_file)["no_own_evidence"] == [("a.py", "f")]
+        assert audit.reconcile(found, own)["no_own_evidence"] == []
 
 
 class TestTheScanReadsTheRightFiles:
@@ -188,173 +239,155 @@ class TestTheEscaperIsRecognisedByOrigin:
 
 
 # ---------------------------------------------------------------------------
-# The empirical backstop: render every component tag with a hostile payload and parse the output.
+# The empirical backstop: drive the audited sinks with a hostile payload, parse the output, and
+# prove the sweep RAN each sink (``payload_sweep_3774`` / ``payload_drivers_3774``).
 # ---------------------------------------------------------------------------
 
-TAG = "ZQ"
-PAYLOAD = (
-    TAG + '"onmouseover=' + TAG + "<b id=" + TAG + ">'" + TAG + "</script><svg onload=" + TAG + ">"
-)
-TAG_MODULES = (
-    "djust.components.templatetags.djust_components",
-    "djust.components.templatetags._forms",
-    "djust.components.templatetags._advanced",
-    "djust.components.templatetags._charts",
-    "djust.components.templatetags._dev_tools",
-)
-SHAPES = ("str", "list_str", "list_dict", "dict")
-#: Parameters that are, by contract, already-rendered (escaped) markup rather than data.
-RENDERED_PARAMS = frozenset({"content", "body", "children"})
+TAG = sweepmod.TAG
+PAYLOAD = sweepmod.PAYLOAD
+URL_PAYLOAD = sweepmod.URL_PAYLOAD
+injections = sweepmod.injections
 
 
-class _Injection(HTMLParser):
-    """Records what the payload turned into: an event-handler attribute or an element it opened."""
-
-    def __init__(self) -> None:
-        super().__init__(convert_charrefs=True)
-        self.hits: list[str] = []
-
-    def handle_starttag(self, tag, attrs):
-        for name, value in attrs:
-            if name in ("onmouseover", "onload"):
-                self.hits.append(f"<{tag} {name}=...>")
-        if tag == "b" and dict(attrs).get("id") == TAG:
-            self.hits.append("<b id=ZQ>")
-
-    handle_startendtag = handle_starttag
+@pytest.fixture(scope="module")
+def traced_sweep():
+    """The whole sweep once, with the lines of every audited file recorded."""
+    files = {str(audit.ROOT / key[0]) for key in audit.AUDITED}
+    executed: dict[str, set[int]] = {}
+    with sweepmod.line_tracer(files, executed):
+        result = sweepmod.sweep(DRIVERS)
+    return result, executed
 
 
-#: What an UNESCAPED payload looks like as raw text. Escaped, each starts with ``&quot;`` / ``&lt;``
-#: / ``&#x27;`` instead, so output without one of these cannot hold an injection and is not parsed
-#: (parsing every output is the slow part of the sweep).
-_RAW = ('"onmouseover=' + TAG, "<b id=" + TAG, "<svg onload=" + TAG, "'" + TAG + "<")
+class TestTheCheckerCanFail:
+    class Vulnerable(Node):
+        def __init__(self, kwargs):
+            self.kwargs = kwargs
 
+        def render(self, context):
+            return mark_safe(
+                f'<a title="{self.kwargs["x"]}">{self.kwargs["x"]}</a><a href="{self.kwargs["u"]}">go</a>'
+            )
 
-def injections(markup) -> list[str]:
-    text = str(markup)
-    if not any(raw in text for raw in _RAW):
-        return []
-    parser = _Injection()
-    parser.feed(text)
-    parser.close()
-    return parser.hits
+    class Escaped(Vulnerable):
+        def render(self, context):
+            x = conditional_escape(self.kwargs["x"])
+            u = conditional_escape(self.kwargs["u"])
+            return mark_safe(f'<a title="{x}">{x}</a><a href="{u}">go</a>')
 
-
-def _keys() -> tuple[set[str], set[str]]:
-    """Every kwarg name the tags read, and the ones they ``int()`` straight away."""
-    keys: set[str] = set()
-    numeric: set[str] = set()
-    for name in TAG_MODULES:
-        src = inspect.getsource(importlib.import_module(name))
-        keys |= set(re.findall(r'kw\.get\(\s*"(\w+)"', src))
-        keys |= set(re.findall(r'nkw\.get\(\s*"(\w+)"', src))
-        numeric |= set(re.findall(r'int\(\s*kw\.get\(\s*"(\w+)"', src))
-    return keys, numeric
-
-
-def _shape(shape: str, keys: set[str], numeric: set[str]):
-    row = {k: (3 if k in numeric else PAYLOAD) for k in keys}
-    return {
-        "str": PAYLOAD,
-        "list_str": [PAYLOAD, PAYLOAD],
-        "list_dict": [dict(row), dict(row, children=[dict(row)])],
-        "dict": dict(row),
-    }[shape]
-
-
-def render_node(cls, shape: str, keys: set[str], numeric: set[str]):
-    """Instantiate a tag ``Node`` with the payload in every kwarg, render it; ``None`` if it cannot."""
-    kwargs = {k: (3 if k in numeric else _shape(shape, keys, numeric)) for k in keys}
-    args = []
-    for name in (p for p in inspect.signature(cls.__init__).parameters if p != "self"):
-        args.append(kwargs if name == "kwargs" else NodeList() if name == "nodelist" else PAYLOAD)
-    try:
-        return cls(*args).render(Context({}))
-    except Exception:  # noqa: BLE001 - a tag that rejects the payload is not rendering it
-        return None
-
-
-def render_function(func, shape: str, keys: set[str], numeric: set[str]):
-    params = {}
-    for name, p in inspect.signature(func).parameters.items():
-        if p.kind in (p.VAR_KEYWORD, p.VAR_POSITIONAL):
-            continue
-        if name == "context":
-            params[name] = Context({})
-        elif name in RENDERED_PARAMS:
-            params[name] = conditional_escape(PAYLOAD)
-        else:
-            params[name] = _shape(shape, keys, numeric)
-    try:
-        return func(**params)
-    except Exception:  # noqa: BLE001
-        return None
-
-
-def sweep() -> tuple[list[tuple], int, int]:
-    """``(injections found, nodes rendered, nodes discovered)`` over every tag module."""
-    keys, numeric = _keys()
-    found: list[tuple] = []
-    rendered = discovered = 0
-    for module_name in TAG_MODULES:
-        module = importlib.import_module(module_name)
-        for name, obj in inspect.getmembers(module):
-            if getattr(obj, "__module__", None) != module_name:
-                continue
-            if inspect.isclass(obj) and issubclass(obj, Node):
-                discovered += 1
-                ok = False
-                for shape in SHAPES:
-                    out = render_node(obj, shape, keys, numeric)
-                    if out is None:
-                        continue
-                    ok = True
-                    found += [(module_name, name, shape, h) for h in injections(out)]
-                rendered += ok
-            elif inspect.isfunction(obj) and not name.startswith(("_", "do_")):
-                for shape in SHAPES:
-                    out = render_function(obj, shape, keys, numeric)
-                    if isinstance(out, str):
-                        found += [(module_name, name, shape, h) for h in injections(out)]
-    return found, rendered, discovered
-
-
-class TestPayloadSweep:
-    def test_the_checker_catches_an_unescaped_attribute_and_an_unescaped_element(self):
-        class Vulnerable(Node):
-            def __init__(self, kwargs):
-                self.kwargs = kwargs
-
-            def render(self, context):
-                return mark_safe(f'<a title="{self.kwargs["x"]}">{self.kwargs["x"]}</a>')
-
-        class Escaped(Vulnerable):
-            def render(self, context):
-                value = conditional_escape(self.kwargs["x"])
-                return mark_safe(f'<a title="{value}">{value}</a>')
-
-        assert {h for h in injections(Vulnerable({"x": PAYLOAD}).render(None))} == {
+    def test_it_catches_an_unescaped_attribute_an_unescaped_element_and_a_script_url(self):
+        out = self.Vulnerable({"x": PAYLOAD, "u": URL_PAYLOAD}).render(None)
+        assert set(injections(out)) == {
             "<a onmouseover=...>",
             "<b id=ZQ>",
             "<svg onload=...>",
+            "<a href=javascript:zq(1)...>",
         }
-        assert injections(Escaped({"x": PAYLOAD}).render(None)) == []
 
-    def test_the_checker_does_not_flag_a_quote_in_text(self):
-        assert injections(f'<p>{TAG}"onmouseover={TAG}</p>') == []
+    def test_an_escaped_twin_is_clean_even_with_a_script_url(self):
+        # Escaping stops attribute breakout; it does NOT stop ``javascript:`` in an href. That is
+        # what safe_url / url_attr are for, and why the url mode exists: it fails any tag that
+        # prints a script URL, escaped or not.
+        out = self.Escaped({"x": PAYLOAD, "u": "/safe"}).render(None)
+        assert injections(out) == []
+        assert injections(self.Escaped({"x": PAYLOAD, "u": URL_PAYLOAD}).render(None)) != []
 
-    def test_no_component_tag_turns_the_payload_into_markup(self):
-        found, rendered, discovered = sweep()
-        assert found == [], f"a payload became markup: {found}"
+    @pytest.mark.parametrize(
+        "markup",
+        [
+            f'<p>{TAG}"onmouseover={TAG}</p>',  # a quote in text
+            '<img src="data:image/png;base64,AAAA">',  # an image data URI is legitimate
+            '<a href="/x?next=javascript:1">x</a>',  # not a script URL: the scheme is not first
+        ],
+    )
+    def test_it_does_not_flag_what_is_harmless(self, markup):
+        assert injections(markup) == []
+
+    @pytest.mark.parametrize(
+        "href", ["javascript:1", " JaVa\tScRiPt:1", "vbscript:1", "data:text/html,<b>"]
+    )
+    def test_it_flags_every_script_scheme_spelling(self, href):
+        assert injections(f'<a href="{href}">x</a>') != []
+
+
+class TestPayloadSweep:
+    def test_no_audited_sink_turns_the_payload_into_markup_or_a_script_url(self, traced_sweep):
+        result, _ = traced_sweep
+        assert result["found"] == [], f"a payload became markup or a script URL: {result['found']}"
         # A sweep that renders almost nothing proves nothing: most of the tags must have rendered.
-        assert rendered >= 0.85 * discovered, (rendered, discovered)
+        assert result["rendered"] >= 0.85 * result["discovered"], result
 
     def test_the_sweep_reads_a_real_tag_with_the_payload(self):
-        keys, numeric = _keys()
+        all_keys, numeric = sweepmod.keys()
         from djust.components.templatetags._advanced import RibbonNode
 
-        out = str(render_node(RibbonNode, "str", keys, numeric))
+        out = str(sweepmod.render_node(RibbonNode, "str", "markup", all_keys, numeric))
         assert "dj-ribbon" in out and TAG in out and "&quot;onmouseover" in out
+
+    def test_a_number_argument_gets_a_number_so_the_code_after_the_coercion_runs(self):
+        # int(PAYLOAD) raising is why slider, number_stepper and others were never reached.
+        from djust.components.templatetags._forms import slider
+
+        out = sweepmod.render_function(slider, "numeric_none", "markup")
+        assert out is not None and 'class="dj-slider' in str(out)
+
+
+class TestEverySinkIsReached:
+    """The claim "the sweep covers the audited sinks" is checked, not assumed (review of #3821).
+
+    Line coverage is taken over the sweep itself; a sink whose lines never ran is either a hole in
+    the sweep (add a driver) or recorded per entry as ``unreached`` with the reason.
+    """
+
+    @staticmethod
+    def _reached(traced_sweep):
+        _, executed = traced_sweep
+        out = {}
+        for key in audit.AUDITED:
+            ran = executed.get(str(audit.ROOT / key[0]), set())
+            out[key] = [bool(group & ran) for group in audit.sink_groups(key)]
+        return out
+
+    def test_every_audited_sink_runs_unless_the_entry_says_why_not(self, traced_sweep):
+        reached = self._reached(traced_sweep)
+        unexplained = [
+            k for k, flags in reached.items() if not all(flags) and not audit.AUDITED[k].unreached
+        ]
+        assert unexplained == [], (
+            "the payload sweep never executed these sinks: add a driver to "
+            f"python/tests/payload_drivers_3774.py, or give the entry an `unreached` reason: {unexplained}"
+        )
+
+    def test_an_entry_marked_unreached_really_is(self, traced_sweep):
+        reached = self._reached(traced_sweep)
+        stale = [k for k, entry in audit.AUDITED.items() if entry.unreached and all(reached[k])]
+        assert stale == [], (
+            f"marked unreached but the sweep reaches every sink (drop the note): {stale}"
+        )
+
+    def test_an_unreached_note_says_something(self):
+        thin = [k for k, e in audit.AUDITED.items() if e.unreached and len(e.unreached.split()) < 6]
+        assert thin == []
+
+    def test_the_tracer_tells_a_line_that_ran_from_one_that_did_not(self, tmp_path):
+        source = tmp_path / "branchy.py"
+        source.write_text(
+            "def f(flag):\n    if flag:\n        return 'taken'\n    return 'skipped'\n"
+        )
+        namespace: dict = {}
+        executed: dict[str, set[int]] = {}
+        with sweepmod.line_tracer({str(source)}, executed):
+            exec(compile(source.read_text(), str(source), "exec"), namespace)  # noqa: S102
+            namespace["f"](True)
+        lines = executed[str(source)]
+        assert 3 in lines and 4 not in lines
+
+    def test_sink_groups_are_one_per_flagged_call(self):
+        # render_modal has two flagged sinks, RibbonNode.render one: coverage is per sink.
+        modal = audit.sink_groups((audit.DC, "render_modal"))
+        ribbon = audit.sink_groups((audit.ADV, "RibbonNode.render"))
+        assert len(modal) == 2 and len(ribbon) == 1
+        assert not modal[0] & modal[1]
 
 
 # ---------------------------------------------------------------------------

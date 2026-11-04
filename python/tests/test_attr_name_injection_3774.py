@@ -24,6 +24,9 @@ from djust.templatetags.live_tags import live_input
 
 HOSTILE_NAMES = [
     "dj-input onfocus=alert(1) autofocus y",  # the reproducer: a space ends the name
+    "dj-input autofocus",  # ASCII space only: no quote, no "=", nothing but \s separates the words
+    "dj-input ",  # a trailing space
+    "dj-input\n",  # a trailing newline (``$`` would accept it; ``fullmatch`` must not)
     'a"b',
     "a'b",
     "a>b",
@@ -131,3 +134,71 @@ class TestFrameworkAdapter:
     def test_the_adapter_still_renders_a_legal_one(self):
         out = PlainAdapter()._build_tag("input", {"name": "n", "dj-change": "validate_field"})
         assert out == '<input name="n" dj-change="validate_field" />'
+
+
+BAD_KEY = "x onfocus=alert(1) autofocus y"
+
+
+class TestOtherAttributeNameWriters:
+    """The same class as ``build_tag``, in the writers that did not go through it (review of #3821).
+
+    Every one of these writes ``<prefix><key>=`` from a mapping key or a keyword name. None is
+    reachable from template DATA today (a key is a literal or a dict key the developer wrote), which
+    is why they are the parallel-path twin of ``build_tag``'s name rather than a new hole.
+    """
+
+    def test_render_icon_refuses_a_hostile_attribute_name(self):
+        from djust.components.icons import render_icon
+
+        with pytest.raises(ValueError, match="not a valid HTML attribute name"):
+            render_icon("check", **{BAD_KEY: "v"})
+
+    def test_render_icon_still_renders_aria_label(self):
+        from djust.components.icons import render_icon
+
+        assert 'aria-label="Close"' in render_icon("check", aria_label="Close")
+
+    def test_button_refuses_a_hostile_data_key(self):
+        from djust.components.components.button import Button
+
+        with pytest.raises(ValueError):
+            Button("Go", data={BAD_KEY: "1"}).render()
+
+    def test_card_refuses_a_hostile_data_key(self):
+        from djust.components.components.card import Card
+
+        with pytest.raises(ValueError):
+            Card("body", data={BAD_KEY: "1"}).render()
+
+    def test_button_and_card_still_render_a_data_key(self):
+        from djust.components.components.button import Button
+        from djust.components.components.card import Card
+
+        assert 'data-id="7"' in Button("Go", data={"id": 7}).render()
+        assert 'data-id="7"' in Card("body", data={"id": 7}).render()
+
+    def test_pagination_click_refuses_a_hostile_data_key(self):
+        from djust.components.data.pagination import PaginationComponent
+
+        with pytest.raises(ValueError):
+            PaginationComponent(total_pages=3)._click("go", **{BAD_KEY: "1"})
+
+    def test_pagination_click_still_writes_a_data_key(self):
+        from djust.components.data.pagination import PaginationComponent
+
+        assert ' data-page="2"' in PaginationComponent(total_pages=3)._click("go", page=2)
+
+    def test_event_attrs_refuses_a_hostile_value_key_and_trigger(self):
+        from djust.components.components.button import Button
+
+        button = Button("Go")
+        with pytest.raises(ValueError):
+            button.event_attrs("go", **{BAD_KEY: "1"})
+        with pytest.raises(ValueError):
+            button.event_attrs("go", trigger="click onfocus=alert(1) y")
+
+    def test_event_attrs_still_writes_typed_values(self):
+        from djust.components.components.button import Button
+
+        out = Button("Go").event_attrs("go", item_id=3)
+        assert out == 'dj-click="go" dj-value-item-id:int="3"'
