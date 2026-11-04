@@ -19,7 +19,9 @@ name from the question (``scripts/lib/template_library_parity/url_sweep.py``):
   the encoded form, so the encoded forms are in the corpus).
 
 It runs in subprocesses (it replaces ``uuid`` and ``datetime`` for its whole
-process, like the parity harness) and takes about two minutes.
+process, like the parity harness) and takes about 90 s on a workstation. Its size is
+budgeted in cells (``CELL_CEILING``), and the shortcuts that make it affordable are checked
+against an exhaustive run in ``test_url_scheme_sweep_capacity.py``.
 
 What each class proves:
 
@@ -54,6 +56,24 @@ pytestmark = pytest.mark.pr_tier
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "template-library-url-sweep.py"
 TIMEOUT = 900
+
+#: The sweep is a budget, and the budget is a number of CELLS, never of seconds
+#: (``docs/patterns/wall-clock-assertion.md``). It timed out in CI once (``python-tests`` shard
+#: 2/4 on main: 228,522 cells, over 900 s on both attempts, against 300-380 s on a workstation)
+#: and was made about 3.4x cheaper per cell (``test_url_scheme_sweep_capacity.py``). The
+#: ceiling below is the cell count that would still use only ``BUDGET_SHARE`` of ``TIMEOUT`` on
+#: a CI runner, derived from a measurement rather than typed: the tags subprocess ran 228,522
+#: cells in 98 s inside a sharded run (``-n 4 --dist loadfile --splits 4 --group 2``, the CI
+#: command), and CI runs about ``CI_SLOWDOWN`` times slower than that (the sweep needed more
+#: than ``TIMEOUT`` there for what took 300-333 s here). Growing past it fails
+#: ``test_the_sweep_stays_inside_its_cell_budget`` while CI still passes, so the growth is a
+#: decision made with the cost in front of it (cut cells that cannot differ, or give the sweep
+#: its own job), not a timeout found on main. Re-measure BOTH numbers before changing them.
+BUDGET_SHARE = 0.5
+CI_SLOWDOWN = 3.0
+CALIBRATION_CELLS = 228_522
+CALIBRATION_SECONDS = 98
+CELL_CEILING = int(CALIBRATION_CELLS * BUDGET_SHARE * TIMEOUT / (CALIBRATION_SECONDS * CI_SLOWDOWN))
 
 #: Tags with no named parameter to drive, and why (the sweep derives this; the pin
 #: makes a NEW parameterless tag a visible decision rather than a silent skip).
@@ -457,6 +477,25 @@ class TestTheSweep:
         whether a value reached a URL attribute, for every payload that was driven."""
         found = {(d[0], d[1], d[2]) for d in runs["tags"]["disagreements"]}
         assert found == KNOWN_ENGINE_DISAGREEMENTS, sorted(found ^ KNOWN_ENGINE_DISAGREEMENTS)
+
+    def test_the_sweep_stays_inside_its_cell_budget(self, runs):
+        """The tags sweep is the long pole of ``runs`` (the components and the planted-hole
+        subprocesses finish in a fraction of its time), so its size is what to bound."""
+        cells = runs["tags"]["cells"]
+        assert cells > 0, "the sweep drove nothing: a budget over an empty sweep says nothing"
+        assert cells <= CELL_CEILING, (
+            "the tags sweep grew to %d cells, over the budget of %d (about %d%% of its %d s "
+            "timeout on a CI runner). Cut cells that cannot differ, or move the sweep to its "
+            "own CI job, before raising the budget (see the comment at CELL_CEILING)"
+            % (cells, CELL_CEILING, BUDGET_SHARE * 100, TIMEOUT)
+        )
+
+    def test_the_budget_cannot_be_raised_without_a_new_measurement(self):
+        """A ceiling far above the current size is not a ceiling. The headroom is bounded, so
+        raising it means re-measuring ``CALIBRATION_*`` (the cell count and its time), not
+        editing one number."""
+        assert CELL_CEILING <= 2 * CALIBRATION_CELLS, (CELL_CEILING, CALIBRATION_CELLS)
+        assert CELL_CEILING > CALIBRATION_CELLS, "the budget is already below the sweep"
 
     def test_every_tag_of_every_library_was_driven(self, runs):
         """Derived from the libraries as they are NOW: a new tag is swept with no edit here."""

@@ -54,6 +54,7 @@ AVATAR_RS = ROOT / "crates/djust_components/src/simple/avatar.rs"
 AVATAR = "python/tests/test_avatar_src_scheme_3665.py"
 SINKS = "python/tests/test_image_url_sinks_3665.py"
 SWEEPTEST = "python/tests/test_url_scheme_sweep_3665.py"
+CAPACITY = "python/tests/test_url_scheme_sweep_capacity.py"
 SWEEP_K = "no_tag_emits or no_class_component or planted_hole or Scanner"
 
 #: (label, file, text to find, replacement, test file, -k expression or "")
@@ -560,6 +561,79 @@ MUTATIONS: list[tuple[str, pathlib.Path, str, str, str, str]] = [
         SWEEPTEST,
         "driven_or_pinned",
     ),
+    # --- the sweep's affordability: its shortcuts change nothing, and its size is budgeted
+    (
+        "capacity: no context name is passed to a call (referenced_names returns nothing)",
+        SWEEP,
+        '    return tuple(n for n in names if re.search(r"\\b%s\\b" % re.escape(n), src))',
+        "    return ()",
+        CAPACITY,
+        "TheShortcutsChangeNothing",
+    ),
+    (
+        "capacity: a context name matches as a substring, not a word",
+        SWEEP,
+        '    return tuple(n for n in names if re.search(r"\\b%s\\b" % re.escape(n), src))',
+        "    return tuple(n for n in names if re.search(re.escape(n), src))",
+        CAPACITY,
+        "",
+    ),
+    (
+        "capacity: carries is not measured for a tag with a native handler",
+        SWEEP,
+        '    return native or label == "https"',
+        '    return label == "https"',
+        CAPACITY,
+        "TheShortcutsChangeNothing",
+    ),
+    (
+        "capacity: the read an output is shared with a cell loses the attributes carries reads",
+        SWEEP,
+        "                read[out] = (findings_in(attrs), marked_attrs(attrs))",
+        "                read[out] = (findings_in(attrs), [])",
+        CAPACITY,
+        "TheShortcutsChangeNothing",
+    ),
+    (
+        "capacity: --exhaustive still gives each call only the names it uses",
+        SWEEP,
+        "                call_ctx = ctx if exhaustive else {",
+        "                call_ctx = ctx if False else {",
+        CAPACITY,
+        "",
+    ),
+    (
+        "capacity: --exhaustive still skips carries where nothing reads it",
+        SWEEP,
+        "                carried = exhaustive or needs_carries(",
+        "                carried = False or needs_carries(",
+        CAPACITY,
+        "",
+    ),
+    (
+        "budget: the calibration size is lowered, so the sweep is over its ceiling",
+        ROOT / SWEEPTEST,
+        "CALIBRATION_CELLS = 228_522",
+        "CALIBRATION_CELLS = 100_000",
+        SWEEPTEST,
+        "stays_inside_its_cell_budget",
+    ),
+    (
+        "budget: the CI slowdown is lowered, so the ceiling is no longer bounded",
+        ROOT / SWEEPTEST,
+        "CI_SLOWDOWN = 3.0",
+        "CI_SLOWDOWN = 0.3",
+        SWEEPTEST,
+        "cannot_be_raised",
+    ),
+    (
+        "budget: every parameter is driven three times over, so the sweep outgrows its ceiling",
+        SWEEP,
+        "    for name in names:\n        for shape in (*shapes, SAFE_SHAPE):",
+        "    for name in names:\n        for shape in (*shapes, *shapes, *shapes, SAFE_SHAPE):",
+        SWEEPTEST,
+        "stays_inside_its_cell_budget",
+    ),
     # --- the sweep's own guarantees
     (
         "scanner: nothing is ever dangerous",
@@ -628,6 +702,7 @@ def main(argv: list[str]) -> int:
         AVATAR,
         SINKS,
         SWEEPTEST,
+        CAPACITY,
         "scripts/template-library-url-sweep.py",
         "scripts/url-sweep-gateoff.py",
         THEMING_TEST,

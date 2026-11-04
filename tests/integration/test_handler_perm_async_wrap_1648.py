@@ -32,7 +32,12 @@ def _mock_ws():
     return ws
 
 
-@pytest.mark.django_db
+# ``transaction=True`` on both tests here: the users are created through ``sync_to_async``, on
+# the executor thread's own connection, so they commit outside the test's transaction and a plain
+# ``django_db`` rollback never removes them. They stayed in the table and a later test on the
+# same xdist worker that read ``User.objects.first()`` read one of them instead of its own row
+# (CI run 41774238410). A transactional test flushes at teardown.
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
 async def test_permission_required_handler_does_not_raise_sync_only(rf):
     """A @permission_required handler whose perm check hits the DB (real
@@ -84,7 +89,7 @@ async def test_permission_required_handler_does_not_raise_sync_only(rf):
     assert not ws.send_error.called
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)  # see the note above the first test
 @pytest.mark.asyncio
 async def test_permission_required_handler_denies_without_perm(rf):
     """Control: a non-superuser LACKING the perm is denied (no raise)."""
