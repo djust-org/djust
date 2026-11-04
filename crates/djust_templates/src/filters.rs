@@ -5358,8 +5358,10 @@ fn value_to_json(value: &Value) -> String {
         // for exactly the reason the `Decimal` arm above documents.
         // #2899: a dict-subclass carrier spells its MAPPING here, as
         // `DjangoJSONEncoder` does; every other carrier keeps the string.
-        Value::Encoded(e) => match e.live_mapping_value() {
-            Some(mapping) => value_to_json(&mapping),
+        // A list-subclass carrier (Django's `ErrorList`) is `str(o)` for TEXT and the SEQUENCE for
+        // JSON: `json.dumps(ErrorList(...))` is the array, not the errorlist markup (#3770 review).
+        Value::Encoded(e) => match e.live_mapping_value().or_else(|| e.live_sequence_value()) {
+            Some(container) => value_to_json(&container),
             None => format!("\"{}\"", json_string_body(&e.json)),
         },
         // JSON has no tuple; Python's `json.dumps` emits an array for one.

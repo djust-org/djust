@@ -131,6 +131,38 @@ pub(crate) fn protect_sidecar_strict<'py>(
     protect.call1((obj,)).ok()
 }
 
+/// Is this live handle a Django `Form` / `BoundField` (#3755)?
+///
+/// [`crate::value_into_handler_pyobject`] hands a live handle to a bridged Python
+/// tag only when the object is NOT iterable, because the floor
+/// ([`protect_sidecar_strict`]) is a leaf floor and cannot see inside a container.
+/// A `BoundField` is iterable (its subwidgets), so a `{% for f in form %}` /
+/// `{% with f=form.name %}` binding reached `{% field_error field=f %}` as a
+/// [`crate::TemplateObject`] with no `errors` to read, while the same field spelled
+/// `form.name` reached it live.
+///
+/// The exception is this exact family, decided by `djust.serialization` (one
+/// authority, not a copy of its type list here). It adds a new SPELLING of an existing
+/// reach, not a new reach: a `Form` / `BoundField` in the value stack came from a `Form`
+/// that the raw-Python sidecar already hands the same bridged tag LIVE under its own
+/// name, and everything reachable from a field is reachable from that form. That reach has
+/// NO floor: Django's `Variable` walks raw objects, so a bridged tag given
+/// `form.instance.password` or `f.form.instance.password` prints the hash (tracked in the
+/// follow-up issue; an earlier version of this comment said "adds no exposure", which was
+/// wrong for `json_viewer`, now back on the floored native path). Fail-CLOSED: anything but
+/// a clean `True` (djust's Python not importable, the helper missing or raising) answers
+/// `false`, and the caller keeps the wrapper.
+pub(crate) fn live_handle_is_form_object(
+    py: Python<'_>,
+    obj: &pyo3::Bound<'_, pyo3::PyAny>,
+) -> bool {
+    py.import("djust.serialization")
+        .and_then(|m| m.getattr("_is_form_object"))
+        .and_then(|check| check.call1((obj,)))
+        .and_then(|answer| answer.is_truthy())
+        .unwrap_or(false)
+}
+
 /// Reuse only exact builtin values with no user-defined timezone behavior.
 /// Subclasses can override display, truthiness and methods; aware values can
 /// carry mutable tzinfo implementations, so both take normal live conversion.

@@ -27,6 +27,8 @@ format!("#{}", python_float_repr(f))
 Some(arg) => format!("{name}:{arg}"),
 value.to_string()
 filters::html_escape(&value.to_string())
+.insert(TYPED_ARGS_KEY.to_string(), Value::Object(typed));
+typed.insert(djust_core::ObjectKey::from(key), value);
 other => DjangoRustError::TemplateError(format!("{kind} '{name}' error: {other}")),
 let content = render_nodes_with_loader_mut(children, context, loader)?;
 blank_html: None,
