@@ -13,7 +13,7 @@ from typing import Any
 from django import template
 from django.forms import BaseForm
 from django.template import Context
-from django.utils.html import conditional_escape
+from django.utils.html import format_html
 from django.utils.safestring import SafeString, mark_safe
 
 from ..manager import get_theme_config
@@ -67,25 +67,32 @@ def theme_form(
     allowed_layouts = ("stacked", "horizontal", "inline")
     if layout not in allowed_layouts:
         layout = "stacked"
+    # Every line is a constant or the result of ``format_html`` (it escapes each value it
+    # is given), so what ``mark_safe`` joins at the end holds no raw value. ``prefix`` is
+    # config, ``field_id`` is built from the FIELD NAME, the form prefix and ``auto_id``
+    # (a form builder can put a quote there): neither is trusted markup (#3766).
     lines = []
 
     # Form-level non-field errors
     if form.non_field_errors():
         lines.append(
-            f'<div class="{prefix}theme-form-errors {prefix}alert {prefix}alert-destructive" role="alert">'
+            format_html(
+                '<div class="{0}theme-form-errors {0}alert {0}alert-destructive" role="alert">',
+                prefix,
+            )
         )
-        lines.append(f'  <ul class="{prefix}theme-error-list">')
+        lines.append(format_html('  <ul class="{}theme-error-list">', prefix))
         for error in form.non_field_errors():
-            lines.append(f"    <li>{conditional_escape(error)}</li>")
+            lines.append(format_html("    <li>{}</li>", error))
         lines.append("  </ul>")
         lines.append("</div>")
 
-    # Form container
-    lines.append(f'<div class="{prefix}theme-form-{layout}">')
+    # Form container (``layout`` is one of ``allowed_layouts``; ``format_html`` anyway)
+    lines.append(format_html('<div class="{}theme-form-{}">', prefix, layout))
 
     # Visible fields
     for bound_field in form.visible_fields():
-        lines.append(f'  <div class="{prefix}theme-form-field">')
+        lines.append(format_html('  <div class="{}theme-form-field">', prefix))
 
         # Label
         field = bound_field.field
@@ -97,41 +104,55 @@ def theme_form(
         # referencing `template.library.InvalidTemplateLibrary` that was never
         # reached — dropped for clarity.
         if label_text and not isinstance(field.widget, type(None)):
-            escaped_label = conditional_escape(label_text)
             use_fieldset = (
                 bound_field.field.widget.use_fieldset
                 if hasattr(bound_field.field.widget, "use_fieldset")
                 else False
             )
             if use_fieldset:
-                lines.append(f'    <legend class="{prefix}theme-label">{escaped_label}</legend>')
+                lines.append(
+                    format_html('    <legend class="{}theme-label">{}</legend>', prefix, label_text)
+                )
             else:
                 lines.append(
-                    f'    <label for="{field_id}" class="{prefix}theme-label">{escaped_label}</label>'
+                    format_html(
+                        '    <label for="{}" class="{}theme-label">{}</label>',
+                        field_id,
+                        prefix,
+                        label_text,
+                    )
                 )
 
         # Help text (before widget for stacked/horizontal, after for inline)
         if bound_field.help_text:
             lines.append(
-                f'    <div class="{prefix}theme-help-text" id="{field_id}_helptext">'
-                f"{conditional_escape(bound_field.help_text)}</div>"
+                format_html(
+                    '    <div class="{}theme-help-text" id="{}_helptext">{}</div>',
+                    prefix,
+                    field_id,
+                    bound_field.help_text,
+                )
             )
 
-        # Widget
-        lines.append(f"    {bound_field}")
+        # Widget (a ``BoundField`` renders itself as marked-safe HTML)
+        lines.append(format_html("    {}", bound_field))
 
         # Field errors
         if bound_field.errors:
             for error in bound_field.errors:
                 lines.append(
-                    f'    <span class="{prefix}theme-field-error" role="alert">{conditional_escape(error)}</span>'
+                    format_html(
+                        '    <span class="{}theme-field-error" role="alert">{}</span>',
+                        prefix,
+                        error,
+                    )
                 )
 
         lines.append("  </div>")
 
     # Hidden fields
     for hidden in form.hidden_fields():
-        lines.append(f"  {hidden}")
+        lines.append(format_html("  {}", hidden))
 
     lines.append("</div>")
 
@@ -156,11 +177,13 @@ def theme_form_errors(context: Context, form: BaseForm) -> SafeString:
 
     prefix = _css_prefix()
     lines = [
-        f'<div class="{prefix}theme-form-errors {prefix}alert {prefix}alert-destructive" role="alert">',
-        f'  <ul class="{prefix}theme-error-list">',
+        format_html(
+            '<div class="{0}theme-form-errors {0}alert {0}alert-destructive" role="alert">', prefix
+        ),
+        format_html('  <ul class="{}theme-error-list">', prefix),
     ]
     for error in form.non_field_errors():
-        lines.append(f"    <li>{conditional_escape(error)}</li>")
+        lines.append(format_html("    <li>{}</li>", error))
     lines.append("  </ul>")
     lines.append("</div>")
 

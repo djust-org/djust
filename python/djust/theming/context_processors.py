@@ -10,6 +10,8 @@ from typing import Any
 
 from django.contrib.staticfiles.storage import staticfiles_storage
 from django.http import HttpRequest
+from django.utils.html import escape, format_html
+from django.utils.safestring import SafeString, mark_safe
 
 from ..request_scoped import RequestScopedList
 from ._lazy_html import LazyThemeHTML
@@ -301,6 +303,16 @@ def theme_context(request: HttpRequest) -> dict:
     }
 
 
+def _option_text(value: object) -> SafeString:
+    """``escape(value)`` that leaves ``'`` alone, for an ``<option value="...">label</option>``.
+
+    Both places are written between double quotes or as text, where ``'`` is inert, and a
+    built-in preset is named ``Synthwave '84``: ``escape`` alone would print ``&#x27;``, which
+    shows the same but changes the bytes of the page (and of the lazy/eager parity pin).
+    """
+    return mark_safe(escape(value).replace("&#x27;", "'"))
+
+
 def _render_theme_switcher(state: ThemeState, presets: list[dict]) -> str:
     """Render the theme switcher HTML inline."""
     # Mode buttons
@@ -324,8 +336,13 @@ def _render_theme_switcher(state: ThemeState, presets: list[dict]) -> str:
     preset_options = ""
     for preset in presets:
         selected = "selected" if preset["is_active"] else ""
-        preset_options += (
-            f'<option value="{preset["name"]}" {selected}>{preset["display_name"]}</option>'
+        # A preset's name and display name are registry data, escaped here (#3766); the chunk
+        # is marked safe by ``LazyThemeHTML``, so nothing downstream would do it.
+        preset_options += format_html(
+            '<option value="{}" {}>{}</option>',
+            _option_text(preset["name"]),
+            selected,
+            _option_text(preset["display_name"]),
         )
 
     return f"""<div class="theme-switcher">

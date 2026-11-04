@@ -16,12 +16,13 @@ import logging
 import re
 import uuid
 from collections.abc import Callable, Iterable, Mapping
-
+from decimal import Decimal
 from typing import Any, Optional
 from urllib.parse import unquote
 
 from django import template
 from django.template import Context
+from django.utils.html import format_html
 from django.utils.safestring import SafeString, mark_safe
 
 from djust.components.utils import _srcset_candidates, url_allowed
@@ -642,7 +643,13 @@ def _passthrough_attrs(attrs: dict[str, Any], skip: tuple[str, ...]) -> SafeStri
                 value = _check_url_list(lowered, value, image=lowered in _IMAGE_URL_ATTRS)
             else:
                 value = _neutralise_passthrough_url(key, value, image=lowered in _IMAGE_URL_ATTRS)
-        parts.append(name if value is True else f'{name}="{escape(value)}"')
+        # ``escape`` (not ``conditional_escape``): a marked-safe value is escaped too, as it
+        # always was. ``format_html`` then escapes ``name`` and leaves the escaped value alone.
+        parts.append(
+            format_html("{}", name)
+            if value is True
+            else format_html('{}="{}"', name, escape(value))
+        )
     return mark_safe(" ".join(parts))
 
 
@@ -1335,26 +1342,108 @@ def theme_tooltip(context: Context, text: str, position: str = "top", **attrs: A
     return mark_safe(tmpl.render(ctx))
 
 
+#: The icon size ``theme_icon`` falls back to when it is not given a usable one.
+_ICON_DEFAULT_SIZE = "20"
+
+#: What ``size=`` may be: a plain decimal number (``16``, ``1.5``), optionally with a CSS
+#: length unit (any case, as CSS reads it). Matched whole (``fullmatch``), and no whitespace,
+#: sign or exponent is allowed: ``size`` is written into two attributes, so only ``[0-9.]`` and
+#: a unit may reach them.
+_ICON_SIZE_RE = re.compile(r"([0-9]+(?:\.[0-9]{1,3})?)(px|em|rem|ex|pt|%)?", re.IGNORECASE)
+
+#: A ``float`` / ``Decimal`` is rounded to this many decimals before it is matched, so computed
+#: noise (``14 * 1.1`` is ``15.400000000000002``) prints as ``15.4``.
+_ICON_SIZE_STEP = Decimal("0.001")
+
+#: The largest number a size may carry (any unit): a bound, not a design size.
+_ICON_SIZE_MAX = Decimal(1000)
+
+
+def _icon_size_text(value: Any) -> str:
+    """The text of ``value`` to match: a float or Decimal rounded to three decimals, else ``str``.
+
+    ``str()`` is called once. Raises for a value that has no usable text (a ``__str__`` that
+    raises, an int over Python's 4300-digit limit, a NaN or an out-of-range float):
+    :func:`_icon_size` turns any exception here into the default size.
+    """
+    if isinstance(value, float):
+        value = Decimal(repr(value))
+    if isinstance(value, Decimal):
+        return format(value.quantize(_ICON_SIZE_STEP), "f")
+    return str(value)
+
+
+def _icon_size(value: Any) -> str:
+    """Return ``value`` as text that is safe in an SVG ``width`` / ``height``, or the default.
+
+    Accepted: a number above zero and at most 1000 with up to three decimals, optionally
+    followed by one of ``px em rem ex pt %`` in any case: ``16``, ``"16"``, ``1.5``, ``24px``,
+    ``1.5rem``, ``"16PX"``. An ``int``, ``float`` or ``Decimal`` is a number; a ``float`` or
+    ``Decimal`` is first rounded to three decimals. Any other type is matched by its text
+    (``str``), so a ``Fraction`` (``"3/2"``) is refused. The number is re-printed from its
+    parsed value and the unit lower-cased (``"016"`` and ``16.0`` both print ``16``, ``16PX``
+    prints ``16px``), so what reaches the markup is built here, not copied from the caller.
+
+    Anything else (a quote, ``>``, an entity, whitespace, a sign, an exponent, a ``bool``,
+    zero, a negative, a number over 1000, a value with no text) renders the default size and
+    logs one WARNING per call (the value's type, never its content; a template that renders
+    the icon in a loop logs once per icon). It does not raise: ``size`` is often data, and bad
+    data must not become a 500 (the way a disallowed URL renders ``#`` in
+    :func:`_neutralise_url`). That includes a value whose ``__str__`` raises and an int too
+    large to print; both used to propagate. ``None`` means "not given" and renders the
+    default silently.
+    """
+    if value is None:
+        return _ICON_DEFAULT_SIZE
+    try:
+        match = _ICON_SIZE_RE.fullmatch(_icon_size_text(value))
+    except Exception:  # noqa: BLE001 - any failure to get text is bad data: warn, use the default
+        match = None
+    if match is not None:
+        number = Decimal(match.group(1))
+        if 0 < number <= _ICON_SIZE_MAX:
+            return format(number.normalize(), "f") + (match.group(2) or "").lower()
+    logger.warning(
+        "theming: theme_icon size= (a %s) is not a number or CSS length; rendering size %s",
+        type(value).__name__,
+        _ICON_DEFAULT_SIZE,
+    )
+    return _ICON_DEFAULT_SIZE
+
+
+#: The inside of each placeholder icon. Constant markup: only ``size`` varies, and it is
+#: added by ``format_html`` below, never by string interpolation under ``mark_safe``.
+_ICON_BODIES = {
+    "check": '<polyline points="20 6 9 17 4 12"></polyline>',
+    "x": '<line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line>',
+    "alert": '<circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line>',
+    "info": '<circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line>',
+}
+
+
 @register.simple_tag
-def theme_icon(name: str, size: int = 20) -> SafeString:
+def theme_icon(name: str, size: Any = 20) -> SafeString:
     """
     Render an SVG icon (placeholder - integrate with your icon library).
 
     Args:
-        name: Icon name
-        size: Icon size in pixels
+        name: Icon name (``check``, ``x``, ``alert``, ``info``); any other name renders nothing
+        size: Icon size: a number of pixels (``16``) or a CSS length (``1.5rem``,
+            ``24px``). Anything else renders the default size, ``20``, and logs a warning
+            (see :func:`_icon_size`).
 
     Usage:
         {% theme_icon "check" size=16 %}
     """
-    # Placeholder SVG icons
-    icons = {
-        "check": f'<svg width="{size}" height="{size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"></polyline></svg>',
-        "x": f'<svg width="{size}" height="{size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>',
-        "alert": f'<svg width="{size}" height="{size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>',
-        "info": f'<svg width="{size}" height="{size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>',
-    }
-    return mark_safe(icons.get(name, ""))
+    body = _ICON_BODIES.get(name)
+    if body is None:
+        return mark_safe("")
+    return format_html(
+        '<svg width="{size}" height="{size}" viewBox="0 0 24 24" fill="none" '
+        'stroke="currentColor" stroke-width="2">{body}</svg>',
+        size=_icon_size(size),
+        body=mark_safe(body),
+    )
 
 
 # A query string or fragment: such a url is not a plain path match.
