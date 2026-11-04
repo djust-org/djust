@@ -1426,7 +1426,7 @@ async def test_a_view_leaving_a_push_scope_leaves_the_other_view_in_it():
         await _event(communicator, "go_r2")  # the page view moves; the slot stays in r1
         EVENTS.clear()
         await apush_to_view(MOD + ".Scoped", handler="on_push", scope="r1")
-        frames = await _frames_until(communicator, "patch", "html_update", timeout=5)
+        frames = await _frames_until(communicator, "patch", "html_update")
         assert frames[-1]["target_id"] == "s2"
         assert [e[0] for e in EVENTS] == ["pushed"]
     finally:

@@ -43,7 +43,10 @@ assignment, a ``for`` / ``with`` / ``except`` target): that ``T`` is the functio
 * a helper whose SHORT ``timeout`` default is forwarded to such a wait (``async def
   _receive_until(c, kind, *, timeout=3)``: every caller that says nothing gets 3 s), and
   a call, in the same file, to such a helper that passes a short ``timeout`` as a keyword or
-  in the helper's positional slot (``_recv(comm, 2)``).
+  in the helper's positional slot (``_recv(comm, 2)``). A helper forwards its ``timeout`` when it
+  reaches the wait directly OR through a deadline built from it (``deadline = loop.time() +
+  timeout`` ... ``receive_json_from(timeout=deadline - loop.time())``): the first version read only
+  the bare name and missed ``_frames_until(..., timeout=5)`` and two ``_reply(..., timeout=3.0)``.
 
 A ``try: ... except: pass`` / ``break`` / ``continue`` DRAIN gets no exemption of its own
 (#3726): a drain is counted by the shapes above like any other wait. #3721 exempted them as
@@ -113,11 +116,19 @@ _NO_SLOT = 10**6
 #: ever goes DOWN; an entry that reaches zero is deleted. Keyed by repo-relative path. Each
 #: entry has a reason in ``BASELINE_REASONS`` (pinned by a test), and is on purpose.
 BASELINE: Dict[str, int] = {
+    "python/djust/tests/test_multi_view_render_locks_3252.py": 2,
     "python/djust/tests/test_ws_auth_close_socket.py": 1,
     "python/djust/tests/test_ws_communicator_defaults_3464.py": 1,
 }
 
 BASELINE_REASONS: Dict[str, str] = {
+    "python/djust/tests/test_multi_view_render_locks_3252.py": (
+        "Two strict xfails (BLOCKED_SYNC_THREAD) whose expected outcome IS that the reply does "
+        "not arrive: `_reply(..., timeout=3.0)` is the window in which it must not. A stall "
+        "can only make that window end with no frame, which is the xfail; it cannot turn the "
+        "expected failure into a pass. Lengthening it to PATIENCE would make each take 20 s to "
+        "fail. Found when the scan learned to read a deadline derived from `timeout` (#3709)."
+    ),
     "python/djust/tests/test_ws_auth_close_socket.py": (
         "An absence window: after the 4403 redirect what arrives is a close, which "
         "receive_json_from rejects, and the assertion is that no event handler ran. A stall "
@@ -328,23 +339,57 @@ def _call_name(call: ast.Call) -> str:
     return func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
 
 
+def _names_derived_from_timeout(fn: ast.AST) -> Set[str]:
+    """``timeout`` and every local name assigned from an expression that mentions one of them.
+
+    A helper that turns its ``timeout`` into a deadline (``deadline = loop.time() + timeout``,
+    then ``receive_json_from(timeout=deadline - loop.time())``) passes the caller's number on
+    just as ``timeout=timeout`` does, but never names it at the wait (#3709: the ratchet read
+    only the bare name and so missed ``_frames_until(..., timeout=5)``).
+    """
+    derived = {"timeout"}
+    assignments = [
+        (target, node.value)
+        for node in ast.walk(fn)
+        if isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)) and node.value is not None
+        for target in (node.targets if isinstance(node, ast.Assign) else [node.target])
+        if isinstance(target, ast.Name)
+    ]
+    changed = True
+    while changed:
+        changed = False
+        for target, value in assignments:
+            if target.id not in derived and any(
+                isinstance(n, ast.Name) and n.id in derived for n in ast.walk(value)
+            ):
+                derived.add(target.id)
+                changed = True
+    return derived
+
+
 def _forwarding_helpers(tree: ast.AST, waits: Dict[str, int]) -> Dict[str, ast.AST]:
     """``{name: def}`` of helpers that pass their ``timeout`` parameter on to a communicator
-    wait (``_receive_until(c, kind, timeout=3)``)."""
+    wait (``_receive_until(c, kind, timeout=3)``), directly or through a deadline derived
+    from it."""
     found: Dict[str, ast.AST] = {}
     for fn in ast.walk(tree):
         if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
         if "timeout" not in [a.arg for a in fn.args.args + fn.args.kwonlyargs]:
             continue
+        derived = _names_derived_from_timeout(fn)
+        awaited = {n.value for n in ast.walk(fn) if isinstance(n, ast.Await)}
         for node in ast.walk(fn):
             if (
                 isinstance(node, ast.Call)
                 and isinstance(node.func, ast.Attribute)
                 and node.func.attr in waits
+                # ``wait`` is also ``threading.Condition.wait``; a communicator's is a coroutine.
+                and (node.func.attr not in WRAPPED_NOT_FRAME_WAITS or node in awaited)
                 and any(
-                    isinstance(v, ast.Name) and v.id == "timeout"
+                    isinstance(n, ast.Name) and n.id in derived
                     for v in _timeout_args(node, waits[node.func.attr])
+                    for n in ast.walk(v)
                 )
             ):
                 found[fn.name] = fn
@@ -891,6 +936,27 @@ async def _receive_until(communicator, wanted, *, tries=8, timeout=30):
 async def test_a(socket):
     await _receive_until(socket, "mount", timeout=3)
 """,
+    "a helper that forwards its timeout as a deadline, called with a short one (#3709)": """
+async def _frames_until(communicator, *types, timeout=15.0):
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while True:
+        frame = await communicator.receive_json_from(timeout=deadline - loop.time())
+        if frame.get("type") in types:
+            return frame
+
+async def test_a(socket):
+    await _frames_until(socket, "patch", timeout=5)
+""",
+    "a deadline derived through two assignments, called positionally (#3709)": """
+async def _until(communicator, kind, timeout):
+    budget = timeout * 2
+    deadline = budget + 1
+    return await communicator.receive_json_from(timeout=deadline)
+
+async def test_a(socket):
+    await _until(socket, "patch", 2)
+""",
     "a try whose handler re-raises": """
 async def test_a(socket):
     try:
@@ -1206,6 +1272,26 @@ async def test_a(socket):
 async def _receive_until(communicator, wanted, *, tries=8, timeout=30):
     return await communicator.receive_json_from(timeout=timeout)
 """,
+    "a deadline-forwarding helper called with a generous timeout or none (#3709)": """
+async def _frames_until(communicator, *types, timeout=15.0):
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    return await communicator.receive_json_from(timeout=deadline - loop.time())
+
+async def test_a(socket):
+    await _frames_until(socket, "patch")
+    await _frames_until(socket, "patch", timeout=30)
+""",
+    "a synchronous wait with a derived timeout is not a communicator wait (#3709)": """
+class Probe:
+    def wait_for(self, predicate, timeout):
+        deadline = time.monotonic() + timeout
+        left = deadline - time.monotonic()
+        self._cond.wait(left)
+
+def test_a(probe):
+    probe.wait_for(lambda: True, 2)
+""",
     "an absence window under pytest.raises": """
 async def test_a(socket):
     with pytest.raises(asyncio.TimeoutError):
@@ -1392,7 +1478,11 @@ def test_a_counted_shape_is_not_also_in_the_aggregates(source):
     design: whether it is short depends on its callers, which are what is counted.)
     """
     expected = {"absence_raises": 0, "variable_timeouts": 0, "wait_for_short": 0}
-    if "timeout=timeout" in source or "async def other(socket, T)" in source:
+    if (
+        "timeout=timeout" in source
+        or "timeout=deadline" in source
+        or "async def other(socket, T)" in source
+    ):
         # the shadowed ``T`` in ``other`` cannot be read as a number: a variable timeout
         expected["variable_timeouts"] = 1
     assert _uncovered(source) == expected
