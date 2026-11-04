@@ -67,6 +67,21 @@ flag, a PII column — because serialization defaulted to *allow everything*.
 > A refused name raises `AttributeError` → empty render. The floor is **not**
 > gated on the `template_auto_call` kill-switch.
 >
+> **A model form holds the model's values behind a plain `dict` (#3790).**
+> `ModelForm.initial` is `model_to_dict(instance)`, so by the time a template
+> reads `{{ form.initial.password }}` / `{{ form.password.value }}` the value is
+> a string and no `Model` is left for the proxies to refuse. The walk's floor is
+> therefore `_protect_sidecar_walk` (the leaf `_protect_sidecar_value` plus a
+> `_SidecarFormProxy` for a `ModelForm` and a `_SidecarBoundFieldProxy` for the
+> `BoundField` of a floor field), asked by the three template-walk chokepoints
+> and by the `{% load %}` bridge's operand walk, with the model's floor read
+> off the form's `instance` through the same `_attr_is_serializable`. An object
+> handed to a *tag* (the handler dict, a loop variable in a bridged context)
+> keeps the leaf floor and the real form: a tag is the application's own code,
+> and a proxy would make `bound_field.value()` read empty. The form's own
+> widget rendering (`{{ form.field }}`, `as_p`) is the view author's choice and
+> is unchanged. A plain `Form` has no model behind it and so no model floor.
+>
 > **The TYPE floor (#1987) — a name-independent second axis.** Besides the
 > name/method floor above, a field whose *type* should never reach the client is
 > dropped regardless of its name, via the single shared authority
