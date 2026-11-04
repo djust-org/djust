@@ -255,9 +255,9 @@ object that no other variant models. It holds the facts measured at conversion:
 | field | line | what it is |
 |---|---|---|
 | `type_name` | `:422` | CPython's `tp_name`, as a `TypeError` spells it |
-| `display` | `:425` | `str(o)` — what `{{ p }}` renders |
-| `display_safe` | `:427` | whether `str(o)` is `SafeData`; never restored from the wire |
-| `json` | `:429` | `DjangoJSONEncoder.default(o)` |
+| `display` | `:425` | `str(o)` — what `{{ p }}` renders. A `DisplayText`: computed at conversion, except for a Django form / `BoundField` / formset, where it is asked for on first read and the answer is shared by every clone (#3769). Read it through `Encoded::display()`, `display_safe()` and `str_raised()` |
+| `display_safe()` | method | whether `str(o)` is `SafeData` (a fact of `display`, no field of its own since #3769); never restored from the wire |
+| `json` | `:429` | `DjangoJSONEncoder.default(o)`, as an `Option`: `None` means "the same as `display`" (every opaque carrier), read through `Encoded::json()` |
 | `truthy` | `:432` | `bool(o)` — Python's own answer, not a Rust guess |
 | `len` | `:462` | `len(o)`, or `None` where Python raises |
 | `iterable` | `:484` | `iter(o)` succeeded |

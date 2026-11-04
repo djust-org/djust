@@ -482,7 +482,7 @@ arms:**
    replacement is `handle_only_encoded` (`crates/djust_core/src/lib.rs`): the object keeps its
    live handle with best-effort measurements, so every handle-walked lookup is Django's answer.
    A raising `__str__` is DEFERRED rather than swallowed — the transient `Encoded::str_raised`
-   bit makes the `{{ o }}` sink (`renderer::localize_if_number`) call `str()` on the handle and
+   bit (a method over `DisplayText::raised` since #3769) makes the `{{ o }}` sink (`renderer::localize_if_number`) call `str()` on the handle and
    propagate, which is what #2429 decided and what Django does; `{{ o.attr }}` never calls it.
    That also closed a recorded djust-REFUSES-where-Django-RENDERS cell: `{{ p.year }}` on a
    `datetime` whose tzinfo raises inside `__str__` (`test_nullary_autocall_2485.py`). Only
