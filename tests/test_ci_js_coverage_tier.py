@@ -48,6 +48,9 @@ def _gate_verdict(coverage: str, event: str) -> bool:
     cond = cond.replace("${{ needs.javascript-coverage.result }}", coverage)
     cond = cond.replace("${{ github.event_name }}", event)
     cond = re.sub(r"\$\{\{ needs\.[\w-]+\.result \}\}", "success", cond)
+    # `changes` outputs only matter for the rust-tests skip clause, which is not reached
+    # while rust-tests reports "success" (tests/test_ci_change_scope.py covers that clause).
+    cond = re.sub(r"\$\{\{ needs\.changes\.outputs\.\w+ \}\}", "false", cond)
     out = subprocess.run(
         ["bash", "-c", f"if {cond}; then echo PASS; else echo FAIL; fi"],
         capture_output=True,
@@ -67,11 +70,17 @@ def test_gate_requires_the_coverage_job():
         ("success", "push", True),
         ("success", "pull_request", True),
         ("skipped", "pull_request", True),
+        ("skipped", "merge_group", True),  # the queue has no labels: same tier as a PR
+        ("success", "merge_group", True),
+        ("failure", "merge_group", False),
+        ("cancelled", "merge_group", False),
         ("skipped", "push", False),  # main must run it
         ("failure", "pull_request", False),
         ("failure", "push", False),
         ("cancelled", "push", False),
     ],
 )
-def test_gate_accepts_skipped_coverage_only_on_pull_requests(coverage, event, passes):
+def test_gate_accepts_skipped_coverage_only_on_pull_requests_and_the_merge_queue(
+    coverage, event, passes
+):
     assert _gate_verdict(coverage, event) is passes
