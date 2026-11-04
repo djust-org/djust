@@ -207,8 +207,17 @@ turns on the GitHub merge queue (squash, grouping `ALLGREEN`, up to 3 entries bu
 merged together, 90-minute check timeout). Repository admins are bypass actors, so the
 direct admin merge path still works as a fallback. To roll the queue back, set the
 ruleset's enforcement to `disabled` (Settings, Rules, Rulesets) or delete it; nothing
-else depends on it. The first real `merge_group` run is the one that confirms the
-`base_sha` / `base_ref` assumptions in the scope rules above.
+else depends on it. The first real `merge_group` run (PR #3822, a docs-only change) confirmed the scope rules'
+assumptions for a single-entry queue: `MG_BASE_SHA` was the previous `main` tip, `MG_HEAD_SHA` the
+queue commit, `MG_BASE_REF` was `refs/heads/main`, `origin/main` was present after checkout, and the
+`base_sha` diff and the merge-base diff listed the same files, so `changes (scope)` classified the run
+docs-only and `test-summary` passed in 23 s with every heavy job skipped. A queue entry holding
+several PRs has not been observed yet; the two-diff union in `scripts/ci-change-scope.py` exists for
+that case.
+
+Required approving reviews on `main` are 0 (GitHub will not let the author approve their own PR, and
+no other account has write access), so the queue's gate is the required `test-summary` check. Pushes
+and merges to `main` are restricted to the repository owner through branch protection.
 
 ### Reading CI logs: `gh run view --log` truncates silently
 
