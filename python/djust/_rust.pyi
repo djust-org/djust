@@ -677,27 +677,36 @@ def serialize_queryset(
 
 def serialize_context(
     context: Dict[str, Any],
-    field_paths: Dict[str, List[str]],
 ) -> Dict[str, Any]:
     """
-    Serialize template context with field paths.
+    Convert a context dict's values to JSON-compatible form.
 
-    Efficiently serializes Django models and QuerySets in template context
-    using the provided field paths (from template variable extraction).
+    Nothing in djust's own render path calls this (the Python helper of the same
+    name in ``djust.template.serialization`` is a different function). It takes
+    exactly one argument; there is no ``field_paths`` parameter.
+
+    Lists, tuples and dicts are walked; ``datetime`` / ``date`` / ``time`` become
+    ISO strings, ``Decimal`` and ``UUID`` become strings, a ``QuerySet`` becomes a
+    list, and any other object becomes ``str(obj)``. Two arms call into the value:
+
+    - An object with a callable ``render`` is replaced by ``{"render": <result>}``.
+    - A Django model becomes ``model_to_dict`` plus ``get_full_name``,
+      ``get_short_name``, ``get_absolute_url`` and ``get_username`` as strings.
+
+    Both calls follow the template rule: a callable carrying ``alters_data`` or
+    ``do_not_call_in_templates`` is not called (a refused ``render`` falls back to
+    ``str(obj)``; a refused ``get_*`` is left out). Every model field and method
+    name also passes the serialization floor (``password``, ``is_superuser``,
+    ``is_staff``, ``DJUST_SENSITIVE_FIELDS``, per-model allow and deny lists); if
+    that gate is missing or raises the model is returned as ``str(obj)``; if the gate itself
+    fails internally it permits no names, so the model ships as an empty dict (still no field
+    leaves).
 
     Args:
         context: Template context dictionary
-        field_paths: Mapping of variable names to field paths
 
     Returns:
         Serialized context dictionary
-
-    Example::
-
-        serialized = serialize_context(
-            {"user": user_obj, "articles": articles_qs},
-            {"user": ["name", "email"], "articles": ["id", "title"]}
-        )
     """
     ...
 
