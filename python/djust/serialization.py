@@ -1871,10 +1871,10 @@ def _is_form_object(value: Any) -> bool:
     container; this family is the exception, and the decision lives here so the type
     list is stated once. It adds a new spelling of an existing reach, not a new reach: such
     an object reached the value stack from a form the raw-Python sidecar already hands the
-    same bridged tag live under its own name. That reach has no floor (Django's ``Variable``
-    walks raw objects, so a bridged tag given ``f.form.instance.password`` prints the hash);
-    the native ``json_viewer`` is NOT affected, because the engine resolves its operand
-    through the floored walk (see ``TYPED_ARGS``).
+    same bridged tag live under its own name. The bridged tag's walk is held to the floor
+    (``template_bridge_floor``, #3771), so ``f.form.instance.password`` is refused there as it is
+    in ``{{ }}``; the native ``json_viewer`` resolves its operand through the engine's floored
+    walk (see ``TYPED_ARGS``).
     """
     from django.forms import BaseForm
     from django.forms.boundfield import BoundField
