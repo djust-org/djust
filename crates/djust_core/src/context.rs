@@ -142,12 +142,16 @@ pub(crate) fn protect_sidecar_strict<'py>(
 /// `form.name` reached it live.
 ///
 /// The exception is this exact family, decided by `djust.serialization` (one
-/// authority, not a copy of its type list here), and it adds no exposure: a
-/// `Form` / `BoundField` in the value stack came from a `Form` that the raw-Python
-/// sidecar already hands the same tag LIVE under its own name, and everything
-/// reachable from a field is reachable from that form. Fail-CLOSED: anything but a
-/// clean `True` (djust's Python not importable, the helper missing or raising)
-/// answers `false`, and the caller keeps the wrapper.
+/// authority, not a copy of its type list here). It adds a new SPELLING of an existing
+/// reach, not a new reach: a `Form` / `BoundField` in the value stack came from a `Form`
+/// that the raw-Python sidecar already hands the same bridged tag LIVE under its own
+/// name, and everything reachable from a field is reachable from that form. That reach has
+/// NO floor: Django's `Variable` walks raw objects, so a bridged tag given
+/// `form.instance.password` or `f.form.instance.password` prints the hash (tracked in the
+/// follow-up issue; an earlier version of this comment said "adds no exposure", which was
+/// wrong for `json_viewer`, now back on the floored native path). Fail-CLOSED: anything but
+/// a clean `True` (djust's Python not importable, the helper missing or raising) answers
+/// `false`, and the caller keeps the wrapper.
 pub(crate) fn live_handle_is_form_object(
     py: Python<'_>,
     obj: &pyo3::Bound<'_, pyo3::PyAny>,

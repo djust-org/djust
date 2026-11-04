@@ -473,3 +473,167 @@ class TestNothingElseMoved:
             rust = _render(engines, "rust", LOAD + body, {"form": harness._bound_form()})
             assert django[0] == "ok" and rust == django, (body, django, rust)
             assert "required" in django[1].lower() or "Form-level" in django[1], django
+
+
+# --------------------------------------------------------------------------- #
+# #3770 review: the carrier is `str(o)` for TEXT and the underlying container for JSON
+
+
+class TestAnErrorContainerKeepsItsDataForJson:
+    """``{{ form.errors|json_script:'e' }}`` is the errors as JSON on Django and was, after the
+    first version of this PR, the errorlist HTML as a JSON string: the carrier's JSON form was
+    ``str(o)``. A carrier made for a ``list`` / ``dict`` SUBCLASS must spell itself for text and
+    stay the container for everything that reads the data."""
+
+    BODIES = [
+        "{{ form.errors|json_script:'e' }}",
+        "{{ form.name.errors|json_script:'e' }}",
+        "{{ form.email.errors|json_script:'e' }}",
+        "{{ errs|json_script:'e' }}",
+        "{{ errlist|json_script:'e' }}",
+        "{{ nested|json_script:'e' }}",
+        "{% for f in form %}{{ f.errors|json_script:'e' }}{% endfor %}",
+        "{% with e=form.name.errors %}{{ e|json_script:'e' }}{% endwith %}",
+        # neighbours that read the container or its spelling
+        "{{ errlist|safe }}",
+        "{{ errlist|escape }}",
+        "{{ errlist|force_escape }}",
+        "{{ errlist|length }}",
+        "{{ errlist|first }}",
+        "{{ errlist|join:', ' }}",
+        "{{ errlist|default:'none' }}",
+        "{{ errlist|slice:':1' }}",
+        "{{ errs|safe }}",
+        "{{ errs|escape }}",
+        "{{ errs|length }}",
+        "{{ errs.email|first }}",
+        "{{ form.errors|safe }}",
+        "{{ form.name.errors|safe }}",
+        "{{ form.name.errors|escape }}",
+    ]
+
+    def _context(self):
+        form = _invalid()
+        return {
+            "form": form,
+            "errs": form.errors,
+            "errlist": form["email"].errors,
+            "nested": {"errors": form.errors, "email": form["email"].errors, "n": 1},
+        }
+
+    @pytest.mark.parametrize("body", BODIES)
+    def test_identical_to_django(self, engines, body):
+        # Fresh objects per engine: ``errors`` is cached on the form instance.
+        django = _render(engines, "django", LOAD + body, self._context())
+        rust = _render(engines, "rust", LOAD + body, self._context())
+        assert django[0] == "ok", django
+        assert rust == django, f"{body}\n  django {django}\n  rust   {rust}"
+
+    def test_the_json_is_the_data_not_the_markup(self, engines):
+        out = _render(engines, "rust", LOAD + "{{ form.errors|json_script:'e' }}", self._context())
+        assert "errorlist" not in out[1], out
+        assert "Enter a valid email address." in out[1]
+        # an EMPTY list is `[]`, not `""`
+        out2 = _render(
+            engines,
+            "rust",
+            LOAD + "{{ form.name.errors|json_script:'e' }}",
+            {"form": _valid()},
+        )
+        assert ">[]<" in out2[1], out2
+
+    def test_a_list_subclass_with_its_own_str_keeps_json_and_text_apart(self, engines):
+        class Tagged(list):
+            def __str__(self) -> str:
+                return "TEXT-FORM"
+
+        class Holder:
+            """Reached through an object, so it is the engine's rule (any ``__str__`` /
+            ``__repr__`` override) that applies, not ``serialize_value``'s narrower one."""
+
+            def __init__(self) -> None:
+                self.t = Tagged(["a", "b"])
+
+        ctx = {"h": Holder()}
+        for body in (
+            "{{ h.t }}",
+            "{{ h.t|json_script:'e' }}",
+            "{{ h.t|length }}",
+            "{{ h.t|join:'-' }}",
+            "{% for x in h.t %}{{ x }}{% endfor %}",
+        ):
+            django = _render(engines, "django", body, ctx)
+            rust = _render(engines, "rust", body, ctx)
+            assert django[0] == "ok" and rust == django, (body, django, rust)
+
+
+# --------------------------------------------------------------------------- #
+# #3770 review: a probe that raises must not hide the real exception
+
+
+class _BoomRender(forms.TextInput):
+    def get_context(self, name, value, attrs):
+        raise RuntimeError("boom-render-3770")
+
+
+class _BoomSubwidgets(forms.TextInput):
+    def subwidgets(self, name, value, attrs=None):
+        raise RuntimeError("boom-subwidgets-3770")
+
+
+class _RenderForm(forms.Form):
+    a = forms.CharField()
+    b = forms.CharField(widget=_BoomRender)
+
+
+class _SubwidgetsForm(forms.Form):
+    a = forms.CharField()
+    b = forms.CharField(widget=_BoomSubwidgets)
+
+
+class TestARaisingProbeDoesNotHideTheRealException:
+    """The conversion measures ``str(o)`` / ``bool(o)`` / ``len(o)`` / the items of an object it
+    carries. When a probe raised, the object kept only its live handle and was marked NOT
+    iterable, so ``{% for f in form %}`` failed with ``'_RenderForm' object is not iterable`` and
+    the widget's own exception was never shown. Django is lazy: the loop over labels renders, and
+    the exception appears only where the broken field is rendered."""
+
+    def _outcome(self, engines, which, src, cls):
+        return _render(engines, which, src, {"form": cls()})
+
+    @pytest.mark.parametrize(
+        "src",
+        [
+            "{% for f in form %}[{{ f.label }}]{% endfor %}",
+            "{% for f in form %}[{{ f.name }}|{{ f.field.required }}]{% endfor %}",
+            "{{ form.a.label }}",
+            "{% for f in form %}{{ forloop.counter }}{% endfor %}",
+        ],
+    )
+    def test_the_template_that_never_renders_the_broken_field_renders(self, engines, src):
+        django = self._outcome(engines, "django", src, _RenderForm)
+        rust = self._outcome(engines, "rust", src, _RenderForm)
+        assert django[0] == "ok", django
+        assert rust == django, (src, django, rust)
+
+    @pytest.mark.parametrize(
+        "src,cls,needle",
+        [
+            ("{{ form }}", _RenderForm, "boom-render-3770"),
+            ("{% for f in form %}{{ f }}{% endfor %}", _RenderForm, "boom-render-3770"),
+            (
+                "{% for f in form %}{% for w in f %}{{ w }}{% endfor %}{% endfor %}",
+                _SubwidgetsForm,
+                "boom-subwidgets-3770",
+            ),
+        ],
+    )
+    def test_the_sink_that_needs_the_broken_part_raises_the_real_error(
+        self, engines, src, cls, needle
+    ):
+        django = self._outcome(engines, "django", src, cls)
+        rust = self._outcome(engines, "rust", src, cls)
+        assert django[0] == "err" and needle in django[2], django
+        assert rust[0] == "err", f"the Rust engine rendered where Django raised: {rust}"
+        assert needle in rust[2], f"the real exception is hidden: {rust}"
+        assert "not iterable" not in rust[2], rust

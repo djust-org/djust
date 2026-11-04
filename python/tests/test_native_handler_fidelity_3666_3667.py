@@ -167,10 +167,10 @@ class TestObjectArguments:
 
         measured = {key.split("|")[0].split(":", 1)[1] for key in facts["object_parameters"]}
         assert measured, "the measurement found no object-taking tag: it is not looking"
-        assert measured == set(rust_handlers.ATTRIBUTE_ARGUMENT_TAGS), (
-            "tags the Python library reads an attribute of, not in ATTRIBUTE_ARGUMENT_TAGS: "
-            f"{sorted(measured - rust_handlers.ATTRIBUTE_ARGUMENT_TAGS)}; listed but measured as "
-            f"taking no object: {sorted(rust_handlers.ATTRIBUTE_ARGUMENT_TAGS - measured)}"
+        assert measured == set(rust_handlers.OBJECT_ARGUMENT_TAGS), (
+            "tags the Python library reads an attribute of, not in OBJECT_ARGUMENT_TAGS: "
+            f"{sorted(measured - rust_handlers.OBJECT_ARGUMENT_TAGS)}; listed but measured as "
+            f"taking no object: {sorted(rust_handlers.OBJECT_ARGUMENT_TAGS - measured)}"
         )
 
     def test_no_object_taking_tag_keeps_a_native_handler_class(self):
@@ -900,14 +900,77 @@ class TestTypeDispatch:
                 bad.append(f"{value!r}\n  django {django}\n  rust   {rust}")
         assert not bad, f"{len(bad)} mismatches:\n" + "\n".join(bad[:3])
 
-    def test_json_viewer_is_bridged_not_native(self):
+    def test_json_viewer_is_native_and_declares_typed_args(self):
+        """``json_viewer`` stays a native handler and asks the engine for its operands' TYPES
+        (``TYPED_ARGS``). It is not on the ``{% load %}`` bridge: that walks raw objects with no
+        floor (``test_typed_args_floor_3756.py``)."""
         from djust.components import rust_handlers
 
-        assert "json_viewer" in rust_handlers.TYPE_ARGUMENT_TAGS
-        assert "json_viewer" in rust_handlers.OBJECT_ARGUMENT_TAGS
-        registered = {name for name, _ in rust_handlers.INLINE_HANDLERS}
-        assert "json_viewer" not in registered
-        assert not hasattr(rust_handlers, "JsonViewerHandler")
+        handlers = dict(rust_handlers.INLINE_HANDLERS)
+        assert "json_viewer" in handlers
+        assert "json_viewer" not in rust_handlers.OBJECT_ARGUMENT_TAGS
+        declared = {
+            name
+            for name, handler in rust_handlers.INLINE_HANDLERS
+            if getattr(handler, "TYPED_ARGS", False)
+        }
+        assert declared == set(rust_handlers.TYPED_ARGUMENT_TAGS), (declared, "the set drifted")
+
+    def test_the_engine_hands_a_typed_handler_the_value_not_its_stand_in(self):
+        """The mechanism, without the tag: a handler declaring ``TYPED_ARGS`` receives the
+        ``datetime`` / ``Decimal`` the engine resolved, under the reserved context key; one that
+        does not declare it receives nothing there and pays nothing."""
+        from djust import _rust
+        from djust.components.rust_handlers import TYPED_ARGS_KEY
+
+        seen: dict[str, Any] = {}
+
+        class Typed:
+            TYPED_ARGS = True
+
+            def render(self, args, context):
+                seen["typed"] = context.get(TYPED_ARGS_KEY)
+                seen["args"] = list(args)
+                return ""
+
+        class Plain:
+            def render(self, args, context):
+                seen["plain"] = TYPED_ARGS_KEY in context
+                return ""
+
+        when = datetime.datetime(2024, 3, 15, 11, 0, 0, tzinfo=datetime.timezone.utc)
+        amount = decimal.Decimal("1.5")
+        _rust.register_tag_handler("typed_probe_3756", Typed())
+        _rust.register_tag_handler("plain_probe_3756", Plain())
+        try:
+            ctx = {"when": when, "amount": amount, "row": {"n": amount}}
+            _rust.render_template(
+                '{% typed_probe_3756 a=when b=amount c=row d="lit" e=7 f=missing %}', ctx
+            )
+            _rust.render_template("{% plain_probe_3756 a=when %}", ctx)
+        finally:
+            _rust.unregister_tag_handler("typed_probe_3756")
+            _rust.unregister_tag_handler("plain_probe_3756")
+        typed = seen["typed"]
+        assert typed["a"] == when and type(typed["a"]) is datetime.datetime
+        assert typed["b"] == amount and type(typed["b"]) is decimal.Decimal
+        assert typed["c"] == {"n": amount} and type(typed["c"]["n"]) is decimal.Decimal
+        assert typed["e"] == 7
+        assert "d" not in typed, "a quoted literal has no type to recover"
+        assert "f" not in typed, "an unresolved operand falls back to the string argument"
+        assert seen["plain"] is False
+
+    def test_a_lone_surrogate_inside_a_dict_or_list_renders(self, engines):
+        """User-supplied JSON can hold a lone surrogate (``json.loads('"\\ud83d"')``); the first
+        version of this PR raised ``Handler 'json_viewer' render() must return a string`` for it,
+        where Django and main render it."""
+        src = "{% load djust_components %}{% json_viewer data=v %}"
+        for raw in ('{"c": "\\ud83d"}', '["\\ud83d", {"k": "\\ude00"}]', '"\\ud83d"'):
+            value = json.loads(raw)
+            django = _render(engines, "django", src, {"v": value})
+            rust = _render(engines, "rust", src, {"v": value})
+            assert django[0] == "ok", django
+            assert rust[0] == "ok", (raw, rust)
 
     def test_the_measurement_finds_the_tag_it_was_written_for(self, facts):
         """Looking is not the same as finding: the derivation must report ``json_viewer`` as
@@ -922,41 +985,61 @@ class TestTypeDispatch:
         for label in ("datetime", "date", "Decimal"):
             assert ("djust_components:json_viewer", "data", label) in cells, sorted(cells)
 
-    def test_every_type_sensitive_tag_of_a_realistic_type_is_bridged_or_known(self, facts):
+    def test_every_type_sensitive_tag_of_a_realistic_type_is_handled_or_known(self, facts):
         """Both directions. A tag whose Python output depends on a realistic value's type, where
         the engines agree on the stand-in and still disagree on the value, must be bridged
-        (``TYPE_ARGUMENT_TAGS`` / ``ATTRIBUTE_ARGUMENT_TAGS``) or be in ``KNOWN_TYPE_LOSS``.
-        And ``KNOWN_TYPE_LOSS`` may only name tags that are still wrong."""
+        (``OBJECT_ARGUMENT_TAGS``), typed (``TYPED_ARGUMENT_TAGS``) or be in ``KNOWN_TYPE_LOSS``.
+        And ``KNOWN_TYPE_LOSS`` may only name tags that are still wrong: an entry that is no
+        longer wrong fails here, and so does a new one that is not recorded."""
         from djust.components import rust_handlers
 
-        bridged = set(rust_handlers.OBJECT_ARGUMENT_TAGS)
+        handled = set(rust_handlers.OBJECT_ARGUMENT_TAGS) | set(rust_handlers.TYPED_ARGUMENT_TAGS)
         lost = {
             d["tag"].split(":", 1)[1]
             for d in facts["typed_values"]["dispatches"]
             if d["type"] in REALISTIC_TYPES and d["isolated"] and not d["rust_agrees"]
         }
-        assert not lost & bridged, f"bridged and still wrong: {sorted(lost & bridged)}"
+        assert not lost & handled, f"handled and still wrong: {sorted(lost & handled)}"
         assert lost == set(KNOWN_TYPE_LOSS), (
             f"type loss not recorded: {sorted(lost - set(KNOWN_TYPE_LOSS))}; "
             f"recorded but no longer lost: {sorted(set(KNOWN_TYPE_LOSS) - lost)}"
         )
 
-    def test_a_bridged_tag_agrees_with_django_for_every_realistic_type(self, facts):
-        """The bridge is Django's own node, so a bridged tag differs from Django for no type a
-        template realistically passes. This is the gate: it would fail if ``json_viewer`` had
-        kept its native handler.
+    def test_a_bridged_or_typed_tag_agrees_with_django_for_every_realistic_type(self, facts):
+        """A bridged tag is Django's own node and a typed one is handed the real value, so
+        neither differs from Django for a type a template realistically passes. This is the gate:
+        it fails if ``json_viewer`` loses its typed arguments.
 
         Restricted to ``REALISTIC_TYPES`` because the bridge is not exact for an exotic ITERABLE:
         a ``bytes`` given to ``avatar_group users=`` reaches the node as the engine's wrapper,
         which cannot be sliced (``users[:5]``), where Django slices the real ``bytes``
-        (named in the PR for #3756, not changed here)."""
+        (tracked at #3768)."""
         from djust.components import rust_handlers
 
+        handled = set(rust_handlers.OBJECT_ARGUMENT_TAGS) | set(rust_handlers.TYPED_ARGUMENT_TAGS)
         wrong = sorted(
             (d["tag"], d["param"], d["type"])
             for d in facts["typed_values"]["dispatches"]
-            if d["tag"].split(":", 1)[1] in rust_handlers.OBJECT_ARGUMENT_TAGS
+            if d["tag"].split(":", 1)[1] in handled
             and d["type"] in REALISTIC_TYPES
             and not d["rust_agrees"]
         )
         assert not wrong, wrong[:10]
+
+    @pytest.mark.xfail(
+        strict=True,
+        reason=(
+            "known gap (#3768): serialize_value rebuilds a top-level dict SUBCLASS (OrderedDict, "
+            "defaultdict) as a plain dict, so a tuple / list / dict holding one spells `{...}` "
+            "where Django spells `OrderedDict({...})`. Same cause and same output on main for "
+            "`{{ v }}`; not json_viewer's. Remove this marker when serialize_value stops rebuilding."
+        ),
+    )
+    def test_a_tuple_holding_an_ordereddict_spells_like_django(self, engines):
+        import collections
+
+        src = "{% load djust_components %}{% json_viewer data=v %}"
+        value = (collections.OrderedDict(a=1),)
+        django = _render(engines, "django", src, {"v": value})
+        rust = _render(engines, "rust", src, {"v": value})
+        assert django[0] == "ok" and rust == django

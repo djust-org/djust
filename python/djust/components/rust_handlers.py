@@ -101,6 +101,17 @@ def _parse_args(args: list[str], context: dict[str, object]) -> dict[str, object
     return result
 
 
+#: The reserved context key under which the engine hands a ``TYPED_ARGS`` handler its resolved,
+#: typed operands (``crates/djust_templates/src/renderer.rs``, ``TYPED_ARGS_KEY``).
+TYPED_ARGS_KEY = "__djust_typed_args__"
+
+
+def _typed_args(context: dict[str, object]) -> dict[str, object]:
+    """The operands the engine resolved, as typed Python values, by parameter name (#3756)."""
+    typed = context.get(TYPED_ARGS_KEY)
+    return typed if isinstance(typed, dict) else {}
+
+
 # ---------------------------------------------------------------------------
 # Block handlers (wrap content — e.g. {% modal %}...{% endmodal %})
 # ---------------------------------------------------------------------------
@@ -2008,8 +2019,8 @@ BLOCK_HANDLERS = [
 #: both directions: a new tag that reads an attribute of its argument cannot get a native
 #: handler, and a tag listed here that stopped doing so is reported. A tag that dispatches on a
 #: value's TYPE instead reads no attribute and is not seen by that measurement; those are
-#: ``TYPE_ARGUMENT_TAGS`` below (#3756).
-ATTRIBUTE_ARGUMENT_TAGS = frozenset(
+#: ``TYPED_ARGUMENT_TAGS`` below (#3756).
+OBJECT_ARGUMENT_TAGS = frozenset(
     {
         "avatar_group",
         "combobox",
@@ -2023,27 +2034,24 @@ ATTRIBUTE_ARGUMENT_TAGS = frozenset(
     }
 )
 
-#: Tags whose Python tag DISPATCHES ON A VALUE'S TYPE instead (#3756).
+#: Native tags whose handler declares ``TYPED_ARGS = True`` (#3756).
 #:
-#: ``json_viewer`` branches on ``isinstance(value, dict / list / str / bool / (int, float))``
-#: and spells every other type ``str(value)``, with no type modifier. It reads no attribute,
-#: so the recorder of ``objects.py`` cannot see it, and a native handler is handed the
-#: engine's stand-in for a value it cannot carry (``str(datetime)``, a ``float`` for a
-#: ``Decimal``) and dispatches on THAT: ``datetime`` / ``date`` rendered as a quoted string
-#: with ``dj-json__value--string``, ``Decimal`` as ``--number``, where Django prints
-#: ``dj-json__value`` with neither. The same bridge as above renders it, so Django's node gets
-#: the real object.
+#: ``json_viewer`` branches on ``isinstance`` and reads no attribute, so the recorder of
+#: ``objects.py`` cannot see it, and a native handler is handed the engine's stand-in for a value
+#: it cannot carry (``str(datetime)``, a ``float`` for a ``Decimal``) and dispatches on THAT. It
+#: stays native, and the engine hands it the operand's TYPE: each ``key=<expression>`` operand is
+#: resolved through the same floored walk ``{{ }}`` uses (``Context::resolve``, which re-protects
+#: after every segment) and passed as a typed Python value. It is NOT moved onto the ``{% load %}``
+#: bridge above: the bridge runs Django's ``Variable`` resolution over raw objects and has no
+#: floor, so ``{% json_viewer data=form.instance.password %}`` printed the hash there.
 #:
 #: Which tags are type-sensitive is measured too, by rendering
-#: (``scripts/lib/template_library_parity/typed_values.py``): the Python tag is run on a
-#: value and on the stand-in the engine would hand a handler, and a tag whose output differs
-#: depends on the type. ``python/tests/test_type_dispatching_tags_3756.py`` asserts that no
-#: tag listed here is still native-and-wrong and that the tags measured as wrong and still
-#: native are exactly the recorded follow-up set.
-TYPE_ARGUMENT_TAGS = frozenset({"json_viewer"})
-
-#: Every tag registered as the bridge handler rather than a native class.
-OBJECT_ARGUMENT_TAGS = ATTRIBUTE_ARGUMENT_TAGS | TYPE_ARGUMENT_TAGS
+#: (``scripts/lib/template_library_parity/typed_values.py``: the Python tag is run on a value and on
+#: the stand-in the engine would hand a handler, and a tag whose output differs depends on the
+#: type). ``TestTypeDispatch`` in ``python/tests/test_native_handler_fidelity_3666_3667.py`` asserts
+#: this set equals the handlers that declare ``TYPED_ARGS``, and that none of them disagrees with
+#: Django for a realistic type.
+TYPED_ARGUMENT_TAGS = frozenset({"json_viewer"})
 
 
 def register_with_rust_engine() -> None:
@@ -8377,6 +8385,137 @@ class MarkdownEditorHandler:
         )
 
 
+class JsonViewerHandler:
+    """Inline handler for {% json_viewer data=json_data %}.
+
+    ``TYPED_ARGS`` (#3756): the Python tag branches on ``isinstance(value, ...)`` and spells every
+    other type as ``str(value)``, so a handler that only sees the engine's string / JSON stand-in
+    (``str(datetime)``, a ``float`` for a ``Decimal``) dispatches on the wrong type. The engine
+    resolves each ``key=<expression>`` operand through the SAME floored walk ``{{ }}`` uses and,
+    for a handler that declares this, hands the typed value over under
+    ``context["__djust_typed_args__"]``. The handler reads its operand from there and from the
+    string arguments for everything the engine did not resolve (a literal).
+    """
+
+    TYPED_ARGS = True
+
+    def _render_node(self, value: object, depth: int, collapsed_depth: int) -> str:
+        collapsed = depth >= collapsed_depth
+
+        if isinstance(value, dict):
+            if not value:
+                return '<span class="dj-json__bracket">{}</span>'
+            collapse_cls = " dj-json__node--collapsed" if collapsed else ""
+            toggle = (
+                f'<span class="dj-json__toggle" role="button" tabindex="0" '
+                f'aria-expanded="{"false" if collapsed else "true"}">'
+                f"{'&#9654;' if collapsed else '&#9660;'}</span>"
+            )
+            items = []
+            for k, v in value.items():
+                e_key = conditional_escape(str(k))
+                items.append(
+                    f'<div class="dj-json__pair">'
+                    f'<span class="dj-json__key">"{e_key}"</span>'
+                    f'<span class="dj-json__colon">: </span>'
+                    f"{self._render_node(v, depth + 1, collapsed_depth)}</div>"
+                )
+            count = f' <span class="dj-json__count">({len(value)} keys)</span>' if collapsed else ""
+            return (
+                f'<div class="dj-json__node dj-json__node--object{collapse_cls}">'
+                f"{toggle}"
+                f'<span class="dj-json__bracket">{{</span>{count}'
+                f'<div class="dj-json__children">{"".join(items)}</div>'
+                f'<span class="dj-json__bracket">}}</span></div>'
+            )
+
+        if isinstance(value, list):
+            if not value:
+                return '<span class="dj-json__bracket">[]</span>'
+            collapse_cls = " dj-json__node--collapsed" if collapsed else ""
+            toggle = (
+                f'<span class="dj-json__toggle" role="button" tabindex="0" '
+                f'aria-expanded="{"false" if collapsed else "true"}">'
+                f"{'&#9654;' if collapsed else '&#9660;'}</span>"
+            )
+            items = []
+            for i, v in enumerate(value):
+                items.append(
+                    f'<div class="dj-json__item">'
+                    f"{self._render_node(v, depth + 1, collapsed_depth)}"
+                    f"{',' if i < len(value) - 1 else ''}</div>"
+                )
+            count = (
+                f' <span class="dj-json__count">({len(value)} items)</span>' if collapsed else ""
+            )
+            return (
+                f'<div class="dj-json__node dj-json__node--array{collapse_cls}">'
+                f"{toggle}"
+                f'<span class="dj-json__bracket">[</span>{count}'
+                f'<div class="dj-json__children">{"".join(items)}</div>'
+                f'<span class="dj-json__bracket">]</span></div>'
+            )
+
+        if isinstance(value, str):
+            return f'<span class="dj-json__value dj-json__value--string">"{conditional_escape(value)}"</span>'
+        if isinstance(value, bool):
+            return f'<span class="dj-json__value dj-json__value--bool">{"true" if value else "false"}</span>'
+        if isinstance(value, (int, float)):
+            return f'<span class="dj-json__value dj-json__value--number">{value}</span>'
+        if value is None:
+            return '<span class="dj-json__value dj-json__value--null">null</span>'
+
+        return f'<span class="dj-json__value">{conditional_escape(str(value))}</span>'
+
+    def render(self, args: list[str], context: dict[str, object]) -> str:
+        kw = _parse_args(args, context)
+        kw.update(_typed_args(context))
+        data = kw.get("data", None)
+        collapsed_depth = kw.get("collapsed_depth", 2)
+        root_label = kw.get("root_label", "root")
+        copy_button = kw.get("copy_button", True)
+        custom_class = kw.get("class", "")
+
+        e_class = conditional_escape(str(custom_class))
+        e_label = conditional_escape(str(root_label))
+
+        try:
+            collapsed_depth = int(cast("str | int | float", collapsed_depth))
+        except (ValueError, TypeError):
+            collapsed_depth = 2
+
+        classes = ["dj-json-viewer"]
+        if e_class:
+            classes.append(e_class)
+        class_str = " ".join(classes)
+
+        copy_html = ""
+        if copy_button:
+            copy_html = (
+                '<button class="dj-json-viewer__copy" type="button" '
+                'aria-label="Copy JSON">Copy</button>'
+            )
+
+        try:
+            raw_json = _json.dumps(data, indent=2, default=str)
+        except (TypeError, ValueError):
+            raw_json = str(data)
+
+        tree_html = self._render_node(data, 0, collapsed_depth)
+
+        return _safe(
+            f'<div class="{class_str}" dj-hook="JsonViewer" '
+            f'data-collapsed-depth="{collapsed_depth}">'
+            f'<div class="dj-json-viewer__header">'
+            f'<span class="dj-json-viewer__label">{e_label}</span>'
+            f"{copy_html}</div>"
+            f'<div class="dj-json-viewer__tree">{tree_html}</div>'
+            f'<script type="application/json" class="dj-json-viewer__raw">'
+            f"{conditional_escape(raw_json)}</script>"
+            f"</div>"
+        )
+
+
 class LogViewerHandler:
     """Inline handler for {% log_viewer lines=log_lines %}"""
 
@@ -8668,6 +8807,7 @@ INLINE_HANDLERS.extend(
     [
         ("terminal", TerminalHandler()),
         ("markdown_editor", MarkdownEditorHandler()),
+        ("json_viewer", JsonViewerHandler()),
         ("log_viewer", LogViewerHandler()),
         ("file_tree", FileTreeHandler()),
         ("tour", TourHandler()),

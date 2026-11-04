@@ -4404,7 +4404,17 @@ fn opaque_gate(ob: &Bound<'_, PyAny>) -> Option<OpaqueFacts> {
     let truthy = ob.is_truthy().ok()?;
     // `PyObject_GetIter`, which builds an iterator and consumes nothing — a
     // generator is not advanced by being asked.
-    let iterator = ob.try_iter().ok();
+    //
+    // A type that DEFINES `__iter__` and whose `iter(o)` RAISED is iterable and broken (a
+    // `BoundField` whose widget's `subwidgets` raises): the gate declines it like every other
+    // raising probe, so it crosses as the handle-only carrier, which is iterable by type, and
+    // `{% for %}` reports the object's own exception where Django does instead of
+    // `'BoundField' object is not iterable` (#3770 review).
+    let iterator = match ob.try_iter() {
+        Ok(it) => Some(it),
+        Err(_) if type_defines_iter(ob) => return None,
+        Err(_) => None,
+    };
     let iterable = iterator.is_some();
     // `PyObject_Size`: `Ok` for anything with a `__len__`, `Err` otherwise.
     let len = ob.len().ok();
@@ -4779,6 +4789,25 @@ impl Encoded {
         Python::attach(|py| a.bind(py).eq(b.bind(py)).ok())
     }
 
+    /// A list-subclass carrier's SEQUENCE, the list half of [`Encoded::live_mapping_value`]
+    /// (#3770 review). A `list` subclass that spells itself (Django's `ErrorList`) crosses as
+    /// a carrier whose text is `str(o)`; `|json_script` is `json.dumps`, which writes the
+    /// array. `None` for every non-list carrier and for one whose handle a round trip dropped.
+    pub fn live_sequence_value(&self) -> Option<Value> {
+        let handle = self.live.as_ref()?;
+        Python::attach(|py| {
+            let ob = handle.bind(py);
+            if !ob.is_instance_of::<PyList>() {
+                return None;
+            }
+            let mut items = Vec::with_capacity(ob.len().unwrap_or(0).min(64));
+            for item in ob.try_iter().ok()? {
+                items.push(item.ok()?.extract::<Value>().ok()?);
+            }
+            Some(Value::List(items))
+        })
+    }
+
     pub fn live_mapping_value(&self) -> Option<Value> {
         let handle = self.live.as_ref()?;
         Python::attach(|py| {
@@ -5092,7 +5121,14 @@ pub fn opaque_value(ob: &Bound<'_, PyAny>) -> Option<Encoded> {
     // An UNBOUNDED object (#2670, #2678) is left at `None` for the same
     // reason: the sinks read it through the handle, up to the cap.
     let one_shot = ob.try_iter().is_ok_and(|it| it.as_any().is(ob));
-    let items = if iterable && !one_shot && !unbounded {
+    // A Django `Form` / `BoundField` is carried like a one-shot iterator: handle live, `items`
+    // left `None`, the sink that needs them (`{% for %}`) reads them through the handle
+    // (#3770 review, performance). Enumerating them at conversion renders every subwidget of
+    // every field, and for a `ModelChoiceField` re-evaluates its queryset each time, which is
+    // work a template that never loops over the form pays for. A `Form` / `BoundField` re-iterates
+    // to the same items, so reading them at the sink is the same answer, later.
+    let lazy_form = iterable && context::live_handle_is_form_object(ob.py(), ob);
+    let items = if iterable && !one_shot && !unbounded && !lazy_form {
         let it = ob.try_iter().ok()?;
         let mut collected = Vec::with_capacity(len.unwrap_or(0).min(64));
         for item in it {
@@ -5209,6 +5245,16 @@ pub fn opaque_value(ob: &Bound<'_, PyAny>) -> Option<Encoded> {
 /// is the one cell this carrier does not make Django-exact; it is no worse
 /// than the dict dump it replaces on that cell and strictly better on every
 /// lookup that walks the handle.
+/// Does the object's TYPE define a usable `__iter__`? (#3770 review)
+///
+/// Asked of the type, not of `iter(o)`: that call may be the very probe that raised. A class
+/// that sets `__iter__ = None` is Python's spelling of "not iterable", so `None` answers no.
+fn type_defines_iter(ob: &Bound<'_, PyAny>) -> bool {
+    ob.get_type()
+        .getattr(pyo3::intern!(ob.py(), "__iter__"))
+        .is_ok_and(|iter| !iter.is_none())
+}
+
 fn handle_only_encoded(ob: &Bound<'_, PyAny>) -> Encoded {
     let type_name = ob
         .get_type()
@@ -5235,7 +5281,13 @@ fn handle_only_encoded(ob: &Bound<'_, PyAny>) -> Encoded {
         display,
         truthy: ob.is_truthy().unwrap_or(true),
         len: None,
-        iterable: false,
+        // The TYPE says whether it iterates (#3770 review). `iter(o)` is not asked: it may be the
+        // very probe that raised (a form whose `str()` raised still iterates its `BoundField`s;
+        // a `BoundField` whose subwidgets raise still iterates, and the error is the one the
+        // loop should report). With `items` left `None` and the handle live, `{% for %}` consumes
+        // the live object at the sink, so the real exception surfaces THERE, as Django's does,
+        // instead of an `'X' object is not iterable` that hides it.
+        iterable: type_defines_iter(ob),
         repr,
         cmp_key: None,
         live: Some(std::sync::Arc::new(ob.clone().unbind())),
