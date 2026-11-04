@@ -186,6 +186,19 @@ class TestAPlainFormHasNoModelFloorButHasTheWidgetFloor:
         assert not serialization.field_has_password_widget(form.fields["name"])
         assert not serialization.field_has_password_widget(form.fields["note"])
 
+    def test_a_password_input_that_draws_as_text_is_still_a_password_field(self):
+        """A "show password" widget is a ``PasswordInput`` that switches ``input_type`` to ``text``.
+        ``isinstance`` and ``input_type`` are two tests for two shapes: this one is only the first."""
+
+        class Reveal(forms.PasswordInput):
+            input_type = "text"
+
+        class Toggle(forms.Form):
+            pw = forms.CharField(widget=Reveal)
+
+        assert serialization.field_has_password_widget(Toggle().fields["pw"])
+        assert serialization._model_form_floor(Toggle()) is not None
+
     def test_the_other_fields_of_that_form_still_read(self, engine):
         form = SignupForm({"name": "Ada", "pin": TYPED, "note": "hello"})
         for src in (
@@ -474,6 +487,21 @@ class TestTheFormsetHasTheSameFloor:
         out = native(engine, src, fs=fs)
         assert TYPED not in out
         assert "n" in out
+
+    def test_a_formset_whose_forms_cannot_be_built_still_has_the_class_level_floor(self, caplog):
+        """The forms it built and the class's ``base_fields`` are two sources. Where they overlap
+        (every ordinary formset) either alone gives the same floor; the class level is what is left
+        when building a form raises, and the floor must not fail open then."""
+        from django.forms import formset_factory
+
+        class Broken(formset_factory(SignupForm, extra=0)):
+            @property
+            def forms(self):
+                raise RuntimeError("cannot build")
+
+        floor = serialization._formset_floor(Broken())
+        assert floor is not None and "pin" in floor[4] and "token" in floor[4]
+        assert "name" not in floor[4]
 
     def test_the_formset_floor_is_none_when_nothing_is_on_it(self):
         from django.forms import formset_factory
