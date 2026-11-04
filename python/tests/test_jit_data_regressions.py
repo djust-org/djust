@@ -218,7 +218,8 @@ def assert_list_html(html):
 def test_http_model_list(data_rows, force_codegen, monkeypatch):
     if force_codegen:
         monkeypatch.setattr(
-            "djust._rust.serialize_queryset", lambda rows, paths: [{} for _ in rows]
+            "djust._rust.serialize_queryset",
+            lambda rows, paths, all_row_cap=None: [{} for _ in rows],
         )
     from django.test import RequestFactory
     from django.contrib.sessions.middleware import SessionMiddleware

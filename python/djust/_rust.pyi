@@ -634,6 +634,7 @@ def dj_model_fields_from_template(
 def serialize_queryset(
     objects: List[Any],
     field_paths: List[str],
+    all_row_cap: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
     """
     Serialize Django QuerySet objects efficiently.
@@ -654,6 +655,13 @@ def serialize_queryset(
     Args:
         objects: List of Django model instances
         field_paths: List of field paths to serialize (e.g., ["id", "user.name"])
+        all_row_cap: At most this many rows are read through a called ``all``
+            (a related manager's ``.all``): a SQL ``LIMIT`` on an unevaluated
+            QuerySet. ``None`` (the default for a direct call) reads every row;
+            ``djust.mixins.jit`` passes ``LIVEVIEW_CONFIG['queryset_all_row_cap']``.
+            A path ``X.all.count`` / ``X.all.exists`` / ``X.all.first`` /
+            ``X.all.last`` -- ``all`` read only through QuerySet methods -- is
+            shipped as ``{"count": n, ...}`` and never materializes the rows.
 
     Returns:
         List of dictionaries containing serialized objects

@@ -215,6 +215,9 @@ _FRAMEWORK_INTERNAL_ATTRS: frozenset = frozenset(
         "_loop_cache_bypassed",
         "_djust_mount_kwargs",
         "_jit_serialized_keys",
+        # The JIT's template source for a value reached through a container,
+        # read once per render by ``get_context_data`` (#3788).
+        "_nested_template_source",
         "_context_processor_keys",
         # What the last legacy render built from attributes / as render-only
         # (``mixins/context.py`` ``legacy_unsaved_keys``).
