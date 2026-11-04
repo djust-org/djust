@@ -99,9 +99,11 @@ def _floor() -> "tuple[Callable[[Any], Any], Callable[[Any], Any]]":
     is imported by ``template_libraries`` at ``{% load %}`` time, before a render)."""
     global _protect_value, _protect_tree
     if _protect_value is None or _protect_tree is None:
-        from djust.serialization import _protect_sidecar_tree, _protect_sidecar_value
+        from djust.serialization import _protect_sidecar_tree, _protect_sidecar_walk
 
-        _protect_value = _protect_sidecar_value
+        # The WALK's floor (#3790): the leaf floor plus the model forms. `release` hands a tag the
+        # real form back.
+        _protect_value = _protect_sidecar_walk
         _protect_tree = _protect_sidecar_tree
     return _protect_value, _protect_tree
 
@@ -146,6 +148,14 @@ def release(value: Any) -> Any:
     if not isinstance(value, FloorWalker):
         return value
     raw = object.__getattribute__(value, "_FloorWalker__raw")
+    # A model form (or the BoundField of a floor field) is walked as a floor proxy so a PATH cannot read
+    # `form.initial.password`, but a tag is the application's own code and is handed the real form
+    # (#3790): djust's component readers call `bound_field.value()` and a third-party form tag renders
+    # the widget; a proxy would draw a `User`'s `is_staff` checkbox unchecked and the next save would
+    # clear it.
+    from djust.serialization import unwrap_form_proxy
+
+    raw = unwrap_form_proxy(raw)
     if isinstance(raw, (list, tuple, dict, set, frozenset)):
         _, protect_tree = _floor()
         protected = protect_tree(raw)

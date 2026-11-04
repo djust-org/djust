@@ -935,6 +935,27 @@ _FIELD_TYPE_MAP = {
 }
 
 
+def _bound_field_value(bound_field: Any) -> Any:
+    """``bound_field.value()``, held to the serialization floor (#3790).
+
+    The one reader every component that fills a control from a ``BoundField`` calls
+    (``_render_field``, the hidden-field loop of ``dj_form``, ``_from_bound_field``), so they cannot
+    disagree. A floor field of a ``ModelForm`` (``password``, ``is_superuser``, ``is_staff``,
+    ``DJUST_SENSITIVE_FIELDS``, ...) that is ``disabled`` reads as ``None``: Django ignores what is
+    posted for it, so the control can be drawn without the value and a re-save cannot change it. An
+    EDITABLE floor field keeps its value, because the browser posts the control back and a blank one
+    clears the column (an unchecked checkbox demotes the user); the reader says so once, loudly.
+    """
+    from djust.serialization import form_field_floor_state, warn_editable_floor_field
+
+    state = form_field_floor_state(bound_field)
+    if state == "disabled":
+        return None
+    if state == "editable":
+        warn_editable_floor_field(bound_field)
+    return bound_field.value()
+
+
 def _get_field_type(bound_field: Any) -> Any:
     """Determine the djust component type for a Django BoundField."""
     field = bound_field.field
@@ -999,7 +1020,7 @@ def _render_field(bound_field: Any, event_prefix: Any = "") -> Any:
     # Get current value
     value = ""
     if hasattr(bound_field, "value"):
-        v = bound_field.value()
+        v = _bound_field_value(bound_field)
         if v is not None:
             value = str(v)
 
@@ -1245,7 +1266,7 @@ def dj_form(
         h_name = bf.html_name if hasattr(bf, "html_name") else bf.name
         h_value = ""
         if hasattr(bf, "value"):
-            v = bf.value()
+            v = _bound_field_value(bf)
             if v is not None:
                 h_value = str(v)
         hidden_html += (

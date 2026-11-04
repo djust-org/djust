@@ -56,6 +56,7 @@ del _submodule, importlib
 # Re-export helpers moved to sub-modules for backward compatibility
 # (importing from _forms also triggers its @register decorators at load time)
 from djust.components.templatetags._forms import (  # noqa: E402
+    _bound_field_value,
     _get_field_type,  # noqa: F401
     _infer_columns,  # noqa: F401
     _queryset_to_rows,  # noqa: F401
@@ -2123,7 +2124,7 @@ def _from_bound_field(field: Any, values: dict) -> dict:
     if not out.get("label"):
         out["label"] = field.label or ""
     if not out.get("value"):
-        current = field.value()
+        current = _bound_field_value(field)
         out["value"] = "" if current is None else str(current)
     if not out.get("error") and field.errors:
         out["error"] = str(list(field.errors)[0])
