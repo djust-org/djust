@@ -4899,6 +4899,117 @@ fn gated_names(
     Ok(out)
 }
 
+/// What a template's `.all` step iterates, for a path that names `all` (#3777).
+///
+/// `{% for g in u.groups.all %}{{ g.name }}{% endfor %}` extracts as the paths
+/// `groups.all` and `groups.all.name`: `all` is the related manager's METHOD,
+/// not a field. This serializer walks the path tree with `getattr`, so before
+/// this helper existed it handed the bound method `all` to the nested walk,
+/// found no `name` on a method, and shipped `{"groups": {"all": {}}}` — the
+/// loop ran over an empty dict and rendered nothing. The leaf spelling
+/// (`{{ u.groups.all|length }}`) shipped the QuerySet's `repr` as a string.
+///
+/// The Python codegen twin has always iterated it
+/// (`optimization/codegen.py`, the `attr_name == "all"` branch), which is why
+/// a `list[Model]` rendered the names and a QuerySet did not (#1646). The
+/// caller's key-count fallback to that codegen never fires, because the
+/// `groups` key IS present.
+///
+/// `Ok(None)` means `template_call_guard` refused: the name is OMITTED, as the
+/// leaf arm omits a refused callable, so the sidecar walk (which refuses the
+/// same callables) answers instead.
+///
+/// Errors follow the codegen (`_generate_nested_access` catches
+/// `(TypeError, AttributeError)` and nothing else): a `TypeError` /
+/// `AttributeError` (an `all` that takes arguments, a result that does not
+/// iterate) is an empty list, and ANY OTHER exception — a database error
+/// mid-evaluation, `SynchronousOnlyOperation` — PROPAGATES. It reaches the
+/// caller's `[JIT ERROR]` handler, which logs it through the exposure
+/// diagnostics and falls back to the generic serializer, rather than
+/// rendering a user with no groups or permissions and saying nothing (#3777
+/// review). This function never logs an exception itself (ADR-038).
+fn called_all_rows<'py>(value: &Bound<'py, PyAny>) -> PyResult<Option<Vec<Bound<'py, PyAny>>>> {
+    if !djust_core::template_call_guard(value).may_call() {
+        return Ok(None);
+    }
+    let rows = value
+        .call0()
+        .and_then(|queryset| queryset.try_iter())
+        .and_then(|iterator| iterator.collect::<PyResult<Vec<_>>>());
+    match rows {
+        Ok(rows) => Ok(Some(rows)),
+        Err(err) if codegen_swallows(value.py(), &err) => Ok(Some(Vec::new())),
+        Err(err) => Err(err),
+    }
+}
+
+/// The exceptions the Python codegen twin swallows around a `.all()` step.
+fn codegen_swallows(py: Python<'_>, err: &PyErr) -> bool {
+    err.is_instance_of::<pyo3::exceptions::PyTypeError>(py)
+        || err.is_instance_of::<pyo3::exceptions::PyAttributeError>(py)
+}
+
+/// Is `value` a Django `QuerySet` — or any subclass of it?
+///
+/// An `isinstance`, not a class-name test: `SomeQS.as_manager()` and a related
+/// manager's `all()` hand back the model's OWN queryset class, whose name is
+/// not `QuerySet`, and the name test left `|length`, `{% if %}` and `|join`
+/// wrong for exactly those (#3777 review).
+fn is_django_queryset(value: &Bound<'_, PyAny>) -> bool {
+    value
+        .py()
+        .import("django.db.models")
+        .and_then(|m| m.getattr("QuerySet"))
+        .and_then(|cls| value.is_instance(&cls))
+        .unwrap_or(false)
+}
+
+/// `value` as a list when it is a QuerySet (the result of a called `all`),
+/// otherwise unchanged (#3777). The template named the relation whole
+/// (`{{ u.groups.all|length }}`, `{% if u.groups.all %}`), so every row is
+/// wanted, and a QuerySet is neither a list nor a tuple to
+/// [`queryset_template_value`]. Errors as in [`called_all_rows`]: the
+/// codegen's two are tolerated (the value stays as it is), anything else
+/// propagates.
+fn called_all_to_list<'py>(
+    py: Python<'py>,
+    value: &Bound<'py, PyAny>,
+) -> PyResult<Bound<'py, PyAny>> {
+    if !is_django_queryset(value) {
+        return Ok(value.clone());
+    }
+    let rows = value
+        .try_iter()
+        .and_then(|iterator| iterator.collect::<PyResult<Vec<_>>>())
+        .and_then(|rows| PyList::new(py, rows));
+    match rows {
+        Ok(list) => Ok(list.into_any()),
+        Err(err) if codegen_swallows(py, &err) => Ok(value.clone()),
+        Err(err) => Err(err),
+    }
+}
+
+/// A row a called `all` yielded, serialized under `tree`. A dict / list / tuple
+/// row (a model METHOD named `all` that returns plain data) carries data keys,
+/// not model attributes, so it is preserved whole exactly as the sibling arm
+/// preserves such an attribute value; anything else is walked and gated
+/// (#3777 review).
+fn serialize_all_row(
+    py: Python,
+    row: &Bound<'_, PyAny>,
+    tree: &std::collections::HashMap<String, PathNode>,
+    gate: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    if row.is_instance_of::<PyDict>()
+        || row.is_instance_of::<PyList>()
+        || row.is_instance_of::<PyTuple>()
+    {
+        queryset_template_value(row, 0)
+    } else {
+        serialize_object_with_paths(py, row, tree, gate)
+    }
+}
+
 /// Serialize a single Python object based on path tree
 fn serialize_object_with_paths(
     py: Python,
@@ -4955,11 +5066,29 @@ fn serialize_object_with_paths(
                     // It's a method - try calling it
                     match attr_value.call0() {
                         Ok(method_result) => {
+                            // `u.groups.all` named whole (`|length`, `{% if %}`,
+                            // `{{ g }}` in the loop) is a sequence of rows. A
+                            // QuerySet is not a list/tuple, so it fell through
+                            // to its `repr` string: `|length` counted the
+                            // characters and an EMPTY relation was truthy
+                            // (#3777).
+                            let method_result = if attr_name == "all" {
+                                called_all_to_list(py, &method_result)?
+                            } else {
+                                method_result
+                            };
                             // Method call succeeded - use the result
                             result
                                 .set_item(attr_name, queryset_template_value(&method_result, 0)?)?;
                         }
-                        Err(_) => {
+                        Err(err) => {
+                            // A call that raises something other than the
+                            // codegen's two is a real failure of the relation
+                            // (a database error), not "needs arguments"; it
+                            // propagates for `all` (#3777).
+                            if attr_name == "all" && !codegen_swallows(py, &err) {
+                                return Err(err);
+                            }
                             // Method call failed - skip this attribute (don't insert null)
                             // This can happen if the method requires arguments
                             continue;
@@ -4971,6 +5100,19 @@ fn serialize_object_with_paths(
                 }
             }
             PathNode::Object(nested_tree) => {
+                // `u.groups.all.name`: `all` is the manager's method and its
+                // children are read off each ROW it yields (#3777).
+                if attr_name == "all" && attr_value.is_callable() {
+                    let Some(rows) = called_all_rows(&attr_value)? else {
+                        continue;
+                    };
+                    let mut serialized = Vec::with_capacity(rows.len());
+                    for row in &rows {
+                        serialized.push(serialize_all_row(py, row, nested_tree, gate)?);
+                    }
+                    result.set_item(attr_name, PyList::new(py, serialized)?)?;
+                    continue;
+                }
                 // JSONField and computed containers carry data keys, not model
                 // attributes. Preserve them just as the codegen root path does.
                 let nested_result = if attr_value.is_instance_of::<PyDict>()
@@ -4994,7 +5136,17 @@ fn serialize_object_with_paths(
                 // through the same guard as the leaf above (#3772): a model
                 // whose own `all` is stamped `alters_data` (or
                 // `do_not_call_in_templates`) is iterated as it is, not called.
-                let iterable = if let Some(all_method) = attr_value
+                //
+                // `u.groups.all.0.name` is the same step spelled with an index:
+                // the attribute IS the `all` method, so its rows are what the
+                // index reads (#3777).
+                let rows_are_called_all = attr_name == "all" && attr_value.is_callable();
+                let iterable = if rows_are_called_all {
+                    let Some(rows) = called_all_rows(&attr_value)? else {
+                        continue;
+                    };
+                    PyList::new(py, rows)?.into_any()
+                } else if let Some(all_method) = attr_value
                     .getattr("all")
                     .ok()
                     .filter(|m| djust_core::template_call_guard(m).may_call())
@@ -5025,8 +5177,11 @@ fn serialize_object_with_paths(
                             Ok(obj) => obj,
                             Err(_) => continue,
                         };
-                        let item_result =
-                            serialize_object_with_paths(py, &item_obj, nested_tree, gate)?;
+                        let item_result = if rows_are_called_all {
+                            serialize_all_row(py, &item_obj, nested_tree, gate)?
+                        } else {
+                            serialize_object_with_paths(py, &item_obj, nested_tree, gate)?
+                        };
                         list_results.push(item_result);
                     }
                 }
