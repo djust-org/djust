@@ -241,6 +241,27 @@ class TestThePathLookupForAContainer3788:
         code = generate_serializer_code("User", ["groups.all.name"], name)
         assert compile_serializer(code, name)
 
+    @pytest.mark.django_db
+    def test_a_render_with_a_nested_queryset_changes_no_state(self, world) -> None:
+        """Behaviour, not membership: rendering a view whose context holds a
+        nested QuerySet writes the per-render template memo, and that write must
+        not look like a state change -- else a no-op event re-renders."""
+        from djust.websocket import _compute_changed_keys, _snapshot_assigns
+
+        class _V(LiveView):
+            def mount(self, request, **kwargs):
+                self.d = {"users": _users()}
+
+        _V.template = "<div dj-root>{% for x in d.users %}" + _groups_of("x") + "{% endfor %}</div>"
+        client = LiveViewTestClient(_V)
+        client.mount()
+        view = client.view_instance
+        before = _snapshot_assigns(view)
+        client.render()
+        view.get_context_data()
+        assert _compute_changed_keys(before, _snapshot_assigns(view)) == set()
+        assert view._nested_template_source  # the memo really was written
+
     def test_the_per_render_template_memo_is_framework_state(self) -> None:
         """It is written by every render of a view with a nested DB value; if
         it counted as user state, a render would look like a state change and a
@@ -285,6 +306,8 @@ METHOD_SOURCES = {
     "first-name": "{% for u in users %}[{{ u.groups.all.first.name }}]{% endfor %}",
     "last-name": "{% for u in users %}[{{ u.groups.all.last.name }}]{% endfor %}",
     "first-whole": "{% for u in users %}[{{ u.groups.all.first }}]{% endfor %}",
+    "first-whole-and-field": "{% for u in users %}[{{ u.groups.all.first }}-{{ u.groups.all.first.name }}]{% endfor %}",
+    "last-whole-and-field": "{% for u in users %}[{{ u.groups.all.last }}-{{ u.groups.all.last.name }}]{% endfor %}",
     "all-three": "{% for u in users %}[{{ u.groups.all.first.name }}|{{ u.groups.all.count }}"
     "|{{ u.groups.all.exists }}]{% endfor %}",
 }
@@ -325,6 +348,25 @@ class TestAllReadThroughQuerySetMethods3788:
         users = list(_users())
         assert _rust.serialize_queryset(users, paths) == [codegen(u) for u in users]
 
+    def test_a_row_read_whole_and_by_field_carries_its_text(self, world) -> None:
+        """A dict prints as its repr, so ``first`` / ``last`` read both ways carry
+        the ``__str__`` a serialized model carries -- in Rust and in the codegen
+        twin -- and only then (reading the field alone ships no text)."""
+        both = ["groups.all.first", "groups.all.first.name"]
+        field_only = ["groups.all.first.name"]
+        code = generate_serializer_code("User", both, "ser_str_3788")
+        codegen = compile_serializer(code, "ser_str_3788")
+        users = list(_users())
+        rust = _rust.serialize_queryset(users, both)
+        assert rust == [codegen(u) for u in users]
+        assert [r["groups"]["all"]["first"] for r in rust] == [
+            {"name": "staff", "__str__": "staff"},
+            {"name": "staff", "__str__": "staff"},
+            None,
+        ]
+        alone = _rust.serialize_queryset(users, field_only)
+        assert alone[0]["groups"]["all"]["first"] == {"name": "staff"}
+
     def test_reading_the_rows_too_keeps_the_rows(self, world) -> None:
         """The relation read whole (the loop's iterable), or any row field, is
         a list of rows -- the shape ``{% for %}`` needs."""
@@ -335,6 +377,31 @@ class TestAllReadThroughQuerySetMethods3788:
         ):
             out = _rust.serialize_queryset(list(_users()), paths)
             assert isinstance(out[0]["groups"]["all"], list), paths
+
+    def test_the_codegen_twin_keeps_rows_when_the_relation_is_read_whole(self, world) -> None:
+        """Every child of ``all`` is a method name, but ``groups.all`` itself is
+        read (the loop's iterable): rows, as in Rust. Without the whole mark the
+        twin shipped ``{"count": n}`` and the loop iterated its keys."""
+        paths = ["groups.all", "groups.all.count"]
+        code = generate_serializer_code("User", paths, "ser_whole_3788")
+        codegen = compile_serializer(code, "ser_whole_3788")
+        users = list(_users())
+        shipped = [codegen(u)["groups"]["all"] for u in users]
+        assert all(isinstance(rows, list) for rows in shipped), shipped
+        assert [len(rows) for rows in shipped] == [2, 1, 0]
+        assert shipped == [r["groups"]["all"] for r in _rust.serialize_queryset(users, paths)]
+
+    @pytest.mark.parametrize("render", RENDERS)
+    @pytest.mark.parametrize("shape", list(MAKE_CONTEXT))
+    def test_a_loop_beside_a_method_keeps_iterating_the_rows(self, world, render, shape) -> None:
+        source = (
+            "{% for u in users %}[{% for g in u.groups.all %}x{% endfor %}"
+            "|{{ u.groups.all.count }}]{% endfor %}"
+        )
+        expected = re.sub(r"\|\d+\]", "|]", _django_render(source, MAKE_CONTEXT[shape]()))
+        assert expected == "[xx|][x|][|]"
+        got = html_lib.unescape(render(source, MAKE_CONTEXT[shape]()))
+        assert re.sub(r"\|\d+\]", "|]", got) == expected
 
     @pytest.mark.parametrize("render", RENDERS)
     def test_a_loop_beside_a_method_still_renders_the_loop(self, world, render) -> None:
@@ -383,6 +450,12 @@ def _build_models():
             return super().first()
 
         first.alters_data = True  # type: ignore[attr-defined]
+
+        def exists(self):
+            CALLS.append("exists")
+            return super().exists()
+
+        exists.do_not_call_in_templates = True  # type: ignore[attr-defined]
 
         def count(self):
             CALLS.append("count")
@@ -491,6 +564,38 @@ class TestTheMethodReadingIsUnambiguous3788:
         out = compile_serializer(code, "g")(QSBin.objects.get(name="full"))
         assert out == {"notes": {"all": {"count": 2}}}
         assert "first" not in CALLS and "count" in CALLS
+
+    @pytest.mark.parametrize("marker", ["alters_data", "do_not_call_in_templates"])
+    def test_the_codegen_all_step_never_calls_a_marked_all(self, marker) -> None:
+        """The Python serializer's own ``all`` step goes through the same call
+        guard as the Rust one (#3772): a marked ``all`` is not run."""
+        from types import SimpleNamespace
+
+        calls: list[str] = []
+
+        def make(marked: bool):
+            def all_():
+                calls.append("all")
+                return []
+
+            if marked:
+                setattr(all_, marker, True)
+            return SimpleNamespace(groups=SimpleNamespace(all=all_))
+
+        code = generate_serializer_code("Holder", ["groups.all.name"], "ser_guard_3788")
+        serializer = compile_serializer(code, "ser_guard_3788")
+        serializer(make(True))
+        assert calls == []
+        serializer(make(False))  # non-vacuity: an unmarked one IS run
+        assert calls == ["all"]
+
+    def test_a_do_not_call_in_templates_method_is_never_called(self, bins) -> None:
+        """The second marker of the one call guard, in Rust and in the twin."""
+        assert _ser(["notes.all.exists", "notes.all.count"])[0]["notes"]["all"] == {"count": 2}
+        code = generate_serializer_code("QSBin", ["notes.all.exists", "notes.all.count"], "g")
+        twin = compile_serializer(code, "g")(QSBin.objects.get(name="full"))
+        assert twin == {"notes": {"all": {"count": 2}}}
+        assert "exists" not in CALLS
 
     def test_the_codegen_twin_keeps_a_row_field_named_like_a_method(self, bins) -> None:
         code = generate_serializer_code("QSBin", ["items.all.count", "items.all.first"], "g")
@@ -692,7 +797,12 @@ class TestTheCapSetting3788:
         ("configured", "expected"),
         [
             (0, None),
+            (None, 100_000),
             (5, 5),
+            (2**62 - 1, 2**62 - 1),
+            (2**62, None),
+            (2**63, None),
+            (10**30, None),
             (-1, 100_000),
             ("many", 100_000),
             (True, 100_000),
@@ -709,6 +819,47 @@ class TestTheCapSetting3788:
                 assert all_row_cap() == expected
         finally:
             config.set("queryset_all_row_cap", previous)
+
+    @pytest.mark.django_db
+    @pytest.mark.parametrize("cap", [10**30, 2**63, 2**62])
+    def test_an_absurd_cap_is_no_cap_not_a_blank_page(self, world, cap) -> None:
+        """10**30 reached Rust as a usize it cannot hold, the JIT swallowed the
+        OverflowError, and every relation rendered empty."""
+        from djust.config import config
+
+        source = (
+            "{% for u in users %}[{% for g in u.groups.all %}{{ g.name }},{% endfor %}]{% endfor %}"
+        )
+        previous = config.get("queryset_all_row_cap")
+        config.set("queryset_all_row_cap", cap)
+        try:
+            got = _liveview_render(source, MAKE_CONTEXT["QuerySet"]())
+        finally:
+            config.set("queryset_all_row_cap", previous)
+        assert got == _django_render(source, MAKE_CONTEXT["QuerySet"]()) == "[staff,ops,][staff,][]"
+
+    @pytest.mark.django_db
+    @pytest.mark.parametrize("cap", [2**62 - 1, 2**63 - 1])
+    def test_a_direct_call_with_a_huge_cap_reads_every_row(self, world, cap) -> None:
+        """The Rust slice bound is clamped, so even a caller that bypasses
+        ``all_row_cap()`` gets the rows."""
+        out = _rust.serialize_queryset(list(_users()), ["groups.all", "groups.all.name"], cap)
+        assert [len(row["groups"]["all"]) for row in out] == [2, 1, 0]
+
+    @pytest.mark.parametrize("cap", [2**62 - 1, 2**63 - 1])
+    def test_the_slice_bound_is_clamped_for_a_plain_list_all(self, cap) -> None:
+        """A QuerySet whose slice bound overflowed fell back to iterating the
+        whole thing, which hid the overflow. A plain list does not: ``rows[:bound]``
+        with a wrapped (negative) bound drops every row."""
+        from types import SimpleNamespace
+
+        holder = SimpleNamespace(
+            groups=SimpleNamespace(
+                all=lambda: [SimpleNamespace(name="a"), SimpleNamespace(name="b")]
+            )
+        )
+        out = _rust.serialize_queryset([holder], ["groups.all", "groups.all.name"], cap)
+        assert out == [{"groups": {"all": [{"name": "a"}, {"name": "b"}]}}]
 
     def test_the_default_is_a_ceiling_ordinary_pages_never_reach(self) -> None:
         from djust.config import config

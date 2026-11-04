@@ -4980,7 +4980,12 @@ fn capped_rows<'py>(
     };
     let limit = cap.saturating_add(1);
     let window = queryset
-        .get_item(pyo3::types::PySlice::new(py, 0, limit as isize, 1))
+        .get_item(pyo3::types::PySlice::new(
+            py,
+            0,
+            isize::try_from(limit).unwrap_or(isize::MAX),
+            1,
+        ))
         .unwrap_or_else(|_| queryset.clone());
     let mut rows = window
         .try_iter()
@@ -5126,7 +5131,7 @@ fn with_whole_marks(paths: &[String]) -> Vec<String> {
         let mut end = 0;
         for segment in path.split('.') {
             end += segment.len();
-            if end < path.len() && segment == "all" {
+            if end < path.len() && matches!(segment, "all" | "first" | "last") {
                 let prefix = &path[..end];
                 let next = path[end + 1..].split('.').next().unwrap_or("");
                 if known.contains(prefix) && next.parse::<usize>().is_err() {
@@ -5207,7 +5212,21 @@ fn serialize_all_methods(
         }
         let shipped = match node {
             PathNode::Object(row_tree) if name == "first" || name == "last" => {
-                serialize_all_row(py, &value, row_tree, gate, cap)?
+                let row = serialize_all_row(py, &value, row_tree, gate, cap)?;
+                // `{{ u.groups.all.first }}` beside `{{ u.groups.all.first.name }}`
+                // reads the row whole AND by field. A dict prints as its repr, so
+                // the row carries the text a serialized model carries for that:
+                // `__str__` (Display renders a dict that has one as that text).
+                if row_tree.contains_key(WHOLE_MARK)
+                    && !(value.is_instance_of::<PyDict>()
+                        || value.is_instance_of::<PyList>()
+                        || value.is_instance_of::<PyTuple>())
+                {
+                    if let Ok(dict) = row.bind(py).cast::<PyDict>() {
+                        dict.set_item("__str__", value.str()?.to_string())?;
+                    }
+                }
+                row
             }
             _ => queryset_template_value(&value, 0)?,
         };

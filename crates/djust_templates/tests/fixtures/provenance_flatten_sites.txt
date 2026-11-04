@@ -703,6 +703,7 @@ current.entry(part.to_string()).or_insert(PathNode::Leaf);
 .entry(part.to_string())
 out.insert(name.to_string());
 marks.insert(format!("{prefix}.{WHOLE_MARK}"));
+dict.set_item("__str__", value.str()?.to_string())?;
 return Ok(serde_json::Value::Number(i.into()));
 Ok(s) => Ok(serde_json::Value::String(s.to_string())),
 return if foreign { None } else { Some(raw.to_string()) };

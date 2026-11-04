@@ -142,18 +142,24 @@ ALL_CHAIN_METHODS = ("count", "exists", "first", "last")
 
 _DEFAULT_ALL_ROW_CAP = 100_000
 
+#: A cap this large is no cap; see :func:`all_row_cap`.
+_NO_CAP_FROM = 2**62
+
 
 def all_row_cap() -> Optional[int]:
     """``LIVEVIEW_CONFIG['queryset_all_row_cap']`` as the serializers' cap (#3788).
 
-    ``0`` is no cap. A value that is not a non-negative integer is a
-    configuration mistake, and the safe answer to a mistake is the default,
-    not "unbounded".
+    ``0`` is no cap, and so is any value of 2**62 or more (no relation has that
+    many rows, and the Rust side counts in a signed 64-bit slice bound: 10**30
+    used to overflow it and blank every relation). ``None`` is NOT "no cap":
+    ``config.get`` treats an unset or ``None`` key as absent, so it is the
+    default. A value that is not a non-negative integer is a configuration
+    mistake, and the safe answer to a mistake is the default, not "unbounded".
     """
     from ..config import config
 
     cap = config.get("queryset_all_row_cap", _DEFAULT_ALL_ROW_CAP)
-    if cap is None:
+    if isinstance(cap, int) and not isinstance(cap, bool) and cap >= _NO_CAP_FROM:
         return None
     if isinstance(cap, bool) or not isinstance(cap, int) or cap < 0:
         logger.warning(
@@ -244,7 +250,13 @@ def all_methods_value(queryset: Any, subtree: Dict[str, Any]) -> Optional[Dict[s
         except (TypeError, AttributeError):
             continue
         if value is not None and name in ("first", "last") and subtree[name]:
-            value = take_by_tree(value, subtree[name])
+            row = value
+            value = take_by_tree(row, subtree[name])
+            # The row is also read whole (``{{ u.groups.all.first }}`` beside
+            # ``.first.name``): a dict prints as its repr, so it carries the
+            # ``__str__`` a serialized model carries (the Rust twin does the same).
+            if ALL_WHOLE_KEY in subtree[name] and isinstance(value, dict):
+                value["__str__"] = str(row)
         out[name] = value
     return out
 
@@ -485,7 +497,7 @@ def _mark_whole_all_nodes(tree: Dict[str, Any], paths: List[str]) -> None:
     for parts in split:
         for end, part in enumerate(parts, start=1):
             if (
-                part != "all"
+                part not in ("all", "first", "last")
                 or end >= len(parts)
                 or parts[end].isdigit()
                 or parts[:end] not in known
