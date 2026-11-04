@@ -1696,6 +1696,21 @@ class _SidecarModelProxy:
         floor-filtered instead of ``__dict__``-dumped."""
         return normalize_django_value(object.__getattribute__(self, "_obj"))
 
+    def __eq__(self, other: object) -> Any:
+        """Equal when the objects behind are equal (#3771).
+
+        A proxy is a view of ONE model, so two views of it, and a view and the instance, are the same
+        model. Without this ``{% perm_tag request.user obj.user %}`` compared two distinct proxies (or a
+        ``SimpleLazyObject`` and a proxy) and flipped from equal to unequal when the operand became a
+        proxy. Identity is all this reveals; no field is read, so the floor is unchanged.
+        """
+        if isinstance(other, _SidecarModelProxy):
+            other = object.__getattribute__(other, "_obj")
+        return object.__getattribute__(self, "_obj").__eq__(other)
+
+    def __hash__(self) -> int:
+        return hash(object.__getattribute__(self, "_obj"))
+
     def __str__(self) -> str:
         # ``{{ member }}`` normally renders via the eager dict's ``__str__``
         # key; this covers the case where a proxied related model is the

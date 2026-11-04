@@ -27,8 +27,11 @@ What changes is the WALK of every ``Variable`` resolved while a bridged node ren
   dict-then-attribute-then-index order, same callable rules, same ``string_if_invalid`` handling) against
   :class:`FlooredContext`, an alias of the context whose top-level lookups return :class:`FloorWalker`
   wrappers. Each step of the path goes through a walker, which re-protects the result with
-  ``_protect_sidecar_value`` before Django takes the next step: the same re-protection ``walk_live``
-  does for ``{{ }}``.
+  ``_protect_sidecar_value`` before Django takes the next step. That is the re-protection
+  ``walk_live`` applies after each segment for ``{{ }}``, applied to the steps Django's resolver takes;
+  it is a second route to the same floor, not the same code, and the two can differ for an exotic
+  object (a proxy is walked by this module's walkers, and ``walk_live`` calls
+  ``protect_sidecar_strict`` on the live handle).
 * Why a patch of the resolver and not a ``Variable`` subclass or a ``Parser`` override: an operand
   reaches Django's resolver through several doors (a ``FilterExpression`` that ``compile_filter``
   builds, a ``template.Variable`` a raw tag constructs at compile time, one it constructs at render
@@ -103,20 +106,14 @@ def _floor() -> "tuple[Callable[[Any], Any], Callable[[Any], Any]]":
     return _protect_value, _protect_tree
 
 
-def _is_floor_proxy(value: Any) -> bool:
-    """Does ``value`` need no walker? Two kinds of object do not.
+def _is_lazy_block(value: Any) -> bool:
+    """Is ``value`` the engine's lazy ``block`` (``djust._rust.LazyBlock``, #2918)?
 
-    * The floor's own terminal proxies: they re-protect their own attribute access and iteration, so
-      wrapping them again would only add a layer.
-    * The engine's lazy ``block`` (``djust._rust.LazyBlock``, #2918): it holds a rendered parent
-      block, no model, and its ``__getitem__`` decides between "Django's resolver is asking" and
-      "legacy dict-style user code" by inspecting its immediate Python caller's frame. A walker
-      in between would turn Django's own resolver into "user code" and make ``block.super`` warn.
+    It holds a rendered parent block and no model, and its ``__getitem__`` decides between "Django's
+    resolver is asking" and "legacy dict-style user code" by inspecting its immediate Python caller's
+    frame. A walker in between would turn Django's own resolver into "user code" and make
+    ``block.super`` warn. It is the ONLY object the walk does not wrap.
     """
-    from djust.serialization import _SidecarModelProxy, _SidecarQuerySetProxy
-
-    if isinstance(value, (_SidecarModelProxy, _SidecarQuerySetProxy)):
-        return True
     try:
         from djust._rust import LazyBlock
     except ImportError:  # pragma: no cover - the extension is a hard dependency
@@ -127,21 +124,20 @@ def _is_floor_proxy(value: Any) -> bool:
 def wrap(value: Any) -> Any:
     """The value Django's next lookup step is handed.
 
-    A leaf is itself. A ``Model`` / ``Manager`` / ``QuerySet`` is its floor proxy (terminal: the proxy
-    re-protects its own attribute access). Anything else is a :class:`FloorWalker` over it, so that
-    the model it HOLDS is met by the floor on the step that reaches it.
+    A leaf is itself. Everything else is a :class:`FloorWalker`, so that the NEXT step is
+    re-protected: a ``Model`` / ``Manager`` / ``QuerySet`` is first turned into its floor proxy and the
+    walker goes over THAT. The proxy is not terminal. It re-protects only its own immediate return value,
+    and only if that value is itself a model or queryset, so a method or property of a model that returns
+    a plain container (``qs.in_bulk`` -> ``{pk: Model}``, a ``@property`` returning ``[Model]``) hands
+    Django a raw container whose next step would read a raw model. The walker over the proxy re-protects
+    that step too, so the model inside the container is protected on the step that reaches it.
     """
     if value is None or isinstance(value, _LEAF_TYPES):
         return value
-    if isinstance(value, FloorWalker):
+    if isinstance(value, FloorWalker) or _is_lazy_block(value):
         return value
     protect_value, _ = _floor()
-    protected = protect_value(value)
-    if protected is not value:
-        return protected
-    if _is_floor_proxy(value):
-        return value
-    return _walker_for(value)
+    return _walker_for(protect_value(value))
 
 
 def release(value: Any) -> Any:
@@ -283,22 +279,41 @@ _floor_root: contextvars.ContextVar[Optional[BaseContext]] = contextvars.Context
     "djust_bridge_floor_root", default=None
 )
 
-#: Django's own ``Variable._resolve_lookup``, kept so the patched one can delegate to it and so
-#: :func:`uninstall` can put it back.
-_original_resolve_lookup: Optional[Callable[..., Any]] = None
+
+def _capture_original() -> Callable[..., Any]:
+    """Django's own ``Variable._resolve_lookup``, read ONCE, when this module is imported.
+
+    Import is serialised by the interpreter's import lock, so the read cannot race another thread's
+    install, and nothing at install time reads the class attribute back (a check-then-read at install
+    time could, on a lost race, store the already-patched function as "the original" and make every
+    ``Variable.resolve`` in the process recurse forever). If this module is being imported again
+    (``importlib.reload``) after a previous copy patched the class, the previous copy's function carries
+    the genuine original.
+    """
+    current = Variable._resolve_lookup
+    return getattr(current, "_djust_original", current)  # type: ignore[no-any-return]
+
+
+#: Django's own ``Variable._resolve_lookup``: what the patched one delegates to and what
+#: :func:`uninstall` puts back.
+_ORIGINAL = _capture_original()
 
 
 def floored_resolve_lookup(self: Variable, context: Any) -> Any:
     root = _floor_root.get()
-    original = _original_resolve_lookup
-    assert original is not None
     if root is None or context is not root:
-        return original(self, context)
-    return release(original(self, _alias(root)))
+        return _ORIGINAL(self, context)
+    return release(_ORIGINAL(self, _alias(root)))
+
+
+floored_resolve_lookup._djust_original = _ORIGINAL  # type: ignore[attr-defined]
 
 
 def install() -> None:
-    """Patch ``Variable._resolve_lookup`` (idempotent).
+    """Patch ``Variable._resolve_lookup`` (idempotent, and race-free by construction).
+
+    The whole of it is one assignment of a constant: two threads installing at once both write the same
+    value, and nothing is read back or remembered at install time (see :func:`_capture_original`).
 
     Why a patch and not a ``Variable`` subclass: an operand reaches Django's resolver through three
     doors, and only this method is common to all of them. ``Parser.compile_filter`` builds a
@@ -310,20 +325,12 @@ def install() -> None:
     :func:`floor_scope` registered: any other resolution, in any other template engine, any other
     thread, any ``Context.new()`` the node derives, runs Django's own code, untouched.
     """
-    global _original_resolve_lookup
-    if _original_resolve_lookup is not None:
-        return
-    _original_resolve_lookup = Variable._resolve_lookup
     Variable._resolve_lookup = floored_resolve_lookup  # type: ignore[method-assign]
 
 
 def uninstall() -> None:
     """Put Django's ``_resolve_lookup`` back (for tests that prove the patch is what holds the floor)."""
-    global _original_resolve_lookup
-    if _original_resolve_lookup is None:
-        return
-    Variable._resolve_lookup = _original_resolve_lookup  # type: ignore[method-assign]
-    _original_resolve_lookup = None
+    Variable._resolve_lookup = _ORIGINAL  # type: ignore[method-assign]
 
 
 @contextlib.contextmanager
