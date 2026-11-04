@@ -698,7 +698,9 @@ def serialize_context(
     ``str(obj)``; a refused ``get_*`` is left out). Every model field and method
     name also passes the serialization floor (``password``, ``is_superuser``,
     ``is_staff``, ``DJUST_SENSITIVE_FIELDS``, per-model allow and deny lists); if
-    that gate cannot be resolved the model is returned as ``str(obj)``.
+    that gate is missing or raises the model is returned as ``str(obj)``; if the gate itself
+    fails internally it permits no names, so the model ships as an empty dict (still no field
+    leaves).
 
     Args:
         context: Template context dictionary
