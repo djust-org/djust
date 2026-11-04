@@ -176,10 +176,21 @@ def _ws_settings() -> Iterator[None]:
     refuse it. The default token bucket (100/s, burst 20) would throttle a
     benchmark loop, which measures the limiter, not the policy. Both policies
     run under the same settings.
+
+    The explicit policy's storage deadline is lifted to its 10 s cap for the
+    same reason (#3791). An explicit turn withholds its reply until its save
+    lands, and a save that outruns the deadline (150 ms by default) answers
+    with a transient ``state_error`` instead and schedules a catch-up turn,
+    whose own frame then lands in the NEXT round. On a loaded runner one slow
+    session write is enough, so the benchmark was measuring the deadline's
+    policy, not the cost of persisting. A reply therefore implies its save is
+    done, which is the ordering a drain between rounds would have to provide;
+    the cap is the bound that makes it hold.
     """
     from django.conf import settings
     from django.test import override_settings
 
+    from djust._exposure_sessions import MAX_EXPLICIT_STATE_SAVE_TIMEOUT_S
     from djust.config import config as djust_config
 
     config = {k: v for k, v in settings.DJUST_CONFIG.items() if not k.startswith("TENANT_")}
@@ -192,6 +203,7 @@ def _ws_settings() -> Iterator[None]:
             DJUST_CONFIG=config,
             DJUST_TENANTS={},
             LIVEVIEW_CONFIG=liveview,
+            DJUST_EXPLICIT_STATE_SAVE_TIMEOUT=MAX_EXPLICIT_STATE_SAVE_TIMEOUT_S,
         ):
             djust_config.reset()
             yield
@@ -250,6 +262,15 @@ def test_ws_mount(benchmark, staged, policy):
     assert "SKU-00049" in frame["html"]
 
 
+async def _round(comm) -> Dict[str, Any]:
+    """Send one ``increment`` event and return its first reply frame."""
+    await comm.send_json_to({"type": "event", "event": "increment", "params": {}})
+    while True:
+        frame = await comm.receive_json_from()
+        if frame.get("type") in {"patch", "html_update", "error"}:
+            return frame
+
+
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.benchmark(group="exposure_ws_event")
 @pytest.mark.parametrize("policy", ["legacy", "explicit"])
@@ -265,12 +286,9 @@ def test_ws_event(benchmark, staged, policy):
     replies: List[str] = []
 
     async def _event() -> Dict[str, Any]:
-        await comm.send_json_to({"type": "event", "event": "increment", "params": {}})
-        while True:
-            frame = await comm.receive_json_from()
-            if frame.get("type") in {"patch", "html_update", "error"}:
-                replies.append(frame["type"])
-                return frame
+        frame = await _round(comm)
+        replies.append(frame["type"])
+        return frame
 
     with _ws_settings():
         comm, _ = loop.run_until_complete(_connect(key, policy))
@@ -280,7 +298,7 @@ def test_ws_event(benchmark, staged, policy):
             loop.run_until_complete(comm.disconnect())
             loop.close()
     assert frame["type"] in {"patch", "html_update"}, frame
-    assert "error" not in replies
+    assert "error" not in replies, replies
     if policy == "explicit":
         # Prove the explicit event path persisted the declared state each time.
         from django.contrib.sessions.backends.db import SessionStore
@@ -289,6 +307,70 @@ def test_ws_event(benchmark, staged, policy):
 
         restored = load_server_state(ExplicitCostView(), _request(SessionStore(key)))
         assert restored is not None and restored["count"] == len(replies)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_slow_save_does_not_turn_a_round_into_a_state_error(staged, monkeypatch):
+    """The benchmark's rounds cannot be knocked over by one slow session write (#3791).
+
+    The flake: a round's explicit save outran the 150 ms storage deadline, the
+    turn answered ``state_error`` ("Your last change is still being saved")
+    instead of a patch, and the catch-up turn it scheduled put a second frame
+    into the next round. Here the FIRST event's save is made slow on purpose
+    (0.4 s: past the default deadline, far inside the cap), so the failure is
+    reproduced rather than waited for. Slowness only ever grows under load, so
+    the outcome is the same on any machine in both directions: with the
+    deadline left at its default this test gets a ``state_error``; under
+    ``_ws_settings()`` it gets three patches in order and all three counts
+    persisted.
+
+    Not a benchmark (no ``benchmark`` fixture), so ``--benchmark-only`` skips it
+    and the ordinary run keeps it.
+    """
+    import time
+
+    pytest.importorskip("channels")
+    from django.contrib.sessions.backends.db import SessionStore
+
+    from djust import _exposure_sessions
+    from djust._exposure_sessions import load_server_state
+
+    real_save = _exposure_sessions.save_server_state
+    saves: List[str] = []  # "slow" / "fast", one per save after the fault is armed
+    armed = [False]
+
+    def save_with_one_slow_write(view, request):
+        if armed[0]:
+            slow = not saves
+            saves.append("slow" if slow else "fast")
+            if slow:
+                time.sleep(0.4)  # the injected fault: the only sleep, and not a wait
+        return real_save(view, request)
+
+    monkeypatch.setattr(_exposure_sessions, "save_server_state", save_with_one_slow_write)
+    key = _new_session().session_key
+    loop = asyncio.new_event_loop()
+    frames: List[Dict[str, Any]] = []
+
+    async def _scenario() -> None:
+        comm, _ = await _connect(key, "explicit")
+        try:
+            armed[0] = True
+            for _ in range(3):
+                frames.append(await _round(comm))
+        finally:
+            await comm.disconnect()
+
+    with _ws_settings():
+        try:
+            loop.run_until_complete(_scenario())
+        finally:
+            loop.close()
+
+    assert all(f["type"] in {"patch", "html_update"} for f in frames), frames
+    assert saves == ["slow", "fast", "fast"], f"the fault was not injected as intended: {saves}"
+    restored = load_server_state(ExplicitCostView(), _request(SessionStore(key)))
+    assert restored is not None and restored["count"] == 3, restored
 
 
 # ---------------------------------------------------------------------------

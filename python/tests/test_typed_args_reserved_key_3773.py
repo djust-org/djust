@@ -58,7 +58,7 @@ USER_VALUES = [
 
 @pytest.fixture
 def probes():
-    """Register one typed, one plain and one block/assign probe; each records what it was handed."""
+    """Register one probe per handler kind; each records whether the reserved key reached it."""
     seen: dict[str, object] = {}
 
     class Typed:
@@ -93,7 +93,33 @@ def probes():
             seen["bridged_has_key"] = TYPED_ARGS_KEY in context
             return "", {}
 
+    class RawBlock:
+        """A raw-block handler (``{% blocktranslate %}`` is the shipped one): the body crosses as
+        un-rendered source and the handler must declare ``RETURNS_BINDINGS``."""
+
+        RETURNS_BINDINGS = True
+
+        def render(self, args, body, context):
+            seen["raw_block_has_key"] = TYPED_ARGS_KEY in context
+            return body, {}
+
+    class LazyBody:
+        """The two-phase block contract (#2658): ``before_body`` then ``after_body``, each handed
+        its own context dict."""
+
+        LAZY_BODY = True
+
+        def before_body(self, args, context):
+            seen["before_body_has_key"] = TYPED_ARGS_KEY in context
+            return None, object()
+
+        def after_body(self, args, content, context, state):
+            seen["after_body_has_key"] = TYPED_ARGS_KEY in context
+            return content
+
     _rust.register_tag_handler("bridged_probe_3773", Bridged())
+    _rust.register_raw_block_tag_handler("raw_probe_3773", "endraw_probe_3773", RawBlock())
+    _rust.register_block_tag_handler("lazy_probe_3773", "endlazy_probe_3773", LazyBody())
     _rust.register_tag_handler("typed_probe_3773", Typed())
     _rust.register_tag_handler("plain_probe_3773", Plain())
     _rust.register_block_tag_handler("block_probe_3773", "endblock_probe_3773", Block())
@@ -104,11 +130,12 @@ def probes():
         for name in ("typed_probe_3773", "plain_probe_3773", "bridged_probe_3773"):
             _rust.unregister_tag_handler(name)
         for unregister, name in (
-            (getattr(_rust, "unregister_block_tag_handler", None), "block_probe_3773"),
-            (getattr(_rust, "unregister_assign_tag_handler", None), "assign_probe_3773"),
+            (_rust.unregister_block_tag_handler, "block_probe_3773"),
+            (_rust.unregister_block_tag_handler, "lazy_probe_3773"),
+            (_rust.unregister_assign_tag_handler, "assign_probe_3773"),
+            (_rust.unregister_raw_block_tag_handler, "raw_probe_3773"),
         ):
-            if unregister is not None:
-                unregister(name)
+            unregister(name)
 
 
 class TestAUserKeyNeverStandsInForTheChannel:
@@ -145,21 +172,46 @@ class TestAUserKeyNeverStandsInForTheChannel:
 
 
 class TestNoHandlerKindSeesTheUserKey:
-    """The same removal covers every call path, not only the inline typed one."""
+    """The same removal covers every call path, not only the inline typed one.
+
+    One test per handler kind, so a gate-off of one scrub names the kind it reaches rather than
+    failing a single test with four asserts behind it (#3787). Every kind is also rendered
+    against every planted shape, the opaque object included, which rides the raw-Python sidecar
+    instead of the flat map.
+    """
+
+    #: ``(probe key, template)``: one render per handler kind, nothing else in the template, so a
+    #: red test cannot be blamed on a neighbouring tag.
+    KINDS = [
+        pytest.param("plain_has_key", "{% plain_probe_3773 a=1 %}", id="plain-inline"),
+        pytest.param("bridged_has_key", "{% bridged_probe_3773 a=1 %}", id="bridged-inline"),
+        pytest.param(
+            "block_has_key", "{% block_probe_3773 %}x{% endblock_probe_3773 %}", id="block"
+        ),
+        pytest.param("assign_has_key", "{% assign_probe_3773 %}", id="assign"),
+        pytest.param(
+            "raw_block_has_key", "{% raw_probe_3773 %}x{% endraw_probe_3773 %}", id="raw-block"
+        ),
+        pytest.param(
+            "before_body_has_key",
+            "{% lazy_probe_3773 %}x{% endlazy_probe_3773 %}",
+            id="lazy-before_body",
+        ),
+        pytest.param(
+            "after_body_has_key",
+            "{% lazy_probe_3773 %}x{% endlazy_probe_3773 %}",
+            id="lazy-after_body",
+        ),
+    ]
 
     @pytest.mark.parametrize("planted", USER_VALUES)
-    def test_plain_block_and_assign_handlers(self, probes, planted):
-        _rust.render_template(
-            "{% plain_probe_3773 a=1 %}"
-            "{% bridged_probe_3773 a=1 %}"
-            "{% block_probe_3773 %}x{% endblock_probe_3773 %}"
-            "{% assign_probe_3773 %}",
-            {RESERVED: planted},
+    @pytest.mark.parametrize(("probe_key", "src"), KINDS)
+    def test_the_handler_is_not_handed_the_user_key(self, probes, probe_key, src, planted):
+        _rust.render_template(src, {RESERVED: planted})
+        assert probe_key in probes, f"the probe never ran: {sorted(probes)} (a vacuous pass)"
+        assert probes[probe_key] is False, (
+            f"{probe_key}: an application value under {RESERVED!r} reached the handler"
         )
-        assert probes["plain_has_key"] is False
-        assert probes["bridged_has_key"] is False
-        assert probes["block_has_key"] is False
-        assert probes["assign_has_key"] is False
 
 
 class TestTheSidecar:
