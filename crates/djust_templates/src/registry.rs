@@ -1614,6 +1614,10 @@ pub(crate) fn build_py_context<'py>(
     }
     if let Some(raw) = raw_py_objects {
         for (key, obj) in raw {
+            // #3773: the typed-operand channel is the engine's, never the application's.
+            if key == crate::renderer::TYPED_ARGS_KEY {
+                continue;
+            }
             py_context
                 .set_item(key, obj.bind(py))
                 .map_err(|e| format!("Failed to set raw context key '{key}': {e}"))?;
@@ -1643,8 +1647,22 @@ pub(crate) fn build_py_context_memo<'py>(
     raw_py_objects: Option<&HashMap<String, pyo3::Py<PyAny>>>,
 ) -> Result<Bound<'py, pyo3::types::PyDict>, String> {
     let py_context = context.bridged_py_dict(py)?;
+    // #3773: a live-frame key of the engine's reserved name never reaches a handler. The dict is
+    // this call's own (`bridged_py_dict` builds a fresh one); the per-frame memo is untouched.
+    if py_context
+        .contains(crate::renderer::TYPED_ARGS_KEY)
+        .unwrap_or(false)
+    {
+        py_context
+            .del_item(crate::renderer::TYPED_ARGS_KEY)
+            .map_err(|e| format!("Failed to drop the reserved typed-args key: {e}"))?;
+    }
     if let Some(raw) = raw_py_objects {
         for (key, obj) in raw {
+            // #3773: as in `build_py_context`, the sidecar cannot carry the engine's key.
+            if key == crate::renderer::TYPED_ARGS_KEY {
+                continue;
+            }
             py_context
                 .set_item(key, obj.bind(py))
                 .map_err(|e| format!("Failed to set raw context key '{key}': {e}"))?;
