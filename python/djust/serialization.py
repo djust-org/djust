@@ -1184,8 +1184,10 @@ def decode_state_roundtrip(obj: Any) -> Any:
             if isinstance(payload, str):
                 try:
                     return Decimal(payload)
-                except InvalidOperation:
-                    # A colliding user dict whose payload is not a number.
+                except (InvalidOperation, ValueError):
+                    # A colliding user dict whose payload is not a number, or is a digit string
+                    # past the interpreter's int-conversion limit (the pure-Python ``_pydecimal``
+                    # raises ``ValueError``, not ``InvalidOperation``, for it).
                     # Leave it alone rather than raise — see the docstring.
                     return dict(obj)
         if STATE_COMPONENT_TAG in obj and "state" in obj and len(obj) <= 3:
