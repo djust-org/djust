@@ -4938,6 +4938,20 @@ fn serialize_object_with_paths(
             PathNode::Leaf => {
                 // Check if it's a callable (method) - try calling it first
                 if attr_value.is_callable() {
+                    // Django's callable block, asked of the ONE rule the sidecar
+                    // walk asks (`djust_core::template_call_guard`): an
+                    // `alters_data` callable is never called and a
+                    // `do_not_call_in_templates` one is never called either.
+                    // Before #3772 this arm `call0()`-ed EVERYTHING it was
+                    // handed, so `{{ users.delete }}` ran `Model.delete()` on
+                    // every row of the queryset, `{{ u.groups.clear }}` ran the
+                    // related manager's `clear`, and `{{ u.save }}` saved. The
+                    // name is OMITTED, as a denied name is, so the template
+                    // renders `string_if_invalid` — or, when the value is still
+                    // reachable, the guarded sidecar walk answers it.
+                    if !djust_core::template_call_guard(&attr_value).may_call() {
+                        continue;
+                    }
                     // It's a method - try calling it
                     match attr_value.call0() {
                         Ok(method_result) => {
@@ -4975,7 +4989,16 @@ fn serialize_object_with_paths(
 
                 // For Django QuerySets/Managers, we need to evaluate them first
                 // Try to call .all() if it exists (for QuerySets/Managers)
-                let iterable = if let Ok(all_method) = attr_value.getattr("all") {
+                //
+                // `all` is a callable the template never named, so it goes
+                // through the same guard as the leaf above (#3772): a model
+                // whose own `all` is stamped `alters_data` (or
+                // `do_not_call_in_templates`) is iterated as it is, not called.
+                let iterable = if let Some(all_method) = attr_value
+                    .getattr("all")
+                    .ok()
+                    .filter(|m| djust_core::template_call_guard(m).may_call())
+                {
                     // It has .all() method - call it to get the QuerySet
                     if let Ok(queryset) = all_method.call0() {
                         // Convert QuerySet to Python list for iteration

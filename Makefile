@@ -397,7 +397,8 @@ MERGE_GATES := \
 	python/djust/tests/test_no_absolute_time_bounds_3711.py \
 	python/tests/test_no_override_settings_with_fixture_3728.py \
 	python/tests/test_no_reported_crash_signals_2701.py \
-	python/tests/test_template_library_parity_3663.py
+	python/tests/test_template_library_parity_3663.py \
+	python/tests/test_user_rows_do_not_leak_between_tests.py
 
 .PHONY: merge-gates
 merge-gates: ## Run the whole-tree meta tests (run on a scratch merge of a PR with main before merging; #3757)

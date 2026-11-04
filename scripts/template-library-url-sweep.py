@@ -71,6 +71,12 @@ def main(argv: list[str] | None = None) -> int:
         help="gate-off: make the Python tag emit a javascript: link; the sweep must report it",
     )
     parser.add_argument("--corpus", choices=("all", "quick", "test"), default=None)
+    parser.add_argument(
+        "--exhaustive",
+        action="store_true",
+        help="no shortcuts (whole context per call, every output re-read, carries everywhere): "
+        "slower, and must measure exactly what the default does",
+    )
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument("--components-only", action="store_true", help="skip the template tags")
     parser.add_argument(
@@ -98,6 +104,7 @@ def main(argv: list[str] | None = None) -> int:
             if args.verbose
             else None,
             args.plant,
+            args.exhaustive,
         )
     except Exception:  # noqa: BLE001 - exit 2 ("could not run"), distinct from 1 ("a hole")
         traceback.print_exc()
@@ -178,6 +185,10 @@ def main(argv: list[str] | None = None) -> int:
                     ),
                     "rendered_both": sum(1 for c in sweep.cells if c.rendered_both),
                     "cells": len(sweep.cells),
+                    "component_cells": len(component_cells),
+                    "context_names": sweep.context_names,
+                    "carries_measured": sweep.carries_measured,
+                    "digest": url_sweep.digest(sweep),
                     "driven": sweep.driven,
                     "no_params": sweep.no_params,
                     "unrendered": sweep.unrendered,
