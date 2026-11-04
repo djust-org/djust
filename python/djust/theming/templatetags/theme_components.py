@@ -17,7 +17,7 @@ import re
 import uuid
 from collections.abc import Callable, Iterable, Mapping
 from decimal import Decimal
-from typing import Any, Optional
+from typing import Any, Optional, Tuple
 from urllib.parse import unquote
 
 from django import template
@@ -1358,6 +1358,14 @@ _ICON_SIZE_STEP = Decimal("0.001")
 #: The largest number a size may carry (any unit): a bound, not a design size.
 _ICON_SIZE_MAX = Decimal(1000)
 
+#: The most digits the whole-number part of a valid size has once its leading zeros are dropped
+#: (``1000`` is four). A longer one is over :data:`_ICON_SIZE_MAX` by length alone, so it is
+#: refused BEFORE any ``Decimal`` is built from it: ``Decimal(<text>)`` is not safe on an
+#: unbounded digit string, because the pure-Python ``_pydecimal`` parses it with ``int()``, which
+#: raises ``ValueError`` past ``sys.get_int_max_str_digits()`` (4300 by default); CPython's C
+#: ``_decimal`` does not, which is why this only showed on a build using ``_pydecimal`` (#3766).
+_ICON_SIZE_MAX_WHOLE_DIGITS = len(str(int(_ICON_SIZE_MAX)))
+
 
 def _icon_size_text(value: Any) -> str:
     """The text of ``value`` to match: a float or Decimal rounded to three decimals, else ``str``.
@@ -1371,6 +1379,22 @@ def _icon_size_text(value: Any) -> str:
     if isinstance(value, Decimal):
         return format(value.quantize(_ICON_SIZE_STEP), "f")
     return str(value)
+
+
+def _icon_size_number(text: str) -> Optional[Decimal]:
+    """The number in ``text`` (the digits of ``_ICON_SIZE_RE`` group 1), or ``None`` if too big.
+
+    The length of the whole-number part is checked before ``Decimal`` sees it, so no digit string
+    of any length reaches a conversion that has a digit limit. Leading zeros are not magnitude
+    and are dropped first (``"0016"`` is 16, as it always was). The fractional part is at most
+    three digits by the pattern. It does not catch: :func:`_icon_size` turns anything ``Decimal``
+    raises anyway (a build with other limits) into the default size, in one place.
+    """
+    whole, dot, fraction = text.partition(".")
+    whole = whole.lstrip("0")
+    if len(whole) > _ICON_SIZE_MAX_WHOLE_DIGITS:
+        return None
+    return Decimal((whole or "0") + dot + fraction)
 
 
 def _icon_size(value: Any) -> str:
@@ -1390,19 +1414,23 @@ def _icon_size(value: Any) -> str:
     the icon in a loop logs once per icon). It does not raise: ``size`` is often data, and bad
     data must not become a 500 (the way a disallowed URL renders ``#`` in
     :func:`_neutralise_url`). That includes a value whose ``__str__`` raises and an int too
-    large to print; both used to propagate. ``None`` means "not given" and renders the
-    default silently.
+    large to print; both used to propagate. So does a digit string of any length: the
+    whole-number part is length-checked before any ``Decimal`` is built from it (see
+    :func:`_icon_size_number`). ``None`` means "not given" and renders the default silently.
     """
     if value is None:
         return _ICON_DEFAULT_SIZE
+    parsed: Optional[Tuple[Optional[Decimal], str]] = None
     try:
         match = _ICON_SIZE_RE.fullmatch(_icon_size_text(value))
-    except Exception:  # noqa: BLE001 - any failure to get text is bad data: warn, use the default
-        match = None
-    if match is not None:
-        number = Decimal(match.group(1))
-        if 0 < number <= _ICON_SIZE_MAX:
-            return format(number.normalize(), "f") + (match.group(2) or "").lower()
+        if match is not None:
+            parsed = (_icon_size_number(match.group(1)), (match.group(2) or "").lower())
+    except Exception:  # noqa: BLE001 - any failure to get a number is bad data: warn, use the default
+        parsed = None
+    if parsed is not None:
+        number, unit = parsed
+        if number is not None and 0 < number <= _ICON_SIZE_MAX:
+            return format(number.normalize(), "f") + unit
     logger.warning(
         "theming: theme_icon size= (a %s) is not a number or CSS length; rendering size %s",
         type(value).__name__,
