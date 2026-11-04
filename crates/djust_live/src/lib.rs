@@ -4513,7 +4513,11 @@ fn serialize_queryset_py(
 /// - Simple types (str, int, float, bool, None): pass through
 /// - Lists/tuples: recursively serialize
 /// - Dicts: recursively serialize
-/// - Components: call .render() and wrap in {"render": ...}
+/// - Components: call .render() and wrap in {"render": ...} — unless `render`
+///   carries `alters_data` / `do_not_call_in_templates` (`template_call_guard`)
+/// - Django models: `model_to_dict` plus four fixed `get_*` methods, every name
+///   held to the serialization gate (the floor) and every method to the same
+///   call guard (#3778). Not used by any production path; see #3778.
 /// - Django types (datetime, UUID): convert to strings
 /// - `Decimal`: **converts to a float, not a string** (#2214). The branch below
 ///   intends a string and is dead, because `extract::<f64>()` above it honours
@@ -4648,11 +4652,20 @@ fn serialize_python_value(py: Python, value: &Bound<'_, PyAny>) -> PyResult<Py<P
         return Ok(f.into_pyobject(py)?.to_owned().into_any().unbind());
     }
 
-    // Components: Check if object has 'render' method
+    // Components: Check if object has 'render' method.
+    //
+    // The call is made under `template_call_guard`, the one statement of
+    // Django's `alters_data` / `do_not_call_in_templates` rule (#3772), so a
+    // `render` that carries either marker is NOT called and the value falls
+    // through to the arms below (a model, else `str()`), exactly as a template
+    // walking to that callable would leave it alone (#3778). The name is fixed,
+    // not template-chosen, but this entry point accepts any object a caller
+    // hands it, and `render` is a common name for a method that writes.
     if value.hasattr("render")? {
         // Call .render() method
         let render_method = value.getattr("render")?;
-        if render_method.is_callable() {
+        if render_method.is_callable() && djust_core::template_call_guard(&render_method).may_call()
+        {
             match render_method.call0() {
                 Ok(rendered) => {
                     // Wrap in {"render": ...} dict
@@ -4688,47 +4701,89 @@ fn serialize_python_value(py: Python, value: &Bound<'_, PyAny>) -> PyResult<Py<P
         return Ok(str_repr.into_pyobject(py)?.to_owned().into_any().unbind());
     }
 
-    // Django model instances: serialize to dict using model_to_dict + methods
+    // Django model instances: serialize to dict using model_to_dict + methods.
+    //
+    // Every name that leaves here goes through the serialization gate
+    // (`resolve_attr_gate` -> `emittable_names`), the same chokepoint the
+    // queryset serializer asks, and every method is called only if
+    // `template_call_guard` allows it (#3778). Before this, `model_to_dict`
+    // shipped `password`, `is_superuser` and `is_staff` of a `User` verbatim —
+    // the floor `serialize_queryset` and the eager channels hold (#2685, #2614)
+    // — and the four `get_*` methods ran whatever they carried. Fail CLOSED: if
+    // the gate cannot be resolved the model falls through to `str()` rather
+    // than shipping ungated fields (the queryset serializer's own rule).
     if value.hasattr("_meta")? {
-        // Use Django's model_to_dict to serialize the model fields
-        if let Ok(forms_module) = py.import("django.forms.models") {
-            if let Ok(model_to_dict_fn) = forms_module.getattr("model_to_dict") {
-                if let Ok(model_dict) = model_to_dict_fn.call1((value,)) {
-                    // Convert to PyDict so we can add method results
-                    if let Ok(result_dict) = model_dict.cast::<PyDict>() {
-                        // Call specific, known-safe get_* methods commonly used in templates
-                        // This is safer than calling all get_* methods which can cause infinite recursion
-                        let safe_methods = vec![
-                            "get_full_name",
-                            "get_short_name",
-                            "get_absolute_url",
-                            "get_username",
-                        ];
-
-                        for method_name in safe_methods {
-                            if let Ok(attr) = value.getattr(method_name) {
-                                if attr.is_callable() {
-                                    if let Ok(result) = attr.call0() {
-                                        // Convert result to string to avoid recursive serialization
-                                        if let Ok(result_str) = result.str() {
-                                            let _ = result_dict.set_item(method_name, result_str);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        // Recursively serialize the enhanced dict
-                        return serialize_python_value(py, result_dict.as_any());
-                    }
-                }
-            }
+        if let Some(serialized) = serialize_model_gated(py, value) {
+            return serialized;
         }
     }
 
     // Fallback: convert to string representation
     let str_repr = value.str()?.to_string();
     Ok(str_repr.into_pyobject(py)?.to_owned().into_any().unbind())
+}
+
+/// The model arm of [`serialize_python_value`] (#3778): `model_to_dict` plus the
+/// four fixed `get_*` methods, each name held to the serialization gate and each
+/// method to `template_call_guard`.
+///
+/// `None` means "this arm did not apply" (no gate, no `model_to_dict`, an
+/// unreadable dict) and the caller falls through to `str()` — never to an
+/// ungated dict. A name the gate refuses is dropped from the dict, as the
+/// queryset serializer drops it; a method that is refused, or raises, is simply
+/// absent. Nothing here logs an exception (ADR-038).
+fn serialize_model_gated(py: Python, value: &Bound<'_, PyAny>) -> Option<PyResult<Py<PyAny>>> {
+    // Called with these names, in this order, only when permitted. Specific,
+    // known get_* methods: calling every get_* method can recurse forever.
+    const METHODS: [&str; 4] = [
+        "get_full_name",
+        "get_short_name",
+        "get_absolute_url",
+        "get_username",
+    ];
+
+    let gate = resolve_attr_gate(py).ok()?;
+    let model_to_dict = py
+        .import("django.forms.models")
+        .ok()?
+        .getattr("model_to_dict")
+        .ok()?;
+    let model_dict = model_to_dict.call1((value,)).ok()?;
+    let result_dict = model_dict.cast::<PyDict>().ok()?;
+
+    // Snapshot before mutating (#2510): the keys are removed below.
+    let field_names: Vec<String> = result_dict
+        .keys()
+        .iter()
+        .filter_map(|k| k.extract::<String>().ok())
+        .collect();
+    let mut names: Vec<&str> = field_names.iter().map(String::as_str).collect();
+    names.extend(METHODS);
+    let permitted = permitted_among(py, value, &names, gate.bind(py)).ok()?;
+
+    for name in &field_names {
+        if !permitted.contains(name) {
+            let _ = result_dict.del_item(name);
+        }
+    }
+    for method_name in METHODS {
+        if !permitted.contains(method_name) {
+            continue;
+        }
+        if let Ok(attr) = value.getattr(method_name) {
+            if attr.is_callable() && djust_core::template_call_guard(&attr).may_call() {
+                if let Ok(result) = attr.call0() {
+                    // Convert result to string to avoid recursive serialization
+                    if let Ok(result_str) = result.str() {
+                        let _ = result_dict.set_item(method_name, result_str);
+                    }
+                }
+            }
+        }
+    }
+
+    // Recursively serialize the enhanced dict
+    Some(serialize_python_value(py, result_dict.as_any()))
 }
 
 /// Build a tree structure from flat field paths for efficient nested traversal
@@ -4897,9 +4952,23 @@ fn gated_names(
         .map(|k| k.as_str())
         .filter(|k| *k != WHOLE_MARK)
         .collect();
-    let permitted = gate.call1((obj, PyTuple::new(py, &names)?))?;
+    permitted_among(py, obj, &names, gate)
+}
+
+/// The subset of *names* the gate permits for *obj* — the one place the gate
+/// is called and its answer read, shared by the queryset serializer
+/// ([`gated_names`], keyed by a path tree) and the model arm of
+/// `serialize_python_value`, keyed by a field/method name list (#3778). Two
+/// callers of one gate, one implementation (#1646).
+fn permitted_among(
+    py: Python,
+    obj: &Bound<'_, PyAny>,
+    names: &[&str],
+    gate: &Bound<'_, PyAny>,
+) -> PyResult<std::collections::HashSet<String>> {
+    let permitted = gate.call1((obj, PyTuple::new(py, names)?))?;
     let mut out = std::collections::HashSet::new();
-    for name in names {
+    for name in names.iter().copied() {
         if permitted.contains(name)? {
             out.insert(name.to_string());
         }
