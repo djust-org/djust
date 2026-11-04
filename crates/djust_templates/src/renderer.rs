@@ -1330,6 +1330,9 @@ fn call_custom_tag(
     if !returns_bindings && crate::registry::tag_handler_wants_typed_args(name) {
         let typed = typed_operands(args, context);
         if !typed.is_empty() {
+            // PROVENANCE (provenance_flatten_site_inventory): the operands of an inline tag
+            // are folded into the handler's context; the handler's output returns as a plain,
+            // never-authored `String`. See `typed_operands` for the full classification.
             context_map
                 .map
                 .insert(TYPED_ARGS_KEY.to_string(), Value::Object(typed));
@@ -1391,12 +1394,28 @@ fn typed_operands(
         if key.is_empty() || expr.is_empty() || strip_quotes(expr).is_some() {
             continue;
         }
-        if let Ok(value) = get_value(expr, context) {
+        // `get_value_safe`, not `get_value`: the second discards the runtime-safe flag, so
+        // `data=p` for a `p` bound by `{% with p=x|safe %}` (or a `mark_safe`d context value)
+        // reached the handler as a plain `str` and was escaped where Django hands the tag the
+        // `SafeString` and leaves it raw. Over-escaping, not a leak, and a byte difference from
+        // Django. The narrowing is `tag_arg`'s: only a STRING can be `SafeData`.
+        if let Ok((value, safe)) = get_value_safe(expr, context) {
+            let value = match value {
+                Value::String(text) if safe => Value::SafeString(text),
+                other => other,
+            };
             if !matches!(value, Value::Missing) {
+                // PROVENANCE: this folds a resolved operand into the object the handler is
+                // handed; it is not a rendered-output conversion. The handler's OUTPUT comes
+                // back as a plain `String` (`Ok((html).into())` in the `CustomTag` arm), never
+                // authored, so no authority is minted or dropped here, and the literal records
+                // this resolution leaves pending are discarded below exactly as
+                // `call_custom_tag` discards them after `resolve_custom_tag_args` (fail closed).
                 typed.insert(djust_core::ObjectKey::from(key), value);
             }
         }
     }
+    context.take_provenance_flatten();
     typed
 }
 
