@@ -888,7 +888,7 @@ class ContextMixin:
         that, and ``_deep_serialize_dict`` then flattened it to a field dict
         (#3788). Read once per render, on the first nested DB value.
         """
-        memo = getattr(self, "_nested_template_source", None)
+        memo: Optional[List[Optional[str]]] = getattr(self, "_nested_template_source", None)
         if memo:
             return memo[0]
         content: Optional[str] = None
