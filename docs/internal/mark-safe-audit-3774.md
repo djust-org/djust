@@ -1,0 +1,201 @@
+# Audit of the `mark_safe` sites the taint guard flags outside `djust.theming` (#3774)
+
+`scripts/lib/safe_markup_taint.py` (the guard of #3766) flagged **125** call sites in `python/djust`
+(tests and `djust/theming` excluded) as markup built from a value it cannot show is escaped. This is
+the record of reading every one of them, not of counting them.
+
+## Result
+
+| verdict | meaning | count |
+|---|---|---|
+| **S** | safe: every raw-looking value is a constant, escaped, coerced or validated (evidence cited) | **125** sites: 96 sinks in 93 functions kept in the audited baseline, 29 re-sourced (below) |
+| **U** | a raw value reaches the markup unescaped | **0** in the flagged sinks; **1** found one call below a flagged site and fixed (below) |
+| **N** | needs a decision | **3** items, filed as #3818, #3819 (two items) |
+
+None of the 125 sinks is vulnerable. They are flagged because the guard is name-based and
+single-function (its docstring says so): it does not follow a value across a call into a helper that
+escapes it, treats a name that is reassigned (`width = int(width)`) as still raw, and does not know
+the project's own escapers. #3820 files teaching it those, so this list can shrink.
+
+## How each site was read
+
+For every flagged function the raw-looking interpolations were listed (a script over the guard's own
+scopes, so it uses the same notion of "raw"), each was traced to where its value comes from, and the
+function and the helpers it calls were read. The rule for **S**: the value is (a) a constant, (b)
+`conditional_escape` / `escape` / `html.escape` / `format_html` output, (c) coerced with `int()` /
+`float()` with a numeric fallback, (d) checked against a constant set or a regex before it is used,
+(e) the output of a helper that does one of those internally (`safe_url`, `url_attr`,
+`safe_css_color`, `safe_css_length`, `rich_html`, `upload_attrs`, `voice_extras`,
+`map_picker_attrs`, `pad_extras`, `interpolate_color`, `field_aria_attrs`; each one read), or (f) the
+rendered body of the tag (`nodelist.render(context)`, or the Rust block handler's rendered children,
+which `crates/djust_templates/src/renderer.rs` produces with the engine's autoescape).
+
+Then every component tag was **rendered with a hostile payload** in every argument it reads, in four
+shapes (string, list of strings, list of dicts, dict), and the output parsed
+(`TestPayloadSweep` in `python/tests/test_safe_markup_audit_3774.py`): no payload became an
+attribute, an event handler or an element. The checker is shown to fail on a deliberately unescaped
+tag.
+
+## The baseline is machine-checked
+
+`scripts/lib/safe_markup_audit.py` holds one entry per `(file, function)`: the number of flagged
+sinks, the reason, and **evidence** (`(file, literal)` pairs that must still appear in that file).
+`python/tests/test_safe_markup_audit_3774.py` fails on a flagged site with no entry, on a function
+that gained a sink (the older theming allowlist, keyed by function only, would have waved it
+through), on an entry with no site or a different count, on an entry without a reason or evidence,
+and on evidence that no longer exists. The table below is generated from the same data
+(`python scripts/lib/safe_markup_audit.py --table`); the test compares it, without line numbers, to
+the table in this file.
+
+What the baseline cannot see: an audited function is judged by its sink **count**, so swapping an
+escaped value for a raw one *inside* an audited function leaves the guard exactly as flagged as before.
+The payload sweep is the check for that (gate-off: neutering `RibbonNode`'s `conditional_escape` fails
+only the sweep, while adding a sink, adding an unaudited function, re-exporting the escaper and
+renaming a piece of evidence each fail the baseline test).
+
+## U-1 (fixed): an attribute NAME was written unescaped — `live_input`
+
+`djust._html.build_tag` is documented as the one place every value is escaped. A **value** was; a
+**name** was interpolated raw. `{% live_input ... event=var %}` takes `event` from a template
+argument and uses it as the attribute name, so a name can come from data:
+
+```
+live_input("text", handler="h", event="dj-input onfocus=alert(1) autofocus y")
+before: <input type="text" ... name="h" dj-input onfocus=alert(1) autofocus y="h" />
+after:  ValueError: 'dj-input onfocus=alert(1) autofocus y' is not a valid HTML attribute name
+```
+
+Escaping cannot repair a name (the payload has nothing to escape), so `djust._html.attr_name` checks
+it against the HTML spec's rule (no whitespace, controls, quotes, `<`, `>`, `/` or `=`). Every real
+name (`dj-input`, `aria-label`, `@click`, `:class`, `dj-keydown.enter`) passes byte-identically.
+`FormMixin.as_live`'s `BaseAdapter._build_tag` uses the same check. Tests:
+`python/tests/test_attr_name_injection_3774.py` (67 cases; 40 fail with `attr_name` neutered).
+`live_input` itself stays in the table: its flagged `mark_safe(html)` is safe once the names are.
+
+## N: filed, not decided here
+
+* **#3818** — `live_input` passthrough attributes have no URL-scheme / `on*` / `type`-override policy
+  (`formaction="javascript:..."` renders as given; theming's `_passthrough_attrs` rejects it).
+  Template-author-written today; a policy decision.
+* **#3819** — two raw-markup slots with no escaping contract: `live_render`'s `lazy={"placeholder": ...}`
+  (spliced as HTML), and `routing.get_route_map_script`'s `mark_safe(route_json)` inside a `<script>`
+  (`json.dumps` does not escape `<`; the data is developer URL config).
+
+## Re-sourced: flagged only because the escaper was imported through a re-export
+
+`_advanced.py`, `_charts.py` and `_forms.py` imported `conditional_escape` from `._registry`, which
+re-exports `django.utils.html.conditional_escape`. The guard trusts an escaper by its **origin**, never
+its spelling (`from re import escape` must not count), so every site those modules escaped was flagged.
+Importing it from `django.utils.html` makes the origin visible, and 29 of the 125 sinks
+stop being flagged without any behaviour change. Each is clean under the guard's full rules, and the
+payload sweep renders all of them.
+
+* `components/templatetags/_advanced.py`: `TourNode.render`, `GanttChartNode.render (2 sites)`, `DiffViewerNode.render (2 sites)`, `PivotTableNode.render`, `OrgChartNode.render`, `ComparisonTableNode.render`, `MasonryGridNode.render`, `CursorsOverlayNode.render`, `LiveIndicatorNode.render`, `CollabSelectionNode.render`, `ReactionsNode.render`, `CronInputNode.render`
+* `components/templatetags/_charts.py`: `BarChartNode.render`, `LineChartNode.render`, `PieChartNode.render (2 sites)`, `SparklineNode.render`, `HeatmapNode.render (2 sites)`, `TreemapNode.render`
+* `components/templatetags/_forms.py`: `search_input`, `password_input`, `autocomplete`, `dependent_select`, `currency_input`, `form_errors`, `field_error`
+
+## The audited baseline
+
+Verdict **S** for every row. Paths are relative to `python/djust/`. Line numbers are those of the
+branch this file was generated on; regenerate with `python scripts/lib/safe_markup_audit.py --table`.
+Every cited line is resolved by grep against the files, not typed.
+
+| file:line (the def) | function | sinks | verdict | why it is safe | evidence (file:line) |
+|---|---|---|---|---|---|
+<!-- audit-table:begin -->
+| `assets/tags.py:214` | `asset_tags` | 1 | S | joins _tag() results; _tag builds every branch with format_html, so src and integrity are escaped | `assets/tags.py:190`<br>`assets/tags.py:201` |
+| `components/base.py:313` | `Component.asset_tags` | 1 | S | joins djust.assets.tags.asset_tags() results, which are format_html SafeStrings | `components/base.py:315`<br>`assets/tags.py:214` |
+| `components/icons.py:171` | `render_icon` | 1 | S | class names are the constant size label plus html.escape(custom_class); every extra attribute is html.escape'd; px is int(); svg_inner is the bundled / DJUST_COMPONENTS_ICON_SETS (developer settings) markup keyed by name, never the caller's text | `components/icons.py:212`<br>`components/icons.py:220`<br>`components/icons.py:204`<br>`components/icons.py:196` |
+| `forms.py:821` | `FormMixin.as_live` | 1 | S | joins adapter.render_field() output; BaseAdapter escapes wrapper/label/help text/errors/choices/values and (since #3774) checks attribute names in _build_tag; a custom adapter owes the same (FrameworkAdapter contract) | `frameworks.py:114`<br>`frameworks.py:247`<br>`frameworks.py:24` |
+| `template_tags/lorem.py:42` | `LoremTagHandler.render` | 1 | S | wraps the paragraphs of django.utils.lorem_ipsum (a fixed corpus) in <p>; same as Django's own lorem tag | `template_tags/lorem.py:26` |
+| `templatetags/djust_pwa.py:141` | `djust_sw_register` | 1 | S | nonce_attr is escape()'d in _nonce_attr; the URL and scope are _script_json(): json.dumps with < > & and U+2028/9 escaped, so neither can end the script element | `templatetags/djust_pwa.py:43`<br>`templatetags/djust_pwa.py:53` |
+| `templatetags/djust_pwa.py:206` | `djust_offline_indicator` | 1 | S | texts and classes are escape()'d locals; show_when selects a constant visibility attribute; the style block is a constant plus the escaped nonce | `templatetags/djust_pwa.py:257`<br>`templatetags/djust_pwa.py:260` |
+| `templatetags/djust_pwa.py:344` | `djust_offline_styles` | 1 | S | constant CSS plus the nonce attribute built by _nonce_attr (escape()'d) | `templatetags/djust_pwa.py:43` |
+| `templatetags/live_tags.py:253` | `_client_config_html` | 1 | S | the three meta prefixes are escape()'d; the route-map script is routing.get_route_map_script (format_html around json.dumps of developer URL config) | `templatetags/live_tags.py:278`<br>`routing.py:471` |
+| `templatetags/live_tags.py:802` | `live_input` | 1 | S | html is build_tag output: every attribute VALUE is escape()'d, select options escape()'d, textarea content escaped; attribute NAMES (event=, passthrough keys) were not checked until #3774 (the audit's one U, fixed in djust._html.attr_name, python/tests/test_attr_name_injection_3774.py; passthrough URL/on* policy is N, #3818) | `_html.py:26`<br>`_html.py:84`<br>`templatetags/live_tags.py:709` |
+| `templatetags/live_tags.py:1027` | `ColocatedHookNode.render` | 1 | S | the name is the tag's parse-time literal (plus the view's module.qualname): template/code, not request data; it is escape()'d into data-hook; the body is </script>-escaped; the nonce is escape()'d | `templatetags/live_tags.py:1042`<br>`templatetags/live_tags.py:1037`<br>`templatetags/live_tags.py:1054` |
+| `templatetags/live_tags.py:1150` | `djust_skeleton` | 1 | S | shape is checked against _SKELETON_VALID_SHAPES; width/height pass _SKELETON_SIZE_RE; class_ goes through build_tag (escaped); count is int()-clamped | `templatetags/live_tags.py:1196`<br>`templatetags/live_tags.py:1137`<br>`templatetags/live_tags.py:1205` |
+| `templatetags/live_tags.py:1795` | `_render_sticky_child_html` | 2 | S | the wrapper's ids are escape()'d; the body is the child's own template render (autoescaped by the engine) stamped by _stamp_view_id, which escape()s view_id | `templatetags/live_tags.py:1521`<br>`templatetags/live_tags.py:1862`<br>`templatetags/live_tags.py:1855` |
+| `templatetags/live_tags.py:1978` | `live_render` | 2 | S | ids and the CSP nonce are escape()'d, lazy['trigger'] is checked against ('flush', 'visible'), the child body is a template render stamped by _stamp_view_id. The one raw piece, lazy['placeholder'], is a developer-supplied HTML slot (verdict N, #3819) | `templatetags/live_tags.py:2257`<br>`templatetags/live_tags.py:2305`<br>`templatetags/live_tags.py:2481` |
+| `components/templatetags/_charts.py:33` | `BarChartNode.render` | 1 | S | width/height int() with a numeric fallback; values float(); title, labels, colour and class conditional_escape'd; every other interpolation is a float | `components/templatetags/_charts.py:13`<br>`components/templatetags/_charts.py:112` |
+| `components/templatetags/_charts.py:155` | `LineChartNode.render` | 1 | S | width/height int(); values float(); series name and colour conditional_escape'd; coordinates are floats | `components/templatetags/_charts.py:13`<br>`components/templatetags/_charts.py:230` |
+| `components/templatetags/_charts.py:329` | `PieChartNode.render` | 1 | S | width/height int(), inner_radius float(); segment colour and label conditional_escape'd; the path data is floats | `components/templatetags/_charts.py:13`<br>`components/templatetags/_charts.py:412` |
+| `components/templatetags/_charts.py:489` | `SparklineNode.render` | 1 | S | width/height int(), stroke_width float(); colour conditional_escape'd; path data is floats | `components/templatetags/_charts.py:517`<br>`components/templatetags/_charts.py:104` |
+| `components/templatetags/_charts.py:612` | `HeatmapNode.render` | 1 | S | cell_size int(); cell colours come from interpolate_color (a #rrggbb string built from ints); axis labels and title conditional_escape'd | `components/utils.py:145`<br>`components/templatetags/_charts.py:638`<br>`components/templatetags/_charts.py:281` |
+| `components/templatetags/_charts.py:788` | `TreemapNode.render` | 1 | S | width/height int(); the fill is a constant palette entry; label and title conditional_escape'd | `components/templatetags/_charts.py:854`<br>`components/templatetags/_charts.py:853` |
+| `components/templatetags/_charts.py:909` | `CalendarHeatmapNode.render` | 1 | S | year, cell_size, cell_gap int(); fills are the constant LEVELS; date_str is date.isoformat(); title conditional_escape'd | `components/templatetags/_charts.py:930`<br>`components/templatetags/_charts.py:889`<br>`components/templatetags/_charts.py:1019` |
+| `components/templatetags/_forms.py:31` | `slider` | 1 | S | min/max/step/value/value_end are int()'d; name, label, event and class conditional_escape'd | `components/templatetags/_forms.py:81`<br>`components/templatetags/_forms.py:83` |
+| `components/templatetags/_forms.py:463` | `render_confirm_dialog` | 1 | S | every kwarg is conditional_escape'd; `body` is the already-rendered tag body (Django nodelist.render, Rust block handler's rendered children), autoescaped by the engine | `components/templatetags/_forms.py:536`<br>`components/rust_handlers.py:4068` |
+| `components/templatetags/_forms.py:566` | `render_popconfirm` | 1 | S | every kwarg is conditional_escape'd; `content` is the rendered tag body (nodelist.render / the Rust block handler's children) | `components/templatetags/_forms.py:615`<br>`components/rust_handlers.py:4077` |
+| `components/templatetags/_forms.py:1200` | `dj_form` | 1 | S | _render_field escapes every value (label, help, errors, choices, widget attrs); the action goes through safe_url; hidden-field names and values conditional_escape'd | `components/templatetags/_forms.py:1234`<br>`components/templatetags/_forms.py:1003`<br>`components/utils.py:368` |
+| `components/templatetags/_forms.py:1443` | `model_table` | 1 | S | every row value is conditional_escape(str(v))'d before the table is built; page and total_pages int(); event names and labels conditional_escape'd | `components/templatetags/_forms.py:1537`<br>`components/templatetags/_forms.py:1562` |
+| `components/templatetags/_advanced.py:141` | `CalendarViewNode.render` | 1 | S | year, month, start_day int(); month and day names from calendar; event titles conditional_escape'd; event colours through safe_css_color | `components/templatetags/_advanced.py:163`<br>`components/templatetags/_advanced.py:222`<br>`components/templatetags/_advanced.py:187` |
+| `components/templatetags/_advanced.py:279` | `GanttChartNode.render` | 1 | S | width/row_height int(); start/duration/progress float(); task name, colour and unit label conditional_escape'd | `components/templatetags/_advanced.py:387`<br>`components/templatetags/_advanced.py:302` |
+| `components/templatetags/_advanced.py:618` | `PivotTableNode.render` | 1 | S | row and column headers, title and class conditional_escape'd; cells print _format_val (int/float text) | `components/templatetags/_advanced.py:613`<br>`components/templatetags/_advanced.py:685` |
+| `components/templatetags/_advanced.py:775` | `OrgChartNode.render` | 1 | S | the tree comes from _render_node, which conditional_escape's id, name and title and sends the avatar through url_attr | `components/templatetags/_advanced.py:734`<br>`components/templatetags/_advanced.py:748` |
+| `components/templatetags/_advanced.py:851` | `ComparisonTableNode.render` | 1 | S | _render_value returns constants or conditional_escape(str(val)); plan and feature names escaped | `components/templatetags/_advanced.py:844`<br>`components/templatetags/_advanced.py:849` |
+| `components/templatetags/_advanced.py:942` | `MasonryGridNode.render` | 1 | S | columns and gap int(); item content and class conditional_escape'd | `components/templatetags/_advanced.py:958`<br>`components/templatetags/_advanced.py:987` |
+| `components/templatetags/_advanced.py:1112` | `LiveIndicatorNode.render` | 1 | S | name, field, action conditional_escape'd; the avatar goes through url_attr(image=True) | `components/templatetags/_advanced.py:1136`<br>`components/utils.py:457` |
+| `components/templatetags/_advanced.py:1277` | `ActivityFeedNode.render` | 1 | S | max int(); every event field conditional_escape'd; the avatar goes through url_attr(image=True) | `components/templatetags/_advanced.py:1281`<br>`components/templatetags/_advanced.py:1312` |
+| `components/templatetags/_advanced.py:1447` | `MapPickerNode.render` | 1 | S | lat/lng float(), zoom int(); height through safe_css_length; the Leaflet attributes come from map_picker_attrs, which html.escape's every value and int()s the zoom | `components/templatetags/_advanced.py:1471`<br>`components/components/map_picker.py:99`<br>`components/components/map_picker.py:135` |
+| `components/templatetags/_advanced.py:1514` | `PromptEditorNode.render` | 1 | S | the template text is conditional_escape'd FIRST; {{var}} tokens are \w+ and are replaced by conditional_escape'd values inside <mark>; rows int() | `components/templatetags/_advanced.py:1561`<br>`components/templatetags/_advanced.py:1547` |
+| `components/templatetags/_advanced.py:1604` | `VoiceInputNode.render` | 1 | S | event and lang conditional_escape'd; the wrapper, disclosure and status come from voice_extras, which html.escape's the disclosure and int()s max_seconds | `components/components/voice_input.py:58`<br>`components/components/voice_input.py:78` |
+| `components/templatetags/_advanced.py:1732` | `ErrorPageNode.render` | 1 | S | code int(); the action URL goes through safe_url; title, message and label conditional_escape'd | `components/templatetags/_advanced.py:1749`<br>`components/utils.py:368` |
+| `components/templatetags/_advanced.py:1790` | `ImageUploadPreviewNode.render` | 1 | S | the upload attributes come from upload_attrs (html.escape'd slot, int() size); thumbnails go through url_attr(image=True); name, event, accept and class conditional_escape'd; max int() | `components/components/image_upload_preview.py:18`<br>`components/components/image_upload_preview.py:39`<br>`components/templatetags/_advanced.py:1818` |
+| `components/templatetags/_advanced.py:1877` | `AnimatedNumberNode.render` | 1 | S | value float(); duration and decimals int(); prefix, suffix, separator and the formatted number conditional_escape'd | `components/templatetags/_advanced.py:1916`<br>`components/templatetags/_advanced.py:1896` |
+| `components/templatetags/_advanced.py:1959` | `RibbonNode.render` | 1 | S | position is checked against the four corner names; the variant class is a constant from VARIANT_MAP; text and class conditional_escape'd | `components/templatetags/_advanced.py:1970`<br>`components/templatetags/_advanced.py:1978` |
+| `components/templatetags/_advanced.py:2008` | `BreadcrumbDropdownNode.render` | 1 | S | labels conditional_escape'd; hrefs go through safe_url; the separator is conditional_escape'd | `components/templatetags/_advanced.py:2039`<br>`components/templatetags/_advanced.py:1903` |
+| `components/templatetags/_advanced.py:2106` | `DataCardGridNode.render` | 1 | S | title, description and category are conditional_escape'd (the raw first `cat` only feeds escape()); the image goes through url_attr; columns int() | `components/templatetags/_advanced.py:2158`<br>`components/templatetags/_advanced.py:2163` |
+| `components/templatetags/_advanced.py:2214` | `AgentStepNode.render` | 1 | S | status is checked against STATUS_ICONS' keys before it reaches the class; the icon is a constant entity; tool, duration and content conditional_escape'd | `components/templatetags/_advanced.py:2223`<br>`components/templatetags/_advanced.py:2203` |
+| `components/templatetags/_advanced.py:2319` | `QRCodeNode.render` | 1 | S | px comes from SIZE_MAP's ints or int(); fg, bg and data conditional_escape'd; the modules are floats | `components/templatetags/_advanced.py:2337`<br>`components/templatetags/_advanced.py:2328` |
+| `components/templatetags/djust_components.py:128` | `render_modal_description` | 1 | S | `content` is the rendered {% modal_description %} body (nodelist.render / the Rust block handler) | `components/templatetags/djust_components.py:257`<br>`components/rust_handlers.py:138` |
+| `components/templatetags/djust_components.py:137` | `render_modal` | 2 | S | title, close event and ids conditional_escape'd; size from a four-key dict, role from a two-way test, heading level int() in 2..6; `content` is the rendered tag body | `components/templatetags/djust_components.py:173`<br>`components/templatetags/djust_components.py:181`<br>`components/templatetags/djust_components.py:249` |
+| `components/templatetags/djust_components.py:583` | `TooltipNode.render` | 1 | S | text, position and component_id conditional_escape'd; tip_id is the escaped component id or a counter; content is the rendered body | `components/templatetags/djust_components.py:598`<br>`components/templatetags/djust_components.py:575` |
+| `components/templatetags/djust_components.py:1533` | `dj_textarea` | 1 | S | rows int(); name, label, value, placeholder, error, helper and event conditional_escape'd | `components/templatetags/djust_components.py:1341`<br>`components/templatetags/djust_components.py:1551` |
+| `components/templatetags/djust_components.py:1705` | `breadcrumb` | 1 | S | labels conditional_escape'd; urls go through safe_url | `components/templatetags/djust_components.py:1724`<br>`components/utils.py:368` |
+| `components/templatetags/djust_components.py:2026` | `code_block` | 1 | S | theme must match [A-Za-z0-9_-]+ and is escaped; language, filename and code conditional_escape'd; the stylesheet tag is asset_tags (format_html); the hljs JSON is conditional_escape'd into data-hljs | `components/templatetags/djust_components.py:2049`<br>`components/templatetags/djust_components.py:2087` |
+| `components/templatetags/djust_components.py:2160` | `combobox` | 1 | S | ids, names, labels, values and options conditional_escape'd; aria attributes come from field_aria_attrs, which escapes its ids | `components/templatetags/djust_components.py:2138`<br>`components/templatetags/djust_components.py:2285` |
+| `components/templatetags/djust_components.py:2393` | `render_popover` | 1 | S | trigger, placement, title and ids conditional_escape'd; `content` is the rendered tag body | `components/templatetags/djust_components.py:2406`<br>`components/templatetags/djust_components.py:2434` |
+| `components/templatetags/djust_components.py:2545` | `render_collapsible` | 1 | S | trigger, event and ids conditional_escape'd; `content` is the rendered tag body | `components/templatetags/djust_components.py:2581`<br>`components/templatetags/djust_components.py:2566` |
+| `components/templatetags/djust_components.py:2648` | `notification_center` | 1 | S | unread_count int(); id, message, time and event names conditional_escape'd | `components/templatetags/djust_components.py:2663`<br>`components/templatetags/djust_components.py:2678` |
+| `components/templatetags/djust_components.py:2784` | `carousel` | 1 | S | active int(); src through url_attr(image=True); alt, caption and event names conditional_escape'd | `components/templatetags/djust_components.py:2812`<br>`components/templatetags/djust_components.py:1986` |
+| `components/templatetags/djust_components.py:2858` | `tree_view` | 1 | S | node id and label conditional_escape'd; depth is a number; event names conditional_escape'd | `components/templatetags/djust_components.py:2883`<br>`components/templatetags/djust_components.py:2892` |
+| `components/templatetags/djust_components.py:3066` | `render_context_menu` | 1 | S | label and id conditional_escape'd; `content` is the rendered tag body | `components/templatetags/djust_components.py:3090`<br>`components/templatetags/djust_components.py:3077` |
+| `components/templatetags/djust_components.py:3124` | `date_picker` | 1 | S | year and month int() (month_name is calendar's); the selected, range, label, error and event values conditional_escape'd; date_str is built from ints | `components/templatetags/djust_components.py:3163`<br>`components/templatetags/djust_components.py:3176` |
+| `components/templatetags/djust_components.py:3364` | `table_of_contents` | 1 | S | level int(); id and label conditional_escape'd | `components/templatetags/djust_components.py:3386`<br>`components/templatetags/djust_components.py:3384` |
+| `components/templatetags/djust_components.py:3407` | `virtual_list` | 1 | S | total, page, page_size and item_height int() (one except resets all four); labels and the event conditional_escape'd | `components/templatetags/djust_components.py:3426`<br>`components/templatetags/djust_components.py:3439` |
+| `components/templatetags/djust_components.py:3581` | `rich_text_editor` | 1 | S | the value goes through rich_html (the Markdown sanitizer unless it is SafeData); height through safe_css_length; name, event, label and placeholder conditional_escape'd | `components/utils.py:582`<br>`components/templatetags/djust_components.py:3601`<br>`components/utils.py:277` |
+| `components/templatetags/djust_components.py:3766` | `otp_input` | 1 | S | digits int() clamped to 1..12; the id is a uuid hex; name, label and event conditional_escape'd | `components/templatetags/djust_components.py:3784`<br>`components/templatetags/djust_components.py:3791` |
+| `components/templatetags/djust_components.py:3819` | `number_stepper` | 1 | S | value, step, min and max int(); name, label and event conditional_escape'd | `components/templatetags/djust_components.py:3857`<br>`components/templatetags/djust_components.py:3848` |
+| `components/templatetags/djust_components.py:4184` | `fab` | 1 | S | position is checked against four names; icon, event, label, size and variant conditional_escape'd | `components/templatetags/djust_components.py:4216`<br>`components/templatetags/djust_components.py:1754` |
+| `components/templatetags/djust_components.py:4417` | `CalloutNode.render` | 1 | S | the icon is ICONS[callout_type] (a constant) only when callout_type is a key; the type, title, icon text and class are conditional_escape'd; content is the rendered body | `components/templatetags/djust_components.py:4440`<br>`components/templatetags/djust_components.py:4424` |
+| `components/templatetags/djust_components.py:4963` | `rich_select` | 1 | S | variant names match ^[a-z0-9][a-z0-9-]{0,31}$ (_VARIANT_NAME_RE); ids, names, values, labels, placeholder escaped; aria from field_aria_attrs; option bodies from _rich_select_option_html, which escapes | `components/components/rich_select.py:35`<br>`components/templatetags/djust_components.py:5129`<br>`components/templatetags/djust_components.py:5037` |
+| `components/templatetags/djust_components.py:5500` | `ToastContainerNode.render` | 1 | S | position is checked against ALLOWED_POSITIONS; max_toasts int(); class conditional_escape'd | `components/templatetags/djust_components.py:5503`<br>`components/templatetags/djust_components.py:5511` |
+| `components/templatetags/djust_components.py:5619` | `responsive_image` | 1 | S | src and placeholder through url_attr(image=True); srcset through srcset_attr; aspect-ratio through safe_css_ratio; alt, sizes and class conditional_escape'd | `components/templatetags/djust_components.py:5663`<br>`components/templatetags/djust_components.py:5655`<br>`components/utils.py:557` |
+| `components/templatetags/djust_components.py:5820` | `render_theme_toggle` | 1 | S | mode, icon and label come from the constant _THEME_TOGGLE_MODES; current, event, class and id conditional_escape'd; the icons are render_icon output | `components/templatetags/djust_components.py:5813`<br>`components/templatetags/djust_components.py:5837` |
+| `components/templatetags/djust_components.py:5910` | `PageHeaderNode.render` | 1 | S | title, subtitle, description and class conditional_escape'd; the breadcrumb and actions slots are rendered nodelists | `components/templatetags/djust_components.py:4425`<br>`components/templatetags/djust_components.py:5925` |
+| `components/templatetags/djust_components.py:6069` | `SidebarNode.render` | 1 | S | title, class, ids and events conditional_escape'd; items come from _render_item (labels escaped, hrefs through safe_url) | `components/templatetags/djust_components.py:6023`<br>`components/templatetags/djust_components.py:6052` |
+| `components/templatetags/djust_components.py:6231` | `NavMenuNode.render` | 1 | S | brand, class, ids and events conditional_escape'd; brand_href through safe_url; items from _render_nav_item (escaped, safe_url) | `components/templatetags/djust_components.py:6163`<br>`components/templatetags/djust_components.py:6250` |
+| `components/templatetags/djust_components.py:6565` | `FilterBarNode.render` | 1 | S | every control's name, label, value, option and event is conditional_escape'd; debounce int() | `components/templatetags/djust_components.py:6590`<br>`components/templatetags/djust_components.py:6644` |
+| `components/templatetags/djust_components.py:6700` | `AvatarGroupNode.render` | 1 | S | size, class, name and initials conditional_escape'd; src through url_attr(image=True); max int() | `components/templatetags/djust_components.py:4615`<br>`components/templatetags/djust_components.py:6703` |
+| `components/templatetags/djust_components.py:7013` | `ThinkingIndicatorNode.render` | 1 | S | status is checked against VALID_STATUSES before it reaches the class; label and class escaped | `components/templatetags/djust_components.py:7008`<br>`components/templatetags/djust_components.py:7019` |
+| `components/templatetags/djust_components.py:7156` | `FeedbackWidgetNode.render` | 1 | S | mode is checked against VALID_MODES; the buttons are constants plus the conditional_escape'd event, an int star index and escaped emoji keys | `components/templatetags/djust_components.py:7151`<br>`components/templatetags/djust_components.py:7163` |
+| `components/templatetags/djust_components.py:7256` | `ApprovalGateNode.render` | 1 | S | risk is checked against VALID_RISKS before it reaches the class; message, labels, events and class conditional_escape'd; the icons are constants | `components/templatetags/djust_components.py:7251`<br>`components/templatetags/djust_components.py:7266` |
+| `components/templatetags/djust_components.py:7330` | `SourceCitationNode.render` | 1 | S | idx int(); title conditional_escape'd; the url is safe_url (escaped, scheme-checked) and is also the link text; relevance float() | `components/templatetags/djust_components.py:7344`<br>`components/templatetags/djust_components.py:7339` |
+| `components/templatetags/djust_components.py:7402` | `ModelSelectorNode.render` | 1 | S | name, event, placeholder, class, value and every option conditional_escape'd (_option_inner escapes label, description, context window and tier) | `components/templatetags/djust_components.py:7473`<br>`components/templatetags/djust_components.py:3722` |
+| `components/templatetags/djust_components.py:7592` | `ChatBubbleNode.render` | 1 | S | name, text, time, class conditional_escape'd; the avatar through url_attr(image=True); status must be in VALID_STATUSES; side is one of two constants | `components/templatetags/djust_components.py:7610`<br>`components/templatetags/djust_components.py:7635` |
+| `components/templatetags/djust_components.py:7692` | `PresenceAvatarsNode.render` | 1 | S | max int(); name and initials conditional_escape'd; src through url_attr(image=True); status must be in VALID_STATUSES | `components/templatetags/djust_components.py:7719`<br>`components/templatetags/djust_components.py:6703` |
+| `components/templatetags/djust_components.py:7772` | `MentionsInputNode.render` | 1 | S | id, name, initials, placeholder, event and class conditional_escape'd; the avatar through url_attr(image=True); the users JSON is conditional_escape'd into data-users | `components/templatetags/djust_components.py:7827`<br>`components/templatetags/djust_components.py:7802` |
+| `components/templatetags/djust_components.py:8632` | `CookieConsentNode.render` | 1 | S | the privacy URL goes through safe_url; message, labels and events conditional_escape'd | `components/templatetags/djust_components.py:8660`<br>`components/utils.py:368` |
+| `components/templatetags/djust_components.py:8703` | `FormArrayNode.render` | 1 | S | min and max int(); name, events, labels and each row value conditional_escape'd; a custom row body is a rendered nodelist | `components/templatetags/djust_components.py:8721`<br>`components/templatetags/djust_components.py:5281` |
+| `components/templatetags/djust_components.py:9038` | `render_dropdown_menu` | 1 | S | label, event, class and align conditional_escape'd; items come from render_menu_item (labels escaped, href through url_attr); a block body is the rendered tag body | `components/templatetags/djust_components.py:8957`<br>`components/templatetags/djust_components.py:9018` |
+| `components/templatetags/djust_components.py:9139` | `MeterNode.render` | 1 | S | total int(), value float(); the colour goes through safe_css_color; labels and legend values conditional_escape'd | `components/templatetags/djust_components.py:9179`<br>`components/templatetags/djust_components.py:3423`<br>`components/utils.py:226` |
+| `components/templatetags/djust_components.py:9623` | `SortableGridNode.render` | 1 | S | columns int(); gap through safe_css_length then conditional_escape; id and label conditional_escape'd; thumbnail through url_attr(image=True) | `components/templatetags/djust_components.py:9628`<br>`components/templatetags/djust_components.py:9662` |
+| `components/templatetags/djust_components.py:9700` | `ImageCropperNode.render` | 1 | S | src through url_attr(image=True); event, class, ratio and alt conditional_escape'd; min sizes int(); cropper_extras is constant markup | `components/templatetags/djust_components.py:5644`<br>`components/components/image_cropper.py:24` |
+| `components/templatetags/djust_components.py:9775` | `SignaturePadNode.render` | 1 | S | name, event, pen colour and class conditional_escape'd; width, height and pen width int(); pad_extras html.escape's the label and int()s max_bytes | `components/components/signature_pad.py:35`<br>`components/templatetags/djust_components.py:9807` |
+| `components/templatetags/djust_components.py:9857` | `ResizablePanelNode.render` | 1 | S | direction is reset unless it is 'horizontal' or 'vertical'; min, max and initial size go through safe_css_length then conditional_escape; class and event conditional_escape'd | `components/templatetags/djust_components.py:9869`<br>`components/templatetags/djust_components.py:9881`<br>`components/utils.py:277` |
+| `components/templatetags/djust_components.py:9928` | `LightboxNode.render` | 1 | S | the image through url_attr(image=True); alt, caption, events and class conditional_escape'd; idx int() | `components/templatetags/djust_components.py:9966`<br>`components/templatetags/djust_components.py:9955` |
+| `components/templatetags/djust_components.py:10032` | `DashboardGridNode.render` | 1 | S | columns and every panel cell are clamp_columns / clamp_cells ints; gap and row height through safe_css_length then conditional_escape; id, title and content conditional_escape'd | `components/templatetags/djust_components.py:10078`<br>`components/components/dashboard_grid.py:22`<br>`components/templatetags/djust_components.py:10045` |
+<!-- audit-table:end -->
+
+Refs #3774, #3766, #3775, #3818, #3819, #3820.
