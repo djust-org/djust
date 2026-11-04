@@ -347,11 +347,19 @@ def _validate_snapshot(snapshot: dict, data: dict[str, float], n: int) -> None:
     flattened = [nodeid for group in per_group for nodeid in group]
     assert len(flattened) == len(set(flattened)), "shards assign a test more than once"
     assert set(flattened) == set(collected), "shards omit or invent collected tests"
-    shared = set(snapshot.get("shared_corpus", []))
-    assert shared <= set(collected), "shared corpus names uncollected tests"
-    if shared:
-        owners = [group for group in per_group if shared.intersection(group)]
-        assert len(owners) == 1, "full corpus readers would repeat the sweep across shards"
+    # Every shared fixture's readers must sit in ONE shard, or each shard that holds a reader
+    # runs the fixture's whole setup again (#3781). Older snapshots carry only `shared_corpus`.
+    units = dict(snapshot.get("shared_units") or {})
+    if "shared_corpus" in snapshot:
+        units.setdefault("corpus", snapshot["shared_corpus"])
+    for unit, readers in units.items():
+        shared = set(readers)
+        assert shared <= set(collected), f"shared unit {unit} names uncollected tests"
+        if shared:
+            owners = [group for group in per_group if shared.intersection(group)]
+            assert len(owners) == 1, (
+                f"readers of {unit} would repeat the sweep across shards ({len(owners)} hold them)"
+            )
     missing = [t for t in collected if t not in data]
     fraction = len(missing) / len(collected)
     assert fraction <= STALE_FRACTION_MAX, (
@@ -423,4 +431,10 @@ def test_shards_cover_current_collection_with_balanced_durations(tmp_path: Path)
     )
     snapshot = json.loads(output.read_text())
     assert snapshot.get("shared_corpus"), "full sweep fixture was not recognized during collection"
+    # The URL-sweep module is collected from the real tree, so a rename of the module or of its
+    # `runs` fixture silently un-shares it (four sweeps per run again, #3781) unless it is seen.
+    assert snapshot.get("shared_units", {}).get("@@djust-shared-url-sweep"), (
+        "the URL-sweep fixture was not recognized during collection; the readers would run "
+        "the sweep once per shard (#3781). Update SHARED_FIXTURES in tests/corpus_shards.py."
+    )
     _validate_snapshot(snapshot, json.loads(DURATIONS_TEXT), n)

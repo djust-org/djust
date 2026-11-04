@@ -408,7 +408,7 @@ merge-gates: ## Run the whole-tree meta tests (run on a scratch merge of a PR wi
 test-harness: ## Validate and time doctor scenarios and CI shard collection
 	@PYTHONPATH=. $(PYTHON) -m pytest python/djust/tests/test_make_doctor_2061.py \
 		tests/test_ci_python_test_shards.py tests/test_collect_test_shards.py \
-		tests/test_corpus_shards.py -q --durations=10
+		tests/test_corpus_shards.py tests/test_corpus_shards_url_sweep_3781.py -q --durations=10
 
 # CI runs python-tests as four pytest-split shards balanced by the durations
 # recorded in .test_durations (committed). pytest-split falls back to

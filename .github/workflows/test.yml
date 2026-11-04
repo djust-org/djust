@@ -14,6 +14,54 @@ on:
       - '**.md'
       - 'docs/**'
       - 'CHANGELOG.md'
+  # GitHub's merge queue (the queue itself is a repo setting, not enabled by
+  # this file). The queue builds a temporary
+  # `gh-readonly-queue/<base>/pr-N-<sha>` branch (the PR squashed onto the
+  # current base) and waits for the REQUIRED checks on it; a workflow with no
+  # `merge_group` trigger never reports them and the queue stalls until it
+  # times out. Notes on what is different under this event:
+  #   * `paths-ignore` is NOT evaluated for `merge_group`, so a docs-only entry
+  #     starts this whole workflow (the docs shim only listens to
+  #     `pull_request`). The `changes` job below classifies the entry and the
+  #     expensive jobs skip -- see "Change scope" below.
+  #   * `github.ref` is that unique queue branch, so the concurrency group
+  #     below is per-entry: entries never cancel each other.
+  #   * There is no `github.event.pull_request` (so no `full-tests` label): the
+  #     queue is treated like a pull request (3.12 only, the fast tier), and
+  #     the push to main that follows the merge still runs the full matrix.
+  #   * No job here posts a comment or otherwise needs a PR context.
+  merge_group:
+    types: [checks_requested]
+
+# Change scope (merge queue + path scoping). The `changes` job runs
+# scripts/ci-change-scope.py on `pull_request` and `merge_group` events (push,
+# dispatch and the nightly always run everything) and the expensive jobs read
+# its two outputs:
+#
+#   class     paths
+#   --------  ----------------------------------------------------------------
+#   DOCS      root-level *.md (CHANGELOG.md, RETRO.md, ...), docs/**, changelog.d/**
+#   TEST_PY   *.py under tests/, python/tests/, python/djust/tests/
+#
+#   change set                          docs_only  rust_skip  jobs that skip
+#   ----------------------------------  ---------  ---------  ----------------
+#   only DOCS                           true       true       everything
+#   only DOCS + TEST_PY                 false      true       rust-tests only
+#   anything else (workflows, scripts/, false      false      none
+#   pyproject, Cargo.*, crates/,
+#   python/djust/ source, fixtures,
+#   .test_durations, nested *.md, ...)
+#
+# A test-only change still runs the whole Python matrix, JavaScript, the
+# benchmarks and the browser jobs: only cargo is provably unaffected (the one
+# Rust read into the test tree is python/tests/fixtures/*.json, which is not a
+# .py file and so is not TEST_PY).
+#
+# Fail-open: an empty change set, a git error or an unexpected path yields
+# false/false (full run). The `test-summary` gate accepts a skipped job ONLY
+# when `changes` itself succeeded and vouched for the skip; if `changes`
+# fails, its dependants are skipped and the gate fails. The rule table is
+# quoted in docs/testing-strategy.md and pinned by tests/test_ci_change_scope.py.
 
 # Cancel superseded runs when commits push rapidly to a branch or PR.
 # Force-pushes, dependabot rebases, and quick fixup commits otherwise burn
@@ -38,8 +86,50 @@ permissions:
   contents: read
 
 jobs:
+  # Classify the change set (see "Change scope" at the top of this file).
+  # Cheap on purpose: every other job waits for it. On push / dispatch /
+  # schedule it skips the checkout and reports false/false (run everything).
+  changes:
+    name: changes (scope)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      docs_only: ${{ steps.scope.outputs.docs_only }}
+      rust_skip: ${{ steps.scope.outputs.rust_skip }}
+    steps:
+      # Full history so the base and head shas (and the merge-base) are
+      # reachable; the docs shim does the same.
+      - uses: actions/checkout@v7
+        if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
+        with:
+          fetch-depth: 0
+
+      - name: Classify the changed files
+        id: scope
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          MG_BASE_SHA: ${{ github.event.merge_group.base_sha }}
+          MG_HEAD_SHA: ${{ github.event.merge_group.head_sha }}
+        run: |
+          set -euo pipefail
+          case "$EVENT_NAME" in
+            pull_request)
+              python3 scripts/ci-change-scope.py --event pull_request --base "$PR_BASE_SHA" --head "$PR_HEAD_SHA" ;;
+            merge_group)
+              python3 scripts/ci-change-scope.py --event merge_group --base "$MG_BASE_SHA" --head "$MG_HEAD_SHA" ;;
+            *)
+              echo "event $EVENT_NAME is not scoped -- running everything"
+              { echo "docs_only=false"; echo "rust_skip=false"; } >> "$GITHUB_OUTPUT" ;;
+          esac
+
   # Rust tests - runs in parallel
   rust-tests:
+    needs: changes
+    # Skipped only when `changes` says every file is docs or a Python test
+    # module (rust_skip). The gate accepts that skip only if `changes` succeeded.
+    if: needs.changes.outputs.rust_skip != 'true'
     runs-on: ubuntu-latest
     # Build the TEST binaries without LTO and with parallel codegen.
     #
@@ -151,12 +241,16 @@ jobs:
   # --release`'s build, with LTO — NOT rust-tests' CARGO_PROFILE_* override,
   # for the measured reason given on python-tests below.
   python-build:
+    needs: changes
+    # docs/changelog-only change (scripts/ci-change-scope.py): nothing to build.
+    # Every job that `needs: python-build` is skipped with it.
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     continue-on-error: ${{ matrix.python-version == '3.15' }}
     strategy:
       fail-fast: false
       matrix:
-        python-version: ${{ github.event_name != 'pull_request' && fromJSON('["3.12","3.13","3.14","3.15"]') || fromJSON('["3.12"]') }}
+        python-version: ${{ github.event_name != 'pull_request' && github.event_name != 'merge_group' && fromJSON('["3.12","3.13","3.14","3.15"]') || fromJSON('["3.12"]') }}
     name: python-build (py${{ matrix.python-version }})
     steps:
       - uses: actions/checkout@v7
@@ -206,7 +300,8 @@ jobs:
   # Python tests - runs in parallel with pytest-xdist
   #
   # Matrix-on-PR is the project's #1 minute sink (3 cells × ~10 min each).
-  # On PR we run only the canonical interpreter (3.12); on push to main
+  # On PR (and in the merge queue) we run only the canonical interpreter
+  # (3.12); on push to main
   # we run the full matrix (3.12/3.13/3.14, plus 3.15 allowed to fail). 3.13 / 3.14 regressions are
   # caught on push or manual dispatch instead of at PR time — one merge later,
   # not "never". Historical evidence the matrix has value: PRs #450 / #452
@@ -248,13 +343,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ${{ github.event_name != 'pull_request' && fromJSON('["3.12","3.13","3.14","3.15"]') || fromJSON('["3.12"]') }}
+        python-version: ${{ github.event_name != 'pull_request' && github.event_name != 'merge_group' && fromJSON('["3.12","3.13","3.14","3.15"]') || fromJSON('["3.12"]') }}
         group: [1, 2, 3, 4]
     name: python-tests (py${{ matrix.python-version }}, shard ${{ matrix.group }}/4)
     # Installs the extension python-build compiled for this interpreter rather
     # than building it per shard. `needs` waits for every python-build cell;
     # a failed build skips the shards, and a skipped python-tests is not
     # "success", so the test-summary gate still fails.
+    # No `if` of its own: python-build is skipped on a docs/changelog-only
+    # change and a job whose needed job is skipped is skipped (it would need an
+    # explicit `always()` not to be). The same holds for every other job that
+    # needs python-build.
     needs: python-build
     # The extension (built in python-build) is NOT given rust-tests'
     # CARGO_PROFILE_* override — measured, and it is a LOSS here. Tried on this job and reverted: the build step did drop
@@ -396,6 +495,20 @@ jobs:
       # before pytest-split deselects, so a run that collects fewer items than
       # .test_collected_floor says exits TESTS_FAILED — and this step has no
       # continue-on-error, so that fails the job and the test-summary gate.
+      #
+      # `-o faulthandler_timeout=1200` (#3800): pytest's built-in faulthandler
+      # plugin dumps every thread's stack to stderr when ONE test (setup, call
+      # and teardown together) runs longer than 1200 s, then lets it carry on --
+      # it never kills or fails anything, so test semantics are unchanged. It
+      # exists because shard 3/4 once went silent on two interpreters with no
+      # pytest summary, and nothing could say which test it was stuck in. Under
+      # xdist each worker arms its own timer and writes to the inherited
+      # stderr, so the dump lands in this step's log with the file, line and
+      # test function (checked with `-n 2 --dist loadfile`). The value is above
+      # 3x the slowest recorded test in .test_durations (380 s, the URL-sweep
+      # module fixture charged to its first test, #3781), so a normal run prints
+      # nothing; the timer fires from a C thread, so it still works when the
+      # hang holds the GIL. Pinned by tests/test_ci_hang_dump_3800.py.
       - name: Run Python tests (parallel with pytest-xdist, shard ${{ matrix.group }}/4)
         # PR fast tier: pull requests skip the duration-derived `slow` tier
         # (tests/slow_tier.py — > 1s in .test_durations: ~1.6% of tests,
@@ -409,9 +522,13 @@ jobs:
         # Pinned by tests/test_ci_pr_fast_tier.py.
         env:
           DJUST_COLLECTED_FLOOR: "1"
-          PYTEST_MARK: ${{ (github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'full-tests')) && 'not nightly and not slow' || 'not nightly' }}
+          # A merge-queue entry has no PR labels, so it is treated like an
+          # unlabelled PR (fast tier, 3.12 only): the push to main that follows
+          # the merge still runs the slow tier and the other interpreters.
+          # Flip to the full tier for the queue by dropping the `merge_group` arm.
+          PYTEST_MARK: ${{ ((github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'full-tests')) || github.event_name == 'merge_group') && 'not nightly and not slow' || 'not nightly' }}
         run: |
-          PYTHONPATH=. .venv/bin/python -m pytest tests/ python/tests/ python/djust/tests/ -v -n auto --dist loadfile -m "$PYTEST_MARK" --splits 4 --group ${{ matrix.group }} --splitting-algorithm least_duration --durations-path .test_durations --store-durations --clean-durations
+          PYTHONPATH=. .venv/bin/python -m pytest tests/ python/tests/ python/djust/tests/ -v -n auto --dist loadfile -m "$PYTEST_MARK" -o faulthandler_timeout=1200 --splits 4 --group ${{ matrix.group }} --splitting-algorithm least_duration --durations-path .test_durations --store-durations --clean-durations
 
       # Ancillary to the gate, so it may never fail the job: the merge gate is
       # the pytest step above, and a flaky artifact upload must not block a
@@ -507,6 +624,8 @@ jobs:
   # so a failure shows red; it is still NOT wired into the test-summary
   # aggregate gate, so it does not by itself block a merge.
   python-free-threaded:
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     name: python-tests (py3.14t free-threaded)
     # No CARGO_PROFILE_* override, for the same reason as python-tests above.
@@ -588,6 +707,8 @@ jobs:
 
   # JavaScript tests - runs in parallel
   javascript-tests:
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -626,7 +747,11 @@ jobs:
   # every PR; main pushes (never cancelled) enforce the coverage floors.
   # Pinned by tests/test_ci_js_coverage_tier.py.
   javascript-coverage:
-    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'full-tests')
+    needs: changes
+    # Like the slow Python tier: skipped on pull requests (and in the merge
+    # queue, which has no labels) unless a PR carries `full-tests`; main pushes
+    # enforce the floors. The gate accepts `skipped` on those two events only.
+    if: needs.changes.outputs.docs_only != 'true' && ((github.event_name != 'pull_request' && github.event_name != 'merge_group') || contains(github.event.pull_request.labels.*.name, 'full-tests'))
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -842,8 +967,12 @@ jobs:
   # pytest-cov leg with the ``--cov-fail-under=75`` gate, which is a real
   # PR-time signal we don't want to drop.
   security-scan:
+    needs: changes
     runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request'
+    # Informational and not in the gate: push / schedule / dispatch only (the
+    # push that follows a merge-queue merge runs it; running it inside the
+    # queue as well would only duplicate that).
+    if: needs.changes.outputs.docs_only != 'true' && github.event_name != 'pull_request' && github.event_name != 'merge_group'
     steps:
       - uses: actions/checkout@v7
 
@@ -1049,6 +1178,8 @@ jobs:
   #
   benchmarks:
     name: benchmarks (serial, thresholds enforced)
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -1097,6 +1228,8 @@ jobs:
   # baseline with `--write-baseline` and commits it; never lower it by hand.
   django-template-suite:
     name: django template_tests scoreboard
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     steps:
       # Nothing in this job pushes, and the child process executes the
@@ -1152,6 +1285,8 @@ jobs:
 
   # Windows ACL APIs cannot be exercised by the Linux Python matrix (#3462).
   windows-ai-inventory:
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: windows-latest
     defaults:
       run:
@@ -1175,7 +1310,7 @@ jobs:
   # Summary job - waits for all test jobs
   test-summary:
     runs-on: ubuntu-latest
-    needs: [benchmarks, rust-tests, python-tests, windows-ai-inventory, javascript-tests, javascript-coverage, playwright-tests, browser-smoke, nav-hooks-guard, security-scan, security-tests, demo-checks, django-template-suite]
+    needs: [changes, benchmarks, rust-tests, python-tests, windows-ai-inventory, javascript-tests, javascript-coverage, playwright-tests, browser-smoke, nav-hooks-guard, security-scan, security-tests, demo-checks, django-template-suite]
     if: always()
     steps:
       # `needs.python-tests.result` is the MATRIX-WIDE result: GitHub reports
@@ -1186,8 +1321,10 @@ jobs:
       # `== "success"` clause covers all of them, exactly as it already
       # covered the 3.12/3.13/3.14 dimension before sharding.
       - name: Check test results
+        if: needs.changes.result != 'success' || needs.changes.outputs.docs_only != 'true' || (github.event_name != 'pull_request' && github.event_name != 'merge_group')
         run: |
           echo "Test Results Summary:"
+          echo "  Change scope: ${{ needs.changes.result }} (docs_only=${{ needs.changes.outputs.docs_only }}, rust_skip=${{ needs.changes.outputs.rust_skip }})"
           echo "  Rust tests: ${{ needs.rust-tests.result }}"
           echo "  Python tests: ${{ needs.python-tests.result }}"
           echo "  Windows AI inventory: ${{ needs.windows-ai-inventory.result }}"
@@ -1208,12 +1345,24 @@ jobs:
           # playwright-tests leg and security scan are informational (not
           # blocking) — only the stable browser-smoke canary gates from the
           # playwright family (#1869 / Action Tracker #314).
-          if [ "${{ needs.rust-tests.result }}" == "success" ] && \
-             [ "${{ needs.python-tests.result }}" == "success" ] && \
+          #
+          # rust-tests is the one job a legitimate skip can reach this chain
+          # for (a docs-or-Python-test-only change). It is accepted as skipped
+          # only when `changes` itself succeeded and set rust_skip == true on a
+          # pull_request / merge_group event (`changes` emits false for every other
+          # event; the event check here is a second lock on the same door);
+          # javascript-coverage likewise only on pull_request / merge_group.
+          if [ "${{ needs.python-tests.result }}" == "success" ] && \
+             { [ "${{ needs.rust-tests.result }}" == "success" ] || \
+               { [ "${{ needs.rust-tests.result }}" == "skipped" ] && \
+                 [ "${{ needs.changes.result }}" == "success" ] && \
+                 [ "${{ needs.changes.outputs.rust_skip }}" == "true" ] && \
+                 { [ "${{ github.event_name }}" == "pull_request" ] || [ "${{ github.event_name }}" == "merge_group" ]; }; }; } && \
              [ "${{ needs.windows-ai-inventory.result }}" == "success" ] && \
              [ "${{ needs.javascript-tests.result }}" == "success" ] && \
              { [ "${{ needs.javascript-coverage.result }}" == "success" ] || \
-               { [ "${{ needs.javascript-coverage.result }}" == "skipped" ] && [ "${{ github.event_name }}" == "pull_request" ]; }; } && \
+               { [ "${{ needs.javascript-coverage.result }}" == "skipped" ] && \
+                 { [ "${{ github.event_name }}" == "pull_request" ] || [ "${{ github.event_name }}" == "merge_group" ]; }; }; } && \
              [ "${{ needs.browser-smoke.result }}" == "success" ] && \
              [ "${{ needs.nav-hooks-guard.result }}" == "success" ] && \
              [ "${{ needs.security-tests.result }}" == "success" ] && \
@@ -1235,3 +1384,59 @@ jobs:
             echo "FAILURE: Some core tests failed"
             exit 1
           fi
+
+      # HOW A SKIP IS ACCEPTED, AND HOW A FAILURE STILL FAILS (#1713).
+      #
+      # There are exactly two ways through this job, chosen by `changes`:
+      #
+      #   1. `changes` succeeded AND said docs_only (a docs/changelog-only
+      #      merge-queue entry): the step after the chain runs and the chain
+      #      does not. That step passes only if EVERY gated job reports `skipped`
+      #      -- a `success`, `failure` or `cancelled` there is a state the
+      #      scoping did not predict, so it fails rather than guesses.
+      #   2. anything else -- including `changes` failing or being cancelled,
+      #      where docs_only is empty -- runs the AND-chain (the first step), which
+      #      requires `success` from every job. A job that was skipped because
+      #      `changes` broke reports `skipped`, which is not `success`, so the
+      #      chain fails. The only skip the chain tolerates is rust-tests, and
+      #      only with `changes` succeeded and rust_skip == true.
+      #
+      # A real failure therefore reaches `exit 1` on both paths: on path 1 it
+      # cannot occur (the job was skipped) and a non-`skipped` result fails
+      # the step; on path 2 it is a non-`success` clause of the chain.
+      # Pinned by tests/test_ci_change_scope.py, which runs both bash blocks
+      # over every (docs_only, rust_skip, result) combination.
+      - name: Docs/changelog-only change -- the gated jobs were skipped
+        if: needs.changes.result == 'success' && needs.changes.outputs.docs_only == 'true' && (github.event_name == 'pull_request' || github.event_name == 'merge_group')
+        env:
+          RESULTS: |
+            rust-tests=${{ needs.rust-tests.result }}
+            python-tests=${{ needs.python-tests.result }}
+            windows-ai-inventory=${{ needs.windows-ai-inventory.result }}
+            javascript-tests=${{ needs.javascript-tests.result }}
+            javascript-coverage=${{ needs.javascript-coverage.result }}
+            playwright-tests=${{ needs.playwright-tests.result }}
+            browser-smoke=${{ needs.browser-smoke.result }}
+            nav-hooks-guard=${{ needs.nav-hooks-guard.result }}
+            security-scan=${{ needs.security-scan.result }}
+            security-tests=${{ needs.security-tests.result }}
+            demo-checks=${{ needs.demo-checks.result }}
+            benchmarks=${{ needs.benchmarks.result }}
+            django-template-suite=${{ needs.django-template-suite.result }}
+        run: |
+          echo "Every changed file is documentation or a changelog fragment (scripts/ci-change-scope.py),"
+          echo "so the suite was skipped on purpose. Verifying that is what happened:"
+          bad=0
+          while IFS='=' read -r job result; do
+            [ -z "$job" ] && continue
+            echo "  $job: $result"
+            if [ "$result" != "skipped" ]; then
+              echo "::error::$job reported '$result' on a docs-only change; expected 'skipped'"
+              bad=1
+            fi
+          done <<< "$RESULTS"
+          if [ "$bad" -ne 0 ]; then
+            echo "FAILURE: the docs-only scoping did not behave as predicted"
+            exit 1
+          fi
+          echo "Docs-only change: nothing to test."
