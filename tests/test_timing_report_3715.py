@@ -24,6 +24,7 @@ is removed):
 
 from __future__ import annotations
 
+import ctypes
 import gc
 import os
 import threading
@@ -265,20 +266,61 @@ def test_a_gen_2_collection_is_reported_and_attributed_to_its_test(inner: pytest
     assert "gen-2 GC pause: none" not in line
 
 
+@pytest.mark.skipif(
+    os.name != "posix" or not hasattr(ctypes, "PyDLL"),
+    reason="the GIL-holding stall is built from libc usleep through ctypes.PyDLL",
+)
 def test_a_stall_is_reported_and_attributed_to_its_test(inner: pytest.Pytester):
+    """The ticker records a stall, and records it against the test that was running.
+
+    The first version held the GIL with ``list.sort`` and asserted that the final report line
+    named the test. That depended on three things nothing in the test controlled (main, run
+    41774238410, py3.14 shard 1/4: ``stall: worst 0.32 s in (between tests); 1 ticks over 0.1 s
+    late``):
+
+    * how long the sort took (the comment said "~0.5 s"; measured here it holds the GIL for about
+      0.1 s, a tick ~0.05 s late, under ``STALL_COUNTED_S``, so on a fast runner the sort alone
+      is not even "counted": the run above counted exactly one tick, the 0.32 s one);
+    * that no other stall in the process was longer (the report names the WORST stall, so a
+      0.32 s pause anywhere else, which a shared runner produces between tests, won);
+    * that the ticker ran before pytest moved on to ``logfinish``, after which a late tick is
+      correctly attributed to "between tests".
+
+    Now the test owns all three. The hold is exactly 0.3 s (``usleep`` called through
+    ``ctypes.PyDLL``, which keeps the GIL, unlike a ``CDLL`` call or ``time.sleep``); the stall
+    statistics are reset inside the test so nothing earlier can shadow it; and the test does not
+    return until the ticker has recorded the stall, so ``Recorder.current`` is still this test
+    when it does. The attribution is asserted there, in the test, before anything later can
+    change the worst stall. What it asserts is a logical fact (the tick the ticker recorded was
+    noted against the running test), never a duration.
+    """
     inner.makepyfile(
         test_stall="""
-        def test_holds_the_gil():
-            # list.sort does not release the GIL: nothing else in the process, the
-            # ticker thread included, runs until it returns (~0.5 s for this list).
-            data = list(range(4_000_000, 0, -1)) * 2
-            data.sort()
+        import ctypes
+        import time
+
+        from tests.timing_report import STALL_COUNTED_S, Worst
+
+        def test_holds_the_gil(request):
+            recorder = request.config.pluginmanager.get_plugin("djust_timing_report").recorder
+            recorder.stall = Worst(floor=STALL_COUNTED_S)  # nothing earlier may shadow this one
+            # A PyDLL call does not release the GIL: nothing else in the process, the ticker
+            # thread included, runs until it returns.
+            ctypes.PyDLL(None).usleep(300_000)
+            # time.sleep releases the GIL, so the ticker can now report the late tick it owes.
+            deadline = time.monotonic() + 10
+            while not recorder.stall.counted and time.monotonic() < deadline:
+                time.sleep(0.005)
+            assert recorder.stall.counted, "the ticker never recorded the stall"
+            assert recorder.stall.when == request.node.nodeid, recorder.stall.when
         """
     )
-    out = _run(inner).stdout.str()
+    result = _run(inner)
+    assert result.ret == pytest.ExitCode.OK, result.stdout.str()
+    out = result.stdout.str()
     line = next(line for line in out.splitlines() if line.startswith("this process:"))
+    # The report is printed from the same recorder: a stall is in it, not "none".
     assert "stall: worst" in line and "stall: none" not in line
-    assert "test_stall.py::test_holds_the_gil" in line.split("stall:")[1]
 
 
 def test_under_xdist_the_controller_prints_one_line_per_worker(inner: pytest.Pytester):

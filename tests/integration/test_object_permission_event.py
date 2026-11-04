@@ -523,7 +523,13 @@ async def test_per_event_fails_closed_when_request_missing_with_custom_get_objec
     )
 
 
-@pytest.mark.django_db
+# ``transaction=True``: the row is written through ``sync_to_async``, i.e. on the executor
+# thread's own connection, so it COMMITS outside the test's transaction and a plain ``django_db``
+# rollback never removes it. It stayed in the table (empty password, low pk) and a later test on
+# the same xdist worker that read ``User.objects.first()`` read it instead of its own row (CI run
+# 41774238410, python/tests/test_typed_args_floor_3756.py). A transactional test flushes at
+# teardown, which is the cleanup this write needs.
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
 async def test_per_event_sync_orm_get_object_does_not_raise_sync_only(rf):
     """#1638 (P0): the per-event object-permission check must wrap

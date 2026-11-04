@@ -69,8 +69,31 @@ def user():
     return get_user_model().objects.create_user("floor-user", "f@example.com", "pw-3756")
 
 
+def _check_the_floor_holds(engines, user, row) -> None:
+    """One matrix row: Django prints the fixture's secret (the control), the Rust engine does not."""
+    _id, key, body, what = row
+    ctx = _contexts(user)[key]
+    secret = _secret(user, what)
+    assert secret, "the fixture produced no secret to look for"
+    django_out = _render(engines, "django", body, ctx)
+    rust_out = _render(engines, "rust", body, ctx)
+    # Django itself prints it (no floor there): the control that the secret is reachable.
+    assert secret in django_out or secret.upper() in django_out or what == "HASH_UPPER", (
+        f"control: Django did not print the secret for {_id}: {django_out[:200]}"
+    )
+    assert secret not in rust_out, f"{_id}: the Rust engine printed the secret: {rust_out[:300]}"
+    assert secret.upper() not in rust_out and secret.lower() not in rust_out
+
+
 class OwnerForm(forms.Form):
     owner = forms.ModelChoiceField(queryset=get_user_model().objects.all())
+
+    def __init__(self, *args, only=None, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        if only is not None:
+            # Narrow to the fixture's own row (see ``Holder``): a row another test left behind
+            # must not become ``.first()``.
+            self.fields["owner"].queryset = get_user_model().objects.filter(pk=only.pk)
 
 
 class Holder:
@@ -78,7 +101,12 @@ class Holder:
 
     def __init__(self, user) -> None:
         self.user = user
-        self.users = get_user_model().objects.all()
+        # NOT ``objects.all()``: ``.first`` is the lowest pk in the table, and a row another test
+        # left behind (an async test writing through ``sync_to_async`` commits on the executor
+        # thread's own connection, outside the test's transaction; CI run 41774238410) is not the
+        # fixture's. ``TestARowAnotherTestLeftBehind`` pins this.
+        # ``filter(pk=...)`` is the same QuerySet-through-an-object reach, pinned to our row.
+        self.users = get_user_model().objects.filter(pk=user.pk)
 
 
 class View:
@@ -98,7 +126,7 @@ def _render(engines, which: str, src: str, context: dict) -> str:
 def _contexts(user):
     return {
         "change": {"form": UserChangeForm(instance=user)},
-        "owner": {"form": OwnerForm()},
+        "owner": {"form": OwnerForm(only=user)},
         "object": {"obj": Holder(user)},
         "view": {"view": View(user)},
     }
@@ -166,20 +194,7 @@ def _secret(user, which: str) -> str:
 class TestTheFloorHolds:
     @pytest.mark.parametrize("row", ROWS, ids=[r[0] for r in ROWS])
     def test_the_rust_engine_does_not_print_the_secret(self, engines, user, row):
-        _id, key, body, what = row
-        ctx = _contexts(user)[key]
-        secret = _secret(user, what)
-        assert secret, "the fixture produced no secret to look for"
-        django_out = _render(engines, "django", body, ctx)
-        rust_out = _render(engines, "rust", body, ctx)
-        # Django itself prints it (no floor there): the control that the secret is reachable.
-        assert secret in django_out or secret.upper() in django_out or what == "HASH_UPPER", (
-            f"control: Django did not print the secret for {_id}: {django_out[:200]}"
-        )
-        assert secret not in rust_out, (
-            f"{_id}: the Rust engine printed the secret: {rust_out[:300]}"
-        )
-        assert secret.upper() not in rust_out and secret.lower() not in rust_out
+        _check_the_floor_holds(engines, user, row)
 
     @pytest.mark.parametrize("row", ROWS, ids=[r[0] for r in ROWS])
     def test_the_secret_is_not_in_the_raw_json_block_either(self, engines, user, row):
@@ -223,6 +238,39 @@ class TestTheFloorHolds:
             engines, "rust", "{% json_viewer data=obj.user.username %}", {"obj": Holder(user)}
         )
         assert "floor-user" in out
+
+
+class TestARowAnotherTestLeftBehind:
+    """The rows that reach a user through ``.first`` read the lowest pk in the table.
+
+    Two tests (``tests/integration/test_object_permission_event.py`` and
+    ``tests/integration/test_handler_perm_async_wrap_1648.py``) created a ``User`` through
+    ``sync_to_async`` under a plain ``django_db`` mark. That write runs on the executor thread's own
+    connection, so it commits outside the test's transaction and the rollback never removes it. On
+    CI the pair landed on one xdist worker (py3.14 shard 1/4), the stray row had the lowest pk, and
+    ``.first.password`` read ITS password (``""``) instead of the fixture's: "control: Django did
+    not print the secret". Which tests share a worker is the scheduler's, so the cure is that this
+    file never depends on being alone in the table, which this class pins deterministically: a
+    stray row with the LOWEST pk exists before the fixture's, and both ``.first`` rows must still
+    read the fixture's.
+    """
+
+    FIRST_ROWS = [r for r in ROWS if ".first." in r[0]]
+
+    def test_there_are_first_rows_to_pin(self):
+        assert [r[0] for r in self.FIRST_ROWS] == [
+            "queryset.first.password",
+            "obj.users.first.password",
+        ]
+
+    @pytest.mark.parametrize("row", FIRST_ROWS, ids=[r[0] for r in FIRST_ROWS])
+    def test_a_lower_pk_stray_row_is_not_the_one_first_reads(self, engines, row):
+        User = get_user_model()
+        stray = User.objects.create(username="stray-left-behind")  # empty password, as the leak had
+        own = User.objects.create_user("floor-user", "f@example.com", "pw-3756")
+        assert stray.pk < own.pk, "the stray row must be the lowest pk, as it was on CI"
+        assert User.objects.first().pk == stray.pk, "the unfiltered table's .first() is the stray"
+        _check_the_floor_holds(engines, own, row)
 
 
 class TestTheLeakThatPredatesThePr:
