@@ -22,8 +22,8 @@ What each class proves:
   Rust engine, with the secret asserted PRESENT under Django so the comparison is not two empty
   strings. Each also leaks if the operand is resolved by Django's node (the gate-off), proved
   directly by rendering the tag through the bridge.
-* ``TestTheLeakThatPredatesThePr``: ``relative_time`` is a bridged tag. A raw operand path through a
-  form leaks there on main as well; recorded as a control, not fixed here.
+* ``TestABridgedTagIsFlooredToo``: ``relative_time`` is a bridged tag. A raw operand path through a
+  form printed the hash there on main as well (#3771); the bridge's walk is now held to the floor.
 
 Refs #3756, #3755, #1986, #1646, #1468.
 """
@@ -205,10 +205,12 @@ class TestTheFloorHolds:
         raw = rust_out.split("dj-json-viewer__raw", 1)[1]
         assert _secret(user, what) not in raw
 
-    def test_the_bridge_would_leak_the_same_operand(self, engines, user):
-        """The gate-off, in the suite: Django's node over the raw objects is what leaked. Rendering
-        the tag through the ``{% load %}`` bridge handler (the PR's first version of #3756) prints
-        the hash for the headline row, so this test is red if the floor were not in the engine's walk."""
+    def test_the_bridge_no_longer_leaks_the_same_operand(self, engines, user):
+        """Rendering ``json_viewer`` through the ``{% load %}`` bridge handler (the first version of
+        #3756) printed the hash for the headline row, because Django's node walked the raw objects.
+        The bridge is now held to the floor (#3771, ``test_bridge_floor_3771.py``), so the same
+        render prints nothing. ``json_viewer`` stays native for its TYPE (``TYPED_ARGS``), which the
+        bridge's floored walk does not provide."""
         from djust import _rust
         from djust.components.templatetags.djust_components import register
         from djust.template_libraries import LibraryTagHandler
@@ -225,7 +227,7 @@ class TestTheFloorHolds:
         finally:
             # The registry is process-global: leave no handler behind for the next test.
             _rust.unregister_tag_handler("json_viewer_bridged")
-        assert user.password in out, "the bridge no longer leaks: this control has lost its meaning"
+        assert user.password not in out
 
     def test_a_loop_variables_own_attributes_still_render(self, engines, user):
         """The floor must not be a blanket refusal: public, non-floored attributes still show."""
@@ -273,15 +275,15 @@ class TestARowAnotherTestLeftBehind:
         _check_the_floor_holds(engines, own, row)
 
 
-class TestTheLeakThatPredatesThePr:
-    """``relative_time`` is a BRIDGED tag: Django's node walks raw objects, so the floor does not
-    apply to it. The first five rows are MAIN's behaviour (measured against a build of the base
-    commit: every one prints the hash there too), kept as controls so the PR is shown not to have
-    moved them, and reported as #3771 rather than widened here. The last row is a new SPELLING of
-    the same reach (the PR hands a bridged tag a live ``BoundField`` for a loop variable; on main
-    ``f`` was the widget HTML and had no ``.form``)."""
+class TestABridgedTagIsFlooredToo:
+    """``relative_time`` is a BRIDGED tag: Django's own node resolves its operands. Until #3771 that
+    walk ran over raw objects with no floor, so every row here printed the hash (measured against
+    the base commit), where ``{{ }}`` over the same path is refused. The bridge's walk is now held to
+    the floor (``template_bridge_floor``); ``test_bridge_floor_3771.py`` carries the full matrix.
+    These rows are the five the issue measured, kept next to the ``json_viewer`` rows they were
+    reported from. The control in each is Django, which prints the secret."""
 
-    CONTROLS = [
+    ROWS = [
         ("form.instance.password", "change", "form.instance.password", "HASH"),
         (
             "form.fields.owner.queryset.first.password",
@@ -294,27 +296,23 @@ class TestTheLeakThatPredatesThePr:
         ("view.user.get_session_auth_hash", "view", "view.user.get_session_auth_hash", "SESSION"),
     ]
 
-    @pytest.mark.parametrize("row", CONTROLS, ids=[r[0] for r in CONTROLS])
-    def test_a_bridged_tag_walks_raw_objects_as_it_did_on_main(self, engines, user, row):
+    @pytest.mark.parametrize("row", ROWS, ids=[r[0] for r in ROWS])
+    def test_a_bridged_tag_does_not_print_the_secret(self, engines, user, row):
         _id, key, expr, what = row
         body = "{% relative_time datetime=" + expr + " %}"
-        out = _render(engines, "rust", body, _contexts(user)[key])
-        assert _secret(user, what) in out, (
-            "this control records that a BRIDGED tag does not apply the floor (#3771); if it now "
-            "does, delete the control and close the issue"
-        )
-        # and `{{ }}` over the same path is refused, which is what makes it a floor bypass
+        secret = _secret(user, what)
+        assert secret in _render(engines, "django", body, _contexts(user)[key]), "control"
+        assert secret not in _render(engines, "rust", body, _contexts(user)[key])
+        # and `{{ }}` over the same path was always refused: the two now agree
         plain = _render(engines, "rust", "{{ " + expr + " }}", _contexts(user)[key])
-        assert _secret(user, what) not in plain
+        assert secret not in plain
 
-    def test_the_loop_variable_spelling_is_a_new_spelling_of_the_same_reach(self, engines, user):
+    def test_the_loop_variable_spelling_does_not_print_the_secret(self, engines, user):
         body = (
             "{% for f in form %}{% relative_time datetime=f.form.instance.password %}{% endfor %}"
         )
         out = _render(engines, "rust", body, _contexts(user)["change"])
-        assert user.password in out, "see #3771"
-        # json_viewer, native and floored, is unaffected by the same spelling (the first
-        # `TestTheFloorHolds` rows), which is what the review asked for.
+        assert user.password not in out
         viewer = _render(
             engines,
             "rust",

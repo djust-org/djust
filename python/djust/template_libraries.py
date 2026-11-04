@@ -1554,6 +1554,8 @@ def _render_node(
     from django.template import Context
     from django.utils.safestring import mark_safe
 
+    from .template_bridge_floor import floor_scope
+
     before = dict(context)
     # `dict(context)`, NOT `context` — identical to the raw-block handler's
     # `render` below, which is the same construction on a parallel path
@@ -1566,7 +1568,10 @@ def _render_node(
         ctx.request = context["request"]
     ctx.template = _stub_template_with(*_render_engine_options())
     _share_render_context(ctx, shares_render_context)
-    output = node.render(ctx)
+    # #3771: every `Variable` the node resolves against `ctx` is walked through the serialization
+    # floor, as `{{ }}` is; see `template_bridge_floor`.
+    with floor_scope(ctx):
+        output = node.render(ctx)
     after = ctx.dicts[-1]
     bindings = {
         key: value for key, value in after.items() if key not in before or before[key] is not value
@@ -1969,9 +1974,13 @@ def _resolve_cache_operand(token: str, context: Dict[str, Any]) -> Any:
     """
     from django.template import Context as DjangoContext
 
+    from .template_bridge_floor import floor_scope
+
     ctx = DjangoContext(dict(context))
     ctx.template = _stub_template_with(*_render_engine_options())
-    return _parser([]).compile_filter(token.strip()).resolve(ctx)
+    # #3771: a vary-on / expiry operand is a template author's path like any other.
+    with floor_scope(ctx):
+        return _parser([]).compile_filter(token.strip()).resolve(ctx)
 
 
 def _bridge_bespoke_block_tag(label: str, name: str) -> bool:
@@ -2072,6 +2081,8 @@ class LibraryRawBlockTagHandler:
         from django.template import Context
         from django.utils.safestring import mark_safe
 
+        from .template_bridge_floor import floor_scope
+
         try:
             before = dict(context)
             use_l10n, use_tz = _current_format_flags.get()
@@ -2080,7 +2091,8 @@ class LibraryRawBlockTagHandler:
             ctx.template = _stub_template_with(string_if_invalid, debug)
             # The same as `_render_node` (#3044, #1646).
             _share_render_context(ctx, self.shares_render_context)
-            output = self._compile(list(args), body).render(ctx)
+            with floor_scope(ctx):
+                output = self._compile(list(args), body).render(ctx)
             after = ctx.dicts[-1]
             bindings = {
                 key: value

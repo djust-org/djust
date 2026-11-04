@@ -1698,6 +1698,21 @@ class _SidecarModelProxy:
         floor-filtered instead of ``__dict__``-dumped."""
         return normalize_django_value(object.__getattribute__(self, "_obj"))
 
+    def __eq__(self, other: object) -> Any:
+        """Equal when the objects behind are equal (#3771).
+
+        A proxy is a view of ONE model, so two views of it, and a view and the instance, are the same
+        model. Without this ``{% perm_tag request.user obj.user %}`` compared two distinct proxies (or a
+        ``SimpleLazyObject`` and a proxy) and flipped from equal to unequal when the operand became a
+        proxy. Identity is all this reveals; no field is read, so the floor is unchanged.
+        """
+        if isinstance(other, _SidecarModelProxy):
+            other = object.__getattribute__(other, "_obj")
+        return object.__getattribute__(self, "_obj").__eq__(other)
+
+    def __hash__(self) -> int:
+        return hash(object.__getattribute__(self, "_obj"))
+
     def __str__(self) -> str:
         # ``{{ member }}`` normally renders via the eager dict's ``__str__``
         # key; this covers the case where a proxied related model is the
@@ -1873,10 +1888,10 @@ def _is_form_object(value: Any) -> bool:
     container; this family is the exception, and the decision lives here so the type
     list is stated once. It adds a new spelling of an existing reach, not a new reach: such
     an object reached the value stack from a form the raw-Python sidecar already hands the
-    same bridged tag live under its own name. That reach has no floor (Django's ``Variable``
-    walks raw objects, so a bridged tag given ``f.form.instance.password`` prints the hash);
-    the native ``json_viewer`` is NOT affected, because the engine resolves its operand
-    through the floored walk (see ``TYPED_ARGS``).
+    same bridged tag live under its own name. The bridged tag's walk is held to the floor
+    (``template_bridge_floor``, #3771), so ``f.form.instance.password`` is refused there as it is
+    in ``{{ }}``; the native ``json_viewer`` resolves its operand through the engine's floored
+    walk (see ``TYPED_ARGS``).
     """
     from django.forms import BaseForm
     from django.forms.boundfield import BoundField
