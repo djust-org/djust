@@ -32,6 +32,12 @@ a slow run. The script never exits non-zero for a classification problem; if the
 runs it fails outright, its dependants are skipped, which the ``test-summary`` gate reads as
 a failure (it only accepts a skip that ``changes`` vouched for).
 
+MERGE QUEUE: for ``merge_group`` the change set is the UNION of ``base_sha..head_sha`` and
+``merge-base(head_sha, origin/<base_ref>)..head_sha``, and both lists are logged. The payload's
+``base_sha`` is not verified to mean "the target branch" for a grouped queue, so the result must
+not depend on it (a [code PR, docs PR] group could otherwise read as docs-only). A union can only
+add files, so it can only make a run bigger.
+
 Why TEST_PY is ``.py`` only: ``python/tests/fixtures/*.json`` is ``include_str!``-ed by a
 Rust test (``crates/djust_live/src/lib.rs``), so a test-tree file that is not a Python module
 can reach the Rust build.
@@ -102,20 +108,48 @@ def _git(*args: str) -> str:
     ).stdout
 
 
-def changed_files(event: str, base: str, head: str) -> list[str]:
-    """The files this event's change set touches.
-
-    ``--no-renames`` so a rename lists BOTH the old and the new path: moving a source file
-    into ``docs/`` must not read as a docs-only change.
-    """
-    if event == "pull_request":
-        # The merge-base, so the comparison is what the PR changes and not everything
-        # main gained since the branch point (the shape the docs shim already uses).
-        base = _git("merge-base", base, head).strip()
-    elif event != "merge_group":
-        raise ValueError(f"unscoped event {event!r}")
+def _diff(base: str, head: str) -> list[str]:
     out = _git("diff", "--name-only", "--no-renames", "-z", base, head)
     return [f for f in out.split("\0") if f]
+
+
+def branch_name(base_ref: str) -> str:
+    """``refs/heads/main`` -> ``main`` (the merge_group payload carries the full ref)."""
+    name = base_ref.strip()
+    for prefix in ("refs/heads/", "refs/remotes/origin/", "origin/"):
+        if name.startswith(prefix):
+            name = name[len(prefix) :]
+    return name
+
+
+def merge_group_diffs(base: str, head: str, base_ref: str) -> tuple[list[str], list[str]]:
+    """The two views of a merge-queue entry's change set, both against ``head``.
+
+    The meaning of ``merge_group.base_sha`` is not verified: for a stacked or grouped queue it
+    could be the group's own parent, so ``base_sha..head_sha`` would cover only the last PR
+    (a [code PR, docs PR] group would read as docs-only). So the result never depends on it:
+
+    * ``by_base_sha``: ``base_sha..head_sha``, as the payload states it;
+    * ``by_merge_base``: ``merge-base(head_sha, origin/<base_ref>)..head_sha``, everything the
+      entry adds to the target branch, whatever ``base_sha`` means.
+
+    The caller classifies their UNION. A missing ``base_ref`` or an unfetched branch raises, and
+    ``main`` turns that into a full run.
+    """
+    name = branch_name(base_ref)
+    if not name:
+        raise ValueError("merge_group has no base_ref")
+    merge_base = _git("merge-base", head, f"origin/{name}").strip()
+    return _diff(base, head), _diff(merge_base, head)
+
+
+def pull_request_files(base: str, head: str) -> list[str]:
+    """What the PR changes: the diff from the merge-base, not from the moved-on base tip.
+
+    ``--no-renames`` (in ``_diff``) so a rename lists BOTH the old and the new path: moving a
+    source file into ``docs/`` must not read as a docs-only change.
+    """
+    return _diff(_git("merge-base", base, head).strip(), head)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -123,13 +157,35 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--event", required=True, help="pull_request or merge_group")
     parser.add_argument("--base", default="", help="base sha (PR base, or merge-group base)")
     parser.add_argument("--head", default="", help="head sha (PR head, or merge-group head)")
+    parser.add_argument(
+        "--base-ref", default="", help="merge_group only: the target branch (payload base_ref)"
+    )
     args = parser.parse_args(argv)
 
     scope = FULL_RUN
     try:
         if args.base and args.head:
-            files = changed_files(args.event, args.base, args.head)
-            print(f"{len(files)} changed file(s):")
+            if args.event == "merge_group":
+                # Log BOTH views so the first real queue run shows what base_sha meant.
+                by_base_sha, by_merge_base = merge_group_diffs(args.base, args.head, args.base_ref)
+                for label, listed in (
+                    (f"base_sha {args.base[:12]}..head_sha {args.head[:12]}", by_base_sha),
+                    (
+                        f"merge-base with origin/{branch_name(args.base_ref)}..head_sha",
+                        by_merge_base,
+                    ),
+                ):
+                    print(f"{len(listed)} file(s) by {label}:")
+                    for f in listed:
+                        print(f"  {f}")
+                files = sorted(set(by_base_sha) | set(by_merge_base))
+                if set(by_base_sha) != set(by_merge_base):
+                    print("::notice::the two merge_group diffs differ -- classifying their union")
+            elif args.event == "pull_request":
+                files = pull_request_files(args.base, args.head)
+            else:
+                raise ValueError(f"unscoped event {args.event!r}")
+            print(f"{len(files)} changed file(s) classified:")
             for f in files:
                 print(f"  {f}")
             scope = classify(files)

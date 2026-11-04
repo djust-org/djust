@@ -116,3 +116,18 @@ def test_the_dump_is_silent_and_inert_when_no_test_is_slow(tmp_path):
 def test_a_failing_test_still_fails_with_the_flag(tmp_path):
     done = _pytest(tmp_path, 600, test_body="def test_bad():\n    assert False\n")
     assert done.returncode == 1, done.stdout + done.stderr
+
+
+def _python_tests_job() -> dict:
+    return yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]["python-tests"]
+
+
+def test_a_hung_shard_ends_in_bounded_time():
+    """The faulthandler dump names the test; a job timeout is what ENDS the hang (#3800)."""
+    minutes = _python_tests_job().get("timeout-minutes")
+    assert isinstance(minutes, int), "python-tests has no job-level timeout-minutes"
+    assert minutes < 360, "that is GitHub's default; it bounds nothing"
+    # headroom over the slowest legitimate shard: 15.4 min over the last five green main runs
+    assert minutes >= 3 * 15, f"{minutes} min risks timing out a healthy shard"
+    # the dump must be able to fire BEFORE the job is killed, or it is never seen
+    assert minutes * 60 > _timeout() + 300, (minutes, _timeout())

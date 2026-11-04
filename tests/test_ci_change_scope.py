@@ -195,10 +195,16 @@ def repo(tmp_path: Path) -> Path:
         f.write_text("x\n")
     _git(tmp_path, "add", "-A")
     _git(tmp_path, "commit", "-q", "-m", "base")
+    # the checkout in CI has the target branch as origin/main
+    _git(tmp_path, "update-ref", "refs/remotes/origin/main", "HEAD")
     return tmp_path
 
 
 def _run_script(repo: Path, tmp_path: Path, *argv: str) -> dict[str, str]:
+    return _run_script_logged(repo, tmp_path, *argv)[0]
+
+
+def _run_script_logged(repo: Path, tmp_path: Path, *argv: str) -> tuple[dict[str, str], str]:
     sink = tmp_path / "github_output"
     sink.unlink(missing_ok=True)
     env = isolated_git_env(GITHUB_OUTPUT=str(sink))
@@ -210,7 +216,12 @@ def _run_script(repo: Path, tmp_path: Path, *argv: str) -> dict[str, str]:
         text=True,
     )
     assert done.returncode == 0, done.stdout + done.stderr  # never fails on classification
-    return dict(line.split("=", 1) for line in sink.read_text().splitlines())
+    outputs = dict(line.split("=", 1) for line in sink.read_text().splitlines())
+    return outputs, done.stdout
+
+
+def _mg(base: str, head: str, base_ref: str = "refs/heads/main") -> list[str]:
+    return ["--event", "merge_group", "--base", base, "--head", head, "--base-ref", base_ref]
 
 
 def _commit(repo: Path, files: dict[str, str | None], message: str = "c") -> str:
@@ -242,7 +253,11 @@ def _commit(repo: Path, files: dict[str, str | None], message: str = "c") -> str
 def test_script_classifies_a_real_diff(repo, tmp_path, event, change, docs_only, rust_skip):
     base = _git(repo, "rev-parse", "HEAD")
     head = _commit(repo, change)
-    out = _run_script(repo, tmp_path, "--event", event, "--base", base, "--head", head)
+    if event == "merge_group":
+        argv = _mg(base, head)
+    else:
+        argv = ["--event", event, "--base", base, "--head", head]
+    out = _run_script(repo, tmp_path, *argv)
     assert out == {"docs_only": docs_only, "rust_skip": rust_skip}
 
 
@@ -254,7 +269,7 @@ def test_a_rename_out_of_the_source_tree_into_docs_is_not_docs_only(repo, tmp_pa
     _git(repo, "mv", "crates/a.rs", "docs/a_moved.md")
     _git(repo, "commit", "-q", "-m", "rename")
     head = _git(repo, "rev-parse", "HEAD")
-    out = _run_script(repo, tmp_path, "--event", "merge_group", "--base", base, "--head", head)
+    out = _run_script(repo, tmp_path, *_mg(base, head))
     assert out == {"docs_only": "false", "rust_skip": "false"}
 
 
@@ -274,12 +289,71 @@ def test_pull_request_diff_is_taken_from_the_merge_base(repo, tmp_path):
     "argv",
     [
         ["--event", "merge_group"],  # no shas
-        ["--event", "merge_group", "--base", "0" * 40, "--head", "1" * 40],  # unknown objects
+        ["--event", "merge_group", "--base", "0" * 40, "--head", "1" * 40, "--base-ref", "main"],
+        ["--event", "merge_group", "--base", "0" * 40, "--head", "1" * 40],  # no base_ref
         ["--event", "push", "--base", "a", "--head", "b"],  # unscoped event
     ],
 )
 def test_script_fails_open_and_still_exits_zero(repo, tmp_path, argv):
     assert _run_script(repo, tmp_path, *argv) == {"docs_only": "false", "rust_skip": "false"}
+
+
+def _grouped_queue(repo: Path) -> tuple[str, str, str]:
+    """A [code PR, docs PR] group on main: returns (main sha, group parent, head)."""
+    main_sha = _git(repo, "rev-parse", "HEAD")
+    code_pr = _commit(repo, {"crates/a.rs": "code change\n"})
+    head = _commit(repo, {"docs/a.md": "docs change\n"})
+    return main_sha, code_pr, head
+
+
+def test_a_grouped_queue_entry_is_not_docs_only_whatever_base_sha_means(repo, tmp_path):
+    main_sha, group_parent, head = _grouped_queue(repo)
+    # if base_sha is the group's OWN parent, base_sha..head_sha is the docs PR alone ...
+    out, log = _run_script_logged(repo, tmp_path, *_mg(group_parent, head))
+    # ... and the merge-base view still sees the code PR, so the union runs everything
+    assert out == {"docs_only": "false", "rust_skip": "false"}
+    assert "crates/a.rs" in log and "docs/a.md" in log
+    # if base_sha is the target branch tip, the two views agree
+    out, _ = _run_script_logged(repo, tmp_path, *_mg(main_sha, head))
+    assert out == {"docs_only": "false", "rust_skip": "false"}
+
+
+def test_the_log_shows_both_diffs_so_a_first_queue_run_can_confirm_base_sha(repo, tmp_path):
+    _, group_parent, head = _grouped_queue(repo)
+    _, log = _run_script_logged(repo, tmp_path, *_mg(group_parent, head))
+    assert f"by base_sha {group_parent[:12]}..head_sha {head[:12]}" in log, log
+    assert "by merge-base with origin/main..head_sha" in log, log
+    assert "the two merge_group diffs differ" in log, log
+    by_base_sha = log.split("by base_sha", 1)[1].split("file(s) by merge-base", 1)[0]
+    assert "docs/a.md" in by_base_sha and "crates/a.rs" not in by_base_sha, log
+
+
+def test_the_classified_set_is_the_union_not_either_diff_alone(repo, tmp_path):
+    # base_sha is older than the merge-base (main moved on with a code change): the base_sha
+    # diff then holds a file the merge-base diff does not. The union must keep it.
+    old_base = _git(repo, "rev-parse", "HEAD")
+    _commit(repo, {"crates/a.rs": "main moved on\n"})
+    _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    head = _commit(repo, {"docs/a.md": "y\n"})
+    out, log = _run_script_logged(repo, tmp_path, *_mg(old_base, head))
+    assert out == {"docs_only": "false", "rust_skip": "false"}
+    assert "the two merge_group diffs differ" in log
+
+
+def test_a_docs_only_entry_directly_on_main_still_skips(repo, tmp_path):
+    main_sha = _git(repo, "rev-parse", "HEAD")
+    head = _commit(repo, {"docs/a.md": "y\n"})
+    out, log = _run_script_logged(repo, tmp_path, *_mg(main_sha, head))
+    assert out == {"docs_only": "true", "rust_skip": "true"}
+    assert "differ" not in log
+
+
+@pytest.mark.parametrize("base_ref", ["", "refs/heads/no-such-branch"])
+def test_a_missing_or_unfetched_base_ref_runs_everything(repo, tmp_path, base_ref):
+    main_sha = _git(repo, "rev-parse", "HEAD")
+    head = _commit(repo, {"docs/a.md": "y\n"})
+    out = _run_script(repo, tmp_path, *_mg(main_sha, head, base_ref))
+    assert out == {"docs_only": "false", "rust_skip": "false"}
 
 
 # --------------------------------------------------------------------------- #
@@ -368,6 +442,34 @@ def test_the_queue_is_treated_like_a_pull_request_for_matrix_and_tier():
         assert "github.event_name != 'merge_group'" in expr, (name, expr)
     step = next(s for s in jobs["python-tests"]["steps"] if "-m pytest" in (s.get("run") or ""))
     assert "github.event_name == 'merge_group'" in step["env"]["PYTEST_MARK"]
+
+
+def test_the_changes_step_passes_the_merge_group_payload_to_the_script():
+    """W14: nothing else pins this arm, and a typo here silently fails open (full runs)."""
+    step = next(s for s in _workflow()["jobs"]["changes"]["steps"] if s.get("id") == "scope")
+    env, run = step["env"], step["run"]
+    assert env["MG_BASE_SHA"] == "${{ github.event.merge_group.base_sha }}"
+    assert env["MG_HEAD_SHA"] == "${{ github.event.merge_group.head_sha }}"
+    assert env["MG_BASE_REF"] == "${{ github.event.merge_group.base_ref }}"
+    assert env["PR_BASE_SHA"] == "${{ github.event.pull_request.base.sha }}"
+    assert env["PR_HEAD_SHA"] == "${{ github.event.pull_request.head.sha }}"
+    arm = re.search(r"merge_group\)\s*\n\s*(python3 scripts/ci-change-scope\.py[^\n]*?);;", run)
+    assert arm, run
+    assert arm.group(1).split() == [
+        "python3",
+        "scripts/ci-change-scope.py",
+        "--event",
+        "merge_group",
+        "--base",
+        '"$MG_BASE_SHA"',
+        "--head",
+        '"$MG_HEAD_SHA"',
+        "--base-ref",
+        '"$MG_BASE_REF"',
+    ]
+    pr_arm = re.search(r"pull_request\)\s*\n\s*(python3 scripts/ci-change-scope\.py[^\n]*?);;", run)
+    assert pr_arm
+    assert '"$PR_BASE_SHA"' in pr_arm.group(1) and '"$PR_HEAD_SHA"' in pr_arm.group(1)
 
 
 def test_external_pr_gate_survives_a_merge_group_event():
