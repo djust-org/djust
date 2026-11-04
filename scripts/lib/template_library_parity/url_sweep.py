@@ -446,15 +446,27 @@ def danger_class(attr: Attr) -> str:
     return "inert"
 
 
+def findings_in(attrs: Iterable[Attr]) -> list[tuple[str, str, str, str]]:
+    """:func:`findings` over attributes already read from the markup."""
+    return sorted(
+        {(a.element, a.name, danger_class(a), scheme_of(a.value)) for a in attrs if is_dangerous(a)}
+    )
+
+
 def findings(markup: str) -> list[tuple[str, str, str, str]]:
     """``[(element, attribute, class, scheme)]`` of every dangerous attribute, sorted."""
-    return sorted(
-        {
-            (a.element, a.name, danger_class(a), scheme_of(a.value))
-            for a in attributes(markup)
-            if is_dangerous(a)
-        }
-    )
+    return findings_in(attributes(markup))
+
+
+def marked_attrs(attrs: Iterable[Attr]) -> list[Attr]:
+    """The URL attributes whose value holds :data:`MARK`: the only ones :func:`carries_in` reads."""
+    return [a for a in attrs if is_url_attr(a.name) and MARK in a.value]
+
+
+def carries_in(marked: Iterable[Attr], payload: str) -> bool:
+    """:func:`carries` over the output of :func:`marked_attrs`."""
+    head = _STRIP.sub("", html.unescape(payload)).lower()[:5]
+    return any(_STRIP.sub("", a.value).lower().startswith(head) for a in marked)
 
 
 def carries(markup: str, payload: str) -> bool:
@@ -463,15 +475,7 @@ def carries(markup: str, payload: str) -> bool:
     Matched on the unique :data:`MARK` plus the payload's own first characters,
     so alt text that merely echoes the value does not count.
     """
-    head = _STRIP.sub("", html.unescape(payload)).lower()[:5]
-    for a in attributes(markup):
-        if (
-            is_url_attr(a.name)
-            and MARK in a.value
-            and _STRIP.sub("", a.value).lower().startswith(head)
-        ):
-            return True
-    return False
+    return carries_in(marked_attrs(attributes(markup)), payload)
 
 
 # --------------------------------------------------------------------------- #
@@ -567,8 +571,11 @@ class Cell:
     label: str
     python: Optional[list[tuple[str, str, str, str]]] = None  # None: did not render
     rust: Optional[list[tuple[str, str, str, str]]] = None
-    python_carries: bool = False
-    rust_carries: bool = False
+    #: whether the value survived into a URL attribute; ``None`` where nothing reads it (see
+    #: :func:`needs_carries`), which is every cell of a tag with no native handler that is not
+    #: driven with the ``https`` value
+    python_carries: Optional[bool] = None
+    rust_carries: Optional[bool] = None
     native: bool = False
 
     @property
@@ -586,6 +593,14 @@ class Sweep:
     #: tags none of whose calls rendered in any engine, so nothing was learned
     unrendered: list[str] = field(default_factory=list)
     probe: dict[str, str] = field(default_factory=dict)
+    #: how many context variables the renders were given in all (a full context repeats the
+    #: whole set for every call), so a run says whether it took the shortcut
+    context_names: int = 0
+
+    @property
+    def carries_measured(self) -> int:
+        """How many cells had ``carries`` measured (every cell, under ``exhaustive``)."""
+        return sum(1 for c in self.cells if c.python_carries is not None)
 
 
 def inventory() -> dict[str, variants.TagInfo]:
@@ -678,16 +693,45 @@ def calls_for(
         yield "*", KEYREF + "_lists", ["%s=p_keyref_list" % n for n in names]
 
 
+def referenced_names(names: Iterable[str], src: str) -> tuple[str, ...]:
+    """The context names ``src`` can read: each of ``names`` that appears in it as a word.
+
+    A call's template names the context variables it reads (``p_scalar``, ``bound_form``,
+    ``lst_str`` ...), and a variable it does not name cannot reach its output. The Rust engine
+    serialises the WHOLE context on every render (a recursive walk of every dict, 3-4 ms for
+    ``data_table``'s 127 keys, about 85% of the sweep's time), so each call is given only the
+    variables it names. Over-inclusion is harmless (a name found inside a string literal is
+    passed and unused); a name this test misses would be dropped, which is why
+    ``python/tests/test_url_scheme_sweep_capacity.py`` renders both ways and compares."""
+    return tuple(n for n in names if re.search(r"\b%s\b" % re.escape(n), src))
+
+
+def needs_carries(native: bool, label: str) -> bool:
+    """Whether :attr:`Cell.python_carries` / :attr:`Cell.rust_carries` are read for a cell.
+
+    Only :func:`disagreements` (a tag with a native handler) and the ``reached`` set (the
+    ``https`` value arriving at an attribute) read them, so measuring them for the rest, which
+    is most cells, costs a scan of the output for nothing."""
+    return native or label == "https"
+
+
 def run_sweep(
     payloads: Iterable[tuple[str, str]] = PAYLOADS,
     only: Optional[set[str]] = None,
     shapes: Iterable[str] = SHAPES,
     on_tag: Optional[Callable[[str], None]] = None,
     plant: Optional[str] = None,
+    exhaustive: bool = False,
 ) -> Sweep:
     """Drive every parameter of every tag in both engines. Fresh process only.
 
-    ``plant`` is ``"<label>:<tag>"``: see :func:`planted_hole`."""
+    ``plant`` is ``"<label>:<tag>"``: see :func:`planted_hole`.
+
+    ``exhaustive`` turns off the three shortcuts that make the sweep affordable: every call
+    gets the WHOLE context (:func:`referenced_names`), every output is read again, and
+    ``carries`` is measured for every cell (:func:`needs_carries`). The shortcuts must change
+    nothing, so ``python/tests/test_url_scheme_sweep_capacity.py`` runs both and
+    compares :func:`digest`."""
     from django.template import engines
 
     python_engine = engines["django"]
@@ -732,18 +776,43 @@ def run_sweep(
             for param, shape, args in calls_for(info, shapes)
         ]
         any_rendered = False
+        context_names = tuple(build_context("", keys)) + ("bound_form",)
+        needed = [referenced_names(context_names, src) for _param, _shape, src in calls]
+        # Reading an output (every attribute of every element, entity-decoded) is most of what
+        # is left once the render is cheap, and many cells of one tag print the same markup (a
+        # parameter the tag ignores prints the same page for every payload), so each distinct
+        # output is read once and the cells share the result. Per tag, so a large tag's outputs
+        # are not all held at once.
+        read: dict[str, tuple[list[tuple[str, str, str, str]], list[Attr]]] = {}
+
+        def reading(out: str) -> tuple[list[tuple[str, str, str, str]], list[Attr]]:
+            if exhaustive or out not in read:
+                attrs = list(attributes(out))
+                read[out] = (findings_in(attrs), marked_attrs(attrs))
+            return read[out]
+
+        def scan(out: Optional[str]) -> Optional[list[tuple[str, str, str, str]]]:
+            return None if out is None else list(reading(out)[0])
+
+        def survived(out: Optional[str], payload: str) -> bool:
+            return out is not None and carries_in(reading(out)[1], payload)
+
         for label, payload in payloads:
             ctx = build_context(payload, keys)
             if "form" in names:
                 ctx["bound_form"] = harness._bound_form()
-            for param, shape, src in calls:
+            for (param, shape, src), reads in zip(calls, needed):
                 if "form" in names:
                     # a bound Django form, not a string: the rest of the call still runs
                     src = re.sub(r"\bform=p_\w+", "form=bound_form", src)
+                    reads = tuple(dict.fromkeys((*reads, "bound_form")))
+                call_ctx = ctx if exhaustive else {n: ctx[n] for n in reads if n in ctx}
+                sweep.context_names += len(call_ctx)
                 with planted_hole(plant) if plant == key else contextlib.nullcontext():
-                    py_out = _render(python_engine, src, ctx)
-                rs_out = _render(rust_engine, src, ctx)
+                    py_out = _render(python_engine, src, call_ctx)
+                rs_out = _render(rust_engine, src, call_ctx)
                 any_rendered |= py_out is not None or rs_out is not None
+                carried = exhaustive or needs_carries(bool(info.native), label)
                 sweep.cells.append(
                     Cell(
                         key,
@@ -751,10 +820,10 @@ def run_sweep(
                         shape,
                         payload,
                         label,
-                        None if py_out is None else findings(py_out),
-                        None if rs_out is None else findings(rs_out),
-                        py_out is not None and carries(py_out, payload),
-                        rs_out is not None and carries(rs_out, payload),
+                        scan(py_out),
+                        scan(rs_out),
+                        survived(py_out, payload) if carried else None,
+                        survived(rs_out, payload) if carried else None,
                         bool(info.native),
                     )
                 )
@@ -784,6 +853,35 @@ def holes(sweep: Sweep) -> dict[tuple[str, str, str, str, str], set[str]]:
                     (engine, cell.tag, cell.param, element, "%s:%s" % (attr, cls)), set()
                 ).add(cell.label)
     return out
+
+
+def digest(sweep: Sweep) -> str:
+    """A hash of everything the sweep measured: every cell's findings in both engines and, where
+    something reads it (:func:`needs_carries`), whether the value survived.
+
+    Two sweeps with the same digest found the same thing in every cell, which is how the
+    shortcuts of :func:`run_sweep` are shown to change nothing."""
+    import hashlib
+
+    h = hashlib.sha256()
+    for c in sweep.cells:
+        read = needs_carries(c.native, c.label)
+        h.update(
+            repr(
+                (
+                    c.tag,
+                    c.param,
+                    c.shape,
+                    c.label,
+                    c.python,
+                    c.rust,
+                    c.native,
+                    bool(c.python_carries) if read else None,
+                    bool(c.rust_carries) if read else None,
+                )
+            ).encode()
+        )
+    return h.hexdigest()
 
 
 def disagreements(sweep: Sweep) -> list[Cell]:
