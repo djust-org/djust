@@ -1326,7 +1326,18 @@ fn call_custom_tag(
         )?;
         return Ok((html, bindings.into_iter().map(sibling_binding).collect()));
     }
-    let context_map = bridged_context_map(context)?;
+    let mut context_map = bridged_context_map(context)?;
+    if !returns_bindings && crate::registry::tag_handler_wants_typed_args(name) {
+        let typed = typed_operands(args, context);
+        if !typed.is_empty() {
+            // PROVENANCE (provenance_flatten_site_inventory): the operands of an inline tag
+            // are folded into the handler's context; the handler's output returns as a plain,
+            // never-authored `String`. See `typed_operands` for the full classification.
+            context_map
+                .map
+                .insert(TYPED_ARGS_KEY.to_string(), Value::Object(typed));
+        }
+    }
     if returns_bindings {
         let (html, bindings) = crate::registry::call_handler_with_bindings(
             name,
@@ -1347,6 +1358,65 @@ fn call_custom_tag(
     )
     .map_err(|e| handler_call_error("Custom tag", name, e))?;
     Ok((html, Vec::new()))
+}
+
+/// The context key under which a handler that declares `TYPED_ARGS` receives its operands as
+/// typed Python values (#3756). Leading underscores: Django's own variable syntax refuses such a
+/// name, so no template can spell it, and `python/djust/components/rust_handlers.py`
+/// (`TYPED_ARGS_KEY`) is the one reader.
+const TYPED_ARGS_KEY: &str = "__djust_typed_args__";
+
+/// Each `key=<expression>` operand of an inline tag, resolved to a [`Value`] through
+/// [`get_value`] and keyed by `key` (#3756).
+///
+/// This is the resolution `{{ <expression> }}` performs, filters included, and it is the point of
+/// the channel: [`Context::resolve`] re-protects every segment of a dotted path
+/// (`protect_sidecar`), so `data=form.instance.password` is the same refusal here as in
+/// `{{ form.instance.password }}`. A handler that resolved the path itself over the raw objects (the
+/// `{% load %}` bridge) would have no floor. Quoted literals are skipped: the handler already
+/// reads them from its string arguments, and a literal has no type to recover. An operand that
+/// does not resolve (`Missing`, or an error) is skipped as well, so the handler falls back to its
+/// string argument exactly as before.
+///
+/// The values cross as typed Python objects through `value_into_handler_pyobject`: a `datetime`
+/// as the `datetime`, a `Decimal` as the `Decimal`, a carried object as its floor-protected live
+/// handle or its `TemplateObject`.
+fn typed_operands(
+    args: &[String],
+    context: &Context,
+) -> indexmap::IndexMap<djust_core::ObjectKey, Value> {
+    let mut typed = indexmap::IndexMap::new();
+    for arg in args {
+        let Some((key, expr)) = arg.split_once('=') else {
+            continue;
+        };
+        let (key, expr) = (key.trim(), expr.trim());
+        if key.is_empty() || expr.is_empty() || strip_quotes(expr).is_some() {
+            continue;
+        }
+        // `get_value_safe`, not `get_value`: the second discards the runtime-safe flag, so
+        // `data=p` for a `p` bound by `{% with p=x|safe %}` (or a `mark_safe`d context value)
+        // reached the handler as a plain `str` and was escaped where Django hands the tag the
+        // `SafeString` and leaves it raw. Over-escaping, not a leak, and a byte difference from
+        // Django. The narrowing is `tag_arg`'s: only a STRING can be `SafeData`.
+        if let Ok((value, safe)) = get_value_safe(expr, context) {
+            let value = match value {
+                Value::String(text) if safe => Value::SafeString(text),
+                other => other,
+            };
+            if !matches!(value, Value::Missing) {
+                // PROVENANCE: this folds a resolved operand into the object the handler is
+                // handed; it is not a rendered-output conversion. The handler's OUTPUT comes
+                // back as a plain `String` (`Ok((html).into())` in the `CustomTag` arm), never
+                // authored, so no authority is minted or dropped here, and the literal records
+                // this resolution leaves pending are discarded below exactly as
+                // `call_custom_tag` discards them after `resolve_custom_tag_args` (fail closed).
+                typed.insert(djust_core::ObjectKey::from(key), value);
+            }
+        }
+    }
+    context.take_provenance_flatten();
+    typed
 }
 
 /// Attribute a registry call's failure to its tag — unless it is the

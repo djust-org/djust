@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 from django.template import Context, Template
 
+from djust import _rust
 from djust.components import rust_handlers as rh
 from djust.components.components.json_viewer import JsonViewer
 from djust.components.components.log_viewer import LogViewer
@@ -153,9 +154,12 @@ class TestJsonViewerMarkupTheHookReads:
         return {
             "class": JsonViewer(data=self.DATA, collapsed_depth=1).render(),
             "tag": _tag("{% json_viewer data=data collapsed_depth=1 %}", data=self.DATA),
+            # ``json_viewer`` has no native handler class since #3756 (it dispatches on a
+            # value's type, so the Python node renders it through the bridge); the third
+            # path is the Rust engine's render of the tag.
             "handler": str(
-                rh.JsonViewerHandler().render(
-                    ["data=data", "collapsed_depth=1"], {"data": self.DATA}
+                _rust.render_template(
+                    "{% json_viewer data=data collapsed_depth=1 %}", {"data": self.DATA}
                 )
             ),
         }

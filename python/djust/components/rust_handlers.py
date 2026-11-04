@@ -101,6 +101,17 @@ def _parse_args(args: list[str], context: dict[str, object]) -> dict[str, object
     return result
 
 
+#: The reserved context key under which the engine hands a ``TYPED_ARGS`` handler its resolved,
+#: typed operands (``crates/djust_templates/src/renderer.rs``, ``TYPED_ARGS_KEY``).
+TYPED_ARGS_KEY = "__djust_typed_args__"
+
+
+def _typed_args(context: dict[str, object]) -> dict[str, object]:
+    """The operands the engine resolved, as typed Python values, by parameter name (#3756)."""
+    typed = context.get(TYPED_ARGS_KEY)
+    return typed if isinstance(typed, dict) else {}
+
+
 # ---------------------------------------------------------------------------
 # Block handlers (wrap content — e.g. {% modal %}...{% endmodal %})
 # ---------------------------------------------------------------------------
@@ -2007,9 +2018,8 @@ BLOCK_HANDLERS = [
 #: ``python/tests/test_native_handler_fidelity_3666_3667.py`` asserts it equals this set, in
 #: both directions: a new tag that reads an attribute of its argument cannot get a native
 #: handler, and a tag listed here that stopped doing so is reported. A tag that dispatches on a
-#: value's TYPE instead (``json_viewer``: ``isinstance``) reads no attribute and is not seen by
-#: that measurement (#3756); a ``Form`` bound by ``{% for %}`` / ``{% with %}`` is lost before
-#: any tag runs (#3755).
+#: value's TYPE instead reads no attribute and is not seen by that measurement; those are
+#: ``TYPED_ARGUMENT_TAGS`` below (#3756).
 OBJECT_ARGUMENT_TAGS = frozenset(
     {
         "avatar_group",
@@ -2023,6 +2033,25 @@ OBJECT_ARGUMENT_TAGS = frozenset(
         "toast_container",
     }
 )
+
+#: Native tags whose handler declares ``TYPED_ARGS = True`` (#3756).
+#:
+#: ``json_viewer`` branches on ``isinstance`` and reads no attribute, so the recorder of
+#: ``objects.py`` cannot see it, and a native handler is handed the engine's stand-in for a value
+#: it cannot carry (``str(datetime)``, a ``float`` for a ``Decimal``) and dispatches on THAT. It
+#: stays native, and the engine hands it the operand's TYPE: each ``key=<expression>`` operand is
+#: resolved through the same floored walk ``{{ }}`` uses (``Context::resolve``, which re-protects
+#: after every segment) and passed as a typed Python value. It is NOT moved onto the ``{% load %}``
+#: bridge above: the bridge runs Django's ``Variable`` resolution over raw objects and has no
+#: floor, so ``{% json_viewer data=form.instance.password %}`` printed the hash there.
+#:
+#: Which tags are type-sensitive is measured too, by rendering
+#: (``scripts/lib/template_library_parity/typed_values.py``: the Python tag is run on a value and on
+#: the stand-in the engine would hand a handler, and a tag whose output differs depends on the
+#: type). ``TestTypeDispatch`` in ``python/tests/test_native_handler_fidelity_3666_3667.py`` asserts
+#: this set equals the handlers that declare ``TYPED_ARGS``, and that none of them disagrees with
+#: Django for a realistic type.
+TYPED_ARGUMENT_TAGS = frozenset({"json_viewer"})
 
 
 def register_with_rust_engine() -> None:
@@ -8357,7 +8386,18 @@ class MarkdownEditorHandler:
 
 
 class JsonViewerHandler:
-    """Inline handler for {% json_viewer data=json_data %}"""
+    """Inline handler for {% json_viewer data=json_data %}.
+
+    ``TYPED_ARGS`` (#3756): the Python tag branches on ``isinstance(value, ...)`` and spells every
+    other type as ``str(value)``, so a handler that only sees the engine's string / JSON stand-in
+    (``str(datetime)``, a ``float`` for a ``Decimal``) dispatches on the wrong type. The engine
+    resolves each ``key=<expression>`` operand through the SAME floored walk ``{{ }}`` uses and,
+    for a handler that declares this, hands the typed value over under
+    ``context["__djust_typed_args__"]``. The handler reads its operand from there and from the
+    string arguments for everything the engine did not resolve (a literal).
+    """
+
+    TYPED_ARGS = True
 
     def _render_node(self, value: object, depth: int, collapsed_depth: int) -> str:
         collapsed = depth >= collapsed_depth
@@ -8429,6 +8469,7 @@ class JsonViewerHandler:
 
     def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
+        kw.update(_typed_args(context))
         data = kw.get("data", None)
         collapsed_depth = kw.get("collapsed_depth", 2)
         root_label = kw.get("root_label", "root")
