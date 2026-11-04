@@ -1611,6 +1611,11 @@ def _protect_sidecar_value(value: Any) -> Any:
         return _SidecarModelProxy(value)
     if isinstance(value, (models.Manager, models.QuerySet)):
         return _SidecarQuerySetProxy(value)
+    if isinstance(value, _FORM_PROXIES):
+        # A form proxy is for a template PATH (#3790). The leaf floor is what Python code that is not a
+        # path is handed (a bridged tag's operand, a loop variable in its context), and a tag is the
+        # application's own code: it gets the real form / BoundField.
+        return unwrap_form_proxy(value)
     return value
 
 
@@ -1874,15 +1879,15 @@ _FORM_CLASSES: Optional[tuple] = None
 
 
 def _form_classes() -> tuple:
-    """``(BoundField, BaseModelForm, BaseFormSet)``, imported on first use: ``django.forms`` is not
+    """``(BoundField, BaseForm, BaseFormSet)``, imported on first use: ``django.forms`` is not
     needed by anything that renders no form, and this runs once per template path segment."""
     global _FORM_CLASSES
     if _FORM_CLASSES is None:
+        from django.forms import BaseForm
         from django.forms.boundfield import BoundField
         from django.forms.formsets import BaseFormSet
-        from django.forms.models import BaseModelForm
 
-        _FORM_CLASSES = (BoundField, BaseModelForm, BaseFormSet)
+        _FORM_CLASSES = (BoundField, BaseForm, BaseFormSet)
     return _FORM_CLASSES
 
 
@@ -1908,6 +1913,12 @@ def _model_form_floor(form: Any) -> Optional[tuple]:
     ``djust_serializable_fields`` allowlist). A plain ``Form`` has no model behind it and so no floor
     to enforce (a model floor protects a model's fields).
     """
+    # A formset's management form is a plain ``Form`` with no instance; the formset pins its own floor
+    # on it when it hands it out (``_SidecarFormSetProxy``), so a field of it and the ``.form`` of that
+    # field lead back to a proxied form and not to the real one holding the formset's whole data.
+    pinned = form.__dict__.get("_djust_floor") if hasattr(form, "__dict__") else None
+    if pinned is not None:
+        return pinned  # type: ignore[no-any-return]
     instance = getattr(form, "instance", None)
     if not isinstance(instance, models.Model):
         return None
@@ -2144,6 +2155,10 @@ class _SidecarFormSetProxy:
             # A plain ``Form`` (so the walk would leave it alone) that holds the formset's WHOLE
             # submitted data: ``fs.management_form.data`` is ``form-0-password`` and all. It is
             # proxied with the formset's floor, so its ``data`` is filtered like the formset's own.
+            try:
+                value._djust_floor = floor
+            except AttributeError:  # pragma: no cover - a form class with __slots__
+                pass
             return _SidecarFormProxy(value, floor)
         return _protect_sidecar_walk(value)
 
@@ -2215,6 +2230,8 @@ class _SidecarBoundFieldProxy:
             raise TypeError(
                 "BoundField indices must be integers or slices, not %s." % type(idx).__name__
             )
+        if isinstance(idx, slice):
+            return []  # every slice of no subwidgets
         raise IndexError("BoundField index out of range")
 
     def __iter__(self) -> Any:
@@ -2305,6 +2322,8 @@ def _protect_sidecar_walk(value: Any) -> Any:
       Any other ``BoundField`` is itself: it holds no floor value, and ``.form`` leads back to a
       form that this function proxies.
     """
+    if isinstance(value, _FORM_PROXIES):
+        return value
     protected = _protect_sidecar_value(value)
     if protected is not value:
         return protected
@@ -2324,6 +2343,9 @@ def _protect_sidecar_walk(value: Any) -> Any:
         return value if floor is None else _SidecarFormSetProxy(value, floor)
     return value
 
+
+#: The three form proxies (defined above): a template path's view of a form, a formset, a floor field.
+_FORM_PROXIES = (_SidecarFormProxy, _SidecarFormSetProxy, _SidecarBoundFieldProxy)
 
 #: Types a walk cannot get a form out of; answered before the ``isinstance`` probes above.
 _WALK_SCALARS = frozenset({str, int, float, bool, list, dict, tuple, set, frozenset, bytes})

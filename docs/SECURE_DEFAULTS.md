@@ -97,14 +97,20 @@ flag, a PII column — because serialization defaulted to *allow everything*.
 >   value (Django ignores what is posted for it). An *editable* floor field is
 >   drawn with its value, and the component logs once that it did; declare the
 >   form field `disabled=True`, or leave it out, to draw it without.
-> - *`{% if form.<floor field> in form %}` is false* where Django says true
->   (`==` and aliases compare correctly)
->   ([#3802](https://github.com/djust-org/djust/issues/3802)).
 > - *A plain `Form` has no model floor*
 >   ([#3799](https://github.com/djust-org/djust/issues/3799)), and a typed
 >   `PasswordInput` value that is not a model column (`UserCreationForm`'s
 >   `password1`) is not on it either
 >   ([#3798](https://github.com/djust-org/djust/issues/3798)).
+>
+> **The invariant**: a template walk never receives a real `BoundField` of a
+> floor field, nor the real form (or management form) behind one. Path segments
+> are floored by `_protect_sidecar_walk`; every other producer (a loop
+> variable, `visible_fields`, `get_context().fields`, a slice, an alias, a
+> formset loop) goes through the one value conversion, which keeps the floored
+> object as the value's live handle (`floored_form_handle`). The grammar test
+> `python/tests/test_form_floor_differential_3790.py` is what says the list of
+> producers is complete.
 >
 > An object handed to a *tag* (the handler dict, a loop variable in a bridged
 > context) keeps the leaf floor and the real form: a tag is the application's own

@@ -501,12 +501,24 @@ class TestAFloorFieldIsTheSameFieldEachTimeItIsReached:
         control = Engine().from_string(src).render(Context({"form": form}))
         assert control == expected, "the expectation is Django's own answer"
 
-    def test_a_floor_field_is_not_found_by_in_a_known_limit(self, engine, user):
-        """Django says True. The left operand is a floor proxy and ``in`` compares it with the real
-        fields the form's handle yields (see the comment in ``serialization``; #3802)."""
+    def test_in_finds_a_floor_field_as_django_does(self, engine, user):
+        """Was a known limit (#3802): ``in`` walks the form's handle, whose items are now the same
+        floored fields a path reaches, because the conversion stores the floored object."""
         form = UserChangeForm(instance=user)
         src = "{% if form.is_staff in form %}T{% else %}F{% endif %}"
-        assert render(engine, src, form=form) == "F"
+        assert render(engine, src, form=form) == "T"
+
+    def test_a_loop_variable_equals_the_field_it_is(self, engine, user):
+        from django.template import Context, Engine
+
+        form = UserChangeForm(instance=user)
+        src = (
+            "{% for f in form %}{% if f.name == 'is_staff' %}"
+            "{% if f == form.is_staff %}Y{% else %}N{% endif %}"
+            "{% endif %}{% endfor %}"
+        )
+        assert render(engine, src, form=form) == "Y"
+        assert Engine().from_string(src).render(Context({"form": form})) == "Y"
 
     def test_one_proxy_per_bound_field_and_floor(self, user):
         from djust.serialization import _protect_sidecar_walk
@@ -625,6 +637,10 @@ class TestFailClosed:
             # the one that used to answer `Err(_) => obj`: the first three never reach it.
             "{% with d=form.initial %}{{ d.password }}{% endwith %}",
             "{% with d=form.cleaned_data %}{{ d.password }}{% endwith %}",
+            # The CONVERSION of a form into the engine's value asks the floor too (a loop variable's
+            # handle); a floor that raised there must drop the value, not keep the real field.
+            "{% for f in form %}{% for w in f %}{{ w.data.value }}{% endfor %}{% endfor %}",
+            "{% for f in form.visible_fields %}{% for w in f %}{{ w.data.value }}{% endfor %}{% endfor %}",
         ],
     )
     def test_a_floor_that_raises_drops_the_value_it_does_not_hand_the_raw_form_on(
@@ -641,6 +657,25 @@ class TestFailClosed:
         form.is_valid()
         out = render(engine, src, form=form)
         assert user.password not in out, out
+
+    def test_a_field_the_floor_cannot_protect_is_dropped_at_conversion(
+        self, engine, user, monkeypatch
+    ):
+        """The floor raises for a ``BoundField`` only. Its subwidgets are not fields, so nothing else
+        would stop ``w.data.value``: the conversion of the field itself must drop it."""
+        from django.forms.boundfield import BoundField
+
+        real = serialization._protect_sidecar_walk
+
+        def selective(value):
+            if isinstance(value, BoundField):
+                raise RuntimeError("the floor failed")
+            return real(value)
+
+        monkeypatch.setattr(serialization, "_protect_sidecar_walk", selective)
+        src = "{% for f in form.visible_fields %}{% for w in f %}{{ w.data.value }}{% endfor %}{% endfor %}"
+        out = render(engine, src, form=UserChangeForm(instance=user))
+        assert user.password not in out and "floor-user" not in out, out
 
     def test_the_control_without_the_failure_is_the_issue(self, engine, user, monkeypatch):
         """The leaf floor alone (a floor that is not asked) prints it: the test above is not vacuous."""
@@ -714,3 +749,53 @@ class TestATagIsHandedWhatIsBehindEveryProxy:
         form = UserChangeForm(instance=user)
         assert release(wrap(fs)) is fs
         assert release(wrap(form)) is form
+
+
+class TestTheReviewersRepros:
+    """The routes by which a REAL floor field, or the real form behind one, reached a template other
+    than a path segment (round 4). The grammar in ``test_form_floor_differential_3790`` generalises
+    them; these are the spellings as they were reported."""
+
+    @staticmethod
+    def _bound_formset(user):
+        FormSet = modelformset_factory(User, form=UserChangeForm, extra=0)
+        fs = FormSet(_formset_data(user), queryset=User.objects.filter(pk=user.pk))
+        assert fs.is_valid(), fs.errors
+        return fs
+
+    @pytest.mark.parametrize(
+        "src",
+        [
+            "{{ fs.management_form.TOTAL_FORMS.form.data }}",
+            "{% for f in fs.management_form %}{{ f.form.data }}{% endfor %}",
+            "{% for f in fs.management_form.hidden_fields %}{{ f.form.data }}{% endfor %}",
+            "{{ fs.management_form.get_context.form.data }}",
+            "{% with f=fs.management_form.TOTAL_FORMS %}{{ f.form.data }}{% endwith %}",
+        ],
+    )
+    def test_the_management_form_behind_a_field_is_still_the_floored_one(self, engine, user, src):
+        out = render(engine, src, fs=self._bound_formset(user))
+        assert user.password not in out and "form-0-password" not in out, out
+
+    @pytest.mark.parametrize(
+        "src",
+        [
+            "{% for f in form %}{% for w in f %}{{ w.data.value }}{% endfor %}{% endfor %}",
+            "{% for f in form.visible_fields %}{% for w in f %}{{ w.data.value }}{% endfor %}{% endfor %}",
+            "{% for p in form.get_context.fields %}{% for w in p.0 %}{{ w.data.value }}{% endfor %}{% endfor %}",
+            "{% for f in form %}{% for w in f|slice:':2' %}{{ w.data.value }}{% endfor %}{% endfor %}",
+            "{% with f=form.password %}{% for w in f %}{{ w.data.value }}{% endfor %}{% endwith %}",
+        ],
+    )
+    def test_the_subwidgets_of_a_floor_field_are_not_iterable_by_any_producer(
+        self, engine, user, src
+    ):
+        out = render(engine, src, form=UserChangeForm(instance=user))
+        assert user.password not in out, out
+
+    def test_the_subwidgets_of_a_floor_field_through_a_formset(self, engine, user):
+        src = (
+            "{% for f in fs %}{% for b in f %}{% for w in b %}"
+            "{{ w.data.value }}{% endfor %}{% endfor %}{% endfor %}"
+        )
+        assert user.password not in render(engine, src, fs=self._bound_formset(user))
