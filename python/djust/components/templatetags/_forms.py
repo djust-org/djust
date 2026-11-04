@@ -945,11 +945,13 @@ def _bound_field_value(bound_field: Any) -> Any:
     posted for it, so the control can be drawn without the value and a re-save cannot change it. An
     EDITABLE floor field keeps its value, because the browser posts the control back and a blank one
     clears the column (an unchecked checkbox demotes the user); the reader says so once, loudly.
+    A field whose widget is a password input reads as ``None`` too, editable or not (#3798): what was
+    typed into it is on the floor, and Django's own widget never writes it back into the control.
     """
     from djust.serialization import form_field_floor_state, warn_editable_floor_field
 
     state = form_field_floor_state(bound_field)
-    if state == "disabled":
+    if state in ("disabled", "password"):
         return None
     if state == "editable":
         warn_editable_floor_field(bound_field)

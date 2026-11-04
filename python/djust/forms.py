@@ -63,13 +63,15 @@ _REDACTED_FORM_ERROR = "Invalid value."
 def is_sensitive_form_field(name: str, field: forms.Field) -> bool:
     """Whether a form field's value may never be persisted, rendered or debugged.
 
-    ADR-038 D-e: a ``PasswordInput`` widget (or subclass), or a field name in the
-    serialization floor (``password``, ``is_superuser``, ``is_staff``) unioned
-    with ``settings.DJUST_SENSITIVE_FIELDS``.
+    ADR-038 D-e: a ``PasswordInput`` widget (or subclass, or any widget that draws a password
+    input), or a field name in the serialization floor (``password``, ``is_superuser``,
+    ``is_staff``) unioned with ``settings.DJUST_SENSITIVE_FIELDS``. The widget half is
+    :func:`djust.serialization.field_has_password_widget`, which the template walk's form floor asks
+    too (#3798), so the two cannot disagree about what a password field is.
     """
-    from .serialization import _resolve_sensitive_fields
+    from .serialization import _resolve_sensitive_fields, field_has_password_widget
 
-    return isinstance(field.widget, forms.PasswordInput) or name in _resolve_sensitive_fields()
+    return field_has_password_widget(field) or name in _resolve_sensitive_fields()
 
 
 def _is_persistable_input(value: Any) -> bool:

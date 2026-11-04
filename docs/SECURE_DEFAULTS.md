@@ -80,6 +80,30 @@ flag, a PII column — because serialization defaulted to *allow everything*.
 > matched through its prefix (`u-password`, `form-0-password`). A refused read
 > logs once, by field name, so the breaking change is never silent.
 >
+> **A second floor, keyed on the WIDGET (#3798).** What a person *typed* into a
+> password input is no column of any model (`UserCreationForm.password1`), so
+> the model floor cannot name it. A field whose widget is a password input
+> (`PasswordInput` or a subclass, any widget with `input_type == "password"`, or
+> a `MultiWidget` with such a part) is therefore a floor field **by type**,
+> whatever its name and whatever the form is: a `ModelForm` or a plain `Form`.
+> It is the same chokepoint (`_model_form_floor` -> `_floor_field_readable`), so
+> the form, bound-field and formset proxies and the conversion floor all hold it:
+> `{{ form.password1.value }}`, `.data`, `.initial`, `{{ form.data.password1 }}`
+> (and `u-password1`, and a `MultiWidget`'s `pair_0` / `pair_1`),
+> `{{ form.cleaned_data.password1 }}`, `subwidgets`, a loop variable, and a
+> formset's `data` / `cleaned_data` / `initial` (read from the forms it built, so
+> a field added in a form's `__init__` is held too). The test is
+> `djust.serialization.field_has_password_widget`, which
+> `djust.forms.is_sensitive_form_field` (`persisted_form_input`) asks too, so the
+> two cannot disagree about what a password field is. Nothing a re-save needs is
+> lost: Django's `PasswordInput` never writes a value back into the control, so
+> `{{ form.password1 }}` of a typed-but-invalid form is byte-identical with and
+> without this floor (`python/tests/test_password_widget_floor_3798.py`,
+> `TestTheControlStillDraws`); a template that *branches on* the typed value
+> (`{% if form.password1.value %}`) now takes the else branch, which is the one
+> breaking change, and logs once by field name. djust's own component tags draw a
+> password field blank, editable or not (`form_field_floor_state` -> `"password"`).
+>
 > **What the form floor does NOT do (stated as limits, each pinned by a test in
 > `python/tests/test_form_floor_followups_3790.py`).**
 >
@@ -101,11 +125,22 @@ flag, a PII column — because serialization defaulted to *allow everything*.
 >   `Form` with no floor ([#3799](https://github.com/djust-org/djust/issues/3799)); only a
 >   formset's own `management_form` is pinned. The same goes for any plain `Form` that
 >   carries `self.instance = <Model>`: the floor is a `ModelForm`'s.
-> - *A plain `Form` has no model floor*
->   ([#3799](https://github.com/djust-org/djust/issues/3799)), and a typed
->   `PasswordInput` value that is not a model column (`UserCreationForm`'s
->   `password1`) is not on it either
->   ([#3798](https://github.com/djust-org/djust/issues/3798)).
+> - *A plain `Form` has no MODEL floor*
+>   ([#3799](https://github.com/djust-org/djust/issues/3799)): only its
+>   password-widget fields are held (above). A plain `Form` that is handed
+>   `initial=model_to_dict(user)` still reads that `password` hash back through a
+>   field with a text widget, and a field merely *named* `password` over a
+>   `TextInput` is not a password field. The floor is the widget's, not a name's:
+>   applying the base names to every form would make a login form's typed
+>   `password` read back empty, a product decision.
+> - *`PasswordInput(render_value=True)` writes the value into the control.* That
+>   is the widget the view author chose, so `{{ form.pw }}` still prints it (the
+>   same as every floor field above); the template's READS of the value are still
+>   refused. Pinned in `TestTheControlStillDraws`.
+> - *Values held in plain data are not forms.* A view's own dict
+>   (`form_data`, `{"pw": request.POST["password"]}`) is not a `Form`: the floor
+>   guards forms and models, never a dict the author built. (`FormMixin`'s
+>   explicit exposure blanks sensitive fields in `form_data` already, ADR-038.)
 >
 > **The invariant**: a template walk never receives a real `BoundField` of a
 > floor field, nor the real form (or management form) behind one. Path segments
@@ -259,6 +294,41 @@ flag, a PII column — because serialization defaulted to *allow everything*.
 > is gone. **Migration:** a model that previously relied on the allowlist to
 > ship a floor field must now name it in `djust_serialize_sensitive_fields` as
 > well — a second, explicit declaration that you accept the disclosure.
+
+> [!WARNING]
+> **A row's `__str__` is public text (#3806).** The floor and the per-model
+> `djust_exclude_fields` / `djust_serializable_fields` decide which *fields* of a
+> row a template can read. They do **not** decide what `str(row)` says:
+> `"__str__"` is one of the identity keys (`_IDENTITY_KEYS`, above) that passes
+> every one of those rules, `model_identity()` and the full serializer both
+> carry it, and `{{ row }}` renders it. This is Django's own behaviour (the same
+> template under Django's engine prints the same text), and it was measured
+> rather than assumed (`python/tests/test_row_str_is_public_text_3806.py`, run on
+> the `DjustTemplateBackend` and on a `LiveView`, with Django's engine as the
+> control). `str(row)` ships on each of these paths, whatever the model excludes:
+>
+> - a top-level loop over a QuerySet, `{% for r in rows %}{{ r }}`;
+> - a model in the context, `{{ row }}`, and a foreign key read whole,
+>   `{{ row.shelf }}`;
+> - a row reached through a relation, `{{ shelf.rows.all.first }}` (and
+>   `.last`);
+> - on the `DjustTemplateBackend`, a QuerySet's `{{ rows.first }}` /
+>   `{{ rows.last }}`, also beside a field read (`{{ rows.first }}|{{ rows.first.name }}`).
+>   A LiveView attribute that is a top-level QuerySet renders `{{ rows.first }}`
+>   as nothing today (a parity gap that withholds more, not less; pinned as a
+>   strict `xfail` so the list above is updated when it is fixed).
+>
+> A model whose `__str__` builds its text from a field the floor withholds
+> therefore shows that field's value in the page: `__str__` returning
+> `f"{self.name} <{self.password}>"` renders the password for `{{ row }}` while
+> `{{ row.password }}` is empty, and `djust_exclude_fields = ("secret",)` does
+> not stop `__str__` from printing `secret`. The stock `User.__str__` is the
+> username, so no stock Django model leaks; the author of a model is the only one
+> who can. **Author guidance: build `__str__` from public fields only**, the way
+> you would for the admin or a log line. The framework does not rewrite
+> `__str__` (that would make `{{ row }}` differ from Django's, and a model's
+> display text is its author's decision); a field that must never be printed
+> belongs in `djust_exclude_fields` *and* out of `__str__`.
 
 **Deliberate opt-out — re-include a floor field only when you mean it:**
 

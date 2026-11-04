@@ -1892,27 +1892,91 @@ def _form_classes() -> tuple:
     return _FORM_CLASSES
 
 
-def _floor_for_model(model_class: Any) -> tuple:
-    """``(model class, denied, allowed, optout)`` for a model CLASS: the SAME three sets
-    ``_SidecarModelProxy`` is built from. Their readers look only at ``type(obj)``, so an instance
-    that was never initialised (no query, no ``__init__``) stands in for the class."""
+_PASSWORD_WIDGET_CLASSES: Optional[tuple] = None
+
+
+def _widget_draws_password(widget: Any) -> bool:
+    """A password input, or a ``MultiWidget`` that has one among its parts (recursively)."""
+    global _PASSWORD_WIDGET_CLASSES
+    if _PASSWORD_WIDGET_CLASSES is None:
+        # Imported once: this runs for every field of a form, on every step of a template path that
+        # reaches the form (a function-level ``import`` per call was measurable on a 30-field form).
+        from django.forms import MultiWidget, PasswordInput
+
+        _PASSWORD_WIDGET_CLASSES = (PasswordInput, MultiWidget)
+    password_input, multi_widget = _PASSWORD_WIDGET_CLASSES
+    if isinstance(widget, password_input) or getattr(widget, "input_type", None) == "password":
+        return True
+    if isinstance(widget, multi_widget):
+        return any(_widget_draws_password(part) for part in getattr(widget, "widgets", ()))
+    return False
+
+
+def field_has_password_widget(field: Any) -> bool:
+    """Is *field*'s widget a password input? The WIDGET-TYPE half of the form floor (#3798).
+
+    ``isinstance(widget, PasswordInput)`` (so a subclass is one), ``input_type == "password"`` (a
+    widget that is not a ``PasswordInput`` but draws one), or a ``MultiWidget`` with such a part. What
+    such a field holds is what a person TYPED: it is not a column of any model, so the model floor
+    cannot name it, and it is a secret whatever the field is called.
+    ``djust.forms.is_sensitive_form_field`` asks this too, so the two cannot disagree about what a
+    password field is (#1646).
+    """
+    return _widget_draws_password(getattr(field, "widget", None))
+
+
+def _password_field_names(fields: Any) -> frozenset:
+    """The keys, in *fields* (a form's ``fields`` or a form class's ``base_fields``), under which a
+    password-widget field's value is held (:func:`field_has_password_widget`).
+
+    A field is held under its own name (``initial`` / ``cleaned_data`` / ``BoundField``). A
+    ``MultiWidget`` field is also submitted under one key per part (``pair_0``, ``pair_1``:
+    ``widget.widgets_names``), and that is what ``form.data`` holds, so those keys are named too.
+    """
+    if not fields:
+        return frozenset()
+    names = set()
+    for name, field in fields.items():
+        if not field_has_password_widget(field):
+            continue
+        names.add(name)
+        for suffix in getattr(getattr(field, "widget", None), "widgets_names", ()):
+            names.add(name + suffix)
+    return frozenset(names)
+
+
+def _floor_for_model(model_class: Any, password_names: frozenset = frozenset()) -> tuple:
+    """``(model class, denied, allowed, optout, password names)`` for a model CLASS: the SAME three
+    sets ``_SidecarModelProxy`` is built from, and the names of the form's password-widget fields
+    (#3798). ``model_class`` is ``None`` for a form with no model behind it (a plain ``Form``): its
+    floor is the password fields alone, and no model rule is applied to it (#3799). The model's readers
+    look only at ``type(obj)``, so an instance that was never initialised (no query, no ``__init__``)
+    stands in for the class."""
+    if model_class is None:
+        return (None, frozenset(), None, frozenset(), password_names)
     stand_in = object.__new__(model_class)
     return (
         model_class,
         DjangoJSONEncoder._get_denied_fields(stand_in),
         DjangoJSONEncoder._get_allowlist_fields(stand_in),
         DjangoJSONEncoder._get_sensitive_optout_fields(stand_in),
+        password_names,
     )
 
 
 def _model_form_floor(form: Any) -> Optional[tuple]:
-    """``(model class, denied, allowed, optout)`` for a ``ModelForm``, else ``None``.
+    """``(model class, denied, allowed, optout, password names)`` for a form, else ``None``.
 
-    Read off the form's ``instance``: a form over a ``User`` holds that user's values under the
-    user's field names, so the user's floor is the form's floor (``password``, ``is_superuser``,
-    ``is_staff``, ``DJUST_SENSITIVE_FIELDS``, ``djust_exclude_fields``, and the
-    ``djust_serializable_fields`` allowlist). A plain ``Form`` has no model behind it and so no floor
-    to enforce (a model floor protects a model's fields).
+    Two floors meet here, and a form is on the floor if EITHER names a field of it:
+
+    * the MODEL floor, read off a ``ModelForm``'s ``instance``: a form over a ``User`` holds that
+      user's values under the user's field names, so the user's floor is the form's floor
+      (``password``, ``is_superuser``, ``is_staff``, ``DJUST_SENSITIVE_FIELDS``,
+      ``djust_exclude_fields``, and the ``djust_serializable_fields`` allowlist). A plain ``Form``
+      has no model behind it and so no model floor (#3799);
+    * the WIDGET-TYPE floor (#3798): a field whose widget is a password input holds what was typed,
+      whatever the form is and whatever the field is called, so it is a floor field of a plain
+      ``Form`` and of a ``ModelForm`` alike (``UserCreationForm.password1`` is no column of ``User``).
     """
     # A formset's management form is a plain ``Form`` with no instance; the formset pins its own floor
     # on it when it hands it out (``_SidecarFormSetProxy``), so a field of it and the ``.form`` of that
@@ -1920,34 +1984,57 @@ def _model_form_floor(form: Any) -> Optional[tuple]:
     pinned = form.__dict__.get("_djust_floor") if hasattr(form, "__dict__") else None
     if pinned is not None:
         return pinned  # type: ignore[no-any-return]
-    # ONLY a ``ModelForm`` (or a form with a pinned floor, above) has a model floor. A plain ``Form``
-    # that happens to carry ``self.instance = <Model>`` is the view author's own form: its fields are
-    # not the model's columns, and "a plain Form has no model floor" stays true.
-    if not isinstance(form, _form_classes()[3]):
+    passwords = _password_field_names(getattr(form, "fields", None))
+    # ONLY a ``ModelForm`` has a model floor. A plain ``Form`` that happens to carry
+    # ``self.instance = <Model>`` is the view author's own form: its fields are not the model's
+    # columns, and "a plain Form has no model floor" stays true.
+    model_class = None
+    if isinstance(form, _form_classes()[3]):
+        instance = getattr(form, "instance", None)
+        if isinstance(instance, models.Model):
+            model_class = type(instance)
+    if model_class is None and not passwords:
         return None
-    instance = getattr(form, "instance", None)
-    if not isinstance(instance, models.Model):
-        return None
-    return _floor_for_model(type(instance))
+    return _floor_for_model(model_class, passwords)
 
 
 def _formset_floor(formset: Any) -> Optional[tuple]:
-    """The floor of a formset's model: ``BaseModelFormSet.model``, else the model of its ``ModelForm``
-    class (a plain ``formset_factory(SomeModelForm)``). ``None`` when no model is behind it."""
+    """The floor of a formset: the model floor of ``BaseModelFormSet.model`` (else of the model of its
+    ``ModelForm`` class, a plain ``formset_factory(SomeModelForm)``) and the password-widget fields
+    of its forms (#3798). ``None`` when neither names anything.
+
+    The password fields are those of the form CLASS (``base_fields``) and of the forms the formset
+    has actually built: a form that adds a ``PasswordInput`` in its ``__init__`` is not in
+    ``base_fields``, but ``formset.cleaned_data`` / ``formset.data`` hold its value all the same.
+    """
+    form_class = getattr(formset, "form", None)
     model = getattr(formset, "model", None)
     if model is None:
-        model = getattr(getattr(getattr(formset, "form", None), "_meta", None), "model", None)
-    if isinstance(model, type) and issubclass(model, models.Model):
-        return _floor_for_model(model)
-    return None
+        model = getattr(getattr(form_class, "_meta", None), "model", None)
+    if not (isinstance(model, type) and issubclass(model, models.Model)):
+        model = None
+    passwords = set(_password_field_names(getattr(form_class, "base_fields", None)))
+    try:
+        for built in formset.forms:
+            passwords |= _password_field_names(getattr(built, "fields", None))
+    except Exception:  # noqa: BLE001 - a formset whose forms cannot be built exposes none either
+        logger.debug("[djust] a formset's forms could not be built for the floor")
+    if model is None and not passwords:
+        return None
+    return _floor_for_model(model, frozenset(passwords))
 
 
 def _floor_field_readable(floor: tuple, name: Any) -> bool:
-    """May a template read the model's value under form-field key *name*? One authority:
-    ``_attr_is_serializable`` and the TYPE floor, as ``_SidecarModelProxy.__getattr__`` asks."""
+    """May a template read the value held under form-field key *name*? One authority:
+    ``_attr_is_serializable`` and the TYPE floor, as ``_SidecarModelProxy.__getattr__`` asks, and the
+    form's password-widget fields (#3798)."""
     if not isinstance(name, str):
         return True
-    model_class, denied, allowed, optout = floor
+    model_class, denied, allowed, optout, passwords = floor
+    if name in passwords:
+        return False
+    if model_class is None:
+        return True  # a plain Form: only its password fields are on the floor (#3798, #3799)
     if not DjangoJSONEncoder._attr_is_serializable(name, denied, allowed, optout):
         return False
     return not _field_type_excluded_for(model_class, name)
@@ -2013,6 +2100,18 @@ def _warn_refused_floor_read(floor: tuple, field_name: str, attr: str) -> None:
     if key in _REFUSED_READ_WARNED:
         return
     _REFUSED_READ_WARNED.add(key)
+    if field_name in floor[4]:
+        logger.warning(
+            "[djust] a template read form field %s via .%s, but its widget is a password input, so "
+            "what was typed into it is on the serialization floor (#3798): it renders as empty. "
+            "{{ form.%s }} still draws the control (Django's PasswordInput never writes the value "
+            "back); to use the value, read it in the view from cleaned_data and put what the "
+            "template needs in get_context_data().",
+            field_name,
+            attr,
+            field_name,
+        )
+        return
     logger.warning(
         "[djust] a template read form field %s.%s via .%s, which is on the serialization floor "
         "(#3790): it renders as empty (as {{ obj.%s }} does on the model). Render the control with "
@@ -2037,11 +2136,18 @@ def form_field_floor_state(bound_field: Any) -> Optional[str]:
     ``test_form_initial_floor_3790.TestWhatPostingBackDoes``: a blank or an omitted control clears
     a text field and unchecks a checkbox, which is how ``is_staff`` is demoted), so the reader keeps
     rendering it and reports that it did (:func:`warn_editable_floor_field`).
+
+    ``"password"`` (#3798): the field's widget is a password input. Django's ``PasswordInput`` never
+    writes a value back into the control, so a reader that draws the control without the value is
+    exactly what Django draws, and a re-save posts what the person types, not what was typed before.
+    The value is stripped whether or not the field is editable (nothing is lost, nothing is reported).
     """
     form = getattr(bound_field, "form", None)
     floor = _model_form_floor(form) if form is not None else None
     if floor is None or _floor_field_readable(floor, bound_field.name):
         return None
+    if bound_field.name in floor[4]:
+        return "password"
     return "disabled" if getattr(bound_field.field, "disabled", False) else "editable"
 
 
