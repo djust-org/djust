@@ -398,6 +398,10 @@ When reviewing PRs, check for these security issues:
 - [ ] Components pass through SafeString detection (pre-rendered HTML not double-escaped)
 - [ ] A caller-supplied URL printed into `href`, `action`, `src` or `srcset` goes through `url_attr` / `safe_url` / `srcset_attr` in the Python tag AND the native handler AND any class-based twin; `make template-library-url-sweep` drives script-capable URLs through every parameter of every tag and component, in both engines
 
+### Models and Forms
+- [ ] A model's `__str__` is built from public fields only (it is shipped as public text, whatever `djust_exclude_fields` / `djust_serializable_fields` say, #3806)
+- [ ] A form field that holds a typed secret uses a password widget (`PasswordInput`): a template cannot read a password-widget field's value back (#3798)
+
 ### JavaScript
 - [ ] innerHTML assignments reviewed for XSS
 - [ ] Object merges use `safeObjectAssign()`
@@ -535,6 +539,46 @@ from django.utils.html import escape
 # Safe for embedding in JS string contexts
 js_selector = escape(user_selector)
 ```
+
+### 8. A Row's `__str__` Is Public Text (#3806)
+
+**What it is:** `djust_exclude_fields`, `djust_serializable_fields` and the
+serialization floor (`password`, `is_superuser`, `is_staff`,
+`DJUST_SENSITIVE_FIELDS`) decide which *fields* of a model a template can read.
+They do **not** constrain `str(row)`: `"__str__"` is an identity key every
+serialized model carries, so `{{ row }}` prints whatever the model's `__str__`
+returns, exactly as Django's own template engine does.
+
+**Where it ships** (measured, with Django's engine as the control, in
+`python/tests/test_row_str_is_public_text_3806.py`): a top-level loop over a
+QuerySet (`{% for r in rows %}{{ r }}`), a model in the context (`{{ row }}`), a
+foreign key read whole (`{{ row.shelf }}`), a row reached through a relation
+(`{{ shelf.rows.all.first }}`), and on the `DjustTemplateBackend` a QuerySet's
+`{{ rows.first }}` / `{{ rows.last }}`.
+
+**Impact:** a model whose `__str__` is built from a field you excluded or did not
+allowlist shows that field in the rendered page while `{{ row.that_field }}` is
+empty. The stock `User.__str__` is the username, so no stock Django model leaks.
+
+**Prevention:** treat `__str__` as public text and build it from public fields
+only:
+```python
+class Account(models.Model):
+    name = models.CharField(max_length=80)
+    api_token = models.CharField(max_length=64)
+    djust_exclude_fields = ("api_token",)
+
+    # BAD - the token is excluded as a field, and printed here anyway
+    def __str__(self):
+        return f"{self.name} ({self.api_token[:6]}...)"
+
+    # GOOD - public fields only
+    def __str__(self):
+        return self.name
+```
+The framework does not rewrite `__str__`: that would make `{{ row }}` differ from
+Django's, and a model's display text is its author's decision. See
+[SECURE_DEFAULTS.md](SECURE_DEFAULTS.md) (section 1) for the precise behaviour.
 
 ---
 
