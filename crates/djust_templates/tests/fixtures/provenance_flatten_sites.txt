@@ -66,6 +66,9 @@ serde_json::to_string(&e.items).unwrap_or_else(|_| v.to_string())
 return serde_json::to_string(literal).unwrap_or_else(|_| arg.to_string());
 None => arg.to_string(),
 Some(spelled) => spelled.to_string(),
+None => encoded.display().to_string(),
+return Ok(encoded.display().to_string());
+return Ok(encoded.display().to_string());
 DjangoRustError::TemplateError(format!("localizing {}: {e}", encoded.type_name))
 djust_core::locale::localize_number_unlocalized(&value.to_string(), false)
 djust_core::locale::localize_number(&value.to_string())
@@ -436,26 +439,26 @@ Value::Decimal("1.50".to_string()),
 Value::BigInt("123456789012345678901".to_string()),
 Value::String("ab".to_string()),
 type_name: "datetime.datetime".to_string(),
-display: "2020-01-01 03:04:05".to_string(),
-json: "2020-01-01T03:04:05".to_string(),
+display: "2020-01-01 03:04:05".to_string().into(),
+json: Some("2020-01-01T03:04:05".to_string()),
 repr: "datetime.datetime(2020, 1, 1, 3, 4, 5)".to_string(),
 type_name: "set".to_string(),
-display: "set()".to_string(),
-json: "set()".to_string(),
+display: "set()".to_string().into(),
+json: Some("set()".to_string()),
 repr: "set()".to_string(),
 type_name: "set".to_string(),
-display: "{'a'}".to_string(),
-json: "{'a'}".to_string(),
+display: "{'a'}".to_string().into(),
+json: Some("{'a'}".to_string()),
 repr: "{'a'}".to_string(),
 items: Some(vec![Value::String("a".to_string())]),
 type_name: "FalsyIterable".to_string(),
-display: "FalsyIterable()".to_string(),
-json: "FalsyIterable()".to_string(),
+display: "FalsyIterable()".to_string().into(),
+json: Some("FalsyIterable()".to_string()),
 repr: "FalsyIterable()".to_string(),
 items: Some(vec![Value::String("x".to_string())]),
 type_name: "LenZero".to_string(),
-display: "<LenZero object>".to_string(),
-json: "<LenZero object>".to_string(),
+display: "<LenZero object>".to_string().into(),
+json: Some("<LenZero object>".to_string()),
 repr: "<LenZero object>".to_string(),
 ctx.set("p".to_string(), value.clone());
 var_names: vec!["x".to_string()],
@@ -1146,6 +1149,7 @@ Ok(Some(self.record_provenance_flatten(output, text)))
 source.render_block_super(self).map(Some)
 .map_err(|e| crate::DjangoRustError::TemplateError(format!("block.super: {e}")))?;
 type_name: "LazyBlock".to_string(),
+display: String::new().into(),
 repr: LAZY_BLOCK_REPR.to_string(),
 self.set("block".to_owned(), Value::Object(Default::default()));
 frame.safe_keys_mut().insert(name.to_string());

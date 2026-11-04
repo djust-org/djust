@@ -418,6 +418,278 @@ pub enum Value {
     Encoded(Box<Encoded>),
 }
 
+/// The `str(o)` of an [`Encoded`] (#3769): either the text itself, or the object to ask for it.
+///
+/// A Django `Form` / `BoundField` / formset crosses with a `display` that is the render of the
+/// whole form (`as_div`, a widget per field), and the carrier is built for EVERY such object in
+/// the context on EVERY render, several times over — including the ones a template never
+/// prints. `hello` over a context holding a form called `str(form)` three times; `{{ form.f0 }}`
+/// rendered every OTHER field too (4-5x the flattened cost, #3769). So the text of such a
+/// carrier is DEFERRED: the first reader asks the object, and the answer is kept.
+///
+/// **One reader per fact, and the reader forces.** `text`, `safe` and `raised` are the only ways
+/// to the three facts, and the type has no `Deref` / `Display`, so a new reader of
+/// [`Encoded::display`] has to say which fact it wants and cannot get a half-built answer. The
+/// fields that used to sit beside `display` (`display_safe`, `str_raised`, and `json`, which for
+/// every opaque carrier WAS `display`) are derived from the same one forcing for that reason: a
+/// copy of one `str()` would be the #1646 shape.
+///
+/// **Forcing never blocks the interpreter.** The cell is `std::sync::OnceLock` used only through
+/// `get` / `set`: the `str()` runs OUTSIDE it, so a thread holding the GIL is never parked on a
+/// lock whose holder needs the GIL to finish (`OnceLock::get_or_init` is exactly that deadlock).
+/// A lost race computes the text twice and keeps the first; the answers are equal by construction,
+/// because they are `str()` of one object read at one render.
+///
+/// `str()` RAISING does not fail the conversion (it used to: the object fell to
+/// [`handle_only_encoded`], and a different carrier shape). The text is then the stand-in
+/// (`repr`) and [`DisplayText::raised`] is `true`, which is the same condition the `{{ o }}` sink
+/// already branches on: it calls `str()` on [`Encoded::live`] and propagates what Python raises,
+/// where `{{ o.attr }}` never calls it.
+pub struct DisplayText(DisplayRepr);
+
+enum DisplayRepr {
+    /// The text was computed at the conversion, or came off the wire. `raised` is set only by
+    /// [`handle_only_encoded`], whose text is the stand-in for a `str()` that raised.
+    Eager {
+        text: String,
+        safe: bool,
+        raised: bool,
+    },
+    /// `str(handle)`, computed by the first reader.
+    Deferred(Box<DeferredDisplay>),
+}
+
+struct DeferredDisplay {
+    /// The object whose `str()` is the text.
+    handle: std::sync::Arc<Py<PyAny>>,
+    /// What the text is if `str()` raises: the object's `repr`, or `<Type object>`.
+    standin: String,
+    /// SHARED by every clone of this text. A `Value` is cloned wherever the engine copies it (a
+    /// filter chain's operand, a comparison, a cache key), and a cell per clone would ask the
+    /// object once per clone where the eager conversion asked once for all of them. The answer is
+    /// `str()` of one object at one render, so the clones agree by construction. (A second
+    /// `{{ form }}` does NOT share: the engine re-reads the object for each occurrence, as Django
+    /// does, and each reading is its own carrier.)
+    forced: std::sync::Arc<std::sync::OnceLock<ForcedDisplay>>,
+}
+
+#[derive(Clone)]
+struct ForcedDisplay {
+    text: String,
+    safe: bool,
+    raised: bool,
+}
+
+impl DisplayText {
+    /// A text that is already known. `safe` is "`str(o)` was a `SafeString`".
+    pub fn eager(text: String, safe: bool) -> Self {
+        DisplayText(DisplayRepr::Eager {
+            text,
+            safe,
+            raised: false,
+        })
+    }
+
+    /// The stand-in for a `str()` that raised AT the conversion ([`handle_only_encoded`]).
+    pub fn raised_standin(text: String) -> Self {
+        DisplayText(DisplayRepr::Eager {
+            text,
+            safe: false,
+            raised: true,
+        })
+    }
+
+    /// `str(handle)`, asked for by the first reader. `standin` is what a raising `str()` leaves.
+    pub fn deferred(handle: std::sync::Arc<Py<PyAny>>, standin: String) -> Self {
+        DisplayText(DisplayRepr::Deferred(Box::new(DeferredDisplay {
+            handle,
+            standin,
+            forced: std::sync::Arc::new(std::sync::OnceLock::new()),
+        })))
+    }
+
+    /// Has `str()` been asked yet? Always `true` for an eager text. Exists for the tests that pin
+    /// that a template which never reads the text never forces it.
+    pub fn is_forced(&self) -> bool {
+        match &self.0 {
+            DisplayRepr::Eager { .. } => true,
+            DisplayRepr::Deferred(d) => d.forced.get().is_some(),
+        }
+    }
+
+    /// Is this text computed on first read?
+    pub fn is_deferred(&self) -> bool {
+        matches!(self.0, DisplayRepr::Deferred(_))
+    }
+
+    fn forced(&self) -> ForcedRef<'_> {
+        match &self.0 {
+            DisplayRepr::Eager { text, safe, raised } => ForcedRef {
+                text,
+                safe: *safe,
+                raised: *raised,
+            },
+            DisplayRepr::Deferred(d) => {
+                let forced = match d.forced.get() {
+                    Some(forced) => forced,
+                    None => {
+                        let computed = d.compute();
+                        // A lost race returns `Err`; the winner's value is read back below.
+                        let _ = d.forced.set(computed);
+                        d.forced
+                            .get()
+                            .expect("set or lost the race: the cell is full")
+                    }
+                };
+                ForcedRef {
+                    text: &forced.text,
+                    safe: forced.safe,
+                    raised: forced.raised,
+                }
+            }
+        }
+    }
+
+    /// Let go of the object a deferred text would ask, WITHOUT asking it (#3769). The teardown
+    /// that drops [`Encoded::live`] (`clear_live_handles`, ADR-027 #2539) must drop this handle
+    /// too, or a connection would keep every form it ever resolved alive through its text. A
+    /// teardown never runs the object's code, so an unasked text keeps the stand-in (the same
+    /// degradation a cleared entry already has for a dotted lookup until the next full sync
+    /// re-converts it); a text that WAS asked keeps its answer. Eager text is untouched.
+    pub fn release_handle(&mut self) {
+        let DisplayRepr::Deferred(deferred) = &self.0 else {
+            return;
+        };
+        let (text, safe) = match deferred.forced.get() {
+            Some(done) => (done.text.clone(), done.safe),
+            None => (deferred.standin.clone(), false),
+        };
+        self.0 = DisplayRepr::Eager {
+            text,
+            safe,
+            raised: false,
+        };
+    }
+
+    /// `str(o)`, or the stand-in if it raised.
+    pub fn text(&self) -> &str {
+        self.forced().text
+    }
+
+    /// Is `str(o)` a `SafeString`? Runtime safety of the text, not of `o` itself.
+    pub fn safe(&self) -> bool {
+        self.forced().safe
+    }
+
+    /// Did `str(o)` raise? Then [`DisplayText::text`] is a stand-in and the `{{ o }}` sink must
+    /// call `str()` on the live object and propagate (ADR-027 Step 5, #2628).
+    pub fn raised(&self) -> bool {
+        self.forced().raised
+    }
+}
+
+struct ForcedRef<'a> {
+    text: &'a str,
+    safe: bool,
+    raised: bool,
+}
+
+impl DeferredDisplay {
+    fn compute(&self) -> ForcedDisplay {
+        Python::attach(|py| {
+            let object = self.handle.bind(py);
+            let asked = object.str().ok().and_then(|t| {
+                py_string_lossy(&t)
+                    .ok()
+                    .map(|s| (s, python_string_is_safe(t.as_any())))
+            });
+            match asked {
+                Some((text, safe)) => ForcedDisplay {
+                    text,
+                    safe,
+                    raised: false,
+                },
+                None => ForcedDisplay {
+                    text: self.standin.clone(),
+                    safe: false,
+                    raised: true,
+                },
+            }
+        })
+    }
+}
+
+impl Clone for DisplayText {
+    fn clone(&self) -> Self {
+        DisplayText(match &self.0 {
+            DisplayRepr::Eager { text, safe, raised } => DisplayRepr::Eager {
+                text: text.clone(),
+                safe: *safe,
+                raised: *raised,
+            },
+            DisplayRepr::Deferred(d) => DisplayRepr::Deferred(Box::new(DeferredDisplay {
+                handle: d.handle.clone(),
+                standin: d.standin.clone(),
+                forced: d.forced.clone(),
+            })),
+        })
+    }
+}
+
+impl fmt::Debug for DisplayText {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.0 {
+            DisplayRepr::Eager { text, safe, raised } => f
+                .debug_struct("DisplayText::Eager")
+                .field("text", text)
+                .field("safe", safe)
+                .field("raised", raised)
+                .finish(),
+            // Never forces: a `Debug` that ran `str(form)` would change what a failing assertion
+            // costs, and could raise inside the formatter.
+            DisplayRepr::Deferred(d) => match d.forced.get() {
+                Some(done) => f
+                    .debug_struct("DisplayText::Deferred")
+                    .field("text", &done.text)
+                    .field("safe", &done.safe)
+                    .field("raised", &done.raised)
+                    .finish(),
+                None => f.write_str("DisplayText::Deferred(unforced)"),
+            },
+        }
+    }
+}
+
+/// A text that is known, for the places that build an [`Encoded`] from a string (a wire payload,
+/// a test): `str(o)` was not a `SafeString`, as `display_safe` always was for those.
+impl From<String> for DisplayText {
+    fn from(text: String) -> Self {
+        DisplayText::eager(text, false)
+    }
+}
+
+impl From<&str> for DisplayText {
+    fn from(text: &str) -> Self {
+        DisplayText::eager(text.to_owned(), false)
+    }
+}
+
+/// Two texts are equal if they are the same text, forced if they must be. Two deferred texts of
+/// the SAME object are equal without asking it: nothing can differ between two readings of one
+/// `str(o)` within a render, and a structural `==` that ran `str(form)` twice to say so would
+/// make the cheap case expensive.
+impl PartialEq for DisplayText {
+    fn eq(&self, other: &Self) -> bool {
+        if let (DisplayRepr::Deferred(a), DisplayRepr::Deferred(b)) = (&self.0, &other.0) {
+            if std::sync::Arc::ptr_eq(&a.handle, &b.handle) {
+                return true;
+            }
+        }
+        let (a, b) = (self.forced(), other.forced());
+        a.text == b.text && a.safe == b.safe
+    }
+}
+
 /// The payload of [`Value::Encoded`] (#2448). Boxed there to keep `Value`'s
 /// size unchanged — a `Value` is cloned per context entry per render.
 #[derive(Debug, Clone)]
@@ -427,12 +699,16 @@ pub struct Encoded {
     /// `datetime.timedelta`.
     pub type_name: String,
     /// `str(o)` — what `{{ p }}` renders, and what this value looked like
-    /// before the variant existed.
-    pub display: String,
-    /// Runtime safety of str(o), not of o itself. Never restored from wire data.
-    pub display_safe: bool,
+    /// before the variant existed. Computed on first read for a Django form
+    /// object (#3769); read it through [`Encoded::display`],
+    /// [`Encoded::display_safe`] and [`Encoded::str_raised`], which are the
+    /// three facts one `str(o)` yields.
+    pub display: DisplayText,
     /// `DjangoJSONEncoder.default(o)` — the string `json.dumps` writes.
-    pub json: String,
+    /// `None` when it IS [`Encoded::display`], which is every opaque carrier
+    /// (no encoder spelling exists for those) and is why a deferred `display`
+    /// needs no second deferral here. Read it through [`Encoded::json`].
+    pub json: Option<String>,
     /// `bool(o)` — Python's own truthiness for the object (#2458). See the
     /// [`Value::Encoded`] doc for why this is carried rather than derived.
     pub truthy: bool,
@@ -724,16 +1000,40 @@ pub struct Encoded {
     /// `{{ q.resolution }}` from the handle, and gating the handle off leaves
     /// the first standing.
     pub live: Option<std::sync::Arc<Py<PyAny>>>,
-    /// `str(o)` RAISED at conversion, so `display` is a stand-in and the
-    /// `{{ o }}` sink must call `str()` on [`Encoded::live`] itself — and
-    /// propagate what it raises, as Django does (ADR-027 Step 5, #2628;
-    /// decided for `{{ p }}` by #2429). Set only by [`handle_only_encoded`].
+}
+
+impl Encoded {
+    /// `str(o)` — what `{{ o }}` renders. Forces a deferred text (#3769); the stand-in if
+    /// `str()` raised (see [`Encoded::str_raised`]).
+    pub fn display(&self) -> &str {
+        self.display.text()
+    }
+
+    /// Runtime safety of `str(o)`, not of `o` itself. Never restored from wire data.
+    pub fn display_safe(&self) -> bool {
+        self.display.safe()
+    }
+
+    /// `str(o)` RAISED, so [`Encoded::display`] is a stand-in and the `{{ o }}` sink must call
+    /// `str()` on [`Encoded::live`] itself — and propagate what it raises, as Django does
+    /// (ADR-027 Step 5, #2628; decided for `{{ p }}` by #2429).
     ///
-    /// **TRANSIENT**, exactly like `live`: not serialized, not compared. A
-    /// carrier that came back from a state round trip has no handle to defer
-    /// to, and renders `display` — the stand-in — which is the same
-    /// degradation `live`'s own round-trip limit already has (#2767).
-    pub str_raised: bool,
+    /// **TRANSIENT**, exactly like `live`: not serialized, not compared. A carrier that came
+    /// back from a state round trip has no handle to defer to, and renders `display` — the
+    /// stand-in — which is the same degradation `live`'s own round-trip limit already has
+    /// (#2767).
+    pub fn str_raised(&self) -> bool {
+        self.display.raised()
+    }
+
+    /// `DjangoJSONEncoder.default(o)` — the string `json.dumps` writes. [`Encoded::display`]
+    /// for a carrier that has no encoder spelling of its own.
+    pub fn json(&self) -> &str {
+        match &self.json {
+            Some(json) => json,
+            None => self.display(),
+        }
+    }
 }
 
 /// Which of Python's equality contracts a [`Value::Encoded`] obeys (#2480).
@@ -986,8 +1286,7 @@ impl PartialEq for Encoded {
     fn eq(&self, other: &Self) -> bool {
         self.type_name == other.type_name
             && self.display == other.display
-            && self.display_safe == other.display_safe
-            && self.json == other.json
+            && self.json() == other.json()
             && self.truthy == other.truthy
             && self.len == other.len
             && self.iterable == other.iterable
@@ -1253,8 +1552,8 @@ impl Serialize for Value {
                     ENCODED_TAG,
                     &(
                         e.type_name.as_str(),
-                        e.display.as_str(),
-                        e.json.as_str(),
+                        e.display(),
+                        e.json(),
                         e.truthy,
                         // Slot 5 WIDENED from #2466's `sized_empty` boolean to
                         // `len(o)` itself (#2477/#2489) — `Option<u64>`, so
@@ -1338,7 +1637,7 @@ impl Serialize for Value {
             // bare string is what `from_json` can read back without a tag. The
             // client-facing JSON is `json_script`'s own `value_to_json`, which
             // has its own `Encoded` arm and writes the ENCODER spelling there.
-            Value::Encoded(e) => serializer.serialize_str(&e.display),
+            Value::Encoded(e) => serializer.serialize_str(e.display()),
             // Everything else is exactly the untagged derive it replaces.
             Value::Decimal(d) => serializer.serialize_str(d),
             Value::BigInt(d) => serializer.serialize_str(d),
@@ -1688,8 +1987,8 @@ impl<'de> Deserialize<'de> for Value {
                         {
                             return Ok(Value::Encoded(Box::new(Encoded {
                                 type_name: type_name.clone(),
-                                display: display.clone(),
-                                json: json.clone(),
+                                display: display.clone().into(),
+                                json: Some(json.clone()),
                                 truthy: *truthy,
                                 len: match len {
                                     Value::Integer(n) if *n >= 0 => usize::try_from(*n).ok(),
@@ -1725,8 +2024,6 @@ impl<'de> Deserialize<'de> for Value {
                                 // `{{ o.a }}`. See
                                 // `test_restore_round_trip_contract_2570.py`.
                                 live: None,
-                                display_safe: false,
-                                str_raised: false,
                             })));
                         }
                         // TEN elements: the #2477/#2489 shape — slot 5
@@ -1752,8 +2049,8 @@ impl<'de> Deserialize<'de> for Value {
                         {
                             return Ok(Value::Encoded(Box::new(Encoded {
                                 type_name: type_name.clone(),
-                                display: display.clone(),
-                                json: json.clone(),
+                                display: display.clone().into(),
+                                json: Some(json.clone()),
                                 truthy: *truthy,
                                 len: match len {
                                     Value::Integer(n) if *n >= 0 => usize::try_from(*n).ok(),
@@ -1789,8 +2086,6 @@ impl<'de> Deserialize<'de> for Value {
                                 // `{{ o.a }}`. See
                                 // `test_restore_round_trip_contract_2570.py`.
                                 live: None,
-                                display_safe: false,
-                                str_raised: false,
                             })));
                         }
                         // NINE elements: the #2481 shape, the attribute map
@@ -1808,8 +2103,8 @@ impl<'de> Deserialize<'de> for Value {
                         {
                             return Ok(Value::Encoded(Box::new(Encoded {
                                 type_name: type_name.clone(),
-                                display: display.clone(),
-                                json: json.clone(),
+                                display: display.clone().into(),
+                                json: Some(json.clone()),
                                 truthy: *truthy,
                                 // Slot 5 is a BOOLEAN in this width, and every
                                 // value ever written in it was declined by
@@ -1847,8 +2142,6 @@ impl<'de> Deserialize<'de> for Value {
                                 // `{{ o.a }}`. See
                                 // `test_restore_round_trip_contract_2570.py`.
                                 live: None,
-                                display_safe: false,
-                                str_raised: false,
                             })));
                         }
                         // Eight elements: the #2471/#2472 shape, `repr` and
@@ -1861,8 +2154,8 @@ impl<'de> Deserialize<'de> for Value {
                         {
                             return Ok(Value::Encoded(Box::new(Encoded {
                                 type_name: type_name.clone(),
-                                display: display.clone(),
-                                json: json.clone(),
+                                display: display.clone().into(),
+                                json: Some(json.clone()),
                                 truthy: *truthy,
                                 // Slot 5 is a BOOLEAN in this width, and every
                                 // value ever written in it was declined by
@@ -1907,8 +2200,6 @@ impl<'de> Deserialize<'de> for Value {
                                 // `{{ o.a }}`. See
                                 // `test_restore_round_trip_contract_2570.py`.
                                 live: None,
-                                display_safe: false,
-                                str_raised: false,
                             })));
                         }
                         // Six elements: the #2466 shape, `sized_empty` and
@@ -1918,8 +2209,8 @@ impl<'de> Deserialize<'de> for Value {
                         {
                             return Ok(Value::Encoded(Box::new(Encoded {
                                 type_name: type_name.clone(),
-                                display: display.clone(),
-                                json: json.clone(),
+                                display: display.clone().into(),
+                                json: Some(json.clone()),
                                 truthy: *truthy,
                                 // Slot 5 is a BOOLEAN in this width, and every
                                 // value ever written in it was declined by
@@ -1965,8 +2256,6 @@ impl<'de> Deserialize<'de> for Value {
                                 // `{{ o.a }}`. See
                                 // `test_restore_round_trip_contract_2570.py`.
                                 live: None,
-                                display_safe: false,
-                                str_raised: false,
                             })));
                         }
                         // Four elements: the #2458 shape, `truthy` carried and
@@ -1977,8 +2266,8 @@ impl<'de> Deserialize<'de> for Value {
                         {
                             return Ok(Value::Encoded(Box::new(Encoded {
                                 type_name: type_name.clone(),
-                                display: display.clone(),
-                                json: json.clone(),
+                                display: display.clone().into(),
+                                json: Some(json.clone()),
                                 truthy: *truthy,
                                 // Every value written in the #2458 shape was a
                                 // datetime, and none of the four has a
@@ -2014,8 +2303,6 @@ impl<'de> Deserialize<'de> for Value {
                                 // `{{ o.a }}`. See
                                 // `test_restore_round_trip_contract_2570.py`.
                                 live: None,
-                                display_safe: false,
-                                str_raised: false,
                             })));
                         }
                         // Three elements: the #2448 shape, still readable
@@ -2027,8 +2314,8 @@ impl<'de> Deserialize<'de> for Value {
                         {
                             return Ok(Value::Encoded(Box::new(Encoded {
                                 type_name: type_name.clone(),
-                                display: display.clone(),
-                                json: json.clone(),
+                                display: display.clone().into(),
+                                json: Some(json.clone()),
                                 truthy: !display.is_empty(),
                                 len: None,
                                 iterable: false,
@@ -2061,8 +2348,6 @@ impl<'de> Deserialize<'de> for Value {
                                 // `{{ o.a }}`. See
                                 // `test_restore_round_trip_contract_2570.py`.
                                 live: None,
-                                display_safe: false,
-                                str_raised: false,
                             })));
                         }
                     }
@@ -2320,8 +2605,8 @@ pub fn django_json_encoded(ob: &Bound<'_, PyAny>) -> Option<Encoded> {
 
     Some(Encoded {
         type_name,
-        display,
-        json,
+        display: display.into(),
+        json: Some(json),
         truthy,
         // A `datetime` / `date` / `time` / `timedelta` has no `__len__`, is
         // NOT iterable in Python, and `{% for %}` over one raises on both
@@ -2337,8 +2622,6 @@ pub fn django_json_encoded(ob: &Bound<'_, PyAny>) -> Option<Encoded> {
         // Preserve the immutable temporal object across Python filter calls.
         // The wire still carries the measured fields; live handles are transient.
         live: Some(std::sync::Arc::new(ob.clone().unbind())),
-        display_safe: false,
-        str_raised: false,
     })
 }
 
@@ -2545,8 +2828,8 @@ pub fn slim_timedelta_encoded(
     );
     Some(Encoded {
         type_name: "datetime.timedelta".to_string(),
-        display: timedelta_str(days, seconds, microseconds),
-        json: timedelta_iso_string(total_micros),
+        display: timedelta_str(days, seconds, microseconds).into(),
+        json: Some(timedelta_iso_string(total_micros)),
         truthy: total_micros != 0,
         len: None,
         iterable: false,
@@ -2560,8 +2843,6 @@ pub fn slim_timedelta_encoded(
         items: None,
         eq_class: None,
         live: Some(std::sync::Arc::new(ob.clone().unbind())),
-        display_safe: false,
-        str_raised: false,
     })
 }
 
@@ -2904,7 +3185,7 @@ impl Value {
     pub fn string_conversion_is_safe(&self) -> bool {
         match self {
             Value::SafeString(_) => true,
-            Value::Encoded(e) => e.display_safe,
+            Value::Encoded(e) => e.display_safe(),
             _ => false,
         }
     }
@@ -3326,7 +3607,7 @@ impl Value {
             // exactly the `Value::String(str(o))` this used to be, plus the two
             // fields nothing outside `json_script` and the refusal filters
             // reads (#2448).
-            Value::Encoded(e) => write!(f, "{}", e.display),
+            Value::Encoded(e) => write!(f, "{}", e.display()),
             // A dict VIEW joins the `[List]` placeholder rather than naming
             // itself (#2340), and that is deliberate: this arm is the
             // pre-#2203 rendering, and before #2340 a view WAS a
@@ -3424,7 +3705,7 @@ impl fmt::Display for Value {
             // unchanged cell beats a panic.
             Value::Encoded(e) => match self.container_spelling() {
                 Some(spelled) => write!(f, "{spelled}"),
-                None => write!(f, "{}", e.display),
+                None => write!(f, "{}", e.display()),
             },
             Value::List(items) => {
                 let inner: Vec<String> = items.iter().map(Value::py_repr).collect();
@@ -5186,11 +5467,23 @@ pub fn opaque_value(ob: &Bound<'_, PyAny>) -> Option<Encoded> {
         .ok()?
         .extract::<String>()
         .ok()?;
-    let text = ob.str().ok()?;
-    let display_safe = python_string_is_safe(text.as_any());
-    // Lossy, like every other `str()` crossing (#2555): a `__str__` that
-    // yields a lone surrogate keeps its carrier rather than declining it.
-    let display = py_string_lossy(&text).ok()?;
+    // `str(o)`: NOW, or when a sink first asks (#3769). A Django form object's `str()` is the
+    // render of the whole form, and a formset's is the render of every form in it; the carrier
+    // is built for every one in the context on every render, so those are deferred. Every other
+    // object keeps the eager read, because there a raising `__str__` must still decline the
+    // carrier (the `?` below) and the objects whose `str()` is cheap have nothing to save. The
+    // formset question is asked only of an iterable that is not already a form, so an ordinary
+    // object pays no extra Python call. Read BEFORE `repr`, as it always was.
+    let defer_text = lazy_form || (iterable && context::live_handle_is_formset(ob.py(), ob));
+    let eager_text = if defer_text {
+        None
+    } else {
+        let text = ob.str().ok()?;
+        let display_safe = python_string_is_safe(text.as_any());
+        // Lossy, like every other `str()` crossing (#2555): a `__str__` that
+        // yields a lone surrogate keeps its carrier rather than declining it.
+        Some((py_string_lossy(&text).ok()?, display_safe))
+    };
     // MEASURED, not `display.clone()` (#2472). For `set()`, `frozenset()` and
     // `complex(0)` the two spellings coincide, which is exactly why copying
     // `display` here would look correct on every builtin this function was
@@ -5204,12 +5497,18 @@ pub fn opaque_value(ob: &Bound<'_, PyAny>) -> Option<Encoded> {
     // allocation, so attaching one adds no Rust→Python crossing to the
     // per-render budget (#2532). Unconditional since Step 5 (#2628) deleted
     // the ADR-027 kill-switch flag that used to gate it.
-    let live = Some(std::sync::Arc::new(ob.clone().unbind()));
+    let live = std::sync::Arc::new(ob.clone().unbind());
+    let display = match eager_text {
+        Some((text, safe)) => DisplayText::eager(text, safe),
+        None => DisplayText::deferred(live.clone(), repr.clone()),
+    };
     Some(Encoded {
         type_name,
         // No encoder spelling exists for these; `str(o)` is what the
-        // `Value::String` path this replaces already wrote.
-        json: display.clone(),
+        // `Value::String` path this replaces already wrote — `None` says
+        // "the same as `display`", so a deferred `display` is not asked
+        // twice and not cloned.
+        json: None,
         display,
         truthy,
         len,
@@ -5229,9 +5528,7 @@ pub fn opaque_value(ob: &Bound<'_, PyAny>) -> Option<Encoded> {
         // names and `LenZero() == LenZero()` is False WITHIN one — so no
         // carried spelling decides it. Filed as #2480.
         cmp_key: None,
-        live,
-        display_safe,
-        str_raised: false,
+        live: Some(live),
         // EMPTY: the handle is the authority for every attribute lookup under
         // ADR-027, so building an eager `__dict__` map as well would be two
         // mechanisms answering one question (#1646) — and the wrong one would
@@ -5312,8 +5609,12 @@ fn handle_only_encoded(ob: &Bound<'_, PyAny>) -> Encoded {
         .unwrap_or_else(|| repr.clone());
     Encoded {
         type_name,
-        json: display.clone(),
-        display,
+        json: None,
+        display: if str_raised {
+            DisplayText::raised_standin(display)
+        } else {
+            DisplayText::eager(display, display_safe)
+        },
         truthy: ob.is_truthy().unwrap_or(true),
         len: None,
         // The TYPE says whether it iterates (#3770 review). `iter(o)` is not asked: it may be the
@@ -5326,8 +5627,6 @@ fn handle_only_encoded(ob: &Bound<'_, PyAny>) -> Encoded {
         repr,
         cmp_key: None,
         live: Some(std::sync::Arc::new(ob.clone().unbind())),
-        display_safe,
-        str_raised,
         attrs: IndexMap::new(),
         items: None,
         eq_class: None,
@@ -5479,7 +5778,7 @@ impl Encoded {
             }
             cls.call((), Some(&kwargs))?
         } else {
-            let value = cls.call_method1("fromisoformat", (&self.display,))?;
+            let value = cls.call_method1("fromisoformat", (self.display(),))?;
             let kwargs = pyo3::types::PyDict::new(py);
             if let Some(fold) = self.attrs.get("fold") {
                 kwargs.set_item("fold", fold.clone().into_pyobject(py)?)?;
@@ -5543,7 +5842,7 @@ impl<'py> IntoPyObject<'py> for Value {
             // contract, including the model-protection boundary (#2509).
             Value::Encoded(e) => match e.temporal_object(py)? {
                 Some(value) => Ok(value),
-                None => Ok(e.display.into_pyobject(py)?.to_owned().into_any()),
+                None => Ok(e.display().into_pyobject(py)?.to_owned().into_any()),
             },
             // Back to a real `decimal.Decimal`, not a str: a value that made
             // the round-trip as a Decimal must come back as one, or handlers
@@ -5902,7 +6201,7 @@ impl TemplateObject {
         match &self.value {
             Value::Encoded(e) => {
                 e.type_name.hash(&mut hasher);
-                e.display.hash(&mut hasher);
+                e.display().hash(&mut hasher);
                 e.repr.hash(&mut hasher);
             }
             other => other.to_string().hash(&mut hasher),

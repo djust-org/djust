@@ -584,7 +584,7 @@ fn walk_live_transcribes_djangos_resolve_lookup() {
         match &live_value {
             djust_core::Value::Encoded(e) => {
                 assert!(e.live.is_some(), "16: no handle attached");
-                assert_eq!(e.display, "<Cls>", "16: the display is str(o)");
+                assert_eq!(e.display(), "<Cls>", "16: the display is str(o)");
                 assert!(
                     e.attrs.is_empty(),
                     "16: a handle-bearing value must carry NO eager attribute dump"
@@ -617,7 +617,7 @@ fn walk_live_transcribes_djangos_resolve_lookup() {
         let lazy: djust_core::Value = plain.extract().expect("17 conversion");
         match &lazy {
             djust_core::Value::Encoded(e) => {
-                assert_eq!(e.display, "<Plain>", "17: display");
+                assert_eq!(e.display(), "<Plain>", "17: display");
                 assert!(e.live.is_some(), "17: handle");
                 assert!(e.attrs.is_empty(), "17: no eager attribute dump");
             }

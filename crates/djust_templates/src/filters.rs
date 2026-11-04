@@ -1127,7 +1127,7 @@ fn apply_resolved_filter(
         "striptags",
     ];
     let converted = if STRING_FILTERS.contains(&filter_name)
-        && matches!(value, Value::Encoded(e) if e.display_safe)
+        && matches!(value, Value::Encoded(e) if e.display_safe())
     {
         Some(Value::SafeString(value.to_string()))
     } else {
@@ -5362,7 +5362,7 @@ fn value_to_json(value: &Value) -> String {
         // JSON: `json.dumps(ErrorList(...))` is the array, not the errorlist markup (#3770 review).
         Value::Encoded(e) => match e.live_mapping_value().or_else(|| e.live_sequence_value()) {
             Some(container) => value_to_json(&container),
-            None => format!("\"{}\"", json_string_body(&e.json)),
+            None => format!("\"{}\"", json_string_body(e.json())),
         },
         // JSON has no tuple; Python's `json.dumps` emits an array for one.
         Value::List(items) | Value::Tuple(items) | Value::NamedTuple { items, .. } => {
@@ -7599,8 +7599,8 @@ mod tests {
             // direction, since #2448 added it.
             Value::Encoded(Box::new(djust_core::Encoded {
                 type_name: "datetime.datetime".to_string(),
-                display: "2020-01-01 03:04:05".to_string(),
-                json: "2020-01-01T03:04:05".to_string(),
+                display: "2020-01-01 03:04:05".to_string().into(),
+                json: Some("2020-01-01T03:04:05".to_string()),
                 truthy: true,
                 len: None,
                 iterable: false,
@@ -7614,13 +7614,11 @@ mod tests {
                 items: None,
                 eq_class: None,
                 live: None,
-                display_safe: false,
-                str_raised: false,
             })),
             Value::Encoded(Box::new(djust_core::Encoded {
                 type_name: "set".to_string(),
-                display: "set()".to_string(),
-                json: "set()".to_string(),
+                display: "set()".to_string().into(),
+                json: Some("set()".to_string()),
                 truthy: false,
                 len: Some(0),
                 iterable: true,
@@ -7630,8 +7628,6 @@ mod tests {
                 items: Some(vec![]),
                 eq_class: None,
                 live: None,
-                display_safe: false,
-                str_raised: false,
             })),
             // The FOURTH shape, and the one #2477/#2489 added: a NON-EMPTY
             // carried collection. It is what makes the `python_len` ==
@@ -7639,8 +7635,8 @@ mod tests {
             // other than 0, which two empty samples cannot.
             Value::Encoded(Box::new(djust_core::Encoded {
                 type_name: "set".to_string(),
-                display: "{'a', 'b'}".to_string(),
-                json: "{'a', 'b'}".to_string(),
+                display: "{'a', 'b'}".to_string().into(),
+                json: Some("{'a', 'b'}".to_string()),
                 truthy: true,
                 len: Some(2),
                 iterable: true,
@@ -7653,8 +7649,6 @@ mod tests {
                 ]),
                 eq_class: Some(djust_core::EqClass::Set),
                 live: None,
-                display_safe: false,
-                str_raised: false,
             })),
             // The FIFTH: a falsy `__iter__` class with NO `__len__`. Django's
             // `|length` answers 0 (its `except TypeError`) while `{% for %}`
@@ -7662,8 +7656,8 @@ mod tests {
             // those apart, and a `sized_empty` BIT could not.
             Value::Encoded(Box::new(djust_core::Encoded {
                 type_name: "FalsyIterable".to_string(),
-                display: "FalsyIterable()".to_string(),
-                json: "FalsyIterable()".to_string(),
+                display: "FalsyIterable()".to_string().into(),
+                json: Some("FalsyIterable()".to_string()),
                 truthy: false,
                 len: None,
                 iterable: true,
@@ -7673,8 +7667,6 @@ mod tests {
                 items: Some(vec![Value::String("x".to_string())]),
                 eq_class: None,
                 live: None,
-                display_safe: false,
-                str_raised: false,
             })),
             // The THIRD shape, and the one that proves the two bits are two
             // questions: a class with a zero `__len__` and no `__iter__`.
@@ -7683,8 +7675,8 @@ mod tests {
             // are comprehensions.
             Value::Encoded(Box::new(djust_core::Encoded {
                 type_name: "LenZero".to_string(),
-                display: "<LenZero object>".to_string(),
-                json: "<LenZero object>".to_string(),
+                display: "<LenZero object>".to_string().into(),
+                json: Some("<LenZero object>".to_string()),
                 truthy: false,
                 len: Some(0),
                 iterable: false,
@@ -7694,8 +7686,6 @@ mod tests {
                 items: None,
                 eq_class: None,
                 live: None,
-                display_safe: false,
-                str_raised: false,
             })),
         ]
     }
@@ -7738,8 +7728,8 @@ mod tests {
         assert_eq!(checked, 0, "a live fixture now has the wire-only shape");
         let legacy = Value::Encoded(Box::new(djust_core::Encoded {
             type_name: "set".to_string(),
-            display: "set()".to_string(),
-            json: "set()".to_string(),
+            display: "set()".to_string().into(),
+            json: Some("set()".to_string()),
             truthy: false,
             len: Some(0),
             iterable: true,
@@ -7749,8 +7739,6 @@ mod tests {
             items: None,
             eq_class: None,
             live: None,
-            display_safe: false,
-            str_raised: false,
         }));
         assert!(iter_values_ok(&legacy).is_some_and(|items| items.is_empty()));
         assert_eq!(python_len(&legacy), Some(0));
@@ -8193,8 +8181,8 @@ mod tests {
             // hold.
             Value::Encoded(Box::new(djust_core::Encoded {
                 type_name: "datetime.datetime".to_string(),
-                display: "2020-01-01 03:04:05".to_string(),
-                json: "2020-01-01T03:04:05".to_string(),
+                display: "2020-01-01 03:04:05".to_string().into(),
+                json: Some("2020-01-01T03:04:05".to_string()),
                 truthy: true,
                 len: None,
                 iterable: false,
@@ -8208,8 +8196,6 @@ mod tests {
                 items: None,
                 eq_class: None,
                 live: None,
-                display_safe: false,
-                str_raised: false,
             })),
             // The SAME variant on the ITERATING side (#2466), which is why one
             // sample of it is no longer enough. Since `falsy_opaque` widened
@@ -8222,8 +8208,8 @@ mod tests {
             // reaches it.
             Value::Encoded(Box::new(djust_core::Encoded {
                 type_name: "EmptyThing".to_string(),
-                display: "EmptyThing()".to_string(),
-                json: "EmptyThing()".to_string(),
+                display: "EmptyThing()".to_string().into(),
+                json: Some("EmptyThing()".to_string()),
                 truthy: false,
                 len: Some(0),
                 iterable: true,
@@ -8238,8 +8224,6 @@ mod tests {
                 items: Some(vec![]),
                 eq_class: None,
                 live: None,
-                display_safe: false,
-                str_raised: false,
             })),
         ];
         // The hostile-display member, kept OUT of the array above so the
@@ -8248,8 +8232,8 @@ mod tests {
         // between it and the page.
         let hostile = Value::Encoded(Box::new(djust_core::Encoded {
             type_name: "Sneaky".to_string(),
-            display: "<script>alert(1)</script>".to_string(),
-            json: "<script>alert(1)</script>".to_string(),
+            display: "<script>alert(1)</script>".to_string().into(),
+            json: Some("<script>alert(1)</script>".to_string()),
             truthy: false,
             len: None,
             iterable: false,
@@ -8259,8 +8243,6 @@ mod tests {
             items: None,
             eq_class: None,
             live: None,
-            display_safe: false,
-            str_raised: false,
         }));
         assert!(
             iter_values_ok(&hostile).is_none(),

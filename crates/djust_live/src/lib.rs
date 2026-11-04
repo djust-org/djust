@@ -2440,6 +2440,9 @@ fn clear_live_handles_in(value: &mut Value) {
     match value {
         Value::Encoded(encoded) => {
             encoded.live = None;
+            // A deferred text holds its own handle to the same object (#3769): it goes too, or
+            // the form it would ask stays alive through `display` after the clear.
+            encoded.display.release_handle();
             for nested in encoded.attrs.values_mut() {
                 clear_live_handles_in(nested);
             }

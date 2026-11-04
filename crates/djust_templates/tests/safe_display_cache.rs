@@ -1,4 +1,4 @@
-use djust_core::{Context, Encoded, Value};
+use djust_core::{Context, DisplayText, Encoded, Value};
 use djust_templates::loop_cache::{LoopCacheGuard, LoopRenderCache};
 use djust_templates::Template;
 use indexmap::IndexMap;
@@ -15,10 +15,8 @@ fn changing_only_display_safety_invalidates_cached_html() {
             "text".into(),
             Value::Encoded(Box::new(Encoded {
                 type_name: "TextObject".into(),
-                display: "<b>&</b>".into(),
-                display_safe: safe,
-                str_raised: false,
-                json: "<b>&</b>".into(),
+                display: DisplayText::eager("<b>&</b>".into(), safe),
+                json: Some("<b>&</b>".into()),
                 truthy: true,
                 len: None,
                 iterable: false,

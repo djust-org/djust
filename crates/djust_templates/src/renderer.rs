@@ -2394,7 +2394,7 @@ fn localize_if_number(value: &Value) -> Result<String> {
             // `{{ p }}` over a raising `__str__` propagates on both
             // engines). Before the temporal branch: a `datetime` whose
             // tzinfo raises inside `__str__` is this carrier too.
-            if encoded.str_raised {
+            if encoded.str_raised() {
                 if let Some(handle) = encoded.live.as_ref() {
                     return Python::attach(|py| -> Result<String> {
                         let text = handle
@@ -2417,7 +2417,7 @@ fn localize_if_number(value: &Value) -> Result<String> {
                 // them.
                 return Ok(match value.container_spelling() {
                     Some(spelled) => spelled.to_string(),
-                    None => encoded.display.clone(),
+                    None => encoded.display().to_string(),
                 });
             }
             // `localize_temporal` resolved once per process, not per value.
@@ -2427,7 +2427,7 @@ fn localize_if_number(value: &Value) -> Result<String> {
                 pyo3::sync::PyOnceLock::new();
             return Python::attach(|py| -> PyResult<String> {
                 let Some(value) = encoded.temporal_object(py)? else {
-                    return Ok(encoded.display.clone());
+                    return Ok(encoded.display().to_string());
                 };
                 // `None` is cached ONLY for ImportError (a bare-Rust harness
                 // with no djust package); any other failure propagates and
@@ -2446,7 +2446,7 @@ fn localize_if_number(value: &Value) -> Result<String> {
                         }
                     })?;
                 let Some(localize) = localize else {
-                    return Ok(encoded.display.clone());
+                    return Ok(encoded.display().to_string());
                 };
                 let use_l10n = USE_L10N_STACK.with(|stack| stack.borrow().last().copied());
                 localize.bind(py).call1((value, use_l10n))?.extract()
@@ -8988,8 +8988,8 @@ mod tests {
             // say "not iterable".
             Value::Encoded(Box::new(djust_core::Encoded {
                 type_name: "datetime.datetime".to_string(),
-                display: "2020-01-01 03:04:05".to_string(),
-                json: "2020-01-01T03:04:05".to_string(),
+                display: "2020-01-01 03:04:05".to_string().into(),
+                json: Some("2020-01-01T03:04:05".to_string()),
                 truthy: true,
                 len: None,
                 iterable: false,
@@ -9003,15 +9003,13 @@ mod tests {
                 items: None,
                 eq_class: None,
                 live: None,
-                display_safe: false,
-                str_raised: false,
             })),
             // A `set()`: `len` 0 and iterable, so both probes say
             // "iterates to nothing".
             Value::Encoded(Box::new(djust_core::Encoded {
                 type_name: "set".to_string(),
-                display: "set()".to_string(),
-                json: "set()".to_string(),
+                display: "set()".to_string().into(),
+                json: Some("set()".to_string()),
                 truthy: false,
                 len: Some(0),
                 iterable: true,
@@ -9021,8 +9019,6 @@ mod tests {
                 items: Some(vec![]),
                 eq_class: None,
                 live: None,
-                display_safe: false,
-                str_raised: false,
             })),
             // A `{'a'}`: truthy, `len` 1, and its item carried (#2477/#2489).
             // Without it every `Encoded` sample here is EMPTY, and the sweep
@@ -9030,8 +9026,8 @@ mod tests {
             // always renders nothing".
             Value::Encoded(Box::new(djust_core::Encoded {
                 type_name: "set".to_string(),
-                display: "{'a'}".to_string(),
-                json: "{'a'}".to_string(),
+                display: "{'a'}".to_string().into(),
+                json: Some("{'a'}".to_string()),
                 truthy: true,
                 len: Some(1),
                 iterable: true,
@@ -9041,8 +9037,6 @@ mod tests {
                 items: Some(vec![Value::String("a".to_string())]),
                 eq_class: None,
                 live: None,
-                display_safe: false,
-                str_raised: false,
             })),
             // A falsy `__iter__` class with NO `__len__`: Django's `ForNode`
             // has no length to read, so it `list()`s the object and renders
@@ -9050,8 +9044,8 @@ mod tests {
             // iterate — which is why that arm reads `items`, not `len`.
             Value::Encoded(Box::new(djust_core::Encoded {
                 type_name: "FalsyIterable".to_string(),
-                display: "FalsyIterable()".to_string(),
-                json: "FalsyIterable()".to_string(),
+                display: "FalsyIterable()".to_string().into(),
+                json: Some("FalsyIterable()".to_string()),
                 truthy: false,
                 len: None,
                 iterable: true,
@@ -9061,16 +9055,14 @@ mod tests {
                 items: Some(vec![Value::String("x".to_string())]),
                 eq_class: None,
                 live: None,
-                display_safe: false,
-                str_raised: false,
             })),
             // A zero-`__len__` class with no `__iter__`: `{% for %}` renders
             // the empty branch, `iter_values` refuses. The one sample that
             // makes the two questions distinguishable.
             Value::Encoded(Box::new(djust_core::Encoded {
                 type_name: "LenZero".to_string(),
-                display: "<LenZero object>".to_string(),
-                json: "<LenZero object>".to_string(),
+                display: "<LenZero object>".to_string().into(),
+                json: Some("<LenZero object>".to_string()),
                 truthy: false,
                 len: Some(0),
                 iterable: false,
@@ -9080,8 +9072,6 @@ mod tests {
                 items: None,
                 eq_class: None,
                 live: None,
-                display_safe: false,
-                str_raised: false,
             })),
         ];
         // `Value::None` and `Value::Missing` are Django's `values is None`
