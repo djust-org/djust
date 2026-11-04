@@ -6841,6 +6841,11 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(compute_template_hash, m)?)?;
     m.add_function(wrap_pyfunction!(crosses_as_encoded, m)?)?;
     m.add_function(wrap_pyfunction!(crosses_as_encoded_by_conversion, m)?)?;
+    // This build asks `djust.serialization._protect_sidecar_walk` (the leaf floor PLUS the model
+    // forms) after every segment of a template path (#3790). An older extension asks the leaf floor
+    // only, so a Python that has the form arms loses them silently; `DjustConfig.ready()` reads this
+    // name and says so.
+    m.add("WALK_FLOOR_COVERS_FORMS", true)?;
     // The conversion's recursion ceiling (#2624), exported so the test that
     // pins it against the worker-stack measurement reads the real constant.
     m.add("MAX_CONVERSION_DEPTH", djust_core::MAX_CONVERSION_DEPTH)?;

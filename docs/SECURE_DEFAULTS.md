@@ -72,15 +72,40 @@ flag, a PII column — because serialization defaulted to *allow everything*.
 > reads `{{ form.initial.password }}` / `{{ form.password.value }}` the value is
 > a string and no `Model` is left for the proxies to refuse. The walk's floor is
 > therefore `_protect_sidecar_walk` (the leaf `_protect_sidecar_value` plus a
-> `_SidecarFormProxy` for a `ModelForm` and a `_SidecarBoundFieldProxy` for the
-> `BoundField` of a floor field), asked by the three template-walk chokepoints
-> and by the `{% load %}` bridge's operand walk, with the model's floor read
-> off the form's `instance` through the same `_attr_is_serializable`. An object
-> handed to a *tag* (the handler dict, a loop variable in a bridged context)
-> keeps the leaf floor and the real form: a tag is the application's own code,
-> and a proxy would make `bound_field.value()` read empty. The form's own
-> widget rendering (`{{ form.field }}`, `as_p`) is the view author's choice and
-> is unchanged. A plain `Form` has no model behind it and so no model floor.
+> `_SidecarFormProxy` for a `ModelForm`, a `_SidecarFormSetProxy` for a formset
+> over a model, and a `_SidecarBoundFieldProxy` for the `BoundField` of a floor
+> field), asked by the three template-walk chokepoints and by the `{% load %}`
+> bridge's operand walk, with the model's floor read off the form's `instance`
+> (or the formset's model) through the same `_attr_is_serializable`. `data` is
+> matched through its prefix (`u-password`, `form-0-password`). A refused read
+> logs once, by field name, so the breaking change is never silent.
+>
+> **What the form floor does NOT do (stated as limits, each pinned by a test in
+> `python/tests/test_form_floor_followups_3790.py`).**
+>
+> - *Widgets are not blanked.* `{{ form.field }}`, `as_p`, `{{ form }}` and a
+>   loop's `{{ x }}` render the widget the view author chose. Django's
+>   `ReadOnlyPasswordHashWidget` shows a summary of the hash, never the hash;
+>   but a `TextInput` over the `password` column, or over a
+>   `DJUST_SENSITIVE_FIELDS` field, prints `value="..."`. Blanking an editable
+>   control clears it on the next save (a blank or omitted text control clears
+>   the column; an unchecked checkbox demotes the user), so the floor guards
+>   what a template can *read back*, not what the form draws. Tracked in
+>   [#3797](https://github.com/djust-org/djust/issues/3797).
+> - *Components strip a value only when that cannot clobber.* `dj_form`,
+>   `combobox` and `rich_select` draw a `disabled` floor field without its
+>   value (Django ignores what is posted for it). An *editable* floor field is
+>   drawn with its value, and the component logs once that it did; declare the
+>   form field `disabled=True`, or leave it out, to draw it without.
+> - *A plain `Form` has no model floor*
+>   ([#3799](https://github.com/djust-org/djust/issues/3799)), and a typed
+>   `PasswordInput` value that is not a model column (`UserCreationForm`'s
+>   `password1`) is not on it either
+>   ([#3798](https://github.com/djust-org/djust/issues/3798)).
+>
+> An object handed to a *tag* (the handler dict, a loop variable in a bridged
+> context) keeps the leaf floor and the real form: a tag is the application's own
+> code, and a proxy would make `bound_field.value()` read empty.
 >
 > **The TYPE floor (#1987) — a name-independent second axis.** Besides the
 > name/method floor above, a field whose *type* should never reach the client is

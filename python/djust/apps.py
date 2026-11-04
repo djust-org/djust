@@ -141,6 +141,8 @@ class DjustConfig(AppConfig):
                 "[djust] applying virtual_keyed_ops to the Rust differ failed"
             )
 
+        _check_form_floor_extension()
+
         if _running_under_pytest():
             _log_pytest_skip()
         else:
@@ -214,6 +216,30 @@ class DjustConfig(AppConfig):
                 "[FilterBridge] startup warm in DjustConfig.ready() failed"
             )
             return False
+
+
+def _check_form_floor_extension() -> bool:
+    """Say so when the compiled extension predates the model-form floor (#3790).
+
+    The Python half (``djust.serialization._protect_sidecar_walk``) is only ASKED by an extension
+    that carries ``WALK_FLOOR_COVERS_FORMS``; an older ``.so`` asks the leaf floor, so
+    ``{{ form.initial.password }}`` prints the hash again with no error anywhere. Returns whether the
+    floor is in force. Never raises: startup must not break on a diagnostic.
+    """
+    try:
+        from djust import _rust
+
+        if getattr(_rust, "WALK_FLOOR_COVERS_FORMS", False):
+            return True
+    except Exception:  # noqa: BLE001 - a missing extension has its own, louder, failure
+        return True
+    logging.getLogger("djust").error(
+        "[djust] the compiled extension (djust._rust) predates the model-form serialization floor "
+        "(#3790): {{ form.initial.password }} and the other form value paths are NOT held to the "
+        "floor under the native engine. Rebuild or reinstall djust so the extension matches the "
+        "Python package (make dev-build)."
+    )
+    return False
 
 
 _SERVER_TOKENS = ("runserver", "uvicorn", "daphne", "hypercorn", "granian", "gunicorn")

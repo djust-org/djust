@@ -2845,8 +2845,9 @@ impl Context {
     /// Floor enforcement is INDEPENDENT of the `auto_call` kill-switch
     /// (`{{ p.user.password }}` leaks via pure getattr, no call), so this runs
     /// regardless of `self.auto_call`. It is idempotent (wrapping a proxy
-    /// returns it unchanged) and fail-safe: any error returns the value
-    /// unwrapped rather than crashing the render.
+    /// returns it unchanged). A floor that RAISES drops the value (the cell
+    /// renders empty) rather than handing the raw object on (#3790); only an
+    /// interpreter with no `djust.serialization` at all passes it through.
     fn protect_sidecar<'py>(
         &self,
         py: Python<'py>,
@@ -2858,10 +2859,17 @@ impl Context {
             m.getattr("_protect_sidecar_walk")
                 .or_else(|_| m.getattr("_protect_sidecar_value"))
         }) {
-            Ok(protect) => match protect.call1((obj.clone(),)) {
+            Ok(protect) => match protect.call1((obj,)) {
                 Ok(wrapped) => wrapped,
-                Err(_) => obj,
+                // The floor RAN and raised (#3790): the form arms read a form's instance and its
+                // field set, which can raise for an exotic object. Handing the raw object on is
+                // handing the next segment the very thing the floor exists to hold back, so the
+                // value is dropped instead (`None`: the next segment finds nothing, and the cell
+                // renders empty). The ABSENT-floor arm below still passes the object through.
+                Err(_) => py.None().into_bound(py),
             },
+            // No `djust.serialization` on this interpreter (an embedder): no floor to fail
+            // closed about.
             Err(_) => obj,
         }
     }

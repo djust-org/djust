@@ -367,6 +367,11 @@ def diff_html(old_html: str, new_html: str) -> str:
     """
     ...
 
+WALK_FLOOR_COVERS_FORMS: bool
+"""``True`` in a build that asks ``djust.serialization._protect_sidecar_walk`` (the leaf
+floor plus the model forms) after every segment of a template path (#3790). Absent from an
+older extension, which asks the leaf floor only."""
+
 MAX_VDOM_DEPTH: int
 """How many element levels the VDOM parser keeps, counted from the LiveView
 root (256). An element at the limit keeps its tag and attributes; everything
@@ -1550,6 +1555,7 @@ __all__ = [
     "render_markdown",
     "diff_html",
     "MAX_VDOM_DEPTH",
+    "WALK_FLOOR_COVERS_FORMS",
     "collapse_inter_tag_whitespace",
     "inter_tag_whitespace_edits",
     "authored_lazy_elements",
