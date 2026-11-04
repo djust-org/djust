@@ -160,6 +160,19 @@ CASES: list[Case] = [
         lambda: {"users": User.objects.all()},
     ),
     ("qs.0.delete", "{{ users.0.delete }}", lambda: {"users": User.objects.all()}),
+    # The issue's second spelling: a tag OPERAND. The path extractor reads
+    # `users.delete` out of the tag's arguments exactly as it does out of
+    # `{{ }}`, so the same serializer runs it.
+    (
+        "tag-operand.qs.delete",
+        "{% load djust_components %}{% json_viewer data=users.delete %}",
+        lambda: {"users": User.objects.all()},
+    ),
+    (
+        "tag-operand.for-u.delete",
+        "{% load djust_components %}{% for u in users %}{% json_viewer data=u.delete %}{% endfor %}",
+        lambda: {"users": User.objects.all()},
+    ),
     (
         "for-u.delete",
         "{% for u in users %}{{ u.delete }}{% endfor %}",
