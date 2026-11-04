@@ -52,19 +52,19 @@ register = template.Library()
 
 
 @register.simple_tag
-def echo(value=None, other=None):
+def echo_3771(value=None, other=None):
     """A third-party-shaped tag: it prints whatever it is handed."""
     return "[%s]" % (value if other is None else "%s|%s" % (value, other))
 
 
 @register.simple_tag
-def kind(value):
+def kind_3771(value):
     """The type of the operand the tag is handed (what the invariants below pin)."""
     return type(value).__name__
 
 
 @register.simple_tag(takes_context=True)
-def reads_context(context):
+def reads_context_3771(context):
     """A tag AUTHOR's own code reading the context: trusted, never floored."""
     obj = context["obj"]
     return "%s:%s" % (type(obj).__name__, obj.user.username)
@@ -274,15 +274,15 @@ PATHS = [
 #: How the operand is spelled in the tag. ``{p}`` is the path.
 SHAPES = [
     ("relative_time kw", "{{% relative_time datetime={p} %}}"),
-    ("echo positional", "{{% echo {p} %}}"),
-    ("echo kw", "{{% echo value={p} %}}"),
-    ("echo second positional", "{{% echo 1 {p} %}}"),
-    ("filter upper", "{{% echo {p}|upper %}}"),
-    ("filter default", '{{% echo {p}|default:"-" %}}'),
-    ("filter add", '{{% echo {p}|add:"" %}}'),
-    ("filter as argument", '{{% echo ""|default:{p} %}}'),
-    ("as var", "{{% echo {p} as got %}}<{{{{ got }}}}>"),
-    ("if", "{{% if {p} %}}{{% echo {p} %}}{{% endif %}}"),
+    ("echo positional", "{{% echo_3771 {p} %}}"),
+    ("echo kw", "{{% echo_3771 value={p} %}}"),
+    ("echo second positional", "{{% echo_3771 1 {p} %}}"),
+    ("filter upper", "{{% echo_3771 {p}|upper %}}"),
+    ("filter default", '{{% echo_3771 {p}|default:"-" %}}'),
+    ("filter add", '{{% echo_3771 {p}|add:"" %}}'),
+    ("filter as argument", '{{% echo_3771 ""|default:{p} %}}'),
+    ("as var", "{{% echo_3771 {p} as got %}}<{{{{ got }}}}>"),
+    ("if", "{{% if {p} %}}{{% echo_3771 {p} %}}{{% endif %}}"),
 ]
 
 
@@ -340,7 +340,7 @@ class TestTheFloorHolds:
 
     def test_a_with_binding_is_unchanged(self, engines, user):
         """``{% with %}`` is native: it resolves through the floored walk already."""
-        body = "{% with p=obj.user.password %}{% echo p %}{% endwith %}"
+        body = "{% with p=obj.user.password %}{% echo_3771 p %}{% endwith %}"
         assert user.password not in _render(engines, "rust", body, _contexts(user)["object"])
 
     def test_an_underscore_name_is_refused_at_compile_by_both_engines(self, engines, user):
@@ -348,11 +348,13 @@ class TestTheFloorHolds:
         variable at compile time, and the bridge compiles with Django's own parser."""
         for engine in ("django", "rust"):
             with pytest.raises(Exception, match="underscore"):
-                _render(engines, engine, "{% echo obj.user._meta %}", _contexts(user)["object"])
+                _render(
+                    engines, engine, "{% echo_3771 obj.user._meta %}", _contexts(user)["object"]
+                )
 
     def test_str_of_the_model_is_not_a_secret(self, engines, user):
-        """``{% echo obj.user %}`` prints ``str(user)`` (the username) under both engines."""
-        body = "{% echo obj.user %}"
+        """``{% echo_3771 obj.user %}`` prints ``str(user)`` (the username) under both engines."""
+        body = "{% echo_3771 obj.user %}"
         ctx = _contexts(user)["object"]
         assert _render(engines, "rust", body, ctx) == _render(engines, "django", body, ctx)
         assert "floor-user" in _render(engines, "rust", body, ctx)
@@ -401,9 +403,9 @@ class TestBenignOutputIsByteIdentical:
         "shape",
         [
             "{{% relative_time datetime={p} %}}",
-            "{{% echo {p} %}}",
-            '{{% echo {p}|default:"-" %}}',
-            "{{% echo {p} as got %}}<{{{{ got }}}}>",
+            "{{% echo_3771 {p} %}}",
+            '{{% echo_3771 {p}|default:"-" %}}',
+            "{{% echo_3771 {p} as got %}}<{{{{ got }}}}>",
         ],
     )
     def test_the_output_is_django_s(self, engines, user, key, path, shape):
@@ -413,17 +415,17 @@ class TestBenignOutputIsByteIdentical:
 
     def test_a_nested_dict_of_scalars_is_walked_as_before(self, engines):
         ctx = {"d": {"a": {"b": [10, {"c": "deep"}]}}}
-        body = "{% echo d.a.b.1.c %}|{% echo d.a.b.0 %}|{% echo d.a.missing %}"
+        body = "{% echo_3771 d.a.b.1.c %}|{% echo_3771 d.a.b.0 %}|{% echo_3771 d.a.missing %}"
         assert _render(engines, "rust", body, ctx) == _render(engines, "django", body, ctx)
 
     def test_a_loop_variable_still_reaches_public_attributes(self, engines, user):
-        body = "{% for f in form %}{% echo f.label %}{% echo f.name %}{% endfor %}"
+        body = "{% for f in form %}{% echo_3771 f.label %}{% echo_3771 f.name %}{% endfor %}"
         ctx = _contexts(user)["change"]
         assert _render(engines, "rust", body, ctx) == _render(engines, "django", body, ctx)
 
     def test_a_bound_field_errors_attribute_still_reaches_a_tag(self, engines, user):
         form = UserChangeForm({"username": ""}, instance=user)
-        body = "{% for f in form %}{% echo f.errors %}{% endfor %}"
+        body = "{% for f in form %}{% echo_3771 f.errors %}{% endfor %}"
         out = _render(engines, "rust", body, {"form": form})
         assert out == _render(engines, "django", body, {"form": form})
         assert "required" in out.lower() or "errorlist" in out
@@ -433,32 +435,35 @@ class TestWhatATagIsHanded:
     """The operand a tag receives. These are the invariants of the walker, not of any one tag."""
 
     def test_a_scalar_operand_is_the_same_object(self, engines, user):
-        assert _render(engines, "rust", "{% kind obj.title %}", _contexts(user)["object"]) == "str"
+        assert (
+            _render(engines, "rust", "{% kind_3771 obj.title %}", _contexts(user)["object"])
+            == "str"
+        )
 
     def test_a_plain_object_operand_arrives_as_itself(self, engines, user):
         ctx = _contexts(user)["object"]
-        assert _render(engines, "rust", "{% kind obj.holder %}", ctx) == "Inner"
-        assert _render(engines, "rust", "{% kind obj %}", ctx) == "Holder"
+        assert _render(engines, "rust", "{% kind_3771 obj.holder %}", ctx) == "Inner"
+        assert _render(engines, "rust", "{% kind_3771 obj %}", ctx) == "Holder"
 
     def test_a_container_operand_keeps_its_type(self, engines, user):
         ctx = _contexts(user)["object"]
-        assert _render(engines, "rust", "{% kind obj.rows %}", ctx) == "list"
-        assert _render(engines, "rust", "{% kind obj.pair %}", ctx) == "Pair"
-        assert _render(engines, "rust", "{% kind obj.mapping %}", ctx) == "Mapped"
+        assert _render(engines, "rust", "{% kind_3771 obj.rows %}", ctx) == "list"
+        assert _render(engines, "rust", "{% kind_3771 obj.pair %}", ctx) == "Pair"
+        assert _render(engines, "rust", "{% kind_3771 obj.mapping %}", ctx) == "Mapped"
 
     def test_a_model_operand_is_the_same_wherever_it_is_spelled(self, engines, user):
         """A model handed to a tag is the floor-enforcing proxy; the type must not depend on the
         spelling (a top-level ``user`` versus a path through a holder)."""
         ctx = dict(_contexts(user)["object"], user=user)
-        top = _render(engines, "rust", "{% kind user %}", ctx)
-        assert top == _render(engines, "rust", "{% kind obj.user %}", ctx)
-        assert top == _render(engines, "rust", "{% kind d.user %}", ctx)
-        assert top == _render(engines, "rust", "{% kind obj.rows.0.user %}", ctx)
+        top = _render(engines, "rust", "{% kind_3771 user %}", ctx)
+        assert top == _render(engines, "rust", "{% kind_3771 obj.user %}", ctx)
+        assert top == _render(engines, "rust", "{% kind_3771 d.user %}", ctx)
+        assert top == _render(engines, "rust", "{% kind_3771 obj.rows.0.user %}", ctx)
 
     def test_a_tag_authors_own_code_reads_the_context_unfloored(self, engines, user):
         """``takes_context``: the TAG's Python is trusted. Only the template author's expression is
         walked through the floor."""
-        out = _render(engines, "rust", "{% reads_context %}", _contexts(user)["object"])
+        out = _render(engines, "rust", "{% reads_context_3771 %}", _contexts(user)["object"])
         assert out == "Holder:floor-user"
 
 
@@ -486,18 +491,18 @@ class _RenderTimeVariableNode(template.Node):
         return "<%s>" % template.Variable(self.expr).resolve(context)
 
 
-@register.tag("raw_compile_var")
+@register.tag("raw_compile_var_3771")
 def _raw_compile_var(parser, token):
     return _CompileTimeVariableNode(template.Variable(token.split_contents()[1]))
 
 
-@register.tag("raw_render_var")
+@register.tag("raw_render_var_3771")
 def _raw_render_var(parser, token):
     return _RenderTimeVariableNode(token.split_contents()[1])
 
 
 class TestARawTagThatBuildsItsOwnVariable:
-    @pytest.mark.parametrize("tag", ["raw_compile_var", "raw_render_var"])
+    @pytest.mark.parametrize("tag", ["raw_compile_var_3771", "raw_render_var_3771"])
     @pytest.mark.parametrize("row", PATHS[:8], ids=[r[0] for r in PATHS[:8]])
     def test_the_floor_holds(self, engines, user, tag, row):
         _id, key, path, which = row
@@ -514,7 +519,7 @@ class TestARawTagThatBuildsItsOwnVariable:
             out = "<<%s>>" % exc
         assert secret not in out
 
-    @pytest.mark.parametrize("tag", ["raw_compile_var", "raw_render_var"])
+    @pytest.mark.parametrize("tag", ["raw_compile_var_3771", "raw_render_var_3771"])
     def test_a_benign_path_renders_as_django_renders_it(self, engines, user, tag):
         body = "{%% %s obj.user.username %%}" % tag
         ctx = _contexts(user)["object"]
@@ -579,7 +584,7 @@ class TestDjangoSCallableRulesAreKept:
 
     @pytest.mark.parametrize("path", CASES)
     def test_the_output_is_django_s(self, engines, path):
-        body = "{% echo " + path + " %}"
+        body = "{% echo_3771 " + path + " %}"
         ctx = {"m": _Methods()}
         results = []
         for engine in ("django", "rust"):
@@ -592,7 +597,7 @@ class TestDjangoSCallableRulesAreKept:
     def test_loud_exceptions_cross_whole(self, engines):
         for engine in ("django", "rust"):
             with pytest.raises(RuntimeError, match="loud"):
-                _render(engines, engine, "{% echo m.loud %}", {"m": _Methods()})
+                _render(engines, engine, "{% echo_3771 m.loud %}", {"m": _Methods()})
 
 
 class TestTheScopeIsExact:
@@ -600,7 +605,7 @@ class TestTheScopeIsExact:
     rendered on."""
 
     def test_a_django_engine_in_the_same_process_is_untouched(self, engines, user):
-        _render(engines, "rust", "{% echo obj.user.username %}", _contexts(user)["object"])
+        _render(engines, "rust", "{% echo_3771 obj.user.username %}", _contexts(user)["object"])
         # The floor patch is installed now. Django's own engine still prints what Django prints.
         out = _render(engines, "django", "{{ obj.user.password }}", _contexts(user)["object"])
         assert user.password in out
@@ -778,7 +783,7 @@ class TestTheWalkerHasTheProtocolOfItsObject:
 
 
 @register.simple_tag
-def same(a, b):
+def same_3771(a, b):
     """What a permission / ownership tag does with two operands."""
     return "%s/%s" % (a == b, hash(a) == hash(b))
 
@@ -799,7 +804,7 @@ class TestTwoViewsOfOneModelAreEqual:
         ],
     )
     def test_the_same_row_is_equal_and_hashes_alike(self, engines, user, a, b):
-        body = "{% same " + a + " " + b + " %}"
+        body = "{% same_3771 " + a + " " + b + " %}"
         ctx = _contexts(user)["object"]
         assert _render(engines, "rust", body, ctx) == _render(engines, "django", body, ctx)
         assert _render(engines, "rust", body, ctx) == "True/True"
@@ -808,7 +813,7 @@ class TestTwoViewsOfOneModelAreEqual:
         other = get_user_model().objects.create_user("other-3771", "o@example.com", "pw")
         ctx = dict(_contexts(user)["object"], other=other)
         for b in ("other", "obj.holder", "obj.title"):
-            body = "{% same obj.user " + b + " %}"
+            body = "{% same_3771 obj.user " + b + " %}"
             assert _render(engines, "rust", body, ctx) == _render(engines, "django", body, ctx)
             assert _render(engines, "rust", body, ctx).startswith("False")
 
@@ -1005,3 +1010,17 @@ class TestInstallCannotSelfReference:
         assert not errors
         assert floor._ORIGINAL is not floor.floored_resolve_lookup
         assert template.Variable("a.b").resolve({"a": {"b": 4}}) == 4
+
+
+class TestThisFilesTagsDoNotPolluteTheWorker:
+    """The ``{% load %}`` bridge registers a library's tags in the PROCESS-global Rust registry and
+    ``reassert()`` (run before every test by ``reset_djust_globals``) re-registers them for the rest of
+    the worker; nothing is unregistered. CI shard 4/4 failed
+    ``tests/unit/test_assign_tag.py::test_assign_tag_multiple_args_resolved_against_context``
+    (``'[body|label][]' == '[body]'``) because this file's first version registered a tag called
+    ``echo``, which won over that test's own assign tag of the same name. Not the floor: a name
+    collision with another test's tag. Every tag this library registers carries the issue number."""
+
+    def test_the_probe_tags_the_file_defines_are_all_namespaced(self):
+        assert register.tags, "no tags defined"
+        assert all(name.endswith("_3771") for name in register.tags), sorted(register.tags)
