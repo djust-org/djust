@@ -223,6 +223,243 @@ CLEAN = {
     "a-recursive-name": 'def f(x):\n    s = ""\n    s += s\n    return mark_safe(s)\n',
 }
 
+#: Rules added after the re-review of #3775: each is a dirty/clean pair, so a rule that is
+#: removed (or one that matches everything) fails by name. The label says which rule it pins.
+SHAPES.update(
+    {
+        # --- what counts as an escaper is decided by ORIGIN, not spelling ----------------
+        "origin-re.escape-is-not-an-html-escaper": (
+            "import re\ndef f(x):\n    return mark_safe(f'<b data-x=\"{re.escape(x)}\">')\n",
+            "import re\ndef f(x):\n    return mark_safe(f'<b data-x=\"{escape(x)}\">')\n",
+        ),
+        "origin-shlex.quote-is-not-an-html-escaper": (
+            "import shlex\ndef f(x):\n    return mark_safe(f'<b data-x=\"{shlex.quote(x)}\">')\n",
+            "import shlex\ndef f(x):\n    return mark_safe(f'<b data-x=\"{escape(x)}\">')\n",
+        ),
+        "origin-from-another-module": (
+            'from re import escape\ndef f(x):\n    return mark_safe(f"<b>{escape(x)}</b>")\n',
+            'def f(x):\n    return mark_safe(f"<b>{escape(x)}</b>")\n',
+        ),
+        "origin-locally-defined-escape": (
+            'def escape(v):\n    return v\ndef f(x):\n    return mark_safe(f"<b>{escape(x)}</b>")\n',
+            'def f(x):\n    return mark_safe(f"<b>{escape(x)}</b>")\n',
+        ),
+        "origin-parameter-named-escape": (
+            'def f(escape, x):\n    return mark_safe(f"<b>{escape(x)}</b>")\n',
+            'def f(esc, x):\n    return mark_safe(f"<b>{escape(x)}</b>")\n',
+        ),
+        "origin-assignment-alias-of-something-else": (
+            'def f(x):\n    e = str.title\n    return mark_safe(f"<b>{e(x)}</b>")\n',
+            'def f(x):\n    e = escape\n    return mark_safe(f"<b>{e(x)}</b>")\n',
+        ),
+        "origin-locally-defined-int": (
+            'def int(v):\n    return v\ndef f(x):\n    return mark_safe(f"<b>{int(x)}</b>")\n',
+            'def f(x):\n    return mark_safe(f"<b>{int(x)}</b>")\n',
+        ),
+        "origin-locally-defined-render_to_string": (
+            "def render_to_string(v):\n    return v\n"
+            'def f(x):\n    return mark_safe(render_to_string(f"<a {x}>"))\n',
+            'def f(x):\n    return mark_safe(render_to_string("t.html", {"x": x}))\n',
+        ),
+        # --- numbers out of numbers --------------------------------------------------------
+        "rule-min": (
+            'def f(x):\n    return mark_safe(f"<td>{min(x, 5)}</td>")\n',
+            'def f(x):\n    return mark_safe(f"<td>{min(int(x), 5)}</td>")\n',
+        ),
+        "rule-max": (
+            'def f(x):\n    return mark_safe(f"<td>{max(x, 0)}</td>")\n',
+            'def f(x):\n    return mark_safe(f"<td>{max(int(x), 0)}</td>")\n',
+        ),
+        "rule-round": (
+            'def f(x):\n    return mark_safe(f"<td>{round(x, 2)}</td>")\n',
+            'def f(x):\n    return mark_safe(f"<td>{round(float(x), 2)}</td>")\n',
+        ),
+        "rule-abs": (
+            'def f(x):\n    return mark_safe(f"<td>{abs(x)}</td>")\n',
+            'def f(x):\n    return mark_safe(f"<td>{abs(int(x))}</td>")\n',
+        ),
+        "rule-nested-min-max": (
+            'def f(v, t):\n    pct = min(100.0, max(0.0, v / t))\n    return mark_safe(f"<i>{pct}</i>")\n',
+            'def f(v, t):\n    pct = min(100.0, max(0.0, float(v) / float(t)))\n    return mark_safe(f"<i>{pct}</i>")\n',
+        ),
+        "rule-enumerate-index": (
+            "def f(rows):\n    out = []\n    for i, row in enumerate(rows):\n"
+            '        out.append(f"<td>{row}</td>")\n    return mark_safe("".join(out))\n',
+            "def f(rows):\n    out = []\n    for i, row in enumerate(rows):\n"
+            '        out.append(f"<td>{i}</td>")\n    return mark_safe("".join(out))\n',
+        ),
+        "rule-enumerate-index-in-a-comprehension": (
+            'def f(rows):\n    return mark_safe("".join(f"<td>{r}</td>" for i, r in enumerate(rows)))\n',
+            'def f(rows):\n    return mark_safe("".join(f"<td>{i}</td>" for i, r in enumerate(rows)))\n',
+        ),
+        "rule-numeric-format-spec": (
+            'def f(x):\n    return mark_safe(f"<b>{x:>10}</b>")\n',
+            'def f(x):\n    return mark_safe(f"<b>{x:.2f}</b>")\n',
+        ),
+        "rule-numeric-format-spec-d": (
+            'def f(x):\n    return mark_safe(f"<b>{x:s}</b>")\n',
+            'def f(x):\n    return mark_safe(f"<b>{x:05d}</b>")\n',
+        ),
+        "rule-format-spec-c-prints-a-character": (
+            'def f(x):\n    return mark_safe(f"<b>{x:c}</b>")\n',
+            'def f(x):\n    return mark_safe(f"<b>{x:x}</b>")\n',
+        ),
+        "rule-uuid-hex": (
+            "import uuid\ndef f(obj):\n    return mark_safe(f'<i id=\"{obj.hex}\">')\n",
+            "import uuid\ndef f(obj):\n    return mark_safe(f'<i id=\"{uuid.uuid4().hex[:6]}\">')\n",
+        ),
+        "rule-secrets-token": (
+            "import secrets\ndef f(t):\n    return mark_safe(f'<i id=\"{t}\">')\n",
+            "import secrets\ndef f(t):\n    return mark_safe(f'<i id=\"{secrets.token_hex(4)}\">')\n",
+        ),
+        # --- structure the first version missed ---------------------------------------------
+        "rule-tuple-unpack": (
+            'def f(x):\n    a, b = f"<i>{x}</i>", 1\n    return mark_safe(a)\n',
+            'def f(x):\n    a, b = f"<i>{escape(x)}</i>", 1\n    return mark_safe(a)\n',
+        ),
+        "rule-nested-tuple-unpack": (
+            'def f(x):\n    (a, b), c = (f"<i>{x}</i>", 1), 2\n    return mark_safe(a)\n',
+            'def f(x):\n    (a, b), c = (f"<i>{escape(x)}</i>", 1), 2\n    return mark_safe(a)\n',
+        ),
+        "rule-walrus": (
+            'def f(x):\n    return mark_safe((s := f"<a {x}>"))\n',
+            'def f(x):\n    return mark_safe((s := f"<a {escape(x)}>"))\n',
+        ),
+        "rule-walrus-then-name": (
+            'def f(x):\n    if (s := f"<a {x}>"):\n        return mark_safe(s)\n',
+            'def f(x):\n    if (s := f"<a {escape(x)}>"):\n        return mark_safe(s)\n',
+        ),
+        "rule-dict-comprehension": (
+            'def f(xs):\n    d = {k: f"<i>{k}</i>" for k in xs}\n    return mark_safe(d["a"])\n',
+            'def f(xs):\n    d = {k: format_html("<i>{}</i>", k) for k in xs}\n    return mark_safe(d["a"])\n',
+        ),
+        "rule-list-comprehension": (
+            'def f(xs):\n    items = [f"<i>{k}</i>" for k in xs]\n    return mark_safe("".join(items))\n',
+            'def f(xs):\n    items = [format_html("<i>{}</i>", k) for k in xs]\n    return mark_safe("".join(items))\n',
+        ),
+        "rule-comprehension-in-place": (
+            'def f(xs):\n    return mark_safe([f"<i>{k}</i>" for k in xs][0])\n',
+            'def f(xs):\n    return mark_safe([format_html("<i>{}</i>", k) for k in xs][0])\n',
+        ),
+        "rule-format_map": (
+            'def f(x):\n    return mark_safe("<a {x}>".format_map({"x": x}))\n',
+            'def f(x):\n    return mark_safe("<a {x}>".format_map({"x": escape(x)}))\n',
+        ),
+        "rule-Template.substitute": (
+            'from string import Template\ndef f(x):\n    return mark_safe(Template("<a $x>").substitute(x=x))\n',
+            'from string import Template\ndef f(x):\n    return mark_safe(Template("<a $x>").substitute(x=escape(x)))\n',
+        ),
+        "rule-Template.safe_substitute": (
+            'from string import Template\ndef f(x):\n    return mark_safe(Template("<a $x>").safe_substitute(x=x))\n',
+            'from string import Template\ndef f(x):\n    return mark_safe(Template("<a $x>").safe_substitute(x=escape(x)))\n',
+        ),
+    }
+)
+
+#: Clean on purpose: each pins a precision rule (a false positive the review listed, or an
+#: escaper spelled another way that IS an escaper).
+CLEAN.update(
+    {
+        "origin-stdlib-html-escape": 'import html\ndef f(x):\n    return mark_safe(f"<b>{html.escape(x)}</b>")\n',
+        "origin-from-stdlib-html-import": (
+            "from html import escape as esc2\n"
+            'def f(x):\n    return mark_safe(f"<b>{esc2(x)}</b>")\n'
+        ),
+        "origin-module-alias": (
+            "from django.utils import html as h\n"
+            'def f(x):\n    return mark_safe(f"<b>{h.escape(x)}</b>")\n'
+        ),
+        "origin-dotted-module-path": (
+            "import django.utils.html\n"
+            'def f(x):\n    return mark_safe(f"<b>{django.utils.html.escape(x)}</b>")\n'
+        ),
+        "origin-assignment-alias-of-the-escaper": (
+            'def f(x):\n    e = escape\n    return mark_safe(f"<b>{e(x)}</b>")\n'
+        ),
+        "origin-escaper-used-inside-a-nested-function": (
+            'def f(x):\n    def g():\n        return mark_safe(f"<b>{escape(x)}</b>")\n    return g\n'
+        ),
+        "rule-tuple-unpack-the-other-element": (
+            'def f(x):\n    a, b = f"<i>{x}</i>", "<br>"\n    return mark_safe(b)\n'
+        ),
+        "rule-enumerate-index-and-an-escaped-item": (
+            "def f(rows):\n    out = []\n    for i, row in enumerate(rows):\n"
+            '        out.append(format_html("<td>{}:{}</td>", i, row))\n    return mark_safe("".join(out))\n'
+        ),
+        "rule-range-variable": (
+            'def f(n):\n    return mark_safe("".join(f"<td>{i}</td>" for i in range(n)))\n'
+        ),
+        "rule-uuid-in-an-attribute": (
+            "import uuid\n"
+            "def f():\n    return mark_safe(f'<i id=\"dj-{uuid.uuid4().hex[:8]}\"></i>')\n"
+        ),
+        "rule-str-of-a-uuid": (
+            "import uuid\ndef f():\n    return mark_safe(f'<i id=\"{str(uuid.uuid4())}\"></i>')\n"
+        ),
+        "rule-percent-format-spec": (
+            'def f(n):\n    return mark_safe(f"<i>{n:.1%}</i> <b>{n:,d}</b> <u>{n:+08.3f}</u>")\n'
+        ),
+        "rule-slice-of-clean-text": (
+            'def f():\n    s = "<i>hello</i>"\n    return mark_safe(s[:3])\n'
+        ),
+        "rule-walrus-of-clean": 'def f(x):\n    return mark_safe((s := f"<a {escape(x)}>"))\n',
+        "rule-comprehension-of-literals": (
+            'def f():\n    return mark_safe("".join([f"<i>{k}</i>" for k in ("a", "b")]))\n'
+        ),
+        "rule-format_map-of-clean": (
+            'def f():\n    return mark_safe("<a {x}>".format_map({"x": "b"}))\n'
+        ),
+        "rule-Template-of-clean": (
+            "from string import Template\n"
+            'def f():\n    return mark_safe(Template("<a $x>").substitute(x="b"))\n'
+        ),
+        "rule-the-token-counter-shape": (
+            "def f(used, limit):\n"
+            "    pct = min(100.0, max(0.0, int(used) / int(limit) * 100))\n"
+            "    return mark_safe(f'<div style=\"width: {pct:.0f}%\">{round(pct, 1)}</div>')\n"
+        ),
+    }
+)
+
+#: Dirty code the guard does NOT flag today, probed and pinned. The module docstring lists these
+#: as limits; when the guard learns one, ``test_a_known_miss_is_still_a_miss`` fails and the
+#: entry (and the sentence in the docstring, the changelog and the PR body) moves.
+KNOWN_MISSES = {
+    "reduce-over-raw-items": (
+        "from functools import reduce\n"
+        "def f(a, b):\n    return mark_safe(reduce(lambda p, q: p + q, [a, b]))\n"
+    ),
+    "partial-of-the-sink": (
+        'from functools import partial\ndef f(x):\n    return partial(mark_safe, f"<a {x}>")()\n'
+    ),
+    "map-of-the-sink": 'def f(xs):\n    return list(map(mark_safe, [f"<a {x}>" for x in xs]))\n',
+    "getattr-of-the-sink": (
+        "from django.utils import safestring\n"
+        'def f(x):\n    return getattr(safestring, "mark_safe")(f"<a {x}>")\n'
+    ),
+    "module-global-appended-in-one-function-joined-in-another": (
+        "PARTS = []\n"
+        'def add(x):\n    PARTS.append(f"<i>{x}</i>")\n'
+        'def out():\n    return mark_safe("".join(PARTS))\n'
+    ),
+    "built-in-one-function-marked-safe-in-another (the switcher)": (
+        "def options(presets):\n    out = ''\n    for p in presets:\n"
+        "        out += f'<option value=\"{p}\">{p}</option>'\n    return f'<select>{out}</select>'\n"
+        "def chunk(presets):\n    return mark_safe(options(presets))\n"
+    ),
+    "a-helper-returning-an-interpolated-string": (
+        'def helper(x):\n    return f"<a {x}>"\ndef f(x):\n    return mark_safe(helper(x))\n'
+    ),
+    "a-value-stored-on-self": (
+        'class V:\n    def build(self, x):\n        self.html = f"<a {x}>"\n'
+        "    def out(self):\n        return mark_safe(self.html)\n"
+    ),
+    "a-bare-parameter": "def f(markup):\n    return mark_safe(markup)\n",
+    "render-trusted-by-method-name": (
+        'def f(thing, x):\n    return mark_safe(thing.render(f"<a {x}>"))\n'
+    ),
+}
+
 #: The pre-fix code, verbatim from ``main`` before #3775.
 ORIGINAL_THEME_ICON = '''
 @register.simple_tag
@@ -308,6 +545,27 @@ class TestEveryShapeIsCaught:
     def test_a_syntax_error_is_not_swallowed(self):
         with pytest.raises(SyntaxError):
             find_unsafe_markup("def f(:\n")
+
+
+class TestKnownMisses:
+    @pytest.mark.parametrize("label", sorted(KNOWN_MISSES))
+    def test_a_known_miss_is_still_a_miss(self, label):
+        """If this fails the guard learned something: move the entry and the docstring sentence."""
+        assert _flagged(KNOWN_MISSES[label]) == [], label
+
+    def test_the_misses_are_the_ones_the_docstring_names(self):
+        from scripts.lib import safe_markup_taint
+
+        doc = safe_markup_taint.__doc__ or ""
+        for needle in (
+            "partial(mark_safe",
+            "map(mark_safe",
+            "getattr(safestring",
+            "reduce",
+            "self",
+        ):
+            assert needle in doc, needle
+        assert "switcher" in doc and "NAME-based" in doc and "SINGLE-FUNCTION" in doc
 
 
 class TestTheOriginalCode:
