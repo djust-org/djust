@@ -422,6 +422,26 @@ fn read_wants_autoescape(handler: &Bound<'_, PyAny>) -> PyResult<bool> {
     handler.getattr("WANTS_AUTOESCAPE")?.is_truthy()
 }
 
+/// The handler's opt-in "hand me my operands as TYPED values" declaration (#3756).
+///
+/// The inline-handler contract resolves every operand to TEXT (scalars) or JSON (lists, dicts)
+/// before `render(args, context)` runs, so a handler that branches on a value's TYPE
+/// (`json_viewer`: `isinstance`) sees `str(datetime)` where Django's tag sees the `datetime`.
+/// A handler that sets `TYPED_ARGS = True` is additionally handed, in the `context` dict under
+/// [`crate::renderer`]'s reserved key, each `key=<expression>` operand as the typed Python value
+/// the engine resolved through the SAME floored walk `{{ }}` uses (`value_into_handler_pyobject`).
+/// It is the engine, not the handler, that resolves the expression, which is the point: a handler
+/// resolving it itself, as the `{% load %}` bridge does, walks raw objects with no floor.
+///
+/// Opt-IN, like [`read_wants_autoescape`], and read once at registration so a handler without it
+/// pays nothing per call. Inline registry only.
+fn read_wants_typed_args(handler: &Bound<'_, PyAny>) -> PyResult<bool> {
+    if !handler.hasattr("TYPED_ARGS")? {
+        return Ok(false);
+    }
+    handler.getattr("TYPED_ARGS")?.is_truthy()
+}
+
 /// The handler's opt-in "let ME decide whether the body renders at all"
 /// declaration (#2658).
 ///
@@ -496,6 +516,8 @@ struct TagHandlerEntry {
     accepts_as_var: bool,
     /// See [`read_wants_autoescape`] (#2556).
     wants_autoescape: bool,
+    /// See [`read_wants_typed_args`] (#3756).
+    wants_typed_args: bool,
     /// `Some(message)` when the parser must REFUSE this tag with Django's
     /// `TemplateSyntaxError` the moment a template uses it (#2547): a raw
     /// `@register.tag` that consumes a body cannot be bridged, and the
@@ -693,6 +715,7 @@ pub fn register_tag_handler(py: Python<'_>, name: String, handler: Py<PyAny>) ->
     let returns_bindings = read_returns_bindings(handler_ref)?;
     let accepts_as_var = read_accepts_as_var(handler_ref)?;
     let wants_autoescape = read_wants_autoescape(handler_ref)?;
+    let wants_typed_args = read_wants_typed_args(handler_ref)?;
     if accepts_as_var && !returns_bindings {
         return Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(format!(
             "Handler '{name}' declares ACCEPTS_AS_VAR but not RETURNS_BINDINGS — \
@@ -718,6 +741,7 @@ pub fn register_tag_handler(py: Python<'_>, name: String, handler: Py<PyAny>) ->
             returns_bindings,
             accepts_as_var,
             wants_autoescape,
+            wants_typed_args,
             parse_refusal,
         },
     );
@@ -1327,6 +1351,16 @@ pub fn tag_handler_returns_bindings(name: &str) -> bool {
         .read()
         .ok()
         .and_then(|registry| registry.get(name).map(|entry| entry.returns_bindings))
+        .unwrap_or(false)
+}
+
+/// Internal Rust API — did the inline handler for `name` declare `TYPED_ARGS` (#3756)?
+/// `false` for an unregistered name.
+pub fn tag_handler_wants_typed_args(name: &str) -> bool {
+    TAG_HANDLERS
+        .read()
+        .ok()
+        .and_then(|registry| registry.get(name).map(|entry| entry.wants_typed_args))
         .unwrap_or(false)
 }
 
