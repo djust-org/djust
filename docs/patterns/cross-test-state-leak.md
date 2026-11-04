@@ -21,8 +21,8 @@ fixed together with the `tests/timing_report.py` attribution flake.
 
 - **A writer.** An `async` test that calls `sync_to_async(<Model>.objects.create...)` under a plain
   `@pytest.mark.django_db` (or the `db` fixture). The pin covers the user model; the same shape
-  with `Session.save` (37 tests flagged by the wider scan, none read a session table by
-  position) and `Group` leaks too and is not pinned.
+  with `Session.save` (34 more tests in 17 files flagged by the wider scan, none read a session
+  table by position) and `Group` leaks too and is not pinned; tracked in #3782.
 - **A reader.** `X.objects.first()`, `X.objects.all()[0]`, or `.first` reached through a template
   over a global queryset, in a test that created its own row. Prefer
   `X.objects.filter(pk=row.pk)`: it keeps the same code path and cannot be shadowed.
