@@ -1062,6 +1062,7 @@ DjangoRustError::TemplateError(format!("No block handler registered for tag: {na
 .map_err(|e| format!("Failed to convert value for key '{key}': {e}"))?;
 .map_err(|e| format!("Failed to set context key '{key}': {e}"))?;
 .map_err(|e| format!("Failed to set raw context key '{key}': {e}"))?;
+.map_err(|e| format!("Failed to drop the reserved typed-args key: {e}"))?;
 .map_err(|e| format!("Failed to set raw context key '{key}': {e}"))?;
 let mut key: String = first.to_string();
 d.get_item(segment).ok().flatten()
