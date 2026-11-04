@@ -245,13 +245,39 @@ def test_a_serial_run_prints_one_line_for_its_own_process(inner: pytest.Pytester
     assert "this process: gen-2 GC pause:" in out and "; stall:" in out
 
 
+#: How long the inner suite's slow collection takes. It has to beat every OTHER generation-2
+#: pause in the inner session (the ones that happen on their own while pytest imports and
+#: collects, in a process that already holds this suite's heap) with room to spare.
+SLOW_COLLECTION_S = 1.0
+
+
 def test_a_gen_2_collection_is_reported_and_attributed_to_its_test(inner: pytest.Pytester):
+    """The worst pause is named after the test it happened in.
+
+    "Worst" is a comparison between this session's generation-2 pauses, and the inner
+    session is in-process: its imports and collection run generation-2 collections of their
+    own in a process holding the whole suite's heap, which on CI took 0.10 s (#3800). An
+    explicit ``gc.collect()`` in ``test_collects`` takes about as long, so which of them was
+    "worst" was a coin toss, and the report named ``(startup or collection, before the first
+    test)`` instead of the test. The test makes its own pause unmistakably the worst: a
+    callback registered after the plugin's (callbacks run in order) holds the collection for
+    :data:`SLOW_COLLECTION_S`, inside the interval the plugin is timing.
+    """
     inner.makepyfile(
-        test_gc="""
+        test_gc=f"""
         import gc
+        import time
 
         def test_collects():
-            gc.collect()  # a generation-2 collection
+            def hold(phase, info):
+                if phase == "start" and info["generation"] == 2:
+                    time.sleep({SLOW_COLLECTION_S})
+
+            gc.callbacks.append(hold)
+            try:
+                gc.collect()  # a generation-2 collection
+            finally:
+                gc.callbacks.remove(hold)
 
         def test_quiet():
             pass
@@ -259,10 +285,9 @@ def test_a_gen_2_collection_is_reported_and_attributed_to_its_test(inner: pytest
     )
     out = _run(inner).stdout.str()
     line = next(line for line in out.splitlines() if line.startswith("this process:"))
-    assert "gen-2 GC pause: worst" in line
-    # The test running when the pause happened is named (``test_quiet`` may also have
-    # had an automatic collection, so only ``test_collects`` is guaranteed one).
-    assert "test_gc.py::test_collects" in line or "test_gc.py::test_quiet" in line
+    gc_text = line.split("; stall:")[0]
+    assert "gen-2 GC pause: worst" in gc_text
+    assert "in test_gc.py::test_collects;" in gc_text, gc_text
     assert "gen-2 GC pause: none" not in line
 
 

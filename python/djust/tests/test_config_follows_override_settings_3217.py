@@ -109,7 +109,13 @@ def test_update_and_dotted_set_survive_too():
 
 
 def test_an_explicit_reset_still_discards_code_set_values():
+    # What a reset returns to is the settings' value, whatever an earlier test on this worker
+    # left in the process-wide config. The shard split puts this test after tests of other files
+    # without the resets its file-mates make, and a polluter's ``css_framework=None`` was read
+    # here as "before" (#3800).
+    config.reset()
     before = config.get("css_framework")
+    assert before is not None, "the settings and defaults give css_framework a value"
     config.set("css_framework", "tailwind_probe")
     config.reset()
     assert config.get("css_framework") == before

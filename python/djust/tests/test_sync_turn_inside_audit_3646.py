@@ -56,11 +56,22 @@ def _wrapper(view, step, turn):
 @pytest.fixture(autouse=True)
 def recording(monkeypatch):
     previous = djust_config.get("sync_turn_wrapper")
+    before = djust_config.as_dict()
     djust_config.set("sync_turn_wrapper", _wrapper)
     del OBSERVED[:]
     yield monkeypatch
     djust_config.set("sync_turn_wrapper", previous)
     del OBSERVED[:]
+    # A scenario drives real views under ``override_settings`` and the config singleton is
+    # process-wide: whatever a scenario leaves in it, the next test on the worker reads (#3800,
+    # where a leaked ``css_framework=None`` failed an unrelated test on CI). Name the scenario
+    # that leaks instead of the test that happens to run after it, and put the config back so
+    # the leak is not also passed on.
+    after = djust_config.as_dict()
+    if after != before:
+        djust_config.reset()
+        changed = sorted(k for k in before.keys() | after.keys() if before.get(k) != after.get(k))
+        raise AssertionError("this test left the djust config changed: %s" % changed)
 
 
 def watch(monkeypatch, cls: type, name: str, label: str) -> None:
@@ -339,12 +350,13 @@ def _render_field(mp):
     from djust.admin_ext.adapters import AdminTailwindAdapter
 
     watch(mp, AdminTailwindAdapter, "render_field", "AdminTailwindAdapter.render_field")
+    # The override alone selects the adapter: the config follows ``override_settings`` on entry
+    # and on exit (#3217). Setting the key by hand as well, and "undoing" it with
+    # ``set("css_framework", None)``, left ``None`` in the process-wide config for every later
+    # test on the worker, which failed ``test_an_explicit_reset_still_discards_code_set_values``
+    # whenever the two shared one (#3800).
     with override_settings(LIVEVIEW_CONFIG={"css_framework": "admin_tailwind"}):
-        djust_config.set("css_framework", "admin_tailwind")
-        try:
-            get(FormPage)
-        finally:
-            djust_config.set("css_framework", None)
+        get(FormPage)
 
 
 @scenario("BaseAdapter._merge_widget_attrs")
