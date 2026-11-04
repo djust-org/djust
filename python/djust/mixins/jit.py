@@ -78,6 +78,45 @@ def _cached_extract_template_variables(template_content: str) -> Optional[dict]:
     return result
 
 
+def _paths_for_variable(variable_paths_map: Optional[dict], variable_name: str) -> List[str]:
+    """The template paths read off the value named *variable_name* (#3788).
+
+    A context name the template reads directly (``users``) is a key of the
+    extraction map. A value reached THROUGH a container is not: with
+    ``{"d": {"users": qs}}`` and ``{% for x in d.users %}{{ x.groups.all }}``,
+    the map holds ``d: ["users", "users.groups.all", "users.username"]`` and no
+    key ``d.users``, so a lookup by the dotted name found no path and the
+    value was serialized as a flat field dict, with every relation the
+    template walks missing. The dotted name is its root's paths with the
+    leading segments removed.
+
+    One resolver for the QuerySet, the model and the model-list producers
+    (#1646): they each did their own ``map.get(name)``.
+    """
+    if not variable_paths_map:
+        return []
+    direct = variable_paths_map.get(variable_name)
+    if direct:
+        return list(direct)
+    root, dot, rest = variable_name.partition(".")
+    if not dot:
+        return []
+    prefix = rest + "."
+    return [
+        path[len(prefix) :] for path in variable_paths_map.get(root, ()) if path.startswith(prefix)
+    ]
+
+
+def _serializer_function_name(variable_name: str, template_hash: str) -> str:
+    """``serialize_<name>_<hash>`` as a Python identifier (#3788).
+
+    A nested value's name is dotted (``d.users``), and the generated source
+    ``def serialize_d.users_...`` does not compile.
+    """
+    safe = re.sub(r"\W", "_", variable_name)
+    return f"serialize_{safe}_{template_hash}"
+
+
 def _template_hash(template_content: str) -> str:
     """The short sha256 of a template source, computed once per source."""
     try:
@@ -155,7 +194,7 @@ def _jit_template_content(view: Any) -> Optional[str]:
 
 try:
     from ..optimization.query_optimizer import analyze_queryset_optimization, optimize_queryset
-    from ..optimization.codegen import generate_serializer_code, compile_serializer
+    from ..optimization.codegen import all_row_cap, compile_serializer, generate_serializer_code
 
     JIT_AVAILABLE = True
 except ImportError:
@@ -429,7 +468,7 @@ class JITMixin:
             variable_paths_map = _cached_extract_template_variables(template_content)
             if variable_paths_map is None:
                 return [normalize_django_value(obj) for obj in queryset]
-            paths_for_var = variable_paths_map.get(variable_name, [])
+            paths_for_var = _paths_for_variable(variable_paths_map, variable_name)
 
             if not paths_for_var:
                 logger.debug(
@@ -475,7 +514,7 @@ class JITMixin:
             from djust._rust import serialize_queryset
 
             items = list(queryset)
-            result = serialize_queryset(items, paths_for_var)
+            result = serialize_queryset(items, paths_for_var, all_row_cap())
 
             # Check if Rust serializer captured all expected paths
             # (Rust can't access @property attributes, only model fields)
@@ -499,7 +538,7 @@ class JITMixin:
                 # costs anything for a template that names a denied field, which
                 # is a bug in the template.
 
-                func_name = f"serialize_{variable_name}_{template_hash}"
+                func_name = _serializer_function_name(variable_name, template_hash)
                 code = generate_serializer_code(model_class.__name__, paths_for_var, func_name)
                 serializer = compile_serializer(code, func_name)
                 result = [serializer(obj) for obj in items]
@@ -552,7 +591,7 @@ class JITMixin:
         is not a way past it.
         """
         variable_paths_map = _cached_extract_template_variables(template_content)
-        paths_for_var = (variable_paths_map or {}).get(variable_name, [])
+        paths_for_var = _paths_for_variable(variable_paths_map, variable_name)
         if not paths_for_var:
             return [normalize_django_value(item) for item in items]
         return [self._jit_serialize_model(item, template_content, variable_name) for item in items]
@@ -570,7 +609,7 @@ class JITMixin:
             variable_paths_map = _cached_extract_template_variables(template_content)
             if variable_paths_map is None:
                 return cast(Dict[str, Any], normalize_django_value(obj))
-            paths_for_var = variable_paths_map.get(variable_name, [])
+            paths_for_var = _paths_for_variable(variable_paths_map, variable_name)
 
             if not paths_for_var:
                 # Finding #19: the whole-object / not-field-referenced case
@@ -598,7 +637,7 @@ class JITMixin:
             if cache_key in _jit_serializer_cache:
                 serializer, _ = _jit_serializer_cache[cache_key]
             else:
-                func_name = f"serialize_{variable_name}_{template_hash}"
+                func_name = _serializer_function_name(variable_name, template_hash)
                 code = generate_serializer_code(model_class.__name__, paths_for_var, func_name)
                 serializer = compile_serializer(code, func_name)
                 _jit_serializer_cache[cache_key] = (serializer, None)

@@ -37,6 +37,7 @@ logger = logging.getLogger(__name__)
 # Try to import JIT optimization utilities
 try:
     from djust._rust import extract_template_variables, serialize_queryset
+    from djust.optimization.codegen import all_row_cap
     from djust.optimization.query_optimizer import analyze_queryset_optimization, optimize_queryset
     from djust.serialization import DjangoJSONEncoder, normalize_django_value
 
@@ -359,7 +360,8 @@ class DjustTemplate:
                 queryset = optimize_queryset(queryset, optimization)
 
             # Serialize with Rust (5-10x faster)
-            result = serialize_queryset(list(queryset), paths_for_var)
+            # The same row cap the LiveView path passes (#3788, #1646).
+            result = serialize_queryset(list(queryset), paths_for_var, all_row_cap())
 
             logger.debug(
                 "[JIT] Serialized %s objects for '%s' using Rust", len(result), variable_name
