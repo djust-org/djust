@@ -288,7 +288,7 @@ _floor_root: contextvars.ContextVar[Optional[BaseContext]] = contextvars.Context
 _original_resolve_lookup: Optional[Callable[..., Any]] = None
 
 
-def _floored_resolve_lookup(self: Variable, context: Any) -> Any:
+def floored_resolve_lookup(self: Variable, context: Any) -> Any:
     root = _floor_root.get()
     original = _original_resolve_lookup
     assert original is not None
@@ -314,7 +314,7 @@ def install() -> None:
     if _original_resolve_lookup is not None:
         return
     _original_resolve_lookup = Variable._resolve_lookup
-    Variable._resolve_lookup = _floored_resolve_lookup  # type: ignore[method-assign]
+    Variable._resolve_lookup = floored_resolve_lookup  # type: ignore[method-assign]
 
 
 def uninstall() -> None:
