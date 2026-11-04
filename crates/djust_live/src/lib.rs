@@ -4476,15 +4476,19 @@ fn json_value_to_py(py: Python, value: &serde_json::Value) -> PyResult<Py<PyAny>
 /// paths = ['user.email', 'user.get_full_name', 'active_leases.0.property.name', 'phone']
 /// result_list = serialize_queryset(tenants, paths)  # Returns Python list directly!
 /// ```
-#[pyfunction(name = "serialize_queryset")]
+#[pyfunction(name = "serialize_queryset", signature = (objects, field_paths, all_row_cap=None))]
 fn serialize_queryset_py(
     py: Python,
     objects: &Bound<'_, PyList>,
     field_paths: Vec<String>,
+    all_row_cap: Option<usize>,
 ) -> PyResult<Py<PyList>> {
     guard_panic("serialize_queryset_py", move || {
-        // Parse paths into tree structure for efficient traversal
-        let path_tree = build_field_tree(&field_paths);
+        // Parse paths into tree structure for efficient traversal. A path the
+        // template reads whole AND walks into (`groups.all` next to
+        // `groups.all.name`) is marked, because the tree alone cannot tell
+        // `{% for g in u.groups.all %}` from `{{ u.groups.all.count }}` (#3788).
+        let path_tree = build_field_tree(&with_whole_marks(&field_paths));
 
         // Create Python list to hold results
         let result_list = PyList::empty(py);
@@ -4495,7 +4499,7 @@ fn serialize_queryset_py(
 
         // Iterate over objects
         for obj in objects.iter() {
-            let serialized = serialize_object_with_paths(py, &obj, &path_tree, gate)?;
+            let serialized = serialize_object_with_paths(py, &obj, &path_tree, gate, all_row_cap)?;
             result_list.append(serialized)?;
         }
 
@@ -4888,7 +4892,11 @@ fn gated_names(
     tree: &std::collections::HashMap<String, PathNode>,
     gate: &Bound<'_, PyAny>,
 ) -> PyResult<std::collections::HashSet<String>> {
-    let names: Vec<&str> = tree.keys().map(|k| k.as_str()).collect();
+    let names: Vec<&str> = tree
+        .keys()
+        .map(|k| k.as_str())
+        .filter(|k| *k != WHOLE_MARK)
+        .collect();
     let permitted = gate.call1((obj, PyTuple::new(py, &names)?))?;
     let mut out = std::collections::HashSet::new();
     for name in names {
@@ -4915,31 +4923,117 @@ fn gated_names(
 /// caller's key-count fallback to that codegen never fires, because the
 /// `groups` key IS present.
 ///
-/// `Ok(None)` means `template_call_guard` refused: the name is OMITTED, as the
-/// leaf arm omits a refused callable, so the sidecar walk (which refuses the
-/// same callables) answers instead.
+/// What a call to `all` came to.
+enum CalledAll<'py> {
+    /// `template_call_guard` refused: the name is OMITTED, as the leaf arm
+    /// omits a refused callable, so the sidecar walk (which refuses the same
+    /// callables) answers instead.
+    Refused,
+    /// `all` raised one of the two exceptions the codegen twin swallows
+    /// (`TypeError`, `AttributeError`): an empty relation, not an error.
+    Empty,
+    /// What `all()` returned — a QuerySet for a related manager.
+    Called(Bound<'py, PyAny>),
+}
+
+/// Call `value` (an `all` method) under the one call guard.
 ///
 /// Errors follow the codegen (`_generate_nested_access` catches
 /// `(TypeError, AttributeError)` and nothing else): a `TypeError` /
-/// `AttributeError` (an `all` that takes arguments, a result that does not
-/// iterate) is an empty list, and ANY OTHER exception — a database error
-/// mid-evaluation, `SynchronousOnlyOperation` — PROPAGATES. It reaches the
-/// caller's `[JIT ERROR]` handler, which logs it through the exposure
-/// diagnostics and falls back to the generic serializer, rather than
-/// rendering a user with no groups or permissions and saying nothing (#3777
-/// review). This function never logs an exception itself (ADR-038).
-fn called_all_rows<'py>(value: &Bound<'py, PyAny>) -> PyResult<Option<Vec<Bound<'py, PyAny>>>> {
+/// `AttributeError` (an `all` that takes arguments) is an empty list, and ANY
+/// OTHER exception — a database error mid-evaluation,
+/// `SynchronousOnlyOperation` — PROPAGATES. It reaches the caller's
+/// `[JIT ERROR]` handler, which logs it through the exposure diagnostics and
+/// falls back to the generic serializer, rather than rendering a user with no
+/// groups or permissions and saying nothing (#3777 review). This function
+/// never logs an exception itself (ADR-038).
+fn call_all<'py>(value: &Bound<'py, PyAny>) -> PyResult<CalledAll<'py>> {
     if !djust_core::template_call_guard(value).may_call() {
-        return Ok(None);
+        return Ok(CalledAll::Refused);
     }
-    let rows = value
-        .call0()
-        .and_then(|queryset| queryset.try_iter())
-        .and_then(|iterator| iterator.collect::<PyResult<Vec<_>>>());
-    match rows {
-        Ok(rows) => Ok(Some(rows)),
-        Err(err) if codegen_swallows(value.py(), &err) => Ok(Some(Vec::new())),
+    match value.call0() {
+        Ok(queryset) => Ok(CalledAll::Called(queryset)),
+        Err(err) if codegen_swallows(value.py(), &err) => Ok(CalledAll::Empty),
         Err(err) => Err(err),
+    }
+}
+
+/// The rows a called `all` yields, at most `cap` of them (#3788).
+///
+/// A related manager's `all()` is an UNEVALUATED QuerySet, and iterating it
+/// loads the whole relation: `{{ u.groups.all.0.name }}` over 60,000 rows
+/// built 60,000 model instances for one name (0.75 s against Django's
+/// `LIMIT 1`). With a cap the read is `qs[:cap + 1]` — a SQL `LIMIT` on an
+/// unevaluated QuerySet, a slice of the result cache on a prefetched one — so
+/// the cost is bounded by the cap, not by the relation. One row past the cap is
+/// read only to learn the relation was longer; it is dropped, and the
+/// truncation is logged (a template still gets every row up to the cap).
+fn capped_rows<'py>(
+    queryset: &Bound<'py, PyAny>,
+    cap: Option<usize>,
+) -> PyResult<Vec<Bound<'py, PyAny>>> {
+    let py = queryset.py();
+    let Some(cap) = cap else {
+        return queryset
+            .try_iter()
+            .and_then(|iterator| iterator.collect::<PyResult<Vec<_>>>());
+    };
+    let limit = cap.saturating_add(1);
+    let window = queryset
+        .get_item(pyo3::types::PySlice::new(py, 0, limit as isize, 1))
+        .unwrap_or_else(|_| queryset.clone());
+    let mut rows = window
+        .try_iter()
+        .and_then(|iterator| iterator.take(limit).collect::<PyResult<Vec<_>>>())?;
+    if rows.len() > cap {
+        rows.truncate(cap);
+        warn_rows_capped(py, cap);
+    }
+    Ok(rows)
+}
+
+/// [`capped_rows`] with the codegen's error rule: a `TypeError` /
+/// `AttributeError` while reading the rows is an empty relation, anything else
+/// propagates (#3777 review).
+fn capped_rows_or_empty<'py>(
+    queryset: &Bound<'py, PyAny>,
+    cap: Option<usize>,
+) -> PyResult<Vec<Bound<'py, PyAny>>> {
+    match capped_rows(queryset, cap) {
+        Err(err) if codegen_swallows(queryset.py(), &err) => Ok(Vec::new()),
+        other => other,
+    }
+}
+
+/// Say that a relation was longer than the cap (#3788). A plain warning with
+/// the cap as its only argument — no exception, no row data (ADR-038).
+fn warn_rows_capped(py: Python<'_>, cap: usize) {
+    let logged = py
+        .import("logging")
+        .and_then(|logging| logging.getattr("getLogger"))
+        .and_then(|get_logger| get_logger.call1(("djust.optimization.codegen",)))
+        .and_then(|logger| {
+            logger.call_method1(
+                "warning",
+                (
+                    "A related manager's .all read by the queryset serializer has more than %s rows; only the first %s are sent. Raise LIVEVIEW_CONFIG['queryset_all_row_cap'] (0 disables it), read .count / .first / .exists, or paginate.",
+                    cap,
+                    cap,
+                ),
+            )
+        });
+    drop(logged);
+}
+
+/// `None` when the call guard refused; an empty list for a swallowed error.
+fn called_all_rows<'py>(
+    value: &Bound<'py, PyAny>,
+    cap: Option<usize>,
+) -> PyResult<Option<Vec<Bound<'py, PyAny>>>> {
+    match call_all(value)? {
+        CalledAll::Refused => Ok(None),
+        CalledAll::Empty => Ok(Some(Vec::new())),
+        CalledAll::Called(queryset) => capped_rows_or_empty(&queryset, cap).map(Some),
     }
 }
 
@@ -4968,20 +5062,17 @@ fn is_django_queryset(value: &Bound<'_, PyAny>) -> bool {
 /// otherwise unchanged (#3777). The template named the relation whole
 /// (`{{ u.groups.all|length }}`, `{% if u.groups.all %}`), so every row is
 /// wanted, and a QuerySet is neither a list nor a tuple to
-/// [`queryset_template_value`]. Errors as in [`called_all_rows`]: the
-/// codegen's two are tolerated (the value stays as it is), anything else
-/// propagates.
+/// [`queryset_template_value`]. Errors as in [`call_all`]: the codegen's two
+/// are tolerated (the value stays as it is), anything else propagates.
 fn called_all_to_list<'py>(
     py: Python<'py>,
     value: &Bound<'py, PyAny>,
+    cap: Option<usize>,
 ) -> PyResult<Bound<'py, PyAny>> {
     if !is_django_queryset(value) {
         return Ok(value.clone());
     }
-    let rows = value
-        .try_iter()
-        .and_then(|iterator| iterator.collect::<PyResult<Vec<_>>>())
-        .and_then(|rows| PyList::new(py, rows));
+    let rows = capped_rows(value, cap).and_then(|rows| PyList::new(py, rows));
     match rows {
         Ok(list) => Ok(list.into_any()),
         Err(err) if codegen_swallows(py, &err) => Ok(value.clone()),
@@ -4999,6 +5090,7 @@ fn serialize_all_row(
     row: &Bound<'_, PyAny>,
     tree: &std::collections::HashMap<String, PathNode>,
     gate: &Bound<'_, PyAny>,
+    cap: Option<usize>,
 ) -> PyResult<Py<PyAny>> {
     if row.is_instance_of::<PyDict>()
         || row.is_instance_of::<PyList>()
@@ -5006,8 +5098,122 @@ fn serialize_all_row(
     {
         queryset_template_value(row, 0)
     } else {
-        serialize_object_with_paths(py, row, tree, gate)
+        serialize_object_with_paths(py, row, tree, gate, cap)
     }
+}
+
+/// The path-tree key that records a node's own name is ALSO read whole (#3788).
+/// It is never an attribute: [`gated_names`] drops it, so no walk reads it.
+const WHOLE_MARK: &str = "__djust_whole__";
+
+/// The QuerySet methods a template can chain after `.all`.
+const ALL_CHAIN_METHODS: [&str; 4] = ["count", "exists", "first", "last"];
+
+/// `paths` plus a [`WHOLE_MARK`] child under every `…all` path that the template
+/// reads whole as well as walks into (#3788).
+///
+/// `{% for g in u.groups.all %}{{ g.name }}{% endfor %}` extracts as
+/// `groups.all` and `groups.all.name`; `{{ u.groups.all.count }}` extracts as
+/// `groups.all.count` alone. The tree built from those is the same shape (an
+/// `all` node with a `count` child), so without this mark a template that
+/// loops over the rows and ALSO prints their count would be indistinguishable
+/// from one that prints only the count. A path whose next segment is an index
+/// is not marked: `build_field_tree` already turns that node into a list.
+fn with_whole_marks(paths: &[String]) -> Vec<String> {
+    let known: std::collections::HashSet<&str> = paths.iter().map(|p| p.as_str()).collect();
+    let mut marks: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for path in paths {
+        let mut end = 0;
+        for segment in path.split('.') {
+            end += segment.len();
+            if end < path.len() && segment == "all" {
+                let prefix = &path[..end];
+                let next = path[end + 1..].split('.').next().unwrap_or("");
+                if known.contains(prefix) && next.parse::<usize>().is_err() {
+                    marks.insert(format!("{prefix}.{WHOLE_MARK}"));
+                }
+            }
+            end += 1;
+        }
+    }
+    let mut out = paths.to_vec();
+    out.extend(marks);
+    out
+}
+
+/// Does the template read `all` ONLY through QuerySet methods
+/// (`u.groups.all.count`, `.all.first.name`, `.all.exists`) — and is that
+/// reading unambiguous for these rows? (#3788)
+///
+/// The tree cannot say whether `count` is `qs.count()` or the `count` FIELD of
+/// a row in `{% for i in o.items.all %}{{ i.count }}`: both extract to
+/// `items.all.count`. It is a method read only when nothing else about the
+/// node asks for rows — the relation is not read whole ([`WHOLE_MARK`]), every
+/// child is a QuerySet method name, and the row model has no attribute of that
+/// name. Otherwise the node stays a list of rows, as it was.
+fn all_is_read_through_methods(
+    queryset: &Bound<'_, PyAny>,
+    nested: &std::collections::HashMap<String, PathNode>,
+) -> bool {
+    if nested.is_empty()
+        || nested.contains_key(WHOLE_MARK)
+        || !nested
+            .keys()
+            .all(|name| ALL_CHAIN_METHODS.contains(&name.as_str()))
+        || !is_django_queryset(queryset)
+    {
+        return false;
+    }
+    let Ok(model) = queryset.getattr("model") else {
+        return false;
+    };
+    nested
+        .keys()
+        .all(|name| !model.hasattr(name.as_str()).unwrap_or(true))
+}
+
+/// `{"count": 2, "exists": true, "first": {...}}` for an `all` the template
+/// reads through QuerySet methods (#3788).
+///
+/// Each method runs on the QuerySet `all()` returned, so Django's own SQL
+/// applies: `count` is `COUNT(*)` (or the length of a prefetched cache),
+/// `exists` is `EXISTS`, `first` / `last` read ONE row. The relation is never
+/// materialized. Every method goes through the one call guard like `all`
+/// itself, and a `first` / `last` row goes through the serialization gate like
+/// any other row.
+fn serialize_all_methods(
+    py: Python,
+    queryset: &Bound<'_, PyAny>,
+    nested: &std::collections::HashMap<String, PathNode>,
+    gate: &Bound<'_, PyAny>,
+    cap: Option<usize>,
+) -> PyResult<Py<PyAny>> {
+    let out = PyDict::new(py);
+    for (name, node) in nested {
+        let Ok(method) = queryset.getattr(name.as_str()) else {
+            continue;
+        };
+        if !djust_core::template_call_guard(&method).may_call() {
+            continue;
+        }
+        let value = match method.call0() {
+            Ok(value) => value,
+            Err(err) if codegen_swallows(py, &err) => continue,
+            Err(err) => return Err(err),
+        };
+        if value.is_none() {
+            out.set_item(name, py.None())?;
+            continue;
+        }
+        let shipped = match node {
+            PathNode::Object(row_tree) if name == "first" || name == "last" => {
+                serialize_all_row(py, &value, row_tree, gate, cap)?
+            }
+            _ => queryset_template_value(&value, 0)?,
+        };
+        out.set_item(name, shipped)?;
+    }
+    Ok(out.into_any().unbind())
 }
 
 /// Serialize a single Python object based on path tree
@@ -5016,6 +5222,7 @@ fn serialize_object_with_paths(
     obj: &Bound<'_, PyAny>,
     tree: &std::collections::HashMap<String, PathNode>,
     gate: &Bound<'_, PyAny>,
+    cap: Option<usize>,
 ) -> PyResult<Py<PyAny>> {
     let result = PyDict::new(py);
 
@@ -5073,7 +5280,7 @@ fn serialize_object_with_paths(
                             // characters and an EMPTY relation was truthy
                             // (#3777).
                             let method_result = if attr_name == "all" {
-                                called_all_to_list(py, &method_result)?
+                                called_all_to_list(py, &method_result, cap)?
                             } else {
                                 method_result
                             };
@@ -5103,12 +5310,26 @@ fn serialize_object_with_paths(
                 // `u.groups.all.name`: `all` is the manager's method and its
                 // children are read off each ROW it yields (#3777).
                 if attr_name == "all" && attr_value.is_callable() {
-                    let Some(rows) = called_all_rows(&attr_value)? else {
-                        continue;
+                    let rows = match call_all(&attr_value)? {
+                        CalledAll::Refused => continue,
+                        CalledAll::Empty => Vec::new(),
+                        CalledAll::Called(queryset) => {
+                            // `u.groups.all.count` / `.first.name` / `.exists`
+                            // (#3788): the template asks the QuerySet, not its
+                            // rows.
+                            if all_is_read_through_methods(&queryset, nested_tree) {
+                                result.set_item(
+                                    attr_name,
+                                    serialize_all_methods(py, &queryset, nested_tree, gate, cap)?,
+                                )?;
+                                continue;
+                            }
+                            capped_rows_or_empty(&queryset, cap)?
+                        }
                     };
                     let mut serialized = Vec::with_capacity(rows.len());
                     for row in &rows {
-                        serialized.push(serialize_all_row(py, row, nested_tree, gate)?);
+                        serialized.push(serialize_all_row(py, row, nested_tree, gate, cap)?);
                     }
                     result.set_item(attr_name, PyList::new(py, serialized)?)?;
                     continue;
@@ -5121,7 +5342,7 @@ fn serialize_object_with_paths(
                 {
                     queryset_template_value(&attr_value, 0)?
                 } else {
-                    serialize_object_with_paths(py, &attr_value, nested_tree, gate)?
+                    serialize_object_with_paths(py, &attr_value, nested_tree, gate, cap)?
                 };
                 result.set_item(attr_name, nested_result)?;
             }
@@ -5142,7 +5363,7 @@ fn serialize_object_with_paths(
                 // index reads (#3777).
                 let rows_are_called_all = attr_name == "all" && attr_value.is_callable();
                 let iterable = if rows_are_called_all {
-                    let Some(rows) = called_all_rows(&attr_value)? else {
+                    let Some(rows) = called_all_rows(&attr_value, cap)? else {
                         continue;
                     };
                     PyList::new(py, rows)?.into_any()
@@ -5178,9 +5399,9 @@ fn serialize_object_with_paths(
                             Err(_) => continue,
                         };
                         let item_result = if rows_are_called_all {
-                            serialize_all_row(py, &item_obj, nested_tree, gate)?
+                            serialize_all_row(py, &item_obj, nested_tree, gate, cap)?
                         } else {
-                            serialize_object_with_paths(py, &item_obj, nested_tree, gate)?
+                            serialize_object_with_paths(py, &item_obj, nested_tree, gate, cap)?
                         };
                         list_results.push(item_result);
                     }

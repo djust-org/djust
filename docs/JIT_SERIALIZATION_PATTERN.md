@@ -578,6 +578,40 @@ added. Before 1.2.1 the key was read by nothing and had no effect (#2984). The
 `jit_cache_backend`, `jit_cache_dir` and `jit_redis_url` keys were never read
 and were removed in 1.3; `djust.C018` warns when one is still set.
 
+### Related managers, `.all` and its methods, and the row cap
+
+A QuerySet is serialized by the fields the template reads, wherever it sits in
+the context: as a top-level value, as a value inside a dict, or inside a dict in
+a list (`{"d": {"users": qs}}`, `[{"label": "a", "users": qs}]`). Looked at the
+other way round, `{% for g in x.groups.all %}{{ g.name }}{% endfor %}` over a
+QuerySet nested in a container renders the same rows it does over a top-level
+one (#3788). A container is searched three levels down.
+
+`.all` on a related manager is read in one of two ways, and the template decides:
+
+- **As rows**: `{% for g in u.groups.all %}`, `{{ u.groups.all|length }}`,
+  `{% if u.groups.all %}`. Every row up to `queryset_all_row_cap` is sent.
+- **Through QuerySet methods only**: `{{ u.groups.all.count }}`,
+  `{% if u.groups.all.exists %}`, `{{ u.groups.all.first.name }}`,
+  `.all.last`. The method runs on the QuerySet (a `COUNT`, an `EXISTS`, a
+  `LIMIT 1`) and its answer is sent; the relation is not read into rows. This
+  holds only when the template does not also read the relation as rows, and
+  the row model has no attribute of that name (a `count` *field* keeps `all` a
+  list of rows). A template that loops over `u.groups.all` and also prints
+  `u.groups.all.count` still renders the count empty on a LiveView (#3801).
+
+```python
+# settings.py
+LIVEVIEW_CONFIG = {
+    'queryset_all_row_cap': 100_000,   # the default; 0 removes the cap
+}
+```
+
+At most this many rows are read per `.all` (a SQL `LIMIT` on an unevaluated
+relation). A longer relation is cut to the cap and a warning is logged. The
+cut is visible: `{{ u.groups.all|length }}` reports the capped number, so a
+template that needs a total should read `.count`, which is never capped.
+
 ### Debugging Serialization Issues
 
 If data isn't appearing in your template, check:
