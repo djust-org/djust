@@ -151,7 +151,7 @@ def _render_template_name_with_markers(
     from ..config import template_auto_call_enabled
     from ..mixins.rust_bridge import _collect_safe_keys
     from ..render_env import apply_render_env_once
-    from ..serialization import build_render_sidecar, normalize_django_value
+    from ..serialization import build_render_sidecar, normalize_django_value, without_form_values
     from ..utils import get_template_dirs
 
     apply_render_env_once()
@@ -167,9 +167,12 @@ def _render_template_name_with_markers(
     namespace = _dj_if_id_namespace(context.get("component_id"))
     if namespace and hasattr(rust_view, "set_dj_if_id_namespace"):
         rust_view.set_dj_if_id_namespace(namespace)
-    rust_view.update_state(normalize_django_value(context))
+    # #3767: a form (or a container holding one) is not state; the sidecar built from the
+    # same context below answers for it, so the flattened copy must not be found first.
+    state_context = without_form_values(context)
+    rust_view.update_state(normalize_django_value(state_context))
     safe_keys: List[str] = []
-    for key, value in context.items():
+    for key, value in state_context.items():
         safe_keys.extend(_collect_safe_keys(value, key))
     if safe_keys:
         rust_view.mark_safe_keys(safe_keys)
