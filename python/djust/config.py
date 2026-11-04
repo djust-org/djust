@@ -236,6 +236,19 @@ class LiveViewConfig:
         # were removed in 1.3 (#2984): nothing read them. djust.C018 warns when
         # one is still set.
         "serialization_max_depth": 3,  # Max depth for nested model serialization (e.g., lease.tenant.user = 3 levels)
+        # Rows read through a related manager's ``.all`` (``{% for g in
+        # u.groups.all %}``, ``{{ u.groups.all|length }}``). The relation is an
+        # unevaluated QuerySet, and the serializer read all of it with no
+        # bound (#3788). At most this many rows are read per ``.all`` -- a SQL
+        # LIMIT on an unevaluated QuerySet -- the rest are dropped and a
+        # warning is logged. The default is a ceiling no ordinary page reaches
+        # (a template rendering 100,000 related rows is already past usable);
+        # lower it to bound memory, ``0`` removes it. A cap is not
+        # free of cost to correctness: ``{{ u.groups.all|length }}`` reports
+        # the capped count, so a template that needs a total should read
+        # ``.count`` (never capped, one query), and one that needs one row
+        # ``.first`` / ``.exists``.
+        "queryset_all_row_cap": 100_000,
         # Serialization behavior (issue #292)
         # When False (default): non-serializable values are converted via str() fallback with a warning log
         # When True: non-serializable values raise TypeError with actionable error message

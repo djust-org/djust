@@ -578,6 +578,65 @@ added. Before 1.2.1 the key was read by nothing and had no effect (#2984). The
 `jit_cache_backend`, `jit_cache_dir` and `jit_redis_url` keys were never read
 and were removed in 1.3; `djust.C018` warns when one is still set.
 
+### Related managers, `.all` and its methods, and the row cap
+
+A QuerySet is serialized by the fields the template reads, wherever it sits in
+the context: as a top-level value, as a value inside a dict, or inside a dict in
+a list (`{"d": {"users": qs}}`, `[{"label": "a", "users": qs}]`). Looked at the
+other way round, `{% for g in x.groups.all %}{{ g.name }}{% endfor %}` over a
+QuerySet nested in a container renders the same rows it does over a top-level
+one (#3788).
+
+A container is searched four containers deep (`{"a": {"b": {"c": {"d": qs}}}}`
+is found, a fifth level is not). **Below that the value is left as the view
+built it and no error is raised**: the QuerySet is sent as a flat field dict, and
+every relation the template walks (`x.groups.all`) renders empty. Keep the
+QuerySet within four containers of the context, or assign it to a top-level name.
+
+`.all` on a related manager is read in one of two ways, and the template decides:
+
+- **As rows**: `{% for g in u.groups.all %}`, `{{ u.groups.all|length }}`,
+  `{% if u.groups.all %}`. Every row up to `queryset_all_row_cap` is sent.
+- **Through QuerySet methods only**: `{{ u.groups.all.count }}`,
+  `{% if u.groups.all.exists %}`, `{{ u.groups.all.first.name }}`,
+  `.all.last`. The method runs on the QuerySet (a `COUNT`, an `EXISTS`, a
+  `LIMIT 1`) and its answer is sent; the relation is not read into rows.
+
+The method reading is used only when the template does **not** also read the
+relation as rows, and the row model has no attribute of that name. So on a
+LiveView these still render the method empty (Django renders the count), because
+the relation is also read whole (#3801):
+
+- `{% for g in u.groups.all %}...{% endfor %}` next to `{{ u.groups.all.count }}`
+- `{{ u.groups.all|length }}` next to `{{ u.groups.all.count }}`
+- `{% if u.groups.all %}{{ u.groups.all.count }}{% endif %}`
+- `{% with gs=u.groups.all %}{{ gs.count }}{% endwith %}`
+- `{{ u.groups.all|slice:":2" }}` next to `.count`
+
+Read the number or the rows, not both, from one `.all`; or annotate the count
+(`Count("groups")`) and read the annotation. A model with a `count`, `exists`,
+`first` or `last` *field* keeps `all` a list of rows, so `u.items.all.count`
+stays empty there (the field is what `{% for i in u.items.all %}{{ i.count }}`
+reads); and on a `list[Model]` the Python serializer drops a row's integer
+`count` / `exists` field (pre-existing, #3801).
+
+```python
+# settings.py
+LIVEVIEW_CONFIG = {
+    'queryset_all_row_cap': 100_000,   # the default; 0 removes the cap
+}
+```
+
+At most this many rows are read per `.all` (a SQL `LIMIT` on an unevaluated
+relation). A longer relation is cut to the cap and a warning is logged. The cut
+is visible: `{{ u.groups.all|length }}` reports the capped number, so a template
+that needs a total should read `.count`, which is never capped. `0`, and any value
+of 2**62 or more, removes the cap; `None` is the same as unset (the default, not
+"no cap"); anything that is not a non-negative integer is logged and replaced by
+the default. **The cap bounds the work the serializer does, not memory**: the
+optimizer still prefetches the whole relation before the serializer runs
+(#3801), so a huge relation is loaded whatever the cap is.
+
 ### Debugging Serialization Issues
 
 If data isn't appearing in your template, check:
