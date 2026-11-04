@@ -4,8 +4,9 @@
 ``mark_safe(icons.get(name, ""))``: ``size='1" onload="alert(1)'`` rendered
 ``<svg width="1" onload="alert(1)" ...>``, the banned ``mark_safe(f'...')`` with an
 interpolated value (CLAUDE.md, Security Rules 1). It is now validated (a number or a CSS
-length; anything else renders the default size and logs a warning, never raising) and the
-markup is built with ``format_html``.
+length; anything else renders the default size and logs a warning) and the markup is built with
+``format_html``. A value with no text at all (a ``__str__`` that raises, an int over the 4300-digit
+limit) renders the default too, where it used to propagate.
 
 What each class proves:
 
@@ -17,12 +18,10 @@ What each class proves:
   library, so one function is what both engines run.
 * ``TestBenignSizeIsUnchanged`` pins the output for the sizes that worked before against a
   golden written from the pre-fix markup, byte for byte.
-* ``TestNoInterpolatedMarkSafeInTheming`` is derived from the source (an AST walk of every
-  file under ``djust/theming``): no ``mark_safe`` call takes an interpolated string. Its
-  detector is checked against a synthetic bug trigger of each shape, so it cannot go green
-  by matching nothing.
+* The repo-wide rule ("no ``mark_safe`` of a string built from a raw value") is
+  ``test_safe_markup_guard_3766.py``.
 
-Refs #3766, #3749, #1825, #1468.
+Refs #3766, #3775, #3749, #1825, #1468.
 """
 
 from __future__ import annotations
@@ -30,6 +29,7 @@ from __future__ import annotations
 import ast
 import logging
 from decimal import Decimal
+from fractions import Fraction
 from html.parser import HTMLParser
 from pathlib import Path
 
@@ -40,7 +40,6 @@ from django.utils.functional import lazy
 pytestmark = pytest.mark.theming
 
 ROOT = Path(__file__).resolve().parents[2]
-THEMING = ROOT / "python/djust/theming"
 
 ICONS = ("check", "x", "alert", "info")
 DEFAULT = "20"
@@ -53,6 +52,25 @@ GOLDEN = {
     "alert": '<svg width="{size}" height="{size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>',
     "info": '<svg width="{size}" height="{size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>',
 }
+
+
+class _RaisingStr:
+    """A value whose ``__str__`` raises (hostile or just broken)."""
+
+    def __str__(self) -> str:
+        raise RuntimeError("no text for you")
+
+
+class _ChangingStr:
+    """A value whose ``__str__`` answers differently each time (a TOCTOU between check and print)."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def __str__(self) -> str:
+        self.calls += 1
+        return "16" if self.calls == 1 else '16" onload="alert(1)'
+
 
 #: What a caller can hand ``size``. Each must render the DEFAULT size and nothing else.
 HOSTILE = {
@@ -105,6 +123,16 @@ HOSTILE = {
     "dict": {"a": 1},
     "object": object(),
     "decimal-nan": Decimal("NaN"),
+    # Deliberate refusals (the number is outside what an icon can be, or is not a plain number):
+    "tiny-float": 0.0001,
+    "above-range-float": 1234.5,
+    "above-range-int": 1001,
+    "fraction": Fraction(3, 2),
+    "decimal-huge": Decimal("1E+30"),
+    "decimal-snan": Decimal("sNaN"),
+    # ``str()`` itself fails: an int over the 4300-digit limit, and a raising ``__str__``.
+    "int-over-str-limit": 10**5000,
+    "raising-str": _RaisingStr(),
 }
 
 #: Values that worked before and must keep working: (value, what is printed).
@@ -116,6 +144,18 @@ BENIGN = {
     "big-allowed": (1000, "1000"),
     "float": (1.5, "1.5"),
     "float-whole": (16.0, "16"),
+    # CSS units are case-insensitive, and a computed float carries binary noise.
+    "upper-px": ("16PX", "16px"),
+    "upper-rem": ("1.5REM", "1.5rem"),
+    "mixed-case-unit": ("2Em", "2em"),
+    "upper-percent": ("50%", "50%"),
+    "computed-float": (14 * 1.1, "15.4"),
+    "one-third": (1 / 3, "0.333"),
+    "float-sum": (0.1 + 0.2, "0.3"),
+    "decimal-exponent": (Decimal("1E+2"), "100"),
+    "decimal-noise": (Decimal("15.40000000001"), "15.4"),
+    "float-three-decimals": (0.125, "0.125"),
+    "string-extra-zero": ("1.50", "1.5"),
     "decimal": (Decimal("16"), "16"),
     "decimal-frac": (Decimal("1.25"), "1.25"),
     "leading-zero": ("016", "16"),
@@ -206,6 +246,16 @@ class TestHostileSize:
             "or CSS length; rendering size 20"
         )
 
+    def test_the_text_of_the_value_is_read_once(self):
+        """What is judged is what is printed: a ``__str__`` that changes cannot pass then print."""
+        from djust.theming.templatetags.theme_components import theme_icon
+
+        value = _ChangingStr()
+        html = theme_icon("check", value)
+        assert value.calls == 1
+        assert html == GOLDEN["check"].format(size="16")
+        assert "onload" not in html
+
     def test_none_means_not_given(self, engine, caplog):
         from djust.theming.templatetags import theme_components
 
@@ -255,87 +305,17 @@ class TestBenignSizeIsUnchanged:
 
 
 # --------------------------------------------------------------------------- #
-# The repo rule, derived from the source
+# The repo rule. The first version of this file carried a detector that matched
+# ``mark_safe(<f-string>)`` literally; it found nothing in the pre-fix ``theme_icon`` (the f-strings
+# sat in a dict) and is replaced by ``scripts/lib/safe_markup_taint.py``, tested in
+# ``test_safe_markup_guard_3766.py``.
 
 
-def _interpolates(node: ast.AST) -> bool:
-    """Whether an expression builds a string out of other values (f-string, ``%``, ``.format``, ``+``)."""
-    for child in ast.walk(node):
-        if isinstance(child, ast.JoinedStr) and any(
-            isinstance(v, ast.FormattedValue) for v in child.values
-        ):
-            return True
-        if isinstance(child, ast.BinOp) and isinstance(child.op, (ast.Mod, ast.Add)):
-            # ``"a" + "b"`` and ``"%d" % 3`` are constant folds; anything else is data.
-            if not (isinstance(child.left, ast.Constant) and isinstance(child.right, ast.Constant)):
-                return True
-        if (
-            isinstance(child, ast.Call)
-            and isinstance(child.func, ast.Attribute)
-            and child.func.attr == "format"
-        ):
-            return True
-    return False
-
-
-def _mark_safe_interpolations(source: str) -> list[int]:
-    lines = []
-    for node in ast.walk(ast.parse(source)):
-        if (
-            isinstance(node, ast.Call)
-            and (
-                (isinstance(node.func, ast.Name) and node.func.id == "mark_safe")
-                or (isinstance(node.func, ast.Attribute) and node.func.attr == "mark_safe")
-            )
-            and node.args
-            and _interpolates(node.args[0])
-        ):
-            lines.append(node.lineno)
-    return lines
-
-
-class TestNoInterpolatedMarkSafeInTheming:
-    def test_the_detector_sees_each_shape(self):
-        """A synthetic bug trigger per shape: a detector that matches nothing proves nothing."""
-        trigger = {
-            "f-string": 'mark_safe(f"<svg width={size}>")',
-            "format": 'mark_safe("<svg width={}>".format(size))',
-            "percent": 'mark_safe("<svg width=%s>" % size)',
-            "concat": 'mark_safe("<svg width=" + size + ">")',
-            "module-attr": 'safestring.mark_safe(f"<i>{x}</i>")',
-        }
-        for label, code in trigger.items():
-            assert _mark_safe_interpolations(code), label
-        clean = {
-            "constant": 'mark_safe("<br>")',
-            "adjacent-constants": 'mark_safe("<a>" "<b>")',
-            "constant-concat": 'mark_safe("<a>" + "<b>")',
-            "f-string-without-values": 'mark_safe(f"<br>")',
-            "format_html": 'format_html("<i>{}</i>", x)',
-            "name": "mark_safe(rendered)",
-        }
-        for label, code in clean.items():
-            assert not _mark_safe_interpolations(code), label
-
-    def test_the_theming_package_has_no_interpolated_mark_safe(self):
-        files = sorted(THEMING.rglob("*.py"))
-        assert files, "found no djust_theming sources to scan"
-        found = {}
-        for path in files:
-            lines = _mark_safe_interpolations(path.read_text())
-            if lines:
-                found[str(path.relative_to(ROOT))] = lines
-        assert found == {}, (
-            "mark_safe() of an interpolated string (use format_html / escape, "
-            f"CLAUDE.md Security Rules 1): {found}"
-        )
-
-    def test_theme_icon_builds_no_string_out_of_size(self):
-        """The old shape hid the f-string in a dict that ``mark_safe`` later read."""
-        path = THEMING / "templatetags/theme_components.py"
+class TestThemeIconBuildsNoStringOutOfSize:
+    def test_the_function_holds_no_f_string_and_no_mark_safe_of_a_built_string(self):
+        path = ROOT / "python/djust/theming/templatetags/theme_components.py"
         tree = ast.parse(path.read_text())
         fn = next(
             n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "theme_icon"
         )
-        assert not _interpolates(fn), "theme_icon interpolates a value into a string"
         assert not any(isinstance(n, ast.JoinedStr) for n in ast.walk(fn))
