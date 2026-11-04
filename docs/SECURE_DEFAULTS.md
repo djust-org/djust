@@ -92,11 +92,14 @@ flag, a PII column — because serialization defaulted to *allow everything*.
 >   the column; an unchecked checkbox demotes the user), so the floor guards
 >   what a template can *read back*, not what the form draws. Tracked in
 >   [#3797](https://github.com/djust-org/djust/issues/3797).
-> - *Components strip a value only when that cannot clobber.* `dj_form`,
+> - *Components draw a disabled floor field without its value; an editable one is not stripped.* `dj_form`,
 >   `combobox` and `rich_select` draw a `disabled` floor field without its
 >   value (Django ignores what is posted for it). An *editable* floor field is
 >   drawn with its value, and the component logs once that it did; declare the
 >   form field `disabled=True`, or leave it out, to draw it without.
+> - *`{% if form.<floor field> in form %}` is false* where Django says true
+>   (`==` and aliases compare correctly)
+>   ([#3802](https://github.com/djust-org/djust/issues/3802)).
 > - *A plain `Form` has no model floor*
 >   ([#3799](https://github.com/djust-org/djust/issues/3799)), and a typed
 >   `PasswordInput` value that is not a model column (`UserCreationForm`'s

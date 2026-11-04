@@ -372,6 +372,12 @@ class TestFormsets:
         "{{ fs.forms.0.initial.password }}",
         "{% for f in fs %}{{ f.cleaned_data.password }}{{ f.password.value }}{% endfor %}",
         "{{ fs.initial_forms.0.cleaned_data.password }}",
+        # The management form is a plain Form that holds the formset's WHOLE submitted data.
+        "{{ fs.management_form.data }}",
+        "{{ fs.management_form.data.items }}",
+        "{{ fs.management_form.data|pprint }}",
+        "{% for k, v in fs.management_form.data.items %}{{ k }}={{ v }};{% endfor %}",
+        "{{ fs.empty_form.initial.password }}{{ fs.empty_form.data }}",
     ]
 
     def _bound(self, user):
@@ -454,6 +460,72 @@ class TestFormsets:
             {"form-TOTAL_FORMS": "1", "form-INITIAL_FORMS": "0", "form-0-password": "typed"}
         )
         assert "typed" in render(engine, "{{ fs.data }}", fs=fs)
+
+    def test_the_management_form_still_carries_its_counts(self, engine, user):
+        fs = self._bound(user)
+        out = render(
+            engine,
+            "{{ fs.management_form.TOTAL_FORMS.value }}|{{ fs.management_form.data|length }}"
+            "|{{ fs.management_form.cleaned_data.TOTAL_FORMS }}",
+            fs=fs,
+        )
+        # `length` counts what the form was given: the filtered copy has one key fewer (the password).
+        assert out == "1|%d|1" % (len(_formset_data(user)) - 1)
+
+
+class TestAFloorFieldIsTheSameFieldEachTimeItIsReached:
+    """The engine decides what ``==`` means from the object it converts (a ``BoundField`` has the
+    default ``__eq__`` and ``__repr__``, so it compares by identity). A fresh proxy per walk made
+    ``{% if form.is_staff == form.is_staff %}`` false; it is true on main."""
+
+    @pytest.mark.parametrize(
+        "src,expected",
+        [
+            ("{% if form.is_staff == form.is_staff %}T{% else %}F{% endif %}", "T"),
+            ("{% if form.is_staff != form.is_staff %}T{% else %}F{% endif %}", "F"),
+            ("{% if form.is_staff == form.username %}T{% else %}F{% endif %}", "F"),
+            ("{% if form.is_staff != form.username %}T{% else %}F{% endif %}", "T"),
+            (
+                "{% with f=form.is_staff %}{% if f == form.is_staff %}T{% else %}F{% endif %}{% endwith %}",
+                "T",
+            ),
+            ("{% if form.username == form.username %}T{% else %}F{% endif %}", "T"),
+            ("{% if form.username in form %}T{% else %}F{% endif %}", "T"),
+        ],
+    )
+    def test_it_compares_as_it_does_on_the_django_engine(self, engine, user, src, expected):
+        from django.template import Context, Engine
+
+        form = UserChangeForm(instance=user)
+        assert render(engine, src, form=form) == expected
+        control = Engine().from_string(src).render(Context({"form": form}))
+        assert control == expected, "the expectation is Django's own answer"
+
+    def test_a_floor_field_is_not_found_by_in_a_known_limit(self, engine, user):
+        """Django says True. The left operand is a floor proxy and ``in`` compares it with the real
+        fields the form's handle yields (see the comment in ``serialization``; #3802)."""
+        form = UserChangeForm(instance=user)
+        src = "{% if form.is_staff in form %}T{% else %}F{% endif %}"
+        assert render(engine, src, form=form) == "F"
+
+    def test_one_proxy_per_bound_field_and_floor(self, user):
+        from djust.serialization import _protect_sidecar_walk
+
+        form = UserChangeForm(instance=user)
+        first = _protect_sidecar_walk(form["is_staff"])
+        assert first is not form["is_staff"]
+        assert _protect_sidecar_walk(form["is_staff"]) is first
+        assert _protect_sidecar_walk(form["password"]) is not first
+        with override_settings(DJUST_SENSITIVE_FIELDS=["username"]):
+            assert _protect_sidecar_walk(form["is_staff"]) is not first, (
+                "a changed floor is a new proxy"
+            )
+
+    def test_the_proxy_keeps_the_real_fields_class_of_equality(self, user):
+        from djust.serialization import _SidecarBoundFieldProxy
+
+        assert _SidecarBoundFieldProxy.__eq__ is object.__eq__
+        assert _SidecarBoundFieldProxy.__repr__ is object.__repr__
 
 
 # ---------------------------------------------------------------------------------------------

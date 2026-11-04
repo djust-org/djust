@@ -2135,12 +2135,16 @@ class _SidecarFormSetProxy:
         if name.startswith("_"):
             raise AttributeError(name)
         value = getattr(object.__getattribute__(self, "_fs"), name)
+        floor = object.__getattribute__(self, "_floor")
         if name in _FLOOR_FORM_DICT_ATTRS:
             return _without_floor_keys(
-                value,
-                object.__getattribute__(self, "_floor"),
-                _floor_data_key_readable if name == "data" else None,
+                value, floor, _floor_data_key_readable if name == "data" else None
             )
+        if name == "management_form":
+            # A plain ``Form`` (so the walk would leave it alone) that holds the formset's WHOLE
+            # submitted data: ``fs.management_form.data`` is ``form-0-password`` and all. It is
+            # proxied with the formset's floor, so its ``data`` is filtered like the formset's own.
+            return _SidecarFormProxy(value, floor)
         return _protect_sidecar_walk(value)
 
     def __getitem__(self, key: Any) -> Any:
@@ -2235,16 +2239,37 @@ class _SidecarBoundFieldProxy:
     def __html__(self) -> str:
         return object.__getattribute__(self, "_bf").__html__()  # type: ignore[no-any-return]
 
-    def __repr__(self) -> str:
-        return repr(object.__getattribute__(self, "_bf"))
+    # No ``__repr__`` / ``__eq__`` / ``__hash__`` on purpose. The engine decides what ``==`` means
+    # for an object when it converts it: a class with the default ``__eq__`` AND ``__repr__`` (a
+    # ``BoundField`` is one) compares by identity, so ``{% if form.is_staff == form.is_staff %}`` is
+    # true; a class that overrides either is never equal to anything. The proxy keeps the real
+    # field's class of equality by keeping the defaults, and :func:`_cached_bound_field_proxy` makes
+    # one proxy per ``BoundField``, so the same field is the same object each time a walk reaches it.
+    #
+    # It does NOT make ``{% if form.is_staff in form %}`` true: ``in`` walks the form's own handle,
+    # whose items are the real fields, and an identity compare of a proxy with the real field is
+    # false. Converting the real field instead (a ``__djust_serialize__`` hook) was tried and
+    # refused: the handle the engine keeps is then the real field, and ``{% for w in form.password %}``
+    # iterates its subwidgets, which carry the value. Tracked in the issue named in the changelog.
 
-    def __eq__(self, other: object) -> Any:
-        if isinstance(other, _SidecarBoundFieldProxy):
-            other = object.__getattribute__(other, "_bf")
-        return object.__getattribute__(self, "_bf").__eq__(other)
 
-    def __hash__(self) -> int:
-        return hash(object.__getattribute__(self, "_bf"))
+def _cached_bound_field_proxy(bound_field: Any, floor: tuple) -> "_SidecarBoundFieldProxy":
+    """ONE proxy per ``BoundField`` (and floor), so the same field reached twice is the same object.
+
+    Every walk step used to wrap a fresh proxy, and the engine compares an identity-class object by
+    its address: ``{% if form.is_staff == form.is_staff %}`` went false (true on main). A form builds
+    each ``BoundField`` once and keeps it, so the proxy rides on it. The floor is compared too: a proxy
+    made under an older ``DJUST_SENSITIVE_FIELDS`` is not reused after the setting changes.
+    """
+    cached = bound_field.__dict__.get("_djust_floor_proxy")
+    if cached is not None and object.__getattribute__(cached, "_floor") == floor:
+        return cached  # type: ignore[no-any-return]
+    proxy = _SidecarBoundFieldProxy(bound_field, floor)
+    try:
+        bound_field._djust_floor_proxy = proxy
+    except AttributeError:  # pragma: no cover - a BoundField subclass with __slots__
+        pass
+    return proxy
 
 
 def unwrap_form_proxy(value: Any) -> Any:
@@ -2293,7 +2318,7 @@ def _protect_sidecar_walk(value: Any) -> Any:
         floor = _model_form_floor(value.form)
         if floor is None or _floor_field_readable(floor, value.name):
             return value
-        return _SidecarBoundFieldProxy(value, floor)
+        return _cached_bound_field_proxy(value, floor)
     if isinstance(value, formset):
         floor = _formset_floor(value)
         return value if floor is None else _SidecarFormSetProxy(value, floor)
