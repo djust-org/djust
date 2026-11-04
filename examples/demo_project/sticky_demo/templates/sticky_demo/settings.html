@@ -28,6 +28,8 @@
         <em>(notifications slot — waiting for reattach)</em>
     </div>
 {% endblock %}
-{# No live_render inside this template — the stickies arrive via the
-   client-side reattach flow, not a fresh mount. #}
+{% comment %}
+No live_render inside this template — the stickies arrive via the
+client-side reattach flow, not a fresh mount.
+{% endcomment %}
 {% block sticky_embeds %}{% endblock %}
