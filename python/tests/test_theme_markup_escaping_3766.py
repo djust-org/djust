@@ -22,7 +22,9 @@ What each class proves:
 * ``TestHostileFormValues`` drives the real tags through BOTH engines and reads the FINAL tags with
   ``html.parser`` (the attributes the browser sees), never the string or the sanitiser's verdict.
 * ``TestBenignFormOutputIsUnchanged`` compares 40 renderings (config prefix x layout x form) to
-  ``fixtures/theme_form_golden_3766.json``, captured from the code BEFORE the change.
+  ``fixtures/theme_form_golden_3766.json``, captured from the code BEFORE the change. The switcher
+  golden is JSON too (``theme_switcher_inline_golden_3766.json``): the markup has trailing
+  whitespace, which the repo's whitespace hooks would strip from a ``.html`` file.
 * ``TestThemeSwitcherChunk`` is the same pair for the inline switcher.
 
 Refs #3766, #3775, #1825, #1468.
@@ -266,7 +268,9 @@ class TestThemeSwitcherChunk:
         return _render_theme_switcher(self._state(), presets)
 
     def test_byte_for_byte_what_the_code_before_the_change_printed(self):
-        golden = (FIXTURES / "theme_switcher_inline_golden_3766.html").read_text()
+        golden = json.loads((FIXTURES / "theme_switcher_inline_golden_3766.json").read_text())[
+            "html"
+        ]
         assert self._render(self.PRESETS) == golden
 
     @pytest.mark.parametrize("label", sorted(BREAKOUTS))
@@ -276,7 +280,9 @@ class TestThemeSwitcherChunk:
         presets[1][field] = BREAKOUTS[label]
         html = self._render(presets)
         # The switcher prints its own constant ``onclick`` handlers; a breakout adds to them.
-        golden = (FIXTURES / "theme_switcher_inline_golden_3766.html").read_text()
+        golden = json.loads((FIXTURES / "theme_switcher_inline_golden_3766.json").read_text())[
+            "html"
+        ]
         assert _breakout_findings(html) == _breakout_findings(golden), html
         options = [attrs for tag, attrs in _tags(html) if tag == "option"]
         assert len(options) == len(presets)
