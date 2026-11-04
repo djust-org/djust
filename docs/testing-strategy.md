@@ -200,6 +200,38 @@ of GitHub's 360-minute default; it must stay above the dump threshold so the dum
 fire first. Neither is a diagnosis on its own: the dump needs a hang longer than 20
 minutes, the timeout only bounds it.
 
+### The merge queue is on (ruleset `merge-queue`)
+
+The `merge-queue` ruleset on the default branch requires the `test-summary` check and
+turns on the GitHub merge queue (squash, grouping `ALLGREEN`, up to 3 entries built and
+merged together, 90-minute check timeout). Repository admins are bypass actors, so the
+direct admin merge path still works as a fallback. To roll the queue back, set the
+ruleset's enforcement to `disabled` (Settings, Rules, Rulesets) or delete it; nothing
+else depends on it. The first real `merge_group` run (PR #3822, a docs-only change) confirmed the scope rules'
+assumptions for a single-entry queue: `MG_BASE_SHA` was the previous `main` tip, `MG_HEAD_SHA` the
+queue commit, `MG_BASE_REF` was `refs/heads/main`, `origin/main` was present after checkout, and the
+`base_sha` diff and the merge-base diff listed the same files, so `changes (scope)` classified the run
+docs-only and `test-summary` passed in 23 s with every heavy job skipped. A queue entry holding
+several PRs has not been observed yet; the two-diff union in `scripts/ci-change-scope.py` exists for
+that case.
+
+Required approving reviews on `main` are 0 (GitHub will not let the author approve their own PR, and
+no other account has write access), so the queue's gate is the required `test-summary` check. Pushes
+and merges to `main` are restricted to the repository owner through branch protection.
+
+### Reading CI logs: `gh run view --log` truncates silently
+
+`gh run view --job <id> --log` stops at the first log line over 64 KiB, with no error,
+so a job can look like it went silent mid-run when it finished normally (this is what
+made #3800 look like a hang). Fetch the full log through the API instead:
+
+```bash
+gh api --allow-escape-sequences repos/<owner>/<repo>/actions/jobs/<job-id>/logs > job.log
+```
+
+`tests/short_param_ids.py` keeps collected test ids short so the pytest lines stay far
+below that limit.
+
 ## Measurements and next improvements
 
 Main `0aa117d6` [CI run 37083226366](https://github.com/djust-org/djust/actions/runs/37083226366)

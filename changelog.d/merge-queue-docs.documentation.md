@@ -1,0 +1,1 @@
+- Documented the merge-queue ruleset (how it is set up, how to roll it back) and the `gh run view --log` 64 KiB truncation gotcha in `docs/testing-strategy.md`.
