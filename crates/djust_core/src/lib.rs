@@ -4324,9 +4324,7 @@ impl<'py> FromPyObject<'_, 'py> for Value {
             //
             // Shadows `ob` (as a `Bound`) so the two call sites below keep their spelling: the
             // structural pin on `opaque_value` having exactly one caller reads that text.
-            let Some(ob) = floored_form_handle(&ob.to_owned()) else {
-                return Ok(Value::None);
-            };
+            let ob = floored_form_handle(&ob.to_owned());
             if let Some(encoded) = opaque_value(&ob.to_owned()) {
                 return Ok(Value::Encoded(Box::new(encoded)));
             }
@@ -4363,13 +4361,18 @@ impl<'py> FromPyObject<'_, 'py> for Value {
 /// floored object once, here, is the one place that holds them all; guarding each sink was the
 /// chain of point fixes that kept leaving the neighbour.
 ///
-/// `None` is the floor failing to enforce (it raised): the value is dropped.
-fn floored_form_handle<'py>(ob: &Bound<'py, PyAny>) -> Option<Bound<'py, PyAny>> {
+/// The floor failing to enforce (it raised) drops the value: an EMPTY STRING is returned in its place
+/// (it renders nothing, iterates to nothing, is falsy, and has no field to walk to). It is returned
+/// here, not as an early `return` from the conversion, because the structural reader of the fallback
+/// block counts that block's exits (`scripts/filter-parity-differential.py::_fallback_arms`); and not
+/// `None`, which this arm would carry as a one-element `Encoded` that `{% for %}` refuses.
+fn floored_form_handle<'py>(ob: &Bound<'py, PyAny>) -> Bound<'py, PyAny> {
     // Forms and fields iterate; nothing else this concerns does. A type check, no Python call.
     if !type_defines_iter(ob) || !context::live_handle_is_form_object(ob.py(), ob) {
-        return Some(ob.clone());
+        return ob.clone();
     }
     context::protect_sidecar_walk_strict(ob.py(), ob.clone())
+        .unwrap_or_else(|| pyo3::types::PyString::new(ob.py(), "").into_any())
 }
 
 /// The most items the conversion will read out of ANY object, sized or not

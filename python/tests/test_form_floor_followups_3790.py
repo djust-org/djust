@@ -799,3 +799,73 @@ class TestTheReviewersRepros:
             "{{ w.data.value }}{% endfor %}{% endfor %}{% endfor %}"
         )
         assert user.password not in render(engine, src, fs=self._bound_formset(user))
+
+
+class TestOnlyAModelFormHasAModelFloor:
+    """The floor is widened from ``BaseModelForm`` to any form that carries a pinned floor (a formset's
+    management form), so it must not widen to every ``BaseForm``: a plain ``Form`` that happens to
+    carry ``self.instance = <Model>`` is the view author's own form."""
+
+    class ChangeEmailForm(forms.Form):
+        password = forms.CharField(required=False)
+
+        def __init__(self, *args, instance=None, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.instance = instance
+
+    def _form(self, user):
+        form = self.ChangeEmailForm({"password": "typed-pw"}, instance=user)
+        assert form.is_valid()
+        return form
+
+    def test_a_plain_form_with_an_instance_reads_back_as_django_does(self, engine, user):
+        from django.template import Context, Engine
+
+        src = "{{ form.password.value }}|{{ form.data.password }}|{{ form.cleaned_data.password }}"
+        form = self._form(user)
+        assert render(engine, src, form=form) == "typed-pw|typed-pw|typed-pw"
+        assert (
+            Engine().from_string(src).render(Context({"form": form}))
+            == "typed-pw|typed-pw|typed-pw"
+        )
+
+    def test_a_loop_over_it_keeps_the_field(self, engine, user):
+        src = "{% for f in form %}{{ f.name }}={{ f.value }};{% endfor %}"
+        assert render(engine, src, form=self._form(user)) == "password=typed-pw;"
+
+    def test_it_is_not_given_a_model_floor(self, user):
+        from djust.serialization import _model_form_floor, _protect_sidecar_walk
+
+        form = self._form(user)
+        assert _model_form_floor(form) is None
+        assert _protect_sidecar_walk(form) is form
+        assert _protect_sidecar_walk(form["password"]) is form["password"]
+
+    def test_a_management_form_handed_over_directly_has_no_floor(self, engine, user):
+        """Only a formset's OWN ``management_form`` is pinned (#3799 for the rest)."""
+        FormSet = modelformset_factory(User, form=UserChangeForm, extra=0)
+        fs = FormSet(_formset_data(user), queryset=User.objects.filter(pk=user.pk))
+        assert fs.is_valid()
+        out = render(engine, "{{ mf.data }}", mf=fs.management_form)
+        assert "form-0-password" in out
+
+    def test_a_formsets_own_management_form_is_pinned(self, engine, user):
+        FormSet = modelformset_factory(User, form=UserChangeForm, extra=0)
+        fs = FormSet(_formset_data(user), queryset=User.objects.filter(pk=user.pk))
+        assert fs.is_valid()
+        assert "form-0-password" not in render(engine, "{{ fs.management_form.data }}", fs=fs)
+
+
+class TestTheFloorFieldsSubwidgetsAreEmptyInEveryShape:
+    """What a ``BoundField`` proxy answers when indexed, sliced or given the wrong type."""
+
+    def test_index_slice_and_type(self, user):
+        from djust.serialization import _protect_sidecar_walk
+
+        proxy = _protect_sidecar_walk(UserChangeForm(instance=user)["password"])
+        assert proxy[0:2] == [] and proxy[:] == [] and proxy[5:] == []
+        with pytest.raises(IndexError):
+            proxy[0]
+        with pytest.raises(TypeError):
+            proxy["name"]
+        assert list(proxy) == []

@@ -1879,15 +1879,16 @@ _FORM_CLASSES: Optional[tuple] = None
 
 
 def _form_classes() -> tuple:
-    """``(BoundField, BaseForm, BaseFormSet)``, imported on first use: ``django.forms`` is not
-    needed by anything that renders no form, and this runs once per template path segment."""
+    """``(BoundField, BaseForm, BaseFormSet, BaseModelForm)``, imported on first use: ``django.forms``
+    is not needed by anything that renders no form, and this runs once per template path segment."""
     global _FORM_CLASSES
     if _FORM_CLASSES is None:
         from django.forms import BaseForm
         from django.forms.boundfield import BoundField
         from django.forms.formsets import BaseFormSet
+        from django.forms.models import BaseModelForm
 
-        _FORM_CLASSES = (BoundField, BaseForm, BaseFormSet)
+        _FORM_CLASSES = (BoundField, BaseForm, BaseFormSet, BaseModelForm)
     return _FORM_CLASSES
 
 
@@ -1919,6 +1920,11 @@ def _model_form_floor(form: Any) -> Optional[tuple]:
     pinned = form.__dict__.get("_djust_floor") if hasattr(form, "__dict__") else None
     if pinned is not None:
         return pinned  # type: ignore[no-any-return]
+    # ONLY a ``ModelForm`` (or a form with a pinned floor, above) has a model floor. A plain ``Form``
+    # that happens to carry ``self.instance = <Model>`` is the view author's own form: its fields are
+    # not the model's columns, and "a plain Form has no model floor" stays true.
+    if not isinstance(form, _form_classes()[3]):
+        return None
     instance = getattr(form, "instance", None)
     if not isinstance(instance, models.Model):
         return None
@@ -2155,11 +2161,14 @@ class _SidecarFormSetProxy:
             # A plain ``Form`` (so the walk would leave it alone) that holds the formset's WHOLE
             # submitted data: ``fs.management_form.data`` is ``form-0-password`` and all. It is
             # proxied with the formset's floor, so its ``data`` is filtered like the formset's own.
+            # The pin is the ONE mechanism: ``_protect_sidecar_walk`` proxies a pinned form (and
+            # the fields of it, and the conversion floors it), so the generic return below is
+            # the proxy. Returning ``_SidecarFormProxy`` here as well was a second mechanism
+            # that no test could separate from the first.
             try:
                 value._djust_floor = floor
             except AttributeError:  # pragma: no cover - a form class with __slots__
                 pass
-            return _SidecarFormProxy(value, floor)
         return _protect_sidecar_walk(value)
 
     def __getitem__(self, key: Any) -> Any:
@@ -2329,7 +2338,7 @@ def _protect_sidecar_walk(value: Any) -> Any:
         return protected
     if value is None or type(value) in _WALK_SCALARS:
         return value
-    bound_field, model_form, formset = _form_classes()
+    bound_field, model_form, formset, _ = _form_classes()
     if isinstance(value, model_form):
         floor = _model_form_floor(value)
         return value if floor is None else _SidecarFormProxy(value, floor)

@@ -97,6 +97,10 @@ flag, a PII column — because serialization defaulted to *allow everything*.
 >   value (Django ignores what is posted for it). An *editable* floor field is
 >   drawn with its value, and the component logs once that it did; declare the
 >   form field `disabled=True`, or leave it out, to draw it without.
+> - *A management form handed to the template DIRECTLY* as a context variable is a plain
+>   `Form` with no floor ([#3799](https://github.com/djust-org/djust/issues/3799)); only a
+>   formset's own `management_form` is pinned. The same goes for any plain `Form` that
+>   carries `self.instance = <Model>`: the floor is a `ModelForm`'s.
 > - *A plain `Form` has no model floor*
 >   ([#3799](https://github.com/djust-org/djust/issues/3799)), and a typed
 >   `PasswordInput` value that is not a model column (`UserCreationForm`'s
