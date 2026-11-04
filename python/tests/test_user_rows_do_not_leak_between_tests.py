@@ -16,9 +16,13 @@ plain (rolled-back) database may write a user through ``sync_to_async``. It scan
 ``python/tests/`` and ``python/djust/tests/`` by AST, so a new polluter fails here, at the polluter,
 naming the test, rather than as an unrelated failure far away.
 
-Scope, stated: this pins USER rows written through ``sync_to_async`` / ``database_sync_to_async``.
-Other tables (``Session`` rows saved through ``sync_to_async``) leak the same way but nothing reads
-them by position; they are not pinned.
+Scope, stated: this pins USER rows written through ``sync_to_async`` / ``database_sync_to_async``,
+written in the test's own body. Other tables leak the same way (``Session`` rows saved through
+``sync_to_async``: measured at 293 tests in 57 files, nearly all through a helper such as
+``_make_db_session`` that this scan cannot see), but nothing reads them by position, and marking
+each ``transaction=True`` would flush the database after every one. ``tests/db_row_isolation.py``
+(#3782) sweeps the rows another connection committed under a rolled-back ``django_db`` after each
+test, for ``User``, ``Group``, ``Permission`` and ``Session``, and reports which tests did it.
 
 Gate-off: the scanner is exercised against synthetic sources, so a scanner that stopped matching
 (the mutation text not found, or the mark logic inverted) fails ``TestTheScanner`` rather than

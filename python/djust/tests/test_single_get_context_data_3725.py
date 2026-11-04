@@ -31,6 +31,7 @@ import ast
 import asyncio
 import inspect
 import json
+import re
 import uuid
 
 import pytest
@@ -256,10 +257,44 @@ def test_an_overriding_get_context_data_runs_once_per_get(name):
 def test_the_page_carries_the_value_the_one_call_computed(name):
     """The render took call 1's context; it did not compute its own second one."""
     html = Client().get("/" + name.lower() + "/").content.decode()
+    _assert_only_the_first_call_reached(name, html)
+
+
+def _assert_only_the_first_call_reached(name: str, html: str) -> None:
+    """The page carries call 1's stamp (101) and no later call's, in each place it prints one.
+
+    The stamps are read from the two places the templates print them (the root's
+    ``{{ n }}-{{ stamp }}`` and the shell's ``shell=[{{ stamp }}]``), not by searching the whole
+    page for "102": the page also carries random text (the CSRF token is 64 characters of
+    [A-Za-z0-9]), which contains "102" about once in a thousand renders and failed this test on
+    CI (#3794).
+    """
     assert "1-101" in html, html
-    assert "102" not in html, "a second evaluation of get_context_data reached the page"
-    if name.endswith("_shell"):
-        assert "shell=[101]" in html, html
+    stamps = sorted(
+        value for pair in re.findall(r">1-(\d+)<|shell=\[(\d+)\]", html) for value in pair if value
+    )
+    expected = ["101", "101"] if name.endswith("_shell") else ["101"]
+    assert stamps == expected, (
+        f"the page should carry only call 1's stamp (101) in each place it prints one; "
+        f"got {stamps}: a second evaluation of get_context_data reached the page. html={html}"
+    )
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("name", ALL)
+def test_a_102_in_the_pages_random_text_is_not_a_second_evaluation(name, monkeypatch):
+    """#3794: the flake, forced. A CSRF token that contains "102" (a 1-in-1000 draw, here fixed)
+    is on the page, which a substring search for the second call's stamp reads as a second call."""
+    import django.middleware.csrf as csrf
+    import django.template.context_processors as context_processors
+
+    token = "AAAA102BBBB" * 5
+    monkeypatch.setattr(csrf, "get_token", lambda request: token)
+    monkeypatch.setattr(context_processors, "get_token", lambda request: token, raising=False)
+    html = Client().get("/" + name.lower() + "/").content.decode()
+    assert "102" in html, "the premise: the random text reaches the page"
+    assert len(CALLS) == 1
+    _assert_only_the_first_call_reached(name, html)
 
 
 @pytest.mark.django_db
@@ -418,7 +453,7 @@ async def test_a_websocket_event_re_renders_with_fresh_context_once(name):
         await communicator.send_json_to({"type": "event", "event": "bump", "params": {}, "ref": 1})
         frames = await receive_settled(communicator, has_type("patch"))
         assert len(CALLS) == 2, f"{name}: the event ran the override {len(CALLS) - 1} times"
-        assert "102" in json.dumps(frames), frames
+        assert "2-102" in json.dumps(frames), frames
     finally:
         await communicator.disconnect()
 
