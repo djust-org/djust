@@ -138,11 +138,14 @@ def _check_event_security(
     # ``LiveView.server_push(handler, payload)`` is the view's own way to run a
     # push handler. It is public and undecorated, so under ``event_security``
     # "warn" / "open" a browser event named ``server_push`` would run a
-    # push-only handler with a client payload. Refused in every mode, by
-    # function: whatever name the event carries, it is the same method (#3809).
+    # push-only handler with a client payload. Refused in every mode, by NAME
+    # (a subclass that overrides ``server_push`` is still the push API) and by
+    # FUNCTION (whatever name the event carries, it is the same method) (#3809).
     from .mixins.server_push import ServerPushMixin
 
-    if getattr(handler, "__func__", handler) is ServerPushMixin.server_push:
+    if event_name == "server_push" or (
+        getattr(handler, "__func__", handler) is ServerPushMixin.server_push
+    ):
         return "Server push methods cannot be invoked as client events"
     if isinstance(owner_instance, ComponentDeclaration) and not is_event_handler(handler):
         return "Interactive components accept only declared event actions"

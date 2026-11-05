@@ -9414,7 +9414,10 @@ class ViewRuntime(RuntimeTurnPort):
                 if view is None or ticking_for is None or ticking_for is view:
                     self._tick_task = None
                     if not task.done():
-                        task.cancel()
+                        # A task of a CLOSED loop (multi-loop teardown) cannot be
+                        # woken: ``cancel`` raises, and nothing is left to cancel.
+                        with contextlib.suppress(RuntimeError):
+                            task.cancel()
             queue = self._deferred_pushes
             if queue:
                 if view is None:

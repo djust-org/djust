@@ -171,6 +171,14 @@ class KickTickPage(LiveView):
         self.kicked = True
 
 
+class OverridePage(GuardedPage):
+    """A user-authored ``server_push``: still the push API, never a client event."""
+
+    async def server_push(self, handler, payload=None):
+        self.overridden = getattr(self, "overridden", 0) + 1
+        return await super().server_push(handler, payload)
+
+
 class LongTickPage(LiveView):
     template = "<div dj-root>x</div>"
     tick_interval = 30000
@@ -231,6 +239,7 @@ urlpatterns = [
     path("authtick/", AuthTickPage.as_view()),
     path("authpush/", AuthPushPage.as_view()),
     path("longtick/", LongTickPage.as_view()),
+    path("override/", OverridePage.as_view()),
     path("kicktick/", KickTickPage.as_view()),
     path("explicit/", ExplicitPushPage.as_view()),
     path("push/", PushPage.as_view()),
@@ -1111,3 +1120,97 @@ async def test_the_runtime_push_turn_enforces_the_allowlist_itself():
     for name in ("secret", "__init__", "render"):
         await runtime._run_server_push(view, lambda name=name: [{"handler": name, "payload": {}}])
     assert view.log == []
+
+
+@pytest.mark.parametrize("mode", ["strict", "warn", "open"])
+async def test_a_subclass_override_of_server_push_is_not_a_client_event_over_sse(mode):
+    previous = config.get("event_security")
+    config.set("event_security", mode)
+    try:
+        session, key = await _sse(MOD + "OverridePage", "/override/")
+        view = session.view_instance
+        await _sse_event(
+            session,
+            key,
+            "server_push",
+            {"handler": "trusted_update", "payload": {"who": "ATTACKER"}},
+        )
+        await _sse_frames(session, lambda fs: any(f.get("type") == "error" for f in fs))
+        assert view.calls == [] and getattr(view, "overridden", 0) == 0
+    finally:
+        config.set("event_security", previous)
+
+
+@pytest.mark.parametrize("mode", ["strict", "warn", "open"])
+async def test_a_subclass_override_of_server_push_is_not_a_client_event_over_a_websocket(mode):
+    previous = config.get("event_security")
+    config.set("event_security", mode)
+    try:
+        socket, consumer = await _ws(MOD + "OverridePage")
+        try:
+            view = consumer.view_instance
+            await socket.send_json_to(
+                {
+                    "type": "event",
+                    "event": "server_push",
+                    "params": {"handler": "trusted_update", "payload": {"who": "ATTACKER"}},
+                }
+            )
+            await receive_until(socket, lambda fs: any(f.get("type") == "error" for f in fs))
+            assert view.calls == [] and getattr(view, "overridden", 0) == 0
+        finally:
+            await socket.disconnect()
+    finally:
+        config.set("event_security", previous)
+
+
+def test_override_and_alias_are_refused_in_every_mode():
+    from djust.websocket_utils import _check_event_security
+
+    view = OverridePage()
+    plain = PushPage()
+    plain.innocent = plain.server_push
+    for mode in ("strict", "warn", "open"):
+        previous = config.get("event_security")
+        config.set("event_security", mode)
+        try:
+            # By name: the override is a different function.
+            assert _check_event_security(view.server_push, view, "server_push"), mode
+            # By function: an alias of the mixin's method under an innocent name.
+            assert _check_event_security(plain.innocent, plain, "innocent"), mode
+        finally:
+            config.set("event_security", previous)
+
+
+async def test_stop_server_work_on_a_closed_loop_does_not_raise_and_shutdown_completes():
+    import collections
+    import warnings
+
+    session, _key = await _sse(MOD + "LongTickPage", "/longtick/")
+    runtime = session.runtime
+    runtime._tick_task.cancel()
+
+    async def parked():
+        await asyncio.sleep(30)
+
+    def make_dead_task():
+        # Another loop, on another thread: a task parked on its sleep, loop closed.
+        loop = asyncio.new_event_loop()
+        coro = parked()
+        task = loop.create_task(coro)
+        loop.run_until_complete(asyncio.sleep(0))
+        assert not task.done()
+        loop.close()
+        return task, coro
+
+    dead_task, coro = await asyncio.to_thread(make_dead_task)
+    runtime._tick_task = dead_task
+    runtime._deferred_pushes = collections.deque([(session.view_instance, {})])
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        session.shutdown()  # must not raise
+    assert session.view_instance is None, "the view was released"
+    assert session._closed_sentinel_queued
+    assert not runtime._deferred_pushes, "the queue was cleared"
+    assert runtime._tick_task is None
+    coro.close()
