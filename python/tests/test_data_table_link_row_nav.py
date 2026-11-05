@@ -3,11 +3,11 @@ navigation) in the {% data_table %} template tag.
 
 Tests verify the STRUCTURAL output of `table.html` — presence of `<a>`
 wrappers, `dj-click` / `data-href` attributes — rather than extracted
-cell content. The cell-content render uses `row|dictsort:col.key|first`,
-which depends on the Rust template engine's filter dispatch (Django's
-stock engine doesn't extract dict values via that filter chain). The
+cell content. (Cell content was empty for a dict row until #3870, which
+read it with `dictsort`; it is covered in
+`python/djust/tests/test_component_arg_handling_3870_3871_3872.py`.) The
 structural conditional logic added by #1110/#1111 is what these tests
-prove; cell-content rendering has separate test coverage.
+prove.
 """
 
 from pathlib import Path
@@ -27,7 +27,11 @@ _TABLE_HTML_PATH = (
     / "djust_components"
     / "table.html"
 )
-_TABLE_TEMPLATE = Engine().from_string(_TABLE_HTML_PATH.read_text())
+_ENGINE = Engine(
+    # table.html loads the component filters (``table_cell``, #3870).
+    libraries={"djust_components": "djust.components.templatetags.djust_components"}
+)
+_TABLE_TEMPLATE = _ENGINE.from_string(_TABLE_HTML_PATH.read_text())
 
 
 def render_table(ctx):
@@ -79,8 +83,7 @@ class LinkColumnStructureTest(TestCase):
         rows = [{"claim_number": "C-001", "claim_url": "/claims/1/"}]
         columns = [{"key": "claim_number", "label": "Claim", "link": "claim_url"}]
         out = render_table(_base_ctx(rows, columns))
-        # The <a> tag is rendered (the href value is rust-template-rendered
-        # at runtime; we just assert the wrapper structure here).
+        # The <a> tag is rendered; we just assert the wrapper structure here.
         self.assertIn("<a href=", out)
 
     def test_link_class_attribute_rendered(self):
@@ -162,8 +165,7 @@ class RowUrlStructureTest(TestCase):
         rows = [{"claim_url": "/claims/1/", "name": "Claim 1"}]
         columns = [{"key": "name", "label": "Name"}]
         out = render_table(_base_ctx(rows, columns, row_url="claim_url"))
-        # data-href attribute is present (value extracted by Rust engine
-        # at runtime; we just assert the wiring is in place).
+        # data-href attribute is present; we just assert the wiring is in place.
         self.assertIn("data-href=", out)
         self.assertIn("data-table-row-clickable", out)
         self.assertIn("cursor:pointer", out)

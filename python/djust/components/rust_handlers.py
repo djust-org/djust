@@ -54,12 +54,30 @@ from djust.template_tags import TYPED_ARGS_KEY
 # ---------------------------------------------------------------------------
 
 
+def _quoted(text: str) -> bool:
+    """``text`` is a quoted literal: it opens and closes with the same quote character."""
+    return len(text) >= 2 and text[0] in "\"'" and text[-1] == text[0]
+
+
 def _parse_args(args: list[str], context: dict[str, object]) -> dict[str, object]:
     """Parse handler arg list ["key='val'", "key2=var"] into a dict.
 
-    Resolves variable references against the template context dict.
-    Values that are JSON-encoded lists/objects (from the Rust engine's
-    variable resolution) are deserialized automatically.
+    The engine has already resolved every operand, so ``val`` is the resolved TEXT (a quoted
+    literal arrives as written). Values that are JSON-encoded lists/objects (from the Rust
+    engine's variable resolution) are deserialized automatically.
+
+    The text is read exactly as it arrived. It used to be stripped (``val.strip()``), which also
+    stripped a RESOLVED value: ``ev = "x "`` reached the page as ``x`` where the Django tag keeps
+    ``"x "`` (#3872). A source token never carries whitespace (the engine splits a tag on it), so
+    nothing but a resolved value was ever stripped.
+
+    A name the engine could not resolve never gets here as a name: an inline tag's argument arrives
+    empty, and ``_TypedBlockOperands`` makes a block tag's the same (#3871). What is left of the
+    ``context.get(val, val)`` fallback is the one thing the engine does not do: a handler called
+    DIRECTLY with a raw token (``render(["users=users"], {"users": ...})``, which is how ~400 tests
+    call one). It also looks a RESOLVED value up a second time, so ``ev = "name"`` becomes whatever
+    the variable ``name`` holds; that is a separate defect, pinned in
+    ``test_a_value_that_is_also_a_variable_name_is_resolved_a_second_time``.
     """
 
     result: dict[str, object] = {}
@@ -78,11 +96,8 @@ def _parse_args(args: list[str], context: dict[str, object]) -> dict[str, object
         if key in typed and isinstance(typed[key], _RECOVERED_TYPES):
             result[key] = _from_typed(typed[key])
             continue
-        val = val.strip()
         # String literal — strip quotes
-        if (val.startswith('"') and val.endswith('"')) or (
-            val.startswith("'") and val.endswith("'")
-        ):
+        if _quoted(val):
             result[key] = val[1:-1]
         # JSON array or object (from Rust variable resolution)
         elif (val.startswith("[") and val.endswith("]")) or (
@@ -102,8 +117,12 @@ def _parse_args(args: list[str], context: dict[str, object]) -> dict[str, object
         # None
         elif val in ("None", "null"):
             result[key] = None
+        elif val != val.strip():
+            # Padding is part of a resolved value (#3872): ``int(" 5 ")`` is 5, and a text that
+            # was ``" 5 "`` is not the number.
+            result[key] = val
         else:
-            # Try numeric before falling back to variable reference
+            # Try numeric before falling back to the text
             try:
                 result[key] = int(val)
             except ValueError:
@@ -284,7 +303,13 @@ class _TypedOperands:
         self._handler = handler
 
     def render(self, *args: Any, **kwargs: Any) -> Any:
+        args, kwargs = self._adjust(args, kwargs)
         return self._handler.render(*args, **kwargs)
+
+    def _adjust(self, args: tuple, kwargs: dict) -> tuple[tuple, dict]:
+        """The arguments the wrapped handler is called with; a subclass changes them here, so
+        ``render`` keeps one signature for every wrapper."""
+        return args, kwargs
 
     def __getattr__(self, name: str) -> Any:
         # Only reached for names not found on the wrapper itself.
@@ -295,6 +320,71 @@ class _TypedOperands:
 
 def _with_typed_operands(handler: Any) -> Any:
     return handler if getattr(handler, "TYPED_ARGS", False) else _TypedOperands(handler)
+
+
+class _TypedBlockOperands(_TypedOperands):
+    """A BLOCK handler, handed an unresolved operand the way an inline handler is (#3871).
+
+    The engine resolves the operands of an inline tag so that a name that does not resolve is
+    EMPTY (``{% dj_button event=nope %}`` -> ``event=``), as the Django tag renders it. A block
+    tag's operands go through another resolver, whose contract is "unresolved => keep the raw
+    token" (a ``{% regroup %}`` keyword must survive it): ``{% nav_menu toggle_event=nope %}``
+    arrived as ``toggle_event=nope`` and the variable's NAME became the event name. The handler
+    cannot tell that text from an operand that RESOLVED to ``nope``, and a lookup against the
+    context (``context.get(val, val)``) answers the wrong question: it re-resolves a resolved
+    value.
+
+    The engine knows. A handler that declares ``TYPED_ARGS`` without ``TYPED_ARGS_STANDINS_ONLY``
+    is handed every operand that resolved (``TYPED_ARGS_KEY``), keyed by parameter name, and an
+    operand that did not is missing from it. This wrapper blanks exactly those, so the handler
+    sees what an inline handler sees. A quoted literal has no resolution to fail (the engine skips
+    it) and is left alone, as is every operand that is in the channel, whatever its value.
+    Positional operands are named at compilation (``with_positional_args``), so they are keyed too.
+    """
+
+    #: Every operand, not only the types ``_parse_args`` takes back: the point is which ones are
+    #: THERE. The operands of a block tag are scalars and short lists, so the second conversion
+    #: ``TYPED_ARGS_STANDINS_ONLY`` avoids for a 100,000-row inline operand is not a cost here.
+    TYPED_ARGS_STANDINS_ONLY = False
+
+    def _adjust(self, args: tuple, kwargs: dict) -> tuple[tuple, dict]:
+        # A block handler is called ``render(args, content, context)``, by position (the engine) or
+        # by name (a direct caller).
+        names = ("args", "content", "context")
+        kwargs = dict(kwargs)
+        try:
+            values = [*args, *(kwargs.pop(name) for name in names[len(args) :])]
+        except KeyError as missing:
+            raise TypeError(f"render() missing the required argument {missing}") from None
+        if len(values) != len(names):
+            raise TypeError(f"render() takes {len(names)} arguments, got {len(values)}")
+        arg_list, content, context = values
+        return (_without_unresolved(arg_list, _typed_args(context)), content, context), kwargs
+
+
+_KEYWORD = _re_filters.compile(r"\w+")
+
+
+def _without_unresolved(args: list[str], resolved: dict[str, object]) -> list[str]:
+    """``args`` with each ``key=<operand>`` the engine could not resolve emptied to ``key=``."""
+    out = []
+    for arg in args:
+        key, sep, val = arg.partition("=")
+        text = val.strip()
+        if (
+            sep
+            and text
+            and _KEYWORD.fullmatch(key.strip())
+            and not _quoted(text)
+            and key.strip() not in resolved
+        ):
+            arg = key + "="
+        out.append(arg)
+    return out
+
+
+def _with_typed_block_operands(handler: Any) -> Any:
+    return handler if getattr(handler, "TYPED_ARGS", False) else _TypedBlockOperands(handler)
 
 
 # ---------------------------------------------------------------------------
@@ -1406,7 +1496,11 @@ class DataTableHandler:
             if isinstance(col, dict):
                 key = conditional_escape(str(col.get("key", "")))
                 col_label = conditional_escape(str(col.get("label", key)))
-                sortable = col.get("sortable", True)
+                # ``None`` is "not given", as in the Python template (``default_if_none``): only
+                # an explicit ``False`` (or any other falsy value) makes a column unsortable.
+                sortable = col.get("sortable")
+                if sortable is None:
+                    sortable = True
                 filterable = col.get("filterable", False)
                 filter_type = col.get("filter_type", "text")
                 filter_options = col.get("filter_options", [])
@@ -2340,7 +2434,7 @@ def register_with_rust_engine() -> None:
         register_block_tag_handler(
             tag_name,
             end_tag,
-            with_argument_contract(tag_name, _with_typed_operands(handler), _tag_library),
+            with_argument_contract(tag_name, _with_typed_block_operands(handler), _tag_library),
         )
 
     # Tags that take an object (#3666): the Python tag's own node, through the bridge.

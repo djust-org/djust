@@ -22,13 +22,16 @@ What is NOT compared, and why (each measured, none guessed):
   (expand, export, reorder, ...). Removing them would delete working features from the live
   render path, which is a product decision, not a parity fix (#3869); see
   ``test_data_table_native_extras_only_add_attributes``. The Python template's own quirks
-  (empty cells for dict rows, ``sortable: False`` ignored) are #3870.
+  (empty cells for dict rows, ``sortable: False`` ignored) were #3870 and are fixed: the cells
+  are in ``test_component_arg_handling_3870_3871_3872.py`` and the unsortable column is a case
+  of ``DATA_TABLE`` below.
 * ``nav_item`` nested three levels deep: a block handler is handed already-rendered children
   and cannot know its own depth (#3873, ``test_nav_item_three_levels_is_a_declined_case``).
 * ``filter_bar`` / ``nav_item``: what a template nests in a condition, inside another bar or
   next to the controls is drawn natively and dropped by Django (#3878).
-* A block tag's argument naming an unresolved variable (#3871) and leading/trailing whitespace
-  of a resolved argument (#3872) are engine-level and affect every native handler.
+* A block tag's argument naming an unresolved variable (#3871) and the whitespace of a resolved
+  argument (#3872) are fixed (``test_component_arg_handling_3870_3871_3872.py``). What remains of
+  #3872 is the string ``"0"``: see ``test_the_text_channel_cannot_tell_the_string_zero_from_zero``.
 """
 
 from __future__ import annotations
@@ -60,9 +63,7 @@ def _django(src: str, ctx: dict | None = None) -> str:
 
 
 # A value that needs every escape the attribute context has: a quote, an angle bracket, an
-# ampersand, an apostrophe, a closing script tag, and U+2028 in the MIDDLE (a leading or
-# trailing one is stripped by the engine's argument parser for every tag alike, ASCII space
-# included; that is not event wiring).
+# ampersand, an apostrophe, a closing script tag, and a space in the middle.
 EVIL = "x<b>\"&'</script> y"
 
 TREE = [
@@ -82,6 +83,10 @@ TABLE_COLS = [
     {"key": "name", "label": "Name", "sortable": True},
     {"key": "age", "label": "Age"},
 ]
+TABLE_COLS_UNSORTABLE = [
+    {"key": "name", "label": "Name", "sortable": False},
+    {"key": "age", "label": "Age"},
+]
 TABLE_ROWS = [{"id": 1, "name": "A", "age": 3}, {"id": 2, "name": "B", "age": 4}]
 TOASTS = [
     {"id": "1", "message": "hi", "type": "info"},
@@ -93,6 +98,7 @@ CTX = {
     "tree": TREE,
     "cols": COLUMNS_KANBAN,
     "tcols": TABLE_COLS,
+    "ucols": TABLE_COLS_UNSORTABLE,
     "rows": TABLE_ROWS,
     "toasts": TOASTS,
     "opts": OPTIONS,
@@ -190,6 +196,9 @@ DATA_TABLE = [
     '{% data_table rows=rows columns=tcols row_click_event="rc" selectable=True '
     "paginate=True page=2 total_pages=4 %}",
     '{% data_table rows=rows columns=tcols row_click_event="rc" loading=True %}',
+    # ``sortable: False`` is honoured by the Python template (#3870).
+    "{% data_table rows=rows columns=ucols %}",
+    '{% data_table rows=rows columns=ucols sort_by="name" sort_event="s" %}',
 ]
 FILTER_BAR = [
     '{% filter_bar %}{% filter_select name="s" label="S" options=opts %}{% endfilter_bar %}',
@@ -236,6 +245,9 @@ NAV = [
     '{% nav_item label="Sub" event=ev %}{% endnav_item %}{% endnav_item %}{% endnav_menu %}',
     '{% nav_menu toggle_event=ev %}{% nav_item label="Home" event=ev %}'
     "{% endnav_item %}{% endnav_menu %}",
+    # An argument naming a variable that does not resolve is empty, as for an inline tag (#3871).
+    "{% nav_menu toggle_event=nope %}{% endnav_menu %}",
+    '{% nav_menu %}{% nav_item label="Home" event=nope %}{% endnav_item %}{% endnav_menu %}',
     '{% nav_menu %}{% nav_item label="Menu" %}text'
     '{% nav_item label="Sub" event="s" %}{% endnav_item %}{% endnav_item %}{% endnav_menu %}',
 ]
@@ -401,36 +413,6 @@ def test_nav_item_three_levels_is_a_declined_case() -> None:
     assert ("button", "dj-click", "deep") in rs
 
 
-def test_data_table_python_template_marks_an_unsortable_column_sortable() -> None:
-    """Declined: the reference is wrong here, so the native table is NOT made to match it.
-
-    ``{% if col.sortable|default:True %}`` turns an explicit ``sortable: False`` into True
-    (``False|default:True`` is ``True``), so the Python template wires ``dj-click`` onto a
-    column the caller marked unsortable. The native table honours ``sortable: False``.
-    When the template is fixed, this test fails: move the case into ``DATA_TABLE``.
-    """
-    cols = [{"key": "name", "label": "Name", "sortable": False}]
-    src = "{% data_table rows=rows columns=cols %}"
-    ctx = dict(CTX, cols=cols)
-    sort = ("th", "dj-click", "on_table_sort")
-    assert dj_attrs(_django(src, ctx))[sort] == 1
-    assert dj_attrs(_rust(src, ctx))[sort] == 0
-
-
-def test_a_block_tag_argument_naming_an_unresolved_variable_is_a_declined_case() -> None:
-    """Declined (engine level, every block handler): the native block path hands a handler the
-    NAME of a variable it could not resolve, where the Django tag resolves it to ``""``.
-
-    ``{% nav_menu toggle_event=nope %}``: Python wires ``dj-click=""``, native ``dj-click="nope"``.
-    Inline handlers (``{% dj_button event=nope %}``) resolve it to ``""`` on both engines.
-    """
-    src = "{% nav_menu toggle_event=nope %}{% endnav_menu %}"
-    assert dj_attrs(_django(src, CTX)) == Counter({("button", "dj-click", ""): 1})
-    assert dj_attrs(_rust(src, CTX)) == Counter({("button", "dj-click", "nope"): 1})
-    inline = '{% dj_button label="L" event=nope %}'
-    assert dj_attrs(_django(inline, CTX)) == dj_attrs(_rust(inline, CTX))
-
-
 def test_a_preset_supplies_the_event_and_the_confirmation_on_both_engines() -> None:
     """Absolute, not a comparison: both engines share ``resolve_dj_button_args``, so a parity
     test alone cannot see the preset stop working (gate-off: mutate the helper and every pair
@@ -450,8 +432,8 @@ def test_a_preset_supplies_the_event_and_the_confirmation_on_both_engines() -> N
 
 # --- falsy values: the wiring is decided on the VALUE, never on its escaped text ---------------
 
-#: Every falsy shape. ``"0"`` and ``" "`` are NOT here: the native engine hands a handler TEXT, so
-#: the string "0" reads as the number 0 and a lone space is stripped (#3872); they are pinned in
+#: Every falsy shape. ``"0"`` is NOT here: the native engine hands a handler TEXT, so the string
+#: "0" reads as the number 0 (#3872); it is pinned in
 #: ``test_the_text_channel_cannot_tell_the_string_zero_from_zero``.
 FALSY = {
     "None": None,
@@ -539,17 +521,21 @@ def test_a_falsy_optional_event_wires_nothing(src: str) -> None:
 
 
 def test_the_text_channel_cannot_tell_the_string_zero_from_zero() -> None:
-    """Declined (#3872, engine level): the native engine hands a handler TEXT. The string "0"
-    arrives as ``0`` (falsy; the number 0 must wire nothing), and a lone space is stripped.
-    The Python tag keeps both. Pinned so the choice (the number wins) is visible."""
+    """Declined (#3872, engine level): the native engine hands a handler TEXT, and the string "0"
+    arrives as ``0`` (falsy; the number 0 must wire nothing, which ``FALSY`` pins). The Python tag
+    keeps the string. Pinned so the choice (the number wins) is visible.
+
+    A lone space USED to be here too (it was stripped); it is kept now, and both engines wire it."""
     for src, name in (
         ('{% dj_button label="L" confirm=v %}', "dj-confirm"),
         ('{% dj_button label="L" event=v %}', "dj-click"),
     ):
-        for text in ("0", " "):
-            ctx = dict(CTX, v=text)
-            assert [x for x in dj_attrs(_django(src, ctx)) if x[1] == name], (text, name)
-            assert not [x for x in dj_attrs(_rust(src, ctx)) if x[1] == name], (text, name)
+        ctx = dict(CTX, v="0")
+        assert [x for x in dj_attrs(_django(src, ctx)) if x[1] == name], ("0", name)
+        assert not [x for x in dj_attrs(_rust(src, ctx)) if x[1] == name], ("0", name)
+        ctx = dict(CTX, v=" ")
+        assert dj_attrs(_django(src, ctx)) == dj_attrs(_rust(src, ctx)), (" ", name)
+        assert [x for x in dj_attrs(_rust(src, ctx)) if x[1] == name], (" ", name)
 
 
 # --- the filter bar: what a template nests inside it ---------------------------------------------
@@ -638,13 +624,12 @@ def test_sub_items_a_template_wraps_in_a_condition_are_a_declined_case() -> None
 # --- the row-click value -----------------------------------------------------------------------------
 
 
-def test_the_native_row_click_carries_the_rows_value() -> None:
-    """Not ``dj-*`` and NOT matched: the Python template renders ``data-value=""`` for every row
-    (its ``dictsort`` over a dict, #3870), the native table sends the row's value. Pinned so
-    emptying the native value fails, and so fixing the template shows up here."""
+def test_the_row_click_carries_the_rows_value_on_both_engines() -> None:
+    """Not ``dj-*``, so outside the matrix. The Python template used to render ``data-value=""``
+    for every row (its ``dictsort`` over a dict, #3870); both engines send the row's value."""
     src = '{% data_table rows=rows columns=tcols row_click_event="rc" %}'
-    assert re.findall(r'<tr[^>]*data-value="([^"]*)"', _django(src, CTX)) == ["", ""]
-    assert re.findall(r'<tr[^>]*data-value="([^"]*)"', _rust(src, CTX)) == ["1", "2"]
+    for html in (_django(src, CTX), _rust(src, CTX)):
+        assert re.findall(r'<tr[^>]*data-value="([^"]*)"', html) == ["1", "2"], html
 
 
 def test_the_native_bar_keeps_other_content_in_the_bar() -> None:
