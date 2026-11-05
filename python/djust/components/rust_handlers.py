@@ -10,6 +10,8 @@ Block handlers implement:  render(self, args, content, context) -> str
 """
 
 import json as _json
+import pathlib as _pathlib
+import uuid as _uuid
 from html.parser import HTMLParser
 from typing import Any, cast
 
@@ -99,18 +101,96 @@ def _parse_args(args: list[str], context: dict[str, object]) -> dict[str, object
                 except ValueError:
                     # Variable reference — look up in context
                     result[key] = context.get(val, val)
+    # A value the engine could only hand over as a stand-in (#3768).
+    typed = context.get(TYPED_ARGS_KEY)
+    if isinstance(typed, dict):
+        for key, value in typed.items():
+            if key in result and (type(value) is tuple or isinstance(value, STANDIN_TYPES)):
+                result[key] = _from_typed(value)
     return result
 
 
-#: The reserved context key under which the engine hands a ``TYPED_ARGS`` handler its resolved,
-#: typed operands (``crates/djust_templates/src/renderer.rs``, ``TYPED_ARGS_KEY``). Defined in
-#: ``djust.template_tags`` (``{% live_render %}`` reads it too, #3838) and imported above.
+class TupleValue(list):  # type: ignore[type-arg]
+    """A tuple a native handler was given (#3768).
+
+    The engine hands a handler a ``tuple`` as a JSON list, and a handler reads a list slot with
+    ``isinstance(rows, list)`` (~55 places): a real ``tuple`` there would be dropped as "not a
+    list", turning ``rows=my_tuple_of_dicts`` (an ordinary thing to pass) into an empty table. So
+    the handler keeps getting a ``list``, a subclass that prints the way the tuple does. A text
+    slot then reads ``(1, 2)`` as Django's tag prints it, where it read ``[1, 2]``.
+    """
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:
+        body = ", ".join(repr(item) for item in self)
+        return "(%s%s)" % (body, "," if len(self) == 1 else "")
+
+    __str__ = __repr__
+
+
+def _from_typed(value: object) -> object:
+    """A typed operand as a handler is handed it: a plain ``tuple`` becomes a ``TupleValue``."""
+    if type(value) is tuple:
+        return TupleValue(_from_typed(item) for item in value)
+    return value
+
+
+#: The types a native handler is handed a stand-in for, which a Python tag tells apart from the
+#: stand-in (#3768): a ``UUID`` or a ``Path`` arrives as its ``str`` (``int(uuid)`` works in
+#: Python, ``int("...")`` does not), and a ``tuple`` (not in this tuple: see ``TupleValue``) as
+#: the JSON list ``[1, 2]`` where Django's tag prints ``(1, 2)``. The engine resolves the operand
+#: through the floored walk ``{{ }}`` uses and, for a handler that declares ``TYPED_ARGS``, passes
+#: the real value (``TYPED_ARGS_KEY``); ``_parse_args`` puts it back. Only these types, so a list,
+#: dict, number, string or object reaches a handler exactly as before.
+#:
+#: NOT a ``bytes``, ``set`` or ``frozenset``: they are iterable, and an iterable crosses to Python
+#: as the engine's ``TemplateObject`` wrapper, not as itself (``value_into_handler_pyobject``), so
+#: they cannot be recovered here (recorded in ``KNOWN_TYPE_LOSS``, #3768).
+STANDIN_TYPES = (_uuid.UUID, _pathlib.PurePath)
 
 
 def _typed_args(context: dict[str, object]) -> dict[str, object]:
-    """The operands the engine resolved, as typed Python values, by parameter name (#3756)."""
+    """The operands the engine resolved, as typed Python values, by parameter name (#3756).
+
+    They arrive under ``TYPED_ARGS_KEY``, the reserved context key the engine fills for a
+    handler that declares ``TYPED_ARGS`` (``crates/djust_templates/src/renderer.rs``,
+    ``TYPED_ARGS_KEY``). The constant is defined in ``djust.template_tags`` (``{% live_render %}``
+    reads it too, #3838) and imported above.
+    """
     typed = context.get(TYPED_ARGS_KEY)
     return typed if isinstance(typed, dict) else {}
+
+
+class _TypedOperands:
+    """``handler``, declaring ``TYPED_ARGS`` so its ``_parse_args`` gets the types back (#3768).
+
+    A native inline handler reads its operands through ``_parse_args``, which sees the engine's
+    stand-ins (text, JSON). Declaring ``TYPED_ARGS`` makes the engine hand it the operands as the
+    values they are, and ``_parse_args`` takes back the ones in ``STANDIN_TYPES``. Done here, once,
+    for every inline handler, rather than as a class attribute on each of ~130 (one change instead
+    of 130 that can drift); ``json_viewer`` declares it itself and is not wrapped.
+
+    Everything else the engine reads off a handler (``RESOLVE_ARG_POSITIONS``, ...) is forwarded.
+    """
+
+    TYPED_ARGS = True
+
+    def __init__(self, handler: Any) -> None:
+        self._handler = handler
+
+    def render(self, *args: Any, **kwargs: Any) -> Any:
+        return self._handler.render(*args, **kwargs)
+
+    def __getattr__(self, name: str) -> Any:
+        # Only reached for names not found on the wrapper itself.
+        if name == "_handler":
+            raise AttributeError(name)
+        return getattr(self._handler, name)
+
+
+def _with_typed_operands(handler: Any) -> Any:
+    return handler if getattr(handler, "TYPED_ARGS", False) else _TypedOperands(handler)
 
 
 # ---------------------------------------------------------------------------
@@ -2082,11 +2162,16 @@ def register_with_rust_engine() -> None:
     from .templatetags.djust_components import register as _tag_library
 
     for tag_name, handler in INLINE_HANDLERS:
-        register_tag_handler(tag_name, with_argument_contract(tag_name, handler, _tag_library))
+        register_tag_handler(
+            tag_name,
+            with_argument_contract(tag_name, _with_typed_operands(handler), _tag_library),
+        )
 
     for tag_name, end_tag, handler in BLOCK_HANDLERS:
         register_block_tag_handler(
-            tag_name, end_tag, with_argument_contract(tag_name, handler, _tag_library)
+            tag_name,
+            end_tag,
+            with_argument_contract(tag_name, _with_typed_operands(handler), _tag_library),
         )
 
     # Tags that take an object (#3666): the Python tag's own node, through the bridge.

@@ -803,9 +803,10 @@ class TestMissingArguments:
 
 
 #: The types a template realistically passes where a tag takes a scalar or an object. The
-#: others measured (``tuple``, ``UUID``, ``bytes``, ``set``, ``frozenset``) are reported by the
-#: PR for #3756 but not pinned here: a tuple in a ``class=`` slot or a UUID in a ``count=`` slot
-#: is not an input anyone writes, and a pin over them would be 495 rows nobody can act on.
+#: others measured (``tuple``, ``UUID``, ``bytes``, ``set``, ``frozenset``) are not in the set
+#: that must be fixed or named: a tuple in a ``class=`` slot or a UUID in a ``count=`` slot is not
+#: an input anyone writes. They are counted, though (#3768): ``RESIDUAL_STANDIN_LOSS`` pins what
+#: is left of the 495 cells over every type, so the number cannot grow unseen.
 REALISTIC_TYPES = frozenset(
     {
         "datetime",
@@ -822,15 +823,78 @@ REALISTIC_TYPES = frozenset(
 
 #: ``tag`` -> why the Python tag still renders a realistic value differently from the Rust
 #: handler, with the engines in agreement on the value's stand-in (so it IS the lost type).
-#: Each is a temporal or path value in a CSS-class / URL attribute slot. Equality in both
-#: directions: a tag that stops being wrong must be removed from here, and a new one must be
-#: looked at rather than appended.
+#: Each is a temporal value in a CSS-class attribute slot (``map_picker``'s ``Path`` was the
+#: fourth until #3768 put the type back). Equality in both directions: a tag that stops being
+#: wrong must be removed from here, and a new one must be looked at rather than appended.
 KNOWN_TYPE_LOSS = {
-    "map_picker": "attribution_url: a Path where the tag expects a URL string",
     "theme_mode_toggle": "button_class: a date / datetime / time as a CSS class",
     "theme_preset_selector": "dropdown_class: a date / datetime / time as a CSS class",
     "theme_switcher": "button_class, dropdown_class: a date / datetime / time as a CSS class",
 }
+
+#: What the stand-in measurement still finds over ALL fifteen value types, not only the realistic
+#: ones (#3768): ``{type: {"tag:param": cells}}``. 495 cells before the fix; this is the rest,
+#: and it can only shrink. Equality in both directions, so a cell that gets fixed must be removed
+#: and a cell that appears must be looked at, not appended.
+#:
+#: * ``tuple`` (18): a tuple in a slot that takes a LIST. The Python tag is the strict one there
+#:   (``if not isinstance(data, list)`` renders nothing for a tuple) and the native handler,
+#:   handed a ``TupleValue`` (a list), renders the data, so the native engine is MORE lenient than
+#:   Django's. Deliberately not made strict: a tuple is an ordinary thing to pass for a list
+#:   (Django ``choices``), and a real ``tuple`` here emptied ``dependent_select`` on the first try
+#:   (``test_standin_types_3768.py::TestAListSlotKeepsWorking``).
+#: * ``set`` / ``frozenset`` / ``bytes`` (13): iterable, and an iterable crosses to a handler as
+#:   the engine's ``TemplateObject`` wrapper, not as itself, so the type cannot be recovered
+#:   there. ``avatar_group`` (a ``{% load %}`` bridge tag) hits the same wrapper.
+#: * ``date`` / ``datetime`` / ``time`` (16): ``theme_*`` handlers, a temporal value in a CSS-class
+#:   slot; the same four as ``KNOWN_TYPE_LOSS``, once per type.
+#: * ``UUID`` (1): ``notification_center`` ignores its ``unread_count`` argument, which no type
+#:   recovery reaches.
+#:
+#: No input anyone writes on purpose, which is why they are recorded, not fixed.
+RESIDUAL_STANDIN_LOSS: dict[str, dict[str, int]] = {
+    "tuple": {
+        "bar_chart:data": 1,
+        "collab_selection:users": 1,
+        "comparison_table:plans": 1,
+        "cursors:users": 1,
+        "export_dialog:formats": 1,
+        "image_upload_preview:previews": 1,
+        "lightbox:images": 1,
+        "line_chart:series": 1,
+        "log_viewer:lines": 1,
+        "masonry_grid:items": 1,
+        "mentions_input:users": 1,
+        "meter:segments": 1,
+        "presence_avatars:users": 1,
+        "reactions:options": 1,
+        "scroll_spy:sections": 1,
+        "sparkline:data": 1,
+        "terminal:output": 1,
+        "treemap:data": 1,
+    },
+    "set": {"multi_select:options": 1, "tag_input:suggestions": 1, "tag_input:tags": 1},
+    "frozenset": {"multi_select:options": 1, "tag_input:suggestions": 1, "tag_input:tags": 1},
+    "bytes": {
+        "avatar_group:users": 1,
+        "multi_select:options": 1,
+        "tag_input:suggestions": 1,
+        "tag_input:tags": 1,
+    },
+    "UUID": {"notification_center:unread_count": 1},
+    **{
+        kind: {
+            "theme_mode_toggle:button_class": 1,
+            "theme_preset_selector:dropdown_class": 1,
+            "theme_switcher:button_class": 1,
+            "theme_switcher:dropdown_class": 1,
+        }
+        for kind in ("date", "datetime", "naive datetime", "time")
+    },
+}
+
+#: The cell count before #3768 (``typed_values.differences``: 208 tags, 15 types, 21,390 cells).
+STANDIN_LOSS_BEFORE_3768 = 495
 
 
 class TestTypeDispatch:
@@ -1004,6 +1068,36 @@ class TestTypeDispatch:
             f"type loss not recorded: {sorted(lost - set(KNOWN_TYPE_LOSS))}; "
             f"recorded but no longer lost: {sorted(set(KNOWN_TYPE_LOSS) - lost)}"
         )
+
+    def test_the_stand_in_loss_is_exactly_the_recorded_residual(self, facts):
+        """#3768. Over every value type, the cells where a native handler is handed a stand-in and
+        the Python tag tells it from the value: ``RESIDUAL_STANDIN_LOSS`` and nothing else, in
+        both directions. The number can only go down: a cell that appears fails here until it is
+        looked at, and one that is fixed fails here until it is removed."""
+        measured: dict[str, dict[str, int]] = {}
+        for d in facts["typed_values"]["dispatches"]:
+            if d["isolated"] and not d["rust_agrees"]:
+                cell = "%s:%s" % (d["tag"].split(":", 1)[1], d["param"])
+                by_tag = measured.setdefault(d["type"], {})
+                by_tag[cell] = by_tag.get(cell, 0) + 1
+        assert measured == RESIDUAL_STANDIN_LOSS, (
+            f"new: { {t: sorted(set(m) - set(RESIDUAL_STANDIN_LOSS.get(t, {}))) for t, m in measured.items()} }; "
+            f"fixed: { {t: sorted(set(m) - set(measured.get(t, {}))) for t, m in RESIDUAL_STANDIN_LOSS.items()} }"
+        )
+
+    def test_the_fix_removed_the_cells_it_claims(self, facts):
+        """The headline number, derived rather than restated (#2727): the recorded residual's size
+        is computed from the pin, the before-count is the measurement the issue reported, and the
+        measurement must still be the 21,390 cells those were counted over."""
+        residual = sum(sum(m.values()) for m in RESIDUAL_STANDIN_LOSS.values())
+        assert residual < STANDIN_LOSS_BEFORE_3768
+        assert facts["typed_values"]["cells"] == 21390, (
+            "the cell grid changed: re-derive both counts"
+        )
+        measured = sum(
+            1 for d in facts["typed_values"]["dispatches"] if d["isolated"] and not d["rust_agrees"]
+        )
+        assert measured == residual
 
     def test_a_bridged_or_typed_tag_agrees_with_django_for_every_realistic_type(self, facts):
         """A bridged tag is Django's own node and a typed one is handed the real value, so
