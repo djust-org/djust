@@ -348,8 +348,17 @@ class _TypedBlockOperands(_TypedOperands):
     TYPED_ARGS_STANDINS_ONLY = False
 
     def _adjust(self, args: tuple, kwargs: dict) -> tuple[tuple, dict]:
-        # A block handler is called ``render(args, content, context)``.
-        arg_list, content, context = args
+        # A block handler is called ``render(args, content, context)``, by position (the engine) or
+        # by name (a direct caller).
+        names = ("args", "content", "context")
+        kwargs = dict(kwargs)
+        try:
+            values = [*args, *(kwargs.pop(name) for name in names[len(args) :])]
+        except KeyError as missing:
+            raise TypeError(f"render() missing the required argument {missing}") from None
+        if len(values) != len(names):
+            raise TypeError(f"render() takes {len(names)} arguments, got {len(values)}")
+        arg_list, content, context = values
         return (_without_unresolved(arg_list, _typed_args(context)), content, context), kwargs
 
 

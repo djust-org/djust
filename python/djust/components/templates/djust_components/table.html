@@ -49,7 +49,7 @@
         navigation) via the data-table-row-click.js component module —
         CSP-clean, no inline event handlers.
       {% endcomment %}
-      <tr{% if selectable %} aria-selected="{% if row.id|stringformat:'s' in selected_rows %}true{% else %}false{% endif %}"{% endif %}{% if row_click_event %} class="data-table-row-clickable" dj-click="{{ row_click_event }}" data-value="{{ row|table_cell:row_click_value_key }}" role="button" tabindex="0" style="cursor:pointer"{% elif row_url %} class="data-table-row-clickable" data-href="{{ row|table_href:row_url }}" role="button" tabindex="0" style="cursor:pointer"{% endif %}>
+      <tr{% if selectable %} aria-selected="{% if row.id|stringformat:'s' in selected_rows %}true{% else %}false{% endif %}"{% endif %}{% if row_click_event %} class="data-table-row-clickable" dj-click="{{ row_click_event }}" data-value="{{ row|table_cell:row_click_value_key|force_escape }}" role="button" tabindex="0" style="cursor:pointer"{% elif row_url %} class="data-table-row-clickable" data-href="{{ row|table_href:row_url }}" role="button" tabindex="0" style="cursor:pointer"{% endif %}>
         {% if selectable %}
         <td>
           <input type="checkbox" class="data-table-checkbox"

@@ -492,3 +492,54 @@ def test_an_operand_the_engine_resolves_through_an_object_is_not_emptied(
     src = "{% nav_menu toggle_event=" + expr + " %}{% endnav_menu %}"
     for html in (_django(src, ctx), _rust(src, ctx)):
         assert ("button", "dj-click", expected) in dj_attrs(html), (expr, html)
+
+
+# -- the #3884 review: the row's data-value is escaped even for a mark_safe value; the block wrapper ----
+
+
+def test_a_marked_safe_row_value_cannot_leave_the_data_value_attribute() -> None:
+    """``table_cell`` returns a ``mark_safe`` string as it is (a cell may carry markup); the row's
+    ``data-value`` is an ATTRIBUTE, so the template force-escapes that read (the review of #3884:
+    a row id of ``mark_safe('a" onmouseover="alert(1)" x="')`` rendered a live handler)."""
+    from django.utils.safestring import mark_safe
+
+    hostile = mark_safe('a" onmouseover="alert(1)" x="')
+    src = '{% data_table rows=rows columns=cols row_click_event="rc" %}'
+    ctx = {"rows": [{"id": hostile, "name": "A"}], "cols": [{"key": "name", "label": "Name"}]}
+    out = _django(src, ctx)
+    assert 'onmouseover="alert' not in out, out
+    assert "data-value=" in out and "&quot;" in out, out
+
+
+def test_a_plain_string_row_value_is_escaped_once() -> None:
+    src = '{% data_table rows=rows columns=cols row_click_event="rc" %}'
+    ctx = {"rows": [{"id": 'a"<b>&', "name": "A"}], "cols": [{"key": "name", "label": "Name"}]}
+    out = _django(src, ctx)
+    assert 'data-value="a&quot;&lt;b&gt;&amp;"' in out, out
+
+
+class _Recorder:
+    TYPED_ARGS = False
+
+    def render(self, args, content, context):
+        return (list(args), content)
+
+
+def test_the_block_wrapper_takes_its_arguments_by_position_or_by_name() -> None:
+    from djust.components.rust_handlers import _TypedBlockOperands
+
+    wrapped = _TypedBlockOperands(_Recorder())
+    by_position = wrapped.render(["k=v"], "body", {})
+    by_name = wrapped.render(args=["k=v"], content="body", context={})
+    mixed = wrapped.render(["k=v"], content="body", context={})
+    assert by_position == by_name == mixed == (["k="], "body")
+
+
+def test_the_block_wrapper_names_a_missing_or_extra_argument() -> None:
+    from djust.components.rust_handlers import _TypedBlockOperands
+
+    wrapped = _TypedBlockOperands(_Recorder())
+    with pytest.raises(TypeError, match="missing"):
+        wrapped.render(["k=v"], "body")
+    with pytest.raises(TypeError, match="takes 3"):
+        wrapped.render(["k=v"], "body", {}, {})
