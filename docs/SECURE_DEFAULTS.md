@@ -574,6 +574,10 @@ these guards: the Rust sidecar resolution walk
 generated code (`python/djust/optimization/codegen.py`), and eager model
 serialization (`python/djust/serialization.py::_add_safe_model_methods`).
 
+The same guard covers two calls the framework makes by a fixed name on an object a template hands it (#3815). `{% include obj %}` calls `obj.render()` (`python/djust/template/operands.py::render_template_object`) on the five entries `DjustTemplateBackend`, `_rust.render_template`, `RustLiveView`, a LiveView's WebSocket render and a LiveView's HTTP GET render; the component tags (`avatar_group`, `AvatarGroup`, `LiveIndicator`, `PresenceAvatars`) call `user.get_full_name()`. A `render` or `get_full_name` whose `alters_data` or `do_not_call_in_templates` is truthy (truthiness, as in Django and the Rust guard) is not called: the include renders the empty string, the avatar falls back to `str(user)`, and a WARNING is logged once per type and method. **Stricter than Django on purpose** — stock Django's `{% include obj %}` calls a `render` marked `alters_data`. A marker read that raises anything but `AttributeError` also refuses (fail closed; `python/djust/_template_guards.py::refused_marker`). The method is looked up once and the markers are read off that same object, so a property that returns a different callable on each read cannot pass the check and have another one called.
+
+**Not covered:** the templates of `{% live_render %}` / sticky and embedded CHILD views (`websocket.py::render_embedded_child_html`, `templatetags/live_tags.py::_render_sticky_child_html`) are rendered by Django's stock engine, which calls a marked `render`. That behaviour is pinned by a test so a later change flips it deliberately.
+
 **Why it matters**: without the `alters_data` refusal, a template typo like
 `{{ user.delete }}` or `{{ qs.update }}` would execute a destructive ORM
 operation on first render. Django stamps `alters_data = True` on

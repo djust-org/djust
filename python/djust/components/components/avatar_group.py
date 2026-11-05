@@ -4,6 +4,7 @@ import html
 from typing import Any, List, Optional, Union
 
 from djust import Component
+from djust._template_guards import call_method_for_template
 from djust.components.utils import url_attr
 
 
@@ -76,7 +77,7 @@ class AvatarGroup(Component):
                 name = user.get("name", "")
                 src = user.get("avatar", "") or user.get("src", "")
             elif hasattr(user, "get_full_name"):
-                name = user.get_full_name() or str(user)
+                name = call_method_for_template(user, "get_full_name") or str(user)
                 src = getattr(user, "avatar", "")
                 if hasattr(src, "url"):
                     src = src.url

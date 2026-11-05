@@ -4,6 +4,7 @@ import html
 from typing import Any, Optional
 
 from djust import Component
+from djust._template_guards import call_method_for_template
 from djust.components.utils import url_attr
 
 
@@ -73,7 +74,7 @@ class LiveIndicator(Component):
             name = self.user.get("name", "")
             avatar = self.user.get("avatar", "")
         elif hasattr(self.user, "get_full_name"):
-            name = self.user.get_full_name() or str(self.user)
+            name = call_method_for_template(self.user, "get_full_name") or str(self.user)
             avatar = getattr(self.user, "avatar", "")
             if hasattr(avatar, "url"):
                 avatar = avatar.url
