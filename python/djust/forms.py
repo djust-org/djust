@@ -28,6 +28,7 @@ from django.http import Http404
 from django.utils.safestring import SafeString
 
 from ._class_snapshot import namespace
+from . import _form_data_bounds
 from ._deprecation import warn_deprecated
 from ._exposure import ExposureConfigurationError, ExposureError, ProviderContract
 from ._exposure_providers import provide_context_items
@@ -586,6 +587,21 @@ class FormMixin:
             return self.form_data
         return {f"{prefix}-{name}": value for name, value in self.form_data.items()}
 
+    def _refuse_form_data(self, incoming: Mapping[str, Any]) -> bool:
+        """Refuse *incoming* when merging it into ``form_data`` would take the form past
+        ``max_form_fields`` / ``max_form_data_size`` (#3834). True when refused: nothing of it was
+        stored, the log says so, and the form's errors tell the person using the form.
+
+        ``form_data`` outlives the frame that filled it and is bound to the form on every event, so
+        the bound that matters is on what it HOLDS, not on a frame (``max_message_size``)."""
+        message = _form_data_bounds.refusal(getattr(self, "form_data", None), incoming)
+        if message is None:
+            return False
+        _form_data_bounds.warn(self, message)
+        self.is_valid = False
+        self.form_errors = [message]
+        return True
+
     @event_handler
     def validate_field(
         self, field: str = "", field_name: str = "", value: Any = None, **kwargs: Any
@@ -639,6 +655,8 @@ class FormMixin:
         self._ensure_form_state()
 
         # Update form data
+        if self._refuse_form_data({field_name: value}):
+            return
         self.form_data[field_name] = value
 
         # Re-hydrate model instance if needed
@@ -696,9 +714,10 @@ class FormMixin:
         self._ensure_form_state()
 
         # Merge kwargs into form_data (for fields submitted with the form)
-        self.form_data.update(
-            {self._form_event_field_name(name): value for name, value in kwargs.items()}
-        )
+        incoming = {self._form_event_field_name(name): value for name, value in kwargs.items()}
+        if self._refuse_form_data(incoming):
+            return
+        self.form_data.update(incoming)
 
         # Re-hydrate model instance if lost after WS serialization
         self._ensure_model_instance()

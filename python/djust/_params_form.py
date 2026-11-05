@@ -32,6 +32,7 @@ from django import forms
 from django.core.exceptions import ImproperlyConfigured
 from django.http import QueryDict
 
+from . import _form_data_bounds
 from ._view_hooks import call_hook, call_hook_sync
 from .sync_turn import guarded_step, run_guarded_step
 
@@ -195,6 +196,15 @@ def bind_params(view: Any, form_class: type, params: Any) -> BoundParams:
     query), so the async runner calls this on a worker thread, inside the
     ``sync_turn_wrapper`` step of ``handle_params``.
     """
+    # The parameters are a JSON object the client wrote (a ``url_change`` frame), so they are held to
+    # the same field / size limits as any other data a client binds to a form (#3834): past them
+    # the form is bound to nothing and the URL is invalid, with the reason in ``params_errors``.
+    refused = _form_data_bounds.refusal(None, params) if isinstance(params, Mapping) else None
+    if refused is not None:
+        _form_data_bounds.warn(view, refused)
+        form = form_class(data=QueryDict(mutable=True))
+        view.params_errors = {NON_FIELD_ERRORS_KEY: [refused]}
+        return form, None
     form = form_class(data=_bindable(params))
     if form.is_valid():
         view.params_errors = {}

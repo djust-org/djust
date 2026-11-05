@@ -159,8 +159,12 @@ LIVEVIEW_CONFIG = {
         "reconnect_cooldown": 5,        # Seconds before a rate-limited IP can reconnect
     },
     "max_message_size": 65536,  # 64KB
+    "max_form_fields": 1000,           # fields one form's submitted data may hold (Django's default)
+    "max_form_data_size": 2_621_440,   # characters of keys + values (Django's 2.5 MB)
 }
 ```
+
+`max_message_size` bounds one frame; a form's data is the sum of many, so `max_form_fields` and `max_form_data_size` bound what `FormMixin`, `WizardMixin`, the admin form view and a `params_form` keep (an event past them is refused whole, `0` = no limit; #3834).
 
 For expensive handlers, use the `@rate_limit` decorator:
 
@@ -824,6 +828,7 @@ Verify production-safe defaults:
 - [ ] `DEBUG` is not hardcoded to `True` anywhere
 - [ ] Rate limit defaults are reasonable (100 req/s sustained, 20 burst)
 - [ ] `max_message_size` is set (default: 64KB)
+- [ ] `max_form_fields` / `max_form_data_size` are not `0` (defaults: 1000 fields, 2.5 MB)
 - [ ] `max_connections_per_ip` is set (default: 10)
 - [ ] CSRF protection is enabled on all non-WebSocket endpoints
 - [ ] Template auto-escaping is enabled by default in the Rust engine

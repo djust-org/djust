@@ -260,7 +260,9 @@ class AdminFormMixin(FormMixin):
         if not hasattr(self, "field_errors"):
             self.field_errors = {}
 
-        # Update form data
+        # Update form data (refused, not stored, past the form-data limits: #3834)
+        if self._refuse_form_data({field_name: value}):
+            return
         self.form_data[field_name] = value
 
         # Create form with current data
@@ -301,7 +303,9 @@ class AdminFormMixin(FormMixin):
 
         Extends FormMixin.submit_form() to work with ModelAdmin forms.
         """
-        # Merge kwargs into form_data
+        # Merge kwargs into form_data (refused whole past the form-data limits: #3834)
+        if self._refuse_form_data(kwargs):
+            return
         self.form_data.update(kwargs)
 
         # Create form with all data

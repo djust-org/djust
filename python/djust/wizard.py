@@ -67,6 +67,7 @@ import logging
 import math
 from typing import Any, ClassVar, Dict
 
+from . import _form_data_bounds
 from ._exposure import ProviderContract
 from ._exposure_providers import provide_context_items
 from .decorators import event_handler
@@ -536,6 +537,20 @@ class WizardMixin:
         if step_index in self.wizard_completed_steps or step_index == self.wizard_step_index:
             self.wizard_step_index = step_index
 
+    def _store_step_field(self, name: str, value: Any) -> None:
+        """Keep one client-named field of the current step, unless that takes the step's data past
+        ``max_form_fields`` / ``max_form_data_size`` (#3834): ``wizard_step_data`` outlives the frame
+        that filled it and is bound to the step's form on every event. A refusal stores nothing and
+        says so in the step's errors (``__all__``, Django's key for errors of no field)."""
+        step_name = self._steps[self.wizard_step_index]["name"]
+        step = self.wizard_step_data.setdefault(step_name, {})
+        message = _form_data_bounds.refusal(step, {name: value})
+        if message is not None:
+            _form_data_bounds.warn(self, message)
+            self.wizard_step_errors[step_name] = {"__all__": [message]}
+            return
+        step[name] = value
+
     @event_handler()
     def update_step_field(self, field: str = "", value: Any = "", **kwargs: Any) -> None:
         """Store a single field value for the current step.
@@ -548,10 +563,7 @@ class WizardMixin:
         """
         if not field or not self._steps:
             return
-        step_name = self._steps[self.wizard_step_index]["name"]
-        if step_name not in self.wizard_step_data:
-            self.wizard_step_data[step_name] = {}
-        self.wizard_step_data[step_name][field] = value
+        self._store_step_field(field, value)
 
     @event_handler()
     def validate_field(
@@ -572,10 +584,7 @@ class WizardMixin:
         name = field or field_name
         if not name or not self._steps:
             return
-        step_name = self._steps[self.wizard_step_index]["name"]
-        if step_name not in self.wizard_step_data:
-            self.wizard_step_data[step_name] = {}
-        self.wizard_step_data[step_name][name] = value
+        self._store_step_field(name, value)
 
     @event_handler()
     def submit_wizard(self, **kwargs: Any) -> None:

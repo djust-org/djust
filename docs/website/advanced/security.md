@@ -71,6 +71,8 @@ LIVEVIEW_CONFIG = {
         "reconnect_cooldown": 5,       # seconds before rate-limited IP can reconnect
     },
     "max_message_size": 65536,  # 64KB
+    "max_form_fields": 1000,           # fields one form's submitted data may hold
+    "max_form_data_size": 2_621_440,   # characters of keys + values (2.5 MB)
 }
 ```
 
@@ -88,6 +90,8 @@ class MyView(LiveView):
 ```
 
 `max_message_size` is the largest frame, in bytes, a client may send (`0` = no limit; keep a limit in production, since every frame is held in memory before it is parsed). The server announces it in its `connect` frame, and the client does not send a larger frame: it reports an error with code `message_too_large` (logged, and dispatched as a `djust:error` event whose message starts with `Message too large (N bytes)`) and settles the event's loading state. The server answers a larger frame that arrives anyway with the same error. Send files and other large payloads with [`UploadMixin`](../guides/uploads.md), which splits them into chunks under the limit, rather than raising the limit for every socket.
+
+`max_form_fields` and `max_form_data_size` bound what a client may put into a form's submitted data over the socket, with Django's own `DATA_UPLOAD_MAX_NUMBER_FIELDS` and `DATA_UPLOAD_MAX_MEMORY_SIZE` as their defaults (`0` = no limit). Django applies those to an HTTP POST body, but an event is a JSON frame, and `max_message_size` bounds only one frame while a form's data is the sum of many: `FormMixin` keeps `form_data` for the life of the view, adds a client-named key per `validate_field` event and merges every key of a `submit_form` event, and binds all of it to the form on each one. At the default rate limit a client reaches a hundred thousand fields in about seventeen minutes, and each event after that copies and filters all of them. An event that would take the data past a limit is refused whole: nothing of it is stored, the log says so (never the keys), and the view reports it in `form_errors` (`FormMixin`, the admin form view) or in the step's `wizard_step_errors["__all__"]` (`WizardMixin`); a `params_form` bound to a `url_change` whose parameters exceed it is invalid, with the reason in `params_errors["__all__"]`. A fresh form's declared fields count toward the limit. Keep both limits in production: with `0`, `DEBUG=False` logs a warning at startup.
 
 `max_connections_per_ip` counts the sockets one client address holds open on one server process. Behind a load balancer or reverse proxy, set `DJUST_TRUSTED_PROXY_COUNT` to the number of proxies in front of the app so the client address is read from `X-Forwarded-For`; until then every client behind the proxy shares the proxy's address, so with the default of 10 the eleventh socket on a process is refused with close code `4429`, whoever opened it. The refusal log says which limit applied and flags an untrusted `X-Forwarded-For`. Never trust `X-Forwarded-For` without a proxy that sets it. Size the limit for the most tabs one real user or office NAT opens.
 
