@@ -5899,12 +5899,11 @@ impl<'py> IntoPyObject<'py> for Value {
                 fields,
                 items,
             } => {
-                let cls = named_tuple_class(py, &name, &fields)?;
                 let args: Vec<_> = items
                     .into_iter()
                     .map(|v| v.into_pyobject(py))
                     .collect::<std::result::Result<Vec<_>, _>>()?;
-                cls.call(pyo3::types::PyTuple::new(py, args)?, None)
+                named_tuple_or_tuple(py, &name, &fields, args)
             }
             Value::Tuple(t) => {
                 // Round-trips back to a real Python tuple, so a tuple that
@@ -5988,6 +5987,28 @@ fn named_tuple_class<'py>(
     let mut guard = cache.lock().unwrap_or_else(|e| e.into_inner());
     let entry = guard.entry(key).or_insert_with(|| cls.unbind());
     Ok(entry.bind(py).clone())
+}
+
+/// A [`Value::NamedTuple`] as the Python object it crosses back to: an instance of
+/// [`named_tuple_class`], or, when `collections.namedtuple` REFUSES the shape, the plain `tuple`
+/// of its items (#3849).
+///
+/// The shape is the Python class's own, so it can be one `namedtuple()` will not build:
+/// `namedtuple("R", ["a", "a", "b"], rename=True)` has the fields `('a', '_1', 'b')`, and a
+/// leading underscore is refused ("Field names cannot start with an underscore"); so is a class
+/// whose name is not an identifier. This conversion runs for the WHOLE context whenever a native
+/// tag is called (`build_py_context`), so raising here failed every tag in a template that merely
+/// held such a value, operand or not. Falling back loses the type, never the value.
+fn named_tuple_or_tuple<'py>(
+    py: Python<'py>,
+    name: &str,
+    fields: &[String],
+    args: Vec<Bound<'py, PyAny>>,
+) -> PyResult<Bound<'py, PyAny>> {
+    match named_tuple_class(py, name, fields) {
+        Ok(cls) => cls.call(pyo3::types::PyTuple::new(py, args)?, None),
+        Err(_) => Ok(pyo3::types::PyTuple::new(py, args)?.into_any()),
+    }
 }
 
 /// Convert &Value to Python object (clones the value).
@@ -6377,12 +6398,11 @@ pub fn value_into_handler_pyobject(py: Python<'_>, value: Value) -> PyResult<Bou
             fields,
             items,
         } => {
-            let cls = named_tuple_class(py, &name, &fields)?;
             let args: Vec<_> = items
                 .into_iter()
                 .map(|item| value_into_handler_pyobject(py, item))
                 .collect::<PyResult<Vec<_>>>()?;
-            cls.call(pyo3::types::PyTuple::new(py, args)?, None)
+            named_tuple_or_tuple(py, &name, &fields, args)
         }
         Value::Object(map) => {
             let py_dict = PyDict::new(py);

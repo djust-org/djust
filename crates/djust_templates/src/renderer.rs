@@ -1431,7 +1431,14 @@ fn typed_operands(
             // loses wants a tuple and an object (a `UUID`, a `Path`). A list, a dict, a number or a
             // string is left out, so a large operand is not materialised a second time as Python
             // objects for nothing: the handler has it, as JSON or text, in its string argument.
-            if standins_only && !matches!(value, Value::Tuple(_) | Value::Encoded(_)) {
+            // A namedtuple is a tuple whose type the string argument loses as well (#3849): it
+            // arrives as the JSON list `[1, 2]` where Django's tag prints `P(x=1, y=2)`.
+            if standins_only
+                && !matches!(
+                    value,
+                    Value::Tuple(_) | Value::NamedTuple { .. } | Value::Encoded(_)
+                )
+            {
                 continue;
             }
             if !matches!(value, Value::Missing) {

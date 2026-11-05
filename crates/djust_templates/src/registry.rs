@@ -454,9 +454,9 @@ fn read_wants_typed_args(handler: &Bound<'_, PyAny>) -> PyResult<bool> {
 /// which materialises a large list or dict a second time (the handler already got it as JSON).
 /// A handler that also sets `TYPED_ARGS_STANDINS_ONLY = True` is handed only the operands whose
 /// string form loses their type, the ones `djust.components.rust_handlers._parse_args` takes back:
-/// a tuple and an object (`UUID`, `Path`, ...). Every other operand is left out, so the handler
-/// reads it from its string argument exactly as it did before the channel existed. Has no effect
-/// without `TYPED_ARGS`.
+/// a tuple, a namedtuple (#3849) and an object (`UUID`, `Path`, ...). Every other operand is left
+/// out, so the handler reads it from its string argument exactly as it did before the channel
+/// existed. Has no effect without `TYPED_ARGS`.
 fn read_typed_standins_only(handler: &Bound<'_, PyAny>) -> PyResult<bool> {
     if !handler.hasattr("TYPED_ARGS_STANDINS_ONLY")? {
         return Ok(false);

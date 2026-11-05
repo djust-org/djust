@@ -120,9 +120,8 @@ class TestParseArgsPutsTheTypeBack:
             True,
             None,
             Decimal("1.5"),
-            namedtuple("Point", "x y")(1, 2),
         ],
-        ids=["list", "dict", "int", "float", "str", "bool", "None", "Decimal", "namedtuple"],
+        ids=["list", "dict", "int", "float", "str", "bool", "None", "Decimal"],
     )
     def test_every_other_type_reaches_the_handler_exactly_as_before(self, typed):
         before = rust_handlers._parse_args(["v=[1,2]"], {})
@@ -389,9 +388,11 @@ class TestTheNarrowAsk:
         from djust import _rust
 
         _rust.render_template("{% narrow_probe_3768 " + self.OPERANDS + " %}", dict(self.CTX))
-        assert set(seen["narrow"]) == {"t", "u", "p"}, seen["narrow"]
+        # A namedtuple is a tuple whose type the string argument loses too (#3849).
+        assert set(seen["narrow"]) == {"t", "u", "p", "nt"}, seen["narrow"]
         assert seen["narrow"]["t"] == (1, 2) and type(seen["narrow"]["t"]) is tuple
         assert seen["narrow"]["u"] == self.CTX["u"]
+        assert seen["narrow"]["nt"] == (1, 2) and type(seen["narrow"]["nt"]).__name__ == "Pt"
 
     def test_a_handler_declaring_only_typed_args_still_gets_every_operand(self, seen):
         from djust import _rust
@@ -413,7 +414,7 @@ class TestTheNarrowAsk:
             "{% ball_probe_3768 " + self.OPERANDS + " %}x{% endball_probe_3768 %}",
             dict(self.CTX),
         )
-        assert set(seen["block_narrow"]) == {"t", "u", "p"}, seen["block_narrow"]
+        assert set(seen["block_narrow"]) == {"t", "u", "p", "nt"}, seen["block_narrow"]
         assert set(seen["block_all"]) == {"t", "u", "p", "rows", "d", "n", "s", "nt"}
 
     def test_the_component_wrapper_asks_for_the_narrow_form(self):
