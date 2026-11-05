@@ -20,10 +20,6 @@ from djust import LiveView
 from payload_sweep_3774 import PAYLOAD
 
 
-def _text(mode: str) -> str:
-    return PAYLOAD
-
-
 def _request():
     return SimpleNamespace(csp_nonce=PAYLOAD, user=None, path="/")
 

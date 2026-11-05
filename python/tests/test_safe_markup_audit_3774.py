@@ -3,7 +3,7 @@
 ``scripts/lib/safe_markup_taint.py`` (the guard of #3766) flagged 125 sites in ``python/djust``
 outside tests and theming. Each one was read: the value traced to where it is escaped, validated or
 coerced. The record is ``scripts/lib/safe_markup_audit.py`` (what makes each site safe, plus
-evidence that must still exist verbatim) and ``docs/internal/mark-safe-audit-3774.md`` (the same
+evidence that must still be live code in its scope) and ``docs/internal/mark-safe-audit-3774.md`` (the same
 table with line numbers, generated).
 
 What each class proves:
@@ -20,9 +20,10 @@ What each class proves:
   ``conditional_escape`` from ``django.utils.html``: the guard trusts an escaper by ORIGIN, so the
   same call through ``._registry`` re-flags every site it escapes.
 * ``TestPayloadSweep`` is the empirical backstop for "safe": every component tag is rendered with a
-  hostile payload in every argument it reads, in four shapes, and the output is PARSED. A payload
-  that became an attribute, an event handler or an element fails. Its own checker is shown to catch
-  a deliberately unescaped tag.
+  hostile payload in every argument it reads, in seven shapes (``payload_sweep_3774.SHAPES``), and
+  the output is PARSED. A payload that became an attribute, an event handler or an element fails,
+  including one interpolated raw inside ``<textarea>`` or an SVG ``<title>`` (the payload closes
+  both first, #3827). Its own checker is shown to catch a deliberately unescaped tag.
 * ``TestTheDocMatchesTheAudit`` keeps the generated table honest.
 
 Refs #3774, #3766, #3775, #1859, #1468, #1197.
@@ -165,6 +166,90 @@ class TestTheAuditRulesCanFail:
         entry = {key: _entry(1, evidence=[("m.py", "conditional_escape(name)")])}
         assert len(audit.missing_evidence(entry, tmp_path)) == 1
 
+    # The ways of satisfying a textual evidence literal without the escape being there (#3827).
+    # Each body keeps ``e = escape(v)`` where it cannot run; the literal is present, the escape is not.
+    DEAD = {
+        "a string dropped into the body": "    'e = escape(v)'\n    e = v\n",
+        "an f-string dropped into the body": "    f'e = escape(v)'\n    e = v\n",
+        "an if False branch": "    if False:\n        e = escape(v)\n    e = v\n",
+        "an if 0 branch": "    if 0:\n        e = escape(v)\n    e = v\n",
+        "an if not True branch": "    if not True:\n        e = escape(v)\n    e = v\n",
+        "a while False body": "    while False:\n        e = escape(v)\n    e = v\n",
+        "the else of if True": "    if True:\n        e = v\n    else:\n        e = escape(v)\n",
+        "code after a return": "    return v\n    e = escape(v)\n",
+        "code after a raise": "    raise ValueError\n    e = escape(v)\n",
+        "a nested def nothing calls": "    def never():\n        return escape(v)\n    e = v\n",
+        "a nested def called only from a dead branch": (
+            "    def never():\n        return escape(v)\n    if False:\n        never()\n    e = v\n"
+        ),
+        "a nested def called only by another nested def nothing calls": (
+            "    def inner():\n        return escape(v)\n"
+            "    def outer():\n        return inner()\n    e = v\n"
+        ),
+        "a nested def that only calls itself": (
+            "    def loop(n):\n        return loop(n - 1) or escape(v)\n    e = v\n"
+        ),
+    }
+
+    @pytest.mark.parametrize("what", sorted(DEAD))
+    def test_a_literal_that_cannot_run_is_not_evidence(self, tmp_path, what):
+        (tmp_path / "m.py").write_text("def audited(v):\n" + self.DEAD[what])
+        key = ("m.py", "audited")
+        entry = {key: _entry(1, evidence=[("m.py", "escape(v)")])}
+        assert audit.missing_evidence(entry, tmp_path) == [(key, "m.py", "escape(v)", "audited")]
+
+    #: The same literal where it CAN run: each of these must still count, or the rule above would
+    #: be satisfied by deleting every entry's evidence.
+    LIVE = {
+        "plain code": "    e = escape(v)\n",
+        "an if on a name": "    if flag:\n        e = escape(v)\n    else:\n        e = v\n",
+        "the body of if True": "    if True:\n        e = escape(v)\n",
+        "the else of if False": "    if False:\n        e = v\n    else:\n        e = escape(v)\n",
+        "the body of a loop": "    for _ in v:\n        e = escape(v)\n",
+        "code before a return": "    e = escape(v)\n    return e\n",
+        "a nested def that is called": "    def go():\n        return escape(v)\n    e = go()\n",
+        "a nested def passed along": "    def go(x):\n        return escape(v)\n    e = list(map(go, v))\n",
+        "a nested def that is returned": "    def go():\n        return escape(v)\n    return go\n",
+        "a decorated nested def": "    @register\n    def go():\n        return escape(v)\n",
+        "a method of a nested class": (
+            "    class N:\n        def render(self):\n            return escape(v)\n    e = N()\n"
+        ),
+        "a nested def called from a nested def that is called": (
+            "    def inner():\n        return escape(v)\n"
+            "    def outer():\n        return inner()\n    e = outer()\n"
+        ),
+        "an except handler": "    try:\n        e = v\n    except KeyError:\n        e = escape(v)\n",
+    }
+
+    @pytest.mark.parametrize("what", sorted(LIVE))
+    def test_the_same_literal_where_it_can_run_still_counts(self, tmp_path, what):
+        (tmp_path / "m.py").write_text("def audited(v):\n" + self.LIVE[what])
+        key = ("m.py", "audited")
+        entry = {key: _entry(1, evidence=[("m.py", "escape(v)")])}
+        assert audit.missing_evidence(entry, tmp_path) == []
+
+    def test_what_the_ast_cannot_see_is_still_counted_and_the_sweep_is_the_check(self, tmp_path):
+        """DOCUMENTED LIMIT (#3827): whether a referenced branch, callback or lambda ever runs is a
+        runtime fact. These satisfy the literal check although the escape never executes."""
+        (tmp_path / "m.py").write_text(
+            "def audited(v, flag=False):\n"
+            "    if flag and not flag:\n"
+            "        e = escape(v)\n"
+            "    never = lambda: escape(v)\n"
+            "    e = v\n"
+        )
+        key = ("m.py", "audited")
+        entry = {key: _entry(1, evidence=[("m.py", "escape(v)")])}
+        assert audit.missing_evidence(entry, tmp_path) == []
+
+    def test_dead_code_keeps_its_line_structure(self, tmp_path):
+        # Blanking must not move a line: the generated table resolves every literal to a line.
+        (tmp_path / "m.py").write_text(
+            "def audited(v):\n    if False:\n        x = 1\n        y = 2\n    return escape(v)\n"
+        )
+        key = ("m.py", "audited")
+        assert audit.evidence_line(key, ("m.py", "escape(v)"), tmp_path) == 5
+
     def test_code_in_the_scope_is_evidence_and_a_named_scope_is_honoured(self, tmp_path):
         (tmp_path / "m.py").write_text(
             "def helper():\n    return escape(v)\n\ndef audited():\n    return helper()\n"
@@ -291,6 +376,36 @@ class TestTheCheckerCanFail:
         out = self.Escaped({"x": PAYLOAD, "u": "/safe"}).render(None)
         assert injections(out) == []
         assert injections(self.Escaped({"x": PAYLOAD, "u": URL_PAYLOAD}).render(None)) != []
+
+    # A raw value INSIDE an element whose contents the parser keeps as text (RCDATA, #3827). A
+    # browser ends <textarea> / <title> at the first matching end tag in that text, so the
+    # payload has to close them before its own element or it is invisible here.
+    RCDATA = {
+        "a textarea": "<textarea name='n'>{x}</textarea>",
+        "an svg title": "<svg><rect><title>{x}</title></rect></svg>",
+        "a title and then a textarea": "<svg><title>{x}</title></svg><textarea>{x}</textarea>",
+    }
+
+    @pytest.mark.parametrize("where", sorted(RCDATA))
+    def test_it_catches_a_raw_value_inside_a_textarea_or_an_svg_title(self, where):
+        assert "<svg onload=...>" in injections(self.RCDATA[where].format(x=PAYLOAD))
+
+    @pytest.mark.parametrize("where", sorted(RCDATA))
+    def test_the_escaped_value_inside_them_is_clean(self, where):
+        assert injections(self.RCDATA[where].format(x=conditional_escape(PAYLOAD))) == []
+
+    @pytest.mark.parametrize("where", sorted(RCDATA))
+    def test_without_the_closers_the_same_raw_value_is_invisible(self, where):
+        """The blind spot the closers fix, shown rather than asserted: the payload as it was before
+        #3827 is inert text in these elements, so a raw interpolation went unreported."""
+        assert sweepmod.RCDATA_CLOSERS in PAYLOAD
+        old_payload = PAYLOAD.replace(sweepmod.RCDATA_CLOSERS, "")
+        assert injections(self.RCDATA[where].format(x=old_payload)) == []
+
+    def test_the_closers_come_before_the_element_they_let_through(self):
+        assert (
+            PAYLOAD.index("</textarea>") < PAYLOAD.index("</title>") < PAYLOAD.index("<svg onload")
+        )
 
     @pytest.mark.parametrize(
         "markup",
