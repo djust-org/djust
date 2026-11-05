@@ -604,10 +604,10 @@ def _collect_passthrough_attrs(kwargs: Dict[str, Any]) -> Dict[str, Any]:
     to the rendered tag as an attribute, with ``_`` in keys converted to
     ``-`` (so ``aria_label="Search"`` becomes ``aria-label="Search"``).
 
-    The result is judged by :func:`djust._attr_policy.passthrough_attrs` (#3818): ``on*``
-    names, a ``type`` of ``image`` / ``submit`` / ``reset`` / ``button`` and a script-bearing
-    ``href`` / ``src`` / ``action`` / ``formaction`` raise ``ValueError``; any other URL scheme
-    the shared allowlist rejects renders ``#``.
+    The result is judged by :func:`djust._attr_policy.passthrough_attrs` (#3818): an ``on*``
+    NAME raises ``ValueError``; a VALUE never does (it can come from data): a URL the shared
+    allowlist rejects renders ``#`` and a ``type`` of ``image`` / ``submit`` / ``reset`` /
+    ``button`` is left out, so the field keeps its own type.
     """
     _KNOWN = {
         "handler",

@@ -194,8 +194,9 @@ class BaseAdapter(FrameworkAdapter):
                     continue
                 merged[key] = value
         # Only the attributes that will actually be written are judged (#3818): an inline event
-        # handler, a script-bearing URL or a ``type`` that submits raises ``ValueError``, as
-        # ``live_input`` does; the widget's ``type`` is ignored when the adapter already set one.
+        # handler name raises ``ValueError``, a rejected URL renders ``#`` and a ``type`` that
+        # submits is left out, as for ``live_input``; the widget's ``type`` is ignored when the
+        # adapter already set one.
         attrs.update(passthrough_attrs(merged))
 
     @staticmethod
@@ -214,10 +215,12 @@ class BaseAdapter(FrameworkAdapter):
             if widget_type != default_type:
                 # This is where a widget's ``attrs={"type": ...}`` becomes the tag's own
                 # ``type`` (Django moves it onto the widget), so the passthrough policy for
-                # ``type`` applies here: ``image`` / ``submit`` / ``reset`` / ``button`` raise
-                # ``ValueError`` (#3818).
-                passthrough_attrs({"type": widget_type})
-                return str(widget_type)
+                # ``type`` applies here: ``image`` / ``submit`` / ``reset`` / ``button`` are
+                # left out (and logged), so the field falls back to its class's own type
+                # below (#3818).
+                judged = passthrough_attrs({"type": widget_type})
+                if "type" in judged:
+                    return str(judged["type"])
 
         # Check EmailField before CharField (EmailField inherits from CharField)
         if isinstance(field, forms.EmailField):

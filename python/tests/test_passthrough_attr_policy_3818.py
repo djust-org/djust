@@ -76,8 +76,8 @@ GOOD_URLS = [
     "//cdn.example/x.js",
     "",
 ]
-RAISING = sorted(policy.URL_ATTRS_RAISING)
-QUIET = sorted(policy.URL_ATTRS_QUIET)
+RAISING = sorted(policy.URL_ATTRS_NAVIGATION)
+QUIET = sorted(policy.URL_ATTRS_OTHER)
 ON_NAMES = [
     "onfocus",
     "onFocus",
@@ -178,13 +178,15 @@ class TestThePolicy:
 
     @pytest.mark.parametrize("name", RAISING)
     @pytest.mark.parametrize("url", SCRIPT_URLS)
-    def test_a_script_bearing_url_in_a_navigation_attribute_is_refused(self, name, url):
-        _refused({name: url})
+    def test_a_script_bearing_url_in_a_navigation_attribute_renders_a_hash(self, name, url):
+        # A VALUE can come from data (``formaction=profile.website``): it never raises, because
+        # an error page an attacker's stored value triggers for every viewer is its own hole.
+        assert passthrough_attrs({name: url}) == {name: "#"}
 
     @pytest.mark.parametrize("name", RAISING)
     @pytest.mark.parametrize("url", SCRIPT_URLS)
-    def test_a_marked_safe_script_url_is_refused_too(self, name, url):
-        _refused({name: mark_safe(url)})
+    def test_a_marked_safe_script_url_renders_a_hash_too(self, name, url):
+        assert passthrough_attrs({name: mark_safe(url)}) == {name: "#"}
 
     @pytest.mark.parametrize("name", RAISING + QUIET)
     @pytest.mark.parametrize("url", OTHER_URLS)
@@ -227,7 +229,7 @@ class TestThePolicy:
         assert passthrough_attrs({"poster": uri})["poster"] == uri
         assert passthrough_attrs({"srcset": uri + " 1x"})["srcset"] == uri + " 1x"
         # ... and nothing else may: src does not get the image exemption.
-        _refused({"src": uri})
+        assert passthrough_attrs({"src": uri}) == {"src": "#"}
         assert passthrough_attrs({"data": uri})["data"] == "#"
 
     def test_a_url_is_converted_to_text_once(self):
@@ -242,9 +244,35 @@ class TestThePolicy:
         assert out == "/ok" and str(out) == "/ok"
 
     @pytest.mark.parametrize("value", REFUSED_TYPES)
-    def test_type_cannot_become_a_submitting_control(self, value):
-        _refused({"type": value})
-        _refused({"TYPE": value})
+    def test_a_submitting_type_is_left_out_not_raised(self, value):
+        # ``type=field.kind`` can be data too: the attribute is dropped (the tag keeps the type
+        # it fixed itself) and the call does not fail.
+        assert passthrough_attrs({"type": value}) == {}
+        assert passthrough_attrs({"TYPE": value, "placeholder": "p"}) == {"placeholder": "p"}
+
+    def test_a_type_is_judged_and_returned_as_the_same_text(self):
+        class Flaky:
+            calls = 0
+
+            def __str__(self):
+                Flaky.calls += 1
+                return "date" if Flaky.calls == 1 else "image"
+
+        out = passthrough_attrs({"type": Flaky()})
+        assert out == {"type": "date"} and type(out["type"]) is str
+
+    def test_a_type_that_is_not_text_is_returned_as_text(self):
+        class Kind:
+            def __str__(self):
+                return "color"
+
+        assert passthrough_attrs({"type": Kind()}) == {"type": "color"}
+
+    def test_a_dropped_type_is_logged_by_name_only(self, caplog):
+        with caplog.at_level("WARNING", logger="djust._attr_policy"):
+            passthrough_attrs({"type": "image"})
+            passthrough_attrs({"type": mark_safe("submit")})
+        assert len(caplog.records) == 2 and "image" not in caplog.text
 
     @pytest.mark.parametrize("value", OK_TYPES)
     def test_other_types_still_override(self, value):
@@ -274,10 +302,23 @@ class TestThePolicy:
         assert passthrough_attrs(ok) is not ok
 
     def test_the_error_names_the_attribute_and_never_prints_the_value(self):
-        for attrs in ({"onfocus": "SECRET-1"}, {"formaction": "javascript:SECRET-2"}):
-            with pytest.raises(ValueError) as caught:
-                passthrough_attrs(attrs)
-            assert "SECRET" not in str(caught.value)
+        with pytest.raises(ValueError) as caught:
+            passthrough_attrs({"onfocus": "SECRET-1"})
+        assert "SECRET" not in str(caught.value) and "onfocus" in str(caught.value)
+
+    def test_no_value_can_make_it_raise(self):
+        """Only a NAME raises. Every URL / type value, however hostile, returns."""
+        for name in RAISING + QUIET + ["type"]:
+            for value in (
+                SCRIPT_URLS + OTHER_URLS + REFUSED_TYPES + HOSTILE_NAMES + [mark_safe("<x>")]
+            ):
+                passthrough_attrs({name: value})
+                passthrough_attrs({name: mark_safe(value)})
+
+    def test_a_script_url_is_logged_without_its_value(self, caplog):
+        with caplog.at_level("WARNING", logger="djust._attr_policy"):
+            passthrough_attrs({"formaction": "javascript:SECRET-2"})
+        assert caplog.records and "SECRET" not in caplog.text and "formaction" in caplog.text
 
     def test_a_rejected_scheme_is_logged_without_its_value(self, caplog):
         with caplog.at_level("WARNING", logger="djust._attr_policy"):
@@ -328,9 +369,26 @@ def _tag(attr):
 class TestLiveInputOnBothEngines:
     @pytest.mark.parametrize("attr", ["formaction", "src", "action", "href"])
     @pytest.mark.parametrize("url", SCRIPT_URLS)
-    def test_a_script_url_in_a_navigation_attribute_raises(self, render, attr, url):
-        with pytest.raises(ValueError):
-            render(_tag(attr), {"u": url})
+    def test_a_script_url_in_a_navigation_attribute_renders_a_hash(self, render, attr, url):
+        out = render(_tag(attr), {"u": url})
+        assert f' {attr}="#"' in out
+        assert "javascript" not in out.lower() and "script:" not in out.lower()
+
+    def test_a_url_taken_from_data_never_fails_the_page(self, render):
+        """The reported case: ``formaction=profile.website`` with a stored hostile URL."""
+
+        class Profile:
+            website = "javascript:alert(document.cookie)"
+
+        out = render(
+            '{% live_input "text" handler="h" formaction=profile.website %}', {"profile": Profile}
+        )
+        assert 'formaction="#"' in out
+        out = render(
+            '{% live_input "text" handler="h" formaction=profile.website %}',
+            {"profile": {"website": "java\tscript:x"}},
+        )
+        assert 'formaction="#"' in out
 
     @pytest.mark.parametrize(
         "attr", ["onfocus", "onFocus", "ONFOCUS", "onclick", "on_focus", "onerror"]
@@ -340,16 +398,18 @@ class TestLiveInputOnBothEngines:
             render(_tag(attr), {"u": "alert(1)"})
 
     @pytest.mark.parametrize("value", REFUSED_TYPES)
-    def test_a_submitting_type_raises(self, render, value):
-        with pytest.raises(ValueError):
-            render(_tag("type"), {"u": value})
+    def test_a_submitting_type_is_left_out_and_the_field_keeps_its_own(self, render, value):
+        out = render(_tag("type"), {"u": value})
+        assert out.startswith('<div dj-root><input type="text" class=')
+        assert out.count("type=") == 1
 
-    def test_the_issue_exploit_type_image_with_a_script_src_raises(self, render):
-        with pytest.raises(ValueError):
-            render(
-                '{% live_input "text" handler="h" type=t src=u %}',
-                {"t": "image", "u": "javascript:alert(1)"},
-            )
+    def test_the_issue_exploit_type_image_with_a_script_src_is_neutralised(self, render):
+        out = render(
+            '{% live_input "text" handler="h" type=t src=u %}',
+            {"t": "image", "u": "javascript:alert(1)"},
+        )
+        assert 'type="text"' in out and 'type="image"' not in out
+        assert 'src="#"' in out and "javascript" not in out
 
     @pytest.mark.parametrize("attr", ["poster", "srcset", "ping"])
     @pytest.mark.parametrize("url", SCRIPT_URLS + OTHER_URLS)
@@ -423,8 +483,7 @@ class TestLiveInputOnBothEngines:
             with pytest.raises(ValueError):
                 render(body, {"c": ["a"], "u": "x"})
             body = '{% live_input "' + field_type + '" handler="h" choices=c formaction=u %}'
-            with pytest.raises(ValueError):
-                render(body, {"c": ["a"], "u": "javascript:x"})
+            assert 'formaction="#"' in render(body, {"c": ["a"], "u": "javascript:x"})
 
     def test_the_two_engines_agree_on_every_payload(self):
         cells = []
@@ -492,9 +551,9 @@ class TestAsLiveWidgetAttrs:
             _render_field({name: "this.form.submit()"})
 
     @pytest.mark.parametrize("name", ["formaction", "href", "src", "action"])
-    def test_a_script_url_in_widget_attrs_raises(self, name):
-        with pytest.raises(ValueError):
-            _render_field({name: "javascript:alert(1)"})
+    def test_a_script_url_in_widget_attrs_renders_a_hash(self, name):
+        out = _render_field({name: "javascript:alert(1)"})
+        assert f'{name}="#"' in out and "javascript" not in out
 
     def test_other_rejected_schemes_render_a_hash(self):
         assert 'formaction="#"' in _render_field({"formaction": "blob:x"})
@@ -506,19 +565,22 @@ class TestAsLiveWidgetAttrs:
             _render_field({"onclick": "x"}, kind)
 
     @pytest.mark.parametrize("value", ["image", "submit", "reset", "button", "Image"])
-    def test_a_widget_type_that_submits_raises(self, value):
+    def test_a_widget_type_that_submits_is_ignored(self, value):
         # Django moves ``attrs={"type": ...}`` onto ``widget.input_type`` and the adapter takes
         # the tag's own type from there, so this is the route a widget ``type`` reaches the tag.
-        with pytest.raises(ValueError):
-            _render_field({"type": value})
+        # It does not fail the render: the field keeps its class's own type.
+        out = _render_field({"type": value})
+        assert 'type="text"' in out and value.lower() not in out.split("<input")[1].lower().replace(
+            "validate_field", ""
+        )
 
     @pytest.mark.parametrize("value", ["tel", "date", "color", "range"])
     def test_another_widget_type_still_applies(self, value):
         assert f'type="{value}"' in _render_field({"type": value})
 
     def test_a_type_that_would_be_written_is_judged(self):
-        with pytest.raises(ValueError):
-            _render_field({"type": "image"}, forms.Textarea)
+        out = _render_field({"type": "image"}, forms.Textarea)
+        assert "<textarea" in out and 'type="image"' not in out
 
     def test_ordinary_widget_attrs_are_byte_identical(self):
         out = _render_field(
@@ -546,11 +608,10 @@ class TestIcons:
         with pytest.raises(ValueError):
             render_icon("check", onclick="alert(1)")
 
-    def test_render_icon_refuses_a_script_url(self):
+    def test_render_icon_neutralises_a_script_url(self):
         from djust.components.icons import render_icon
 
-        with pytest.raises(ValueError):
-            render_icon("check", href="javascript:alert(1)")
+        assert 'href="#"' in render_icon("check", href="javascript:alert(1)")
         assert 'poster="#"' in render_icon("check", poster="blob:x")
 
     def test_render_icon_ordinary_extras_are_byte_identical(self):
@@ -609,23 +670,50 @@ class TestParityWithTheming:
     def test_the_sets_are_the_same_sets(self):
         from djust.theming.templatetags import theme_components as tc
 
-        assert policy.URL_ATTRS_RAISING == tc._URL_ATTRS
-        assert policy.URL_ATTRS_QUIET - {"xlink:href"} == tc._QUIET_URL_ATTRS
+        assert policy.URL_ATTRS_NAVIGATION == tc._URL_ATTRS
+        assert policy.URL_ATTRS_OTHER - {"xlink:href"} == tc._QUIET_URL_ATTRS
         assert policy.IMAGE_URL_ATTRS == tc._IMAGE_URL_ATTRS
-        assert policy.RAISING_SCHEMES == tc._RAISING_SCHEMES
 
-    def test_every_url_payload_gets_the_same_verdict(self):
+    def test_every_url_payload_gets_the_same_verdict_except_the_documented_one(self):
+        """The one deliberate difference: theming RAISES for a script-bearing value in
+        ``href`` / ``src`` / ``action`` / ``formaction``; the shared policy renders ``#``
+        (a value can come from data and must not fail the page)."""
         mismatches = []
-        names = sorted(policy.URL_ATTRS_RAISING | (policy.URL_ATTRS_QUIET - {"xlink:href"}))
+        raising_differences = 0
+        names = sorted(policy.URL_ATTRS_NAVIGATION | (policy.URL_ATTRS_OTHER - {"xlink:href"}))
         for name in names:
             values = SCRIPT_URLS + OTHER_URLS + GOOD_URLS + [mark_safe("&#x6A;avascript:x")]
             if name == "srcset":
                 values = [v + " 2x" if v else v for v in values]
             for value in values:
                 theirs, ours = _theming_outcome(name, value), _shared_outcome(name, value)
+                if theirs == "raises" and ours == "#" and name in policy.URL_ATTRS_NAVIGATION:
+                    raising_differences += 1
+                    continue
                 if not _same_modulo_list_whitespace(name, theirs, ours):
                     mismatches.append((name, value, theirs, ours))
         assert not mismatches, mismatches[:5]
+        assert raising_differences > 40, "theming no longer raises: update the docstring"
+
+    def test_the_other_documented_differences_exist_and_are_the_only_ones(self):
+        from djust.theming.templatetags.theme_components import _passthrough_attrs
+
+        # ``type``: judged by the shared policy only.
+        assert passthrough_attrs({"type": "image"}) == {}
+        assert 'type="image"' in str(_passthrough_attrs({"type": "image"}, ()))
+        # ``hx-on-click``: refused by the shared policy only.
+        with pytest.raises(ValueError):
+            passthrough_attrs({"hx-on-click": "x"})
+        assert 'hx-on-click="x"' in str(_passthrough_attrs({"hx-on-click": "x"}, ()))
+        # ``xlink:href``: a URL attribute (and a legal name) in the shared policy only.
+        assert passthrough_attrs({"xlink:href": "javascript:x"}) == {"xlink:href": "#"}
+        with pytest.raises(ValueError):
+            _passthrough_attrs({"xlink:href": "x"}, ())
+        # ``srcset`` / ``ping``: an all-allowed list is printed as written here, re-joined there.
+        assert passthrough_attrs({"srcset": "/a 1x,  /b 2x"}) == {"srcset": "/a 1x,  /b 2x"}
+        assert 'srcset="/a 1x, /b 2x"' in str(_passthrough_attrs({"srcset": "/a 1x,  /b 2x"}, ()))
+        assert passthrough_attrs({"ping": "/a  /b "}) == {"ping": "/a  /b "}
+        assert 'ping="/a /b"' in str(_passthrough_attrs({"ping": "/a  /b "}, ()))
 
     @pytest.mark.parametrize("name", [n for n in ON_NAMES if n.lower().startswith("on")])
     def test_an_event_handler_is_refused_by_both(self, name):

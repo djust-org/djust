@@ -217,7 +217,7 @@ def render_icon(
 
     # Build extra attributes string
     extra = ""
-    # The one passthrough policy (#3818): ``on*`` and a script-bearing URL raise ValueError.
+    # The one passthrough policy (#3818): an ``on*`` name raises ValueError, a rejected URL renders ``#``.
     html_attrs = passthrough_attrs({key.replace("_", "-"): val for key, val in attrs.items()})
     for key, val in html_attrs.items():
         # Convert python_name to html-name (aria_label -> aria-label)

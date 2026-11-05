@@ -133,11 +133,14 @@ keywords are therefore judged by one policy (`djust._attr_policy.passthrough_att
 |---|---|
 | `aria_*`, `data_*`, `placeholder`, `rows`, `maxlength`, `pattern`, `id`, `title`, `style`, `x_model`, `dj_*` ... | forwarded unchanged |
 | `type` of `date`, `color`, `range`, ... | forwarded: it overrides the field's own `type`, as before |
-| `type` of `image`, `submit`, `reset` or `button` (any case) | `ValueError`: the field cannot become a control that submits or navigates |
-| an event-handler attribute: `onclick`, `onfocus`, any `on...`, and the `@click` / `x-on:` / `v-on:` / `hx-on` spellings | `ValueError`: that is inline script; use a `dj-*` binding |
-| `href`, `src`, `action`, `formaction` whose value is a script-bearing URL (`javascript:`, `vbscript:`, `data:`, `livescript:`, `mhtml:`, however spelled: case, spaces, tabs or newlines inside the scheme) | `ValueError` |
-| the same four with any other scheme the URL allowlist rejects (`blob:`, `file:`, a custom scheme) | rendered as `#`, and logged |
-| `poster`, `srcset`, `ping`, `data`, `background`, `xlink:href`, `dj_navigate`, `dj_patch` with a rejected scheme | rendered as `#` (a `srcset` / `ping` list is judged entry by entry) |
+| `type` whose value is `image`, `submit`, `reset` or `button` (any case) | left out, and logged: the field keeps its own `type` |
+| an event-handler attribute NAME: `onclick`, `onfocus`, any `on...`, and the `@click` / `x-on:` / `v-on:` / `hx-on` spellings | `ValueError`: that is inline script; use a `dj-*` binding |
+| `href`, `src`, `action`, `formaction`, `poster`, `srcset`, `ping`, `data`, `background`, `xlink:href`, `dj_navigate`, `dj_patch` whose value has a scheme the URL allowlist rejects (`javascript:`, `vbscript:`, `data:`, `blob:`, `file:`, a custom scheme; however spelled: case, spaces, tabs or newlines inside the scheme) | rendered as `#`, and logged (a `srcset` / `ping` list is judged entry by entry) |
+
+Only an attribute NAME raises (`ValueError`, at development time). A VALUE never does: a template can
+take it from data (`formaction=profile.website`), and an error page that a stored hostile value
+triggers for every viewer would be an availability hole of its own. The log line carries the
+attribute name, never the value.
 
 `http(s)`, `mailto`, `tel`, relative and `#fragment` URLs are unchanged. This is the policy
 `djust.theming` applies to its component attributes, and a test runs the two against the same

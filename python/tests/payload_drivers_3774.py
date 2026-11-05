@@ -57,8 +57,8 @@ def live_input(mode):
             )
         )
     out.append(tag(PAYLOAD, handler="h"))  # the unknown-type comment
-    # Passthrough attributes are judged (#3818): an event handler and a script-bearing URL are
-    # refused (ValueError) or neutralised, so what the sweep sees is the markup that survived;
+    # Passthrough attributes are judged (#3818): an event-handler NAME is refused (ValueError)
+    # and a script-bearing URL value is neutralised to ``#``, so what the sweep sees is the markup that survived;
     # remove the policy and these cells inject. (A submitting ``type`` is not an injection the
     # sweep's detector reads; it is pinned in test_passthrough_attr_policy_3818.py.)
     url = URL_PAYLOAD if mode == "url" else PAYLOAD
