@@ -29,10 +29,12 @@
     <main>
         {% block content %}{% endblock %}
 
-        {# App-shell widgets: two sticky LiveViews. The first page to
-           render each one INSTANTIATES it; subsequent pages declare
-           the slot via ``dj-sticky-slot`` and the sticky subtree
-           re-attaches via ``replaceWith()``. #}
+        {% comment %}
+        App-shell widgets: two sticky LiveViews. The first page to
+        render each one INSTANTIATES it; subsequent pages declare
+        the slot via ``dj-sticky-slot`` and the sticky subtree
+        re-attaches via ``replaceWith()``.
+        {% endcomment %}
         <div class="shell-widgets">
             {% block audio_slot %}
                 <div dj-sticky-slot="audio-player" class="widget">
@@ -47,11 +49,13 @@
             {% endblock %}
         </div>
 
-        {# Initial instantiation of both stickies lives on the Dashboard
-           page (see dashboard.html) — that page is the canonical entry
-           point for the demo. Non-entry pages (Settings, Reports) only
-           declare [dj-sticky-slot] markers (via the base's slot blocks
-           above) and rely on the client/server reattach flow. #}
+        {% comment %}
+        Initial instantiation of both stickies lives on the Dashboard
+        page (see dashboard.html) — that page is the canonical entry
+        point for the demo. Non-entry pages (Settings, Reports) only
+        declare [dj-sticky-slot] markers (via the base's slot blocks
+        above) and rely on the client/server reattach flow.
+        {% endcomment %}
         {% block sticky_embeds %}{% endblock %}
     </main>
 
