@@ -843,7 +843,7 @@ KNOWN_TYPE_LOSS = {
 #:   Django's. Deliberately not made strict: a tuple is an ordinary thing to pass for a list
 #:   (Django ``choices``), and a real ``tuple`` here emptied ``dependent_select`` on the first try
 #:   (``test_standin_types_3768.py::TestAListSlotKeepsWorking``).
-#: * ``set`` / ``frozenset`` / ``bytes`` (13): iterable, and an iterable crosses to a handler as
+#: * ``set`` / ``frozenset`` / ``bytes`` (16, ``color_picker:swatches`` joined in #3669): iterable, and an iterable crosses to a handler as
 #:   the engine's ``TemplateObject`` wrapper, not as itself, so the type cannot be recovered
 #:   there. ``avatar_group`` (a ``{% load %}`` bridge tag) hits the same wrapper.
 #: * ``date`` / ``datetime`` / ``time`` (16): ``theme_*`` handlers, a temporal value in a CSS-class
@@ -873,10 +873,21 @@ RESIDUAL_STANDIN_LOSS: dict[str, dict[str, int]] = {
         "terminal:output": 1,
         "treemap:data": 1,
     },
-    "set": {"multi_select:options": 1, "tag_input:suggestions": 1, "tag_input:tags": 1},
-    "frozenset": {"multi_select:options": 1, "tag_input:suggestions": 1, "tag_input:tags": 1},
+    "set": {
+        "color_picker:swatches": 1,
+        "multi_select:options": 1,
+        "tag_input:suggestions": 1,
+        "tag_input:tags": 1,
+    },
+    "frozenset": {
+        "color_picker:swatches": 1,
+        "multi_select:options": 1,
+        "tag_input:suggestions": 1,
+        "tag_input:tags": 1,
+    },
     "bytes": {
         "avatar_group:users": 1,
+        "color_picker:swatches": 1,
         "multi_select:options": 1,
         "tag_input:suggestions": 1,
         "tag_input:tags": 1,
@@ -1088,10 +1099,12 @@ class TestTypeDispatch:
     def test_the_fix_removed_the_cells_it_claims(self, facts):
         """The headline number, derived rather than restated (#2727): the recorded residual's size
         is computed from the pin, the before-count is the measurement the issue reported, and the
-        measurement must still be the 21,390 cells those were counted over."""
+        measurement must still be the 21,390 cells those were counted over, plus the 135 cells
+        #3669 added by making the native handlers read more parameters (re-measured, with the
+        grid still 15 types, not estimated)."""
         residual = sum(sum(m.values()) for m in RESIDUAL_STANDIN_LOSS.values())
         assert residual < STANDIN_LOSS_BEFORE_3768
-        assert facts["typed_values"]["cells"] == 21390, (
+        assert facts["typed_values"]["cells"] == 21390 + 135, (
             "the cell grid changed: re-derive both counts"
         )
         measured = sum(

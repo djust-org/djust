@@ -30,7 +30,7 @@ djust_components:code_block,DIFFERENT-escape-policy-only,3,escaping:3+tags:3+tex
 djust_components:code_snippet,DIFFERENT,6,classes:2+escaping:5+tags:5+text:5,,15,3/3,15
 djust_components:collab_selection,DIFFERENT-escape-policy-only,3,escaping:3,,22,8/8,22
 djust_components:collapsible,DIFFERENT,6,data/dj-attrs:1+escaping:5+ids:1+tags:2+text:3,,15,5/5,15
-djust_components:color_picker,DIFFERENT,10,classes:7+data/dj-attrs:7+escaping:5+other-attrs:7+tags:8+text:3,,17,5/5,17
+djust_components:color_picker,DIFFERENT-escape-policy-only,5,data/dj-attrs:1+escaping:5+other-attrs:1+tags:3+text:3,,17,5/5,17
 djust_components:combobox,IDENTICAL,0,,,35,17/17,35
 djust_components:command_palette,DIFFERENT,14,data/dj-attrs:1+escaping:4+other-attrs:14,,14,5/5,14
 djust_components:comparison_table,DIFFERENT-escape-policy-only,2,escaping:2,,23,8/8,23
@@ -54,7 +54,7 @@ djust_components:data_table,DIFFERENT,176,a11y:176+classes:176+data/dj-attrs:176
 djust_components:date_picker,DIFFERENT,31,classes:31+data/dj-attrs:1+escaping:11+other-attrs:1+tags:31+text:31,,34,15/15,34
 djust_components:dependent_select,DIFFERENT,10,a11y:1+classes:2+data/dj-attrs:1+escaping:9+ids:2+other-attrs:1+tags:6+text:6,,25,12/12,25
 djust_components:diff_viewer,DIFFERENT-escape-policy-only,4,escaping:4+tags:3+text:3,,19,7/7,19
-djust_components:dj_button,DIFFERENT,12,classes:1+data/dj-attrs:8+escaping:8+tags:4+text:4,,23,9/9,23
+djust_components:dj_button,DIFFERENT-escape-policy-only,8,classes:1+data/dj-attrs:1+escaping:8+tags:4+text:4,,23,9/9,23
 djust_components:dj_checkbox,DIFFERENT,15,data/dj-attrs:1+escaping:5+ids:15+other-attrs:1+tags:15+text:3,,15,6/6,15
 djust_components:dj_divider,DIFFERENT,8,classes:5+escaping:3+tags:8+text:6,,13,2/2,13
 djust_components:dj_input,DIFFERENT,23,classes:7+data/dj-attrs:1+escaping:9+ids:2+other-attrs:8+tags:10+text:6,rust_only_keys:python,23,11/11,24
@@ -76,10 +76,10 @@ djust_components:field_error,IDENTICAL,0,,,14,2/2,1
 djust_components:fieldset,DIFFERENT,4,classes:1+escaping:3+tags:3+text:3,,11,3/3,11
 djust_components:file_dropzone,DIFFERENT,10,classes:6+escaping:7+ids:1+other-attrs:1+tags:9+text:9,,21,7/7,21
 djust_components:file_tree,DIFFERENT-escape-policy-only,5,escaping:5,,21,10/10,21
-djust_components:filter_bar,DIFFERENT,28,classes:3+data/dj-attrs:1+escaping:3+ids:18+tags:28+text:28,,28,12/12,28
-djust_components:filter_date_range,DIFFERENT,14,classes:9+data/dj-attrs:12+escaping:5+tags:11+text:11,,17,5/5,17
-djust_components:filter_search,DIFFERENT,10,classes:6+data/dj-attrs:8+escaping:3+other-attrs:1+tags:6+text:5,,13,5/5,13
-djust_components:filter_select,DIFFERENT,12,classes:7+data/dj-attrs:10+escaping:3+tags:9+text:9,,15,5/5,15
+djust_components:filter_bar,DIFFERENT,33,classes:1+escaping:3+ids:24+tags:33+text:33,,34,15/15,34
+djust_components:filter_date_range,DIFFERENT-escape-policy-only,3,escaping:3+tags:3+text:3,,19,7/7,19
+djust_components:filter_search,DIFFERENT,3,escaping:2,,20,7/7,20
+djust_components:filter_select,DIFFERENT-escape-policy-only,3,escaping:3+tags:3+text:3,,19,7/7,19
 djust_components:form_array,DIFFERENT,19,classes:19+data/dj-attrs:1+escaping:4+other-attrs:19+tags:19+text:19,,19,9/9,19
 djust_components:form_errors,IDENTICAL,0,,,15,2/2,2
 djust_components:form_group,DIFFERENT,12,classes:8+escaping:4+ids:4+tags:11+text:6,,15,5/5,15
@@ -117,8 +117,8 @@ djust_components:modal_description,IDENTICAL,0,,,20,7/7,20
 djust_components:model_selector,DIFFERENT-escape-policy-only,5,escaping:5+tags:3+text:3,,25,11/11,25
 djust_components:multi_select,DIFFERENT-escape-policy-only,4,a11y:1+data/dj-attrs:1+escaping:4+other-attrs:1+tags:3+text:3,rust_only_keys:python,21,8/8,22
 djust_components:multimodal_input,DIFFERENT-escape-policy-only,5,escaping:5,,21,8/8,21
-djust_components:nav_item,DIFFERENT,18,classes:18+data/dj-attrs:6+escaping:3+other-attrs:12+tags:18+text:18,,18,7/7,18
-djust_components:nav_menu,DIFFERENT,29,classes:3+data/dj-attrs:2+escaping:5+ids:1+other-attrs:1+tags:29+text:29,,29,12/12,29
+djust_components:nav_item,DIFFERENT,16,classes:15+data/dj-attrs:1+escaping:3+other-attrs:2+tags:8+text:8,,18,7/7,18
+djust_components:nav_menu,DIFFERENT,29,classes:3+data/dj-attrs:1+escaping:5+ids:1+other-attrs:1+tags:29+text:29,,29,12/12,29
 djust_components:notification_badge,DIFFERENT,4,classes:4+escaping:1,,13,6/6,7
 djust_components:notification_center,DIFFERENT,9,classes:8+data/dj-attrs:6+escaping:3+tags:8+text:8,rust_only_keys:python,17,11/11,18
 djust_components:notification_popover,IDENTICAL,0,,,27,12/12,27
@@ -128,7 +128,7 @@ djust_components:otp_input,DIFFERENT-escape-policy-only,5,data/dj-attrs:1+escapi
 djust_components:page_alert,DIFFERENT,7,classes:1+data/dj-attrs:1+escaping:6+tags:3+text:3,,17,6/6,17
 djust_components:page_header,DIFFERENT,6,classes:1+escaping:5+tags:5+text:5,,16,4/4,16
 djust_components:page_header_actions,IDENTICAL,0,,,19,7/7,19
-djust_components:pagination,DIFFERENT,12,a11y:12+classes:12+data/dj-attrs:12+escaping:4+tags:12+text:12,,12,4/4,12
+djust_components:pagination,DIFFERENT,12,a11y:12+classes:12+data/dj-attrs:1+escaping:4+tags:12+text:12,,12,4/4,12
 djust_components:palette_item,DIFFERENT-escape-policy-only,7,data/dj-attrs:1+escaping:7+tags:6+text:6,,19,5/5,19
 djust_components:password_input,DIFFERENT-escape-policy-only,6,escaping:6+tags:2+text:2,,15,11/11,15
 djust_components:pie_chart,DIFFERENT-escape-policy-only,2,escaping:2+tags:1+text:1,,16,12/12,16

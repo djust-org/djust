@@ -1076,6 +1076,20 @@ def data_table(
 # ---------------------------------------------------------------------------
 
 
+def pagination_pages(page: Any, total_pages: Any) -> "list[Any]":
+    """The page numbers a pager shows, with ``"..."`` for each gap.
+
+    Shared with the native handler (#3669), so the two engines wire the same buttons.
+    """
+    pages: list = []
+    for p in range(1, total_pages + 1):
+        if p == 1 or p == total_pages or abs(p - page) <= 2:
+            pages.append(p)
+        elif pages and pages[-1] != "...":
+            pages.append("...")
+    return pages
+
+
 @register.inclusion_tag("djust_components/pagination.html")
 def pagination(
     page: Any = 1,
@@ -1084,16 +1098,10 @@ def pagination(
     next_event: Any = "page_next",
 ) -> "dict[str, Any]":
     """Render pagination controls."""
-    pages: list = []
-    for p in range(1, total_pages + 1):
-        if p == 1 or p == total_pages or abs(p - page) <= 2:
-            pages.append(p)
-        elif pages and pages[-1] != "...":
-            pages.append("...")
     return {
         "page": page,
         "total_pages": total_pages,
-        "pages": pages,
+        "pages": pagination_pages(page, total_pages),
         "prev_event": prev_event,
         "next_event": next_event,
     }
@@ -1220,6 +1228,61 @@ _DJ_BUTTON_VARIANT_CLASS_MAP = {
 }
 
 
+def resolve_dj_button_args(
+    label: Any,
+    variant: Any,
+    event: Any,
+    confirm: Any,
+    icon: Any,
+    disabled: Any,
+    loading: Any,
+    size: Any,
+    preset: Any,
+) -> "tuple[Any, Any, Any, Any, Any, bool, bool, Any]":
+    """Apply a ``dj_button`` preset and read the boolean flags, exactly as the tag does.
+
+    Shared with the native handler (#3669): which event, confirmation and flags a button
+    ends up with must not be decided twice. A preset fills only the arguments the caller left
+    at their defaults, so an explicit argument always wins.
+    """
+    if preset:
+        from djust.components.presets import get_preset
+
+        preset_params = get_preset("dj_button", preset)
+        if preset_params:
+            _defaults = {
+                "variant": "primary",
+                "event": "",
+                "confirm": "",
+                "icon": "",
+                "disabled": False,
+                "loading": False,
+                "size": "md",
+            }
+            if label == "" and "label" in preset_params:
+                label = preset_params["label"]
+            if variant == _defaults["variant"] and "variant" in preset_params:
+                variant = preset_params["variant"]
+            if event == _defaults["event"] and "event" in preset_params:
+                event = preset_params["event"]
+            if confirm == _defaults["confirm"] and "confirm" in preset_params:
+                confirm = preset_params["confirm"]
+            if icon == _defaults["icon"] and "icon" in preset_params:
+                icon = preset_params["icon"]
+            if disabled == _defaults["disabled"] and "disabled" in preset_params:
+                disabled = preset_params["disabled"]
+            if loading == _defaults["loading"] and "loading" in preset_params:
+                loading = preset_params["loading"]
+            if size == _defaults["size"] and "size" in preset_params:
+                size = preset_params["size"]
+
+    if isinstance(disabled, str):
+        disabled = disabled.lower() not in ("false", "0", "")
+    if isinstance(loading, str):
+        loading = loading.lower() not in ("false", "0", "")
+    return label, variant, event, confirm, icon, bool(disabled), bool(loading), size
+
+
 @register.simple_tag
 def dj_button(
     label: Any = "",
@@ -1252,43 +1315,9 @@ def dj_button(
         size: sm, md, lg (md emits no extra class)
         preset: optional preset name (see ``djust_components.presets``)
     """
-    # Apply preset defaults — explicit kwargs take precedence.
-    if preset:
-        from djust.components.presets import get_preset
-
-        preset_params = get_preset("dj_button", preset)
-        if preset_params:
-            # Only apply preset values for args the caller left at defaults.
-            _defaults = {
-                "variant": "primary",
-                "event": "",
-                "confirm": "",
-                "icon": "",
-                "disabled": False,
-                "loading": False,
-                "size": "md",
-            }
-            if label == "" and "label" in preset_params:
-                label = preset_params["label"]
-            if variant == _defaults["variant"] and "variant" in preset_params:
-                variant = preset_params["variant"]
-            if event == _defaults["event"] and "event" in preset_params:
-                event = preset_params["event"]
-            if confirm == _defaults["confirm"] and "confirm" in preset_params:
-                confirm = preset_params["confirm"]
-            if icon == _defaults["icon"] and "icon" in preset_params:
-                icon = preset_params["icon"]
-            if disabled == _defaults["disabled"] and "disabled" in preset_params:
-                disabled = preset_params["disabled"]
-            if loading == _defaults["loading"] and "loading" in preset_params:
-                loading = preset_params["loading"]
-            if size == _defaults["size"] and "size" in preset_params:
-                size = preset_params["size"]
-
-    if isinstance(disabled, str):
-        disabled = disabled.lower() not in ("false", "0", "")
-    if isinstance(loading, str):
-        loading = loading.lower() not in ("false", "0", "")
+    label, variant, event, confirm, icon, disabled, loading, size = resolve_dj_button_args(
+        label, variant, event, confirm, icon, disabled, loading, size, preset
+    )
 
     # Map well-known variants to their canonical CSS class names; for
     # everything else, pass through with conditional_escape (#1619).
@@ -6569,6 +6598,115 @@ class FilterSearchNode(template.Node):
         return ""  # rendered by FilterBarNode
 
 
+def render_filter_bar(
+    kw: Any, controls: Any, *, default_id: Any = None, extra_html: Any = ""
+) -> SafeString:
+    """Markup for ``{% filter_bar %}``, shared by the Django tag and the native handler (#3669).
+
+    ``kw`` is the bar's own resolved arguments; ``controls`` is a list of ``(kind, kwargs)``
+    with ``kind`` one of ``select`` / ``date_range`` / ``search`` and ``kwargs`` the child
+    tag's resolved arguments. The bar owns ``event`` and ``clear_event``: a child's own
+    ``event=`` is never read. ``default_id`` is the id used when the bar has none (the Django
+    tag draws a random one; the native handler passes a constant so a socket render does not
+    change it). ``extra_html`` is appended inside the controls row (the native handler keeps
+    whatever else the template put in the bar; the Django tag has none).
+    """
+    bar_id = kw.get(
+        "id", default_id if default_id is not None else f"filter-bar-{uuid.uuid4().hex[:8]}"
+    )
+    event = kw.get("event", "filter_change")
+    custom_class = kw.get("class", "")
+    clear_event = kw.get("clear_event", "filter_clear")
+
+    cls = "dj-filter-bar"
+    if custom_class:
+        cls += f" {conditional_escape(custom_class)}"
+
+    e_event = conditional_escape(event)
+    e_clear = conditional_escape(clear_event)
+
+    parts = []
+    has_values = False
+    for kind, nkw in controls:
+        if kind == "select":
+            name = conditional_escape(nkw.get("name", ""))
+            label = conditional_escape(nkw.get("label", name))
+            options = nkw.get("options", [])
+            value = nkw.get("value", "")
+            if value:
+                has_values = True
+            opt_html = f'<option value="">{label}</option>'
+            if isinstance(options, list):
+                for opt in options:
+                    if isinstance(opt, dict):
+                        ov = conditional_escape(str(opt.get("value", "")))
+                        ol = conditional_escape(str(opt.get("label", ov)))
+                    else:
+                        ov = conditional_escape(str(opt))
+                        ol = ov
+                    selected = (
+                        " selected"
+                        if str(opt.get("value", opt) if isinstance(opt, dict) else opt)
+                        == str(value)
+                        else ""
+                    )
+                    opt_html += f'<option value="{ov}"{selected}>{ol}</option>'
+            parts.append(
+                f'<div class="dj-filter-bar__control dj-filter-bar__select-wrap">'
+                f'<select class="dj-filter-bar__select" name="{name}" '
+                f'dj-change="{e_event}">{opt_html}</select></div>'
+            )
+        elif kind == "date_range":
+            name = conditional_escape(nkw.get("name", ""))
+            label = conditional_escape(nkw.get("label", name))
+            value_start = conditional_escape(str(nkw.get("start", "")))
+            value_end = conditional_escape(str(nkw.get("end", "")))
+            if value_start or value_end:
+                has_values = True
+            parts.append(
+                f'<div class="dj-filter-bar__control dj-filter-bar__date-range">'
+                f'<label class="dj-filter-bar__label">{label}</label>'
+                f'<input class="dj-filter-bar__date" type="date" name="{name}_start" '
+                f'value="{value_start}" dj-change="{e_event}">'
+                f'<span class="dj-filter-bar__date-sep">&ndash;</span>'
+                f'<input class="dj-filter-bar__date" type="date" name="{name}_end" '
+                f'value="{value_end}" dj-change="{e_event}"></div>'
+            )
+        elif kind == "search":
+            name = conditional_escape(nkw.get("name", ""))
+            placeholder = conditional_escape(nkw.get("placeholder", "Search\u2026"))
+            value = conditional_escape(str(nkw.get("value", "")))
+            debounce = nkw.get("debounce", 300)
+            if value:
+                has_values = True
+            parts.append(
+                f'<div class="dj-filter-bar__control dj-filter-bar__search-wrap">'
+                f'<input class="dj-filter-bar__search" type="search" name="{name}" '
+                f'placeholder="{placeholder}" value="{value}" '
+                f'dj-input="{e_event}" dj-debounce="{int(debounce)}"></div>'
+            )
+
+    clear_html = ""
+    if has_values:
+        clear_html = (
+            f'<div class="dj-filter-bar__actions">'
+            f'<button class="dj-filter-bar__clear" dj-click="{e_clear}">Clear filters</button></div>'
+        )
+
+    return mark_safe(
+        f'<div class="{cls}" id="{conditional_escape(bar_id)}" role="search">'
+        f'<div class="dj-filter-bar__controls">{"".join(parts)}{extra_html}</div>'
+        f"{clear_html}</div>"
+    )
+
+
+_FILTER_KINDS = {
+    FilterSelectNode: "select",
+    FilterDateRangeNode: "date_range",
+    FilterSearchNode: "search",
+}
+
+
 class FilterBarNode(template.Node):
     def __init__(self, nodelist: Any, kwargs: Any) -> None:
         self.nodelist = nodelist
@@ -6576,98 +6714,12 @@ class FilterBarNode(template.Node):
 
     def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
-        bar_id = kw.get("id", f"filter-bar-{uuid.uuid4().hex[:8]}")
-        event = kw.get("event", "filter_change")
-        custom_class = kw.get("class", "")
-        clear_event = kw.get("clear_event", "filter_clear")
-
-        cls = "dj-filter-bar"
-        if custom_class:
-            cls += f" {conditional_escape(custom_class)}"
-
-        e_event = conditional_escape(event)
-        e_clear = conditional_escape(clear_event)
-
-        filter_nodes = [
-            n
+        controls = [
+            (_FILTER_KINDS[type(n)], {k: _resolve(v, context) for k, v in n.kwargs.items()})
             for n in self.nodelist
-            if isinstance(n, (FilterSelectNode, FilterDateRangeNode, FilterSearchNode))
+            if type(n) in _FILTER_KINDS
         ]
-
-        parts = []
-        has_values = False
-        for node in filter_nodes:
-            nkw = {k: _resolve(v, context) for k, v in node.kwargs.items()}
-            if isinstance(node, FilterSelectNode):
-                name = conditional_escape(nkw.get("name", ""))
-                label = conditional_escape(nkw.get("label", name))
-                options = nkw.get("options", [])
-                value = nkw.get("value", "")
-                if value:
-                    has_values = True
-                opt_html = f'<option value="">{label}</option>'
-                if isinstance(options, list):
-                    for opt in options:
-                        if isinstance(opt, dict):
-                            ov = conditional_escape(str(opt.get("value", "")))
-                            ol = conditional_escape(str(opt.get("label", ov)))
-                        else:
-                            ov = conditional_escape(str(opt))
-                            ol = ov
-                        selected = (
-                            " selected"
-                            if str(opt.get("value", opt) if isinstance(opt, dict) else opt)
-                            == str(value)
-                            else ""
-                        )
-                        opt_html += f'<option value="{ov}"{selected}>{ol}</option>'
-                parts.append(
-                    f'<div class="dj-filter-bar__control dj-filter-bar__select-wrap">'
-                    f'<select class="dj-filter-bar__select" name="{name}" '
-                    f'dj-change="{e_event}">{opt_html}</select></div>'
-                )
-            elif isinstance(node, FilterDateRangeNode):
-                name = conditional_escape(nkw.get("name", ""))
-                label = conditional_escape(nkw.get("label", name))
-                value_start = conditional_escape(str(nkw.get("start", "")))
-                value_end = conditional_escape(str(nkw.get("end", "")))
-                if value_start or value_end:
-                    has_values = True
-                parts.append(
-                    f'<div class="dj-filter-bar__control dj-filter-bar__date-range">'
-                    f'<label class="dj-filter-bar__label">{label}</label>'
-                    f'<input class="dj-filter-bar__date" type="date" name="{name}_start" '
-                    f'value="{value_start}" dj-change="{e_event}">'
-                    f'<span class="dj-filter-bar__date-sep">&ndash;</span>'
-                    f'<input class="dj-filter-bar__date" type="date" name="{name}_end" '
-                    f'value="{value_end}" dj-change="{e_event}"></div>'
-                )
-            elif isinstance(node, FilterSearchNode):
-                name = conditional_escape(nkw.get("name", ""))
-                placeholder = conditional_escape(nkw.get("placeholder", "Search\u2026"))
-                value = conditional_escape(str(nkw.get("value", "")))
-                debounce = nkw.get("debounce", 300)
-                if value:
-                    has_values = True
-                parts.append(
-                    f'<div class="dj-filter-bar__control dj-filter-bar__search-wrap">'
-                    f'<input class="dj-filter-bar__search" type="search" name="{name}" '
-                    f'placeholder="{placeholder}" value="{value}" '
-                    f'dj-input="{e_event}" dj-debounce="{int(debounce)}"></div>'
-                )
-
-        clear_html = ""
-        if has_values:
-            clear_html = (
-                f'<div class="dj-filter-bar__actions">'
-                f'<button class="dj-filter-bar__clear" dj-click="{e_clear}">Clear filters</button></div>'
-            )
-
-        return mark_safe(
-            f'<div class="{cls}" id="{conditional_escape(bar_id)}" role="search">'
-            f'<div class="dj-filter-bar__controls">{"".join(parts)}</div>'
-            f"{clear_html}</div>"
-        )
+        return render_filter_bar(kw, controls)
 
 
 @register.tag("filter_bar")

@@ -10,6 +10,7 @@ Block handlers implement:  render(self, args, content, context) -> str
 """
 
 import json as _json
+import re as _re_filters
 import pathlib as _pathlib
 import uuid as _uuid
 from html.parser import HTMLParser
@@ -534,12 +535,13 @@ class BadgeHandler:
 
 class PaginationHandler:
     def render(self, args: list[str], context: dict[str, object]) -> str:
-        from djust.components.templatetags.djust_components import pagination as _pagination
+        from djust.components.templatetags.djust_components import pagination_pages
 
         kw = _parse_args(args, context)
-        # The Python tag first, for the page list it builds from these numbers: whatever it
-        # raises for them (``total_pages=None``: ``None + 1``) is raised here too (#3667).
-        _pagination(page=kw.get("page", 1), total_pages=kw.get("total_pages", 1))
+        # The Python tag's own page list, first: whatever it raises for these numbers
+        # (``total_pages=None``: ``None + 1``) is raised here too (#3667), and the buttons
+        # drawn below are the ones it draws (#3669).
+        shown = pagination_pages(kw.get("page", 1), kw.get("total_pages", 1))
         try:
             page = int(cast("str | int | float", kw.get("page", 1)))
             total_pages = int(cast("str | int | float", kw.get("total_pages", 1)))
@@ -549,9 +551,25 @@ class PaginationHandler:
         next_event = conditional_escape(kw.get("next_event", "page_next"))
         prev_disabled = " disabled" if page <= 1 else ""
         next_disabled = " disabled" if page >= total_pages else ""
+        # One button per page number, wired like the Python tag's: ``next_event`` carrying the
+        # page number as ``data-value`` (that is the event the Python template fires for a
+        # number, and the native markup had no numbered buttons at all, #3669).
+        numbered = ""
+        for p in shown:
+            if p == "...":
+                numbered += '<span class="pagination-ellipsis" aria-hidden="true">&hellip;</span>'
+                continue
+            active = " active" if p == page else ""
+            current = ' aria-current="page"' if p == page else ""
+            number = conditional_escape(p)
+            numbered += (
+                f'<button class="pagination-btn{active}"{current} '
+                f'dj-click="{next_event}" data-value="{number}">{number}</button>'
+            )
         return _safe(
             f'<div class="pagination">'
             f'<button class="pagination-btn"{prev_disabled} dj-click="{prev_event}">&#8592;</button>'
+            f"{numbered}"
             f'<span class="pagination-info">Page {page} of {total_pages}</span>'
             f'<button class="pagination-btn"{next_disabled} dj-click="{next_event}">&#8594;</button>'
             f"</div>"
@@ -793,22 +811,41 @@ class StepperHandler:
 
 class DjButtonHandler:
     def render(self, args: list[str], context: dict[str, object]) -> str:
+        from djust.components.templatetags.djust_components import resolve_dj_button_args
+
         kw = _parse_args(args, context)
-        label = conditional_escape(kw.get("label", ""))
-        variant = conditional_escape(kw.get("variant", "primary"))
-        event = conditional_escape(kw.get("event", ""))
-        icon = kw.get("icon", "")
-        disabled = kw.get("disabled", False)
-        loading = kw.get("loading", False)
-        size = kw.get("size", "md")
+        # The Python tag's own argument resolution (presets, boolean strings), so the event
+        # and the confirmation a button ends up with are decided in one place (#3669).
+        label_, variant_, event_, confirm_, icon, disabled, loading, size = resolve_dj_button_args(
+            kw.get("label", ""),
+            kw.get("variant", "primary"),
+            kw.get("event", ""),
+            kw.get("confirm", ""),
+            kw.get("icon", ""),
+            kw.get("disabled", False),
+            kw.get("loading", False),
+            kw.get("size", "md"),
+            kw.get("preset", ""),
+        )
+        label = conditional_escape(label_)
+        variant = conditional_escape(variant_)
+        # Truthiness is decided on the VALUE, before it becomes text: ``confirm=None`` (or
+        # False, 0, [] ...) wires nothing in the Python tag, and escaping first would turn it
+        # into the string "None" and a spurious confirm dialog.
+        event = conditional_escape(event_) if event_ else ""
+        confirm = conditional_escape(confirm_) if confirm_ else ""
         classes = ["btn", f"btn-{variant}"]
         if size and size != "md":
             classes.append(f"btn-{conditional_escape(size)}")
         if loading:
             classes.append("btn-loading")
         attrs = [f'class="{" ".join(classes)}"']
-        if event and not loading and not disabled:
+        # The event is wired whether or not the button is disabled or loading, as the Python tag
+        # does; a disabled <button> fires no click by itself (#3669).
+        if event:
             attrs.append(f'dj-click="{event}"')
+        if confirm:
+            attrs.append(f'dj-confirm="{confirm}"')
         if disabled or loading:
             attrs.append("disabled")
         spinner = '<span class="btn-spinner"></span>' if loading else ""
@@ -1027,6 +1064,17 @@ class DataTableHandler:
         page_event = conditional_escape(kw.get("page_event", "on_table_page"))
         striped = kw.get("striped", False)
         compact = kw.get("compact", False)
+        # Row navigation: a clickable row fires ``row_click_event`` (#1111). The Python
+        # template wires it; the native table did not (#3669).
+        # Decided on the value, not on its escaped text: ``row_click_event=None`` wires nothing
+        # in the Python template, and "None" is truthy.
+        _rce = kw.get("row_click_event", "")
+        row_click_event = conditional_escape(_rce) if _rce else ""
+        row_click_value_key = str(kw.get("row_click_value_key", "id"))
+        # Backward-compatible pager (``total_pages > 1`` without ``paginate``), as the Python
+        # template draws it (#3669).
+        prev_event = conditional_escape(kw.get("prev_event", "on_table_prev"))
+        next_event = conditional_escape(kw.get("next_event", "on_table_next"))
 
         # Phase 2 parameters (all opt-in)
         editable_columns = kw.get("editable_columns") or []
@@ -1625,6 +1673,12 @@ class DataTableHandler:
                         if rcm_val in rcm_map:
                             row_classes.append(conditional_escape(str(rcm_map[rcm_val])))
             row_attrs += f' data-row-key="{conditional_escape(row_id)}"'
+            if row_click_event:
+                row_classes.append("data-table-row-clickable")
+                row_attrs += (
+                    f' dj-click="{row_click_event}"'
+                    f' data-value="{conditional_escape(str(row.get(row_click_value_key, "")))}"'
+                )
 
             cells = ""
             # Drag handle cell
@@ -2039,6 +2093,18 @@ class DataTableHandler:
                 f'<span class="pagination-info">Page {page} of {total_pages}</span>'
                 f'<button class="pagination-btn"{next_disabled}'
                 f' dj-click="{page_event}" data-value="{next_page}">&#8594;</button>'
+                f"</div>"
+            )
+        elif total_pages > 1:
+            prev_disabled = " disabled" if page <= 1 else ""
+            next_disabled = " disabled" if page >= total_pages else ""
+            pagination_html = (
+                f'<div class="dj-table__pagination">'
+                f'<button class="dj-table__page-btn"{prev_disabled}'
+                f' dj-click="{prev_event}">&larr; Prev</button>'
+                f'<span class="dj-table__page-info">{page} / {total_pages}</span>'
+                f'<button class="dj-table__page-btn"{next_disabled}'
+                f' dj-click="{next_event}">Next &rarr;</button>'
                 f"</div>"
             )
 
@@ -2493,6 +2559,9 @@ class ColorPickerHandler:
                 value=kwargs.get("value", "#3B82F6"),
                 event=kwargs.get("event", ""),
                 label=kwargs.get("label", ""),
+                # Each swatch carries the event; the Python tag draws the list it is given,
+                # so ignoring it changed how many elements are wired (#3669).
+                swatches=kwargs.get("swatches"),
             )
         )
 
@@ -4581,6 +4650,10 @@ class NavMenuHandler:
         )
 
 
+#: What ``NavItemHandler`` opens every item with, which is how a parent finds its child items.
+_NAV_ITEM_MARKUP = '<li class="dj-nav__item'
+
+
 class NavItemHandler:
     """Block handler for {% nav_item %}...{% endnav_item %}
 
@@ -4600,7 +4673,15 @@ class NavItemHandler:
         is_active = (item_id and item_id == active) or (href and href == active)
         active_cls = " dj-nav__item--active" if is_active else ""
 
-        has_children = content.strip() != ""
+        # A dropdown parent only when the body holds nav ITEMS (this handler's own ``<li>``).
+        # The Python tag counts child ``{% nav_item %}`` nodes and ignores any other body, so
+        # an item with an ``event`` and a text body stays a clickable button there; "any
+        # non-blank body" dropped that ``dj-click`` (#3669).
+        # KNOWN LIMIT (#3873, pinned by a test): a block handler is handed rendered HTML, so a
+        # child is recognised by the markup this handler draws. A literal
+        # ``<li class="dj-nav__item">`` in the body matches too, and a sub-item inside
+        # ``{% if %}`` / ``{% for %}`` counts here where Django counts only direct child nodes.
+        has_children = _NAV_ITEM_MARKUP in content
 
         if has_children:
             mega_cls = " dj-nav__dropdown--mega" if mega else ""
@@ -4868,97 +4949,80 @@ class InlineEditHandler:
 # ---------------------------------------------------------------------------
 
 
+#: How a ``{% filter_select %}`` / ``{% filter_date_range %}`` / ``{% filter_search %}`` tells the
+#: ``{% filter_bar %}`` that holds it what it was given (#3669). The Python tags render NOTHING of
+#: their own: the bar reads its children's arguments and draws every control, wiring its own
+#: ``event`` and ``clear_event`` onto them (a child's ``event=`` is never read). A native block
+#: handler is handed its children already rendered, so a child leaves its arguments in a comment
+#: the bar reads and removes; a child reached outside a bar leaves an invisible comment, where
+#: the Python tag leaves nothing.
+_FILTER_MARK = _re_filters.compile(
+    r"<!--djust-filter:(select|date_range|search):([A-Za-z0-9_=-]*)-->"
+)
+
+
+class _FilterControlHandler:
+    KIND = ""
+
+    def render(self, args: list[str], context: dict[str, object]) -> str:
+        import base64
+
+        payload = _json.dumps(_parse_args(args, context), default=str, separators=(",", ":"))
+        token = base64.urlsafe_b64encode(payload.encode("utf-8")).decode("ascii")
+        kind = conditional_escape(self.KIND)
+        return _safe(f"<!--djust-filter:{kind}:{conditional_escape(token)}-->")
+
+
+class FilterSelectHandler(_FilterControlHandler):
+    """Inline handler for {% filter_select name="status" options=statuses %}"""
+
+    KIND = "select"
+
+
+class FilterDateRangeHandler(_FilterControlHandler):
+    """Inline handler for {% filter_date_range name="dates" %}"""
+
+    KIND = "date_range"
+
+
+class FilterSearchHandler(_FilterControlHandler):
+    """Inline handler for {% filter_search name="q" %}"""
+
+    KIND = "search"
+
+
 class FilterBarHandler:
     """Block handler for {% filter_bar %}...{% endfilter_bar %}
 
-    Horizontal bar composing filter controls with responsive collapse.
+    Draws the bar with the Python tag's own renderer (``render_filter_bar``) from the controls
+    its children left, so ``event``, ``clear_event`` and the "Clear filters" button are decided
+    in one place (#3669). Anything else in the bar is kept after the controls, as before.
     """
 
     def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
+        import base64
+
+        from djust.components.templatetags.djust_components import render_filter_bar
+
         kw = _parse_args(args, context)
-        bar_id = conditional_escape(kw.get("id", "filter-bar"))
-        custom_class = conditional_escape(kw.get("class", ""))
+        controls: list[tuple[str, dict[str, Any]]] = []
 
-        cls = "dj-filter-bar"
-        if custom_class:
-            cls += f" {custom_class}"
+        def take(match: Any) -> str:
+            try:
+                data = _json.loads(base64.urlsafe_b64decode(match.group(2).encode("ascii")))
+            except ValueError:
+                return ""
+            if isinstance(data, dict):
+                controls.append((match.group(1), data))
+            return ""
 
-        return _safe(
-            f'<div class="{cls}" id="{bar_id}" role="search">'
-            f'<div class="dj-filter-bar__controls">{content}</div></div>'
-        )
-
-
-class FilterSelectHandler:
-    """Inline handler for {% filter_select name="status" options=statuses %}"""
-
-    def render(self, args: list[str], context: dict[str, object]) -> str:
-        kw = _parse_args(args, context)
-        name = conditional_escape(kw.get("name", ""))
-        label = conditional_escape(kw.get("label", kw.get("name", "")))
-        options = kw.get("options", [])
-        value = kw.get("value", "")
-        event = conditional_escape(kw.get("event", "filter_change"))
-
-        opt_html = f'<option value="">{label}</option>'
-        if isinstance(options, list):
-            for opt in options:
-                if isinstance(opt, dict):
-                    ov = conditional_escape(str(opt.get("value", "")))
-                    ol = conditional_escape(str(opt.get("label", ov)))
-                    raw_v = str(opt.get("value", ""))
-                else:
-                    ov = conditional_escape(str(opt))
-                    ol = ov
-                    raw_v = str(opt)
-                selected = " selected" if raw_v == str(value) else ""
-                opt_html += f'<option value="{ov}"{selected}>{ol}</option>'
-
-        return _safe(
-            f'<div class="dj-filter-bar__control dj-filter-bar__select-wrap">'
-            f'<select class="dj-filter-bar__select" name="{name}" '
-            f'dj-change="{event}">{opt_html}</select></div>'
-        )
-
-
-class FilterDateRangeHandler:
-    """Inline handler for {% filter_date_range name="dates" %}"""
-
-    def render(self, args: list[str], context: dict[str, object]) -> str:
-        kw = _parse_args(args, context)
-        name = conditional_escape(kw.get("name", ""))
-        label = conditional_escape(kw.get("label", kw.get("name", "")))
-        start = conditional_escape(str(kw.get("start", "")))
-        end = conditional_escape(str(kw.get("end", "")))
-        event = conditional_escape(kw.get("event", "filter_change"))
-
-        return _safe(
-            f'<div class="dj-filter-bar__control dj-filter-bar__date-range">'
-            f'<label class="dj-filter-bar__label">{label}</label>'
-            f'<input class="dj-filter-bar__date" type="date" name="{name}_start" '
-            f'value="{start}" dj-change="{event}">'
-            f'<span class="dj-filter-bar__date-sep">&ndash;</span>'
-            f'<input class="dj-filter-bar__date" type="date" name="{name}_end" '
-            f'value="{end}" dj-change="{event}"></div>'
-        )
-
-
-class FilterSearchHandler:
-    """Inline handler for {% filter_search name="q" %}"""
-
-    def render(self, args: list[str], context: dict[str, object]) -> str:
-        kw = _parse_args(args, context)
-        name = conditional_escape(kw.get("name", ""))
-        placeholder = conditional_escape(kw.get("placeholder", "Search\u2026"))
-        value = conditional_escape(str(kw.get("value", "")))
-        debounce = kw.get("debounce", 300)
-        event = conditional_escape(kw.get("event", "filter_change"))
-
-        return _safe(
-            f'<div class="dj-filter-bar__control dj-filter-bar__search-wrap">'
-            f'<input class="dj-filter-bar__search" type="search" name="{name}" '
-            f'placeholder="{placeholder}" value="{value}" '
-            f'dj-input="{event}" dj-debounce="{int(cast("str | int | float", debounce))}"></div>'
+        rest = _FILTER_MARK.sub(take, content)
+        # The id keeps the constant this handler always drew: the Django tag draws a random one,
+        # which would change on every socket render.
+        return str(
+            render_filter_bar(
+                kw, controls, default_id="filter-bar", extra_html=rest if rest.strip() else ""
+            )
         )
 
 

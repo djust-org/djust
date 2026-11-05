@@ -87,11 +87,16 @@ NO_PARAMETERS = {
     "theme_form_tags:get_css_prefix": "no arguments",
 }
 
-#: Cases where ONE engine keeps a URL the other does not, with the reason. Not a
-#: scheme difference: ``nav_item`` is a block tag; the native handler turns a tag
-#: with a body into a dropdown parent (no link), the Python node renders its link
-#: inside ``nav_menu``. Both pass ``href`` through the same sanitiser.
-KNOWN_ENGINE_DISAGREEMENTS = {("djust_components:nav_item", "href", "scalar")}
+#: Cases where ONE engine keeps a URL the other does not, with the reason. Empty since #3669.
+#: The only entry was ``nav_item``: the native handler turned ANY non-blank body into a dropdown
+#: parent (no link at all), where the Python node counts only child ``nav_item``s and renders its
+#: link otherwise. That was never an unsafe scheme getting through: the native side dropped the
+#: link, so it kept NEITHER the payloads the sanitiser neutralises nor the ones it keeps (https,
+#: relative, mailto, and the percent / entity / srcset-shaped strings that are relative paths to
+#: a browser). The handler now follows the Python rule and the engines agree on all 75 payloads.
+#: The mechanism stays: an entry added here is a recorded decision, and the test below fails
+#: when one stops occurring.
+KNOWN_ENGINE_DISAGREEMENTS: set[tuple[str, str, str]] = set()
 
 #: Class components whose ``data=`` mapping becomes ``data-<key>`` attributes: the
 #: CALLER names the attribute, and djust emits what it was given. The sweep's
