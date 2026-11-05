@@ -53,4 +53,4 @@ class ListView(LiveView):
         self.page = params["page"]
 ```
 
-Not-found pages: set `http_status_of_state = {"not_found": 404}` once on a base view and set `self.state = "not_found"`; no per-view `get_http_status()`.
+Not-found pages: set `http_status_of_state = {"not_found": 404}` once on a base view (or `LIVEVIEW_CONFIG["http_status_of_state"]` for the whole project; the view's own attribute wins, never merged) and set `self.state = "not_found"`; no per-view `get_http_status()` (V025 warns about one under a project-wide map).
