@@ -15,6 +15,23 @@ on one run inflates neither size's best. The default clock is the CPU time of
 this thread: a descheduled process is not charged for the time it sat idle.
 Pass ``clock=time.perf_counter`` for work that leaves the thread (a Rust actor,
 a subprocess).
+
+COUNT FIRST (#3835). A growth ratio is still a ratio of two measured durations.
+Where there is an operation to count, count it instead and the test is exact and
+independent of the machine: the strings a function is handed (a "cut to 512
+characters first" bound: ``test_ai_catalog_3448``, ``test_mcp_ui_components_3448``),
+the records and heartbeats a listing touches (``test_realtime_multiuser``,
+``test_presence_list_scales_linearly``), the characters a scanner's ``find`` and
+``search`` calls examine (``test_template_checks_skip_comments_3283``), the members
+a weigher pulls (``test_form_data_accounting_3841``). A latency claim about code
+with no hook goes to ``tests/benchmarks/`` as a median against a target
+(``test_lazy_provenance_cost_3835``).
+
+This helper is for what is left: work whose steps happen inside an engine that
+offers nothing to count from Python, namely the CPython ``re`` matcher and
+``html.parser`` (a quadratic rescan is one call that runs long, not more calls) and
+the Rust engine (markdown, template variable extraction, session actors). Use it
+there.
 """
 
 from __future__ import annotations

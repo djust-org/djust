@@ -18,7 +18,7 @@ import pytest
 
 from djust.backends.memory import InMemoryPresenceBackend
 from djust.backends.registry import reset_presence_backend, set_presence_backend
-from djust.tests._growth import assert_scales_linearly, assert_scales_linearly_async
+from djust.tests._growth import assert_scales_linearly_async
 from djust.presence import (
     PRESENCE_TIMEOUT,
     PresenceManager,
@@ -600,20 +600,59 @@ class TestPerformanceBaseline:
     # budgets these used to assert (20 ms + 0.5 ms per user, 30 ms, 5 s) were bumped
     # twice for runner variance (#1016) and still asserted how fast the machine is.
 
-    def test_presence_list_scales_linearly(self):
-        """Listing four times the presences costs under ten times as much."""
-        keys = {}
+    def test_presence_list_scales_linearly(self, fresh_presence_backend, monkeypatch):
+        """Listing four times the presences does about four times the work.
+
+        Counted, not timed (#3835): every heartbeat the cleanup looks up, every record handed to the
+        per-user aggregation and every per-user merge. 25 presences and 100 presences are listed
+        the same number of times; a listing that rescanned the group for each presence (quadratic)
+        would do ~16x the work at 4x the presences, a linear one ~4x.
+        """
+        from djust.backends import memory
+
+        counts = {"heartbeats": 0, "records": 0, "merges": 0}
+
+        class CountingHeartbeats(dict):
+            def get(self, key, default=None):
+                counts["heartbeats"] += 1
+                return super().get(key, default)
+
+        real_aggregate = memory.aggregate_by_user
+        real_merge = memory.merge_connection_records
+
+        def aggregate(records):
+            records = list(records)
+            counts["records"] += len(records)
+            return real_aggregate(records)
+
+        def merge(group):
+            counts["merges"] += 1
+            return real_merge(group)
+
+        fresh_presence_backend._heartbeats = CountingHeartbeats(fresh_presence_backend._heartbeats)
+        monkeypatch.setattr(memory, "aggregate_by_user", aggregate)
+        monkeypatch.setattr(memory, "merge_connection_records", merge)
+        monkeypatch.setattr("djust.backends.base.merge_connection_records", merge)
+
+        work = {}
         for scale, n_subscribers in ((1, 25), (4, 100)):
-            keys[scale] = f"perf:list:{n_subscribers}"
+            key = f"perf:list:{n_subscribers}"
             for i in range(n_subscribers):
-                PresenceManager.join_presence(keys[scale], str(i), {"name": f"user{i}"})
-            assert len(PresenceManager.list_presences(keys[scale])) == n_subscribers
+                PresenceManager.join_presence(key, str(i), {"name": f"user{i}"})
+            fresh_presence_backend._heartbeats = CountingHeartbeats(
+                fresh_presence_backend._heartbeats
+            )
+            for name in counts:
+                counts[name] = 0
+            for _ in range(20):
+                assert len(PresenceManager.list_presences(key)) == n_subscribers
+            work[scale] = dict(counts)
 
-        def list_many(scale):
-            for _ in range(200):  # enough work per run that the clock resolves it
-                PresenceManager.list_presences(keys[scale])
-
-        assert_scales_linearly(list_many, what="list_presences")
+        # The counters measure something: a listing looks at every presence at least once.
+        assert work[1]["heartbeats"] >= 25 * 20 and work[1]["records"] >= 25 * 20, work[1]
+        for name in counts:
+            # 4x the presences: about 4x the work, never the ~16x of a rescan per presence.
+            assert work[4][name] <= 5 * work[1][name], (name, work)
 
     @patch("djust.presence.get_channel_layer")
     @patch("djust.presence.async_to_sync")
