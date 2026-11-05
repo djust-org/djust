@@ -202,6 +202,27 @@ class TestTheLimitsHoldOverTheSocket:
         assert "larger than the server accepts (1000" in WsContact.last.form_errors[0]
 
 
+class TestEmptyMembersAreNotFree:
+    """``[""] * 15000`` is ~60 KB of JSON, under the default frame limit, and used to weigh ONE
+    character (an empty string was 0): 150 such events at the default limits stored 2,250,000 empty
+    members and made every later event a second slow (#3842 review). Every member costs at least one
+    character now, so the size limit bounds how many are kept."""
+
+    def test_events_of_empty_strings_stop_at_the_size_limit_over_the_socket(self):
+        payload = [""] * 15_000
+        assert len(json.dumps(payload)) < 65_536
+        events = [
+            {"event": "validate_field", "params": {"field": "f%d" % i, "value": payload}}
+            for i in range(30)
+        ]
+        with limits(size=200_000):
+            answers = drive(events)
+        stored = sum(len(v) for v in WsContact.last.form_data.values() if isinstance(v, list))
+        assert 0 < stored <= 200_000, stored  # 13 events fit; the other 17 were refused
+        assert "larger than the server accepts (200000" in WsContact.last.form_errors[0]
+        assert all(frame[-1]["type"] != "error" for frame in answers[1:])  # refusals, not crashes
+
+
 # ---------------------------------------------------------------------------------------------
 def mounted(cls=WsContact):
     view = cls()
