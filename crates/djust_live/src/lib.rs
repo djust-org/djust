@@ -4568,7 +4568,7 @@ const SERIALIZE_CONTEXT_MAX_DEPTH: usize = 128;
 /// What a [`SerializeWalk`] remembers about an object it is inside of.
 #[derive(PartialEq)]
 enum WalkKey {
-    /// A list, tuple or dict, by address: a container that holds itself is the same object.
+    /// A list or dict, by address: a container that holds itself is the same object.
     Container(usize),
     /// A model row, by class and primary key: a relation hands back a FRESH instance of the row
     /// it came from, so the address says nothing and the row is what repeats.
@@ -4590,10 +4590,10 @@ fn serialize_nested(
     value: &Bound<'_, PyAny>,
     walk: &mut SerializeWalk,
 ) -> PyResult<Py<PyAny>> {
-    let key = (value.cast::<PyList>().is_ok()
-        || value.cast::<PyTuple>().is_ok()
-        || value.cast::<PyDict>().is_ok())
-    .then(|| WalkKey::Container(value.as_ptr() as usize));
+    // Lists and dicts only: a tuple cannot hold itself without a list or dict in between, and those
+    // are tracked, so a cycle through a tuple is ended at the container that closes it.
+    let key = (value.cast::<PyList>().is_ok() || value.cast::<PyDict>().is_ok())
+        .then(|| WalkKey::Container(value.as_ptr() as usize));
     if walk.depth >= SERIALIZE_CONTEXT_MAX_DEPTH
         || key.as_ref().is_some_and(|k| walk.inside.contains(k))
     {

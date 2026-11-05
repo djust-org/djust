@@ -63,8 +63,16 @@ from django.db import connection, models
 from djust import _rust
 
 
+class Tag(models.Model):
+    name = models.CharField(max_length=20)
+
+    class Meta:
+        app_label = "auth"
+
+
 class Person(models.Model):
     name = models.CharField(max_length=20)
+    tags = models.ManyToManyField(Tag)
     friends = models.ManyToManyField("self")                       # symmetrical
     next = models.ManyToManyField("self", symmetrical=False, related_name="prev")
 
@@ -73,13 +81,26 @@ class Person(models.Model):
 
 
 with connection.schema_editor() as ed:
+    ed.create_model(Tag)
     ed.create_model(Person)
 a = Person.objects.create(name="A")
 b = Person.objects.create(name="B")
 a.friends.add(b)
+tag = Tag.objects.create(name="T")  # pk 1, like Person A
+a.tags.add(tag)
 
 shape = sys.argv[1]
-if shape == "symmetrical_m2m":
+if shape == "queries":
+    from django.test.utils import CaptureQueriesContext
+
+    with CaptureQueriesContext(connection) as captured:
+        _rust.serialize_context({"p": a})
+    out = {"queries": len(captured), "sql": [q["sql"][-110:] for q in captured]}
+elif shape == "flat_list":
+    n = int(sys.argv[2])
+    out = _rust.serialize_context({"p": list(range(n)), "d": [{"i": i} for i in range(n)]})
+    out = {"ok": out["p"] == list(range(n)) and out["d"] == [{"i": i} for i in range(n)]}
+elif shape == "symmetrical_m2m":
     out = _rust.serialize_context({"p": a})
 elif shape == "symmetrical_m2m_in_containers":
     out = _rust.serialize_context({"c": {"rows": [a, (b,)]}, "q": Person.objects.all()})
@@ -299,6 +320,29 @@ class TestACycleEndsAtTheRowItCameBackTo:
         """EXACT, not "contains ...": the depth ceiling would also end these, 128 levels down, and
         a cycle check that is gated off must not hide behind it (two mechanisms, one symptom)."""
         assert result_of(run_child(_CHILD, shape)) == expected
+
+
+class TestWhatTheGuardMustNotCatch:
+    """Each of these is something a cycle check gets WRONG when a mechanism is off by one."""
+
+    def test_two_classes_that_share_a_primary_key_are_not_a_cycle(self):
+        """Person 1 holds Tag 1. Keyed on the pk alone they are 'the same row', and the tag would
+        cross as ``str()``; the key is (class, pk)."""
+        out = result_of(run_child(_CHILD, "symmetrical_m2m"))
+        (tag,) = out["p"]["tags"]
+        assert isinstance(tag, dict) and tag["name"] == "T"
+
+    def test_a_flat_list_of_a_thousand_is_not_cut_at_the_depth_ceiling(self):
+        """The ceiling is NESTING, not a count: a depth counter that is never decremented would turn
+        the 129th element of any list into ``str()``."""
+        assert result_of(run_child(_CHILD, "flat_list", "1000")) == {"ok": True}
+
+    def test_the_row_check_runs_before_model_to_dict_so_the_next_ring_is_never_queried(self):
+        """A <-> B reads each row's three many-to-many fields (``friends``, ``next``, ``tags``) once: A, then B.
+        The third row is A again, and it is stopped BEFORE ``model_to_dict`` would read them a
+        third time; a check placed after it would still run those queries before stopping."""
+        out = result_of(run_child(_CHILD, "queries"))
+        assert out["queries"] == 6, out  # 2 rows x 3 fields; 9 if the third row were read too
 
 
 class TestADeepChainOfDistinctRowsIsBounded:
