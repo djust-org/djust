@@ -38,8 +38,14 @@ their input unstripped. Neither can carry a quote, `<` or `;`, so inside an attr
 ## The baseline is machine-checked
 
 `scripts/lib/safe_markup_audit.py` holds one entry per `(file, function)`: the number of flagged
-sinks, the reason, and **evidence**: `(file, literal)` pairs, each of which must appear in the CODE
-(comments and docstrings do not count) of its scope. The scope defaults to the audited function
+sinks, the reason, and **evidence**: `(file, literal)` pairs, each of which must appear in LIVE CODE
+of its scope: comments, docstrings, a string dropped into a body, an `if False:` / `while 0:` branch
+(or the `else` of `if True:`), statements after a `return` / `raise` / `break` / `continue`, and a
+nested `def` with no decorator that nothing in its function reads do not count (#3827). That is
+decided on the AST (`_dead_statements`) and stops there: a branch that is referenced but never runs
+at runtime (`if flag():` with a flag that is always false), a callback that is registered and never
+fired, and a `lambda` are still counted, and a runtime fact is the payload sweep's to catch. The
+scope defaults to the audited function
 itself when the literal is in the audited function's file, so a twin of the escape elsewhere in the
 file does not satisfy it (the first version checked the whole file, and `slider`'s
 `e_name = conditional_escape(name)` occurs in several functions); a helper's literal names its own
@@ -48,7 +54,7 @@ scope as a third element. Every entry needs at least one literal in its own body
 `python/tests/test_safe_markup_audit_3774.py` fails on a flagged site with no entry, on a function
 that gained a sink (the older theming allowlist, keyed by function only, would have waved it
 through), on an entry with no site or a different count, on an entry without a reason or evidence,
-on evidence that is not in its scope's code, and on an entry with no literal in its own body. The
+on evidence that is not live code in its scope, and on an entry with no literal in its own body. The
 table below is generated from the same data (`python scripts/lib/safe_markup_audit.py --table`); the
 test compares it, without line numbers, to the table in this file.
 
@@ -57,8 +63,8 @@ test compares it, without line numbers, to the table in this file.
 `python/tests/payload_sweep_3774.py` and `payload_drivers_3774.py` drive the audited sinks with a
 hostile value and PARSE the output (an event-handler attribute, an element the payload opened, a
 `style` carrying the payload, or a navigation attribute whose value starts with `javascript:` /
-`vbscript:` / `data:text/html` fails). Two payload modes: `markup` (`ZQ"onmouseover=ZQ<b id=ZQ>'...`
-in every argument) and `url` (the same, but an argument that looks like a URL gets
+`vbscript:` / `data:text/html` fails). Two payload modes: `markup`
+(`ZQ"onmouseover=ZQ<b id=ZQ>'ZQ</script></textarea></title><svg onload=ZQ>` in every argument) and `url` (the same, but an argument that looks like a URL gets
 `javascript:ZQ(1)`: escaping alone does not stop that, only `safe_url` / `url_attr` do). Each
 argument takes the shape the code coerces it from: a keyword the tags `int()` is a number, a
 parameter whose default is a number is a number, a list parameter gets dicts carrying the payload
@@ -80,6 +86,14 @@ baseline alone cannot be relied on for this: it judges a function by its sink CO
 escaped value for a raw one inside an audited function leaves the guard exactly as flagged as
 before, and it notices only if the removed line happens to be one of the pinned evidence literals.
 The sweep does not depend on someone having pinned that line.
+
+The payload carries `</textarea></title>` ahead of its `<svg onload=ZQ>` (#3827). The contents of
+`<textarea>` and `<title>` are RCDATA: the parser never turns text inside them into elements, so a
+payload that is interpolated raw INTO one stayed inert text and the sweep reported it clean, while a
+browser ends the element at the first `</textarea>` / `</title>` it finds in that text. Four gate-offs
+passed the sweep without the closers and fail it with them: `build_tag` printing a `<textarea>`
+body raw, `PromptEditor`'s `{tmpl}</textarea>`, `dj_textarea`'s `{value}</textarea>` and the Gantt
+bar's SVG `<title>{name}`. The unmutated tree stays at zero findings.
 
 What the sweep does not do: it drives the Django-engine functions, not the Rust handlers (which call
 the same `render_*` functions for the block tags); `_dev_tools.py` is rendered but not audited by the
