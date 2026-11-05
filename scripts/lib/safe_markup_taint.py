@@ -110,12 +110,17 @@ What it does NOT see (probed, and pinned in ``KNOWN_MISSES`` of its test)
   (``safe_url`` / ``url_attr`` / ``safe_css_*``: text or a quoted value; ``escape_json_for_script``:
   script text): their output is checked against the literal text in front of it in an f-string, a
   ``+`` chain, a ``%`` format string and ``str.format`` (a prefix held in a name that only holds one
-  literal counts), and is NOT clean anywhere else (``join``, a list, a helper's return, an argument).
-  What that check still cannot see (#3850): a prefix the guard cannot read (any unknown earlier part
-  is assumed to be position-neutral), an f-string leaf inside a ``+`` chain (its own prefix only),
-  ``format_map`` / a dict ``%``, a metaclass data descriptor of the same name as a class attribute,
-  and a module attribute replaced from outside the file (``sys.modules[__name__].helper = ...``,
-  ``setattr`` on an imported module).
+  literal, a call of a function of this file that always returns one, or passed as a literal argument
+  counts; a trailing ``<`` is a tag name). A string BUILT from such an output (``'' + safe_url(x)``,
+  ``'%s' % ..``, a helper that returns one, a ``join`` or container of it) is judged again where it is
+  placed, unless the text in front of the output in the builder opens markup of its own (``' style="'
+  + safe_css_length(x)``), and a bare output anywhere nobody checked (``join`` of bare outputs, an
+  argument) is not clean. What that check still cannot see (#3850, #3864): a prefix the guard cannot
+  read (any unknown earlier part is assumed position-neutral), a function that takes the output as a
+  PARAMETER and builds the tag (the helper is judged with its parameter raw), a lambda,
+  ``format_map`` / a dict ``%`` (flagged, not cleared), a metaclass data descriptor of the same name as
+  a class attribute, and a module attribute replaced from outside the file
+  (``sys.modules[__name__].helper = ...``, ``setattr`` on an imported module).
 * A subclass in ANOTHER file that overrides a method or class attribute the guard resolved with
   something computed: that is the developer's own code, not request data. (One in the same file is
   seen: the name is no longer trusted.)
@@ -489,6 +494,11 @@ class _Module:
         self.assigned_attrs: set[str] = set()
         #: file-wide: attributes / module names can be written under a name the source does not show
         self.dynamic_attrs = False
+        #: ``C.__getattr__ = ...`` somewhere: any class may fall through to it (#3850)
+        self.getattr_assigned = False
+        #: (function, origins) -> whether what it returns is built from an escaper's output; memoised
+        self._fn_hold: dict[tuple[int, int], int] = {}
+        self._fn_hold_busy: set[tuple[int, int]] = set()
         self.dynamic_globals = False
         #: keys (a name, or an attribute name) of containers that are changed in place, handed on
         #: (aliased, passed, returned), or whose ELEMENTS are handed on, anywhere in the file
@@ -556,6 +566,8 @@ class _Module:
                 # through to ``__getattr__`` or a base, so a delete is as much a rebind as a store
                 if isinstance(node.ctx, (ast.Store, ast.Del)):
                     self.assigned_attrs.add(node.attr)
+                    if node.attr == "__getattr__":
+                        self.getattr_assigned = True
                 if node.attr in DYNAMIC_ATTR_NAMES:
                     self.dynamic_attrs = True
             elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Del):
@@ -1167,19 +1179,22 @@ class _Module:
             return None
         return cls, values
 
-    @staticmethod
-    def _falls_through(cls: _Scope) -> bool:
-        """A lookup the class body does not satisfy can reach other code: ``__getattr__``, a base class
-        other than ``object`` (it may define the name), a metaclass or other class keyword (#3850)."""
+    def _falls_through(self, cls: _Scope) -> bool:
+        """A lookup the class body does not satisfy can reach other code: ``__getattr__`` (on the class,
+        on a class of this file that inherits from it, or assigned from outside), a base class other
+        than ``object`` (it may define the name), a metaclass or other class keyword (#3850)."""
         node = cls.node
-        if node.keywords:  # type: ignore[attr-defined]
+        if self.getattr_assigned or node.keywords:  # type: ignore[attr-defined]
             return True
         if any(
             not (isinstance(b, ast.Name) and b.id == "object")
             for b in node.bases  # type: ignore[attr-defined]
         ):
             return True
-        return "__getattr__" in cls.def_nodes or "__getattr__" in cls.assigns
+        return any(
+            "__getattr__" in x.def_nodes or "__getattr__" in x.assigns
+            for x in [cls, *self._subclasses(cls)]
+        )
 
     @staticmethod
     def _defined_unconditionally(cls: _Scope, name: str) -> bool:
@@ -1201,6 +1216,10 @@ class _Module:
         """A class of THIS file that inherits from ``cls`` (directly or through others of this file)
         and binds ``attr`` itself: ``self.attr`` may be its value, not ``cls``'s. A subclass in
         another file cannot be seen (the module docstring says so)."""
+        return any(attr in x.assigns or attr in x.def_nodes for x in self._subclasses(cls))
+
+    def _subclasses(self, cls: _Scope) -> list[_Scope]:
+        """The classes of this file that inherit from ``cls``, directly or through each other."""
         names = {cls.node.name}  # type: ignore[attr-defined]
         pending = [x for x in self.scopes if isinstance(x.node, ast.ClassDef) and x is not cls]
         subclasses: list[_Scope] = []
@@ -1218,7 +1237,7 @@ class _Module:
                     subclasses.append(scope)
                     names.add(scope.node.name)  # type: ignore[attr-defined]
                     grew = True
-        return any(attr in x.assigns or attr in x.def_nodes for x in subclasses)
+        return subclasses
 
     # -- judging ------------------------------------------------------------------------
     def findings(self) -> list[Finding]:
@@ -1308,7 +1327,10 @@ class _Module:
                 return True
             return self._name_clean(e, sc, d, seen)
         if isinstance(e, ast.Call):
-            if self._sens_kind(e, sc) and _CTX_OK not in seen:
+            if _CTX_OK not in seen and (
+                self.origin(e.func, sc) in CONTEXT_SENSITIVE_ORIGINS
+                or self.origin(e.func, sc) in JSON_ESCAPERS
+            ):
                 return False  # a context-sensitive escaper's output whose position nobody checked
             return self._call_clean(e, sc, d, seen - {_CTX_OK})
         return False
@@ -1319,56 +1341,232 @@ class _Module:
             return None
         return self.imports.get(e.id)
 
-    def _holds_call_of(
-        self, value: ast.expr, sc: _Scope, origins: frozenset, depth: int = 0
-    ) -> bool:
-        """``value`` is, or can hold (through a name, ``a if c else b``, ``a or b``, ``(n := ...)``),
-        a call of one of ``origins``."""
-        if depth > 6:
-            return False
+    def _hold_level(
+        self,
+        value: object,
+        sc: _Scope,
+        origins: frozenset,
+        depth: int = 0,
+        visited: frozenset = frozenset(),
+    ) -> int:
+        """Whether ``value`` carries the output of an escaper of ``origins``: ``0`` no; ``1`` it IS such a
+        call (through a name, ``a if c else b``, ``a or b``, ``(n := ...)``); ``2`` it is built from one
+        (a ``+`` / ``%`` / ``.format`` / f-string / ``join`` of it, a container or comprehension of it,
+        another call given it, a local helper that returns it): the position it was checked at is no
+        longer the position it lands at (#3850), so it is judged again where it is placed. Past the
+        depth bound the answer is ``2`` (fail closed)."""
+        if not isinstance(value, ast.expr):
+            return 0
+        if depth > 30:
+            return 2
+        d = depth + 1
+
+        def many(parts) -> int:
+            return max((self._hold_level(x, sc, origins, d, visited) for x in parts), default=0)
+
+        def built(parts) -> int:
+            return 2 if many(parts) else 0
+
         if isinstance(value, ast.Call):
-            return self.origin(value.func, sc) in origins
+            if self.origin(value.func, sc) in origins:
+                return 1
+            if (
+                isinstance(value.func, ast.Name)
+                and value.func.id in ("len", "int", "float", "bool")
+                and sc.find(value.func.id) is None
+            ):
+                return 0  # digits
+            parts = [*value.args, *(k.value for k in value.keywords)]
+            if isinstance(value.func, ast.Attribute):
+                parts.append(value.func.value)
+            fn_origin = self.origin(value.func, sc)
+            if fn_origin in CLEAN_ORIGINS or fn_origin in SAFE_ALPHABET_ORIGINS:
+                # ``conditional_escape(safe_css_length(x))``: still the escaper's output, same position rules
+                return 1 if many(parts) else 0
+            if many(parts):
+                return 2
+            local = self._local_function(value.func, sc)
+            if local is not None:
+                fn, fscope = local
+                key = (id(fn), id(origins))
+                if key not in self._fn_hold:
+                    if key in self._fn_hold_busy:
+                        return 0  # recursion adds nothing new
+                    self._fn_hold_busy.add(key)
+                    held = any(
+                        self._hold_level(r.value, fscope, origins)
+                        for r in _own_nodes(fn)
+                        if isinstance(r, ast.Return) and r.value is not None
+                    )
+                    self._fn_hold_busy.discard(key)
+                    self._fn_hold[key] = 2 if held else 0
+                return self._fn_hold[key]
+            return 0
         if isinstance(value, ast.IfExp):
-            return self._holds_call_of(value.body, sc, origins, depth + 1) or self._holds_call_of(
-                value.orelse, sc, origins, depth + 1
-            )
+            return many([value.body, value.orelse])
         if isinstance(value, ast.BoolOp):
-            return any(self._holds_call_of(v, sc, origins, depth + 1) for v in value.values)
+            return many(value.values)
         if isinstance(value, ast.NamedExpr):
-            return self._holds_call_of(value.value, sc, origins, depth + 1)
+            return self._hold_level(value.value, sc, origins, d, visited)
         if isinstance(value, ast.Name):
             owner = sc.find(value.id)
             if owner is None:
-                return False
+                return 0
+            key = ("name", value.id, id(owner))
+            if key in visited:
+                return 0
             values, _ = self._bindings(value, value.id, owner, sc)
-            return any(
-                isinstance(v, ast.expr) and self._holds_call_of(v, owner, origins, depth + 1)
-                for v in values
+            inner = visited | {key}
+            level = max(
+                (self._hold_level(v, owner, origins, d, inner) for v in values), default=0
             )
-        return False
+            extra = [*owner.contents.get(value.id, []), *owner.pieces.get(value.id, [])]
+            if any(self._hold_level(v, owner, origins, d, inner) for v in extra):
+                level = 2
+            return level
+        if isinstance(value, ast.BinOp):
+            return built([value.left, value.right])
+        if isinstance(value, ast.JoinedStr):
+            return built(
+                [v.value for v in value.values if isinstance(v, ast.FormattedValue)]
+            )
+        if isinstance(value, ast.FormattedValue):
+            return built([value.value])
+        if isinstance(value, ast.Starred):
+            return built([value.value])
+        if isinstance(value, (ast.List, ast.Tuple, ast.Set)):
+            return built(value.elts)
+        if isinstance(value, ast.Dict):
+            return built([v for v in value.values if v is not None])
+        if isinstance(value, ast.Subscript):
+            return built([value.value])
+        if isinstance(value, (ast.ListComp, ast.GeneratorExp, ast.SetComp, ast.DictComp)):
+            inner_scope = self._comprehension_scope(value, sc)
+            elt = value.value if isinstance(value, ast.DictComp) else value.elt
+            return 2 if self._hold_level(elt, inner_scope, origins, d, visited) else 0
+        return 0
 
-    def _sensitive(self, value: ast.expr, sc: _Scope) -> bool:
-        """``value`` is (or is a name that holds) the result of an escaper whose output is only clean
-        in a quoted attribute value or in text: ``safe_url(x)``, ``url_attr(x)``, ``safe_css_*(x)``."""
-        return self._holds_call_of(value, sc, CONTEXT_SENSITIVE_ORIGINS)
+    def _alternatives(
+        self, value: ast.expr, sc: _Scope, depth: int = 0, visited: frozenset = frozenset()
+    ) -> list[tuple[ast.expr, _Scope]]:
+        """The expressions ``value`` can be: itself, or for a name / ``a if c else b`` / ``a or b`` /
+        ``(n := a)`` each value it can hold."""
+        if depth > 8:
+            return [(value, sc)]
+        d = depth + 1
+        if isinstance(value, ast.IfExp):
+            return [
+                *self._alternatives(value.body, sc, d, visited),
+                *self._alternatives(value.orelse, sc, d, visited),
+            ]
+        if isinstance(value, ast.BoolOp):
+            return [a for v in value.values for a in self._alternatives(v, sc, d, visited)]
+        if isinstance(value, ast.NamedExpr):
+            return self._alternatives(value.value, sc, d, visited)
+        if isinstance(value, ast.Name):
+            owner = sc.find(value.id)
+            if owner is None:
+                return []
+            key = ("alt", value.id, id(owner))
+            if key in visited:
+                return []
+            if owner.contents.get(value.id) or owner.pieces.get(value.id):
+                return [(value, sc)]  # a container / a string built up: judged as a whole
+            values, _ = self._bindings(value, value.id, owner, sc)
+            return [
+                a
+                for v in values
+                if isinstance(v, ast.expr)
+                for a in self._alternatives(v, owner, d, visited | {key})
+            ]
+        return [(value, sc)]
 
-    def _json_escaped(self, value: ast.expr, sc: _Scope) -> bool:
-        """``value`` is (or holds) ``escape_json_for_script(...)``: clean in ``<script>`` TEXT only. Its
-        output leaves ``"`` alone, so inside a quoted attribute the JSON's own quotes end the value."""
-        return self._holds_call_of(value, sc, JSON_ESCAPERS)
-
-    def _sens_kind(self, value: ast.expr, sc: _Scope) -> str | None:
-        """``"json"`` (clean in text only), ``"sens"`` (clean in text or a quoted value) or ``None``."""
-        if self._json_escaped(value, sc):
-            return "json"
-        if self._sensitive(value, sc):
-            return "sens"
+    def _elements_of(
+        self, e: ast.expr, sc: _Scope, depth: int = 0
+    ) -> list[tuple[ast.expr, _Scope]] | None:
+        """The element expressions of a list / tuple / set display, a comprehension or generator, or a
+        name that holds one (and every ``append`` / ``+=`` to it); ``None`` when that is not known."""
+        if depth > 6:
+            return None
+        if isinstance(e, (ast.List, ast.Tuple, ast.Set)):
+            return [(x, sc) for x in e.elts]
+        if isinstance(e, (ast.ListComp, ast.GeneratorExp, ast.SetComp)):
+            return [(e.elt, self._comprehension_scope(e, sc))]
+        if isinstance(e, ast.Name):
+            owner = sc.find(e.id)
+            if owner is None:
+                return None
+            values, _ = self._bindings(e, e.id, owner, sc)
+            out: list[tuple[ast.expr, _Scope]] = [(c, owner) for c in owner.contents.get(e.id, [])]
+            for v in values:
+                inner = self._elements_of(v, owner, depth + 1) if isinstance(v, ast.expr) else None
+                if inner is None:
+                    return None
+                out.extend(inner)
+            for piece in owner.pieces.get(e.id, []):
+                inner = self._elements_of(piece, owner, depth + 1)
+                if inner is None:
+                    return None
+                out.extend(inner)
+            return out
         return None
 
-    def _leaf_text(self, e: ast.expr, sc: _Scope) -> str:
+    def _joined_elements_kind(self, alt: ast.expr, sc: _Scope, kind: str, found: list[str]) -> bool:
+        """``"".join(parts)``: judged by what each element is. An element that opens markup of its own
+        (``f'src="{u}"'``) is placed wherever the join is; a bare output (``safe_url(y)``) or one that
+        is position-dependent makes the join position-dependent. ``False`` when the elements are not
+        known (the caller then treats the join as built from the output)."""
+        if not (
+            isinstance(alt, ast.Call)
+            and isinstance(alt.func, ast.Attribute)
+            and alt.func.attr == "join"
+            and len(alt.args) == 1
+        ):
+            return False
+        elements = self._elements_of(alt.args[0], sc)
+        if elements is None:
+            return False
+        for element, esc in elements:
+            sub_kind = self._sens_kind(element, esc)
+            if sub_kind is not None and sub_kind.startswith(kind):
+                found.append(sub_kind if sub_kind.endswith("*") else sub_kind + "*")
+        return True
+
+    def _sens_kind(self, value: ast.expr, sc: _Scope) -> str | None:
+        """``"json"`` (clean in text only), ``"sens"`` (clean in text or a quoted value) or ``None``;
+        a trailing ``*`` marks a value BUILT from such an output whose position is the outer one
+        (clean in text only). The strictest of the values it can hold."""
+        found: list[str] = []
+        for alt, asc in self._alternatives(value, sc):
+            for origins, kind in ((JSON_ESCAPERS, "json"), (CONTEXT_SENSITIVE_ORIGINS, "sens")):
+                level = self._hold_level(alt, asc, origins)
+                if level == 1:
+                    found.append(kind)
+                elif level == 2 and self._joined_elements_kind(alt, asc, kind, found):
+                    pass
+                elif level == 2:
+                    # built from the output: when the literal text in front of the first unreadable
+                    # part opens markup of its own (``' style="' + safe_css_length(x)``, ``'<a ' + ..``),
+                    # the builder's own position check (``clean``) decides; otherwise
+                    # (``'' + safe_url(x)``, ``'%s' % ...``, ``f'{...}'``) the position is the outer one
+                    head = self._leaf_text(alt, asc).split("\x00")[0]
+                    if not ("<" in head or self._position("<x " + head) == "quoted"):
+                        found.append(kind + "*")
+                if level:
+                    break
+        for kind in ("json*", "sens*", "json", "sens"):
+            if kind in found:
+                return kind
+        return None
+
+    def _leaf_text(self, e: ast.expr, sc: _Scope, depth: int = 0) -> str:
         """The literal text ``e`` contributes in front of a later part of the same string: its own for a
-        string constant, a name that only ever holds one (``p = "<a href="``) or an f-string (a field
-        counts as ``\x00``); ``\x00`` for anything the guard cannot read."""
+        string constant, an f-string (a field counts as ``\x00``), a name that only ever holds one
+        such value, or a call of a function of this file whose every ``return`` is the same literal;
+        ``\x00`` for anything the guard cannot read."""
+        if depth > 6:
+            return "\x00"
+        d = depth + 1
         if isinstance(e, ast.Constant):
             return e.value if isinstance(e.value, str) else "\x00"
         if isinstance(e, ast.JoinedStr):
@@ -1376,7 +1574,7 @@ class _Module:
                 v.value
                 if isinstance(v, ast.Constant) and isinstance(v.value, str)
                 else (
-                    self._leaf_text(v.value, sc)
+                    self._leaf_text(v.value, sc, d)
                     if isinstance(v, ast.FormattedValue)
                     and v.conversion == -1
                     and v.format_spec is None
@@ -1384,38 +1582,72 @@ class _Module:
                 )
                 for v in e.values
             )
+        if isinstance(e, ast.BinOp):
+            if isinstance(e.op, ast.Add):
+                return self._leaf_text(e.left, sc, d) + self._leaf_text(e.right, sc, d)
+            if (
+                isinstance(e.op, ast.Mod)
+                and isinstance(e.left, ast.Constant)
+                and isinstance(e.left.value, str)
+            ):
+                return _PERCENT_SPEC.sub(
+                    lambda m: "%" if m.group(2) == "%" else "\x00", e.left.value
+                )
+            return "\x00"
         if isinstance(e, ast.Name):
             owner = sc.find(e.id)
             if owner is None:
                 return "\x00"
             values, _ = self._bindings(e, e.id, owner, sc)
-            if (
-                len(values) == 1
-                and isinstance(values[0], ast.Constant)
-                and isinstance(values[0].value, str)
-            ):
-                return values[0].value
+            if len(values) == 1 and isinstance(values[0], ast.expr):
+                return self._leaf_text(values[0], owner, d)
+        if (
+            isinstance(e, ast.Call)
+            and isinstance(e.func, ast.Attribute)
+            and e.func.attr == "format"
+            and isinstance(e.func.value, ast.Constant)
+            and isinstance(e.func.value.value, str)
+        ):
+            try:
+                fields = list(string.Formatter().parse(e.func.value.value))
+            except ValueError:
+                return "\x00"
+            return "".join(lit + ("" if field is None else "\x00") for lit, field, _s, _c in fields)
+        if isinstance(e, ast.Call):
+            local = self._local_function(e.func, sc)
+            if local is not None:
+                fn, fscope = local
+                returns = [
+                    r.value
+                    for r in _own_nodes(fn)
+                    if isinstance(r, ast.Return) and r.value is not None
+                ]
+                texts = {self._leaf_text(r, fscope, d) for r in returns}
+                if len(texts) == 1:
+                    return texts.pop()
         return "\x00"
 
     def _position_ok(self, kind: str, prefix: str) -> bool:
-        """A ``kind`` of escaper output may sit after ``prefix``: text for ``"json"``; text or a quoted
-        value for ``"sens"``; never an unquoted attribute or a tag name."""
+        """A ``kind`` of escaper output (or a string built from it, ``kind`` + ``"*"``) may sit after
+        ``prefix``: text for ``"json"``; text or a quoted value for ``"sens"``; never an unquoted
+        attribute or a tag name."""
         where = self._position(prefix)
-        return where == "text" if kind == "json" else where != "tag"
+        return where == "text" if kind.startswith("json") else where != "tag"
 
     def _add_clean(self, e: ast.BinOp, sc: _Scope, d: int, seen: frozenset) -> bool:
         """``a + b + c``: each part clean, and a context-sensitive part (``safe_url(x)``) only where the
         literal text before it puts it in text or a quoted value (#3850: not only in an f-string)."""
         leaves: list[ast.expr] = []
-
-        def flat(x: ast.expr) -> None:
+        stack: list[ast.expr] = [e]
+        while stack:
+            x = stack.pop()
             if isinstance(x, ast.BinOp) and isinstance(x.op, ast.Add):
-                flat(x.left)
-                flat(x.right)
+                if len(leaves) + len(stack) >= _DEPTH - d:
+                    return False  # too long to follow: flag it, never recurse past the bound
+                stack.append(x.right)
+                stack.append(x.left)
             else:
                 leaves.append(x)
-
-        flat(e)
         before = ""
         for leaf in leaves:
             kind = self._sens_kind(leaf, sc)
@@ -1439,10 +1671,10 @@ class _Module:
             specs = [m for m in _PERCENT_SPEC.finditer(fmt.value) if m.group(2) != "%"]
             if len(specs) == len(args):
                 prefixes, before, last = [], "", 0
-                for m in specs:
-                    before += fmt.value[last : m.start()].replace("%%", "%")
+                for m, arg in zip(specs, args):
+                    before += fmt.value[last : m.start()]
                     prefixes.append(before)
-                    before += "\x00"
+                    before += self._leaf_text(arg, sc)  # a literal argument is text too
                     last = m.end()
         if not self.clean(fmt, sc, d, seen):
             return False
@@ -1470,7 +1702,6 @@ class _Module:
             and func.attr == "format"
             and isinstance(recv, ast.Constant)
             and isinstance(recv.value, str)
-            and not self._has_star(call)
         ):
             keywords = {kw.arg: kw.value for kw in call.keywords if kw.arg}
             try:
@@ -1492,7 +1723,7 @@ class _Module:
                     arg = keywords.get(field)
                 if arg is not None:
                     marks.setdefault(id(arg), []).append(before)
-                before += "\x00"
+                before += self._leaf_text(arg, sc) if arg is not None else "\x00"
         for arg in [*call.args, *(kw.value for kw in call.keywords)]:
             kind = self._sens_kind(arg, sc)
             if kind:
@@ -1513,10 +1744,10 @@ class _Module:
         state, quote = "text", ""
         for i, ch in enumerate(prefix):
             if state == "text":
-                if (
-                    ch == "<"
-                    and i + 1 < len(prefix)
-                    and (prefix[i + 1].isalpha() or prefix[i + 1] in "/!?")
+                if ch == "<" and (
+                    i + 1 == len(prefix)  # ``'<' + value``: the value is the tag name
+                    or prefix[i + 1].isalpha()
+                    or prefix[i + 1] in "/!?"
                 ):
                     state = "tag"
             elif state == "tag":

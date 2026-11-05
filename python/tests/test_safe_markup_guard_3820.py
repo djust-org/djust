@@ -1012,13 +1012,17 @@ def _break_wrappers_are_invisible(monkeypatch):
 
 
 def _break_position_is_ignored(monkeypatch):
-    monkeypatch.setattr(taint._Module, "_sensitive", lambda self, value, sc: False)
-    monkeypatch.setattr(taint._Module, "_json_escaped", lambda self, value, sc: False)
+    monkeypatch.setattr(taint._Module, "_position_ok", lambda self, kind, prefix: True)
 
 
 def _break_any_json_escape_is_clean(monkeypatch):
     monkeypatch.setattr(taint._Module, "_json_dumped", lambda self, e, sc, d, seen: True)
-    monkeypatch.setattr(taint._Module, "_json_escaped", lambda self, value, sc: False)
+    original = taint._Module._position_ok
+    monkeypatch.setattr(
+        taint._Module,
+        "_position_ok",
+        lambda self, kind, prefix: True if kind.startswith("json") else original(self, kind, prefix),
+    )
 
 
 def _break_star_args_are_ignored(monkeypatch):
