@@ -45,6 +45,8 @@ from pathlib import Path
 import flow_fuzz_3820 as fuzz
 import payload_sweep_3774 as sweep
 import pytest
+import safe_markup_corpus_3848 as corpus3848
+import safe_markup_rows_3848 as rows3848
 from django.utils.html import conditional_escape
 from django.utils.safestring import SafeData, mark_safe
 
@@ -837,12 +839,15 @@ class TestNarrowing:
 
 def _directed_false_negatives() -> list[str]:
     """Hand-written FLOW / NARROWING / STRUCTURE rows that must be flagged and are not."""
-    return [
+    missed = [
         label
-        for table in (FLOW, NARROWING, STRUCTURE)
+        for table in (FLOW, NARROWING, STRUCTURE, rows3848.ROWS)
         for label, (source, expect) in table.items()
         if expect and not flagged(source)
     ]
+    # the unsafe functions of the review of #3848, each of which RUNS and emits the payload raw
+    missed += [case for case, (source, _) in corpus3848.CASES.items() if not flagged(source)]
+    return missed
 
 
 def _one_pass_loop(self, stmt, pre, is_for):
@@ -938,6 +943,100 @@ def _break_a_helper_is_always_clean(monkeypatch):
 
 def _break_mutation_is_ignored(monkeypatch):
     monkeypatch.setattr(taint._Module, "_mutated_or_rebound", lambda self, name: False)
+    monkeypatch.setattr(taint._Module, "_stable", lambda self, key, values, owner=None: True)
+
+
+def _break_hazards_are_ignored(monkeypatch):
+    """The scan that finds ``global`` rebinding, ``setattr`` / ``__dict__`` / ``globals()`` and every
+    in-place change finds nothing."""
+    original = taint._Module._scan_hazards
+
+    def blind(self):
+        original(self)
+        self.rebound_names.clear()
+        self.assigned_attrs.clear()
+        self.dynamic_attrs = self.dynamic_globals = False
+        for found in (self.mutated, self.escaped, self.escaped_elements):
+            found.clear()
+        for found in (self.mutated_in, self.escaped_in, self.escaped_elements_in):
+            found.clear()
+
+    monkeypatch.setattr(taint._Module, "_scan_hazards", blind)
+
+
+def _break_a_foreign_read_is_vouched(monkeypatch):
+    monkeypatch.setattr(taint._Module, "_unvouched", lambda self, name, values, owner, sc: values)
+
+
+def _break_class_bodies_are_visible_to_methods(monkeypatch):
+    def find(self, name):
+        scope = self
+        while scope is not None:
+            if name in scope.assigns or name in scope.contents or name in scope.pieces:
+                return scope
+            scope = scope.parent
+        return None
+
+    monkeypatch.setattr(taint._Scope, "find", find)
+
+
+def _break_equality_narrows_against_anything(monkeypatch):
+    original = taint._Flow.split
+
+    def split(self, test, state):
+        if (
+            isinstance(test, ast.Compare)
+            and len(test.ops) == 1
+            and isinstance(test.ops[0], ast.Eq)
+            and isinstance(test.left, ast.Name)
+        ):
+            return self.narrow(state, test.left, test), state
+        return original(self, test, state)
+
+    monkeypatch.setattr(taint._Flow, "split", split)
+
+
+def _break_depth_fails_open(monkeypatch):
+    original = taint._Module.tainted
+
+    def tainted(self, e, sc, depth, seen):
+        if depth > taint._DEPTH:
+            return False
+        return original(self, e, sc, depth, seen)
+
+    monkeypatch.setattr(taint._Module, "tainted", tainted)
+
+
+def _break_wrappers_are_invisible(monkeypatch):
+    monkeypatch.setattr(taint._Module, "_collect_wrappers", lambda self: None)
+
+
+def _break_position_is_ignored(monkeypatch):
+    monkeypatch.setattr(taint._Module, "_sensitive", lambda self, value, sc: False)
+    monkeypatch.setattr(taint._Module, "_json_escaped", lambda self, value, sc: False)
+
+
+def _break_any_json_escape_is_clean(monkeypatch):
+    monkeypatch.setattr(taint._Module, "_json_dumped", lambda self, e, sc, d, seen: True)
+    monkeypatch.setattr(taint._Module, "_json_escaped", lambda self, value, sc: False)
+
+
+def _break_star_args_are_ignored(monkeypatch):
+    monkeypatch.setattr(taint._Module, "_has_star", staticmethod(lambda call: False))
+
+
+def _break_a_trusted_origin_may_be_rebound(monkeypatch):
+    original = taint._Module.origin
+
+    def origin(self, e, sc, depth=0):
+        saved, self.rebound_names = self.rebound_names, set()
+        saved_g, self.dynamic_globals = self.dynamic_globals, False
+        try:
+            return original(self, e, sc, depth)
+        finally:
+            self.rebound_names, self.dynamic_globals = saved, saved_g
+
+    monkeypatch.setattr(taint._Module, "origin", origin)
 
 
 def _break_get_default_is_ignored(monkeypatch):
@@ -962,6 +1061,17 @@ MUTANTS = {
     "a call to a local helper is always clean": _break_a_helper_is_always_clean,
     "a collection mutated elsewhere is still constant": _break_mutation_is_ignored,
     "d.get(k, default) ignores the default": _break_get_default_is_ignored,
+    # the review of #3848
+    "no hazard is found (global, setattr, __dict__, globals(), in-place change)": _break_hazards_are_ignored,
+    "a read from another scope is always vouched for": _break_a_foreign_read_is_vouched,
+    "a class body is visible to its methods": _break_class_bodies_are_visible_to_methods,
+    "equality narrows against any expression": _break_equality_narrows_against_anything,
+    "the depth bound fails open": _break_depth_fails_open,
+    "a wrapper is not a sink unless named": _break_wrappers_are_invisible,
+    "a value-escaper is clean in any position": _break_position_is_ignored,
+    "escape_json_for_script is clean for anything": _break_any_json_escape_is_clean,
+    "star arguments are not examined": _break_star_args_are_ignored,
+    "a trusted import may be rebound": _break_a_trusted_origin_may_be_rebound,
 }
 
 
@@ -1076,42 +1186,34 @@ class TestProjectEscapersAreTrustedByOrigin:
         assert flagged(source, module=UTILS) == []  # in utils.py itself, it IS
 
     def test_attr_name_and_escape_json_for_script(self):
+        """Neither is cleared as a bare call (#3848): ``attr_name`` returns a LEGAL name and ``onmouseover``
+        is legal; ``escape_json_for_script`` leaves ``"`` alone. The second is clean for ``json.dumps``
+        output in script TEXT only (rows in ``safe_markup_rows_3848``)."""
         a = "from djust._html import attr_name\ndef f(k):\n    return mark_safe(f'<i {attr_name(k)}=1>')\n"
         b = (
+            "import json\n"
             "from djust.security.json_script import escape_json_for_script as j\n"
-            "def f(x):\n    return mark_safe(f'<script>{j(x)}</script>')\n"
+            "def f(x):\n    return mark_safe(f'<script>{j(json.dumps(x))}</script>')\n"
         )
-        assert flagged(a) == [] and flagged(b) == []
-        for source in (
-            a.replace("djust._html", "elsewhere"),
-            b.replace("djust.security.json_script", "djust.security"),
-        ):
-            assert flagged(source) == ["f"]
+        assert flagged(a) == ["f"] and flagged(b) == []
+        assert flagged(b.replace("djust.security.json_script", "djust.security")) == [
+            "f"
+        ]  # a re-export
 
     def test_the_css_validators_return_their_default_as_given(self):
         clean = "from djust.components.utils import safe_css_color\n"
-        assert (
-            flagged(
-                clean + "def f(v):\n    return mark_safe(f'<i s={safe_css_color(v, \"red\")}>')\n"
-            )
-            == []
-        )
-        assert (
-            flagged(clean + "def f(v):\n    return mark_safe(f'<i s={safe_css_color(v)}>')\n") == []
-        )
-        assert flagged(
-            clean + "def f(v, d):\n    return mark_safe(f'<i s={safe_css_color(v, d)}>')\n"
-        ) == ["f"]
-        assert flagged(
-            clean + "def f(v, d):\n    return mark_safe(f'<i s={safe_css_color(v, default=d)}>')\n"
-        ) == ["f"]
-        assert (
-            flagged(
+
+        def case(call: str, params: str = "v") -> str:
+            return (
                 clean
-                + "def f(v):\n    return mark_safe(f'<i s={safe_css_color(v, default=\"red\")}>')\n"
+                + f"def f({params}):\n    return mark_safe(f'<i style=\"color:{{{call}}}\">')\n"
             )
-            == []
-        )
+
+        assert flagged(case('safe_css_color(v, "red")')) == []
+        assert flagged(case("safe_css_color(v)")) == []
+        assert flagged(case("safe_css_color(v, d)", "v, d")) == ["f"]
+        assert flagged(case("safe_css_color(v, default=d)", "v, d")) == ["f"]
+        assert flagged(case('safe_css_color(v, default="red")')) == []
 
     def test_a_record_builder_and_its_fields(self):
         head = "from djust.components.components.image_upload_preview import upload_attrs\n"
@@ -1155,6 +1257,9 @@ class TestProjectEscapersAreTrustedByOrigin:
             *taint.CLEAN_IF_DEFAULT_CLEAN,
             *taint.CLEAN_RECORD_ORIGINS,
             *taint.CLEAN_NAME_ORIGINS,
+            *taint.JSON_ESCAPERS,
+            *taint.JSON_PRODUCERS,
+            *taint.CONTEXT_SENSITIVE_ORIGINS,
         }
         missing = []
         for origin in sorted(origins):

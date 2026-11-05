@@ -65,6 +65,7 @@ PWA = PKG + "templatetags/djust_pwa.py"
 HTML = PKG + "_html.py"
 RH = PKG + "components/rust_handlers.py"
 DT = TT + "_dev_tools.py"
+JS = PKG + "js.py"
 
 #: ``(path, literal)`` or ``(path, literal, scope)``. The literal must appear in the CODE (comments
 #: and docstrings do not count) of its scope: by default the audited function itself when ``path``
@@ -545,6 +546,12 @@ AUDITED: dict[tuple[str, str], Audit] = {
         (DT, "e_name = conditional_escape(name)", "FileTreeNode._render_tree_node"),
         (DT, "e_event = conditional_escape(str(event))", "FileTreeNode._render_tree_node"),
     ),
+    (JS, "JSChain.__html__"): S(
+        1,
+        "the value is json.dumps(self.ops) through escape_json_for_script, which neutralises < > & and U+2028/9, so it cannot end an inline <script> element; it is NOT attribute-safe (the JSON's own quotes end a quoted value) and the docstring says so. Flagged since #3848 because the guard clears escape_json_for_script only for json.dumps output placed in script text, and cannot follow self.to_json() through JSChain.__getattr__",
+        (JS, "return str(mark_safe(escape_json_for_script(self.to_json())))"),
+        (JS, 'return json.dumps(self.ops, separators=(",", ":"))', "JSChain.to_json"),
+    ),
 }
 
 #: Flagged sites that were fixed by sourcing the escaper from where the guard can see it (#3774):
@@ -605,13 +612,16 @@ def package_files(root: Path = ROOT) -> list[Path]:
 
 def scan(root: Path = ROOT) -> dict[tuple[str, str], list[str]]:
     """``(path, function) -> [finding, ...]`` for every flagged sink in the audited tree."""
-    from scripts.lib.safe_markup_taint import find_unsafe_markup
+    from scripts.lib.safe_markup_taint import dynamic_class_names, find_unsafe_markup
 
     found: dict[tuple[str, str], list[str]] = {}
-    for path in package_files(root):
+    files = package_files(root)
+    # classes that write attributes under names the source does not show (``Component``)
+    dynamic = dynamic_class_names(p.read_text() for p in files)
+    for path in files:
         rel = str(path.relative_to(root))
         module, is_package = module_name(path, root)
-        for finding in find_unsafe_markup(path.read_text(), module, is_package):
+        for finding in find_unsafe_markup(path.read_text(), module, is_package, dynamic):
             found.setdefault((rel, finding.function), []).append(str(finding))
     return found
 

@@ -437,11 +437,6 @@ KNOWN_MISSES = {
         "from django.utils import safestring\n"
         'def f(x):\n    return getattr(safestring, "mark_safe")(f"<a {x}>")\n'
     ),
-    "module-global-appended-in-one-function-joined-in-another": (
-        "PARTS = []\n"
-        'def add(x):\n    PARTS.append(f"<i>{x}</i>")\n'
-        'def out():\n    return mark_safe("".join(PARTS))\n'
-    ),
     "built-in-one-function-marked-safe-in-another (the switcher)": (
         "def options(presets):\n    out = ''\n    for p in presets:\n"
         "        out += f'<option value=\"{p}\">{p}</option>'\n    return f'<select>{out}</select>'\n"

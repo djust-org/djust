@@ -89,13 +89,19 @@ What it does NOT see (probed, and pinned in ``KNOWN_MISSES`` of its test)
   function and marked safe in another (``build_theme_head_context`` builds ``css_block``;
   ``ThemeMixin`` marks it safe; the inline theme switcher builds ``preset_options`` into a returned
   f-string that ``LazyThemeHTML`` marks safe, so the switcher is protected by its own tests, not by
-  this guard), a module global appended to in one function and joined in another, a value stored on
+  this guard), a value stored on
   ``self``, a helper that returns an interpolated string and is passed straight to the sink.
 * ``mark_safe(x)`` where ``x`` is a bare parameter or an unknown call's result: that is how trusted
   markup is passed in, and no syntax says whether ``x`` was escaped.
 * A sink reached without a call to it by name: ``partial(mark_safe, f"..")``,
   ``map(mark_safe, [..])``, ``getattr(safestring, "mark_safe")(..)``.
 * ``functools.reduce`` over raw items, and any builder not listed above.
+* Known false negatives probed by the review of #3848 (the cases are in ``safe_markup_corpus_3848``'s
+  neighbours and listed in the issue it filed): a dict KEY built from raw data and then iterated, a
+  closure that appends to the enclosing function's list, ``format_html_join``'s format string, an
+  ``await`` or ``*args`` as the sink argument, ``@html_safe`` / ``__html__`` and a ``SafeString``
+  subclass, a sink in a default argument or a decorator, ``str.translate``, a module-level or
+  class-body loop, Python 3.14 t-strings.
 * Whether a name it trusts is the real thing: ``x.render()`` and ``.strip()`` are trusted by method
   name, whatever ``x`` is.
 * WHERE a clean fragment is placed. ``format_html`` output, ``rich_html`` and the record builders are
@@ -115,6 +121,7 @@ from __future__ import annotations
 import ast
 import re
 import sys
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -146,10 +153,112 @@ CLEAN_ORIGINS = frozenset(
         "djust.components.utils.safe_url",  # always conditional_escape()d, or "#"
         "djust.components.utils.url_attr",  # safe_url; or what the developer marked safe
         "djust.components.utils.srcset_attr",  # each URL through url_attr, descriptors escaped
-        "djust._html.attr_name",  # a legal attribute NAME, or ValueError
-        "djust.security.json_script.escape_json_for_script",  # < > & U+2028/9 as \uXXXX
     }
 )
+#: NOT in ``CLEAN_ORIGINS`` on purpose (review of #3848):
+#:
+#: * ``djust._html.attr_name`` returns a LEGAL attribute name, and ``onmouseover`` / ``srcdoc`` /
+#:   ``style`` are legal names: a cleared name is not a cleared event-handler name. A writer that
+#:   needs one also needs ``djust._attr_policy.passthrough_attrs`` (which refuses ``on*``), and
+#:   that is something to read, not to trust.
+#: * ``escape_json_for_script`` escapes ``< > &`` and U+2028/9 and leaves ``"`` alone, so it is only
+#:   clean for ``json.dumps`` output (whose quotes are already ``\"``): see ``JSON_ESCAPERS``.
+#:
+#: Origins whose result is clean ONLY when their first argument is ``json.dumps(...)`` output (or a
+#: method that returns it) AND the field sits in ``<script>`` TEXT: the output keeps ``"``, so inside a
+#: quoted attribute the JSON's own quotes end the value.
+JSON_ESCAPERS = frozenset({"djust.security.json_script.escape_json_for_script"})
+JSON_PRODUCERS = frozenset({"json.dumps"})
+#: Escapers whose contract is about a VALUE: their output is HTML-escaped but keeps spaces and other
+#: characters, so it is clean inside a QUOTED attribute value or element text, and not in an
+#: unquoted ``href={...}`` (``x onmouseover=alert(1)`` becomes an attribute there).
+CONTEXT_SENSITIVE_ORIGINS = frozenset(
+    {
+        "djust.components.utils.safe_url",
+        "djust.components.utils.url_attr",
+        "djust.components.utils.srcset_attr",
+        "djust.components.utils.safe_css_color",
+        "djust.components.utils.safe_css_length",
+        "djust.components.utils.safe_css_ratio",
+        "djust.components.utils.safe_css_number",
+    }
+)
+#: A call to any of these (or a class body that defines one) means attributes can be written under a
+#: name the source does not show: ``setattr(self, key, value)`` over constructor kwargs (what
+#: ``Component`` does), ``self.__dict__.update``, ``object.__setattr__``, ``vars(self)[...]``. No class
+#: attribute or method of such a file is trusted.
+DYNAMIC_ATTR_NAMES = frozenset(
+    {"__setattr__", "__delattr__", "__getattribute__", "__getattr__", "__dict__"}
+)
+DYNAMIC_ATTR_CALLS = frozenset({"setattr", "delattr", "vars"})
+DYNAMIC_GLOBAL_CALLS = frozenset({"globals", "exec", "eval", "vars"})
+#: Methods that change a container in place.
+MUTATORS = frozenset(
+    {
+        "append",
+        "extend",
+        "insert",
+        "add",
+        "update",
+        "setdefault",
+        "pop",
+        "popitem",
+        "remove",
+        "discard",
+        "clear",
+        "sort",
+        "reverse",
+        "appendleft",
+        "extendleft",
+        "rotate",
+        "intersection_update",
+        "difference_update",
+        "symmetric_difference_update",
+        "__setitem__",
+        "__delitem__",
+        "__iadd__",
+        "__ior__",
+        "__iand__",
+        "__ixor__",
+        "__isub__",
+        "__imul__",
+    }
+)
+#: Reading an element out of a container: the result can still be (a reference to) a container.
+READERS = frozenset({"get", "keys", "values", "items", "copy", "index", "count"})
+#: Builtins that read a container without keeping a reference to it.
+SAFE_READ_CALLS = frozenset(
+    {
+        "len",
+        "sorted",
+        "list",
+        "tuple",
+        "set",
+        "frozenset",
+        "dict",
+        "min",
+        "max",
+        "sum",
+        "any",
+        "all",
+        "enumerate",
+        "reversed",
+        "iter",
+        "str",
+        "repr",
+        "bool",
+        "zip",
+        "isinstance",
+        "print",
+    }
+)
+SAFE_READ_METHODS = frozenset({"join", "format", "startswith", "endswith"})
+#: Methods that only transform text; a raw receiver stays a bare passthrough (see the module docstring).
+PURE_TRANSFORMS = frozenset(
+    {"strip", "lstrip", "rstrip", "lower", "upper", "title", "capitalize", "casefold"}
+)
+#: ``a.__add__(b)`` is ``a + b``.
+DUNDER_BUILDERS = frozenset({"__add__", "__radd__", "__mod__", "__rmod__", "__mul__", "__rmul__"})
 #: Origins whose RESULT is clean when the argument named ``default`` (by position) is: they return
 #: the caller's value only if it matches a closed grammar (a colour, a length, a ratio, a number),
 #: else ``default`` AS GIVEN, so a raw ``default`` is a raw result.
@@ -300,6 +409,10 @@ class _Scope:
             if name in scope.assigns or name in scope.contents or name in scope.pieces:
                 return scope
             scope = scope.parent
+            # a class body is not visible from the functions (or classes) inside it: a bare
+            # ``helper(x)`` in a method is the MODULE's ``helper``, not the method of that name
+            while scope is not None and isinstance(scope.node, ast.ClassDef):
+                scope = scope.parent
         return None
 
 
@@ -333,8 +446,18 @@ def _target_names(target: ast.expr) -> list[str]:
 
 
 class _Module:
-    def __init__(self, source: str, module: str | None = None, is_package: bool = False) -> None:
+    def __init__(
+        self,
+        source: str,
+        module: str | None = None,
+        is_package: bool = False,
+        dynamic_bases: frozenset[str] = frozenset(),
+    ) -> None:
         self.source = source
+        #: names of classes (anywhere in the package) that write attributes under names the source
+        #: does not show (``Component``: ``setattr(self, key, value)`` for every kwarg), and the
+        #: classes that inherit from them: see :func:`dynamic_class_names`
+        self.dynamic_bases = dynamic_bases
         #: The dotted name this source is importable as (``djust.components.utils``), when known.
         #: It resolves a relative import to its ORIGIN and names the functions this file defines.
         self.module = module
@@ -344,17 +467,28 @@ class _Module:
         #: (``self.X = ...``): one walk, because the class-attribute rules ask per use
         self.rebound_names: set[str] = set()
         self.assigned_attrs: set[str] = set()
-        for node in ast.walk(self.tree):
-            if isinstance(node, (ast.Global, ast.Nonlocal)):
-                self.rebound_names.update(node.names)
-            elif isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Store):
-                self.assigned_attrs.add(node.attr)
+        #: file-wide: attributes / module names can be written under a name the source does not show
+        self.dynamic_attrs = False
+        self.dynamic_globals = False
+        #: keys (a name, or an attribute name) of containers that are changed in place, handed on
+        #: (aliased, passed, returned), or whose ELEMENTS are handed on, anywhere in the file
+        self.mutated: set[str] = set()
+        self.escaped: set[str] = set()
+        self.escaped_elements: set[str] = set()
+        #: the same, per enclosing function / class / module: ``(id(node), key)`` for every node whose
+        #: extent holds the change. A LOCAL list is judged by what happens inside its own function, a
+        #: module or class table by the whole file.
+        self.mutated_in: set[tuple[int, str]] = set()
+        self.escaped_in: set[tuple[int, str]] = set()
+        self.escaped_elements_in: set[tuple[int, str]] = set()
+        self._scan_hazards()
         self.sinks = set(SINKS)
         self.format_sinks = set(FORMAT_SINKS)
         #: local name -> dotted origin, or ``None`` when the file imports it as two different things
         self.imports: dict[str, str | None] = {}
         self._collect_imports()
         self._collect_aliases()
+        self._collect_wrappers()
         self.scopes: list[_Scope] = []
         #: id(``ast.Name``) -> (scope, the definitions that can reach it); see :class:`_Flow`
         self.reach: dict[int, tuple[_Scope, tuple[_Def, ...]]] = {}
@@ -364,6 +498,219 @@ class _Module:
         for scope in self.scopes:
             if isinstance(scope.node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 _Flow(self, scope).run()
+
+    # -- hazards: what can change a value the source does not show -------------------------
+    @staticmethod
+    def _ref_key(e: ast.AST) -> str | None:
+        if isinstance(e, ast.Name):
+            return e.id
+        if isinstance(e, ast.Attribute):
+            return e.attr
+        return None
+
+    def _root_key(self, e: ast.AST) -> str | None:
+        """The container ``e`` reaches into: ``D`` for ``D[k]``, ``D.get(k)``, ``self.D[a][b]``."""
+        while True:
+            if isinstance(e, ast.Subscript):
+                e = e.value
+            elif (
+                isinstance(e, ast.Call)
+                and isinstance(e.func, ast.Attribute)
+                and (e.func.attr in READERS or e.func.attr in ("setdefault", "pop"))
+            ):
+                e = e.func.value
+            else:
+                return self._ref_key(e)
+
+    def _scan_hazards(self) -> None:
+        parents: dict[int, ast.AST] = {}
+        nodes = list(ast.walk(self.tree))
+        for n in nodes:
+            for c in ast.iter_child_nodes(n):
+                parents[id(c)] = n
+        for node in nodes:
+            if isinstance(node, (ast.Global, ast.Nonlocal)):
+                self.rebound_names.update(node.names)
+            elif isinstance(node, ast.Attribute):
+                if isinstance(node.ctx, ast.Store):
+                    self.assigned_attrs.add(node.attr)
+                if node.attr in DYNAMIC_ATTR_NAMES:
+                    self.dynamic_attrs = True
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                if node.name in DYNAMIC_ATTR_NAMES:
+                    self.dynamic_attrs = True
+            elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+                if node.func.id in DYNAMIC_ATTR_CALLS:
+                    self.dynamic_attrs = True
+                if node.func.id in DYNAMIC_GLOBAL_CALLS:
+                    self.dynamic_globals = True
+            # -- changes in place
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr in MUTATORS
+            ):
+                key = self._root_key(node.func.value)
+                if key:
+                    self._note(self.mutated, self.mutated_in, key, node, parents)
+            elif isinstance(node, ast.Subscript) and isinstance(node.ctx, (ast.Store, ast.Del)):
+                key = self._root_key(node.value)
+                if key:
+                    self._note(self.mutated, self.mutated_in, key, node, parents)
+            elif isinstance(node, ast.AugAssign):
+                target = node.target
+                key = self._root_key(target.value if isinstance(target, ast.Subscript) else target)
+                if key:
+                    self._note(self.mutated, self.mutated_in, key, node, parents)
+        for node in nodes:
+            if isinstance(node, (ast.Name, ast.Attribute)) and isinstance(node.ctx, ast.Load):
+                key = self._ref_key(node)
+                if key is None:
+                    continue
+                verdict = self._read_verdict(node, parents)
+                if verdict == "escapes":
+                    self._note(self.escaped, self.escaped_in, key, node, parents)
+                elif verdict == "element":
+                    self._note(self.escaped_elements, self.escaped_elements_in, key, node, parents)
+
+    @staticmethod
+    def _note(
+        whole: set[str],
+        scoped: set[tuple[int, str]],
+        key: str,
+        node: ast.AST,
+        parents: dict[int, ast.AST],
+    ) -> None:
+        whole.add(key)
+        cur: ast.AST | None = node
+        while cur is not None:
+            if isinstance(
+                cur, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)
+            ):
+                scoped.add((id(cur), key))
+            cur = parents.get(id(cur))
+
+    def _in(
+        self, whole: set[str], scoped: set[tuple[int, str]], key: str, owner: _Scope | None
+    ) -> bool:
+        """``key`` is in the set: for a local of a function, within that function; otherwise anywhere."""
+        if owner is not None and isinstance(
+            owner.node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)
+        ):
+            return (id(owner.node), key) in scoped
+        return key in whole
+
+    def _read_verdict(self, node: ast.AST, parents: dict[int, ast.AST]) -> str:
+        """What happens to the value read at ``node``: ``"safe"`` (compared, printed, iterated,
+        measured, joined), ``"element"`` (an ELEMENT of it is handed on) or ``"escapes"`` (the
+        container itself is aliased, passed, returned, stored)."""
+        cur = node
+        element = False
+        while True:
+            parent = parents.get(id(cur))
+            if parent is None:
+                return "safe"
+            if isinstance(parent, ast.Subscript) and parent.value is cur:
+                if not isinstance(parent.ctx, ast.Load):
+                    return "safe"  # a store / delete: the mutation scan has it
+                cur, element = parent, True
+                continue
+            if isinstance(parent, ast.Attribute) and parent.value is cur:
+                if parent.attr in READERS:
+                    grand = parents.get(id(parent))
+                    if isinstance(grand, ast.Call) and grand.func is parent:
+                        cur, element = grand, True
+                        continue
+                    return "safe"
+                return "safe"  # ``.upper()``, ``.startswith(...)``, a mutator: derived or handled
+            break
+        bad = "element" if element else "escapes"
+        if isinstance(
+            parent,
+            (ast.Compare, ast.FormattedValue, ast.BinOp, ast.Expr, ast.JoinedStr),
+        ):
+            return "safe"
+        if isinstance(parent, ast.UnaryOp) and isinstance(parent.op, ast.Not):
+            return "safe"
+        if isinstance(parent, (ast.If, ast.While, ast.IfExp)) and parent.test is cur:
+            return "safe"
+        if isinstance(parent, (ast.For, ast.AsyncFor, ast.comprehension)) and parent.iter is cur:
+            return "safe"
+        if isinstance(parent, ast.Call):
+            if parent.func is cur:
+                return "safe"
+            func = parent.func
+            if cur in parent.args and (
+                (isinstance(func, ast.Name) and func.id in SAFE_READ_CALLS)
+                or (isinstance(func, ast.Attribute) and func.attr in SAFE_READ_METHODS)
+            ):
+                return "safe"
+        return bad
+
+    @staticmethod
+    def _mutable_display(v: object) -> bool:
+        """A list / dict / set written out (or built by the builtin of that name): aliasing it lets
+        something else change it. Any other call is not assumed to return one."""
+        if isinstance(v, (ast.List, ast.Dict, ast.Set, ast.ListComp, ast.DictComp, ast.SetComp)):
+            return True
+        return (
+            isinstance(v, ast.Call)
+            and isinstance(v.func, ast.Name)
+            and v.func.id in ("list", "dict", "set", "defaultdict", "deque", "OrderedDict")
+        )
+
+    def _mutable_elements(self, v: object) -> bool:
+        if isinstance(v, ast.Dict):
+            kids: list = [x for x in v.values if x is not None]
+        elif isinstance(v, (ast.List, ast.Set, ast.Tuple)):
+            kids = list(v.elts)
+        else:
+            return False
+        return any(self._mutable_display(k) or self._mutable_elements(k) for k in kids)
+
+    def _class_dynamic(self, cls: _Scope) -> bool:
+        """Attributes of instances / the class can be written under names the source does not show."""
+        if self.dynamic_attrs:
+            return True
+        if not self.dynamic_bases:
+            return False
+        names = {cls.node.name}  # type: ignore[attr-defined]
+        pending = [x for x in self.scopes if isinstance(x.node, ast.ClassDef)]
+        bases = {
+            b.id if isinstance(b, ast.Name) else b.attr
+            for b in cls.node.bases  # type: ignore[attr-defined]
+            if isinstance(b, (ast.Name, ast.Attribute))
+        }
+        grew = True
+        while grew:
+            grew = False
+            for scope in list(pending):
+                if scope.node.name in bases:  # type: ignore[attr-defined]
+                    pending.remove(scope)
+                    bases |= {
+                        b.id if isinstance(b, ast.Name) else b.attr
+                        for b in scope.node.bases  # type: ignore[attr-defined]
+                        if isinstance(b, (ast.Name, ast.Attribute))
+                    }
+                    grew = True
+        return bool((bases | names) & self.dynamic_bases)
+
+    def _foreign(self, owner: _Scope, sc: _Scope) -> bool:
+        """``owner`` binds the name but the use is somewhere else: a module or class constant read from
+        a function, or a variable read by a nested function."""
+        if isinstance(owner.node, (ast.Module, ast.ClassDef)):
+            return True
+        cur: _Scope | None = sc
+        while cur is not None and isinstance(
+            cur.node, (ast.ListComp, ast.GeneratorExp, ast.SetComp, ast.DictComp)
+        ):
+            cur = cur.parent
+        return cur is not owner
+
+    # -- same-file wrappers around a sink ---------------------------------------------------
+    def _collect_wrappers(self) -> None:
+        for name in wrapper_names(self.tree, self.sinks):
+            self.sinks.add(name)
 
     # -- imports and aliases --------------------------------------------------------------
     def _collect_imports(self) -> None:
@@ -414,6 +761,9 @@ class _Module:
         if depth > 8:
             return None
         if isinstance(e, ast.Name):
+            if e.id in self.rebound_names or self.dynamic_globals:
+                # ``global escape; escape = ...`` somewhere, or ``globals()[...] = ...``
+                return None
             owner = sc.find(e.id)
             if owner is None:
                 return self.imports.get(e.id, e.id)
@@ -457,21 +807,52 @@ class _Module:
                         if alias.name in names:
                             group.add(alias.asname)
         changed = True
-        while changed:  # ``ms = mark_safe``; ``m2 = ms``
+        while (
+            changed
+        ):  # ``ms = mark_safe``; ``m2 = ms``; ``a = b = mark_safe``; ``(ms := mark_safe)``
             changed = False
-            for node in ast.walk(self.tree):
-                if (
-                    isinstance(node, ast.Assign)
-                    and len(node.targets) == 1
-                    and isinstance(node.targets[0], ast.Name)
-                    and _callee(node.value) is not None
-                    and isinstance(node.value, (ast.Name, ast.Attribute))
-                ):
-                    src, dst = _callee(node.value), node.targets[0].id
-                    for group in (self.sinks, self.format_sinks):
-                        if src in group and dst not in group:
-                            group.add(dst)
-                            changed = True
+            for dst, value in self._alias_pairs():
+                src = _callee(value)
+                if src is None or not isinstance(value, (ast.Name, ast.Attribute)):
+                    continue
+                for group in (self.sinks, self.format_sinks):
+                    if src in group and dst not in group:
+                        group.add(dst)
+                        changed = True
+
+    def _alias_pairs(self):
+        """``(name, value)`` for every way a name can be bound to a plain name / attribute: an
+        assignment (several targets, tuple unpacking), an annotated one, ``:=``, a ``for`` over a
+        literal, and a ``with`` item that is handed the value."""
+        for node in ast.walk(self.tree):
+            if isinstance(node, ast.Assign):
+                for target in node.targets:
+                    yield from self._pairs(target, node.value)
+            elif isinstance(node, ast.AnnAssign) and node.value is not None:
+                yield from self._pairs(node.target, node.value)
+            elif isinstance(node, ast.NamedExpr):
+                yield from self._pairs(node.target, node.value)
+            elif isinstance(node, (ast.For, ast.AsyncFor)) and isinstance(
+                node.iter, (ast.Tuple, ast.List, ast.Set)
+            ):
+                for elt in node.iter.elts:
+                    yield from self._pairs(node.target, elt)
+            elif isinstance(node, (ast.With, ast.AsyncWith)):
+                for item in node.items:
+                    if isinstance(item.context_expr, ast.Call) and item.optional_vars is not None:
+                        for arg in item.context_expr.args:
+                            yield from self._pairs(item.optional_vars, arg)
+
+    def _pairs(self, target: ast.AST, value: ast.AST):
+        if isinstance(target, ast.Name):
+            yield target.id, value
+        elif (
+            isinstance(target, (ast.Tuple, ast.List))
+            and isinstance(value, (ast.Tuple, ast.List))
+            and len(target.elts) == len(value.elts)
+        ):
+            for t, v in zip(target.elts, value.elts):
+                yield from self._pairs(t, v)
 
     # -- scopes -------------------------------------------------------------------------
     def _build(self, node: ast.AST, name: str, parent: _Scope | None) -> None:
@@ -534,7 +915,7 @@ class _Module:
             n = node.target.id
             if isinstance(node.value, (ast.List, ast.Tuple, ast.Set)):
                 scope.contents.setdefault(n, []).extend(node.value.elts)
-            elif isinstance(node.op, (ast.Add, ast.Mod)):
+            elif isinstance(node.op, (ast.Add, ast.Mod, ast.BitOr)):
                 scope.pieces.setdefault(n, []).append(node.value)
         elif isinstance(node, (ast.For, ast.AsyncFor)):
             self._bind_iteration(scope, node, node.target, node.iter)
@@ -568,7 +949,21 @@ class _Module:
                     scope.contents.setdefault(n, []).append(call.args[0])
                 elif method == "insert" and len(call.args) >= 2:
                     scope.contents.setdefault(n, []).append(call.args[1])
-                elif method in ("extend", "update") and call.args:
+                elif method == "setdefault" and len(call.args) >= 2:
+                    scope.contents.setdefault(n, []).append(call.args[1])
+                elif method == "update" and call.keywords:
+                    for kw in call.keywords:  # ``d.update(k=raw)`` / ``d.update(**raw_dict)``
+                        value = kw.value
+                        if kw.arg is None:
+                            value = ast.Subscript(
+                                value=value, slice=ast.Constant(0), ctx=ast.Load()
+                            )
+                        scope.contents.setdefault(n, []).append(value)
+                    if call.args:
+                        scope.contents.setdefault(n, []).append(
+                            ast.Subscript(value=call.args[0], slice=ast.Constant(0), ctx=ast.Load())
+                        )
+                if method in ("extend", "update") and call.args and not call.keywords:
                     arg = call.args[0]
                     if isinstance(arg, (ast.List, ast.Tuple, ast.Set)):
                         scope.contents.setdefault(n, []).extend(arg.elts)
@@ -648,7 +1043,27 @@ class _Module:
         """Whether anything in the file grows, fills or rebinds ``name`` from another scope."""
         if any(name in s.contents or name in s.pieces for s in self.scopes):
             return True
-        return name in self.rebound_names
+        return name in self.rebound_names or name in self.mutated
+
+    def _stable(self, key: str, values: list[object], owner: _Scope | None = None) -> bool:
+        """Nothing in the file changes what ``key`` holds behind the back of its definition.
+
+        Not stable when it is changed in place anywhere (``.append`` / ``.update`` / ``.setdefault`` /
+        ``D[k] = v`` / ``|=`` / ``.__setitem__``, through ``self.D`` or an alias), declared ``global`` /
+        ``nonlocal``, or a list / dict / set that is handed on (``a = D``, ``f(D)``, ``return D``) so
+        that something else can change it; or, when its ELEMENTS are containers, when one of those is.
+        """
+        if self._in(self.mutated, self.mutated_in, key, owner) or key in self.rebound_names:
+            return False
+        if self._in(self.escaped, self.escaped_in, key, owner) and any(
+            self._mutable_display(v) for v in values
+        ):
+            return False
+        if self._in(self.escaped_elements, self.escaped_elements_in, key, owner) and any(
+            self._mutable_elements(v) for v in values
+        ):
+            return False
+        return True
 
     def constant_set(self, e: ast.expr, sc: _Scope, depth: int = 0) -> bool:
         """``e`` is a collection the developer wrote out, every member (or key) a literal.
@@ -677,6 +1092,8 @@ class _Module:
             if owner is None or self._mutated_or_rebound(e.id):
                 return False
             values = owner.assigns.get(e.id, [])
+            if not self._stable(e.id, values, owner):
+                return False
             return bool(values) and all(
                 isinstance(v, ast.expr) and self.constant_set(v, owner, depth + 1) for v in values
             )
@@ -704,9 +1121,13 @@ class _Module:
             return None
         if cls.node.decorator_list or e.attr in cls.annotated:  # type: ignore[attr-defined]
             return None  # a dataclass / NamedTuple field is a default the constructor replaces
+        if self._class_dynamic(cls):
+            return None  # ``setattr(self, key, value)`` and kin: any attribute may be replaced
         if self._mutated_or_rebound(e.attr) or e.attr in self.assigned_attrs:
             return None
         values = cls.assigns.get(e.attr, [])
+        if not self._stable(e.attr, values, cls):
+            return None
         # a ``def`` / ``class`` of that name is a method or a nested class, not a constant
         if not values or e.attr in cls.def_nodes or self._overridden_in_file(cls, e.attr):
             return None
@@ -771,8 +1192,8 @@ class _Module:
             return True
         if isinstance(e, ast.JoinedStr):
             return all(
-                self._field_clean(v, sc, d, seen)
-                for v in e.values
+                self._field_clean(v, sc, d, seen, e, i)
+                for i, v in enumerate(e.values)
                 if isinstance(v, ast.FormattedValue)
             )
         if isinstance(e, ast.NamedExpr):
@@ -828,8 +1249,76 @@ class _Module:
             return None
         return self.imports.get(e.id)
 
-    def _field_clean(self, field: ast.FormattedValue, sc: _Scope, d: int, seen: frozenset) -> bool:
-        """One ``{value!c:spec}`` of an f-string: clean if the value is, or the spec prints digits."""
+    def _sensitive(self, value: ast.expr, sc: _Scope) -> bool:
+        """``value`` is (or is a name that holds) the result of an escaper whose output is only clean
+        in a quoted attribute value or in text: ``safe_url(x)``, ``url_attr(x)``, ``safe_css_*(x)``."""
+        if isinstance(value, ast.Call):
+            return self.origin(value.func, sc) in CONTEXT_SENSITIVE_ORIGINS
+        if isinstance(value, ast.Name):
+            owner = sc.find(value.id)
+            if owner is None:
+                return False
+            values, _ = self._bindings(value, value.id, owner, sc)
+            return any(
+                isinstance(v, ast.Call) and self.origin(v.func, owner) in CONTEXT_SENSITIVE_ORIGINS
+                for v in values
+            )
+        return False
+
+    def _json_escaped(self, value: ast.expr, sc: _Scope) -> bool:
+        """``value`` is (or holds) ``escape_json_for_script(...)``: clean in ``<script>`` TEXT only. Its
+        output leaves ``"`` alone, so inside a quoted attribute the JSON's own quotes end the value."""
+        if isinstance(value, ast.Call):
+            return self.origin(value.func, sc) in JSON_ESCAPERS
+        if isinstance(value, ast.Name):
+            owner = sc.find(value.id)
+            if owner is None:
+                return False
+            values, _ = self._bindings(value, value.id, owner, sc)
+            return any(
+                isinstance(v, ast.Call) and self.origin(v.func, owner) in JSON_ESCAPERS
+                for v in values
+            )
+        return False
+
+    @staticmethod
+    def _position(prefix: str) -> str:
+        """Where the next field sits after ``prefix`` (the literal text before it, ``\x00`` for an
+        earlier field): ``"text"`` (element text), ``"quoted"`` (inside a quoted attribute value) or
+        ``"tag"`` (an unquoted attribute, or a tag name)."""
+        state, quote = "text", ""
+        for i, ch in enumerate(prefix):
+            if state == "text":
+                if (
+                    ch == "<"
+                    and i + 1 < len(prefix)
+                    and (prefix[i + 1].isalpha() or prefix[i + 1] in "/!?")
+                ):
+                    state = "tag"
+            elif state == "tag":
+                if ch == ">":
+                    state = "text"
+                elif ch in "\"'":
+                    state, quote = "quoted", ch
+            elif ch == quote:
+                state = "tag"
+        return state
+
+    def _field_clean(
+        self,
+        field: ast.FormattedValue,
+        sc: _Scope,
+        d: int,
+        seen: frozenset,
+        joined: ast.JoinedStr | None = None,
+        index: int = 0,
+    ) -> bool:
+        """One ``{value!c:spec}`` of an f-string: clean if the value is, or the spec prints digits.
+
+        A value-escaper's output (``safe_url``, ``safe_css_*``) is clean in a quoted attribute or in
+        text, not in an unquoted attribute (``<a href={safe_url(x)}>``): the literal text before the
+        field decides.
+        """
         spec = field.format_spec
         if (
             field.conversion == -1
@@ -839,6 +1328,16 @@ class _Module:
             and _NUMERIC_SPEC.fullmatch("".join(v.value for v in spec.values))  # type: ignore[attr-defined]
         ):
             return True
+        sensitive = self._sensitive(field.value, sc)
+        text_only = self._json_escaped(field.value, sc)
+        if sensitive or text_only:
+            prefix = "".join(
+                v.value if isinstance(v, ast.Constant) and isinstance(v.value, str) else "\x00"
+                for v in (joined.values[:index] if joined is not None else [])
+            )
+            where = self._position(prefix) if joined is not None else "tag"
+            if where == "tag" or (text_only and where != "text"):
+                return False
         return self.clean(field.value, sc, d, seen)
 
     def _trusted_call(self, e: ast.Call, sc: _Scope) -> bool:
@@ -864,10 +1363,14 @@ class _Module:
         origin = self.origin(e.func, sc)
         if origin in CLEAN_IF_ARGS_CLEAN:
             return all(self.clean(a, sc, d, seen) for a in args)
+        if origin in JSON_ESCAPERS:
+            return len(e.args) == 1 and self._json_dumped(e.args[0], sc, d, seen)
         local = self._local_function(e.func, sc)
         if local is not None:
             return self._returns_clean(local, d, seen)
         if origin in CLEAN_IF_DEFAULT_CLEAN:
+            if self._has_star(e):
+                return False  # a ``default`` hidden in ``*args`` / ``**kw`` is never examined
             default = self._default_arg(e, CLEAN_IF_DEFAULT_CLEAN[origin])
             return default is None or self.clean(default, sc, d, seen)
         if isinstance(e.func, ast.Attribute):
@@ -892,6 +1395,50 @@ class _Module:
         return False
 
     @staticmethod
+    def _has_star(call: ast.Call) -> bool:
+        return any(isinstance(a, ast.Starred) for a in call.args) or any(
+            kw.arg is None for kw in call.keywords
+        )
+
+    def _json_dumped(self, e: ast.expr, sc: _Scope, d: int, seen: frozenset) -> bool:
+        """``e`` is ``json.dumps(...)`` output, or a name that only holds some."""
+        if d > _DEPTH:
+            return False
+        if isinstance(e, ast.Call):
+            if self.origin(e.func, sc) in JSON_PRODUCERS:
+                return True
+            local = self._local_function(e.func, sc)  # ``self.to_json()``: a method that returns it
+            if local is None:
+                return False
+            fn, fscope = local
+            key = ("json-fn", id(fn))
+            if key in seen:
+                return True
+            returns = [n for n in _own_nodes(fn) if isinstance(n, ast.Return)]
+            return bool(returns) and all(
+                r.value is not None and self._json_dumped(r.value, fscope, d + 1, seen | {key})
+                for r in returns
+            )
+        if isinstance(e, ast.Name):
+            owner = sc.find(e.id)
+            if owner is None:
+                return False
+            values, defs = self._bindings(e, e.id, owner, sc)
+            key = ("json", e.id, id(owner), defs)
+            if key in seen:
+                return True
+            seen = seen | {key}
+            return (
+                bool(values)
+                and not owner.pieces.get(e.id)
+                and all(
+                    isinstance(v, ast.expr) and self._json_dumped(v, owner, d + 1, seen)
+                    for v in values
+                )
+            )
+        return False
+
+    @staticmethod
     def _defaults(call: ast.Call) -> list[ast.expr]:
         """What ``get`` / ``pop`` / ``setdefault`` return when the key is absent: every argument after
         the key, and ``default=``."""
@@ -912,6 +1459,9 @@ class _Module:
             owner = sc.find(func.id)
             if owner is None or func.id in owner.opaque:
                 return None
+            if func.id in self.rebound_names or self.dynamic_globals:
+                # ``global helper; helper = ...`` somewhere, or ``globals()[...] = ...``
+                return None
             name, holder = func.id, owner
         elif (
             isinstance(func, ast.Attribute)
@@ -923,7 +1473,7 @@ class _Module:
                 cls = cls.parent
             if cls is None or func.value.id not in ("self", "cls", cls.node.name):  # type: ignore[attr-defined]
                 return None
-            if cls.node.decorator_list:  # type: ignore[attr-defined]
+            if cls.node.decorator_list or self._class_dynamic(cls):  # type: ignore[attr-defined]
                 return None
             if func.attr in self.assigned_attrs or self._overridden_in_file(cls, func.attr):
                 return None
@@ -974,7 +1524,7 @@ class _Module:
         return None
 
     def _bindings(
-        self, node: ast.Name | None, name: str, owner: _Scope
+        self, node: ast.Name | None, name: str, owner: _Scope, sc: _Scope | None = None
     ) -> tuple[list[object], tuple[int, ...] | None]:
         """The values ``name`` can hold at this use, and a key that tells those apart.
 
@@ -985,9 +1535,33 @@ class _Module:
         if node is not None:
             hit = self.reach.get(id(node))
             if hit is not None and hit[0] is owner and hit[1]:
-                return [x.value for x in hit[1]], tuple(sorted(id(x) for x in hit[1]))
-        values = owner.assigns.get(name, [])
-        return ([*values, RAW] if name in owner.opaque else values), None
+                return self._unvouched(name, [x.value for x in hit[1]], owner, sc), tuple(
+                    sorted(id(x) for x in hit[1])
+                )
+        values = list(owner.assigns.get(name, []))
+        if name in owner.opaque:
+            values.append(RAW)
+        return self._unvouched(name, values, owner, sc), None
+
+    def _unvouched(
+        self, name: str, values: list[object], owner: _Scope, sc: _Scope | None
+    ) -> list[object]:
+        """``values`` plus a RAW binding when something the flow cannot see can bind the name: a
+        ``global`` / ``nonlocal`` write from another scope, a list or dict that is aliased or handed on
+        (so another name can fill it), or, for a use from another scope than the owner's (a module
+        constant, a closure variable), any in-place change anywhere in the file."""
+        if name in self.rebound_names:
+            return [*values, RAW]
+        if self._in(self.escaped, self.escaped_in, name, owner) and any(
+            self._mutable_display(v) for v in values
+        ):
+            return [*values, RAW]
+        if sc is not None and self._foreign(owner, sc):
+            if not self._stable(name, values, owner) or (
+                self.dynamic_globals and isinstance(owner.node, ast.Module)
+            ):
+                return [*values, RAW]
+        return values
 
     def _is_record(self, e: ast.expr, sc: _Scope, d: int, seen: frozenset) -> bool:
         """``e`` is a record builder's result (``pad_extras(...)``) or a name that only holds one."""
@@ -999,7 +1573,7 @@ class _Module:
             owner = sc.find(e.id)
             if owner is None:
                 return False
-            values, defs = self._bindings(e, e.id, owner)
+            values, defs = self._bindings(e, e.id, owner, sc)
             key = ("record", e.id, id(owner), defs)
             if key in seen:
                 return True
@@ -1020,7 +1594,7 @@ class _Module:
         owner = sc.find(name)
         if owner is None:
             return False
-        values, defs = self._bindings(node, name, owner)
+        values, defs = self._bindings(node, name, owner, sc)
         key = ("clean", name, id(owner), defs)
         if key in seen:
             return True  # a cycle adds nothing new
@@ -1062,15 +1636,18 @@ class _Module:
             owner = sc.find(e.id)
             if owner is None:
                 return False
-            values, defs = self._bindings(e, e.id, owner)
+            values, defs = self._bindings(e, e.id, owner, sc)
             key = ("elements", e.id, id(owner), defs)
             if key in seen:
                 return True
             seen = seen | {key}
             if not values and not owner.contents.get(e.id):
                 return False
-            return all(self.elements_clean(v, owner, d, seen) for v in values) and all(
-                self.clean(c, owner, d, seen) for c in owner.contents.get(e.id, [])
+            return (
+                all(self.elements_clean(v, owner, d, seen) for v in values)
+                and all(self.clean(c, owner, d, seen) for c in owner.contents.get(e.id, []))
+                # ``items += more``: the elements of ``more`` join the container
+                and all(self.elements_clean(p, owner, d, seen) for p in owner.pieces.get(e.id, []))
             )
         if isinstance(e, ast.Attribute):
             found = self.class_attribute(e, sc)  # ``self.ICONS``: a table the class writes out
@@ -1102,13 +1679,15 @@ class _Module:
 
     # tainted: a string BUILT from raw pieces
     def tainted(self, e: object, sc: _Scope, depth: int, seen: frozenset) -> bool:
-        if depth > _DEPTH or not isinstance(e, ast.expr):
+        if not isinstance(e, ast.expr):
             return False
+        if depth > _DEPTH:
+            return True  # beyond what it can follow, flag: a long chain must not hide a sink
         d = depth + 1
         if isinstance(e, ast.JoinedStr):
             return any(
-                not self._field_clean(v, sc, d, seen)
-                for v in e.values
+                not self._field_clean(v, sc, d, seen, e, i)
+                for i, v in enumerate(e.values)
                 if isinstance(v, ast.FormattedValue)
             )
         if isinstance(e, ast.NamedExpr):
@@ -1120,6 +1699,14 @@ class _Module:
         if isinstance(e, ast.BinOp):
             if isinstance(e.op, (ast.Add, ast.Mod)):
                 return not self.clean(e, sc, d, seen)
+            if isinstance(e.op, ast.Mult):
+                # ``"<b>" * n`` builds a string out of ``n``; ``raw * 3`` is still a bare passthrough
+                text = any(
+                    isinstance(x, ast.JoinedStr)
+                    or (isinstance(x, ast.Constant) and isinstance(x.value, str))
+                    for x in (e.left, e.right)
+                )
+                return text and not self.clean(e, sc, d, seen)
             return False
         if isinstance(e, ast.IfExp):
             return self.tainted(e.body, sc, d, seen) or self.tainted(e.orelse, sc, d, seen)
@@ -1139,10 +1726,30 @@ class _Module:
                 return False
             origin = self.origin(e.func, sc)
             if origin in CLEAN_IF_DEFAULT_CLEAN:
+                if self._has_star(e):
+                    return True
                 default = self._default_arg(e, CLEAN_IF_DEFAULT_CLEAN[origin])
                 return default is not None and self.tainted(default, sc, d, seen)
+            if origin in JSON_ESCAPERS:
+                return not (len(e.args) == 1 and self._json_dumped(e.args[0], sc, d, seen))
+            if origin in ("re.sub", "re.subn"):
+                return not all(
+                    self.clean(a, sc, d, seen)
+                    for a in [*e.args[1:], *(k.value for k in e.keywords)]
+                )
             if isinstance(e.func, ast.Attribute):
                 recv = e.func.value
+                if name in DUNDER_BUILDERS:
+                    return not (
+                        self.clean(recv, sc, d, seen)
+                        and all(self.clean(a, sc, d, seen) for a in e.args)
+                    )
+                if name in ("sub", "subn") and len(e.args) >= 2:
+                    return not all(self.clean(a, sc, d, seen) for a in e.args[:2])
+                if name in STR_METHODS and name not in PURE_TRANSFORMS:
+                    # ``TEMPLATE.replace("@@", raw)`` puts the argument into the string
+                    if not all(self.clean(a, sc, d, seen) for a in e.args):
+                        return True
                 if name == "join" and e.args:
                     return not self.clean(recv, sc, d, seen) or not all(
                         self.elements_clean(a, sc, d, seen) for a in e.args
@@ -1161,7 +1768,7 @@ class _Module:
         owner = sc.find(name)
         if owner is None:
             return False
-        values, defs = self._bindings(node, name, owner)
+        values, defs = self._bindings(node, name, owner, sc)
         key = ("tainted", name, id(owner), defs)
         if key in seen:
             return False
@@ -1576,9 +2183,14 @@ class _Flow:
         # an exception can leave the body after any statement, in any nested block
         handler_in = self._anywhere(st, in_body)
         exits: list[State | None] = []
+        star = type(s) is not ast.Try  # ``except*``: every matching handler runs, in order
+        entry: State | None = handler_in
         for handler in s.handlers:  # type: ignore[attr-defined]
-            self.loads(handler.type, handler_in)
-            exits.append(self.block(handler.body, self.bind(handler, handler_in)))
+            self.loads(handler.type, entry)
+            out = self.block(handler.body, self.bind(handler, entry))  # type: ignore[arg-type]
+            exits.append(out)
+            if star:
+                entry = _merge(entry, out)
         else_end = None
         if body_end is not None:
             else_end = self.block(s.orelse, body_end)  # type: ignore[attr-defined]
@@ -1609,17 +2221,202 @@ class _Flow:
         return _merge(*exits)
 
 
+def _transparent(e: ast.AST, names: set[str]) -> bool:
+    """``e`` is, or is derived by an operation that keeps the text (``str()``, ``.strip()``, ``cast``,
+    ``args[0]``, ``*args``, a conditional), from one of ``names``."""
+    if isinstance(e, ast.Name):
+        return e.id in names
+    if isinstance(e, (ast.Starred, ast.Subscript, ast.Await, ast.NamedExpr)):
+        return _transparent(e.value, names)
+    if isinstance(e, ast.IfExp):
+        return _transparent(e.body, names) or _transparent(e.orelse, names)
+    if isinstance(e, ast.BoolOp):
+        return any(_transparent(v, names) for v in e.values)
+    if isinstance(e, ast.Call):
+        func = e.func
+        if isinstance(func, ast.Name) and func.id in ("str", "repr") and e.args:
+            return _transparent(e.args[0], names)
+        if _callee(func) == "cast" and len(e.args) == 2:
+            return _transparent(e.args[1], names)
+        if isinstance(func, ast.Attribute) and func.attr in STR_METHODS:
+            return _transparent(func.value, names)
+    return False
+
+
+def wrapper_names(
+    tree: ast.AST, sinks: set[str] | frozenset[str], top_level_only: bool = True
+) -> set[str]:
+    """Functions (and lambdas, and ``partial`` aliases) that mark a PARAMETER safe: the value a sink
+    receives derives from a parameter by a text-preserving operation (#3848).
+
+    ``def _ms(v): x = v.strip(); y = x; return mark_safe(y)``, ``_ms = lambda v: mark_safe(str(v))``,
+    ``def _ms(*a): return mark_safe(a[0])``, ``_ms = partial(mark_safe)`` are all ``mark_safe``. A
+    function that BUILDS the string it marks (``mark_safe(f"<b>{v}</b>")``) is not a wrapper: the
+    guard judges what it builds. Methods named like template renderers and dunders are skipped.
+    With ``top_level_only`` only module-level definitions count (what the guard can match by name).
+    """
+    known = set(sinks)
+    found: set[str] = set()
+    parents = {id(c): n for n in ast.walk(tree) for c in ast.iter_child_nodes(n)}
+    changed = True
+    while changed:
+        changed = False
+        for node in ast.walk(tree):
+            name: str | None = None
+            args: ast.arguments | None = None
+            body: ast.AST | None = None
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                name, args, body = node.name, node.args, node
+            elif (
+                isinstance(node, ast.Assign)
+                and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+            ):
+                target = node.targets[0].id
+                value = node.value
+                if isinstance(value, ast.Lambda):
+                    name, args, body = target, value.args, value.body
+                elif (
+                    isinstance(value, ast.Call)
+                    and _callee(value.func) == "partial"
+                    and value.args
+                    and _callee(value.args[0]) in known
+                    and target not in known
+                ):
+                    found.add(target)
+                    known.add(target)
+                    changed = True
+            if name is None or args is None or body is None:
+                continue
+            if (
+                name in known
+                or name in RENDER_CALLS
+                or (name.startswith("__") and name.endswith("__"))
+            ):
+                continue
+            names = {a.arg for a in [*args.posonlyargs, *args.args, *args.kwonlyargs]}
+            if args.vararg:
+                names.add(args.vararg.arg)
+            if args.kwarg:
+                names.add(args.kwarg.arg)
+            grew = True
+            while grew:
+                grew = False
+                for sub in ast.walk(body):
+                    pairs: list[tuple[ast.AST, ast.AST]] = []
+                    if isinstance(sub, ast.Assign):
+                        pairs = [(t, sub.value) for t in sub.targets]
+                    elif isinstance(sub, (ast.AnnAssign, ast.NamedExpr)) and sub.value is not None:
+                        pairs = [(sub.target, sub.value)]
+                    for target_node, value_node in pairs:
+                        if isinstance(target_node, ast.Name) and target_node.id not in names:
+                            if _transparent(value_node, names):
+                                names.add(target_node.id)
+                                grew = True
+
+            def marks(value: ast.AST | None) -> bool:
+                while (  # ``cast(str, mark_safe(v))`` and ``str(mark_safe(v))`` still mark ``v``
+                    isinstance(value, ast.Call)
+                    and (
+                        (_callee(value.func) == "cast" and len(value.args) == 2)
+                        or (
+                            isinstance(value.func, ast.Name)
+                            and value.func.id == "str"
+                            and value.args
+                        )
+                    )
+                ):
+                    value = value.args[-1]
+                return (
+                    isinstance(value, ast.Call)
+                    and _callee(value.func) in known
+                    and any(
+                        _transparent(a, names)
+                        for a in [*value.args, *(k.value for k in value.keywords)]
+                    )
+                )
+
+            if isinstance(body, ast.expr):  # a lambda: its one expression
+                results: list[ast.AST | None] = [body]
+            else:  # every value the function returns (not those of functions nested in it)
+                results = [r.value for r in _own_nodes(body) if isinstance(r, ast.Return)]
+            hit = bool(results) and all(marks(r) for r in results)
+            if hit:
+                outer = parents.get(id(node))
+                nested = False
+                while outer is not None:
+                    if isinstance(
+                        outer, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)
+                    ):
+                        nested = True
+                        break
+                    outer = parents.get(id(outer))
+                if top_level_only and nested:
+                    continue
+                found.add(name)
+                known.add(name)
+                changed = True
+    return found
+
+
+def dynamic_class_names(sources: Iterable[str]) -> frozenset[str]:
+    """Names of the classes, across ``sources``, that write attributes under a name the source does
+    not show (``setattr(self, key, value)``, ``self.__dict__.update``, ``object.__setattr__``,
+    ``__setattr__`` / ``__getattribute__``), and of every class that inherits from one of them.
+    ``Component`` does this for every constructor and ``update()`` keyword, so a class attribute of a
+    ``Component`` subclass is a default the caller replaces, not a constant (#3848)."""
+    classes: dict[str, set[str]] = {}
+    hazardous: set[str] = set()
+    for source in sources:
+        try:
+            tree = ast.parse(source)
+        except SyntaxError:
+            continue
+        for cls in (n for n in ast.walk(tree) if isinstance(n, ast.ClassDef)):
+            classes.setdefault(cls.name, set()).update(
+                b.id if isinstance(b, ast.Name) else b.attr
+                for b in cls.bases
+                if isinstance(b, (ast.Name, ast.Attribute))
+            )
+            for node in ast.walk(cls):
+                if (
+                    (isinstance(node, ast.Attribute) and node.attr in DYNAMIC_ATTR_NAMES)
+                    or (
+                        isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                        and node.name in DYNAMIC_ATTR_NAMES
+                    )
+                    or (
+                        isinstance(node, ast.Call)
+                        and isinstance(node.func, ast.Name)
+                        and node.func.id in DYNAMIC_ATTR_CALLS
+                    )
+                ):
+                    hazardous.add(cls.name)
+                    break
+    grew = True
+    while grew:
+        grew = False
+        for name, bases in classes.items():
+            if name not in hazardous and bases & hazardous:
+                hazardous.add(name)
+                grew = True
+    return frozenset(hazardous)
+
+
 def find_unsafe_markup(
-    source: str, module: str | None = None, is_package: bool = False
+    source: str,
+    module: str | None = None,
+    is_package: bool = False,
+    dynamic_bases: frozenset[str] = frozenset(),
 ) -> list[Finding]:
     """Every sink in ``source`` that is handed a string built from a raw value.
 
     ``module`` is the dotted name the source is importable as (``djust.components.utils``). With it a
     relative import resolves to its origin (so ``from ..utils import safe_url`` is the project's
     escaper) and a ``def`` in the file has an origin of its own; without it neither does, which can
-    only flag more, never less.
+    only flag more, never less. ``dynamic_bases`` is :func:`dynamic_class_names` over the package.
     """
-    return _Module(source, module, is_package).findings()
+    return _Module(source, module, is_package, dynamic_bases).findings()
 
 
 def _main(argv: list[str]) -> int:

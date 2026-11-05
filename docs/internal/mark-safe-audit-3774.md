@@ -11,15 +11,15 @@ baseline below. Section "#3820" has the numbers and what each lesson was worth.
 
 | verdict | meaning | count |
 |---|---|---|
-| **S** | safe: every raw-looking value is a constant, escaped, coerced or validated (evidence cited) | #3774: **125** sites, 96 sinks in 93 functions audited, 29 re-sourced (below). #3820: **199** sinks once the wrappers count; the guard proves 145 of them itself and **54 sinks in 50 functions** are still audited by hand (40 sinks in 37 of the original functions, 14 sinks in 13 functions the wrappers added) |
-| **U** | a raw value reaches the markup unescaped | **0** in the flagged sinks, in #3774 or #3820; one CLASS found one call below them and fixed: attribute NAMES (below) |
+| **S** | safe: every raw-looking value is a constant, escaped, coerced or validated (evidence cited) | #3774: **125** sites, 96 sinks in 93 functions audited, 29 re-sourced (below). #3820: **199** sinks once the wrappers count; the guard proves 144 of them itself and **55 sinks in 51 functions** are still audited by hand (40 sinks in 37 of the original functions, 15 sinks in 14 functions the wrappers and the review of #3848 added) |
+| **U** | a raw value reaches the markup unescaped | **0** in the flagged sinks; one CLASS found one call below them and fixed: attribute NAMES (below). #3820 read 15 more sinks and found none; it makes no claim about the 144 the guard proves, beyond what the guard and the sweep show |
 | **N** | needs a decision | **3** items, filed as #3818, #3819 (two items), all since decided and fixed (below); one adjacent finding filed as #3824, also fixed |
 
-None of the 125 sinks was vulnerable, and none of the 14 the wrappers added that a person still had to read is. They were
-flagged because the guard was name-based and single-function: it did not follow a value across a call
-into a helper that escapes it, treated a name that is reassigned (`width = int(width)`) as still raw,
-and did not know the project's own escapers. #3820 taught it those, so this list could shrink: it did,
-from 199 flagged sinks to 54.
+The sinks were flagged because the guard was name-based and single-function: it did not follow a value
+across a call into a helper that escapes it, treated a name that is reassigned (`width = int(width)`) as
+still raw, and did not know the project's own escapers. #3820 taught it those, so this list could shrink:
+from 199 flagged sinks to 55. A flag is not a vulnerability and a clean verdict is not a proof: the guard has
+known false negatives (see "What the guard still does not see").
 
 ## How each site was read
 
@@ -104,7 +104,7 @@ operands `key=__v_key` resolved from the context and the block body a `SafeStrin
 contract, #2379), in every payload shape and both modes, and once more with every flag key false (a
 flag holding the payload is truthy, and `DataTableHandler` returns its loading skeleton before it
 builds the table). Their output is parsed like the Django tags'. So the handlers the guard now
-proves, the 13 it still flags and the dev-tools nodes are all rendered under the payload.
+proves, the 14 it still flags and the dev-tools nodes are all rendered under the payload.
 
 What the sweep does not do: `ColocatedHookNode` is not given a hostile NAME (see its row). Since #3818 / #3819 the
 `live_input` driver also passes an `on*` attribute and URL-valued attributes holding the payload
@@ -127,7 +127,7 @@ lesson is switched off, over the final 54; the lessons overlap, so the rows do n
 | lesson | sinks it clears |
 |---|---|
 | flow: only the bindings that REACH a use count (`width = int(width)`), over `if` / `for` / `while` / `try` / `with` / `match` | 53 |
-| the project's escapers, trusted by the module that defines them (`safe_url`, `url_attr`, `srcset_attr`, `attr_name`, `escape_json_for_script`, ...) and relative imports resolved to that origin | 41 |
+| the project's escapers, trusted by the module that defines them (`safe_url`, `url_attr`, `srcset_attr`, `safe_css_*`), in the position they are clean in, and relative imports resolved to that origin | 41 |
 | the block `content` of a Rust handler's `render(self, args, content, context)`: the engine hands it over as a `SafeString` | 41 |
 | a call to a helper this file defines, judged by what it returns | 21 |
 | a class table (`self.ICONS.get(k, "")`) and class constants | 17 |
@@ -153,18 +153,50 @@ without running the guard.
 
 **What the analysis is checked against.** `python/tests/flow_fuzz_3820.py` generates random functions,
 RUNS them with a marker as the raw value and fails when a `mark_safe` that received the marker was
-not flagged: 0 false negatives in 40 000 programs across 16 seeds. Twelve deliberately broken analyses (a loop that
+not flagged: 0 false negatives in 40 000 programs across 16 seeds, and 57 unsafe functions from an independent review's corpus are RUN (each must emit the payload raw) and flagged. Twenty-two deliberately broken analyses (a loop that
 forgets its `break` or `continue` states, an `if` that follows one branch, a merge that keeps the first
 path, narrowing on the wrong edge, an `assert` that narrows, an exception that sees only the state
 before the `try`, a helper that is always clean, a mutated collection still taken as constant, `.get`
 ignoring its default, ...) are each caught by the fuzz or a directed row.
 
-**What the guard still does not prove**, and why 13 functions are audited by hand: a helper method
+**What the guard still does not prove**, and why 14 functions are audited by hand (13 below and `JSChain.__html__`, which sits behind a `__getattr__`): a helper method
 whose parameter the caller escaped (`_render_tree_node`'s `depth`, `_render_node`'s `e_event`,
 `FeedbackWidgetHandler`'s `e_event`), a nested function called with literal arguments (`_dbtn`), a
 value the standard library makes digits (`date.isoformat()`, `calendar.monthdayscalendar`), and a
 `str(x) in TABLE` test (narrowing reads `x`, not `str(x)`). Each needs a rule with its own proof
 obligation (all callers visible; a type fact), which is a different change.
+
+**The review of the first version of this change** (#3848) found that it trusted too much, and 27 of what it
+found had been flagged by the first guard and were not any more. What changed, each pinned by the corpus the
+reviewer wrote (run, not read):
+
+* a class attribute read through `self.X` is a constant only if nothing writes it: not under `setattr`,
+  `__dict__`, `__setattr__`, `vars`, `globals()` anywhere in the file, not in a class that inherits (anywhere in
+  the package) from one that writes its constructor keywords with `setattr` (`Component` does, for every
+  keyword of `__init__` and `update()`), not when changed through `self` / `cls` / an alias, not when a
+  class of the same file overrides it, not for a dataclass-style field;
+* a collection a membership test narrows against, and a module or class table read from a function, is a
+  constant only if nothing in the file changes it in place (any mutating method, `D[k] = v`, `|=`), declares
+  it `global`, or hands it on (`a = D`, `f(D)`, `return D`); a LOCAL list is judged by its own function;
+* a helper is a helper only if nothing rebinds it (`global`, `globals()`, `setattr`) and a bare name in a
+  method is the module's, not the class body's (Python's own scoping);
+* equality narrows only against a literal; an import the file rebinds is not the import; a function whose
+  every returned value is a sink applied to a parameter (through `str`, `.strip()`, `cast`, `*args`, a
+  lambda, a `partial`) is a wrapper and a sink, found by data flow;
+* the depth bound flags instead of clearing; a `global` / `nonlocal` write from another scope is a raw
+  binding; the handlers of an `except*` run one after another;
+* `attr_name` is a legal NAME, and `onmouseover` is legal, so it is not cleared; `escape_json_for_script`
+  leaves `"` alone, so it is clean only for `json.dumps` output in script TEXT; a `safe_url` / `safe_css_*`
+  value is clean in text or a quoted attribute, not in `href={...}`; a `*args` / `**kw` may hide the
+  default;
+* `str.replace` with a raw argument, `re.sub`, `str * n`, `a.__add__(b)`, `d.update(k=raw)`,
+  `d.setdefault(k, raw)`, `d |= {...}`, `items += more` and more ways to alias a sink are judged.
+
+**What the guard still does not see**, probed by the review and listed in one issue: a dict KEY built from
+raw data and then iterated, a closure that appends to the enclosing function's list, `format_html_join`'s
+format string, an `await` or `*args` as the sink argument, `@html_safe` / `__html__` and a `SafeString`
+subclass, a sink in a default argument or a decorator, `str.translate`, a module-level or class-body loop,
+Python 3.14 t-strings. Its docstring says so.
 
 ## U (fixed): an attribute NAME was written unescaped
 
@@ -231,7 +263,7 @@ payload sweep renders them.
 ## The audited baseline
 
 Verdict **S** for every row. Paths are relative to `python/djust/`. The 37 original functions that
-remain are the ones the guard still cannot prove; the 13 `*Handler.render` / `FileTreeNode.render` rows
+remain are the ones the guard still cannot prove; the 14 `*Handler.render` / `FileTreeNode.render` / `JSChain.__html__` rows
 are the wrapper sinks it cannot prove. Line numbers are those of the
 branch this file was generated on; regenerate with `python scripts/lib/safe_markup_audit.py --table`.
 Every cited line is resolved by the script against the files, not typed; an evidence line is the
@@ -290,6 +322,7 @@ first match inside its scope.
 | `components/rust_handlers.py:10032` | `PromptEditorHandler.render` | 1 | S | the template text is conditional_escape'd FIRST; {{var}} tokens are \w+ and are replaced by conditional_escape'd values inside <mark>; rows int(); same as PromptEditorNode | `components/rust_handlers.py:10078`<br>`components/rust_handlers.py:10064`<br>`components/rust_handlers.py:10046` |
 | `components/rust_handlers.py:10397` | `RibbonHandler.render` | 1 | S | position is checked against the four corner names; the variant class is a constant from VARIANT_MAP; text and class conditional_escape'd; same as RibbonNode | `components/rust_handlers.py:10408`<br>`components/rust_handlers.py:10416`<br>`components/rust_handlers.py:10405` |
 | `components/templatetags/_dev_tools.py:586` | `FileTreeNode.render` | 1 | S | class, event and selected conditional_escape'd; the tree is _render_tree_node, which conditional_escape's name and type, takes its icons from class constants, and whose `depth` is an int at every call site (0 here, depth + 1 in the recursion) | `components/templatetags/_dev_tools.py:595`<br>`components/templatetags/_dev_tools.py:609`<br>`components/templatetags/_dev_tools.py:539`<br>`components/templatetags/_dev_tools.py:555` |
+| `js.py:330` | `JSChain.__html__` | 1 | S | the value is json.dumps(self.ops) through escape_json_for_script, which neutralises < > & and U+2028/9, so it cannot end an inline <script> element; it is NOT attribute-safe (the JSON's own quotes end a quoted value) and the docstring says so. Flagged since #3848 because the guard clears escape_json_for_script only for json.dumps output placed in script text, and cannot follow self.to_json() through JSChain.__getattr__ | `js.py:355`<br>`js.py:325` |
 <!-- audit-table:end -->
 
 Refs #3774, #3766, #3775, #3818, #3819, #3820, #3824.
