@@ -23,6 +23,7 @@ from django import template
 from django.utils.html import conditional_escape
 from django.utils.safestring import SafeString
 
+from djust._template_guards import call_method_for_template
 from djust.components.utils import safe_url  # from where it is DEFINED, not ``._registry`` (#3820)
 from djust.components.utils import rich_html, unique_ids as _unique_ids, url_attr, srcset_attr
 from djust.components.utils import (
@@ -6728,7 +6729,7 @@ class AvatarGroupNode(template.Node):
                 name = user.get("name", "")
                 src = user.get("avatar", "") or user.get("src", "")
             elif hasattr(user, "get_full_name"):
-                name = user.get_full_name() or str(user)
+                name = call_method_for_template(user, "get_full_name") or str(user)
                 src = getattr(user, "avatar", "")
                 if hasattr(src, "url"):
                     src = src.url

@@ -574,6 +574,17 @@ these guards: the Rust sidecar resolution walk
 generated code (`python/djust/optimization/codegen.py`), and eager model
 serialization (`python/djust/serialization.py::_add_safe_model_methods`).
 
+The same guard covers the two calls the framework makes on an object a template
+hands it, by a fixed name (#3815): `{% include obj %}` calls `obj.render()`
+(`python/djust/template/operands.py::render_template_object`) and the component
+tags call `user.get_full_name()` (`avatar_group`, `AvatarGroup`, `LiveIndicator`,
+`PresenceAvatars`). A `render` or `get_full_name` carrying either marker is not
+called: the include renders the empty string and logs a WARNING, and the avatar
+falls back to `str(user)`. **Stricter than Django on purpose** — stock Django's
+`{% include obj %}` calls a `render` marked `alters_data`. A marker read that
+raises anything but `AttributeError` also refuses (fail closed;
+`python/djust/_template_guards.py::refused_marker`).
+
 **Why it matters**: without the `alters_data` refusal, a template typo like
 `{{ user.delete }}` or `{{ qs.update }}` would execute a destructive ORM
 operation on first render. Django stamps `alters_data = True` on

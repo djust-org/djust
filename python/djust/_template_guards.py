@@ -93,3 +93,50 @@ class TemplateMutatorGuard:
             func = getattr(attr, "__func__", attr)
             if callable(func):
                 alters_data(func)
+
+
+#: The two markers, in the order ``djust_core::template_call_guard`` and Django's
+#: ``Variable._resolve_lookup`` read them: ``do_not_call_in_templates`` first.
+_CALL_MARKERS = ("do_not_call_in_templates", "alters_data")
+
+
+def refused_marker(obj: Any) -> str | None:
+    """The marker that forbids a template to call ``obj``, else ``None`` (#3815).
+
+    The Python statement of the rule ``djust_core::template_call_guard`` states in
+    Rust for the serializers (#3772, #3778): a callable carrying a truthy
+    ``do_not_call_in_templates`` or ``alters_data`` is never called on a template's
+    behalf. It READS the two attributes and nothing else -- ``obj`` is not called,
+    and neither is anything it returns.
+
+    One deliberate difference from the Rust read: Django's own lookup is
+    ``getattr(obj, name, False)``, which swallows only ``AttributeError``, and the
+    Rust read treats any error as "no marker". Here a marker read that raises
+    anything else REFUSES (the name of the marker is returned), because this
+    function guards a call that has side effects and a descriptor that cannot say
+    whether it is a mutator must not be taken for one that is not.
+    """
+    for marker in _CALL_MARKERS:
+        try:
+            if getattr(obj, marker, False):
+                return marker
+        except Exception:
+            return marker
+    return None
+
+
+def call_method_for_template(obj: Any, name: str, default: Any = "") -> Any:
+    """``obj.<name>()`` when a template may call it, else ``default`` (#3815).
+
+    For the framework's own fixed-name calls on an object a template supplied
+    (``user.get_full_name()`` in the component tags). The method is looked up
+    once, the markers are read off that bound method, and it is called only when
+    neither forbids it, exactly as ``Variable._resolve_lookup`` would have treated
+    ``{{ user.get_full_name }}`` -- except that Django prints ``string_if_invalid``
+    for a refused call and this returns ``default``. Exceptions the method raises
+    propagate, as they did before the guard.
+    """
+    method = getattr(obj, name, None)
+    if not callable(method) or refused_marker(method) is not None:
+        return default
+    return method()

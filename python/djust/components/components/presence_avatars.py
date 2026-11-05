@@ -5,6 +5,7 @@ from djust.components.utils import url_attr
 from typing import Any, List, Optional, Union
 
 from djust import Component
+from djust._template_guards import call_method_for_template
 
 
 class PresenceAvatars(Component):
@@ -72,7 +73,7 @@ class PresenceAvatars(Component):
                 src = user.get("avatar", "") or user.get("src", "")
                 status = user.get("status", "online")
             elif hasattr(user, "get_full_name"):
-                name = user.get_full_name() or str(user)
+                name = call_method_for_template(user, "get_full_name") or str(user)
                 src = getattr(user, "avatar", "")
                 if hasattr(src, "url"):
                     src = src.url
