@@ -60,6 +60,12 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+#: ``LiveView.http_status_of_state`` as the framework declares it (#3706): an empty read-only map. It is
+#: one object, so ``view.http_status_of_state is UNDECLARED_STATUS_MAP`` tells a view that declares
+#: nothing (read ``LIVEVIEW_CONFIG["http_status_of_state"]``) from one that declares ``{}`` (a map of
+#: its own, which is empty: it opts out of the project's). It compares equal to ``{}`` and is falsy.
+UNDECLARED_STATUS_MAP: Mapping[str, int] = MappingProxyType({})
+
 #: How many times queued background work may queue more before the fallback
 #: gives up and says so. A task that schedules the next page of a load is a
 #: handful of rounds; a loop that never ends would hold the request open.
@@ -1153,14 +1159,28 @@ class RequestMixin:
                 def mount(self, request, slug="", **kwargs):
                     self.state = "ready" if load(slug) else "not_found"
 
+        A project that has several base views sets the map once, for all of
+        them, in ``LIVEVIEW_CONFIG["http_status_of_state"]``. The view's own
+        ``http_status_of_state`` wins and the config is read only for a view
+        that declares none, so the two are never merged: a view that declares a
+        map answers by that map alone, and one that declares ``{}`` opts out of
+        the project's.
+
         ``state_attribute`` names the attribute that holds the state (``"state"``
         by default); only a ``str`` is looked up, so any other value, or a name
         the map does not hold, answers 200. An override still replaces all of
-        this.
+        this; ``manage.py check`` reports one (``djust.V025``) while a
+        project-wide map is configured.
 
         Only the HTTP response uses it.
         """
         statuses = self.http_status_of_state
+        if statuses is UNDECLARED_STATUS_MAP:
+            # The view declares no map: the project-wide one (#3706). A view's own attribute, even
+            # an empty one, wins; the two are never merged. The config validated it when it loaded.
+            from ..config import config
+
+            statuses = config.get("http_status_of_state") or {}
         if not statuses:
             return None
         state = getattr(self, self.state_attribute, None)

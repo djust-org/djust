@@ -2111,3 +2111,70 @@ def check_query_budget_declarations(app_configs: Any, **kwargs: Any) -> list[Che
                 )
             )
     return messages
+
+
+@register("djust")
+def check_get_http_status_overrides(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
+    """V025 (Warning): ``get_http_status()`` overridden while a project-wide map is configured (#3706).
+
+    ``LIVEVIEW_CONFIG["http_status_of_state"]`` exists so no view repeats the same
+    ``get_http_status()`` just to answer 404 for its not-found state (#3688). An
+    override replaces the default and with it the map, so the copies the map was
+    meant to remove would creep back one view at a time. This reports each class
+    that defines the method, once, wherever it is inherited from, while the map is
+    configured. It is a Warning: an override can be a real special case (a status
+    that is not a function of one state), and one that calls ``super()`` still
+    reads the map.
+    """
+    messages: list[CheckMessage] = []
+    if _is_check_suppressed("djust.V025"):
+        return messages
+    try:
+        from djust.config import config
+        from djust.live_view import LiveView
+    except Exception:  # noqa: BLE001 — djust not importable/configured: nothing to check
+        return messages
+
+    if not config.get("http_status_of_state"):
+        return messages
+
+    owners: dict[type, None] = {}
+    candidates = set(_routed_liveview_classes()) | set(_walk_subclasses(LiveView))
+    for cls in candidates:
+        # The class whose body defines the method the view runs: the same lookup the
+        # request path does, so an override inherited from a mixin is found too.
+        owner = next((c for c in cls.__mro__ if "get_http_status" in vars(c)), None)
+        if owner is None or _is_framework_internal_class(owner):
+            continue
+        owners[owner] = None
+
+    for owner in sorted(owners, key=lambda c: (c.__module__, c.__qualname__)):
+        label = "%s.%s" % (owner.__module__, owner.__qualname__)
+        owner_file = ""
+        owner_line = None
+        try:
+            owner_file = inspect.getfile(owner)
+            owner_line = inspect.getsourcelines(vars(owner)["get_http_status"])[1]
+        except (OSError, TypeError):
+            pass  # Source introspection may fail for built-in or C-extension classes
+        messages.append(
+            DjustWarning(
+                "%s overrides get_http_status() while LIVEVIEW_CONFIG['http_status_of_state'] "
+                "is configured; the override replaces the project-wide map for every view that "
+                "uses it." % label,
+                hint=(
+                    "Delete the override and set self.state to a state the map names, so the "
+                    "project-wide map answers; or keep it for a real special case and call "
+                    "super().get_http_status() first so the map still applies. Suppress with "
+                    "DJUST_CONFIG = {'suppress_checks': ['V025']}."
+                ),
+                id="djust.V025",
+                fix_hint=(
+                    "Remove `get_http_status()` from `%s`, or have it fall back to "
+                    "`super().get_http_status()`." % owner.__qualname__
+                ),
+                file_path=owner_file,
+                line_number=owner_line,
+            )
+        )
+    return messages
