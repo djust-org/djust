@@ -65,6 +65,7 @@ Several design decisions here work around known djust serialization constraints:
 
 import logging
 import math
+from collections.abc import Mapping
 from typing import Any, ClassVar, Dict
 
 from . import _form_data_bounds
@@ -539,15 +540,21 @@ class WizardMixin:
 
     def _store_step_field(self, name: str, value: Any) -> None:
         """Keep one client-named field of the current step, unless that takes the step's data past
-        ``max_form_fields`` / ``max_form_data_size`` (#3834): ``wizard_step_data`` outlives the frame
-        that filled it and is bound to the step's form on every event. A refusal stores nothing and
-        says so in the step's errors (``__all__``, Django's key for errors of no field); the next
+        ``max_form_fields`` / ``max_form_data_size`` / ``max_form_members`` (#3834): ``wizard_step_data``
+        outlives the frame that filled it and is bound to the step's form on every event. The field limit
+        is the step's (a step is a form); the characters and members are the wizard's TOTAL, every step's
+        data together (#3858). A refusal stores nothing and says so in the step's errors (``__all__``, Django's key for errors of no field); the next
         accepted field clears that message."""
         step = self._steps[self.wizard_step_index]
         step_name = step["name"]
         data = self.wizard_step_data.setdefault(step_name, {})
         declared = getattr(step.get("form_class"), "base_fields", None) or ()
-        message = _form_data_bounds.refusal(data, {name: value}, declared)
+        beside = [
+            held
+            for held_name, held in self.wizard_step_data.items()
+            if held_name != step_name and isinstance(held, Mapping)
+        ]
+        message = _form_data_bounds.refusal(data, {name: value}, declared, beside)
         earlier = self.__dict__.pop("_form_data_refusal", None)
         if message is not None:
             _form_data_bounds.warn(self, message)

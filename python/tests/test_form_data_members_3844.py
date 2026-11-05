@@ -600,20 +600,65 @@ class TestConfiguration:
 # ---------------------------------------------------------------------------------------------
 # The enforcement line, written out as the mutations the gate-off ran (#1468).
 # ---------------------------------------------------------------------------------------------
+def mutated_bounds(old: str, new: str):
+    """``_form_data_bounds`` compiled from its SOURCE with *old* replaced by *new* (a gate-off of the
+    production text, not a patch of the live module). *old* must occur exactly once and the result must
+    differ, so a mutation that does not apply fails loudly instead of reporting an unchanged module as a
+    caught one (#2129, #2135). ``old == new`` gives an unmutated copy: the control that the harness
+    itself reproduces the real behaviour."""
+    import importlib.util
+    import inspect
+    import sys
+
+    source = inspect.getsource(bounds)
+    assert source.count(old) == 1, "MUTATION TEXT NOT FOUND exactly once: %r" % old[:60]
+    mutated = source.replace(old, new, 1)
+    assert (mutated != source) or (old == new), "NO-OP MUTATION"
+    name = "djust._form_data_bounds_gateoff"
+    spec = importlib.util.spec_from_loader(name, loader=None)
+    module = importlib.util.module_from_spec(spec)
+    module.__package__ = "djust"
+    sys.modules[name] = module
+    try:
+        exec(compile(mutated, "<gateoff>", "exec"), module.__dict__)
+    finally:
+        sys.modules.pop(name, None)
+    return module
+
+
 class TestGateOff:
-    def test_with_the_check_neutered_the_exact_limit_tests_fail(self, members, monkeypatch):
-        """Replace the verdict of the member check by ``False``: a payload past the limit is accepted.
-        (The file-level mutation is recorded in the PR; this is the same change at runtime.)"""
-        members(10)
+    MEMBER_CHECK = (
+        "    if max_members and _over(current, incoming, max_members, True, others):\n"
+        "        return _too_many_members(max_members)\n"
+    )
+
+    def test_with_the_check_removed_from_the_source_the_payload_is_admitted(self):
+        """The member check, removed from the production text, admits what the real one refuses. The
+        control (the same source, unmutated) refuses it, so the difference is the check and not the
+        harness: nothing here patches a name the test then asserts on."""
         payload = {"k": [0] * 50}
-        assert bounds.refusal({}, payload, ()) is not None
-        real = bounds._over
-        monkeypatch.setattr(
-            bounds, "_over", lambda c, i, limit, count: False if count else real(c, i, limit, count)
-        )
-        assert (
-            bounds.refusal({}, payload, ()) is None
-        )  # the neutered check admits what the real one refused
+
+        def judged(module):
+            module.limits = lambda: (0, 0)
+            module.member_limit = lambda: 10
+            return module.refusal({}, payload, ())
+
+        control = judged(mutated_bounds(self.MEMBER_CHECK, self.MEMBER_CHECK))
+        assert control is not None and "more values" in control
+        assert judged(mutated_bounds(self.MEMBER_CHECK, "")) is None
+
+    def test_an_off_by_one_in_the_check_is_caught_at_the_exact_limit(self):
+        """``> limit`` to ``>= limit`` in ``_over``: a payload of exactly the limit is refused."""
+        old = "    return size > limit\n"
+        assert mutated_bounds(old, "    return size >= limit\n") is not None
+        mutant = mutated_bounds(old, "    return size >= limit\n")
+        mutant.limits = lambda: (0, 0)
+        mutant.member_limit = lambda: 10
+        assert mutant.refusal({}, {"k": [0] * 8}, ()) is not None  # 2 + 8 = 10: the mutant refuses
+        real = mutated_bounds(old, old)
+        real.limits = lambda: (0, 0)
+        real.member_limit = lambda: 10
+        assert real.refusal({}, {"k": [0] * 8}, ()) is None  # exactly the limit is within it
 
     def test_a_flood_of_members_is_refused_by_the_member_limit_not_the_size_limit(
         self, monkeypatch

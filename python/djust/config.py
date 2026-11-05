@@ -26,6 +26,9 @@ DEFAULT_MAX_FORM_DATA_SIZE = 2_621_440
 #: 100x Django's field limit; at the per-member cost of an event (~0.7 us in the state sync, measured
 #: in #3844) it keeps an event at the cap to ~70 ms where the size limit alone allowed ~1.8 s.
 DEFAULT_MAX_FORM_MEMBERS = 100_000
+#: The three form-data limits (#3834, #3844). Every one is a non-negative integer (``0`` = no limit),
+#: validated when the config loads AND when a value is written in code (``set`` / ``update``, #3858).
+_FORM_LIMIT_KEYS = ("max_form_fields", "max_form_data_size", "max_form_members")
 
 #: Flat ``DJUST_*`` settings aliasing keys of the ``service_worker`` dict.
 _SERVICE_WORKER_ALIASES = (
@@ -653,6 +656,23 @@ class LiveViewConfig:
             del self._programmatic[existing]
         self._programmatic[key] = (copy.deepcopy(value), dict(self._contrib))
 
+    def _validate_form_limits(self, target: Dict[str, Any]) -> None:
+        """Replace each form-data limit in *target* that is not a non-negative integer by its default.
+
+        Run when the config loads and again on every ``set`` / ``update`` that names one (#3858): a
+        ``'abc'`` written in code made every form event raise ``TypeError``, ``-5`` refused everything,
+        and ``3.7`` / ``True`` were accepted as limits. A bad value is the default, never "no limit"."""
+        for key in _FORM_LIMIT_KEYS:
+            val = target.get(key)
+            if isinstance(val, bool) or not isinstance(val, int) or val < 0:
+                logger.warning(
+                    "Invalid %s=%r (must be an integer >= 0; 0 = no limit). Using default %s.",
+                    key,
+                    val,
+                    self._defaults[key],
+                )
+                target[key] = self._defaults[key]
+
     def _validate_config(self, target: Optional[Dict[str, Any]] = None) -> None:
         """Validate security-critical config values (the live config when
         ``target`` is omitted)."""
@@ -669,16 +689,7 @@ class LiveViewConfig:
             target["event_security"] = "strict"
 
         # A limit that is not a non-negative integer is the default, never "no limit" (#3834).
-        for key in ("max_form_fields", "max_form_data_size", "max_form_members"):
-            val = target.get(key)
-            if isinstance(val, bool) or not isinstance(val, int) or val < 0:
-                logger.warning(
-                    "Invalid %s=%r (must be an integer >= 0; 0 = no limit). Using default %s.",
-                    key,
-                    val,
-                    self._defaults[key],
-                )
-                target[key] = self._defaults[key]
+        self._validate_form_limits(target)
 
         # Validate rate_limit values
         defaults = self._defaults["rate_limit"]
@@ -717,14 +728,12 @@ class LiveViewConfig:
                     "max_message_size is 0 (no limit) with DEBUG=False. "
                     "Consider setting a message size limit in production."
                 )
-            if any(
-                target.get(key) == 0
-                for key in ("max_form_fields", "max_form_data_size", "max_form_members")
-            ):
+            unlimited = [key for key in _FORM_LIMIT_KEYS if target.get(key) == 0]
+            if unlimited:
                 logger.warning(
-                    "max_form_fields / max_form_data_size / max_form_members is 0 (no limit) "
-                    "with DEBUG=False. "
-                    "A client can grow a form's data without bound across events."
+                    "%s is 0 (no limit) with DEBUG=False. "
+                    "A client can grow a form's data without bound across events.",
+                    ", ".join(unlimited),
                 )
             if target.get("event_security") == "open":
                 logger.warning(
@@ -783,6 +792,11 @@ class LiveViewConfig:
         with self._lock:
             new = _detached(self._config)
             _set_path(new, key, _detached(value))
+            if key in _FORM_LIMIT_KEYS:
+                # The default replaces a bad limit, and that is what is recorded, so a reload replays
+                # the sanitized value and not the one written (#3858).
+                self._validate_form_limits(new)
+                value = new[key]
             self._record_programmatic(key, value)
             self._config = new
 
@@ -861,8 +875,9 @@ class LiveViewConfig:
         with self._lock:
             new = _detached(self._config)  # copy-on-write, as in ``set()``
             new.update(_detached(config_dict))
+            self._validate_form_limits(new)  # the same rule ``set()`` applies (#3858)
             for key, value in config_dict.items():
-                self._record_programmatic(key, value)
+                self._record_programmatic(key, new[key] if key in _FORM_LIMIT_KEYS else value)
             self._config = new
 
     def as_dict(self) -> Dict[str, Any]:
