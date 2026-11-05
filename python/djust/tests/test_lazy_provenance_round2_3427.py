@@ -6,7 +6,6 @@ import pytest
 from django.contrib.sessions.backends.db import SessionStore
 
 from djust._rust import RustLiveView, authored_lazy_elements, template_needs_provenance
-from djust.tests._growth import best_of
 from djust.tests.test_lazy_provenance_http_3252 import Child, Page, TAG, get_ids, post
 
 
@@ -70,33 +69,21 @@ def test_recursive_tree_planning_and_render_are_bounded(tmp_path, fan):
     rust.update_state({"tree": {"v": 1, "l": {"v": 2}, "r": None, "m": None}})
     assert not template_needs_provenance(page, [str(tmp_path)])  # it returns at all
 
-    # Costs are compared with each other, never with a number of seconds (#3711): a
-    # runner stall moves both, and best-of-three drops a stall that lands on one
-    # run. The plan is cached after its first call, so each timed run plans a fresh
-    # copy of the tree.
-    fresh = []
-    for run in range(3):
+    # What is exact is asserted here: the tracked render IS the plain render, with nothing
+    # tracked. How long planning and tracking take is a latency claim about the Rust engine, which
+    # has no operation to count, so it lives in the serial benchmark tier as a median against a
+    # target (tests/benchmarks/test_lazy_provenance_cost_3835.py, #3835) instead of as a ratio of
+    # two durations here.
+    plain = rust.render()
+    for _ in range(3):
+        html, spans, origins = rust.render_lazy_html()
+        assert html == plain
+        assert not spans and not origins
+    for run in range(2):  # a fresh, unplanned copy of the tree plans to the same answer
         copy = tmp_path / f"plan{run}"
         copy.mkdir()
         (copy / "tree.html").write_text(source)
-        fresh.append(str(copy))
-    unplanned = iter(fresh)
-    plan = best_of(lambda: template_needs_provenance(page, [next(unplanned)]))
-
-    plain = rust.render()
-    plain_cost = best_of(lambda: [rust.render() for _ in range(15)])
-
-    def tracked_renders():
-        for _ in range(15):
-            html, spans, origins = rust.render_lazy_html()
-            assert html == plain
-            assert not spans and not origins
-
-    tracked_cost = best_of(tracked_renders)
-    assert tracked_cost < plain_cost * 20, (tracked_cost, plain_cost)
-    # Planning a recursive tree is a handful of renders' work, not exponential in the
-    # recursion: even a thousand renders' worth is far below a blow-up.
-    assert plan < plain_cost * 1000, (plan, plain_cost)
+        assert not template_needs_provenance(page, [str(copy)])
 
 
 def test_mutual_cycle_and_dependency_edits_invalidate_plan(tmp_path):

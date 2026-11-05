@@ -1,3 +1,12 @@
+"""Manual benchmark for the generated serializers: ``python python/tests/benchmark_serializer.py``.
+
+NOT collected by pytest (no ``test_`` prefix) and run by no CI job, so nothing here gates a merge, and
+its timing assertions (including the generated-vs-manual ratio) are advisory output of a hand run
+(#3835). They are also stale: the first one fails as this file stands (the generated serializer
+measures ~60x the hand-written one on these mocks, against an asserted 3x), which nothing noticed
+because nothing runs it. A latency claim that should hold belongs in ``tests/benchmarks/``.
+"""
+
 import time
 from djust.optimization.codegen import generate_serializer_code, compile_serializer
 
