@@ -175,13 +175,22 @@ class TestSameAnswerAsTheScan:
         view = serialization._FormPasswordNames(form.fields)
         names = serialization._password_field_names(form.fields)
         assert view == names and names == view
-        assert set(view) == set(names) and len(view) == len(names)
         assert ("pair_1" in view) and ("pair_2" not in view) and (3 not in view)
-        assert bool(view) is True
-        assert bool(serialization._FormPasswordNames(self.FORMS["plain"]().fields)) is False
-        assert view != serialization._FormPasswordNames(self.FORMS["plain"]().fields)
+        plain = serialization._FormPasswordNames(self.FORMS["plain"]().fields)
+        assert view != plain and plain == frozenset() and view != 3
+        # equal by value across two different ``fields`` mappings, and by identity on one
+        again = serialization._FormPasswordNames(self.FORMS["indexed multi"]().fields)
+        assert view == again and view == serialization._FormPasswordNames(form.fields)
         with pytest.raises(TypeError):
-            hash(view)
+            hash(view)  # equal by value, so unhashable
+
+    def test_a_field_keyed_with_the_empty_string_holds_its_parts(self):
+        """``cut == 0`` splits the name into field ``""`` + the whole name as suffix."""
+        form = _form(a=None)
+        form.fields[""] = PairField(_pair())
+        assert held(form, "") and held(form, "_0") and held(form, "_1")
+        assert not held(form, "_2") and not held(form, "a_0")
+        assert all(held(form, n) == scanned(form, n) for n in ("", "_0", "_1", "_2", "a", "a_0"))
 
     def test_a_fields_object_without_lookup_falls_back_to_the_scanned_set(self):
         class Items:
@@ -505,6 +514,101 @@ class TestAStepDoesNotScanTheForm:
 
 
 # ---------------------------------------------------------------------------------------------
+class TestAKeyAClientChoseCostsLinearInItsLength:
+    """``form.data`` is keyed by what the CLIENT posted. The by-name lookup slices and hashes a name
+    once per character, so a 10 KB POST key was quadratic in the lookup alone and, asked once per
+    ``-``-delimited tail of the key, cubic: an 8 KB key of dashes pinned a worker ~31 s (measured on
+    the first version of this PR). The count of lookups is the invariant (wall-clock would flake):
+    a key's length may not decide how many times the form is asked about it.
+    """
+
+    LONG = 10_000
+    KEYS = {
+        "plain": "a" * LONG,
+        "dashes": "-" * LONG,
+        "dashed words": "ab-" * (LONG // 3),
+        "prefixed": "u-" + "a" * LONG,
+        "ends in a password field": "-" * LONG + "-pin",
+    }
+
+    def user_form(self, key):
+        from django.contrib.auth.models import User
+        from django.http import QueryDict
+
+        class Edit(forms.ModelForm):
+            pin = forms.CharField(widget=forms.PasswordInput, required=False)
+
+            class Meta:
+                model = User
+                fields = ["username"]
+
+        qd = QueryDict(mutable=True)
+        qd["username"] = "u"
+        qd[key] = "1"
+        qd["u-pin"] = "typed"
+        qd["pin"] = "typed"
+        return counted(Edit(qd))
+
+    @pytest.mark.parametrize("which", sorted(KEYS))
+    def test_filtering_the_data_of_a_model_form_asks_the_form_nothing_per_key(self, which):
+        key = self.KEYS[which]
+        form = self.user_form(key)
+        floor = serialization._model_form_floor(form)
+        form.fields.scans = form.fields.gets = 0
+        kept = serialization._without_floor_keys(
+            form.data, floor, serialization._floor_data_key_readable
+        )
+        assert form.fields.gets == 0, form.fields.gets  # no per-character lookups, whatever the key
+        assert form.fields.scans <= 1, (
+            form.fields.scans
+        )  # the form is read once for the whole mapping
+        # EXACT: the keys the old eager set kept (a key is refused when it, or any '-'-delimited
+        # tail of it, is a held name)
+        held_set = serialization._password_field_names(form.fields)
+
+        def old_readable(k):
+            tails = [k] + [k[i + 1 :] for i, c in enumerate(k) if c == "-"]
+            return not any(t in held_set for t in tails)
+
+        assert set(kept) == {k for k in form.data if old_readable(k)}
+        assert "username" in kept and "pin" not in kept and "u-pin" not in kept
+        assert (key in kept) == (which != "ends in a password field")
+
+    @pytest.mark.parametrize("which", sorted(KEYS))
+    def test_a_long_name_is_answered_like_the_scan_with_one_scan(self, which):
+        fields = counted(wide_form_class(30)()).fields
+        fields.scans = fields.gets = 0
+        name = self.KEYS[which]
+        assert serialization._password_name_held(fields, name) == (
+            name in serialization._password_field_names(fields)
+        )
+        assert fields.gets == 0 and fields.scans >= 1
+
+    def test_a_password_field_with_a_name_past_the_limit_is_still_held(self):
+        """Exactness at the guard: the long-name path is the scan, not 'never held'."""
+        long_name = "p" * (serialization._NAME_SPLIT_LIMIT + 50)
+        form = _form(**{long_name: forms.PasswordInput, "x": None})
+        multi = _form(**{long_name: _pair()})
+        assert held(form, long_name) and not held(form, "x") and not held(form, long_name + "_0")
+        assert held(multi, long_name + "_0") and held(multi, long_name + "_1")
+        assert not held(multi, long_name + "_2")
+        for f in (form, multi):
+            for n in (
+                long_name,
+                long_name + "_0",
+                long_name + "_1",
+                long_name + "z",
+                long_name[:-1],
+            ):
+                assert held(f, n) == scanned(f, n), n
+
+    def test_a_name_at_the_limit_still_uses_the_lookup(self):
+        fields = counted(wide_form_class(3)()).fields
+        fields.scans = fields.gets = 0
+        serialization._password_name_held(fields, "a" * serialization._NAME_SPLIT_LIMIT)
+        assert fields.scans == 0 and fields.gets == serialization._NAME_SPLIT_LIMIT + 1
+
+
 class TestWhatTheCheapPathMustNotChange:
     """Fast path = same answer. The shapes where a shortcut tends to be wrong."""
 

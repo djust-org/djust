@@ -1949,6 +1949,11 @@ def _password_field_names(fields: Any) -> frozenset:
     return frozenset(names)
 
 
+#: Longest name :func:`_password_name_held` splits by lookup; past it the form is scanned instead.
+#: Django field names are Python identifiers, so none approaches it.
+_NAME_SPLIT_LIMIT = 256
+
+
 def _password_name_held(fields: Any, name: str) -> bool:
     """Is *name* in ``_password_field_names(fields)``? The same answer, with no scan of *fields*.
 
@@ -1964,6 +1969,13 @@ def _password_name_held(fields: Any, name: str) -> bool:
     keyed on ``fields`` would miss a swap, and a memo that validates itself has to read every
     field's widget to do it, which is the scan again.
     """
+    if len(name) > _NAME_SPLIT_LIMIT:
+        # A name this long is no field's: it can be held only by being the exact name of a field
+        # (or a field plus a suffix) that is as long, and a form has no such field. It is also the
+        # shape an ATTACKER chooses (a POST key reaches here through ``form.data``): the split below
+        # slices and hashes the name once per character, quadratic in its length (an 8 KB key pinned
+        # a worker for ~30 s). One scan of the form is exact and linear in the name.
+        return name in _password_field_names(fields)
     for cut in range(len(name) + 1):
         field = fields.get(name[:cut])
         if field is None or not field_has_password_widget(field):
@@ -1996,24 +2008,12 @@ class _FormPasswordNames:
     def _names(self) -> frozenset:
         return _password_field_names(self._fields)
 
-    def __iter__(self) -> Any:
-        return iter(self._names())
-
-    def __len__(self) -> int:
-        return len(self._names())
-
-    def __bool__(self) -> bool:
-        return any(field_has_password_widget(f) for f in self._fields.values())
-
     def __eq__(self, other: object) -> bool:
         if isinstance(other, _FormPasswordNames):
             return other._fields is self._fields or self._names() == other._names()
         if isinstance(other, (set, frozenset)):
             return self._names() == other
         return NotImplemented
-
-    def __repr__(self) -> str:
-        return "_FormPasswordNames(%r)" % sorted(self._names())
 
 
 def _form_password_names(fields: Any) -> Any:
@@ -2183,6 +2183,12 @@ def _without_floor_keys(value: Any, floor: tuple, readable: Any = None) -> Any:
     refused, so the common form (no floor field in it) pays one key scan and keeps identity.
     A list of mappings (a formset's ``initial`` / ``cleaned_data``) is filtered mapping by mapping."""
     readable = readable or _floor_field_readable
+    if isinstance(floor[4], _FormPasswordNames):
+        # This asks the floor about EVERY key of the mapping, and each ``-``-delimited tail of it
+        # (``_floor_data_key_readable``): keys a client chose. Answer them from the names as a SET
+        # (linear in the key, as before #3816) instead of by lookup per split (quadratic in the key,
+        # cubic with dashes): one scan of the form per call, not per key.
+        floor = floor[:4] + (floor[4]._names(),)
     if isinstance(value, (list, tuple)) and not isinstance(value, str):
         filtered = [_without_floor_keys(item, floor, readable) for item in value]
         if all(new is old for new, old in zip(filtered, value)):
