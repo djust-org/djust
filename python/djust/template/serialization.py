@@ -228,10 +228,20 @@ def serialize_value(
             try:
                 return type(value)(*items)
             except Exception as exc:  # noqa: BLE001 - see above: the user's __new__ is arbitrary
-                logger.debug(
-                    "namedtuple %s could not be rebuilt for rendering, using a plain tuple: %s",
-                    type(value).__name__,
+                # Through ``log_failure`` (ADR-038): the user's ``__new__`` is arbitrary code, so
+                # its exception text may carry undeclared state and is logged only where
+                # diagnostics are allowed (``test_log_exposure_pin`` pins this). Imported here,
+                # not at module level: the template backend must not load the exposure modules
+                # at import time (``test_lazy_package_init_2559`` pins the allowlist).
+                from djust._exposure_diagnostics import log_failure
+
+                log_failure(
+                    logger,
                     exc,
+                    "namedtuple %s could not be rebuilt for rendering, using a plain tuple",
+                    type(value).__name__,
+                    level="debug",
+                    traceback=True,
                 )
         return tuple(items)
 
