@@ -37,6 +37,7 @@ import weakref
 from typing import Any, Dict, FrozenSet, Iterable, Optional, Type
 
 from django.forms import BaseFormSet
+from django.forms.models import BaseModelFormSet
 
 from . import _form_data_bounds
 from ._exposure_diagnostics import log_failure_for
@@ -99,6 +100,17 @@ def _declared_row_names(formset_cls: Type[BaseFormSet]) -> FrozenSet[str]:
     return frozenset(name for name in names if isinstance(name, str))
 
 
+def _unbound_formset(formset_cls: Type[BaseFormSet]) -> BaseFormSet:
+    """*formset_cls* built with no data and no arguments, for its ``empty_form``. A model formset's
+    default queryset is the model's whole table, evaluated on first use, so it is given an empty one: the
+    form's fields do not depend on the rows, and deriving them must not read any (#3881 review)."""
+    model = getattr(formset_cls, "model", None)
+    manager = getattr(model, "_default_manager", None)
+    if manager is not None and issubclass(formset_cls, BaseModelFormSet):
+        return formset_cls(queryset=manager.none())
+    return formset_cls()
+
+
 def _row_suffixes(formset_cls: Type[BaseFormSet]) -> FrozenSet[str]:
     """The names a row's key may end in: the fields a row of this formset really has. Derived from the
     CLASS, never from the client's data (#3858), and computed once per class (#3861).
@@ -110,12 +122,15 @@ def _row_suffixes(formset_cls: Type[BaseFormSet]) -> FrozenSet[str]:
     form is unbound, so a field a form adds only when it holds data (``self.data``) is not one of them.
     When the formset cannot be built without arguments (a form whose ``__init__`` requires a
     ``form_kwargs`` entry), the class-declared names are used instead (:func:`_declared_row_names`):
-    narrower, so a field added by such a form counts toward ``max_form_fields``, which fails closed."""
+    narrower, so a field added by such a form counts toward ``max_form_fields``, which fails closed.
+
+    Computed once per class per process: a form whose fields depend on state that changes later keeps the
+    first answer."""
     cached = _SUFFIX_CACHE.get(formset_cls)
     if cached is not None:
         return cached
     try:
-        names = {*_ROW_EXTRAS, *formset_cls().empty_form.fields}
+        names = {*_ROW_EXTRAS, *_unbound_formset(formset_cls).empty_form.fields}
     except Exception as exc:  # noqa: BLE001 - an app's form code runs here; any failure is the fallback
         log_failure_for(
             logger,

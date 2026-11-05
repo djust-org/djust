@@ -20,7 +20,11 @@ from typing import Any, Dict, Optional
 from django import forms
 from django.contrib.auth.models import Permission
 from django.contrib.contenttypes.models import ContentType
-from django.forms import ModelForm, formset_factory, inlineformset_factory
+from django.forms import ModelForm, formset_factory, inlineformset_factory, modelformset_factory
+from django.test.utils import CaptureQueriesContext
+from django.db import connection
+
+import pytest
 
 from djust import formsets
 from djust.config import DEFAULT_MAX_FORM_FIELDS
@@ -245,6 +249,44 @@ class TestTheInlineForeignKeyIsExempt:
         for i in range(1500):
             view.remove_row(formset="fs", prefix="fs-0-zz%d" % i)
         assert len(view._formset_data) == 4 + DEFAULT_MAX_FORM_FIELDS
+
+
+# ---------------------------------------------------------------------------------------------
+# 2b. Deriving the names reads no rows (review of #3881)
+# ---------------------------------------------------------------------------------------------
+@pytest.mark.django_db
+class TestDerivingTheNamesRunsNoQuery:
+    """A model formset's default queryset is the model's whole table. Building ``empty_form`` for the
+    exempt names evaluated it once per class: one unbounded ``SELECT``, blocking that event on a large
+    table. The formset is built over ``Model._default_manager.none()``."""
+
+    @staticmethod
+    def _model_fs():
+        return modelformset_factory(Permission, fields=("name", "codename"), extra=0)
+
+    @staticmethod
+    def _inline_fs():
+        return inlineformset_factory(ContentType, Permission, fields=("name", "codename"), extra=0)
+
+    @pytest.mark.parametrize("make", ["_model_fs", "_inline_fs"])
+    def test_the_first_remove_row_for_a_model_formset_runs_zero_queries(self, make):
+        fs = getattr(self, make)()
+        view = view_for(fs)
+        seed(view, 3, ("name", "codename", "id"))
+        with CaptureQueriesContext(connection) as queries:
+            view.remove_row(formset="fs", prefix="fs-0")
+        assert len(queries) == 0, [q["sql"] for q in queries]
+        assert view._formset_data["fs-0-DELETE"] == "on"  # and it still did its work
+
+    def test_the_names_are_the_same_as_for_the_default_queryset(self):
+        fs = self._model_fs()
+        assert formsets._row_suffixes(fs) == frozenset(
+            {"DELETE", "ORDER", "id", "name", "codename"}
+        )
+
+    def test_a_plain_formset_is_built_as_before(self):
+        """No model, no ``queryset`` argument (a plain ``BaseFormSet`` takes none)."""
+        assert "street" in formsets._row_suffixes(AddsFormSet)
 
 
 # ---------------------------------------------------------------------------------------------
