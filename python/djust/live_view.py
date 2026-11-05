@@ -221,6 +221,8 @@ _FRAMEWORK_INTERNAL_ATTRS: frozenset = frozenset(
         # The JIT's template source for a value reached through a container,
         # read once per render by ``get_context_data`` (#3788).
         "_nested_template_source",
+        # The raw rows a QuerySet-method read is answered from (#3801).
+        "_all_method_rows",
         "_context_processor_keys",
         # What the last legacy render built from attributes / as render-only
         # (``mixins/context.py`` ``legacy_unsaved_keys``).

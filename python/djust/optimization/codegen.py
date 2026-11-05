@@ -261,6 +261,65 @@ def all_methods_value(queryset: Any, subtree: Dict[str, Any]) -> Optional[Dict[s
     return out
 
 
+def _related_model(model: Any, name: str) -> Any:
+    """The model a relation named ``name`` on ``model`` yields, or ``None``."""
+    if model is None:
+        return None
+    try:
+        related = model._meta.get_field(name).related_model
+    except Exception:  # FieldDoesNotExist, or a model without _meta
+        related = None
+    if related is None:
+        descriptor = getattr(model, name, None)
+        for chain in (("rel", "model"), ("related", "related_model"), ("field", "related_model")):
+            candidate = descriptor
+            for step in chain:
+                candidate = getattr(candidate, step, None)
+            if isinstance(candidate, type):
+                related = candidate
+                break
+    return related if isinstance(related, type) else None
+
+
+def _tree_mixes_all_methods_with_rows(tree: Dict[str, Any], model: Any) -> bool:
+    for name, subtree in tree.items():
+        if name in ("__list_item__", ALL_WHOLE_KEY) or not isinstance(subtree, dict):
+            continue
+        row_model = _related_model(model, name)
+        if name == "all":
+            names = tree_names(subtree)
+            if any(n in ALL_CHAIN_METHODS for n in names) and (
+                ALL_WHOLE_KEY in subtree
+                or "__list_item__" in subtree
+                or any(n not in ALL_CHAIN_METHODS for n in names)
+                or (model is not None and any(hasattr(model, n) for n in names))
+            ):
+                return True
+            # ``all`` is a manager's method, not a relation: its rows are the
+            # PARENT relation's model, which is the ``model`` we were handed.
+            if _tree_mixes_all_methods_with_rows(subtree, model):
+                return True
+            continue
+        if subtree and _tree_mixes_all_methods_with_rows(subtree, row_model):
+            return True
+    return False
+
+
+def all_methods_need_rows(model: Any, paths: List[str]) -> bool:
+    """Whether a template reads some ``all`` BOTH as rows and through a QuerySet
+    method (``{% for g in u.groups.all %}`` beside ``{{ u.groups.all.count }}``),
+    so the serialized rows cannot answer the method (#3801).
+
+    ``model`` is the row model the ``paths`` start from. The decision is the one
+    :func:`all_methods_value` and its Rust twin make, read from the other side:
+    where they would ship a method dict the methods are answered; where they
+    ship rows (the relation is read whole, a row field is read, or the row model
+    has an attribute of that name) a method read has nothing to read. Those are
+    the names the view then answers from the raw rows (the render sidecar).
+    """
+    return _tree_mixes_all_methods_with_rows(_build_path_tree(list(paths)), model)
+
+
 def take_by_tree(value: Any, tree: Dict[str, Any]) -> Any:
     """``value`` reduced to the path ``tree`` (``_build_path_tree``'s shape).
 
@@ -779,9 +838,16 @@ def _generate_nested_access(
             if attr_name.startswith("get_") or attr_name in ("all", "count", "exists"):
                 # Method call (includes Django manager/queryset methods).
                 # Same ADR-024 guard semantics as the root-attr site above.
+                #
+                # A leaf that is NOT callable is a plain attribute: a row's
+                # integer ``count`` field shares its name with the QuerySet
+                # method and was dropped by the call's TypeError (#3801). The
+                # Rust serializer ships it; only a callable is ever called.
                 lines.append(f"{ind}    _m = {obj_access}")
+                lines.append(f"{ind}    if not callable(_m):")
+                lines.append(f"{ind}        {dict_path_full}['{attr_name}'] = _m")
                 lines.append(
-                    f"{ind}    if not getattr(_m, 'alters_data', False) "
+                    f"{ind}    elif not getattr(_m, 'alters_data', False) "
                     f"and not getattr(_m, 'do_not_call_in_templates', False):"
                 )
                 lines.append(f"{ind}        try:")
