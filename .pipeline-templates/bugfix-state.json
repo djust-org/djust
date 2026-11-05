@@ -2,7 +2,7 @@
   "pipeline_type": "bugfix",
   "task_description": "",
   "branch_name": "",
-  "pr_target_branch": "1.1",
+  "pr_target_branch": "main",
   "project_path": "",
   "started_at": "",
   "completed_at": null,
@@ -144,6 +144,11 @@
           "mandatory": true
         },
         {
+          "action": "STANDING AGENT RULES (2026-11-05 retro; see .pipeline-templates/briefs/implementer.md): (1) LOCAL TESTS ARE TARGETED - the tests this change adds or edits plus their importers, nice -n 10, -n 2 at most; CI on the PR head is the full-suite evidence and tests/local_load_guard.py refuses a whole-suite run outside CI. (2) TIME BUDGET - aim to finish this stage in about 30 minutes; a part that has not converged after two attempts is left out, named in the PR body, and filed as an issue with a measured reason. (3) FOLD IN related findings that are small, in the same invariant and covered by the same tests (always: a defect in code this change adds, a parallel path of the same invariant, a correction to this change's own claims); file everything else; list what was folded in under a 'Folded in' heading in the PR body so the reviewer attacks it. (4) HYGIENE - a unique scratch subdirectory, never `pkill -f`, never a bare `git stash`, prove `djust.__file__` (and `djust._rust.__file__`) resolve under the worktree, zsh has noclobber so overwrite with `>|`; if SSH push is refused push over HTTPS with the gh credential helper.",
+          "done": false,
+          "mandatory": true
+        },
+        {
           "action": "write tests first (TDD)",
           "done": false,
           "mandatory": true
@@ -193,7 +198,7 @@
       "skip_if": "DOCS_ONLY",
       "checklist": [
         {
-          "action": "run full test suite (read-only, no source modifications)",
+          "action": "run the TARGETED tests (read-only, no source modifications): the tests this change adds or edits plus their importers (make test-selected), nice -n 10, -n 2 at most; NOT the whole suite - tests/local_load_guard.py refuses it outside CI, and CI on the PR head is the full-suite evidence",
           "done": false
         },
         {
@@ -438,7 +443,7 @@
       "status": "pending",
       "verdict": null,
       "run_as": "subagent",
-      "subagent_prompt": "You are reviewing PR #{pr_number}. Project: {project_path}. PR targets {pr_target_branch}. BUDGET (#1211, v0.9.5 retro Action Tracker #192): cap your final review comment at 250 words. For security-related changes, enumerate at most the attack shapes the plan documented — do NOT spelunk for additional edge cases beyond that list. PR #1201's reviewer stalled at the 10-min watchdog mid-tangent on backslash-injection; tight scoped reviews find real gaps without watchdog risk. Step 0: Read .pipeline-state/*-plan.md for the original plan. Step 1: Run git diff {pr_target_branch}...HEAD, read changed files. Check docs/PULL_REQUEST_CHECKLIST.md if exists — use as review framework. Step 2: Cross-ref plan vs implementation — verify every planned deliverable was implemented. Step 2b: Cross-ref the plan's test list against actual test files — every test the plan specified must exist. Step 3: Review for correctness, security (XSS, injection, secrets exposure — only the shapes the plan documented), testing gaps, code quality (print vs logging, except:pass), docs, perf, architecture. Flag auto-reject triggers. Step 3b (claims, #3739): for every measured number, 'every/never/only' statement and 'the cause' claim in the PR body, changelog fragments and docstrings, re-run the command or open the file:line that would show it; a claim you cannot reproduce is a finding (pattern unverified-claim). Step 3c (baselines, #3753): if a baseline, snapshot or ratchet file changed (a CSV, a JSON scoreboard, a count pinned in a test), diff it per row and classify every row that moved as an artifact of the fix or a real regression, with the reason; a regenerated baseline is not evidence by itself. Step 4: Run project test suite, report pass/fail. Step 5: Decide APPROVE/REQUEST_CHANGES/COMMENT. Step 6 MANDATORY: Post review to GitHub with gh pr review {pr_number} --comment --body '<formatted review under 250 words>'. If REQUEST_CHANGES use --request-changes. Save to pr/feedback/ if dir exists. Step 7: Output verdict.",
+      "subagent_prompt": "You are reviewing PR #{pr_number}. Project: {project_path}. PR targets {pr_target_branch}. BUDGET (#1211, v0.9.5 retro Action Tracker #192): cap your final review comment at 250 words. For security-related changes, enumerate at most the attack shapes the plan documented — do NOT spelunk for additional edge cases beyond that list. PR #1201's reviewer stalled at the 10-min watchdog mid-tangent on backslash-injection; tight scoped reviews find real gaps without watchdog risk. Step 0: Read .pipeline-state/*-plan.md for the original plan. Step 1: Run git diff {pr_target_branch}...HEAD, read changed files. Check docs/PULL_REQUEST_CHECKLIST.md if exists — use as review framework. Step 2: Cross-ref plan vs implementation — verify every planned deliverable was implemented. Step 2b: Cross-ref the plan's test list against actual test files — every test the plan specified must exist. Step 3: Review for correctness, security (XSS, injection, secrets exposure — only the shapes the plan documented), testing gaps, code quality (print vs logging, except:pass), docs, perf, architecture. Flag auto-reject triggers. Step 3b (claims, #3739): for every measured number, 'every/never/only' statement and 'the cause' claim in the PR body, changelog fragments and docstrings, re-run the command or open the file:line that would show it; a claim you cannot reproduce is a finding (pattern unverified-claim). Step 3c (baselines, #3753): if a baseline, snapshot or ratchet file changed (a CSV, a JSON scoreboard, a count pinned in a test), diff it per row and classify every row that moved as an artifact of the fix or a real regression, with the reason; a regenerated baseline is not evidence by itself. Step 4: Do NOT run the whole suite locally (tests/local_load_guard.py refuses it outside CI; CI runs the full matrix on the PR head): read the head's CI result with `gh pr checks {pr_number}`, and run only the tests the diff adds or changes (nice -n 10, -n 2 at most), then report pass/fail. Step 5: Decide APPROVE/REQUEST_CHANGES/COMMENT. Step 6 MANDATORY: Post review to GitHub with gh pr review {pr_number} --comment --body '<formatted review under 250 words>'. If REQUEST_CHANGES use --request-changes. Save to pr/feedback/ if dir exists. Step 7: Output verdict.",
       "checklist": [
         {
           "action": "Stage-11 stale-base check (#1450 / Action #250): run `git fetch origin && BEHIND=$(git rev-list --count HEAD..origin/{pr_target_branch})`. If BEHIND > 0, STOP. The branch is reviewing against a stale base; the merge applies on top of CURRENT main. Rebase (`git rebase origin/{pr_target_branch}`) BEFORE reviewing.",
@@ -476,7 +481,7 @@
           "done": false
         },
         {
-          "action": "run full test suite, report pass/fail",
+          "action": "read the CI result for the PR head (gh pr checks {pr_number}) as the full-suite evidence, run only the tests the diff adds or changes locally, report pass/fail",
           "done": false,
           "mandatory": true
         },
