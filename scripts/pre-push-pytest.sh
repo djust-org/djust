@@ -89,6 +89,11 @@ fi
 # slow tests (they are about the change); DJUST_PREPUSH_FULL=1 runs everything;
 # CI runs the slow tier. Combined with the nightly filter below into ONE -m:
 # pytest honours only the last -m it is given.
+# The full-suite fallback is the deliberate full gate, so it is allowed past the local
+# load guard (tests/local_load_guard.py); a targeted selection never needs the opt-in.
+if [ "${PATHS[*]}" = "tests/ python/tests/ python/djust/tests/" ]; then
+    export DJUST_FULL_LOCAL=1
+fi
 SKIP_SLOW=0
 if [ "${DJUST_PREPUSH_FULL:-}" != "1" ] && [ "${PATHS[*]}" = "tests/ python/tests/ python/djust/tests/" ]; then
     SKIP_SLOW=1

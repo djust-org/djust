@@ -22,6 +22,7 @@ pytest_plugins = [
     "pytester",  # pytest's plugin-testing fixture, for tests/test_lost_items_guard.py
     "tests.lost_items_guard",  # #2746: a run that loses collected items goes red
     "tests.corpus_shards",  # share the full differential sweep within one CI shard
+    "tests.local_load_guard",  # outside CI: <=2 xdist workers, no whole-suite run (laptop load)
     "tests.slow_tier",  # mark tests > 1s in .test_durations `slow` (fast tier: -m "not slow")
     "tests.timing_report",  # #3715: each process reports its worst GC pause and stall
     "tests.db_row_isolation",  # #3782: rows another connection commits do not outlive their test

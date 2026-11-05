@@ -135,6 +135,7 @@ These are **hard requirements** — violations are auto-rejected in PR review:
 
 - **Conventional commits**: `fix:`, `feat:`, `docs:`, `refactor:`, `security:`, `test:`, `chore:`
 - **Run focused checks while editing**, then let the scoped pre-push hooks run. Do not redundantly run `make test` before every incremental push.
+- **No whole-suite runs on a laptop.** CI is the full-suite evidence. Locally run the file/class/`-k` you changed or `make test-selected`; `tests/local_load_guard.py` caps xdist at 2 workers and refuses a run over 5,000 tests unless `DJUST_FULL_LOCAL=1` (the `make test*` targets set it). Time per PR/issue: `make flow-metrics` (see `docs/testing-strategy.md`, "Local load guard and flow metrics").
 - **Pre-commit hooks** run automatically: ruff, ruff-format, bandit, detect-secrets
 - **Pre-push hooks** select affected Python tests and Rust crates; unknown/shared changes fall back to full coverage. See [test strategy](docs/testing-strategy.md).
 - **Review against** `docs/PULL_REQUEST_CHECKLIST.md` before marking PRs ready
