@@ -457,3 +457,38 @@ def test_a_lone_quote_character_is_a_value_not_an_empty_literal(value: str) -> N
     ctx = dict(CTX, v=value)
     assert dj_attrs(_django(src, ctx)) == dj_attrs(_rust(src, ctx))
     assert ("button", "dj-click", value) in dj_attrs(_rust(src, ctx))
+
+
+class _Live:
+    """An object operand: an attribute, a method (auto-called) and a property."""
+
+    attr = "from_attr"
+
+    def meth(self) -> str:
+        return "from_meth"
+
+    @property
+    def prop(self) -> str:
+        return "from_prop"
+
+
+@pytest.mark.parametrize(
+    ("expr", "expected"),
+    [
+        ("o.attr", "from_attr"),
+        ("o.meth", "from_meth"),
+        ("o.prop", "from_prop"),
+        ("o.nope", ""),
+        ("lst.1", "2"),
+        ("t.1", "t1"),
+    ],
+)
+def test_an_operand_the_engine_resolves_through_an_object_is_not_emptied(
+    expr: str, expected: str
+) -> None:
+    """The block wrapper empties what the typed channel lacks; the channel must have every
+    operand the block resolver resolves, whatever walks it (attribute, call, property, index)."""
+    ctx = dict(CTX, o=_Live(), t=("t0", "t1"))
+    src = "{% nav_menu toggle_event=" + expr + " %}{% endnav_menu %}"
+    for html in (_django(src, ctx), _rust(src, ctx)):
+        assert ("button", "dj-click", expected) in dj_attrs(html), (expr, html)
