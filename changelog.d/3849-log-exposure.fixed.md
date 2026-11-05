@@ -1,0 +1,1 @@
+- **A namedtuple that cannot be rebuilt for rendering is logged through `log_failure` (#3849).** The debug log passed the user's exception to the logger directly, which `test_log_exposure_pin` forbids (ADR-038); the exception text now rides `exc_info` and only where diagnostics are allowed.

@@ -217,4 +217,7 @@ class TestARebuildThatRaisesDegrades:
         records = [r for r in caplog.records if "could not be rebuilt" in r.getMessage()]
         assert records and records[0].levelno == logging.DEBUG
         assert records[0].args, "the log call must use %s-style arguments, not an f-string"
-        assert "not rebuildable" in records[0].getMessage()
+        # The exception text rides ``exc_info`` (only where diagnostics are allowed), never the
+        # message: ``log_failure`` (ADR-038) keeps the message value-free.
+        assert "not rebuildable" not in records[0].getMessage()
+        assert records[0].exc_info and "not rebuildable" in str(records[0].exc_info[1])
