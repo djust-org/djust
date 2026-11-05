@@ -215,7 +215,9 @@ class TestEmptyMembersAreNotFree:
             {"event": "validate_field", "params": {"field": "f%d" % i, "value": payload}}
             for i in range(30)
         ]
-        with limits(size=200_000):
+        # The member limit (#3844) would stop these first (13 x 15,002 members is past 100,000): it has
+        # its own tests; this one is about the characters.
+        with limits(size=200_000, max_form_members=0):
             answers = drive(events)
         stored = sum(len(v) for v in WsContact.last.form_data.values() if isinstance(v, list))
         assert 0 < stored <= 200_000, stored  # 13 events fit; the other 17 were refused

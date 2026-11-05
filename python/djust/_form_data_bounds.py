@@ -10,11 +10,21 @@ binds ALL of it to the form on every event. At the default rate limit (100 event
 reaches Django's 1000-field limit in ten seconds and a hundred thousand keys in about seventeen minutes,
 and every event after that copies and filters all of it.
 
-So the bound lives where the data is KEPT, not where a frame is read. Two settings, in
-``LIVEVIEW_CONFIG``, defaulting to Django's own numbers:
+So the bound lives where the data is KEPT, not where a frame is read. Three settings, in
+``LIVEVIEW_CONFIG``; the first two default to Django's own numbers:
 
 * ``max_form_fields`` (1000): how many keys a form's data may hold beyond the fields it declares;
-* ``max_form_data_size`` (2,621,440): how many characters its keys and values may add up to.
+* ``max_form_data_size`` (2,621,440): how many characters its keys and values may add up to;
+* ``max_form_members`` (100,000): how many members it may hold, a member being a key, a value, or a
+  container inside one (#3844).
+
+The third exists because characters do not bound TIME. Every event hands the whole of the stored data to
+the template engine (a Python pass per member in ``state_pass._convert``, then the extension's
+``update_state``), at about 0.7 microseconds a member: ``[""] * 15000`` costs 15,000 characters, so 174 of
+them (2.61 million empty members, under the size limit) made each later event take 1.2-1.8 s, and
+``[[]] * 7500`` made it 4 s (#3844). A member costs at least one character, so the count is always at most
+the size, and 100,000 of them is ~70 ms of that pass. It is judged by the same walk as the size (the same
+chunking, early stops, nesting bound and replaced-entry arithmetic), with every node counting one.
 
 The size is exact: the characters of the keys and values of the data an event would leave (a string,
 ``bytes`` or ``bytearray`` is its length, and an empty one is 1, so that no member is free: a list of
@@ -47,7 +57,12 @@ import itertools
 import logging
 from typing import Any, Collection, Iterator, List, Mapping, Optional, Sequence, Tuple
 
-from .config import DEFAULT_MAX_FORM_DATA_SIZE, DEFAULT_MAX_FORM_FIELDS, config
+from .config import (
+    DEFAULT_MAX_FORM_DATA_SIZE,
+    DEFAULT_MAX_FORM_FIELDS,
+    DEFAULT_MAX_FORM_MEMBERS,
+    config,
+)
 
 logger = logging.getLogger("djust.forms")
 
@@ -67,6 +82,14 @@ def limits() -> Tuple[int, int]:
         config.get("max_form_fields", DEFAULT_MAX_FORM_FIELDS),
         config.get("max_form_data_size", DEFAULT_MAX_FORM_DATA_SIZE),
     )
+
+
+def member_limit() -> int:
+    """``max_form_members``, ``0`` meaning no limit (#3844).
+
+    A separate function, not a third element of :func:`limits`: that pair is what callers (and tests)
+    already read and replace. Validated by the config exactly as the other two are."""
+    return config.get("max_form_members", DEFAULT_MAX_FORM_MEMBERS)
 
 
 _END = object()
@@ -124,14 +147,33 @@ def _take(chunk: Sequence[Any], rest: List[Any]) -> int:
     return total
 
 
-def _scan(members: Iterator[Any], rest: List[Any], total: int, budget: int) -> int:
+def _count_take(chunk: Sequence[Any], rest: List[Any]) -> int:
+    """:func:`_take` when counting members (#3844): every exact leaf is one, whatever its length;
+    every other member is appended to *rest* to be walked (it is counted, and its own members are
+    taken up, when the walk reaches it)."""
+    if set(map(type, chunk)) <= _LEAVES:
+        return len(chunk)
+    leaves = 0
+    for item in chunk:
+        if type(item) in _LEAVES:
+            leaves += 1
+        else:
+            rest.append(item)
+    return leaves
+
+
+def _scan(
+    members: Iterator[Any], rest: List[Any], total: int, budget: int, count: bool = False
+) -> int:
     """Add the weight of *members* to *total*, a chunk at a time, stopping once *total* is past
-    *budget*. Whatever is not an exact leaf is appended to *rest* for the walk to take up."""
+    *budget*. Whatever is not an exact leaf is appended to *rest* for the walk to take up. With
+    *count*, a member weighs one, not its length (the member limit counts, the size limit weighs)."""
+    take = _count_take if count else _take
     while total <= budget:
         chunk = list(itertools.islice(members, _CHUNK))
         if not chunk:
             break
-        total += _take(chunk, rest)
+        total += take(chunk, rest)
         total = _charge_rest(total, rest, budget)
     return total
 
@@ -145,40 +187,47 @@ def _charge_rest(total: int, rest: List[Any], budget: int) -> int:
     return total + len(rest) if total + len(rest) > budget else total
 
 
-def _bulk(members: Iterator[Any], stack: List[Iterator[Any]], total: int, budget: int) -> int:
+def _bulk(
+    members: Iterator[Any], stack: List[Iterator[Any]], total: int, budget: int, count: bool = False
+) -> int:
     """Weigh a big container's *members* (:func:`_scan`). The members that are containers are pushed on
     *stack* as one iterator, so nesting is followed exactly as it is for a small container."""
     rest: List[Any] = []
-    total = _scan(members, rest, total, budget)
+    total = _scan(members, rest, total, budget, count)
     if rest:
         stack.append(iter(rest))
     return total
 
 
 def _bulk_mapping(
-    mapping: Mapping[Any, Any], stack: List[Iterator[Any]], total: int, budget: int
+    mapping: Mapping[Any, Any],
+    stack: List[Iterator[Any]],
+    total: int,
+    budget: int,
+    count: bool = False,
 ) -> int:
     """:func:`_bulk` for a mapping's keys and values (not the +1 for the mapping itself)."""
     rest: List[Any] = []
     if type(mapping) is dict:
         # Keys and values are summed separately, so no (key, value) tuple is built per entry.
-        total = _scan(iter(mapping.keys()), rest, total, budget)
-        total = _scan(iter(mapping.values()), rest, total, budget)
+        total = _scan(iter(mapping.keys()), rest, total, budget, count)
+        total = _scan(iter(mapping.values()), rest, total, budget, count)
     else:
+        take = _count_take if count else _take
         pairs_iter = iter(mapping.items())
         while total <= budget:
             pairs = list(itertools.islice(pairs_iter, _CHUNK))
             if not pairs:
                 break
             keys, values = zip(*pairs)
-            total += _take(keys, rest) + _take(values, rest)
+            total += take(keys, rest) + take(values, rest)
             total = _charge_rest(total, rest, budget)
     if rest:
         stack.append(iter(rest))
     return total
 
 
-def _walk(stack: List[Iterator[Any]], budget: int, total: int = 0) -> int:
+def _walk(stack: List[Iterator[Any]], budget: int, total: int = 0, count: bool = False) -> int:
     """Walk the iterators on *stack*, adding up the characters, until they run out or *total* passes
     *budget* (the caller only needs to know whether it does).
 
@@ -188,6 +237,9 @@ def _walk(stack: List[Iterator[Any]], budget: int, total: int = 0) -> int:
     through by wrapping its payload in that many lists. The walk is iterative (a stack of iterators,
     one member pulled at a time), every node costs at least one character, so a cycle or a very deep
     value runs out of budget instead of recursion; past ``_MAX_WEIGH_NESTING`` levels it is refused.
+
+    With *count* every node, whatever it is, is one (the member limit, #3844): the walk, the nesting
+    bound and the early stops are the same, so the two limits cannot disagree about the shape of a value.
     """
     while stack:
         item = next(stack[-1], _END)
@@ -195,14 +247,14 @@ def _walk(stack: List[Iterator[Any]], budget: int, total: int = 0) -> int:
             stack.pop()
             continue
         if isinstance(item, (str, bytes, bytearray)):
-            total += len(item) or 1
+            total += 1 if count else (len(item) or 1)
         elif isinstance(item, Mapping):
             total += 1
             if len(item) >= _VECTOR_MIN:
                 # The level a small container would have opened is past the bound.
                 if len(stack) >= _MAX_WEIGH_NESTING:
                     return max(total, budget + 1)
-                total = _bulk_mapping(item, stack, total, budget)
+                total = _bulk_mapping(item, stack, total, budget, count)
             else:
                 stack.append(itertools.chain.from_iterable(item.items()))
         elif isinstance(item, (list, tuple, set, frozenset)):
@@ -210,11 +262,11 @@ def _walk(stack: List[Iterator[Any]], budget: int, total: int = 0) -> int:
             if len(item) >= _VECTOR_MIN:
                 if len(stack) >= _MAX_WEIGH_NESTING:
                     return max(total, budget + 1)
-                total = _bulk(iter(item), stack, total, budget)
+                total = _bulk(iter(item), stack, total, budget, count)
             else:
                 stack.append(iter(item))
         else:
-            total += 8
+            total += 1 if count else 8
         if total > budget or len(stack) > _MAX_WEIGH_NESTING:
             return max(total, budget + 1)
     return total
@@ -227,21 +279,24 @@ def _weigh(value: Any, budget: int) -> int:
     return _walk([iter((value,))], budget)
 
 
-def _weigh_members(mapping: Mapping[Any, Any], budget: int) -> int:
+def _weigh_members(mapping: Mapping[Any, Any], budget: int, count: bool = False) -> int:
     """What a mapping's keys and values add up to: :func:`_weigh` without the one character for the
     mapping itself, because the data a form holds is not a container the client sent (#3841: every
-    call used to add one, so an event could count two more than the exact sum)."""
+    call used to add one, so an event could count two more than the exact sum).
+
+    With *count*, the number of members instead: every key, every value and every container inside
+    them is one (#3844)."""
     # The bottom entry stands for the one-member iterator :func:`_weigh` starts from, so a value is
     # refused at the same nesting whether it is weighed alone or as a member of the data it is in.
     stack: List[Iterator[Any]] = [iter(())]
     total = 0
     if len(mapping) >= _VECTOR_MIN:
-        total = _bulk_mapping(mapping, stack, 0, budget)
+        total = _bulk_mapping(mapping, stack, 0, budget, count)
         if total > budget:
             return max(total, budget + 1)
     else:
         stack.append(itertools.chain.from_iterable(mapping.items()))
-    return _walk(stack, budget, total)
+    return _walk(stack, budget, total, count)
 
 
 def refusal(
@@ -267,7 +322,8 @@ def refusal(
     mapping: what *incoming* adds, plus what *current* holds, less what *incoming* replaces (#3841).
     """
     max_fields, max_size = limits()
-    if not max_fields and not max_size:
+    max_members = member_limit()
+    if not max_fields and not max_size and not max_members:
         return None
     current = current or {}
     if max_fields:
@@ -281,27 +337,39 @@ def refusal(
         extra += sum(1 for key in incoming if key not in current and key not in names)
         if extra > max_fields:
             return _too_many(max_fields)
-    if max_size:
-        size = _weigh_members(incoming, max_size)
-        if size <= max_size and current:
-            budget = max_size - size
-            replaced = _replaced_weight(current, incoming, max_size)
-            if replaced is None:
-                # What *incoming* replaces is itself past the limit (data a project stored, or a
-                # limit lowered after it was): count what survives, without the replaced entries.
-                kept = {key: value for key, value in current.items() if key not in incoming}
-                held = _weigh_members(kept, budget)
-                size = max_size + 1 if held > budget else size + held
-            else:
-                held = _weigh_members(current, budget + replaced)
-                size = max_size + 1 if held > budget + replaced else size + held - replaced
-        if size > max_size:
-            return _too_large(max_size)
+    # Members before characters: a member costs at least a character, so the count reaches its limit
+    # first for the shapes that make an event slow (millions of tiny members), and it is judged in
+    # O(max_members), not O(max_size).
+    if max_members and _over(current, incoming, max_members, True):
+        return _too_many_members(max_members)
+    if max_size and _over(current, incoming, max_size, False):
+        return _too_large(max_size)
     return None
 
 
+def _over(current: Mapping[str, Any], incoming: Mapping[str, Any], limit: int, count: bool) -> bool:
+    """Would ``{**current, **incoming}`` weigh more than *limit* (characters, or members when *count*)?
+
+    Judged WITHOUT building the merged mapping: what *incoming* adds, plus what *current* holds, less
+    what *incoming* replaces (#3841)."""
+    size = _weigh_members(incoming, limit, count)
+    if size <= limit and current:
+        budget = limit - size
+        replaced = _replaced_weight(current, incoming, limit, count)
+        if replaced is None:
+            # What *incoming* replaces is itself past the limit (data a project stored, or a
+            # limit lowered after it was): count what survives, without the replaced entries.
+            kept = {key: value for key, value in current.items() if key not in incoming}
+            held = _weigh_members(kept, budget, count)
+            size = limit + 1 if held > budget else size + held
+        else:
+            held = _weigh_members(current, budget + replaced, count)
+            size = limit + 1 if held > budget + replaced else size + held - replaced
+    return size > limit
+
+
 def _replaced_weight(
-    current: Mapping[str, Any], incoming: Mapping[str, Any], limit: int
+    current: Mapping[str, Any], incoming: Mapping[str, Any], limit: int, count: bool = False
 ) -> Optional[int]:
     """What the entries of *current* that *incoming* sends again add up to (they are not in the merged
     mapping), or ``None`` when that is more than *limit*. Each entry is weighed as a one-entry mapping,
@@ -309,7 +377,7 @@ def _replaced_weight(
     replaced = 0
     for key in incoming:
         if key in current:
-            replaced += _weigh_members({key: current[key]}, limit - replaced)
+            replaced += _weigh_members({key: current[key]}, limit - replaced, count)
             if replaced > limit:
                 return None
     return replaced
@@ -318,6 +386,12 @@ def _replaced_weight(
 def _too_many(limit: int) -> str:
     return (
         "This form received more fields than the server accepts (%d). It was not submitted." % limit
+    )
+
+
+def _too_many_members(limit: int) -> str:
+    return (
+        "This form contains more values than the server accepts (%d). It was not submitted." % limit
     )
 
 

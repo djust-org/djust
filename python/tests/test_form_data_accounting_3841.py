@@ -97,10 +97,13 @@ def verdict_of(message: Optional[str]) -> Optional[str]:
 
 @pytest.fixture
 def limits(monkeypatch):
-    """Set the two limits without touching settings."""
+    """Set the two limits without touching settings. The member limit (#3844) is switched off: these
+    tests are about characters and fields, and several store more than 100,000 members on purpose;
+    ``test_form_data_members_3844.py`` owns the member limit."""
 
     def set_limits(fields: int, size: int) -> None:
         monkeypatch.setattr(bounds, "limits", lambda: (fields, size))
+        monkeypatch.setattr(bounds, "member_limit", lambda: 0)
 
     return set_limits
 

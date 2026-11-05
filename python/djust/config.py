@@ -22,6 +22,10 @@ logger = logging.getLogger(__name__)
 #: because the config loads at ``django.setup()`` and that module must not.
 DEFAULT_MAX_FORM_FIELDS = 1000
 DEFAULT_MAX_FORM_DATA_SIZE = 2_621_440
+#: ``max_form_members`` (#3844): how many keys, values and nested containers a form's data may hold.
+#: 100x Django's field limit; at the per-member cost of an event (~0.7 us in the state sync, measured
+#: in #3844) it keeps an event at the cap to ~70 ms where the size limit alone allowed ~1.8 s.
+DEFAULT_MAX_FORM_MEMBERS = 100_000
 
 #: Flat ``DJUST_*`` settings aliasing keys of the ``service_worker`` dict.
 _SERVICE_WORKER_ALIASES = (
@@ -135,6 +139,10 @@ class LiveViewConfig:
         # bounded by max_message_size; a form's data is the sum of many frames. 0 = no limit.
         "max_form_fields": DEFAULT_MAX_FORM_FIELDS,
         "max_form_data_size": DEFAULT_MAX_FORM_DATA_SIZE,
+        # How many members (keys, values, nested containers) a form's data may hold. The size limit
+        # bounds characters, not the time an event takes: millions of tiny members fit in 2.5 MB and
+        # each is walked on every event (#3844). 0 = no limit.
+        "max_form_members": DEFAULT_MAX_FORM_MEMBERS,
         # How many views one WebSocket may host besides the page view: the
         # ``dj-lazy`` and ``mount_batch`` views, each a view of its own (#3252).
         "max_views_per_connection": 64,
@@ -661,7 +669,7 @@ class LiveViewConfig:
             target["event_security"] = "strict"
 
         # A limit that is not a non-negative integer is the default, never "no limit" (#3834).
-        for key in ("max_form_fields", "max_form_data_size"):
+        for key in ("max_form_fields", "max_form_data_size", "max_form_members"):
             val = target.get(key)
             if isinstance(val, bool) or not isinstance(val, int) or val < 0:
                 logger.warning(
@@ -709,9 +717,13 @@ class LiveViewConfig:
                     "max_message_size is 0 (no limit) with DEBUG=False. "
                     "Consider setting a message size limit in production."
                 )
-            if target.get("max_form_fields") == 0 or target.get("max_form_data_size") == 0:
+            if any(
+                target.get(key) == 0
+                for key in ("max_form_fields", "max_form_data_size", "max_form_members")
+            ):
                 logger.warning(
-                    "max_form_fields / max_form_data_size is 0 (no limit) with DEBUG=False. "
+                    "max_form_fields / max_form_data_size / max_form_members is 0 (no limit) "
+                    "with DEBUG=False. "
                     "A client can grow a form's data without bound across events."
                 )
             if target.get("event_security") == "open":

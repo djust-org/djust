@@ -19,9 +19,13 @@ across environments)::
     15 plain renders (fan 2, fan 3)              0.30 ms, 0.37 ms
     15 tracked renders (fan 2, fan 3)            0.32 ms, 0.38 ms   (1.1x plain)
 
-The targets are ~5x those medians (0.2 ms, 2 ms), so a 10x regression of either fails and a
-runner 2-3x slower than the machine above does not. They are a LATENCY bound, not a count: they
-catch a slowdown, not a change in how much work is done. Two limits to know:
+The targets are ~10x those medians (0.4 ms, 4 ms). They were ~5x (0.2 ms, 2 ms) when #3835 landed,
+and the review of that change (#3844) pointed out that #2156 measured the same code spanning ~11x
+across environments, so a 5x margin is inside the spread of the machines this runs on; it said to go
+to 10x if the job ever flaked, and it is cheaper to do that before it does. What the bound is for is
+unchanged: the regression it was written for (a re-walk of the recursion per branch) is seconds at fan 2
+and does not return at fan 3, four to five orders of magnitude over either target. They are a LATENCY
+bound, not a count: they catch a slowdown, not a change in how much work is done. Two limits to know:
 
 * under pytest-xdist (``-n auto``, which every job but ``benchmarks`` uses) pytest-benchmark collects
   no stats, so ``_assert_benchmark_under`` returns without asserting; only the serial
@@ -38,8 +42,8 @@ import pytest
 from tests.benchmarks.conftest import _assert_benchmark_under
 
 TAG = '<div dj-view="x.Child" dj-lazy></div>'
-TARGET_PLAN_S = 0.0002  # 0.2 ms to plan a fresh recursive tree (~5x the median)
-TARGET_15_TRACKED_RENDERS_S = 0.002  # 2 ms for 15 renders with tracking (~5x the median)
+TARGET_PLAN_S = 0.0004  # 0.4 ms to plan a fresh recursive tree (~10x the median)
+TARGET_15_TRACKED_RENDERS_S = 0.004  # 4 ms for 15 renders with tracking (~10x the median)
 
 
 def _source(fan: int) -> str:
