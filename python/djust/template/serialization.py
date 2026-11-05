@@ -4,7 +4,10 @@ Serialization utilities for djust template rendering.
 Prepares Django/Python values for native rendering or JSON serialization.
 """
 
+import logging
+from collections import namedtuple
 from datetime import date, datetime, time, timedelta
+from functools import lru_cache
 from decimal import Decimal
 from django.utils.datastructures import MultiValueDict
 from django.utils.functional import Promise
@@ -15,8 +18,38 @@ from django.db.models.fields.files import FieldFile
 
 from djust.serialization import django_json_datetime
 
+logger = logging.getLogger(__name__)
+
 # JSON-compatible value the Rust engine accepts.
 JSONValue = Union[str, int, float, bool, None, List[Any], Dict[str, Any]]
+
+
+@lru_cache(maxsize=4096)
+def _namedtuple_shape_is_buildable_cached(name: str, fields: tuple) -> bool:
+    try:
+        namedtuple(name, fields)
+    except (ValueError, TypeError):
+        return False
+    return True
+
+
+def _namedtuple_shape_is_buildable(name: Any, fields: Any) -> bool:
+    """Would ``collections.namedtuple(name, fields)`` accept this shape? (#3849)
+
+    The engine holds a namedtuple as ``(name, fields, items)`` and rebuilds the Python class from
+    the first two with ``collections.namedtuple`` whenever it hands the context to a native tag.
+    That call REFUSES some shapes a real class can have: a duplicate field renamed by
+    ``namedtuple(..., rename=True)`` is ``('a', '_1', 'b')`` and a leading underscore is refused;
+    a class whose name is not an identifier; a Python keyword. A namedtuple like that must stay a
+    plain tuple, so it never reaches the engine as a ``Value::NamedTuple``. The real constructor
+    is the test, not a copy of its rules, and the answer is cached per shape (the call execs a
+    class body).
+    """
+    if not isinstance(name, str) or not isinstance(fields, (tuple, list)):
+        return False
+    if not all(isinstance(field, str) for field in fields):
+        return False
+    return _namedtuple_shape_is_buildable_cached(name, tuple(fields))
 
 
 def _spells_itself(value: Any) -> bool:
@@ -179,16 +212,27 @@ def serialize_value(
         items = [serialize_value(item, for_render=for_render) for item in value]
         if not (for_render and isinstance(value, tuple)):
             return items
-        if hasattr(value, "_fields"):
+        fields = getattr(value, "_fields", None)
+        if fields is not None and _namedtuple_shape_is_buildable(type(value).__name__, fields):
             # A namedtuple keeps its type (#3849): the engine holds it as ``Value::NamedTuple``
             # (name + fields + items) and prints ``P(x=1, y=2)`` as Django does, where a plain
             # ``tuple(items)`` printed ``(1, 2)``. Rebuilt POSITIONALLY: ``type(value)(items)``
-            # would wrap the list in the first field. A subclass whose ``__new__`` takes more
-            # than its fields cannot be rebuilt and degrades to the plain tuple, as it did.
+            # would wrap the list in the first field.
+            #
+            # This runs the class's own ``__new__`` at render time, on values that are already
+            # serialized (a lazy string is a ``str`` by now), so ANY exception it raises means
+            # "this value cannot be rebuilt here": it degrades to the plain tuple it was before
+            # #3849, never to a failed render. (``_protect_sidecar_tree`` in
+            # ``python/djust/serialization.py`` rebuilds the same way and catches only
+            # ``TypeError``; not changed here.)
             try:
                 return type(value)(*items)
-            except TypeError:
-                return tuple(items)
+            except Exception as exc:  # noqa: BLE001 - see above: the user's __new__ is arbitrary
+                logger.debug(
+                    "namedtuple %s could not be rebuilt for rendering, using a plain tuple: %s",
+                    type(value).__name__,
+                    exc,
+                )
         return tuple(items)
 
     # Pass through other types (str, int, float, bool, etc.)

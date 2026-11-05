@@ -184,7 +184,10 @@ def _opening(node: TupleValue) -> str:
 def _namedtuple_shape(source: tuple[Any, ...]) -> tuple[str, tuple[str, ...]] | None:
     """``(name, fields)`` when ``source`` is a namedtuple, else ``None``.
 
-    The engine's own rule for a ``Value::NamedTuple``: a ``_fields`` of the right length.
+    A ``_fields`` tuple with one name per member. This is NARROWER than the engine's rule when it
+    reads a Python object (``Value::NamedTuple`` also accepts a ``list`` ``_fields``): it does not
+    need to be wider, because the typed channel hands a handler the class the engine REBUILT with
+    ``collections.namedtuple``, whose ``_fields`` is always a ``tuple``.
     """
     fields = getattr(source, "_fields", None)
     if type(fields) is tuple and len(fields) == len(source):

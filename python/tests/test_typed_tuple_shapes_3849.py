@@ -177,8 +177,10 @@ class TestTheSevenCellsTheReviewNamed:
 
 class TestTheContextKeepsTheNamedtupleForEverythingElse:
     """``serialize_value(for_render=True)`` no longer rebuilds a namedtuple as a plain tuple, and
-    that is visible beyond the typed channel: ``{{ v }}``, ``{{ v.x }}``, a loop and the filters
-    see what Django sees. Compared with Django's own ``Template`` over one source and context."""
+    that is visible beyond the typed channel: ``{{ v }}`` prints ``P(x=1, y=2)`` as Django does
+    (it printed ``(1, 2)``). The other sources below are REGRESSION guards: ``{{ v.x }}`` already
+    matched Django on ``main`` (through the raw-Python sidecar), and a loop and the simple filters
+    agree. Compared with Django's own template over one source and context."""
 
     SOURCES = [
         "{{ v }}",
@@ -198,6 +200,16 @@ class TestTheContextKeepsTheNamedtupleForEverythingElse:
 
         expected = _text(Template(src).render(Context({"v": value})))
         assert _text(engines[0].from_string(src).render({"v": value})) == expected
+
+    @pytest.mark.parametrize("filter_name", ["dictsort", "dictsortreversed"])
+    def test_dictsort_over_namedtuples_is_recorded_not_fixed(self, engines, filter_name):
+        """Unchanged from ``main`` and NOT fixed here: the native ``dictsort`` /
+        ``dictsortreversed`` read a dict's key, so a list of namedtuples renders EMPTY natively
+        where Django sorts it by attribute. Pinned so the gap is not mistaken for parity."""
+        src = "{% for r in rows|" + filter_name + ":'x' %}[{{ r.x }}]{% endfor %}"
+        rows = [P(2, "b"), P(1, "a")]
+        assert render_django(engines, src, {"rows": rows}) != ""
+        assert render_backend(engines, src, {"rows": rows}) == ""
 
     def test_a_namedtuple_whose_new_wants_more_degrades_to_the_plain_tuple(self, engines):
         """Rebuilding positionally can raise ``TypeError``; the value must still render."""
