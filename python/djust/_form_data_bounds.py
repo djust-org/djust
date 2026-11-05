@@ -17,7 +17,8 @@ So the bound lives where the data is KEPT, not where a frame is read. Two settin
 * ``max_form_data_size`` (2,621,440): how many characters its keys and values may add up to.
 
 The size is exact: the characters of the keys and values of the data an event would leave (a string,
-``bytes`` or ``bytearray`` is its length; each list, tuple, set or mapping inside a value is one more
+``bytes`` or ``bytearray`` is its length, and an empty one is 1, so that no member is free: a list of
+twenty million empty strings stored under one key costs twenty million, not one; each list, tuple, set or mapping inside a value is one more
 character plus its members; any other object is 8), with no character for the data itself, and a size
 equal to the limit is within it. A ``memoryview`` or a dict view is such an "other object": JSON cannot
 carry one, so only the project's own code can store one, and it is charged 8, not its length.
@@ -92,13 +93,20 @@ def _leaf_weight(chunk: Sequence[Any]) -> Optional[int]:
     if not kinds <= _LEAVES:
         return None
     if kinds <= _SIZED:
-        return sum(map(len, chunk))
+        return _sized_weight(chunk)
     if kinds.isdisjoint(_SIZED):
         return 8 * len(chunk)
     # Strings among other leaves (a form of text, checkboxes and numbers): the sized members are picked
     # out and measured in C, the rest are 8 each.
     sized = list(itertools.compress(chunk, map(_SIZED.__contains__, map(type, chunk))))
-    return sum(map(len, sized)) + 8 * (len(chunk) - len(sized))
+    return _sized_weight(sized) + 8 * (len(chunk) - len(sized))
+
+
+def _sized_weight(chunk: Sequence[Any]) -> int:
+    """Their lengths, an empty one counting 1: every member costs at least one character, so a list of
+    twenty million empty strings is not free (#3841)."""
+    lengths = list(map(len, chunk))
+    return sum(lengths) + lengths.count(0)
 
 
 def _take(chunk: Sequence[Any], rest: List[Any]) -> int:
@@ -110,7 +118,7 @@ def _take(chunk: Sequence[Any], rest: List[Any]) -> int:
     for item in chunk:
         kind = type(item)
         if kind in _LEAVES:
-            total += len(item) if kind in _SIZED else 8
+            total += (len(item) or 1) if kind in _SIZED else 8
         else:
             rest.append(item)
     return total
@@ -124,7 +132,17 @@ def _scan(members: Iterator[Any], rest: List[Any], total: int, budget: int) -> i
         if not chunk:
             break
         total += _take(chunk, rest)
+        total = _charge_rest(total, rest, budget)
     return total
+
+
+def _charge_rest(total: int, rest: List[Any], budget: int) -> int:
+    """*total*, plus what *rest* is already known to cost when that alone passes *budget*.
+
+    Every member of *rest* costs at least one character when the walk reaches it, so a flat list of
+    twenty million empty lists is over the budget once *rest* is, and is not pulled whole to find out
+    (#3841). Below the budget nothing is added: they are charged when the walk takes them up."""
+    return total + len(rest) if total + len(rest) > budget else total
 
 
 def _bulk(members: Iterator[Any], stack: List[Iterator[Any]], total: int, budget: int) -> int:
@@ -154,6 +172,7 @@ def _bulk_mapping(
                 break
             keys, values = zip(*pairs)
             total += _take(keys, rest) + _take(values, rest)
+            total = _charge_rest(total, rest, budget)
     if rest:
         stack.append(iter(rest))
     return total
@@ -163,7 +182,7 @@ def _walk(stack: List[Iterator[Any]], budget: int, total: int = 0) -> int:
     """Walk the iterators on *stack*, adding up the characters, until they run out or *total* passes
     *budget* (the caller only needs to know whether it does).
 
-    A string, ``bytes`` or ``bytearray`` is its length; a list, tuple, set or mapping is one character
+    A string, ``bytes`` or ``bytearray`` is its length (an empty one is 1); a list, tuple, set or mapping is one character
     plus its members (and a mapping's keys); anything else is a small constant. There is NO depth at
     which a container stops being looked into: a flat charge at some depth was a hole a client walks
     through by wrapping its payload in that many lists. The walk is iterative (a stack of iterators,
@@ -176,7 +195,7 @@ def _walk(stack: List[Iterator[Any]], budget: int, total: int = 0) -> int:
             stack.pop()
             continue
         if isinstance(item, (str, bytes, bytearray)):
-            total += len(item)
+            total += len(item) or 1
         elif isinstance(item, Mapping):
             total += 1
             if len(item) >= _VECTOR_MIN:

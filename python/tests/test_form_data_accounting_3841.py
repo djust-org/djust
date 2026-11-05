@@ -13,8 +13,11 @@ number, never a duration:
   returning nothing survived all 112 tests).
 * the accounting is exact: no character for the mapping itself, a size equal to the limit is within it.
 
-``reference_weigh`` below is the PRE-#3841 walker, kept verbatim: the new one is only trusted for the
-values on which it agrees with it.
+``reference_weigh`` below is the PRE-#3841 walker, member by member, with ONE deliberate change: an
+empty string / ``bytes`` / ``bytearray`` weighs 1, not 0 (the review of #3842 found that a list of
+twenty million empty strings cost one character, so 2,250,000 of them were stored through the real
+socket at the default limits). The old walker is therefore no longer the oracle for zero-weight
+leaves; this one is, and the zero-weight rule has its own tests (``TestNoMemberIsFree``).
 
 Refs #3841, #3834, #3837, #1468, #1646.
 """
@@ -39,8 +42,9 @@ pytestmark = [pytest.mark.pr_tier]
 
 
 # ---------------------------------------------------------------------------------------------
-# The reference: the walker as it was before #3841, member by member, and the verdict computed the
-# slow obvious way (build the merged mapping, weigh all of it).
+# The reference: the walker as it was before #3841, member by member (except that an empty
+# string / bytes weighs 1), and the verdict computed the slow obvious way (build the merged mapping,
+# weigh all of it).
 # ---------------------------------------------------------------------------------------------
 _END = object()
 
@@ -56,7 +60,7 @@ def reference_weigh(value: Any, budget: int) -> int:
             stack.pop()
             continue
         if isinstance(item, (str, bytes, bytearray)):
-            total += len(item)
+            total += len(item) or 1
         elif isinstance(item, Mapping):
             total += 1
             stack.append(itertools.chain.from_iterable(item.items()))
@@ -595,7 +599,10 @@ class TestAnEventWeighsInBulk:
             "non-dict mapping": {"a": EndlessProxy()},
         }[big]
         assert bounds._weigh_members(stored, 1000) > 1000
-        assert len(pulled) <= 2 * bounds._CHUNK, len(pulled)
+        # An absolute ceiling, not a multiple of _CHUNK: with the chunk set to 10**9 a multiple of it
+        # admits the whole million (mutation J4 survived 436 tests while this said ``2 * _CHUNK``).
+        assert len(pulled) <= 16_384, len(pulled)
+        assert bounds._CHUNK <= 8192
 
     def test_no_merged_copy_is_made_and_the_stored_keys_are_not_iterated_one_by_one(self, limits):
         class Counting(dict):
@@ -686,3 +693,110 @@ class TestTheAdminFormViewsDeclaredFieldsAreNotTheClientsToAdd:
         view.submit_form(**{"f%d" % i: "v" for i in range(1200)})
         assert view.form_data == {}
         assert "more fields" in view.form_errors[0]
+
+
+# ---------------------------------------------------------------------------------------------
+# No member is free (#3842 review, item 1) and no flat list of containers is pulled whole (item 2).
+# ---------------------------------------------------------------------------------------------
+class TestNoMemberIsFree:
+    def test_an_empty_string_bytes_or_bytearray_costs_one_character(self):
+        for empty in ("", b"", bytearray(), Shouting("")):
+            assert bounds._weigh(empty, 100) == 1, repr(empty)
+            assert bounds._weigh_members({"k": empty}, 100) == 1 + 1, repr(empty)
+        assert bounds._weigh_members({"": "v"}, 100) == 1 + 1  # an empty KEY too
+
+    @pytest.mark.parametrize("size", [1, 63, 64, 4095, 4096, 4097, 20_000])
+    @pytest.mark.parametrize("shape", ["str", "bytes", "mixed with ints", "mixed with strs"])
+    def test_a_list_of_empties_costs_one_each_in_the_bulk_path_too(self, size, shape):
+        member = {"str": "", "bytes": b"", "mixed with ints": None, "mixed with strs": "ab"}[shape]
+        payload = [member if i % 2 == 0 or shape in ("str", "bytes") else "" for i in range(size)]
+        want = reference_weigh(payload, 10**9)
+        assert bounds._weigh(payload, 10**9) == want
+        assert want >= size  # the reference itself charges every member
+
+    def test_every_leaf_and_empty_container_costs_at_least_one(self):
+        for leaf_value in (0, 0.0, False, None, "", b"", (), [], {}, set(), frozenset()):
+            assert bounds._weigh([leaf_value] * 100, 10**9) >= 101, repr(leaf_value)
+            assert bounds._weigh_members({"k": [leaf_value] * 100}, 10**9) >= 102, repr(leaf_value)
+
+    def test_the_bound_holds_for_a_payload_of_empties(self, limits):
+        limits(0, 10_000)
+        assert bounds.refusal({}, {"k": [""] * 9_000}, ()) is None  # 1 + 1 + 9,000
+        assert bounds.refusal({}, {"k": [""] * 20_000}, ()) is not None
+        # and across events: the second does not fit beside the first
+        assert bounds.refusal({"a": [""] * 6_000}, {"b": [""] * 6_000}, ()) is not None
+
+    def test_members_stored_through_form_mixin_are_bounded(self, limits):
+        from test_form_data_bounds_3834 import WsContact, mounted
+
+        limits(0, 100_000)
+        view = mounted(WsContact)
+        for i in range(60):
+            view.validate_field(field="f%d" % i, value=[""] * 3_000)
+        stored = sum(len(v) for v in view.form_data.values() if isinstance(v, list))
+        assert 0 < stored <= 100_000, stored
+        assert "larger than the server accepts" in view.form_errors[0]
+
+    def test_a_chunk_of_empty_values_is_charged_in_bulk_and_member_by_member_alike(self):
+        payload = {"k%d" % i: "" for i in range(5_000)}
+        got = bounds._weigh_members(payload, 10**9)
+        assert got == reference_members(payload, 10**9)
+        assert got == sum(len(k) for k in payload) + 5_000  # each empty value is one character
+
+
+class TestAFlatListOfContainersIsNotPulledWhole:
+    """``[[]] * 20_000_000`` was pulled in full before it was charged, because its members went to
+    ``rest`` at weight 0 and cost only when the walk reached them. Counted by what is pulled."""
+
+    @pytest.mark.parametrize("member", [list, dict, tuple, set, lambda: [1], lambda: {"a": 1}])
+    @pytest.mark.parametrize("holder", ["list", "dict values", "non-dict values", "dict keys"])
+    def test_members_pulled_before_the_budget_is_known_to_be_passed(self, member, holder):
+        pulled = []
+
+        def members():
+            for i in range(10**6):
+                pulled.append(i)
+                yield member() if holder != "dict keys" else (i,)
+
+        class Endless(list):
+            def __len__(self):
+                return 10**6
+
+            def __iter__(self):
+                return members()
+
+        class EndlessDict(dict):
+            def __len__(self):
+                return 10**6
+
+            def values(self):
+                return members()
+
+            def items(self):
+                # Keys that are containers too, so no leaf key spends the budget before the rest does.
+                return (((), m) for m in members())
+
+        class EndlessKeys(dict):
+            def __len__(self):
+                return 10**6
+
+            def keys(self):
+                return members()
+
+            def items(self):
+                return ((m, 1) for m in members())
+
+        value = {
+            "list": {"k": Endless()},
+            "dict values": {"k": EndlessDict()},
+            "non-dict values": {"k": EndlessDict()},
+            "dict keys": {"k": EndlessKeys()},
+        }[holder]
+        assert bounds._weigh_members(value, 1_000) > 1_000
+        assert len(pulled) <= 16_384, len(pulled)
+
+    def test_a_flat_list_of_containers_under_the_budget_is_still_weighed_exactly(self):
+        payload = {"k": [[] for _ in range(5_000)]}
+        assert bounds._weigh_members(payload, 10**9) == reference_members(payload, 10**9)
+        payload = {"k": [{"a": [1]} for _ in range(5_000)]}
+        assert bounds._weigh_members(payload, 10**9) == reference_members(payload, 10**9)

@@ -15,13 +15,20 @@ no spans and no origins, and planning a recursive tree returns at all
 Medians on one development machine, for the record, NOT for tuning (#2156: the same code spans ~11x
 across environments)::
 
-    plan a fresh recursive tree (fan 2, fan 3)   0.06 ms, 0.05 ms
+    plan a fresh recursive tree (fan 2, fan 3)   0.035 ms, 0.039 ms   (pytest-benchmark medians)
     15 plain renders (fan 2, fan 3)              0.30 ms, 0.37 ms
-    15 tracked renders (fan 2, fan 3)            0.33 ms, 0.40 ms   (1.1x plain)
+    15 tracked renders (fan 2, fan 3)            0.32 ms, 0.38 ms   (1.1x plain)
 
-The targets are ~100x the plan and ~60x the tracked render: far above any environment's noise, far
-below the blow-up they exist to catch (a plan that re-walks the recursion for every branch is seconds
-at fan 2 and does not return at fan 3).
+The targets are ~5x those medians (0.2 ms, 2 ms), so a 10x regression of either fails and a
+runner 2-3x slower than the machine above does not. They are a LATENCY bound, not a count: they
+catch a slowdown, not a change in how much work is done. Two limits to know:
+
+* under pytest-xdist (``-n auto``, which every job but ``benchmarks`` uses) pytest-benchmark collects
+  no stats, so ``_assert_benchmark_under`` returns without asserting; only the serial
+  ``benchmarks`` job enforces these;
+* a re-walk of the recursion for every branch (the blow-up the 1000x bound was written for) is
+  seconds at fan 2 and does not return at fan 3, which the PR-tier test
+  (``test_recursive_tree_planning_and_render_are_bounded``) would hang on rather than pass.
 """
 
 from __future__ import annotations
@@ -31,8 +38,8 @@ import pytest
 from tests.benchmarks.conftest import _assert_benchmark_under
 
 TAG = '<div dj-view="x.Child" dj-lazy></div>'
-TARGET_PLAN_S = 0.050  # 50 ms to plan a fresh recursive tree
-TARGET_15_TRACKED_RENDERS_S = 0.020  # 20 ms for 15 renders with provenance tracking
+TARGET_PLAN_S = 0.0002  # 0.2 ms to plan a fresh recursive tree (~5x the median)
+TARGET_15_TRACKED_RENDERS_S = 0.002  # 2 ms for 15 renders with tracking (~5x the median)
 
 
 def _source(fan: int) -> str:
