@@ -34,6 +34,7 @@ from typing import Any, Dict, List, Optional, Union
 
 from django.utils.safestring import mark_safe
 
+from djust._attr_policy import passthrough_attrs
 from djust._html import attr_name as _checked_attr_name
 
 logger = logging.getLogger(__name__)
@@ -216,9 +217,11 @@ def render_icon(
 
     # Build extra attributes string
     extra = ""
-    for key, val in attrs.items():
+    # The one passthrough policy (#3818): ``on*`` and a script-bearing URL raise ValueError.
+    html_attrs = passthrough_attrs({key.replace("_", "-"): val for key, val in attrs.items()})
+    for key, val in html_attrs.items():
         # Convert python_name to html-name (aria_label -> aria-label)
-        attr_name = _checked_attr_name(key.replace("_", "-"))
+        attr_name = _checked_attr_name(key)
         attr_val = _html.escape(str(val))
         extra += f' {attr_name}="{attr_val}"'
 

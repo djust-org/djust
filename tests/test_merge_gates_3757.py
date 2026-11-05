@@ -73,6 +73,7 @@ EXCLUDED: dict[str, str] = {
     "python/djust/tests/test_template_auto_call_1985.py": _SOURCE,
     "python/tests/test_decimal_converters_2239.py": _SOURCE,
     "python/tests/test_decimal_state_tag_2252.py": _SOURCE,
+    "python/tests/test_passthrough_attr_policy_3818.py": _SOURCE,
     "python/tests/test_pwa_tag_template_injection_3824.py": _SOURCE,
     "python/tests/test_query_budget_review_3722.py": _SOURCE,
     "tests/test_red_main_attribution_behaviour_2139.py": (

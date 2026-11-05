@@ -17,7 +17,7 @@ from django.template.base import TextNode
 from django.test import override_settings
 
 from djust import LiveView
-from payload_sweep_3774 import PAYLOAD
+from payload_sweep_3774 import PAYLOAD, URL_PAYLOAD
 
 
 def _text(mode: str) -> str:
@@ -61,6 +61,24 @@ def live_input(mode):
             )
         )
     out.append(tag(PAYLOAD, handler="h"))  # the unknown-type comment
+    # Passthrough attributes are judged (#3818): an event handler and a script-bearing URL are
+    # refused (ValueError) or neutralised, so what the sweep sees is the markup that survived;
+    # remove the policy and these cells inject. (A submitting ``type`` is not an injection the
+    # sweep's detector reads; it is pinned in test_passthrough_attr_policy_3818.py.)
+    url = URL_PAYLOAD if mode == "url" else PAYLOAD
+    for attrs in (
+        {"onmouseover": PAYLOAD},
+        {"formaction": url},
+        {"href": url},
+        {"src": url},
+        {"poster": url},
+        {"srcset": url},
+        {"ping": url},
+    ):
+        try:
+            out.append(tag("text", handler="h", **attrs))
+        except ValueError:
+            pass
     return out
 
 

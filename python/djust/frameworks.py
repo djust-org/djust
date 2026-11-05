@@ -9,6 +9,7 @@ from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional, List
 from django import forms
 from django.utils.html import escape
+from ._attr_policy import passthrough_attrs
 from ._html import attr_name
 from .config import config
 
@@ -184,13 +185,18 @@ class BaseAdapter(FrameworkAdapter):
         widget_attrs = getattr(widget_attrs, "attrs", None)
         if not widget_attrs:
             return
+        merged: Dict[str, Any] = {}
         for key, value in widget_attrs.items():
             if key not in attrs:
                 # Skip None / False — these mean "attribute not present".
                 # True is kept so _build_tag can render it as a boolean attr.
                 if value is None or value is False:
                     continue
-                attrs[key] = value
+                merged[key] = value
+        # Only the attributes that will actually be written are judged (#3818): an inline event
+        # handler, a script-bearing URL or a ``type`` that submits raises ``ValueError``, as
+        # ``live_input`` does; the widget's ``type`` is ignored when the adapter already set one.
+        attrs.update(passthrough_attrs(merged))
 
     @staticmethod
     def _get_field_type(field: forms.Field) -> str:
@@ -206,6 +212,11 @@ class BaseAdapter(FrameworkAdapter):
             # Compare against the widget class's default input_type.
             default_type = getattr(type(widget), "input_type", None)
             if widget_type != default_type:
+                # This is where a widget's ``attrs={"type": ...}`` becomes the tag's own
+                # ``type`` (Django moves it onto the widget), so the passthrough policy for
+                # ``type`` applies here: ``image`` / ``submit`` / ``reset`` / ``button`` raise
+                # ``ValueError`` (#3818).
+                passthrough_attrs({"type": widget_type})
                 return str(widget_type)
 
         # Check EmailField before CharField (EmailField inherits from CharField)

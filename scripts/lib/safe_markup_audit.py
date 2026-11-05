@@ -103,19 +103,22 @@ AUDITED: dict[tuple[str, str], Audit] = {
     ),
     (PKG + "components/icons.py", "render_icon"): S(
         1,
-        "class names are the constant size label plus html.escape(custom_class); every extra attribute VALUE is html.escape'd and every extra attribute NAME is checked by attr_name (before #3774 the name was only html.escape'd, which cannot make a name safe: `x onfocus=alert(1) y` rendered a live handler; fixed, python/tests/test_attr_name_injection_3774.py); px is int(); svg_inner is the bundled / DJUST_COMPONENTS_ICON_SETS (developer settings) markup keyed by name, never the caller's text",
+        "class names are the constant size label plus html.escape(custom_class); every extra attribute VALUE is html.escape'd and every extra attribute NAME is checked by attr_name (before #3774 the name was only html.escape'd, which cannot make a name safe: `x onfocus=alert(1) y` rendered a live handler; fixed, python/tests/test_attr_name_injection_3774.py); since #3818 the extra attributes first pass djust._attr_policy.passthrough_attrs (on* refused, script-bearing URLs refused / neutralised); px is int(); svg_inner is the bundled / DJUST_COMPONENTS_ICON_SETS (developer settings) markup keyed by name, never the caller's text",
         (PKG + "components/icons.py", "classes.append(_html.escape(custom_class))"),
         (PKG + "components/icons.py", "attr_val = _html.escape(str(val))"),
-        (PKG + "components/icons.py", "attr_name = _checked_attr_name(key.replace"),
+        (PKG + "components/icons.py", "attr_name = _checked_attr_name(key)"),
+        (PKG + "components/icons.py", "html_attrs = passthrough_attrs({key.replace"),
         (PKG + "components/icons.py", "px = int(size)"),
         (PKG + "components/icons.py", "svg_inner = icon_data.get(name)"),
     ),
     (PKG + "forms.py", "FormMixin.as_live"): S(
         1,
-        "joins adapter.render_field() output; BaseAdapter escapes wrapper/label/help text/errors/choices/values and (since #3774) checks attribute names in _build_tag; a custom adapter owes the same (FrameworkAdapter contract)",
+        "joins adapter.render_field() output; BaseAdapter escapes wrapper/label/help text/errors/choices/values and (since #3774) checks attribute names in _build_tag; since #3818 the widget attrs it merges pass djust._attr_policy.passthrough_attrs (inline event handlers, script-bearing URLs and a submitting `type` are refused); a custom adapter owes the same (FrameworkAdapter contract)",
         (PKG + "forms.py", "html += self.as_live_field(field_name, adapter=adapter, **kwargs)"),
         (PKG + "frameworks.py", "escape(field.help_text)"),
         (PKG + "frameworks.py", '{attr_name(k)}="{escape(str(v))}"'),
+        (PKG + "frameworks.py", "attrs.update(passthrough_attrs(merged))"),
+        (PKG + "frameworks.py", 'passthrough_attrs({"type": widget_type})'),
     ),
     (PKG + "template_tags/lorem.py", "LoremTagHandler.render"): S(
         1,
@@ -154,8 +157,13 @@ AUDITED: dict[tuple[str, str], Audit] = {
     ),
     (LT, "live_input"): S(
         1,
-        "html is build_tag output: every attribute VALUE is escape()'d, select options escape()'d, textarea content escaped; attribute NAMES (event=, passthrough keys) were not checked until #3774 (the audit's one U, fixed in djust._html.attr_name, python/tests/test_attr_name_injection_3774.py; passthrough URL/on* policy is N, #3818)",
+        "html is build_tag output: every attribute VALUE is escape()'d, select options escape()'d, textarea content escaped; attribute NAMES (event=, passthrough keys) were not checked until #3774 (the audit's one U, fixed in djust._html.attr_name, python/tests/test_attr_name_injection_3774.py); the passthrough attributes are judged by djust._attr_policy.passthrough_attrs (#3818: on* and a submitting `type` refused, script-bearing URLs refused, other rejected schemes rendered `#`; python/tests/test_passthrough_attr_policy_3818.py)",
         (LT, "html = _render_textarea("),
+        (LT, "return passthrough_attrs(out)", "_collect_passthrough_attrs"),
+        (
+            PKG + "_attr_policy.py",
+            "def passthrough_attrs(attrs: Mapping[str, Any]) -> dict[str, Any]:",
+        ),
         (HTML, "def attr_name(name: Any) -> str:"),
         (HTML, "parts.append(f'{key}=\"{escape(str(value))}\"')"),
         (

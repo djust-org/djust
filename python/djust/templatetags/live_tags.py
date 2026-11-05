@@ -38,6 +38,7 @@ from django.template.base import NodeList, Parser, Token
 from django.utils.html import escape, format_html, format_html_join
 from django.utils.safestring import SafeString, mark_safe
 
+from .._attr_policy import passthrough_attrs
 from .._html import build_tag
 from ..auth._login_required_middleware import mark_embedded
 from ..config import config
@@ -602,6 +603,11 @@ def _collect_passthrough_attrs(kwargs: Dict[str, Any]) -> Dict[str, Any]:
     Known configuration kwargs are stripped; everything else passes through
     to the rendered tag as an attribute, with ``_`` in keys converted to
     ``-`` (so ``aria_label="Search"`` becomes ``aria-label="Search"``).
+
+    The result is judged by :func:`djust._attr_policy.passthrough_attrs` (#3818): ``on*``
+    names, a ``type`` of ``image`` / ``submit`` / ``reset`` / ``button`` and a script-bearing
+    ``href`` / ``src`` / ``action`` / ``formaction`` raise ``ValueError``; any other URL scheme
+    the shared allowlist rejects renders ``#``.
     """
     _KNOWN = {
         "handler",
@@ -622,7 +628,9 @@ def _collect_passthrough_attrs(kwargs: Dict[str, Any]) -> Dict[str, Any]:
         # Normalize underscores to dashes for HTML attributes
         attr = k.replace("_", "-")
         out[attr] = v
-    return out
+    # The one policy every passthrough writer shares (#3818): event-handler attributes and a
+    # ``type`` that submits / navigates are refused, URL-valued attributes are judged.
+    return passthrough_attrs(out)
 
 
 def _render_text_like(
