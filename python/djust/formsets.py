@@ -86,7 +86,9 @@ def _row_suffixes(formset_cls: Type[BaseFormSet]) -> FrozenSet[str]:
     from the client's data (#3858)."""
     names = set(_ROW_EXTRAS)
     names.update(getattr(getattr(formset_cls, "form", None), "base_fields", None) or ())
-    names.add(getattr(getattr(formset_cls, "fk", None), "name", None))
+    fk_name = getattr(getattr(formset_cls, "fk", None), "name", None)
+    if isinstance(fk_name, str):
+        names.add(fk_name)
     return frozenset(name for name in names if isinstance(name, str))
 
 
