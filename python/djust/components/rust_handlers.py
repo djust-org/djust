@@ -123,17 +123,55 @@ class TupleValue(list):  # type: ignore[type-arg]
     __slots__ = ()
 
     def __repr__(self) -> str:
-        body = ", ".join(repr(item) for item in self)
-        return "(%s%s)" % (body, "," if len(self) == 1 else "")
+        # Iterative, like ``_from_typed``: a tuple nested a few hundred deep is legal input (it
+        # printed under Django and under this engine before #3768), and a recursive ``repr`` here
+        # would raise RecursionError one level at a time. Only TupleValue members recurse in
+        # this walk; any other member is printed by its own ``repr``.
+        out = ["("]
+        stack: list[tuple[TupleValue, int]] = [(self, 0)]
+        while stack:
+            node, index = stack[-1]
+            if index == len(node):
+                if len(node) == 1:
+                    out.append(",")
+                out.append(")")
+                stack.pop()
+                continue
+            stack[-1] = (node, index + 1)
+            if index:
+                out.append(", ")
+            item = node[index]
+            if isinstance(item, TupleValue):
+                out.append("(")
+                stack.append((item, 0))
+            else:
+                out.append(repr(item))
+        return "".join(out)
 
     __str__ = __repr__
 
 
 def _from_typed(value: object) -> object:
-    """A typed operand as a handler is handed it: a plain ``tuple`` becomes a ``TupleValue``."""
-    if type(value) is tuple:
-        return TupleValue(_from_typed(item) for item in value)
-    return value
+    """A typed operand as a handler is handed it: a plain ``tuple`` becomes a ``TupleValue``.
+
+    Iterative, not recursive: the members of a tuple are converted too (a row of a tuple of
+    tuples must be a list), and a recursive walk raised RecursionError for a tuple nested 500
+    deep that rendered before. An explicit stack has no depth limit but memory.
+    """
+    if type(value) is not tuple:
+        return value
+    root = TupleValue()
+    pending = [(value, root)]
+    while pending:
+        source, target = pending.pop()
+        for item in source:
+            if type(item) is tuple:
+                child = TupleValue()
+                target.append(child)
+                pending.append((item, child))
+            else:
+                target.append(item)
+    return root
 
 
 #: The types a native handler is handed a stand-in for, which a Python tag tells apart from the
@@ -175,6 +213,9 @@ class _TypedOperands:
     """
 
     TYPED_ARGS = True
+    #: Hand over only the operands ``_parse_args`` takes back (a tuple, an object), not every one:
+    #: a 100,000-row list is not materialised a second time as Python objects for nothing.
+    TYPED_ARGS_STANDINS_ONLY = True
 
     def __init__(self, handler: Any) -> None:
         self._handler = handler

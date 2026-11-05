@@ -311,6 +311,8 @@ struct BlockHandlerEntry {
     lazy_body: bool,
     /// See [`read_wants_typed_args`] (#3768).
     wants_typed_args: bool,
+    /// See [`read_typed_standins_only`] (#3768).
+    typed_standins_only: bool,
 }
 
 /// Global registry for block tag handlers (tags with children).
@@ -446,6 +448,22 @@ fn read_wants_typed_args(handler: &Bound<'_, PyAny>) -> PyResult<bool> {
     handler.getattr("TYPED_ARGS")?.is_truthy()
 }
 
+/// A `TYPED_ARGS` handler's narrower ask: only the operands the engine stands in for (#3768).
+///
+/// `TYPED_ARGS = True` alone hands over EVERY `key=<expression>` operand as a typed Python value,
+/// which materialises a large list or dict a second time (the handler already got it as JSON).
+/// A handler that also sets `TYPED_ARGS_STANDINS_ONLY = True` is handed only the operands whose
+/// string form loses their type, the ones `djust.components.rust_handlers._parse_args` takes back:
+/// a tuple and an object (`UUID`, `Path`, ...). Every other operand is left out, so the handler
+/// reads it from its string argument exactly as it did before the channel existed. Has no effect
+/// without `TYPED_ARGS`.
+fn read_typed_standins_only(handler: &Bound<'_, PyAny>) -> PyResult<bool> {
+    if !handler.hasattr("TYPED_ARGS_STANDINS_ONLY")? {
+        return Ok(false);
+    }
+    handler.getattr("TYPED_ARGS_STANDINS_ONLY")?.is_truthy()
+}
+
 /// The handler's opt-in "let ME decide whether the body renders at all"
 /// declaration (#2658).
 ///
@@ -522,6 +540,8 @@ struct TagHandlerEntry {
     wants_autoescape: bool,
     /// See [`read_wants_typed_args`] (#3756).
     wants_typed_args: bool,
+    /// See [`read_typed_standins_only`] (#3768).
+    typed_standins_only: bool,
     /// `Some(message)` when the parser must REFUSE this tag with Django's
     /// `TemplateSyntaxError` the moment a template uses it (#2547): a raw
     /// `@register.tag` that consumes a body cannot be bridged, and the
@@ -720,6 +740,7 @@ pub fn register_tag_handler(py: Python<'_>, name: String, handler: Py<PyAny>) ->
     let accepts_as_var = read_accepts_as_var(handler_ref)?;
     let wants_autoescape = read_wants_autoescape(handler_ref)?;
     let wants_typed_args = read_wants_typed_args(handler_ref)?;
+    let typed_standins_only = read_typed_standins_only(handler_ref)?;
     if accepts_as_var && !returns_bindings {
         return Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(format!(
             "Handler '{name}' declares ACCEPTS_AS_VAR but not RETURNS_BINDINGS — \
@@ -746,6 +767,7 @@ pub fn register_tag_handler(py: Python<'_>, name: String, handler: Py<PyAny>) ->
             accepts_as_var,
             wants_autoescape,
             wants_typed_args,
+            typed_standins_only,
             parse_refusal,
         },
     );
@@ -872,6 +894,7 @@ pub fn register_block_tag_handler(
     let wants_autoescape = read_wants_autoescape(handler_ref)?;
     let lazy_body = read_lazy_body(handler_ref)?;
     let wants_typed_args = read_wants_typed_args(handler_ref)?;
+    let typed_standins_only = read_typed_standins_only(handler_ref)?;
 
     // The two-phase contract is TOTAL or it is not a contract (#2658): a
     // handler that declares it must carry both halves, and the combinations
@@ -920,6 +943,7 @@ pub fn register_block_tag_handler(
             wants_autoescape,
             lazy_body,
             wants_typed_args,
+            typed_standins_only,
         },
     );
     drop(registry);
@@ -1367,6 +1391,26 @@ pub fn tag_handler_wants_typed_args(name: &str) -> bool {
         .read()
         .ok()
         .and_then(|registry| registry.get(name).map(|entry| entry.wants_typed_args))
+        .unwrap_or(false)
+}
+
+/// Internal Rust API — did the inline handler for `name` declare `TYPED_ARGS_STANDINS_ONLY`
+/// (#3768)? `false` for an unregistered name.
+pub fn tag_handler_typed_standins_only(name: &str) -> bool {
+    TAG_HANDLERS
+        .read()
+        .ok()
+        .and_then(|registry| registry.get(name).map(|entry| entry.typed_standins_only))
+        .unwrap_or(false)
+}
+
+/// Internal Rust API — did the block handler for `name` declare `TYPED_ARGS_STANDINS_ONLY`
+/// (#3768)? `false` for an unregistered name.
+pub fn block_handler_typed_standins_only(name: &str) -> bool {
+    BLOCK_TAG_HANDLERS
+        .read()
+        .ok()
+        .and_then(|registry| registry.get(name).map(|entry| entry.typed_standins_only))
         .unwrap_or(false)
 }
 
