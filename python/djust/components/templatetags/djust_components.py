@@ -1076,6 +1076,20 @@ def data_table(
 # ---------------------------------------------------------------------------
 
 
+def pagination_pages(page: Any, total_pages: Any) -> "list[Any]":
+    """The page numbers a pager shows, with ``"..."`` for each gap.
+
+    Shared with the native handler (#3669), so the two engines wire the same buttons.
+    """
+    pages: list = []
+    for p in range(1, total_pages + 1):
+        if p == 1 or p == total_pages or abs(p - page) <= 2:
+            pages.append(p)
+        elif pages and pages[-1] != "...":
+            pages.append("...")
+    return pages
+
+
 @register.inclusion_tag("djust_components/pagination.html")
 def pagination(
     page: Any = 1,
@@ -1084,16 +1098,10 @@ def pagination(
     next_event: Any = "page_next",
 ) -> "dict[str, Any]":
     """Render pagination controls."""
-    pages: list = []
-    for p in range(1, total_pages + 1):
-        if p == 1 or p == total_pages or abs(p - page) <= 2:
-            pages.append(p)
-        elif pages and pages[-1] != "...":
-            pages.append("...")
     return {
         "page": page,
         "total_pages": total_pages,
-        "pages": pages,
+        "pages": pagination_pages(page, total_pages),
         "prev_event": prev_event,
         "next_event": next_event,
     }
@@ -1220,6 +1228,61 @@ _DJ_BUTTON_VARIANT_CLASS_MAP = {
 }
 
 
+def resolve_dj_button_args(
+    label: Any,
+    variant: Any,
+    event: Any,
+    confirm: Any,
+    icon: Any,
+    disabled: Any,
+    loading: Any,
+    size: Any,
+    preset: Any,
+) -> "tuple[Any, Any, Any, Any, Any, bool, bool, Any]":
+    """Apply a ``dj_button`` preset and read the boolean flags, exactly as the tag does.
+
+    Shared with the native handler (#3669): which event, confirmation and flags a button
+    ends up with must not be decided twice. A preset fills only the arguments the caller left
+    at their defaults, so an explicit argument always wins.
+    """
+    if preset:
+        from djust.components.presets import get_preset
+
+        preset_params = get_preset("dj_button", preset)
+        if preset_params:
+            _defaults = {
+                "variant": "primary",
+                "event": "",
+                "confirm": "",
+                "icon": "",
+                "disabled": False,
+                "loading": False,
+                "size": "md",
+            }
+            if label == "" and "label" in preset_params:
+                label = preset_params["label"]
+            if variant == _defaults["variant"] and "variant" in preset_params:
+                variant = preset_params["variant"]
+            if event == _defaults["event"] and "event" in preset_params:
+                event = preset_params["event"]
+            if confirm == _defaults["confirm"] and "confirm" in preset_params:
+                confirm = preset_params["confirm"]
+            if icon == _defaults["icon"] and "icon" in preset_params:
+                icon = preset_params["icon"]
+            if disabled == _defaults["disabled"] and "disabled" in preset_params:
+                disabled = preset_params["disabled"]
+            if loading == _defaults["loading"] and "loading" in preset_params:
+                loading = preset_params["loading"]
+            if size == _defaults["size"] and "size" in preset_params:
+                size = preset_params["size"]
+
+    if isinstance(disabled, str):
+        disabled = disabled.lower() not in ("false", "0", "")
+    if isinstance(loading, str):
+        loading = loading.lower() not in ("false", "0", "")
+    return label, variant, event, confirm, icon, bool(disabled), bool(loading), size
+
+
 @register.simple_tag
 def dj_button(
     label: Any = "",
@@ -1252,43 +1315,9 @@ def dj_button(
         size: sm, md, lg (md emits no extra class)
         preset: optional preset name (see ``djust_components.presets``)
     """
-    # Apply preset defaults — explicit kwargs take precedence.
-    if preset:
-        from djust.components.presets import get_preset
-
-        preset_params = get_preset("dj_button", preset)
-        if preset_params:
-            # Only apply preset values for args the caller left at defaults.
-            _defaults = {
-                "variant": "primary",
-                "event": "",
-                "confirm": "",
-                "icon": "",
-                "disabled": False,
-                "loading": False,
-                "size": "md",
-            }
-            if label == "" and "label" in preset_params:
-                label = preset_params["label"]
-            if variant == _defaults["variant"] and "variant" in preset_params:
-                variant = preset_params["variant"]
-            if event == _defaults["event"] and "event" in preset_params:
-                event = preset_params["event"]
-            if confirm == _defaults["confirm"] and "confirm" in preset_params:
-                confirm = preset_params["confirm"]
-            if icon == _defaults["icon"] and "icon" in preset_params:
-                icon = preset_params["icon"]
-            if disabled == _defaults["disabled"] and "disabled" in preset_params:
-                disabled = preset_params["disabled"]
-            if loading == _defaults["loading"] and "loading" in preset_params:
-                loading = preset_params["loading"]
-            if size == _defaults["size"] and "size" in preset_params:
-                size = preset_params["size"]
-
-    if isinstance(disabled, str):
-        disabled = disabled.lower() not in ("false", "0", "")
-    if isinstance(loading, str):
-        loading = loading.lower() not in ("false", "0", "")
+    label, variant, event, confirm, icon, disabled, loading, size = resolve_dj_button_args(
+        label, variant, event, confirm, icon, disabled, loading, size, preset
+    )
 
     # Map well-known variants to their canonical CSS class names; for
     # everything else, pass through with conditional_escape (#1619).
