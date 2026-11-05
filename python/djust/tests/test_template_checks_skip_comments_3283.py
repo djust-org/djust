@@ -13,6 +13,7 @@ from djust.checks.assets import check_undeclared_origins
 from djust.checks.configuration import _check_manual_client_js, _check_tailwind_cdn_in_production
 from djust.checks import utils as checks_utils
 from djust.checks.utils import _blank_template_comments
+from djust.tests._growth import CountingPattern, Examined, counting_str
 
 
 def _write(settings, tmp_path, html, name="page.html"):
@@ -147,47 +148,15 @@ def test_blanking_keeps_every_line_break_the_scans_split_on():
 # (#3723, found by the review of #3721), and since #3835 the check counts the characters
 # examined instead of timing the pass. The output is pinned separately, against the
 # pre-fix implementation, in test_blank_template_comments_differential_3723.py.
-class _Examined:
-    """How many characters a blanking pass looked at, summed over every search it made."""
-
-    total = 0
-
-
-class _CountingPattern:
-    """A compiled pattern whose ``search`` adds the characters between where it started and where it
-    stopped (a hit's start, or the end of the text for a miss) to the running total."""
-
-    def __init__(self, pattern, examined):
-        self._pattern = pattern
-        self._examined = examined
-
-    def search(self, string, pos=0, endpos=None):
-        if endpos is None:
-            match = self._pattern.search(string, pos)
-        else:
-            match = self._pattern.search(string, pos, endpos)
-        stop = match.start() if match else (len(string) if endpos is None else endpos)
-        self._examined.total += max(stop - pos, 0) + 1
-        return match
-
-
 def _examined_by_blanking(source, monkeypatch):
     """Blank *source*; return the characters examined by every ``find`` and ``search`` it made."""
-    examined = _Examined()
-
-    class Spy(str):
-        def find(self, sub, start=0, end=None):
-            found = str.find(self, sub, start, end)
-            stop = found if found != -1 else (len(self) if end is None else min(end, len(self)))
-            examined.total += max(stop - start, 0) + 1
-            return found
-
+    examined = Examined()
     with monkeypatch.context() as patch:
         for name in ("_COMMENT_OPENER", "_ENDCOMMENT"):
             patch.setattr(
-                checks_utils, name, _CountingPattern(getattr(checks_utils, name), examined)
+                checks_utils, name, CountingPattern(getattr(checks_utils, name), examined)
             )
-        _blank_template_comments(Spy(source))
+        _blank_template_comments(counting_str(examined)(source))
     return examined.total
 
 

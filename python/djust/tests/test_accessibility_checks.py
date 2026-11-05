@@ -17,7 +17,7 @@ from djust.checks import (
     _IMG_TAG_RE,
     check_accessibility,
 )
-from djust.tests._growth import assert_scales_linearly
+from djust.tests._growth import Examined, assert_scales_linearly, counting_str
 
 
 def _settings_with_tpl_dir(settings, tpl_dir):
@@ -1340,23 +1340,53 @@ class TestReviewFixes3685:
         html = '<ul class="%s"><li><i></i></li></ul>' % cls
         assert _scan(tmp_path, settings, html, "djust.Y006") == []
 
-    #: ``(unit, openers at 1x)``. The base is sized per unit so the 4x run costs a few
-    #: milliseconds: ``<!-`` is three characters that are skipped almost for free, and at
-    #: 25 000 of them the large run cost 0.27 ms, 1.3x the helper's floor, so a loaded
-    #: runner could fail it on timer noise (3 of 300 runs with 24 busy processes on 12
-    #: cores).
     @pytest.mark.parametrize(
-        "unit, count", [("<!--", 25_000), ("<!-- x -->", 25_000), ("<!-", 500_000)]
+        "unit, count", [("<!--", 5_000), ("<!-- x -->", 5_000), ("<!-", 20_000)]
     )
     def test_unclosed_comment_openers_are_linear(self, unit, count):
+        """Four times the openers examines about four times the characters (#3835).
+
+        Counted, not timed. ``_blank_html_comments`` is a loop of ``str.find`` calls, and
+        each call examines the characters between where it started and where it stopped,
+        so their sum is the work. The linear pass resumes each search where the last ended
+        (4.0x for 4x the openers); a pass that rescans to the end of the file from every
+        unterminated opener examines N times the file (16x). Exact, and independent of the
+        machine: the timed version needed 500 000 ``<!-`` units to clear the clock's floor
+        and still failed 3 runs in 300 under load (#3711)."""
         from djust.checks.accessibility import _blank_html_comments
 
-        # Growth, not an absolute bound (#3711): 4x the openers under 10x the cost.
-        assert_scales_linearly(
-            lambda scale: _blank_html_comments(unit * (count * scale)),
-            runs=5,
-            what=f"blanking {unit!r} comments",
-        )
+        examined = {
+            scale: _examined_by_finds(_blank_html_comments, unit * (count * scale))
+            for scale in (1, 4)
+        }
+        assert examined[1] > count, "the passes examined nothing, so nothing was measured"
+        assert examined[4] <= 4.5 * examined[1], examined
+        # And per character: a constant number of looks at each, however large the file.
+        assert examined[4] <= 5 * len(unit * (count * 4)), examined
+
+    def test_the_count_tells_a_linear_pass_from_a_rescanning_one(self):
+        """Gate-off sibling: the same measurement on a pass that forgets that a search which
+        failed once cannot succeed later reads ~16x for 4x the openers, far past the 4.5x
+        the real pass is held to. Without this the assertion above could not fail."""
+
+        def rescanning(source):
+            pos = 0
+            while (at := source.find("<!--", pos)) != -1:
+                end = source.find("-->", at + 2)
+                # An unterminated opener resumes just past itself, not at the end.
+                pos = at + 4 if end == -1 else end + 3
+
+        examined = {
+            scale: _examined_by_finds(rescanning, "<!--" * (1_000 * scale)) for scale in (1, 4)
+        }
+        assert examined[4] > 10 * examined[1], examined
+
+
+def _examined_by_finds(blank, source):
+    """Run ``blank`` over *source*; return the characters its ``str.find`` calls examined."""
+    examined = Examined()
+    blank(counting_str(examined)(source))
+    return examined.total
 
 
 class TestReviewFixes3685Round2:
