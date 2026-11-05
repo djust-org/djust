@@ -58,6 +58,12 @@ logger = logging.getLogger(__name__)
 _KWARG_TOKEN_RE = re.compile(r"^[A-Za-z_]\w*=")  # ``key=`` — identifier then '='
 _VAR_TOKEN_RE = re.compile(r"^[A-Za-z_]\w*(\.\w+)*$")  # dotted-identifier path
 
+#: The reserved context key under which the engine hands a handler that declares
+#: ``TYPED_ARGS = True`` its ``key=<expression>`` operands as resolved, typed Python values
+#: (``crates/djust_templates/src/renderer.rs``, ``TYPED_ARGS_KEY``; #3756). Defined here, where
+#: the tag handlers live, and re-exported by ``djust.components.rust_handlers``.
+TYPED_ARGS_KEY = "__djust_typed_args__"
+
 # Track registered handlers for debugging
 _registered_handlers: Dict[str, "TagHandler"] = {}
 

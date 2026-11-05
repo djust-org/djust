@@ -43,6 +43,7 @@ from djust.components.utils import (
     url_attr,
     srcset_attr,
 )
+from djust.template_tags import TYPED_ARGS_KEY
 
 
 # ---------------------------------------------------------------------------
@@ -102,8 +103,8 @@ def _parse_args(args: list[str], context: dict[str, object]) -> dict[str, object
 
 
 #: The reserved context key under which the engine hands a ``TYPED_ARGS`` handler its resolved,
-#: typed operands (``crates/djust_templates/src/renderer.rs``, ``TYPED_ARGS_KEY``).
-TYPED_ARGS_KEY = "__djust_typed_args__"
+#: typed operands (``crates/djust_templates/src/renderer.rs``, ``TYPED_ARGS_KEY``). Defined in
+#: ``djust.template_tags`` (``{% live_render %}`` reads it too, #3838) and imported above.
 
 
 def _typed_args(context: dict[str, object]) -> dict[str, object]:
