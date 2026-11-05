@@ -407,10 +407,14 @@ class TestTheEventPathIsBounded:
             handed = _synced(view)
         assert handed <= DEFAULT_MAX_FORM_MEMBERS
         assert handed == reference_members(view.form_data)
-        assert handed > DEFAULT_MAX_FORM_MEMBERS - 2 * 15_001  # the cap was reached, not far below it
+        assert (
+            handed > DEFAULT_MAX_FORM_MEMBERS - 2 * 15_001
+        )  # the cap was reached, not far below it
         assert "more values" in view.form_errors[0]
 
-    def test_the_review_scenario_with_containers_hands_the_extension_at_most_the_limit(self, native):
+    def test_the_review_scenario_with_containers_hands_the_extension_at_most_the_limit(
+        self, native
+    ):
         view = mounted(WsContact)
         view._initialize_rust_view()
         with livecfg():
@@ -555,7 +559,9 @@ class TestConfiguration:
     def test_zero_is_no_limit(self):
         with override_settings(LIVEVIEW_CONFIG={"max_form_members": 0}):
             assert bounds.member_limit() == 0
-            assert bounds.refusal({}, {"k": [0] * 200_000}, ()) is None  # inside the 2.6M characters
+            assert (
+                bounds.refusal({}, {"k": [0] * 200_000}, ()) is None
+            )  # inside the 2.6M characters
 
     def test_all_three_zero_returns_before_any_walk(self):
         class Boom(dict):
@@ -586,7 +592,9 @@ class TestConfiguration:
         with caplog.at_level(logging.WARNING, logger="djust.config"):
             with override_settings(DEBUG=False, LIVEVIEW_CONFIG={"max_form_members": 500}):
                 pass
-        assert not any("no limit" in r.getMessage() and "form" in r.getMessage() for r in caplog.records)
+        assert not any(
+            "no limit" in r.getMessage() and "form" in r.getMessage() for r in caplog.records
+        )
 
 
 # ---------------------------------------------------------------------------------------------
@@ -600,10 +608,16 @@ class TestGateOff:
         payload = {"k": [0] * 50}
         assert bounds.refusal({}, payload, ()) is not None
         real = bounds._over
-        monkeypatch.setattr(bounds, "_over", lambda c, i, limit, count: False if count else real(c, i, limit, count))
-        assert bounds.refusal({}, payload, ()) is None  # the neutered check admits what the real one refused
+        monkeypatch.setattr(
+            bounds, "_over", lambda c, i, limit, count: False if count else real(c, i, limit, count)
+        )
+        assert (
+            bounds.refusal({}, payload, ()) is None
+        )  # the neutered check admits what the real one refused
 
-    def test_a_flood_of_members_is_refused_by_the_member_limit_not_the_size_limit(self, monkeypatch):
+    def test_a_flood_of_members_is_refused_by_the_member_limit_not_the_size_limit(
+        self, monkeypatch
+    ):
         monkeypatch.setattr(bounds, "limits", lambda: (0, 2_621_440))
         monkeypatch.setattr(bounds, "member_limit", lambda: 100_000)
         message = bounds.refusal({}, {"k": [""] * 150_000}, ())  # 150,002 characters: size is fine
@@ -615,7 +629,11 @@ class TestGateOff:
 def verdict(message: Optional[str]) -> Optional[str]:
     if message is None:
         return None
-    return "fields" if "more fields" in message else ("members" if "more values" in message else "size")
+    return (
+        "fields"
+        if "more fields" in message
+        else ("members" if "more values" in message else "size")
+    )
 
 
 class TestTheVerdictEqualsTheFullRecount:

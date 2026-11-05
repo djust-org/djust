@@ -347,9 +347,7 @@ def refusal(
     return None
 
 
-def _over(
-    current: Mapping[str, Any], incoming: Mapping[str, Any], limit: int, count: bool
-) -> bool:
+def _over(current: Mapping[str, Any], incoming: Mapping[str, Any], limit: int, count: bool) -> bool:
     """Would ``{**current, **incoming}`` weigh more than *limit* (characters, or members when *count*)?
 
     Judged WITHOUT building the merged mapping: what *incoming* adds, plus what *current* holds, less
