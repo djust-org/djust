@@ -2276,6 +2276,114 @@ def _without_floor_keys(value: Any, floor: tuple, readable: Any = None) -> Any:
     return _filter_floor_keys(value, keep)
 
 
+#: Where a form (or formset) keeps what it was last asked about its submitted data (#3834).
+_DATA_FLOOR_MEMO_ATTR = "_djust_data_floor_memo"
+
+
+class _DataFloorMemo:
+    """What the floor decided about one ``form.data`` mapping: the answer, and what it was an answer TO.
+
+    The verdict on a key is a pure function of the key and of the floor, so the verdict on a mapping
+    is a function of its KEYS and the floor, and of nothing else (not its values: the copy a template
+    reads is rebuilt on every read from the values the mapping holds NOW, and not which object holds
+    them: a different mapping with the same keys has the same verdict). So the memo keeps exactly that
+    input and compares it again before it trusts the answer: the keys in order, and a fingerprint of
+    the floor taken as COPIES, so a set mutated in place after the fact cannot make the old and the new
+    floor compare equal.
+
+    The memo keeps the key tuple of the mapping it was made for until the next read replaces it or the
+    form is dropped: replacing ``form.data`` and never reading it again leaves that tuple (one pointer
+    per key, bounded by the form-data limits over the socket) on the form, the same lifetime as the
+    form itself.
+    """
+
+    __slots__ = ("fingerprint", "keys", "refused")
+
+    def __init__(self, fingerprint: tuple, keys: tuple, refused: frozenset) -> None:
+        self.fingerprint = fingerprint
+        self.keys = keys
+        self.refused = refused
+
+
+def _floor_fingerprint(floor: tuple) -> tuple:
+    """Everything :func:`_floor_field_readable` reads, as values that cannot change under it.
+
+    That is the five parts of *floor* and the two things it reaches past them for, all listed here
+    because a verdict kept on an input this omits is a password key a template can read:
+
+    * the model class (itself: a class is the same class), the denied / allowed / opt-out sets
+      (copied, so a set edited in place afterwards is a different fingerprint), and the form's
+      password names, read NOW from the live ``fields`` the :class:`_FormPasswordNames` view looks
+      through, so a widget swapped on a live form is a different fingerprint;
+    * ``LIVEVIEW_CONFIG["sensitive_field_types"]`` (:func:`_sensitive_field_types`), which the TYPE
+      floor (:func:`_field_type_excluded_for`) matches the model's columns against;
+    * the model's columns, which that same floor resolves a key against (``_meta.get_field``) and
+      :func:`_floor_special_name_bound` measures. ``_meta.get_fields`` returns Django's cached tuple,
+      which Django replaces whenever a field is added to or removed from the model, so a column
+      added at runtime is a different fingerprint. A column whose CLASS is swapped in place
+      (``field.__class__ = ...``) is the one thing not seen; no Django API does that.
+
+    Everything else the verdict touches is a module constant (the identity keys, the sensitive model
+    methods and their prefixes)."""
+    model_class, denied, allowed, optout, passwords = floor
+    if isinstance(passwords, _FormPasswordNames):
+        passwords = passwords._names()
+    columns = (
+        None if model_class is None else tuple(model_class._meta.get_fields(include_hidden=True))
+    )
+    return (
+        model_class,
+        frozenset(denied),
+        None if allowed is None else frozenset(allowed),
+        frozenset(optout),
+        frozenset(passwords),
+        _sensitive_field_types(),
+        columns,
+    )
+
+
+def _floor_filtered_data(holder: Any, value: Any, floor: tuple) -> Any:
+    """``_without_floor_keys(value, floor, _floor_data_key_readable)``, asked of the floor ONCE.
+
+    A template that reads ``form.data`` ten times used to put every key of it to the floor ten times,
+    and the keys are what a client posted: 100,000 dashed keys were ~1 s per read (#3834). The verdict
+    is kept on *holder* (the form or formset ``value`` belongs to, which outlives the proxy a template
+    step wraps around it) and trusted only while the mapping has the same keys and the floor is the
+    same floor. Nothing about the values is kept, so a value changed in place is read as it is now.
+    Anything this cannot answer cheaply and exactly (a mapping that is not a dict, a floor that
+    cannot be fingerprinted, a holder that cannot carry the memo) is the uncached call.
+    """
+    if not isinstance(value, (dict, MultiValueDict)):
+        return _without_floor_keys(value, floor, _floor_data_key_readable)
+    try:
+        fingerprint = _floor_fingerprint(floor)
+        # A plain dict is read ONCE: the keys judged and the pairs returned come from the same
+        # snapshot, so a key added by another thread between the two cannot ride through unjudged.
+        pairs = None if isinstance(value, MultiValueDict) else list(value.items())
+        keys = tuple(value) if pairs is None else tuple([key for key, _ in pairs])
+        holder_dict = holder.__dict__
+    except Exception:  # noqa: BLE001 - unreadable means "ask in full", which is always correct
+        return _without_floor_keys(value, floor, _floor_data_key_readable)
+    memo = holder_dict.get(_DATA_FLOOR_MEMO_ATTR)
+    if isinstance(memo, _DataFloorMemo) and memo.fingerprint == fingerprint and memo.keys == keys:
+        refused = memo.refused
+    else:
+        keep = _DataKeyReader(floor)  # set up once for every key of the mapping (#3830)
+        refused = frozenset(key for key in keys if not keep(key))
+        holder_dict[_DATA_FLOOR_MEMO_ATTR] = _DataFloorMemo(fingerprint, keys, refused)
+    if not refused:
+        return value
+    if pairs is not None:
+        return {k: v for k, v in pairs if k not in refused}
+    copy: Any = value.copy()  # ``QueryDict.copy()`` is always mutable; restored below
+    for key in refused:
+        copy.pop(key, None)
+    mutable = getattr(value, "_mutable", None)
+    if mutable is not None:
+        copy._mutable = mutable
+    return copy
+
+
 def _filter_floor_keys(value: Any, keep: Any) -> Any:
     """:func:`_without_floor_keys` with the question already bound: ``keep(key)``."""
     if isinstance(value, (list, tuple)) and not isinstance(value, str):
@@ -2415,11 +2523,10 @@ class _SidecarFormProxy:
         form = object.__getattribute__(self, "_form")
         value = getattr(form, name)
         if name in _FLOOR_FORM_DICT_ATTRS:
-            return _without_floor_keys(
-                value,
-                object.__getattribute__(self, "_floor"),
-                _floor_data_key_readable if name == "data" else None,
-            )
+            floor = object.__getattribute__(self, "_floor")
+            if name == "data":
+                return _floor_filtered_data(form, value, floor)  # asked once, not per read (#3834)
+            return _without_floor_keys(value, floor, None)
         return _protect_sidecar_walk(value)
 
     def __getitem__(self, key: Any) -> Any:
@@ -2470,12 +2577,13 @@ class _SidecarFormSetProxy:
     def __getattr__(self, name: str) -> Any:
         if name.startswith("_"):
             raise AttributeError(name)
-        value = getattr(object.__getattribute__(self, "_fs"), name)
+        formset = object.__getattribute__(self, "_fs")
+        value = getattr(formset, name)
         floor = object.__getattribute__(self, "_floor")
         if name in _FLOOR_FORM_DICT_ATTRS:
-            return _without_floor_keys(
-                value, floor, _floor_data_key_readable if name == "data" else None
-            )
+            if name == "data":
+                return _floor_filtered_data(formset, value, floor)  # asked once (#3834)
+            return _without_floor_keys(value, floor, None)
         if name == "management_form":
             # A plain ``Form`` (so the walk would leave it alone) that holds the formset's WHOLE
             # submitted data: ``fs.management_form.data`` is ``form-0-password`` and all. It is

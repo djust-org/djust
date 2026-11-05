@@ -17,6 +17,12 @@ from typing import Any, ClassVar, Dict, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
+#: Django's ``DATA_UPLOAD_MAX_NUMBER_FIELDS`` / ``DATA_UPLOAD_MAX_MEMORY_SIZE`` defaults, the defaults of
+#: ``max_form_fields`` / ``max_form_data_size`` (#3834). Defined here, not in ``_form_data_bounds``,
+#: because the config loads at ``django.setup()`` and that module must not.
+DEFAULT_MAX_FORM_FIELDS = 1000
+DEFAULT_MAX_FORM_DATA_SIZE = 2_621_440
+
 #: Flat ``DJUST_*`` settings aliasing keys of the ``service_worker`` dict.
 _SERVICE_WORKER_ALIASES = (
     ("DJUST_VDOM_CACHE_ENABLED", "vdom_cache_enabled", bool),
@@ -123,6 +129,12 @@ class LiveViewConfig:
         "worker_pinning": True,
         # Maximum incoming WebSocket message size in bytes (0 = no limit)
         "max_message_size": 65536,  # 64KB
+        # How much a client may put into one form's submitted data over the socket (#3834): the
+        # field count and the characters of keys + values, defaulting to Django's
+        # DATA_UPLOAD_MAX_NUMBER_FIELDS (1000) and DATA_UPLOAD_MAX_MEMORY_SIZE (2.5 MB). A frame is
+        # bounded by max_message_size; a form's data is the sum of many frames. 0 = no limit.
+        "max_form_fields": DEFAULT_MAX_FORM_FIELDS,
+        "max_form_data_size": DEFAULT_MAX_FORM_DATA_SIZE,
         # How many views one WebSocket may host besides the page view: the
         # ``dj-lazy`` and ``mount_batch`` views, each a view of its own (#3252).
         "max_views_per_connection": 64,
@@ -648,6 +660,18 @@ class LiveViewConfig:
             )
             target["event_security"] = "strict"
 
+        # A limit that is not a non-negative integer is the default, never "no limit" (#3834).
+        for key in ("max_form_fields", "max_form_data_size"):
+            val = target.get(key)
+            if isinstance(val, bool) or not isinstance(val, int) or val < 0:
+                logger.warning(
+                    "Invalid %s=%r (must be an integer >= 0; 0 = no limit). Using default %s.",
+                    key,
+                    val,
+                    self._defaults[key],
+                )
+                target[key] = self._defaults[key]
+
         # Validate rate_limit values
         defaults = self._defaults["rate_limit"]
         rl = target.get("rate_limit", {})
@@ -684,6 +708,11 @@ class LiveViewConfig:
                 logger.warning(
                     "max_message_size is 0 (no limit) with DEBUG=False. "
                     "Consider setting a message size limit in production."
+                )
+            if target.get("max_form_fields") == 0 or target.get("max_form_data_size") == 0:
+                logger.warning(
+                    "max_form_fields / max_form_data_size is 0 (no limit) with DEBUG=False. "
+                    "A client can grow a form's data without bound across events."
                 )
             if target.get("event_security") == "open":
                 logger.warning(

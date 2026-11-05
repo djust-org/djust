@@ -6,7 +6,7 @@ readonly fields, and fieldset-based rendering.
 """
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, FrozenSet, List, Optional
 
 from django import forms
 from django.http import Http404
@@ -234,6 +234,12 @@ class AdminFormMixin(FormMixin):
             logger.debug("Failed to get field value for %s", field_name, exc_info=True)
             return default
 
+    def _declared_field_names(self) -> FrozenSet[str]:
+        """The fields of the ModelAdmin form (``form_class`` is unset here), which are not the
+        client's to add: they do not count toward ``max_form_fields`` (#3834)."""
+        fields = getattr(getattr(self, "form_instance", None), "fields", None)
+        return frozenset(fields or ())
+
     def validate_field(
         self, field: str = "", field_name: str = "", value: Any = None, **kwargs: Any
     ) -> None:
@@ -260,7 +266,9 @@ class AdminFormMixin(FormMixin):
         if not hasattr(self, "field_errors"):
             self.field_errors = {}
 
-        # Update form data
+        # Update form data (refused, not stored, past the form-data limits: #3834)
+        if self._refuse_form_data({field_name: value}):
+            return
         self.form_data[field_name] = value
 
         # Create form with current data
@@ -301,7 +309,9 @@ class AdminFormMixin(FormMixin):
 
         Extends FormMixin.submit_form() to work with ModelAdmin forms.
         """
-        # Merge kwargs into form_data
+        # Merge kwargs into form_data (refused whole past the form-data limits: #3834)
+        if self._refuse_form_data(kwargs):
+            return
         self.form_data.update(kwargs)
 
         # Create form with all data
