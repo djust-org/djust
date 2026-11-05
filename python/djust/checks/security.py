@@ -1275,3 +1275,99 @@ def check_model_form_object_policy(app_configs: Any, **kwargs: Any) -> list[Chec
             )
         )
     return messages
+
+
+@register("djust")
+def check_editable_secret_floor_fields(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
+    """``djust.S014``: a ``ModelForm`` with an editable SECRET-LIKE floor field (#3797).
+
+    djust draws such a field (``password``, ``api_token``, ``secret_key``, ... : a floor field the
+    model floor already holds, :func:`djust.serialization._floor_field_is_secret`) WITHOUT its stored
+    value, and a browser posts an empty control as ``""``: an untouched re-save of the form overwrites
+    the column. Nothing at render time can prevent that on a plain ``ModelForm`` in a classic view;
+    only ``disabled=True`` on the form field does (Django then ignores what is posted and keeps the
+    initial value). ``FormMixin.get_form()`` sets it for a form that edits an existing row, so a
+    djust edit view is protected; this reports the forms that are not. Static: the form CLASS's
+    fields (``base_fields``), so a field added in ``__init__`` is not seen. Nothing is constructed,
+    mounted or queried.
+    """
+    if _is_check_suppressed("S014"):
+        return []
+    try:
+        from django import forms as django_forms
+
+        from djust.serialization import (
+            _floor_field_is_secret,
+            _floor_field_readable,
+            _floor_for_model,
+            _form_password_names,
+            _widget_keeps_its_value,
+            field_has_password_widget,
+        )
+    except ImportError:
+        return []
+    from djust.checks.utils import _is_framework_internal_class, _walk_subclasses
+
+    messages: list[CheckMessage] = []
+    seen: set[type] = set()
+    for cls in sorted(
+        _walk_subclasses(django_forms.ModelForm), key=lambda c: (c.__module__, c.__qualname__)
+    ):
+        module = getattr(cls, "__module__", "") or ""
+        if (
+            cls in seen
+            or module.split(".", 1)[0] == "django"
+            or module.rsplit(".", 1)[-1].startswith("test")
+            or _is_framework_internal_class(cls)
+        ):
+            continue
+        seen.add(cls)
+        model = getattr(getattr(cls, "_meta", None), "model", None)
+        base_fields = getattr(cls, "base_fields", None)
+        if model is None or not base_fields:
+            continue
+        try:
+            floor = _floor_for_model(model, _form_password_names(base_fields))
+            exposed = [
+                name
+                for name, field in base_fields.items()
+                if not _floor_field_readable(floor, name)
+                and _floor_field_is_secret(floor, name, field)
+                and not field_has_password_widget(field)
+                and not _widget_keeps_its_value(field.widget)
+                and not getattr(field, "disabled", False)
+            ]
+        except Exception:  # noqa: BLE001 - a model the floor cannot be read for is not reported
+            continue
+        if not exposed:
+            continue
+        try:
+            file_path = inspect.getsourcefile(cls) or ""
+            source_lines, line_number = inspect.getsourcelines(cls)
+        except (OSError, TypeError):
+            file_path, source_lines, line_number = "", [], 0
+        if source_lines and _has_noqa(["", *source_lines], 1, "S014"):
+            continue
+        label = "%s.%s" % (module, cls.__qualname__)
+        names = ", ".join(sorted(exposed))
+        messages.append(
+            DjustWarning(
+                "%s has editable secret field(s) on the serialization floor (%s): djust draws them "
+                "without their stored value, so submitting the form unchanged saves them as empty."
+                % (label, names),
+                hint=(
+                    "Declare the form field disabled=True (Django then ignores the posted value and "
+                    "keeps the stored one), leave it out of Meta.fields, or opt the model field out "
+                    "of the floor with djust_serialize_sensitive_fields. A FormMixin view that edits "
+                    "an existing row sets disabled=True itself."
+                ),
+                id="djust.S014",
+                fix_hint=(
+                    "In `%s.__init__` (or on the field): `self.fields[%r].disabled = True`."
+                    % (label, sorted(exposed)[0])
+                ),
+                file_path=file_path,
+                line_number=line_number or None,
+            )
+        )
+    return messages
