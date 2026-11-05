@@ -2,7 +2,7 @@
   "pipeline_type": "ship",
   "task_description": "",
   "branch_name": "",
-  "pr_target_branch": "1.1",
+  "pr_target_branch": "main",
   "project_path": "",
   "started_at": "",
   "completed_at": null,
@@ -55,7 +55,7 @@
       "skip_if": "DOCS_ONLY",
       "checklist": [
         {
-          "action": "run full test suite (read-only, no source modifications)",
+          "action": "run the TARGETED tests (read-only, no source modifications): the tests this change adds or edits plus their importers (make test-selected), nice -n 10, -n 2 at most; NOT the whole suite - tests/local_load_guard.py refuses it outside CI, and CI on the PR head is the full-suite evidence",
           "done": false,
           "mandatory": true
         },
@@ -247,7 +247,7 @@
       "status": "pending",
       "verdict": null,
       "run_as": "subagent",
-      "subagent_prompt": "You are reviewing PR #{pr_number}. Project: {project_path}. PR targets {pr_target_branch}. Step 1: Run git diff {pr_target_branch}...HEAD, read changed files. Check docs/PULL_REQUEST_CHECKLIST.md if exists. Step 2: Review for correctness, security (XSS, injection, secrets exposure), testing gaps, code quality (print vs logging, except:pass), docs, perf, architecture. Flag auto-reject triggers. Step 3: Run project test suite, report pass/fail. Step 4: Decide APPROVE/REQUEST_CHANGES/COMMENT. Step 5 MANDATORY: Post review to GitHub with gh pr review {pr_number} --comment --body '<formatted review with checklist>'. If REQUEST_CHANGES use --request-changes. Step 6: Output verdict.",
+      "subagent_prompt": "You are reviewing PR #{pr_number}. Project: {project_path}. PR targets {pr_target_branch}. Step 1: Run git diff {pr_target_branch}...HEAD, read changed files. Check docs/PULL_REQUEST_CHECKLIST.md if exists. Step 2: Review for correctness, security (XSS, injection, secrets exposure), testing gaps, code quality (print vs logging, except:pass), docs, perf, architecture. Flag auto-reject triggers. Step 3: Do NOT run the whole suite locally (tests/local_load_guard.py refuses it outside CI; CI runs the full matrix on the PR head): read the head's CI result with `gh pr checks {pr_number}`, and run only the tests the diff adds or changes (nice -n 10, -n 2 at most), then report pass/fail. Step 4: Decide APPROVE/REQUEST_CHANGES/COMMENT. Step 5 MANDATORY: Post review to GitHub with gh pr review {pr_number} --comment --body '<formatted review with checklist>'. If REQUEST_CHANGES use --request-changes. Step 6: Output verdict.",
       "checklist": [
         {
           "action": "Stage-11 stale-base check (#1450 / Action #250): run `git fetch origin && BEHIND=$(git rev-list --count HEAD..origin/{pr_target_branch})`. If BEHIND > 0, STOP. The branch is reviewing against a stale base; the merge applies on top of CURRENT main. Rebase (`git rebase origin/{pr_target_branch}`) BEFORE reviewing.",
@@ -269,7 +269,7 @@
           "mandatory": true
         },
         {
-          "action": "run full test suite, report pass/fail",
+          "action": "read the CI result for the PR head (gh pr checks {pr_number}) as the full-suite evidence, run only the tests the diff adds or changes locally, report pass/fail",
           "done": false,
           "mandatory": true
         },

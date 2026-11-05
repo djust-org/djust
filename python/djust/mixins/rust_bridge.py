@@ -1390,6 +1390,15 @@ class RustBridgeMixin:
                 # getattr walk. Explicit sidecar entries above take precedence.
                 for _raw_key, _raw_val in _raw_models_for_sidecar.items():
                     sidecar.setdefault(_raw_key, _raw_val)
+                # #3801: a relation the template reads as rows AND through a
+                # QuerySet method (``{% for g in u.groups.all %}`` beside
+                # ``{{ u.groups.all.count }}``) ships as rows, which cannot
+                # answer the method; the engine's guarded getattr walk answers it
+                # from these evaluated rows. Only such a name is kept (a proxy
+                # per row is built for it); a plain loop pays nothing.
+                for _raw_key, _raw_val in (getattr(self, "_all_method_rows", None) or {}).items():
+                    if _raw_key in full_context:
+                        sidecar.setdefault(_raw_key, _raw_val)
                 # #1986 (ADR-024 review): the Rust getattr walk bypasses the
                 # serialization floor (SECURE_DEFAULTS Pattern 1) unless raw
                 # models are wrapped — else `{{ user.password }}` /

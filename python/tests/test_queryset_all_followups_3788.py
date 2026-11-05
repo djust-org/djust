@@ -412,18 +412,6 @@ class TestAllReadThroughQuerySetMethods3788:
             source, MAKE_CONTEXT["QuerySet"]()
         )
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="#3801: one serialized value cannot be both the loop's list and `.count`'s object",
-    )
-    def test_a_loop_and_a_method_on_one_all_is_not_yet_supported(self, world) -> None:
-        source = (
-            "{% for u in users %}[{{ u.groups.all.count }}:"
-            "{% for g in u.groups.all %}{{ g.name }},{% endfor %}]{% endfor %}"
-        )
-        expected = _django_render(source, MAKE_CONTEXT["QuerySet"]())
-        assert html_lib.unescape(_liveview_render(source, MAKE_CONTEXT["QuerySet"]())) == expected
-
     def test_a_method_read_is_one_query_per_row_and_reads_no_rows(self, world) -> None:
         """``.count`` is a COUNT and ``.first`` a LIMIT 1 on the QuerySet
         ``all()`` returned -- the serializer never iterates the relation."""
@@ -600,11 +588,11 @@ class TestTheMethodReadingIsUnambiguous3788:
     def test_the_codegen_twin_keeps_a_row_field_named_like_a_method(self, bins) -> None:
         code = generate_serializer_code("QSBin", ["items.all.count", "items.all.first"], "g")
         out = compile_serializer(code, "g")(QSBin.objects.get(name="full"))
-        # Rows, not a method object. (The generated leaf branch calls a leaf
-        # NAMED count / exists / all as a method, so a row's integer ``count``
-        # field is dropped here -- pre-existing, tracked in #3801.)
+        # Rows, not a method object, and the integer ``count`` field is kept
+        # (the generated leaf branch used to call it as a method, #3801).
         rows = out["items"]["all"]
         assert isinstance(rows, list) and [r["first"] for r in rows] == ["F-a", "F-b"]
+        assert [r["count"] for r in rows] == [7, 9]
 
     def test_a_database_error_in_a_method_propagates(self, bins) -> None:
         FlagQS.boom = OperationalError("db is down")  # type: ignore[attr-defined]
