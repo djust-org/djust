@@ -555,7 +555,13 @@ class FormMixin:
         form_class = form_class or self.get_form_class()
         if form_class is None:
             raise ValueError("form_class must be set to use FormMixin")
-        return form_class(**self.get_form_kwargs())
+        form = form_class(**self.get_form_kwargs())
+        from .serialization import protect_blanked_floor_columns
+
+        # A secret djust draws WITHOUT its stored value would be saved as empty by an untouched
+        # re-post; a disabled form field keeps its initial value (#3797).
+        protect_blanked_floor_columns(form)
+        return form
 
     def _create_form(self, data: Optional[Dict[str, Any]] = None) -> forms.Form:
         """Compatibility entry point: existing overrides delegate to public hooks.

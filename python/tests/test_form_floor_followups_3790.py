@@ -546,8 +546,9 @@ class TestAFloorFieldIsTheSameFieldEachTimeItIsReached:
 
 class TestWhatWidgetsDo:
     """The limit, as facts. The floor guards what a template can READ BACK; a widget is the form
-    rendering itself, drawn by the view author's own choice of widget, so it is not blanked (blanking
-    an editable control clears it on save: ``TestWhatPostingBackDoes``)."""
+    rendering itself. Since #3797 a SECRET floor field (``password``, ``api_token``, ...) is drawn
+    without its value; every other floor field (``email``, ``is_staff``) keeps drawing its real state,
+    because blanking an editable control clears it on save (``TestWhatPostingBackDoes``)."""
 
     def test_the_read_only_password_widget_shows_a_summary_never_the_hash(self, engine, user):
         form = UserChangeForm(instance=user)
@@ -561,7 +562,9 @@ class TestWhatWidgetsDo:
             assert user.password not in out, src
             assert "algorithm" in out, src
 
-    def test_a_text_input_over_the_password_column_renders_its_value(self, engine, user):
+    def test_a_text_input_over_the_password_column_renders_no_value(self, engine, user):
+        """#3797: ``password`` is a secret on the floor, so its control is drawn without the value
+        whatever the widget (``test_floor_widget_value_3797`` holds every route and shape)."""
         form = PasswordTextForm(instance=user)
         for src in (
             "{{ form.password }}",
@@ -569,7 +572,9 @@ class TestWhatWidgetsDo:
             "{{ form }}",
             "{% for x in form %}{{ x }}{% endfor %}",
         ):
-            assert user.password in render(engine, src, form=form), src
+            out = render(engine, src, form=form)
+            assert user.password not in out, src
+            assert 'name="password"' in out, "the control is still drawn: " + src
 
     def test_a_configured_sensitive_field_renders_its_value_in_its_widget(self, engine, user):
         with override_settings(DJUST_SENSITIVE_FIELDS=["email"]):
