@@ -232,6 +232,30 @@ gh api --allow-escape-sequences repos/<owner>/<repo>/actions/jobs/<job-id>/logs 
 `tests/short_param_ids.py` keeps collected test ids short so the pytest lines stay far
 below that limit.
 
+## Local load guard and flow metrics
+
+**The rule: CI is the full-suite evidence; a developer machine runs what it changed.** CI runs the
+full 3.12-3.15 matrix on every PR head and every `main` push, so a whole-suite run locally adds
+nothing CI will not report and costs the CPU of everything else on the machine (load averages of
+23-25 with three agents each running `-n 8`, 2026-11-05). `tests/local_load_guard.py` (registered
+in the root `conftest.py`) enforces it. Outside CI, unless `DJUST_FULL_LOCAL=1`:
+
+- xdist is held to 2 workers however many `-n N` / `-n auto` asked for (`DJUST_LOCAL_MAX_WORKERS`);
+- a run that collects more than 5,000 tests (`DJUST_LOCAL_MAX_ITEMS`; the full suite is about
+  35,000) stops before running any, with the way out in the message.
+
+The `make test*` targets and the pre-push full-suite fallback set `DJUST_FULL_LOCAL=1` themselves:
+they are the deliberate gates. Everything else should be a file, a class, `-k`, or
+`make test-selected`. Results for a pushed commit: `gh pr checks N`, or
+`gh run list --workflow Tests --branch main --commit <FULL 40-char sha>` (a short sha returns nothing).
+
+**Time per PR and per issue is measured, not remembered:** `make flow-metrics` (`DAYS=3`, `CHECK=1` to
+exit non-zero on a breach) reads GitHub and compares against budgets set tighter than the
+2026-11-04/05 baseline (27 merged PRs: open to merged median 0.6h, p90 2.0h; 42 closed issues:
+open to closed median 6.3h, p75 17.4h, p90 28.4h). The finding from that baseline: time inside a PR
+is short (CI plus the merge queue); the time is in the wait before a PR exists and in serial review
+rounds. Run it at every retro; it is not a merge gate (a metric on history would block unrelated work).
+
 ## Measurements and next improvements
 
 Main `0aa117d6` [CI run 37083226366](https://github.com/djust-org/djust/actions/runs/37083226366)
