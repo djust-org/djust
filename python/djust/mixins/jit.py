@@ -165,6 +165,22 @@ def _template_source_key(view: Any) -> Optional[Tuple[str, str, Tuple[str, ...]]
     return (kind, ident, tuple(get_template_dirs()))
 
 
+def keep_rows_for_all_methods(view: Any, name: str, rows: List[Any]) -> None:
+    """Remember the evaluated rows of a top-level context value whose template
+    reads a relation both as rows and through a QuerySet method (#3801).
+
+    One serialized value cannot be both the list ``{% for g in u.groups.all %}``
+    iterates and the object ``{{ u.groups.all.count }}`` reads, so the rows ship
+    as a list and the method is answered from these raw rows: the render sidecar
+    (``_sync_state_to_rust``) holds them under the context name, and the engine's
+    guarded getattr walk -- the one ``DjustTemplateBackend`` renders through, with
+    its ``alters_data`` / ``do_not_call_in_templates`` refusals and the
+    serialization floor -- reads ``users.N.groups.all.count`` from them. Written
+    to ``__dict__`` so it is not state; ``get_context_data`` resets it per render.
+    """
+    view.__dict__.setdefault("_all_method_rows", {})[name] = rows
+
+
 def _jit_template_content(view: Any) -> Optional[str]:
     """``view._get_template_content()``, kept per template while templates are cached.
 
@@ -194,7 +210,12 @@ def _jit_template_content(view: Any) -> Optional[str]:
 
 try:
     from ..optimization.query_optimizer import analyze_queryset_optimization, optimize_queryset
-    from ..optimization.codegen import all_row_cap, compile_serializer, generate_serializer_code
+    from ..optimization.codegen import (
+        all_methods_need_rows,
+        all_row_cap,
+        compile_serializer,
+        generate_serializer_code,
+    )
 
     JIT_AVAILABLE = True
 except ImportError:
@@ -515,6 +536,8 @@ class JITMixin:
 
             items = list(queryset)
             result = serialize_queryset(items, paths_for_var, all_row_cap())
+            if "." not in variable_name and all_methods_need_rows(model_class, paths_for_var):
+                keep_rows_for_all_methods(self, variable_name, items)
 
             # Check if Rust serializer captured all expected paths
             # (Rust can't access @property attributes, only model fields)

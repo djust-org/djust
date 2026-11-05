@@ -2,6 +2,7 @@
 ContextMixin - Context data management for LiveView.
 """
 
+import itertools
 import json
 import logging
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
@@ -110,6 +111,38 @@ _NEVER_DB_TYPES = frozenset({str, int, float, bool, bytes, type(None)})
 _NESTED_DB_DEPTH = 4
 
 
+#: Set once the bound has been reported (#3801); the warning is per process.
+_DEPTH_BOUND_REPORTED: dict[str, bool] = {"reported": False}
+
+#: How many values past the bound are looked at to learn whether a Model or
+#: QuerySet is there. The report is a hint, so it stays cheap on a long list.
+_DEPTH_BOUND_PROBE = 64
+
+
+def _warn_once_if_deeper_db_value(items: Any) -> None:
+    """Say, once, that a Model / QuerySet sits past ``_NESTED_DB_DEPTH`` (#3801).
+
+    Past the bound a container is left as the view built it -- a flat field dict
+    whose relations render empty -- and nothing said so. Only the values directly
+    inside the first container past the bound are looked at (at most
+    ``_DEPTH_BOUND_PROBE``): finding a deeper one would mean the scan the bound
+    exists to avoid, so a value deeper still is not reported.
+    """
+    if _DEPTH_BOUND_REPORTED["reported"]:
+        return
+    for item in itertools.islice(items, _DEPTH_BOUND_PROBE):
+        if isinstance(item, (models.Model, models.QuerySet)):
+            _DEPTH_BOUND_REPORTED["reported"] = True
+            logger.warning(
+                "A %s is nested more than %s containers deep in the context, past what the "
+                "template serializer looks at: it is sent as a flat field dict and its "
+                "relations render empty. Hoist it to a shallower name.",
+                type(item).__name__,
+                _NESTED_DB_DEPTH,
+            )
+            return
+
+
 def _holds_db_value(value: Any, depth: int = 0) -> bool:
     """Whether a dict / list holds a Model or QuerySet at any bounded depth (#3788).
 
@@ -139,6 +172,7 @@ def _holds_db_value(value: Any, depth: int = 0) -> bool:
     else:
         return False
     if depth >= _NESTED_DB_DEPTH:
+        _warn_once_if_deeper_db_value(items)
         return False
     depth += 1
     for item in items:
@@ -532,6 +566,9 @@ class ContextMixin:
         # JIT auto-serialization for QuerySets and Models
         jit_serialized_keys = set()
         template_content = None
+        # The raw rows a template's QuerySet-method read is answered from
+        # (#3801); rebuilt every render, never state.
+        self.__dict__["_all_method_rows"] = {}
 
         # Short-circuit: skip JIT pipeline if no DB objects in context (#278).
         # NOTE: This scan only checks top-level context values. DB objects nested
@@ -562,7 +599,12 @@ class ContextMixin:
                     # Template hash once for codegen cache keys
                     from ..mixins.jit import _template_hash
                     from ..session_utils import _jit_serializer_cache, _get_model_hash
-                    from ..optimization.codegen import generate_serializer_code, compile_serializer
+                    from ..optimization.codegen import (
+                        all_methods_need_rows,
+                        compile_serializer,
+                        generate_serializer_code,
+                    )
+                    from ..mixins.jit import keep_rows_for_all_methods
 
                     template_hash = _template_hash(template_content)
 
@@ -632,6 +674,8 @@ class ContextMixin:
                                     serializer = compile_serializer(code, func_name)
                                     _jit_serializer_cache[cache_key] = (serializer, None)
                                 context[key] = [serializer(item) for item in value]
+                                if all_methods_need_rows(model_class, paths):
+                                    keep_rows_for_all_methods(self, key, value)
                             else:
                                 # No field path for this list: the QuerySet
                                 # contract, not the single-model identity map
