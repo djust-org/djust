@@ -292,7 +292,7 @@ AUDITED: dict[tuple[str, str], Audit] = {
     (DC, "render_modal_description"): S(
         1,
         "`content` is the rendered {% modal_description %} body (nodelist.render / the Rust block handler)",
-        (DC, "f'<div class=\"dj-modal__description\"{_MODAL_DESCRIPTION_MARKER}>{content}</div>'"),
+        (DC, 'f"{_MODAL_DESCRIPTION_MARKER}{_MODAL_DESCRIPTION_OPEN}{content}</div>"'),
         (
             DC,
             "return render_modal_description(self.nodelist.render(context))",
@@ -305,6 +305,7 @@ AUDITED: dict[tuple[str, str], Audit] = {
         "title, close event and ids conditional_escape'd; size from a four-key dict, role from a two-way test, heading level int() in 2..6; `content` is the rendered tag body",
         (DC, 'modal_id = conditional_escape(kw.get("id", "modal"))'),
         (DC, "if not 2 <= level <= 6:"),
+        (DC, 'content = str(content).replace(_MODAL_DESCRIPTION_MARKER, "")'),
         (DC, "return render_modal(kw, self.nodelist.render(context))", "ModalNode.render"),
     ),
     (DC, "TooltipNode.render"): S(
