@@ -46,7 +46,11 @@ _TABLE_HTML_PATH = (
     / "djust_components"
     / "table.html"
 )
-_TABLE_TEMPLATE = Engine().from_string(_TABLE_HTML_PATH.read_text())
+_ENGINE = Engine(
+    # table.html loads the component filters (``table_cell``, #3870).
+    libraries={"djust_components": "djust.components.templatetags.djust_components"}
+)
+_TABLE_TEMPLATE = _ENGINE.from_string(_TABLE_HTML_PATH.read_text())
 
 
 def _base_ctx(rows, columns, **overrides):

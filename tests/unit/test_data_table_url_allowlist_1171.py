@@ -52,7 +52,11 @@ _TABLE_HTML_PATH = (
     / "djust_components"
     / "table.html"
 )
-_TABLE_TEMPLATE = Engine().from_string(_TABLE_HTML_PATH.read_text())
+_ENGINE = Engine(
+    # table.html loads the component filters (``table_cell``, #3870).
+    libraries={"djust_components": "djust.components.templatetags.djust_components"}
+)
+_TABLE_TEMPLATE = _ENGINE.from_string(_TABLE_HTML_PATH.read_text())
 
 
 def _ctx(row_url_value: str) -> dict:
@@ -119,12 +123,10 @@ def test_template_render_does_not_crash_for_url_shape(url_value: str):
     out = _render(_ctx(url_value))
     # Render produced a row body.
     assert "<tbody>" in out
-    # The data-href wiring is in place (value extracted at runtime by
-    # the Rust template engine; the Django Engine used here for unit
-    # tests doesn't expand `dictsort:row_url|first` to the row value,
-    # but the attribute is unconditionally emitted in the row_url
-    # branch — see python/tests/test_data_table_link_row_nav.py for
-    # the parallel "wiring is in place" assertion).
+    # The data-href wiring is in place: the attribute is unconditionally
+    # emitted in the row_url branch — see
+    # python/tests/test_data_table_link_row_nav.py for the parallel
+    # "wiring is in place" assertion.
     body_start = out.find("<tbody>")
     body_end = out.find("</tbody>")
     body = out[body_start:body_end]
