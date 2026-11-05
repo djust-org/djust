@@ -122,10 +122,13 @@ flag, a PII column — because serialization defaulted to *allow everything*.
 >   the value (`ChoiceField`'s `invalid_choice`, which a `disabled` field is validated
 >   with against its STORED value) are replaced by a generic one.
 >   **The predicate** (`_floor_field_is_secret`, decided from what the floor already
->   classifies): the field's widget is a password input; or its name has a
->   `password` / `passwd` / `passphrase` / `pwd` / `secret` / `token` / `key` /
->   `apikey` / `hash` / `salt` / `credential(s)` / `otp` / `signature` / `pin` word
->   (`api_token`, `secret_key`, `auth_hash`; the first four also inside a longer word);
+>   classifies): the field's widget is a password input; or its name matches
+>   by SUBSTRING, anywhere in the name (`password`, `passwd`, `secret`, `token`,
+>   `apikey`: `newpassword`, `api_token`), or has a whole WORD (a segment split on
+>   `_`, `-` or a camelCase boundary, so `keyboard`, `monkey`, `hashtag`, `pinned` and
+>   `pinyin` do not match) from `passphrase` / `pwd` / `key` / `hash` / `salt` /
+>   `credential` / `credentials` / `otp` / `signature` / `pin` (`secret_key`,
+>   `auth_hash`, `pin_code`);
 >   or the model's column is of a `sensitive_field_types` type. Everything else on the
 >   floor keeps drawing its REAL state in the control: privilege flags (`is_staff`,
 >   `is_superuser`), selects (`role`, `groups`) and ordinary declared-sensitive text
@@ -157,6 +160,23 @@ flag, a PII column — because serialization defaulted to *allow everything*.
 >   method or renderer template that reads `form.instance` / `form.data` itself, and a
 >   bridged tag that walks the real FORM it is handed (it receives the real form, as
 >   before; only a `BoundField` operand is a blank copy).
+> - *A secret that is also read-only.* A floor field with a secret-like name on a
+>   `FormMixin` edit form is drawn empty AND made `disabled=True` (so the empty
+>   control cannot overwrite the column), which also means what a person types into
+>   it is ignored. That reaches a field that only LOOKS secret (`sort_key`,
+>   `token_count` named in `djust_exclude_fields`) and a "set a new password" box on an
+>   existing row. djust logs it once per (model, field); the ways out are the model's
+>   `djust_serialize_sensitive_fields`, a field name without a secret word, or
+>   declaring `disabled=True` yourself.
+> - *Known limits of a name heuristic.* Not matched: `pass`, `passcode`, `pw`, `ssn`,
+>   `cvv`, `card_number`, `auth_code`, `bearer`, `jwt`, `totp_seed`, `recovery_code`.
+>   A project adds more through the model's `DJUST_SENSITIVE_FIELDS` /
+>   `djust_exclude_fields` (those make a field a FLOOR field; to also have it drawn
+>   empty its name must match the predicate, so rename it or use a password widget).
+>   A `get_form()` / `_create_form()` override that does not call `super()` is not
+>   protected (the field is drawn empty and NOT disabled); `djust.S014` flags the
+>   form class. `djust.S014` also reports a form that is used only from a `FormMixin`
+>   view, which is protected at runtime.
 > - *Components draw a secret floor field without its value, editable or not; another
 >   editable floor field keeps its value.* `dj_form`, `combobox` and `rich_select`
 >   read `bound_field.value()` through `_bound_field_value`: `None` for a `disabled` or

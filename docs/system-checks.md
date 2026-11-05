@@ -706,7 +706,10 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
   view uses), leave the field out of `Meta.fields`, or opt the model field out of the floor with
   `djust_serialize_sensitive_fields`. HTML `disabled` / `readonly` and leaving the control out of the page do
   NOT protect the column.
-- **Limits**: A field added in `__init__` is not seen (the check reads `base_fields`).
+- **Limits**: A field added in `__init__` is not seen (the check reads `base_fields`). A form used only
+  from a `FormMixin` view is protected at runtime (`get_form()` sets `disabled=True`) and is still
+  reported: the check cannot tell which view uses a class. A `get_form()` / `_create_form()` override that
+  does not call `super()` is not protected and is why the class is reported.
 - **Suppression**: `# noqa: S014` on the `class` line, or
   `DJUST_CONFIG = {'suppress_checks': ['S014']}`.
 

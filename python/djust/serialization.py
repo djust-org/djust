@@ -2478,7 +2478,46 @@ def protect_blanked_floor_columns(form: Any) -> None:
             or _widget_keeps_its_value(field.widget)
         ):
             continue
+        if not field.disabled:
+            _warn_field_made_read_only(floor[0], name)
         field.disabled = True
+
+
+#: (model label, field name) pairs :func:`_warn_field_made_read_only` has already reported. Bounded
+#: (a form's field names are code, but a dynamic form can mint them) and locked: forms are built on
+#: every event, on several threads.
+_READ_ONLY_WARNED: set = set()
+_READ_ONLY_WARNED_CAP = 1024
+_READ_ONLY_WARNED_LOCK = threading.Lock()
+
+
+def _warn_field_made_read_only(model_class: Any, field_name: str) -> None:
+    """Say once per (model, field) that :func:`protect_blanked_floor_columns` made a field read-only.
+
+    The field is on the floor and its name is secret-like, so it is drawn empty and, to keep an
+    untouched re-save from overwriting the column, ``disabled``: the person cannot edit it and what they
+    type is ignored. That is silent otherwise, and it reaches fields that are only secret-LOOKING
+    (``sort_key``, ``token_count`` named in ``djust_exclude_fields``, a "set a new password" box). The
+    message names the model and the field and nothing else: no value, object or exception.
+    """
+    label = getattr(getattr(model_class, "_meta", None), "label", None) or getattr(
+        model_class, "__name__", "?"
+    )
+    key = (label, field_name)
+    with _READ_ONLY_WARNED_LOCK:
+        if key in _READ_ONLY_WARNED or len(_READ_ONLY_WARNED) >= _READ_ONLY_WARNED_CAP:
+            return
+        _READ_ONLY_WARNED.add(key)
+    logger.warning(
+        "[djust] form field %s.%s is on the serialization floor and its name looks like a secret, so "
+        "FormMixin draws it empty and made it read-only (disabled=True): what is typed into it is "
+        "ignored, and the stored value is kept (#3797). If it is not a secret, name it in the model's "
+        "djust_serialize_sensitive_fields (or take it off DJUST_SENSITIVE_FIELDS / "
+        "djust_exclude_fields), give it a name without a secret word, or declare disabled=True on "
+        "the form field yourself to say it is meant.",
+        label,
+        field_name,
+    )
 
 
 def form_field_floor_state(bound_field: Any) -> Optional[str]:

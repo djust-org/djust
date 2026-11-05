@@ -343,7 +343,171 @@ class TestProtectBlankedColumns:
         assert form.fields["api_token"].disabled is False
 
 
+class TestMadeReadOnlyIsNotSilent:
+    """A secret-LOOKING floor field on an edit form becomes ``disabled``: say so, once, by name."""
+
+    @pytest.fixture(autouse=True)
+    def _fresh(self, monkeypatch):
+        monkeypatch.setattr(serialization, "_READ_ONLY_WARNED", set())
+
+    def said(self, caplog):
+        return [r.getMessage() for r in caplog.records if "made it read-only" in r.getMessage()]
+
+    def mount(self, form_class, user=None):
+        user = user or make_user()
+
+        class View(EditView):
+            pass
+
+        View.form_class = form_class
+        client = LiveViewTestClient(View)
+        client.mount(pk=user.pk)
+        return user, client.view_instance.form_instance
+
+    def test_djust_exclude_fields_named_secretish_fields_are_reported(self, monkeypatch, caplog):
+        """Reproducer 1: ``djust_exclude_fields`` only keeps fields out of JSON state, yet it put
+        ``sort_key`` / ``token_count`` on the floor, and a secret-LOOKING name made them read-only."""
+        monkeypatch.setattr(
+            User, "djust_exclude_fields", ["sort_key", "token_count"], raising=False
+        )
+
+        class SortForm(forms.ModelForm):
+            sort_key = forms.CharField(required=False)
+            token_count = forms.IntegerField(required=False)
+
+            class Meta:
+                model = User
+                fields = ["username"]
+
+        with caplog.at_level("WARNING", logger="djust.serialization"):
+            user, form = self.mount(SortForm)
+            self.mount(SortForm, user)
+        assert form.fields["sort_key"].disabled and form.fields["token_count"].disabled
+        said = self.said(caplog)
+        assert len(said) == 2, said
+        assert any("sort_key" in m for m in said) and any("token_count" in m for m in said)
+        assert all("djust_serialize_sensitive_fields" in m and "disabled=True" in m for m in said)
+
+    def test_a_set_a_new_password_box_on_an_existing_row_is_reported(self, caplog):
+        """Reproducer 2: the ``password`` column as a text box is read-only on an edit form."""
+        with caplog.at_level("WARNING", logger="djust.serialization"):
+            user, form = self.mount(EditUser)
+        assert form.fields["password"].disabled
+        said = self.said(caplog)
+        assert len(said) == 1 and "auth.User.password" in said[0], said
+        assert user.password not in said[0] and user.password not in caplog.text
+
+    def test_a_field_already_disabled_by_the_author_is_not_reported(self, caplog):
+        with caplog.at_level("WARNING", logger="djust.serialization"):
+            self.mount(ProtectedEditUser)
+        assert not self.said(caplog)
+
+    def test_it_is_once_per_model_and_field_across_threads(self, caplog):
+        import threading
+
+        def hammer():
+            for _ in range(50):
+                serialization._warn_field_made_read_only(User, "api_token")
+
+        with caplog.at_level("WARNING", logger="djust.serialization"):
+            threads = [threading.Thread(target=hammer) for _ in range(8)]
+            [t.start() for t in threads]
+            [t.join() for t in threads]
+        assert len(self.said(caplog)) == 1
+
+    def test_the_dedupe_set_is_bounded(self, monkeypatch, caplog):
+        monkeypatch.setattr(serialization, "_READ_ONLY_WARNED_CAP", 3)
+        with caplog.at_level("WARNING", logger="djust.serialization"):
+            for i in range(10):
+                serialization._warn_field_made_read_only(User, "secret_%d" % i)
+        assert len(serialization._READ_ONLY_WARNED) == 3
+        assert len(self.said(caplog)) == 3
+
+
+class TestProtectKeepsTheKeptWidgets:
+    def test_a_password_hash_widget_field_is_not_made_read_only(self):
+        """``UserChangeForm.password`` shaped: a non-password-widget the floor draws as its own summary."""
+        from django.contrib.auth.forms import ReadOnlyPasswordHashWidget
+
+        class Hash(forms.ModelForm):
+            password = forms.CharField(widget=ReadOnlyPasswordHashWidget, required=False)
+
+            class Meta:
+                model = User
+                fields = ["username"]
+
+        form = Hash(instance=make_user())
+        serialization.protect_blanked_floor_columns(form)
+        assert form.fields["password"].disabled is False
+
+
 class TestSecretPredicate:
+    EXPECTED_WORDS = {
+        "passphrase",
+        "pwd",
+        "key",
+        "hash",
+        "salt",
+        "credential",
+        "credentials",
+        "otp",
+        "signature",
+        "pin",
+        "password",
+        "passwd",
+        "secret",
+        "token",
+        "apikey",
+    }
+
+    def test_the_word_list_is_exactly_this(self):
+        assert serialization._SECRET_NAME_WORDS == self.EXPECTED_WORDS
+        assert serialization._SECRET_NAME_SUBSTRINGS == (
+            "password",
+            "passwd",
+            "secret",
+            "token",
+            "apikey",
+        )
+
+    @pytest.mark.parametrize("word", sorted(EXPECTED_WORDS))
+    @pytest.mark.parametrize("shape", ["{w}", "my_{w}", "{w}_value", "my-{w}-x", "my{W}"])
+    def test_every_word_matches_as_a_whole_segment(self, word, shape):
+        assert serialization._name_is_secret_like(shape.format(w=word, W=word.capitalize()))
+
+    @pytest.mark.parametrize("name", ["pin", "pin_code", "PinCode", "user_pin"])
+    def test_pin(self, name):
+        assert serialization._name_is_secret_like(name)
+
+    @pytest.mark.parametrize(
+        "name",
+        ["keyboard", "monkey", "hashtag", "pinned", "pinyin", "pinch", "salty", "keys_count"],
+    )
+    def test_a_word_inside_a_longer_segment_is_not_a_secret(self, name):
+        assert not serialization._name_is_secret_like(name)
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "pass",
+            "passcode",
+            "pw",
+            "ssn",
+            "cvv",
+            "card_number",
+            "auth_code",
+            "bearer",
+            "jwt",
+            "totp_seed",
+            "recovery_code",
+        ],
+    )
+    def test_the_known_limits_of_a_name_heuristic(self, name):
+        """Documented in SECURE_DEFAULTS (a project adds more through the model's own settings)."""
+        assert not serialization._name_is_secret_like(name)
+
+
+class TestSecretPredicateExamples:
     @pytest.mark.parametrize(
         "name",
         [
