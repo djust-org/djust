@@ -9,6 +9,7 @@ import functools
 import importlib.util
 import json
 import logging
+import re
 import threading
 from datetime import datetime, date, time, timedelta
 from decimal import Decimal, InvalidOperation
@@ -1615,9 +1616,10 @@ def _protect_sidecar_value(value: Any) -> Any:
         return _SidecarQuerySetProxy(value)
     if isinstance(value, _FORM_PROXIES):
         # A form proxy is for a template PATH (#3790). The leaf floor is what Python code that is not a
-        # path is handed (a bridged tag's operand, a loop variable in its context), and a tag is the
-        # application's own code: it gets the real form / BoundField.
-        return unwrap_form_proxy(value)
+        # path is handed (a bridged tag's or filter's operand, a loop variable in its context), and a
+        # tag is the application's own code: it gets the real form, and the real BoundField, except
+        # that the BoundField of a SECRET-LIKE floor field is a blank copy (#3797).
+        return unwrap_form_proxy_for_tag(value)
     return value
 
 
@@ -2447,6 +2449,38 @@ def _warn_refused_floor_read(floor: tuple, field_name: str, attr: str) -> None:
     )
 
 
+def protect_blanked_floor_columns(form: Any) -> None:
+    """Mark every field djust draws WITHOUT its stored value ``disabled=True`` on *form* (#3797).
+
+    A control drawn empty is posted back empty, and a ``ModelForm`` saves what it is posted: the column
+    would be overwritten on an untouched re-save. Django ignores what is posted for a ``disabled`` field
+    and keeps its initial value, which is the only thing that protects the column (HTML ``disabled`` /
+    ``readonly`` and leaving the control out of the page still save ``""``).
+
+    Applied to a ``ModelForm`` that edits an EXISTING row (a new record has no stored value to lose).
+    The fields are those :func:`_floor_blank_bound_field` blanks and a password input is not one of
+    them: Django already draws it empty and a person types a new value into it. The model's
+    ``djust_serialize_sensitive_fields`` opt-out takes a field off the floor, so it is not touched.
+    ``FormMixin.get_form()`` calls this. The form's own ``fields`` are per instance, so only this form
+    is changed.
+    """
+    floor = _model_form_floor(form)
+    if floor is None or floor[0] is None:
+        return
+    instance = getattr(form, "instance", None)
+    if not isinstance(instance, models.Model) or instance._state.adding:
+        return
+    for name, field in form.fields.items():
+        if (
+            _floor_field_readable(floor, name)
+            or field_has_password_widget(field)
+            or not _floor_field_is_secret(floor, name, field)
+            or _widget_keeps_its_value(field.widget)
+        ):
+            continue
+        field.disabled = True
+
+
 def form_field_floor_state(bound_field: Any) -> Optional[str]:
     """How a Python reader of a ``BoundField`` (a component tag) must treat its value (#3790).
 
@@ -2477,13 +2511,15 @@ _EDITABLE_FLOOR_WARNED: set = set()
 
 
 def warn_editable_floor_field(bound_field: Any, floor: Optional[tuple] = None) -> None:
-    """Say, once per model field, that an EDITABLE floor field was rendered WITHOUT its value (#3797).
+    """Say, once per model field, that an EDITABLE floor field was rendered by djust, and how.
 
-    A component (:func:`djust.components.templatetags._forms._bound_field_value`) and a template's own
-    rendering of the form (:func:`_floor_blank_bound_field`) both do it, so they say the same thing.
-    The consequence is the author's to know about: the control is drawn empty, and an unmodified
-    re-post writes that emptiness (a blank text control clears the column, an unchecked checkbox
-    demotes the user: ``test_form_initial_floor_3790.TestWhatPostingBackDoes``).
+    * A SECRET-LIKE field (:func:`_floor_field_is_secret`) is drawn WITHOUT its stored value (#3797).
+      An editable control drawn empty is posted back empty (a blank text control clears the column, an
+      unchecked checkbox demotes), so the message names the one thing that protects the column:
+      ``disabled=True`` on the form field, which ``FormMixin.get_form()`` sets for a form that edits an
+      existing row. A plain ``ModelForm`` in a classic view is not protected (``djust.S014``).
+    * Any other floor field (``email`` in ``DJUST_SENSITIVE_FIELDS``, ``is_staff``) keeps rendering its
+      real value, as it did: stripping it would clear it on the next save (#3790).
     """
     if floor is None:
         floor = _model_form_floor(bound_field.form)
@@ -2491,14 +2527,97 @@ def warn_editable_floor_field(bound_field: Any, floor: Optional[tuple] = None) -
     if key in _EDITABLE_FLOOR_WARNED:
         return
     _EDITABLE_FLOOR_WARNED.add(key)
+    model = floor[0].__name__ if floor and floor[0] is not None else "?"
+    if floor is not None and _floor_field_is_secret(floor, bound_field.name, bound_field.field):
+        logger.warning(
+            "[djust] form field %s.%s is a secret on the serialization floor and EDITABLE, so its "
+            "control is rendered WITHOUT its stored value (#3797): posting the form back as rendered "
+            "writes that emptiness over the column. Declare the form field disabled=True (Django then "
+            "ignores what is posted for it; FormMixin.get_form() does it for a form that edits an "
+            "existing row), leave it out of the form, or opt the model field out of the floor with "
+            "djust_serialize_sensitive_fields.",
+            model,
+            bound_field.name,
+        )
+        return
     logger.warning(
-        "[djust] form field %s.%s is on the serialization floor and EDITABLE, so its control is "
-        "rendered WITHOUT its stored value (#3797): posting the form back as rendered writes that "
-        "emptiness (a blank text control clears it, an unchecked checkbox demotes). Declare the form "
-        "field disabled=True (Django then ignores what is posted for it), leave it out of the form, "
-        "or opt the model field out of the floor with djust_serialize_sensitive_fields.",
-        floor[0].__name__ if floor and floor[0] is not None else "?",
+        "[djust] form field %s.%s is on the serialization floor and EDITABLE, so a component rendered "
+        "it with its value: stripping it would clear it on the next save (a blank text control clears "
+        "it, an unchecked checkbox demotes). Declare the form field disabled=True to render it "
+        "without the value, or leave it out of the form (#3790).",
+        model,
         bound_field.name,
+    )
+
+
+#: Name tokens that make a floor field a SECRET (#3797). A name is split into lower-case words
+#: (``api_token``, ``apiToken``, ``AuthKey`` -> api/token, api/token, auth/key) and any word here
+#: counts; ``password`` / ``passwd`` / ``secret`` / ``token`` are also matched inside a longer word
+#: (``newpassword``). ``is_staff`` and ``is_superuser`` (privilege flags), selects and ordinary
+#: declared-sensitive text (``email``, ``first_name``) are NOT secrets: they are not secrets-in-HTML,
+#: and drawing them empty would corrupt data on the next save.
+_SECRET_NAME_WORDS = frozenset(
+    {
+        "password",
+        "passwd",
+        "passphrase",
+        "pwd",
+        "secret",
+        "token",
+        "key",
+        "apikey",
+        "hash",
+        "salt",
+        "credential",
+        "credentials",
+        "otp",
+        "signature",
+        "pin",
+    }
+)
+_SECRET_NAME_SUBSTRINGS = ("password", "passwd", "secret", "token", "apikey")
+_NAME_WORD_RE = re.compile(r"[A-Z]?[a-z]+|[A-Z]+(?![a-z])")
+
+
+def _name_is_secret_like(name: Any) -> bool:
+    if not isinstance(name, str):
+        return False
+    lowered = name.lower()
+    if any(part in lowered for part in _SECRET_NAME_SUBSTRINGS):
+        return True
+    return any(word.lower() in _SECRET_NAME_WORDS for word in _NAME_WORD_RE.findall(name))
+
+
+def _floor_field_is_secret(floor: tuple, name: Any, field: Any = None) -> bool:
+    """Is the floor field *name* a SECRET, whose value is blanked from the HTML (#3797)?
+
+    Four things make one, and nothing else does: its widget is a password input (``floor[4]``,
+    :func:`field_has_password_widget`: what a person typed); its name is secret-like
+    (:func:`_name_is_secret_like`: ``password``, ``api_token``, ``secret_key``, ``pwd_hash``, ...); or the
+    model's column is of a type ``LIVEVIEW_CONFIG['sensitive_field_types']`` excludes. Privilege flags
+    (``is_staff``, ``is_superuser``), selects (``role``, ``groups``) and ordinary declared-sensitive
+    text (``email``, ``first_name``) keep rendering their real state in the control.
+    """
+    if name in floor[4]:
+        return True
+    if field is not None and field_has_password_widget(field):
+        return True
+    if _name_is_secret_like(name):
+        return True
+    return (
+        floor[0] is not None and isinstance(name, str) and _field_type_excluded_for(floor[0], name)
+    )
+
+
+def floor_field_is_secret(bound_field: Any) -> bool:
+    """:func:`_floor_field_is_secret` for a ``BoundField`` (the component readers' question)."""
+    floor = (
+        _bound_field_floor(bound_field) if getattr(bound_field, "form", None) is not None else None
+    )
+    return (
+        floor is not None
+        and not _floor_field_readable(floor, bound_field.name)
+        and _floor_field_is_secret(floor, bound_field.name, bound_field.field)
     )
 
 
@@ -2546,30 +2665,78 @@ def _field_submission_keys(bound_field: Any) -> frozenset:
     return frozenset(n + suffix for n in names for suffix in ("", *suffixes))
 
 
-def _floor_blank_bound_field(bound_field: Any, floor: Optional[tuple] = None) -> Any:
-    """A COPY of *bound_field* that draws its control without the stored value, else ``None`` (#3797).
+def _scrub_floor_errors(errors: Any, floor: tuple, form: Any) -> Any:
+    """*errors* (a form's ``ErrorDict``) with every parameterised error of a SECRET-LIKE floor field
+    replaced by a generic one (#3797). Django's own messages interpolate the value
+    (``invalid_choice``: "Select a valid choice. <value> is not one of the available choices."), and a
+    ``disabled`` field is validated against its STORED value. A copy; the form's own errors are kept.
+    The same object when nothing needs scrubbing."""
+    if not isinstance(errors, dict) or not errors:
+        return errors
+    scrubbed: Any = None
+    for name, error_list in list(errors.items()):
+        data = getattr(error_list, "data", None)
+        if not data or _floor_field_readable(floor, name):
+            continue
+        field = form.fields.get(name) if isinstance(name, str) else None
+        if not _floor_field_is_secret(floor, name, field) or (
+            field is not None and _widget_keeps_its_value(field.widget)
+        ):
+            continue
+        if not any(getattr(error, "params", None) for error in data):
+            continue
+        from django.core.exceptions import ValidationError
+
+        if scrubbed is None:
+            scrubbed = copy.copy(errors)
+        replacement = copy.copy(error_list)
+        replacement.data = [
+            ValidationError("Enter a valid value.", code=getattr(error, "code", None))
+            if getattr(error, "params", None)
+            else error
+            for error in data
+        ]
+        scrubbed[name] = replacement
+    return errors if scrubbed is None else scrubbed
+
+
+def _floor_blank_bound_field(bound_field: Any, floor: tuple) -> Any:
+    """What a template may DRAW for *bound_field* under the floor (#3797): the field itself, a COPY
+    that draws its control without the stored value, or ``None`` when it cannot be drawn safely.
+
+    Only a SECRET-LIKE floor field is blanked (:func:`_floor_field_is_secret`); every other field is
+    returned as it is, including the floor fields that are not secrets (``email``, ``is_staff``): their
+    real state stays in the control, because drawing them empty overwrites them on the next save.
 
     A control is drawn from three reads on the ``BoundField``: ``value()`` (``as_widget``,
     ``__str__``, ``as_hidden``, and the ``subwidgets`` it builds), ``initial`` (what ``value()`` is
     made of), and ``data``, which on Django 5 ``as_widget(only_initial=True)`` takes straight out of
     ``form.data`` (the posted hidden-initial value) without asking ``value()``. The copy answers ``None``
     to the first two and is bound to a copy of the form whose ``data`` and ``files`` lack the control's
-    own keys (:func:`_field_submission_keys`), so ``data`` is empty too. The real ``BoundField`` is untouched:
-    the view's own code (``form["password"].value()``) and every other reader still see the value.
+    own keys (:func:`_field_submission_keys`) and whose errors for the field carry no value
+    (:func:`_scrub_floor_errors`). The real ``BoundField`` and form are not written to: a copy that is
+    the original, or that shares its ``__dict__`` with it, is refused before anything is set.
 
-    The widget therefore renders as it does for a field that has none: a text control with no
-    ``value=``, a ``<textarea>`` with no body, no ``<option selected>``, an unchecked checkbox, a
-    ``MultiWidget`` with empty parts. That is Django's own rendering of an empty field, not a djust
-    one, so a custom or third-party widget needs no cooperation.
+    The widget then renders as it does for a field that has none: a text control with no ``value=``, a
+    ``<textarea>`` with no body, no ``<option selected>``, an unchecked checkbox, a ``MultiWidget`` with
+    empty parts. That is Django's own rendering of an empty field, so a custom widget needs no
+    cooperation.
 
     ``None`` when the copy cannot be made or does not answer as promised (a ``BoundField`` subclass
-    with ``__slots__`` or a ``value`` that is a property): the caller renders nothing. A control that
-    cannot be drawn without its value is not drawn.
+    with ``__slots__``, ``value`` or ``initial`` as a property, a ``__copy__`` that returns the
+    original): the caller renders nothing. A control that cannot be drawn without its value is not drawn.
     """
     try:
-        if _widget_keeps_its_value(bound_field.field.widget):
+        field = bound_field.field
+        if (
+            _floor_field_readable(floor, bound_field.name)
+            or not _floor_field_is_secret(floor, bound_field.name, field)
+            or _widget_keeps_its_value(field.widget)
+        ):
             return bound_field
         blank = copy.copy(bound_field)
+        if blank is bound_field or blank.__dict__ is bound_field.__dict__:
+            raise TypeError("the copy is the original")
         state = blank.__dict__
         # ``subwidgets`` is cached from ``value()``: drop it, it is rebuilt from the answer below.
         state.pop("subwidgets", None)
@@ -2579,13 +2746,20 @@ def _floor_blank_bound_field(bound_field: Any, floor: Optional[tuple] = None) ->
         form = bound_field.form
         keys = _field_submission_keys(bound_field)
         data, files = getattr(form, "data", None), getattr(form, "files", None)
-        if any(c is not None and k in c for c in (data, files) for k in keys):
-            # The control's own posted keys leave a copy of the form (``form.errors`` is computed on
-            # the REAL form first, so the copy shares the result and validates nothing twice).
-            form.errors  # noqa: B018
+        if getattr(form, "is_bound", False):
+            form.errors  # noqa: B018 - validated on the REAL form once; the copy shares the result
+        errors = getattr(form, "_errors", None)
+        scrubbed = _scrub_floor_errors(errors, floor, form)
+        if scrubbed is not errors or any(
+            c is not None and k in c for c in (data, files) for k in keys
+        ):
+            # The control's own posted keys and value-bearing errors leave a copy of the form.
             stripped = copy.copy(form)
+            if stripped is form:
+                raise TypeError("the form copy is the original")
             stripped.data = _filter_floor_keys(data, lambda k: k not in keys)
             stripped.files = _filter_floor_keys(files, lambda k: k not in keys)
+            stripped._errors = _scrub_floor_errors(getattr(form, "_errors", None), floor, form)
             state["form"] = stripped
         if blank.value() is not None or blank.initial is not None:
             raise TypeError("the copy still answers with the value")
@@ -2596,13 +2770,12 @@ def _floor_blank_bound_field(bound_field: Any, floor: Optional[tuple] = None) ->
             getattr(bound_field, "name", "?"),
         )
         return None
-    if floor is not None and bound_field.name not in floor[4]:
-        if not getattr(bound_field.field, "disabled", False):
-            warn_editable_floor_field(bound_field, floor)
+    if bound_field.name not in floor[4] and not getattr(field, "disabled", False):
+        warn_editable_floor_field(bound_field, floor)
     return blank
 
 
-def _floor_render(bound_field: Any, floor: Optional[tuple] = None) -> str:
+def _floor_render(bound_field: Any, floor: tuple) -> str:
     """*bound_field*'s control as HTML without its stored value; ``""`` when it cannot be drawn."""
     blank = _floor_blank_bound_field(bound_field, floor)
     return "" if blank is None else str(blank)
@@ -2626,6 +2799,9 @@ def _floor_render_form(form: Any, floor: tuple) -> Any:
     try:
         form.errors  # noqa: B018
         shadow = copy.copy(form)
+        if shadow is form:
+            raise TypeError("the form copy is the original")
+        shadow._errors = _scrub_floor_errors(form._errors, floor, form)
         cache = {}
         for name in list(form.fields):
             bound_field = form[name]
@@ -2682,12 +2858,12 @@ def _floor_render_formset(formset: Any) -> Any:
 #: :func:`_floor_render_form`'s copy. ``__str__`` / ``__html__`` are ``render`` and are routed the same.
 _FLOOR_FORM_RENDER_ATTRS = frozenset({"render", "as_p", "as_table", "as_ul", "as_div"})
 
-#: The ``BoundField`` methods that render the CONTROL (``as_widget``, and ``as_field_group`` / ``render``,
-#: which draw the label and the control from ``self``). Run on the blank copy. ``as_text`` /
+#: The ``BoundField`` members read from the blank copy: the methods that render the CONTROL
+#: (``as_widget``, and ``as_field_group`` / ``render``, which draw the label and the control from
+#: ``self``) and ``errors`` (whose messages may carry the value, :func:`_scrub_floor_errors`).
+#: ``get_context`` is not here: it returns a dict the walk re-proxies, so the real one is safe. ``as_text`` /
 #: ``as_textarea`` / ``as_hidden`` stay refused (:data:`_FLOOR_BOUND_FIELD_ATTRS`).
-_FLOOR_BOUND_FIELD_RENDER_ATTRS = frozenset(
-    {"as_widget", "as_field_group", "render", "get_context"}
-)
+_FLOOR_BOUND_FIELD_RENDER_ATTRS = frozenset({"as_widget", "as_field_group", "render", "errors"})
 
 
 class _SidecarFormProxy:
@@ -2723,6 +2899,10 @@ class _SidecarFormProxy:
             # The form's own rendering runs on a copy whose floor fields draw without their value (#3797)
             return getattr(_floor_render_form(form, object.__getattribute__(self, "_floor")), name)
         value = getattr(form, name)
+        if name == "errors":
+            return _protect_sidecar_walk(
+                _scrub_floor_errors(value, object.__getattribute__(self, "_floor"), form)
+            )
         if name in _FLOOR_FORM_DICT_ATTRS:
             floor = object.__getattribute__(self, "_floor")
             if name == "data":
@@ -2784,6 +2964,16 @@ class _SidecarFormSetProxy:
         if name in _FLOOR_FORM_RENDER_ATTRS:
             # each form's floor fields drawn without their value (#3797)
             return getattr(_floor_render_formset(formset), name)
+        if name == "errors":
+            # one ErrorDict per form; a secret-like floor field's value-bearing messages are scrubbed
+            return _protect_sidecar_walk(
+                [
+                    _scrub_floor_errors(f.errors, fl, f)
+                    if (fl := _model_form_floor(f))
+                    else f.errors
+                    for f in formset.forms
+                ]
+            )
         value = getattr(formset, name)
         floor = object.__getattribute__(self, "_floor")
         if name in _FLOOR_FORM_DICT_ATTRS:
@@ -2956,6 +3146,20 @@ def unwrap_form_proxy(value: Any) -> Any:
     if isinstance(value, _SidecarBoundFieldProxy):
         return object.__getattribute__(value, "_bf")
     return value
+
+
+def unwrap_form_proxy_for_tag(value: Any) -> Any:
+    """What a BRIDGED TAG or filter is handed for a form proxy (#3797): :func:`unwrap_form_proxy`,
+    except that the ``BoundField`` of a SECRET-LIKE floor field is handed as its blank copy
+    (:func:`_floor_blank_bound_field`), so a tag that draws it (``{% render_field form.password %}``,
+    ``{{ form.password|add_class:"x" }}``, an inclusion tag over ``{{ field }}``) cannot print the stored
+    value. ``""`` when the copy cannot be made. A form or formset is still the real one (a tag walks it
+    itself; not covered, see ``docs/SECURE_DEFAULTS.md``)."""
+    if isinstance(value, _SidecarBoundFieldProxy):
+        bf = object.__getattribute__(value, "_bf")
+        blank = _floor_blank_bound_field(bf, object.__getattribute__(value, "_floor"))
+        return "" if blank is None else blank
+    return unwrap_form_proxy(value)
 
 
 def _protect_sidecar_walk(value: Any) -> Any:

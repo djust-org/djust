@@ -1,22 +1,26 @@
-"""A floor field NEVER renders its stored value into HTML, whatever widget the author chose (#3797).
+"""A SECRET floor field is never rendered with its stored value, whatever widget the author chose (#3797).
 
-#3796/#3798 refuse every way a TEMPLATE can READ a model form's floor-field value back
-(``form.initial.password``, ``form.password.value``, ``cleaned_data``, ``data``, ``subwidgets``). They
-did not touch what the form RENDERS: ``{{ form.password }}``, ``{{ form.as_p }}``, ``{{ form }}`` and
+#3796/#3798 refuse every way a TEMPLATE can READ a model form's floor-field value back. They did not
+touch what the form RENDERS: ``{{ form.password }}``, ``{{ form.as_p }}``, ``{{ form }}`` and
 ``{% for x in form %}{{ x }}{% endfor %}`` printed ``value="..."`` for a floor field whose widget was a
 plain ``TextInput`` (and the body of a ``Textarea``, the ``selected`` option of a ``Select``, the
-``checked`` of a checkbox, the parts of a ``MultiWidget``). The maintainer's decision: the value is
-never rendered; a floor field's control is drawn the way Django draws a field that has none.
+``checked`` of a checkbox, the parts of a ``MultiWidget``).
+
+The maintainer's decision: blank the value ONLY for SECRET-LIKE floor fields (a password widget, a
+password / token / secret / key / hash-style name, a configured sensitive type); privilege flags
+(``is_staff``), selects and ordinary declared-sensitive text (``email``, ``first_name``) keep drawing
+their real state, because an empty control is posted back empty. The column is protected where it can
+be: ``disabled=True`` on the form field (``FormMixin.get_form()``; the system check ``djust.S014`` for
+a plain ``ModelForm``). ``test_floor_data_loss_3797.py`` holds that half.
 
 The ORACLE is Django itself, twice:
 
-* a floor field draws EXACTLY what Django draws for the SAME form with the floor columns empty (the
-  "twin"): not "the secret is absent" alone, which a control that vanished would also satisfy;
-* a field that is not on the floor draws byte-for-byte what Django draws for the real form.
+* a secret floor field draws EXACTLY what Django draws for the SAME form with the secret columns empty
+  (the "twin"): not "the secret is absent" alone, which a control that vanished would also satisfy;
+* every other field, floor or not, draws byte-for-byte what Django draws for the real form.
 
-The routes (``ROUTES``) are the cross product of how a field is PRODUCED and how it is RENDERED; the
-shapes (``Shapes``) are the widgets. Every secret is also an injection payload, so a value that
-escaped through an attribute or a body would show up whether or not it was HTML-escaped.
+Every secret is also an injection payload, so a value that escaped through an attribute or a body
+would show up whether or not it was HTML-escaped.
 
 Refs #3797, #3790, #3796, #3798, #1646, #1468.
 """
@@ -43,17 +47,31 @@ User = get_user_model()
 #: Every secret contains ``SECRET-3797`` so one substring finds it raw, HTML-escaped or inside an
 #: attribute, and carries a quote and a tag so that a leak through an attribute or a body is visible.
 HASH = '"><i>SECRET-3797-hash</i>'
-EMAIL = "SECRET-3797-email@example.com"
-FIRST = "<b>SECRET-3797-first</b>"
-#: a CHOICE of the Select: its option value is the author's own; what must not happen is the stored
-#: value being marked ``selected`` (the comparison with the twin catches that)
-LAST = "choice-3797-last"
+NOTES = "<b>SECRET-3797-notes</b>"
 TOKEN = "SECRET-3797-token'onfocus='x()"
 SHH = "SECRET-3797-hidden"
+#: a CHOICE of the Select: its option value is the author's own; what must not happen is the stored
+#: value being marked ``selected`` (the comparison with the twin catches that)
+PICK = "choice-3797-pick"
+#: floor fields that are NOT secrets: they keep drawing their real state
+EMAIL = "plain-3797@example.com"
+FIRSTN = "Ada-3797"
+LASTN = "Lovelace-3797"
 MARKER = "SECRET-3797"
 
-FLOOR_SETTING = ["email", "first_name", "last_name", "api_token", "secret", "date_joined"]
-CHOICES = [("", "---"), (LAST, "The last"), ("other", "Other")]
+FLOOR_SETTING = [
+    "email",
+    "first_name",
+    "last_name",
+    "api_token",
+    "secret",
+    "secret_notes",
+    "auth_key",
+    "has_secret",
+    "secret_groups",
+    "token_when",
+]
+CHOICES = [("", "---"), (PICK, "The pick"), ("other", "Other")]
 
 
 class SplitWhen(forms.SplitDateTimeField):
@@ -61,18 +79,19 @@ class SplitWhen(forms.SplitDateTimeField):
 
 
 class Shapes(forms.ModelForm):
-    """Every widget shape on one form; each of the six is a floor field (name or model floor).
+    """Every widget shape on one form.
 
-    ``password`` TextInput (the model column); ``email`` EmailInput (``DJUST_SENSITIVE_FIELDS``);
-    ``first_name`` Textarea; ``last_name`` Select; ``is_staff`` CheckboxInput (model floor);
-    ``date_joined`` ``SplitDateTimeWidget`` (a ``MultiWidget``); ``api_token`` a declared field that is
-    no column of the model (named in the setting); ``secret`` a ``HiddenInput``; ``username`` and
-    ``note`` are NOT on the floor.
+    SECRET floor fields: ``password`` TextInput (the model column), ``api_token`` a declared text field
+    that is no column of the model, ``secret`` a HiddenInput, ``secret_notes`` Textarea, ``auth_key``
+    Select, ``has_secret`` CheckboxInput, ``token_when`` SplitDateTimeWidget (a ``MultiWidget``).
+    Floor fields that are NOT secrets: ``email``, ``first_name``, ``last_name``, ``is_staff``.
+    NOT on the floor: ``username``, ``note``.
     """
 
-    first_name = forms.CharField(widget=forms.Textarea, required=False)
-    last_name = forms.ChoiceField(choices=CHOICES, required=False)
-    date_joined = SplitWhen(required=False)
+    secret_notes = forms.CharField(widget=forms.Textarea, required=False)
+    auth_key = forms.ChoiceField(choices=CHOICES, required=False)
+    has_secret = forms.BooleanField(required=False)
+    token_when = SplitWhen(required=False)
     api_token = forms.CharField(required=False)
     secret = forms.CharField(widget=forms.HiddenInput, required=False)
     note = forms.CharField(required=False)
@@ -83,10 +102,10 @@ class Shapes(forms.ModelForm):
 
 
 class RadioShapes(forms.ModelForm):
-    """The choice widgets that draw one control per option."""
+    """The choice widgets that draw one control per option (secret-like names)."""
 
-    last_name = forms.ChoiceField(choices=CHOICES, widget=forms.RadioSelect, required=False)
-    first_name = forms.MultipleChoiceField(
+    auth_key = forms.ChoiceField(choices=CHOICES, widget=forms.RadioSelect, required=False)
+    secret_groups = forms.MultipleChoiceField(
         choices=[("choice-3797-first", "f"), ("z", "z")],
         widget=forms.CheckboxSelectMultiple,
         required=False,
@@ -107,7 +126,7 @@ class LeakyWidget(forms.TextInput):
 
 
 class WithLeaky(forms.ModelForm):
-    first_name = forms.CharField(widget=LeakyWidget, required=False)
+    secret_notes = forms.CharField(widget=LeakyWidget, required=False)
 
     class Meta:
         model = User
@@ -148,33 +167,40 @@ def django_(src: str, **context) -> str:
 
 
 def row(secret: bool = True):
-    """A ``User`` instance: with its secrets, or the same row with every floor column empty."""
+    """A ``User`` instance: with its secret column, or the same row with it empty. The floor fields
+    that are not secrets are the same in both (they keep drawing their real state)."""
     return User(
         username="bob",
         password=HASH if secret else "",
-        email=EMAIL if secret else "",
-        first_name=FIRST if secret else "",
-        last_name=LAST if secret else "",
-        is_staff=secret,
+        email=EMAIL,
+        first_name=FIRSTN,
+        last_name=LASTN,
+        is_staff=True,
         date_joined=None,
     )
 
 
 def shapes(secret: bool = True, **kwargs):
-    initial = {"api_token": TOKEN, "secret": SHH, "date_joined": None} if secret else {}
-    if secret:
-        from datetime import datetime
+    from datetime import datetime
 
-        initial["date_joined"] = datetime(2020, 1, 2, 3, 4, 5)
+    initial = (
+        {
+            "api_token": TOKEN,
+            "secret": SHH,
+            "secret_notes": NOTES,
+            "auth_key": PICK,
+            "has_secret": True,
+            "token_when": datetime(2020, 1, 2, 3, 4, 5),
+        }
+        if secret
+        else {}
+    )
     return Shapes(instance=row(secret), initial=initial, **kwargs)
 
 
-FLOOR_FIELDS = ["password", "email", "first_name", "last_name", "is_staff", "api_token", "secret"]
-SPLIT = "date_joined"
-
-
-def _fields_src(template: str, names) -> str:
-    return "|".join(template.replace("FIELD", n) for n in names)
+SECRET_FIELDS = ["password", "api_token", "secret", "secret_notes", "auth_key", "has_secret"]
+PLAIN_FLOOR = ["email", "first_name", "last_name", "is_staff"]
+SPLIT = "token_when"
 
 
 # ---------------------------------------------------------------------------------------------
@@ -211,7 +237,7 @@ FORM_ROUTES = [
 
 class TestTheRoutes:
     @pytest.mark.parametrize("src", FIELD_ROUTES)
-    @pytest.mark.parametrize("name", FLOOR_FIELDS + [SPLIT])
+    @pytest.mark.parametrize("name", SECRET_FIELDS + [SPLIT])
     def test_a_field_draws_as_django_draws_the_same_field_with_no_value(self, engine, name, src):
         route = src.replace("FIELD", name)
         out = native(engine, route, form=shapes(True))
@@ -232,6 +258,20 @@ class TestTheRoutes:
         """Without this a route that renders nothing on BOTH engines would pass as protection."""
         route = src.replace("FIELD", "secret" if "hidden_fields" in src else "password")
         assert MARKER in django_(route, form=shapes(True)), route
+
+    @pytest.mark.parametrize("src", FIELD_ROUTES)
+    @pytest.mark.parametrize("name", PLAIN_FLOOR)
+    def test_a_floor_field_that_is_not_a_secret_draws_its_real_state_as_django(
+        self, engine, name, src
+    ):
+        route = src.replace("FIELD", name)
+        form = shapes(True)
+        assert native(engine, route, form=form) == django_(route, form=form)
+
+    def test_the_real_state_of_the_fields_that_are_not_secrets(self, engine):
+        out = native(engine, "{{ form }}", form=shapes(True))
+        assert EMAIL in out and FIRSTN in out and LASTN in out
+        assert re.search(r'name="is_staff"[^>]*checked', out), out
 
     def test_the_fields_that_are_not_on_the_floor_draw_exactly_as_django(self, engine):
         for src in ("{{ form.username }}", "{{ form.note }}", "{{ form.username.label_tag }}"):
@@ -281,13 +321,16 @@ class TestBound:
         "username": "bob",
         "password": HASH,
         "email": EMAIL,
-        "first_name": FIRST,
-        "last_name": LAST,
+        "first_name": FIRSTN,
+        "last_name": LASTN,
         "is_staff": "on",
         "api_token": TOKEN,
         "secret": SHH,
-        "date_joined_0": "2020-01-02",
-        "date_joined_1": "03:04:05",
+        "secret_notes": NOTES,
+        "auth_key": PICK,
+        "has_secret": "on",
+        "token_when_0": "2020-01-02",
+        "token_when_1": "03:04:05",
         "note": "n",
     }
 
@@ -302,7 +345,7 @@ class TestBound:
         assert "x()" not in out
 
     @pytest.mark.parametrize("src", FIELD_ROUTES)
-    @pytest.mark.parametrize("name", FLOOR_FIELDS + [SPLIT])
+    @pytest.mark.parametrize("name", SECRET_FIELDS + [SPLIT])
     def test_the_field_routes(self, engine, name, src):
         out = native(engine, src.replace("FIELD", name), form=self.bound())
         assert MARKER not in out, out
@@ -318,10 +361,10 @@ class TestBound:
         class D(Shapes):
             def __init__(self, *a, **k):
                 super().__init__(*a, **k)
-                self.fields["email"].disabled = True
+                self.fields["api_token"].disabled = True
 
-        form = D(instance=row(True))
-        out = native(engine, "{{ form.email }}{{ form.as_p }}", form=form)
+        form = D(instance=row(True), initial={"api_token": TOKEN})
+        out = native(engine, "{{ form.api_token }}{{ form.as_p }}", form=form)
         assert MARKER not in out
         assert "disabled" in out
 
@@ -336,55 +379,55 @@ class TestBound:
         not from ``value()``: a second route to the same value."""
 
         class H(forms.ModelForm):
-            first_name = forms.CharField(show_hidden_initial=True, required=False)
+            api_token = forms.CharField(show_hidden_initial=True, required=False)
 
             class Meta:
                 model = User
                 fields = ["username"]
 
         form = H(
-            {"username": "b", "first_name": FIRST, "initial-first_name": FIRST}, instance=row(True)
+            {"username": "b", "api_token": NOTES, "initial-api_token": NOTES}, instance=row(True)
         )
-        reference = django_("{{ form.first_name }}", form=form)
+        reference = django_("{{ form.api_token }}", form=form)
         assert MARKER in reference, "not vacuous: Django propagates it"
-        out = native(engine, "{{ form.first_name }}{{ form.as_p }}", form=form)
+        out = native(engine, "{{ form.api_token }}{{ form.as_p }}", form=form)
         assert MARKER not in out, out
-        assert 'name="initial-first_name"' in out, "the hidden-initial control is still drawn"
+        assert 'name="initial-api_token"' in out, "the hidden-initial control is still drawn"
 
 
 class TestWidgetShapes:
     def test_choice_widgets_draw_every_option_and_select_none(self, engine):
         form = RadioShapes(
-            instance=row(True), initial={"first_name": ["choice-3797-first"], "last_name": LAST}
+            instance=row(True), initial={"secret_groups": ["choice-3797-first"], "auth_key": PICK}
         )
-        out = native(engine, "{{ form.last_name }}{{ form.first_name }}", form=form)
+        out = native(engine, "{{ form.auth_key }}{{ form.secret_groups }}", form=form)
         # Django selects the EMPTY choice of a field that has no value; it must not select the stored one
-        assert 'value="choice-3797-last" id="id_last_name_1" checked' not in out, out
-        assert 'value="choice-3797-first" id="id_first_name_0" checked' not in out, out
+        assert 'value="choice-3797-pick" id="id_auth_key_1" checked' not in out, out
+        assert 'value="choice-3797-first" id="id_secret_groups_0" checked' not in out, out
         assert out.count("<input") == 3 + 2, out
         twin = RadioShapes(instance=row(False), initial={})
-        # the option VALUES are the author's choices and are drawn; the stored value is not "checked"
-        assert out == django_("{{ form.last_name }}{{ form.first_name }}", form=twin)
+        assert out == django_("{{ form.auth_key }}{{ form.secret_groups }}", form=twin)
 
     def test_a_select_selects_nothing_and_still_lists_its_options(self, engine):
-        out = native(engine, "{{ form.last_name }}", form=shapes(True))
-        assert 'value="choice-3797-last" selected' not in out
+        out = native(engine, "{{ form.auth_key }}", form=shapes(True))
+        assert 'value="choice-3797-pick" selected' not in out
         assert out.count("<option") == 3
 
     def test_a_checkbox_is_unchecked(self, engine):
-        out = native(engine, "{{ form.is_staff }}", form=shapes(True))
-        assert "checked" not in out
+        assert "checked" not in native(engine, "{{ form.has_secret }}", form=shapes(True))
 
     def test_a_textarea_has_no_body(self, engine):
-        assert native(engine, "{{ form.first_name }}", form=shapes(True)).endswith("> </textarea>")
+        assert native(engine, "{{ form.secret_notes }}", form=shapes(True)).endswith(
+            "> </textarea>"
+        )
 
     def test_a_multiwidget_draws_empty_parts(self, engine):
-        out = native(engine, "{{ form.date_joined }}", form=shapes(True))
+        out = native(engine, "{{ form.token_when }}", form=shapes(True))
         assert out.count("<input") == 2 and "2020" not in out and "03:04" not in out
 
     def test_a_third_party_widget_that_prints_the_value_never_gets_one(self, engine):
-        form = WithLeaky(instance=row(True))
-        out = native(engine, "{{ form.first_name }}{{ form }}", form=form)
+        form = WithLeaky(instance=row(True), initial={"secret_notes": NOTES})
+        out = native(engine, "{{ form.secret_notes }}{{ form }}", form=form)
         assert MARKER not in out, out
 
 
@@ -413,10 +456,10 @@ class TestWhatKeepsDrawing:
     def test_the_model_opt_out_is_the_way_to_echo_a_value(self, engine, monkeypatch):
         """Documented: ``djust_serialize_sensitive_fields`` takes a field off the floor, so it is drawn
         as Django draws it; a field that is not opted out stays blank."""
-        monkeypatch.setattr(User, "djust_serialize_sensitive_fields", ["email"], raising=False)
+        monkeypatch.setattr(User, "djust_serialize_sensitive_fields", ["api_token"], raising=False)
         form = shapes(True)
-        assert EMAIL in native(engine, "{{ form.email }}{{ form.as_p }}", form=form)
-        assert "SECRET-3797-first" not in native(engine, "{{ form.first_name }}", form=form)
+        assert "SECRET-3797-token" in native(engine, "{{ form.api_token }}", form=form)
+        assert SHH not in native(engine, "{{ form.secret }}", form=form)
 
     def test_the_readonly_password_hash_summary_is_drawn_not_blanked(self, engine):
         user = User.objects.create_user("hashed", "h@example.com", "pw-3797-xyz")
@@ -560,7 +603,7 @@ class TestTheProxiesRenderThemselves:
         form = shapes(True)
         floor = serialization._model_form_floor(form)
         FormSet = modelformset_factory(User, form=Shapes, extra=0)
-        user = User.objects.create_user("fs-direct", EMAIL, "pw", first_name=FIRST)
+        user = User.objects.create_user("fs-direct", EMAIL, "pw", first_name=FIRSTN)
         formset = FormSet(queryset=User.objects.filter(pk=user.pk))
         return [
             serialization._SidecarFormProxy(form, floor),
@@ -580,7 +623,7 @@ class TestTheProxiesRenderThemselves:
 class TestFormsets:
     def formset(self):
         FormSet = modelformset_factory(User, form=Shapes, extra=0)
-        user = User.objects.create_user("fs-user", EMAIL, "pw", first_name=FIRST, last_name=LAST)
+        user = User.objects.create_user("fs-user", EMAIL, "pw", first_name=FIRSTN, last_name=LASTN)
         user.password = HASH
         user.save()
         return FormSet(queryset=User.objects.filter(pk=user.pk))
@@ -629,30 +672,36 @@ class TestComponents:
             "{% dj_form form %}",
             "{% combobox field=form.password %}",
             "{% rich_select field=form.password %}",
-            "{% for x in form %}{% if x.name == 'email' %}{% combobox field=x %}{% endif %}{% endfor %}",
+            "{% for x in form %}{% if x.name == 'api_token' %}{% combobox field=x %}{% endif %}{% endfor %}",
         ],
     )
-    def test_an_editable_floor_field_is_drawn_without_its_value(self, engine, src):
+    def test_an_editable_secret_floor_field_is_drawn_without_its_value(self, engine, src):
         assert MARKER not in native(engine, src, form=shapes(True))
+
+    def test_an_editable_floor_field_that_is_not_a_secret_keeps_its_value(self, engine):
+        out = native(engine, "{% dj_form form %}", form=shapes(True))
+        assert EMAIL in out and FIRSTN in out
 
     def test_the_editable_floor_field_says_so_once(self, engine, caplog):
         with caplog.at_level(logging.WARNING, logger="djust.serialization"):
             native(engine, "{% dj_form form %}", form=shapes(True))
             native(engine, "{% dj_form form %}", form=shapes(True))
         said = [r for r in caplog.records if "WITHOUT its stored value" in r.getMessage()]
-        assert 0 < len(said) <= len(FLOOR_FIELDS) + 1
+        assert 0 < len(said) <= len(SECRET_FIELDS) + len(PLAIN_FLOOR) + 1
         assert all(MARKER not in r.getMessage() for r in caplog.records)
 
 
 class TestTheWarning:
     def test_a_template_render_names_the_field_once_and_never_the_value(self, engine, caplog):
         with caplog.at_level(logging.WARNING, logger="djust.serialization"):
-            native(engine, "{{ form.email }}{{ form.email }}{{ form.as_p }}", form=shapes(True))
+            native(
+                engine, "{{ form.password }}{{ form.password }}{{ form.as_p }}", form=shapes(True)
+            )
         said = [
             r.getMessage() for r in caplog.records if "WITHOUT its stored value" in r.getMessage()
         ]
-        assert any("User.email" in m for m in said), said
-        assert len([m for m in said if "User.email" in m]) == 1
+        assert any("User.password" in m and "disabled=True" in m for m in said), said
+        assert len([m for m in said if "User.password" in m]) == 1
         assert all(MARKER not in m for m in said)
 
     def test_a_disabled_or_password_field_is_not_reported(self, engine, caplog):
@@ -693,14 +742,14 @@ class TestFailClosed:
                 return Weird(form, self, field_name)
 
         class W(forms.ModelForm):
-            email = WeirdField(required=False)
+            api_token = WeirdField(required=False)
 
             class Meta:
                 model = User
                 fields = ["username"]
 
         assert MARKER not in native(
-            engine, "{{ form.email }}{{ form }}", form=W(instance=row(True))
+            engine, "{{ form.api_token }}{{ form }}", form=W(instance=row(True))
         )
 
     def test_an_initial_that_is_a_property_is_not_trusted(self, engine):
@@ -714,7 +763,7 @@ class TestFailClosed:
                 return Weird(form, self, field_name)
 
         class W(forms.ModelForm):
-            email = WeirdField(required=False)
+            api_token = WeirdField(required=False)
 
             class Meta:
                 model = User
@@ -723,8 +772,8 @@ class TestFailClosed:
         form = W(instance=row(True))
         floor = serialization._model_form_floor(form)
         # no stock route prints ``initial`` of a blank copy, but a form template may: it is not drawn
-        assert serialization._floor_blank_bound_field(form["email"], floor) is None
-        assert MARKER not in native(engine, "{{ form.email }}{{ form }}", form=form)
+        assert serialization._floor_blank_bound_field(form["api_token"], floor) is None
+        assert MARKER not in native(engine, "{{ form.api_token }}{{ form }}", form=form)
 
 
 class TestCost:

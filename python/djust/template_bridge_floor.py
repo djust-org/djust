@@ -152,10 +152,11 @@ def release(value: Any) -> Any:
     # `form.initial.password`, but a tag is the application's own code and is handed the real form
     # (#3790): djust's component readers call `bound_field.value()` and a third-party form tag renders
     # the widget; a proxy would draw a `User`'s `is_staff` checkbox unchecked and the next save would
-    # clear it.
-    from djust.serialization import unwrap_form_proxy
+    # clear it. The BoundField of a SECRET-LIKE floor field is handed as a blank copy (#3797): a tag
+    # that draws it (`{% render_field %}`) must not print the stored value either.
+    from djust.serialization import unwrap_form_proxy_for_tag
 
-    raw = unwrap_form_proxy(raw)
+    raw = unwrap_form_proxy_for_tag(raw)
     if isinstance(raw, (list, tuple, dict, set, frozenset)):
         _, protect_tree = _floor()
         protected = protect_tree(raw)

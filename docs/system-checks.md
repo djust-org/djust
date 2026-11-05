@@ -1,6 +1,6 @@
 # djust System Checks Reference
 
-Quick reference for all 42 djust system checks — IDs, severities, suppression patterns, and known false positive conditions.
+Quick reference for all 43 djust system checks — IDs, severities, suppression patterns, and known false positive conditions.
 
 Run checks with: `python manage.py check --deploy` or `python manage.py djust_check`
 
@@ -65,6 +65,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | S011 | Security | Warning | Inline executable `<script>` inside a `dj-root` with no CSP configured (#1848) |
 | S012 | Security | Error | A LiveView the runtime refuses on live transports because access control that only the HTTP request runs is not covered by its declared djust auth: a custom `AccessMixin` subclass's `dispatch()`, a `setup()`/`dispatch()`/`get()`/`post()` override, decorator or URLconf wrapper that checks the user and denies, and unknown decorators and URLconf wrappers. Django's own auth decorators, wrappers and mixins are replayed; the rest is V013 (#14; reallocated from a duplicate S004, #2070) |
 | S013 | Security | Warning | A `ModelFormMixin` edit view overrides neither `get_queryset()` nor `has_object_permission()` (ADR-035) |
+| S014 | Security | Warning | A `ModelForm` with an editable SECRET-LIKE floor field (`password`, `api_token`, `secret_key`, ...): djust draws it without its stored value, so an unchanged re-post saves it as empty (#3797) |
 | T001 | Templates | Warning | Deprecated @click/@input syntax |
 | T002 | Templates | Info | Template declares `dj-view` but no `dj-root` (the root is inferred; the page connects) |
 | T003 | Templates | Info | wrapper_template uses {% include %} instead of liveview_content |
@@ -678,6 +679,27 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 - **Suppression**: `# noqa: S013` on the `class` line, or
   `DJUST_CONFIG = {'suppress_checks': ['S013']}`.
 - **Availability**: `ModelFormMixin` is not in a released version yet.
+
+### S014 — Editable secret field on the serialization floor
+- **Severity**: Warning
+- **Method**: Class inspection of imported `ModelForm` subclasses (`base_fields`; nothing is
+  constructed, mounted or queried). Django's own forms and test modules are skipped.
+- **What it detects**: A `ModelForm` whose class has an editable field that is both on the
+  serialization floor and SECRET-LIKE: a `password` column, a name with a `password` / `secret` /
+  `token` / `key` / `hash` / `salt` / `pwd` / `otp` word (`api_token`, `secret_key`), a
+  `sensitive_field_types` column, or a password-widget field. djust draws such a field WITHOUT its stored
+  value, and a browser posts an empty control as `""`, so submitting the form unchanged overwrites the
+  column. A password-widget field is not reported (Django draws it empty by design, and a person types a
+  new value into it). Privilege flags (`is_staff`, `is_superuser`), selects and ordinary declared-sensitive
+  text (`email`) keep rendering their real value and are not reported.
+- **Fix**: Declare the form field `disabled=True` (Django then ignores what is posted and keeps the stored
+  value; a `FormMixin` view that edits an existing row does it for you, so this reports forms a classic
+  view uses), leave the field out of `Meta.fields`, or opt the model field out of the floor with
+  `djust_serialize_sensitive_fields`. HTML `disabled` / `readonly` and leaving the control out of the page do
+  NOT protect the column.
+- **Limits**: A field added in `__init__` is not seen (the check reads `base_fields`).
+- **Suppression**: `# noqa: S014` on the `class` line, or
+  `DJUST_CONFIG = {'suppress_checks': ['S014']}`.
 
 ---
 

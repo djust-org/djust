@@ -107,36 +107,61 @@ flag, a PII column — because serialization defaulted to *allow everything*.
 > **What the form floor does NOT do (stated as limits, each pinned by a test in
 > `python/tests/test_form_floor_followups_3790.py`).**
 >
-> - *A floor field's control is drawn without its value, and re-posting it writes
->   the emptiness (#3797).* The value of a floor field is **never rendered**,
->   whatever widget the form author chose: `{{ form.field }}`, `as_widget`,
->   `as_field_group`, `as_p` / `as_table` / `as_ul` / `as_div` / `render` /
->   `{{ form }}`, a loop's `{{ x }}`, `visible_fields`, a formset's `as_p`, and the
->   `{name: html}` snapshot of a form kept in state all draw the control the way
->   Django draws a field that has none: a text control with no `value=`, a
->   `<textarea>` with no body, no `selected` option, an unchecked checkbox, a
->   `MultiWidget` with empty parts (`_floor_blank_bound_field`). Because Django's
->   own widget does the drawing, a custom or third-party widget needs no
->   cooperation. **The consequence is the author's to know**: an editable control
->   that is drawn empty is posted back empty, so a blank text control clears the
->   column and an unchecked `is_staff` checkbox demotes the user. djust logs it once
->   per field. Declare the form field `disabled=True` (Django ignores what is
->   posted for it), leave it out of the form, or opt the model field out of the
->   floor with `djust_serialize_sensitive_fields` (then it is not a floor field).
->   The stock `django.template` engine is the oracle and is not changed: the
->   floor is a boundary of djust's own rendering (the native engine and
->   `DjustTemplateBackend`), and a view's own Python (`form["password"].value()`)
->   keeps reading the real value. Two widgets keep their own rendering by their own
->   contract: Django's `ReadOnlyPasswordHashWidget`, matched by exact type (a
->   masked summary: algorithm, iterations, the first six characters of the salt
->   and hash; a subclass is not trusted), and `PasswordInput(render_value=True)`,
->   the form author's explicit echo. Not covered: a form class's own custom
->   render method (`def as_bootstrap(self)`) or a project form-renderer template
->   that reads `form.instance` / `form.data` itself; those are the project's code.
-> - *Components draw a floor field without its value, editable or not.* `dj_form`,
->   `combobox` and `rich_select` read `bound_field.value()` in Python through
->   `_bound_field_value`, which returns `None` for a floor field (#3797; until then an
->   editable one was drawn with its value). The editable case logs once.
+> - *A SECRET floor field's control is drawn without its stored value, and the column
+>   is protected by `disabled=True` (#3797).* The floor fields that are **secrets**
+>   (the predicate below) are never rendered with their value: `{{ form.field }}`,
+>   `as_widget`, `as_field_group`, `as_p` / `as_table` / `as_ul` / `as_div` /
+>   `render` / `{{ form }}`, a loop's `{{ x }}`, `visible_fields`, a formset's
+>   `as_p`, the `{name: html}` snapshot of a form kept in state, and the `BoundField`
+>   handed to a bridged `{% load %}` tag or filter (`{% render_field form.password %}`,
+>   `|add_class`) draw the control the way Django draws a field that has none: a text
+>   control with no `value=`, an empty `<textarea>`, no `selected` option, an
+>   unchecked checkbox, a `MultiWidget` with empty parts
+>   (`_floor_blank_bound_field`). Django's own widget does the drawing, so a custom
+>   widget needs no cooperation. Validation messages of such a field that interpolate
+>   the value (`ChoiceField`'s `invalid_choice`, which a `disabled` field is validated
+>   with against its STORED value) are replaced by a generic one.
+>   **The predicate** (`_floor_field_is_secret`, decided from what the floor already
+>   classifies): the field's widget is a password input; or its name has a
+>   `password` / `passwd` / `passphrase` / `pwd` / `secret` / `token` / `key` /
+>   `apikey` / `hash` / `salt` / `credential(s)` / `otp` / `signature` / `pin` word
+>   (`api_token`, `secret_key`, `auth_hash`; the first four also inside a longer word);
+>   or the model's column is of a `sensitive_field_types` type. Everything else on the
+>   floor keeps drawing its REAL state in the control: privilege flags (`is_staff`,
+>   `is_superuser`), selects (`role`, `groups`) and ordinary declared-sensitive text
+>   (`email`, `first_name`). The reason: those are not secrets-in-HTML, and drawing a
+>   control empty is not harmless, because **an empty control is posted back empty**: a
+>   blank text control clears the column, an unselected `<select>` posts its first
+>   option, and an unchecked checkbox posts nothing, so a classic `ModelForm` POST
+>   saves `False` (the stock `UserChangeForm` would demote a superuser). Nothing at
+>   render time can prevent that for a secret (HTML `disabled` / `readonly` and leaving
+>   the control out still save `""`); only `disabled=True` **on the form field** does,
+>   because Django then ignores the posted value and keeps the initial one.
+>   **So the protection lives in the form**: `FormMixin.get_form()` (and so
+>   `ModelFormMixin`) marks every blanked field `disabled=True` on a form that edits
+>   an existing row (`protect_blanked_floor_columns`; a new record has nothing to lose,
+>   and a password-widget field is not touched: Django already draws it empty and the
+>   person types a new value into it). A plain `ModelForm` in a classic view cannot be
+>   fixed at render time: the system check **`djust.S014`** reports an editable secret
+>   floor field in a `ModelForm` (declare `disabled=True`, leave it out, or opt the
+>   model field out). The escape hatch is the model's
+>   `djust_serialize_sensitive_fields`: a field named there is not a floor field, so it
+>   is drawn as Django draws it. The stock `django.template` engine is the oracle and is
+>   not changed; a view's own Python (`form["password"].value()`) reads the real value.
+>   Two widgets keep their own rendering by their own contract: Django's
+>   `ReadOnlyPasswordHashWidget`, matched by exact type (a masked summary: algorithm,
+>   iterations, the first six characters of the salt and hash; a subclass is not
+>   trusted), and `PasswordInput(render_value=True)`, the form author's explicit echo.
+>   **Not covered**: a value the project's own code puts elsewhere (`widget.attrs`,
+>   `help_text`, a closure that holds the form), a form class's own custom render
+>   method or renderer template that reads `form.instance` / `form.data` itself, and a
+>   bridged tag that walks the real FORM it is handed (it receives the real form, as
+>   before; only a `BoundField` operand is a blank copy).
+> - *Components draw a secret floor field without its value, editable or not; another
+>   editable floor field keeps its value.* `dj_form`, `combobox` and `rich_select`
+>   read `bound_field.value()` through `_bound_field_value`: `None` for a `disabled` or
+>   secret floor field, the real value for another editable one (the component says
+>   so once; stripping it would clear it on the next save, #3790).
 > - *A management form handed to the template DIRECTLY* as a context variable is a plain
 >   `Form` with no floor ([#3799](https://github.com/djust-org/djust/issues/3799)); only a
 >   formset's own `management_form` is pinned. The same goes for any plain `Form` that
@@ -163,7 +188,9 @@ flag, a PII column — because serialization defaulted to *allow everything*.
 >   explicit exposure blanks sensitive fields in `form_data` already, ADR-038.)
 >
 > **The invariant**: a template walk never receives a real `BoundField` of a
-> floor field, nor the real form (or management form) behind one. Path segments
+> floor field, nor the real form (or management form) behind one (a bridged tag's
+> operand is the exception named above: a blank copy for a secret, the real
+> form). Path segments
 > are floored by `_protect_sidecar_walk`; every other producer (a loop
 > variable, `visible_fields`, `get_context().fields`, a slice, an alias, a
 > formset loop) goes through the one value conversion, which keeps the floored

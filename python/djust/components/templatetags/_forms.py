@@ -940,25 +940,29 @@ def _bound_field_value(bound_field: Any) -> Any:
 
     The one reader every component that fills a control from a ``BoundField`` calls
     (``_render_field``, the hidden-field loop of ``dj_form``, ``_from_bound_field``), so they cannot
-    disagree with each other or with a template's own ``{{ form.field }}`` (which draws the same
-    control without the value, :func:`djust.serialization._floor_blank_bound_field`). A floor field of
-    a ``ModelForm`` (``password``, ``is_superuser``, ``is_staff``, ``DJUST_SENSITIVE_FIELDS``, ...)
-    reads as ``None``, and so does a field whose widget is a password input (#3798): what was typed
-    into it is on the floor. A ``disabled`` one is simply drawn empty: Django ignores what is posted
-    for it. An EDITABLE one is drawn empty too, and the reader says so once, loudly: the browser posts
-    the control back, so a blank text control clears the column and an unchecked checkbox demotes the
-    user. (Until #3797 a component drew an editable floor field WITH its value, for that reason; a
-    template's ``{{ form.field }}`` did too. The maintainer's decision is that the value is never
-    rendered, whatever the widget.)
+    disagree with each other or with a template's own ``{{ form.field }}``. A floor field of a
+    ``ModelForm`` reads as ``None`` when it is ``disabled`` (Django ignores what is posted for it) or
+    its widget is a password input (#3798). An EDITABLE floor field keeps its value, because the browser
+    posts the control back and a blank one clears the column (an unchecked checkbox demotes the user),
+    and the reader says so once; except a SECRET-LIKE one (``password``, ``api_token``, ...), which is
+    drawn empty as a template's ``{{ form.field }}`` draws it
+    (:func:`djust.serialization._floor_blank_bound_field`) and is protected by
+    ``disabled=True`` (``FormMixin.get_form()``).
     """
-    from djust.serialization import form_field_floor_state, warn_editable_floor_field
+    from djust.serialization import (
+        floor_field_is_secret,
+        form_field_floor_state,
+        warn_editable_floor_field,
+    )
 
     state = form_field_floor_state(bound_field)
-    if state is None:
-        return bound_field.value()
+    if state in ("disabled", "password"):
+        return None
     if state == "editable":
         warn_editable_floor_field(bound_field)
-    return None
+        if floor_field_is_secret(bound_field):
+            return None
+    return bound_field.value()
 
 
 def _get_field_type(bound_field: Any) -> Any:

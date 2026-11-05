@@ -1030,6 +1030,16 @@ not trigger it.
 
 ---
 
+### S014: Editable secret field on the serialization floor
+
+**Severity**: Warning
+
+**What causes it**: A `ModelForm` has an editable field that is a secret on the serialization floor (a `password` column, a field named like `api_token` / `secret_key`, a configured sensitive field type). djust draws it without its stored value, a browser posts an empty control as `""`, and submitting the form unchanged saves the column as empty. Message: "<form> has editable secret field(s) on the serialization floor (<names>): djust draws them without their stored value, so submitting the form unchanged saves them as empty."
+
+**Fix**: Declare the form field `disabled=True` (Django then ignores the posted value and keeps the stored one; a `FormMixin` view that edits an existing row sets it for you), leave the field out of `Meta.fields`, or opt the model field out of the floor with `djust_serialize_sensitive_fields`. HTML `disabled` / `readonly` does not protect the column. Suppress one form with `# noqa: S014` on its class line, or all with `DJUST_CONFIG = {"suppress_checks": ["S014"]}`.
+
+---
+
 ## Template Errors (T0xx)
 
 ### T001: Deprecated @event syntax
