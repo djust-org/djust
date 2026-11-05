@@ -17,7 +17,10 @@ from django.utils.safestring import SafeString
 from djust.components.utils import url_attr
 from djust.components.utils import safe_css_color, safe_css_length
 
-from ._registry import register, _resolve, _parse_kv_args, mark_safe, safe_url
+# ``safe_url`` comes from where it is DEFINED, not through ``._registry``: the safe-markup guard
+# trusts an escaper by its origin, and a re-export is a different origin (#3820, as #3774).
+from djust.components.utils import safe_url
+from ._registry import register, _resolve, _parse_kv_args, mark_safe
 
 # ---------------------------------------------------------------------------
 # Tour / Onboarding Guide

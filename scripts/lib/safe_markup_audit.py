@@ -1,9 +1,13 @@
 """The reviewed baseline of the safe-markup taint guard outside ``djust.theming`` (#3774).
 
 ``scripts/lib/safe_markup_taint.py`` follows a value through ONE function to ``mark_safe`` /
-``SafeString`` / the format string of ``format_html``. Over ``python/djust`` (tests and
+``SafeString`` / the format string of ``format_html`` and, since #3820, to the two wrappers around
+``mark_safe`` (``_safe``, ``djust._html.safe_html``). Over ``python/djust`` (tests and
 ``djust/theming`` excluded; theming has its own, empty, list in ``test_safe_markup_guard_3766.py``)
-it flagged 125 sites. This module is the record of reading each one.
+the first guard flagged 125 sites and #3774 read each one (96 sinks in 93 functions kept, 29 re-sourced).
+With the wrappers as sinks the same guard flagged 199 sinks; #3820 taught it the flow of a name, the
+narrowing of a membership test, the project's own escapers, class tables and the helpers a file
+defines, and what it still flags (every entry below) is what a person had to read.
 
 Every entry is a ``(path, function)`` pair, the number of flagged sinks in that function, the
 reason the sinks are safe (what escapes or validates which value), and EVIDENCE: ``(path,
@@ -17,8 +21,9 @@ after a ``return`` and nested ``def``s nothing reads do not count, see ``_dead_s
 * an entry has no site any more, or a different number (delete or update it);
 * an entry has no reason, or no evidence, or evidence that is no longer live code in its scope.
 
-The guard is name-based and single-function (see its docstring), so "audited" means a person
-traced each flagged value to its source, not that the guard proved it.
+The guard is name-based and nearly single-function (see its docstring), so "audited" means a person
+traced each flagged value to its source, not that the guard proved it. An entry whose function the
+guard can now prove is DELETED, not kept: the guard is the check (56 entries went that way in #3820).
 
 What this baseline can NOT see: an audited function is judged by its sink COUNT, so replacing an
 escaped value with a raw one INSIDE an audited function leaves the guard exactly as flagged as it was.
@@ -36,7 +41,7 @@ so this list can shrink). #3818 and #3819 are decided and fixed (``djust._attr_p
 ``live_render`` placeholder follows Django's escaping rule; the route map is script-escaped), so those
 entries cite the fix rather than a verdict N.
 
-Refs #3774, #3766, #3775, #1859, #1468.
+Refs #3774, #3766, #3775, #3820, #1859, #1468.
 """
 
 from __future__ import annotations
@@ -58,6 +63,9 @@ UT = PKG + "components/utils.py"
 LT = PKG + "templatetags/live_tags.py"
 PWA = PKG + "templatetags/djust_pwa.py"
 HTML = PKG + "_html.py"
+RH = PKG + "components/rust_handlers.py"
+DT = TT + "_dev_tools.py"
+JS = PKG + "js.py"
 
 #: ``(path, literal)`` or ``(path, literal, scope)``. The literal must appear in the CODE (comments
 #: and docstrings do not count) of its scope: by default the audited function itself when ``path``
@@ -92,13 +100,6 @@ CE_IMPORT = "from django.utils.html import conditional_escape"
 
 #: ``(path, function) -> Audit``
 AUDITED: dict[tuple[str, str], Audit] = {
-    (PKG + "assets/tags.py", "asset_tags"): S(
-        1,
-        "joins _tag() results; _tag builds every branch with format_html, so src and integrity are escaped",
-        (PKG + "assets/tags.py", 'mark_safe("\\n".join(_tag(f) for f in files))'),
-        (PKG + "assets/tags.py", "def _tag(file: AssetFile) -> SafeString:", "_tag"),
-        (PKG + "assets/tags.py", '\'<script src="{}" integrity="{}"{}></script>\'', "_tag"),
-    ),
     (PKG + "components/base.py", "Component.asset_tags"): S(
         1,
         "joins djust.assets.tags.asset_tags() results, which are format_html SafeStrings",
@@ -140,18 +141,6 @@ AUDITED: dict[tuple[str, str], Audit] = {
         (PWA, "safe_sw_url = _script_json(sw_url)"),
         (PWA, 'return f\' nonce="{escape(nonce)}"\' if nonce else ""', "_nonce_attr"),
         (PWA, "return json.dumps(value).translate(_SCRIPT_JSON_ESCAPES)", "_script_json"),
-    ),
-    (PWA, "djust_offline_indicator"): S(
-        1,
-        "texts and classes are escape()'d locals; show_when selects a constant visibility attribute; the style block is a constant plus the escaped nonce",
-        (PWA, "safe_online_text = escape(online_text)"),
-        (PWA, "safe_offline_class = escape(offline_class)"),
-    ),
-    (PWA, "djust_offline_styles"): S(
-        1,
-        "constant CSS plus the nonce attribute built by _nonce_attr (escape()'d)",
-        (PWA, "nonce_attr = _nonce_attr(context)"),
-        (PWA, 'return f\' nonce="{escape(nonce)}"\' if nonce else ""', "_nonce_attr"),
     ),
     (LT, "_client_config_html"): S(
         1,
@@ -209,42 +198,12 @@ AUDITED: dict[tuple[str, str], Audit] = {
         (LT, 'custom_placeholder = lazy_config["placeholder"]'),
         (LT, "inner = str(conditional_escape(custom_placeholder))"),
     ),
-    (CH, "BarChartNode.render"): S(
-        1,
-        "width/height int() with a numeric fallback; values float(); title, labels, colour and class conditional_escape'd; every other interpolation is a float",
-        (CH, "from django.utils.html import conditional_escape", "<module>"),
-        (CH, 'lbl = conditional_escape(str(labels[i])) if i < len(labels) else ""'),
-    ),
-    (CH, "LineChartNode.render"): S(
-        1,
-        "width/height int(); values float(); series name and colour conditional_escape'd; coordinates are floats",
-        (CH, "from django.utils.html import conditional_escape", "<module>"),
-        (CH, 'name = conditional_escape(str(s.get("name", f"Series {si + 1}")))'),
-    ),
-    (CH, "PieChartNode.render"): S(
-        1,
-        "width/height int(), inner_radius float(); segment colour and label conditional_escape'd; the path data is floats",
-        (CH, "from django.utils.html import conditional_escape", "<module>"),
-        (CH, 'label = conditional_escape(str(seg.get("label", "")))'),
-    ),
-    (CH, "SparklineNode.render"): S(
-        1,
-        "width/height int(), stroke_width float(); colour conditional_escape'd; path data is floats",
-        (CH, "stroke_width = float(stroke_width)"),
-        (CH, 'e_color = conditional_escape(str(color)) if color else ""'),
-    ),
     (CH, "HeatmapNode.render"): S(
         1,
         "cell_size int(); cell colours come from interpolate_color (a #rrggbb string built from ints); axis labels and title conditional_escape'd",
         (UT, 'return f"#{r:02x}{g:02x}{b:02x}"'),
         (CH, "cell_size = int(cell_size)"),
         (CH, "conditional_escape(str(lbl))"),
-    ),
-    (CH, "TreemapNode.render"): S(
-        1,
-        "width/height int(); the fill is a constant palette entry; label and title conditional_escape'd",
-        (CH, "e_label = conditional_escape(label)"),
-        (CH, "color = conditional_escape(str(self.COLORS[idx % len(self.COLORS)]))"),
     ),
     (CH, "CalendarHeatmapNode.render"): S(
         1,
@@ -288,17 +247,6 @@ AUDITED: dict[tuple[str, str], Audit] = {
             "return str(render_popconfirm(_parse_args(args, context), content))",
         ),
     ),
-    (FM, "dj_form"): S(
-        1,
-        "_render_field escapes every value (label, help, errors, choices, widget attrs); the action goes through safe_url; hidden-field names and values conditional_escape'd",
-        (FM, "e_action = safe_url(action)"),
-        (
-            FM,
-            'def _render_field(bound_field: Any, event_prefix: Any = "") -> Any:',
-            "_render_field",
-        ),
-        (UT, "def safe_url(value: Any) -> str:"),
-    ),
     (FM, "model_table"): S(
         1,
         "every row value is conditional_escape(str(v))'d before the table is built; page and total_pages int(); event names and labels conditional_escape'd",
@@ -312,18 +260,6 @@ AUDITED: dict[tuple[str, str], Audit] = {
         (ADV, "safe_css_color("),
         (ADV, "e_month = conditional_escape(month_name)"),
     ),
-    (ADV, "GanttChartNode.render"): S(
-        1,
-        "width/row_height int(); start/duration/progress float(); task name, colour and unit label conditional_escape'd",
-        (ADV, "e_name = conditional_escape(name)"),
-        (ADV, "row_height = int(row_height)"),
-    ),
-    (ADV, "PivotTableNode.render"): S(
-        1,
-        "row and column headers, title and class conditional_escape'd; cells print _format_val (int/float text)",
-        (ADV, "def _format_val(v: Any) -> Any:", "PivotTableNode._format_val"),
-        (ADV, "conditional_escape(rk)"),
-    ),
     (ADV, "OrgChartNode.render"): S(
         1,
         "the tree comes from _render_node, which conditional_escape's id, name and title and sends the avatar through url_attr",
@@ -335,72 +271,11 @@ AUDITED: dict[tuple[str, str], Audit] = {
         ),
         (ADV, 'src="{url_attr(avatar, image=True)}"', "OrgChartNode._render_node"),
     ),
-    (ADV, "ComparisonTableNode.render"): S(
-        1,
-        "_render_value returns constants or conditional_escape(str(val)); plan and feature names escaped",
-        (ADV, 'name = conditional_escape(str(plan.get("name", "")))'),
-        (ADV, "def _render_value(val: Any) -> Any:", "ComparisonTableNode._render_value"),
-        (ADV, "return conditional_escape(str(val))", "ComparisonTableNode._render_value"),
-    ),
-    (ADV, "MasonryGridNode.render"): S(
-        1,
-        "columns and gap int(); item content and class conditional_escape'd",
-        (ADV, "columns = max(1, int(columns))"),
-        (ADV, 'content = conditional_escape(item.get("content", ""))'),
-    ),
-    (ADV, "LiveIndicatorNode.render"): S(
-        1,
-        "name, field, action conditional_escape'd; the avatar goes through url_attr(image=True)",
-        (ADV, "e_avatar = url_attr(avatar, image=True)"),
-        (UT, "def url_attr(value: Any, *, image: bool = False, honor_safe: bool = True) -> str:"),
-    ),
-    (ADV, "ActivityFeedNode.render"): S(
-        1,
-        "max int(); every event field conditional_escape'd; the avatar goes through url_attr(image=True)",
-        (ADV, 'max_items = int(kw.get("max", 50))'),
-        (ADV, 'avatar_src = url_attr(event.get("avatar", ""), image=True)'),
-    ),
-    (ADV, "MapPickerNode.render"): S(
-        1,
-        "lat/lng float(), zoom int(); height through safe_css_length; the Leaflet attributes come from map_picker_attrs, which html.escape's every value and int()s the zoom",
-        (ADV, 'e_height = conditional_escape(safe_css_length(height, "400px"))'),
-        (PKG + "components/components/map_picker.py", "def map_picker_attrs("),
-        (PKG + "components/components/map_picker.py", "f' data-tile-url=\"{html.escape(tiles)}\"'"),
-    ),
     (ADV, "PromptEditorNode.render"): S(
         1,
         "the template text is conditional_escape'd FIRST; {{var}} tokens are \\w+ and are replaced by conditional_escape'd values inside <mark>; rows int()",
         (ADV, "preview_text = conditional_escape(str(tmpl))"),
         (ADV, "e_v = conditional_escape(v)"),
-    ),
-    (ADV, "VoiceInputNode.render"): S(
-        1,
-        "event and lang conditional_escape'd; the wrapper, disclosure and status come from voice_extras, which html.escape's the disclosure and int()s max_seconds",
-        (ADV, 'extras = voice_extras(kw.get("disclosure"), kw.get("max_seconds", 60))'),
-        (
-            PKG + "components/components/voice_input.py",
-            "def voice_extras(disclosure: Any = None, max_seconds: Any = 60) -> VoiceExtras:",
-        ),
-        (PKG + "components/components/voice_input.py", "html.escape(text)"),
-    ),
-    (ADV, "ErrorPageNode.render"): S(
-        1,
-        "code int(); the action URL goes through safe_url; title, message and label conditional_escape'd",
-        (ADV, "e_url = safe_url(str(action_url))"),
-        (UT, "def safe_url(value: Any) -> str:"),
-    ),
-    (ADV, "ImageUploadPreviewNode.render"): S(
-        1,
-        "the upload attributes come from upload_attrs (html.escape'd slot, int() size); thumbnails go through url_attr(image=True); name, event, accept and class conditional_escape'd; max int()",
-        (PKG + "components/components/image_upload_preview.py", "def upload_attrs("),
-        (PKG + "components/components/image_upload_preview.py", "html.escape(slot)"),
-        (ADV, "e_url = url_attr(url, image=True)"),
-    ),
-    (ADV, "AnimatedNumberNode.render"): S(
-        1,
-        "value float(); duration and decimals int(); prefix, suffix, separator and the formatted number conditional_escape'd",
-        (ADV, "e_formatted = conditional_escape(formatted)"),
-        (ADV, "decimals = int(decimals)"),
     ),
     (ADV, "RibbonNode.render"): S(
         1,
@@ -408,29 +283,11 @@ AUDITED: dict[tuple[str, str], Audit] = {
         (ADV, 'variant_cls = self.VARIANT_MAP.get(str(variant), "dj-ribbon--primary")'),
         (ADV, 'classes.append(f"dj-ribbon--{pos}")'),
     ),
-    (ADV, "BreadcrumbDropdownNode.render"): S(
-        1,
-        "labels conditional_escape'd; hrefs go through safe_url; the separator is conditional_escape'd",
-        (ADV, "e_url = safe_url(str(url))"),
-        (ADV, "e_sep = conditional_escape(str(separator))"),
-    ),
-    (ADV, "DataCardGridNode.render"): S(
-        1,
-        "title, description and category are conditional_escape'd (the raw first `cat` only feeds escape()); the image goes through url_attr; columns int()",
-        (ADV, 'cat = conditional_escape(str(it.get(fk, "")))'),
-        (ADV, "e_img = url_attr(image, image=True)"),
-    ),
     (ADV, "AgentStepNode.render"): S(
         1,
         "status is checked against STATUS_ICONS' keys before it reaches the class; the icon is a constant entity; tool, duration and content conditional_escape'd",
         (ADV, 'status = str(status) if str(status) in self.STATUS_ICONS else "pending"'),
         (ADV, "STATUS_ICONS = {", "AgentStepNode"),
-    ),
-    (ADV, "QRCodeNode.render"): S(
-        1,
-        "px comes from SIZE_MAP's ints or int(); fg, bg and data conditional_escape'd; the modules are floats",
-        (ADV, "px = self.SIZE_MAP[size]"),
-        (ADV, "e_data = conditional_escape(str(data))"),
     ),
     (DC, "render_modal_description"): S(
         1,
@@ -457,30 +314,11 @@ AUDITED: dict[tuple[str, str], Audit] = {
         (DC, 'tip_id = f"{conditional_escape(component_id)}-tip"'),
         (DC, "_tooltip_id_counter = itertools.count(1)", "<module>"),
     ),
-    (DC, "dj_textarea"): S(
-        1,
-        "rows int(); name, label, value, placeholder, error, helper and event conditional_escape'd",
-        (DC, "e_value = conditional_escape(value)"),
-        (DC, "rows = int(rows)"),
-    ),
-    (DC, "breadcrumb"): S(
-        1,
-        "labels conditional_escape'd; urls go through safe_url",
-        (DC, "e_url = safe_url(url)"),
-        (UT, "def safe_url(value: Any) -> str:"),
-    ),
     (DC, "code_block"): S(
         1,
         "theme must match [A-Za-z0-9_-]+ and is escaped; language, filename and code conditional_escape'd; the stylesheet tag is asset_tags (format_html); the hljs JSON is conditional_escape'd into data-hljs",
         (DC, "safe_theme = theme if _re.match("),
         (DC, 'data-hljs="{conditional_escape(hljs_json)}"'),
-    ),
-    (DC, "combobox"): S(
-        1,
-        "ids, names, labels, values and options conditional_escape'd; aria attributes come from field_aria_attrs, which escapes its ids",
-        (DC, "aria = field_aria_attrs(str(id_prefix), error, helper, describedby, invalid)"),
-        (DC, "def field_aria_attrs(", "field_aria_attrs"),
-        (DC, 'ov = conditional_escape(str(opt.get("value", "")))'),
     ),
     (DC, "render_popover"): S(
         1,
@@ -497,18 +335,6 @@ AUDITED: dict[tuple[str, str], Audit] = {
             "CollapsibleNode.render",
         ),
         (DC, "f'<span class=\"collapsible-label\">{conditional_escape(trigger)}</span>'"),
-    ),
-    (DC, "notification_center"): S(
-        1,
-        "unread_count int(); id, message, time and event names conditional_escape'd",
-        (DC, "unread_count = int(unread_count)"),
-        (DC, 'msg = conditional_escape(str(n.get("message", n.get("msg", ""))))'),
-    ),
-    (DC, "carousel"): S(
-        1,
-        "active int(); src through url_attr(image=True); alt, caption and event names conditional_escape'd",
-        (DC, 'src = url_attr(img.get("src", img.get("url", "")), image=True)'),
-        (DC, "active = int(active)"),
     ),
     (DC, "tree_view"): S(
         1,
@@ -532,49 +358,6 @@ AUDITED: dict[tuple[str, str], Audit] = {
         (DC, "year = int(year) if year else today.year"),
         (DC, "e_selected = conditional_escape(selected)"),
     ),
-    (DC, "table_of_contents"): S(
-        1,
-        "level int(); id and label conditional_escape'd",
-        (DC, 'level = int(item.get("level", 1))'),
-        (DC, 'iid = conditional_escape(str(item.get("id", "")))'),
-    ),
-    (DC, "virtual_list"): S(
-        1,
-        "total, page, page_size and item_height int() (one except resets all four); labels and the event conditional_escape'd",
-        (DC, "item_height = int(item_height)"),
-        (DC, 'label = conditional_escape(str(item.get("label", item.get("title", str(item)))))'),
-    ),
-    (DC, "rich_text_editor"): S(
-        1,
-        "the value goes through rich_html (the Markdown sanitizer unless it is SafeData); height through safe_css_length; name, event, label and placeholder conditional_escape'd",
-        (UT, "def rich_html(value: Any) -> str:"),
-        (DC, "e_value = rich_html(value)"),
-        (UT, 'def safe_css_length(value: Any, default: str = "") -> str:'),
-    ),
-    (DC, "otp_input"): S(
-        1,
-        "digits int() clamped to 1..12; the id is a uuid hex; name, label and event conditional_escape'd",
-        (DC, "digits = max(1, min(12, digits))"),
-        (DC, 'uid = f"otp-{uuid.uuid4().hex[:6]}"'),
-    ),
-    (DC, "number_stepper"): S(
-        1,
-        "value, step, min and max int(); name, label and event conditional_escape'd",
-        (DC, 'min_attr = f\' min="{int(min_val)}"\' if min_val is not None else ""'),
-        (DC, "step = int(step)"),
-    ),
-    (DC, "fab"): S(
-        1,
-        "position is checked against four names; icon, event, label, size and variant conditional_escape'd",
-        (DC, 'pos_cls = position if position in valid_positions else "bottom-right"'),
-        (DC, "e_icon = conditional_escape(icon)"),
-    ),
-    (DC, "CalloutNode.render"): S(
-        1,
-        "the icon is ICONS[callout_type] (a constant) only when callout_type is a key; the type, title, icon text and class are conditional_escape'd; content is the rendered body",
-        (DC, "elif callout_type in self.ICONS:"),
-        (DC, "e_type = conditional_escape(str(callout_type))"),
-    ),
     (DC, "rich_select"): S(
         1,
         "variant names match ^[a-z0-9][a-z0-9-]{0,31}$ (_VARIANT_NAME_RE); ids, names, values, labels, placeholder escaped; aria from field_aria_attrs; option bodies from _rich_select_option_html, which escapes",
@@ -588,19 +371,6 @@ AUDITED: dict[tuple[str, str], Audit] = {
             "_rich_select_option_html",
         ),
         (DC, 'uid = conditional_escape(id or f"rs-{name}")'),
-    ),
-    (DC, "ToastContainerNode.render"): S(
-        1,
-        "position is checked against ALLOWED_POSITIONS; max_toasts int(); class conditional_escape'd",
-        (DC, "if position not in self.ALLOWED_POSITIONS:"),
-        (DC, "max_toasts = int(max_toasts)"),
-    ),
-    (DC, "responsive_image"): S(
-        1,
-        "src and placeholder through url_attr(image=True); srcset through srcset_attr; aspect-ratio through safe_css_ratio; alt, sizes and class conditional_escape'd",
-        (DC, "e_srcset = srcset_attr(srcset)"),
-        (DC, 'aspect_ratio = safe_css_ratio(aspect_ratio, "") if aspect_ratio else ""'),
-        (UT, "def srcset_attr(value: Any, *, honor_safe: bool = True) -> str:"),
     ),
     (DC, "render_theme_toggle"): S(
         1,
@@ -625,95 +395,11 @@ AUDITED: dict[tuple[str, str], Audit] = {
         ),
         (DC, "f'href=\"{safe_url(href)}\">'", "SidebarNode._render_item"),
     ),
-    (DC, "NavMenuNode.render"): S(
-        1,
-        "brand, class, ids and events conditional_escape'd; brand_href through safe_url; items from _render_nav_item (escaped, safe_url)",
-        (
-            DC,
-            'items_html = "".join(self._render_nav_item(item, context, active) for item in items)',
-        ),
-        (
-            DC,
-            "def _render_nav_item(self, item: Any, context: Any, active_path: Any) -> Any:",
-            "NavMenuNode._render_nav_item",
-        ),
-        (DC, 'f\'<a class="dj-nav__brand" href="{safe_url(brand_href)}">\''),
-    ),
-    (DC, "FilterBarNode.render"): S(
-        1,
-        "every control's name, label, value, option and event is conditional_escape'd; debounce int()",
-        (DC, 'name = conditional_escape(nkw.get("name", ""))'),
-        (DC, 'dj-debounce="{int(debounce)}"'),
-    ),
-    (DC, "AvatarGroupNode.render"): S(
-        1,
-        "size, class, name and initials conditional_escape'd; src through url_attr(image=True); max int()",
-        (DC, "e_size = conditional_escape(str(size))"),
-        (DC, 'max_display = int(kw.get("max", 5))'),
-    ),
-    (DC, "ThinkingIndicatorNode.render"): S(
-        1,
-        "status is checked against VALID_STATUSES before it reaches the class; label and class escaped",
-        (
-            DC,
-            'VALID_STATUSES = {"thinking", "searching", "generating", "tool_use", "idle"}',
-            "ThinkingIndicatorNode",
-        ),
-        (DC, 'safe_status = status if status in self.VALID_STATUSES else "thinking"'),
-    ),
     (DC, "FeedbackWidgetNode.render"): S(
         1,
         "mode is checked against VALID_MODES; the buttons are constants plus the conditional_escape'd event, an int star index and escaped emoji keys",
         (DC, 'VALID_MODES = {"thumbs", "stars", "emoji"}', "FeedbackWidgetNode"),
         (DC, "if mode not in self.VALID_MODES:"),
-    ),
-    (DC, "ApprovalGateNode.render"): S(
-        1,
-        "risk is checked against VALID_RISKS before it reaches the class; message, labels, events and class conditional_escape'd; the icons are constants",
-        (DC, 'VALID_RISKS = {"low", "medium", "high", "critical"}', "ApprovalGateNode"),
-        (DC, "if risk not in self.VALID_RISKS:"),
-    ),
-    (DC, "SourceCitationNode.render"): S(
-        1,
-        "idx int(); title conditional_escape'd; the url is safe_url (escaped, scheme-checked) and is also the link text; relevance float()",
-        (DC, 'e_url = safe_url(str(url)) if url else ""'),
-        (DC, "idx = int(index)"),
-    ),
-    (DC, "ModelSelectorNode.render"): S(
-        1,
-        "name, event, placeholder, class, value and every option conditional_escape'd (_option_inner escapes label, description, context window and tier)",
-        (DC, "def _option_inner(self, opt: Any) -> Any:", "ModelSelectorNode._option_inner"),
-        (DC, 'data-value="{conditional_escape(ov)}"'),
-    ),
-    (DC, "ChatBubbleNode.render"): S(
-        1,
-        "name, text, time, class conditional_escape'd; the avatar through url_attr(image=True); status must be in VALID_STATUSES; side is one of two constants",
-        (DC, "e_avatar = url_attr(avatar_src, image=True)"),
-        (DC, "if status and status in self.VALID_STATUSES:"),
-    ),
-    (DC, "PresenceAvatarsNode.render"): S(
-        1,
-        "max int(); name and initials conditional_escape'd; src through url_attr(image=True); status must be in VALID_STATUSES",
-        (DC, 'safe_status = status if status in self.VALID_STATUSES else "online"'),
-        (DC, 'max_display = int(kw.get("max", 5))'),
-    ),
-    (DC, "MentionsInputNode.render"): S(
-        1,
-        "id, name, initials, placeholder, event and class conditional_escape'd; the avatar through url_attr(image=True); the users JSON is conditional_escape'd into data-users",
-        (DC, "users_json = conditional_escape(_json.dumps(users, default=str))"),
-        (DC, 'uname = conditional_escape(str(user.get("name", "")))'),
-    ),
-    (DC, "CookieConsentNode.render"): S(
-        1,
-        "the privacy URL goes through safe_url; message, labels and events conditional_escape'd",
-        (DC, "e_url = safe_url(str(privacy_url))"),
-        (UT, "def safe_url(value: Any) -> str:"),
-    ),
-    (DC, "FormArrayNode.render"): S(
-        1,
-        "min and max int(); name, events, labels and each row value conditional_escape'd; a custom row body is a rendered nodelist",
-        (DC, "min_rows = int(min_rows)"),
-        (DC, "val = conditional_escape("),
     ),
     (DC, "render_dropdown_menu"): S(
         1,
@@ -726,50 +412,146 @@ AUDITED: dict[tuple[str, str], Audit] = {
         ),
         (DC, 'href="{url_attr(item["href"])}"', "render_menu_item"),
     ),
-    (DC, "MeterNode.render"): S(
+    # --- the Rust-native handlers (#3820): `_safe(...)` is a sink since the wrapper sinks, so
+    # these are the handlers whose markup the guard still cannot prove. Every other handler
+    # (about 90 call sites) is proved by the guard. ---
+    (RH, "AgentStepHandler.render"): S(
         1,
-        "total int(), value float(); the colour goes through safe_css_color; labels and legend values conditional_escape'd",
-        (DC, 'color = conditional_escape(safe_css_color(seg.get("color", ""), ""))'),
-        (DC, "total = int(total)"),
-        (UT, 'def safe_css_color(value: Any, default: str = "") -> str:'),
+        "status is reset to 'pending' unless it is a key of the class's STATUS_ICONS table, so the class name and the icon (the table's constant entities) are fixed text; tool, duration, class and the content are conditional_escape'd before they are interpolated; same as AgentStepNode",
+        (RH, 'status = str(status) if str(status) in self.STATUS_ICONS else "pending"'),
+        (RH, "e_tool = conditional_escape(str(tool))"),
+        (RH, 'icon = self.STATUS_ICONS.get(status, "&#9711;")'),
+        (RH, "STATUS_ICONS = {", "AgentStepHandler"),
     ),
-    (DC, "SortableGridNode.render"): S(
+    (RH, "AppShellHandler.render"): S(
         1,
-        "columns int(); gap through safe_css_length then conditional_escape; id and label conditional_escape'd; thumbnail through url_attr(image=True)",
-        (DC, 'gap = safe_css_length(kw.get("gap", "0.75rem"), "0.75rem")'),
-        (DC, "e_thumb = url_attr(thumbnail, image=True)"),
+        "id and class conditional_escape'd; `sidebar` and `rest` are the two halves of `content`, the block body the engine hands a handler as an already-rendered SafeString (registry.rs, call_block_handler_with_py_sidecar, #2379; pinned by test_safe_markup_guard_3820.py), split at a parsed </aside> and emitted in the same markup, strip() only trims whitespace",
+        (RH, 'shell_id = conditional_escape(kw.get("id", "app-shell"))'),
+        (RH, "sidebar, rest = _split_app_shell_sidebar(content)"),
+        (
+            RH,
+            "return content[parser.start : parser.end], content[: parser.start] + content[parser.end :]",
+            "_split_app_shell_sidebar",
+        ),
     ),
-    (DC, "ImageCropperNode.render"): S(
+    (RH, "CalendarHeatmapHandler.render"): S(
         1,
-        "src through url_attr(image=True); event, class, ratio and alt conditional_escape'd; min sizes int(); cropper_extras is constant markup",
-        (DC, "e_src = url_attr(src, image=True)"),
-        (PKG + "components/components/image_cropper.py", "def cropper_extras() -> CropperExtras:"),
+        "year, cell size and gap int() (a failed int falls back to today's year / constants), so every coordinate is arithmetic on ints and on date calendar math; date_str is date.isoformat() of a date built from the int year; val is float(); the cell colour is _get_color(): a constant of LEVELS; month labels come from a constant list; the title is conditional_escape'd; same as CalendarHeatmapNode",
+        (RH, 'year = int(cast("str | int | float", year))'),
+        (RH, 'cell_size = int(cast("str | int | float", cell_size))'),
+        (RH, "date_str = current.isoformat()"),
+        (RH, "val = float(data.get(date_str, 0))"),
+        (RH, "color = self._get_color(val, max_val)"),
+        (
+            RH,
+            'LEVELS = ["#ebedf0", "#9be9a8", "#40c463", "#30a14e", "#216e39"]',
+            "CalendarHeatmapHandler",
+        ),
     ),
-    (DC, "SignaturePadNode.render"): S(
+    (RH, "CalendarViewHandler.render"): S(
         1,
-        "name, event, pen colour and class conditional_escape'd; width, height and pen width int(); pad_extras html.escape's the label and int()s max_bytes",
-        (PKG + "components/components/signature_pad.py", "e_label = html.escape(text)"),
-        (DC, "pw = int(pen_width)"),
+        "month, year and start_day int() (a failed int falls back to a constant); the month name is calendar.month_name[month], conditional_escape'd; the weeks come from calendar.Calendar.monthdayscalendar, so `day` is an int and date_str is digits (numeric format specs); event titles conditional_escape'd and event colours go through safe_css_color; same as CalendarViewNode",
+        (RH, 'month = int(cast("str | int | float", month))'),
+        (RH, "weeks = cal.monthdayscalendar(year, month)"),
+        (RH, 'date_str = f"{year}-{month:02d}-{day:02d}"'),
+        (RH, 'title = conditional_escape(str(ev.get("title", "")))'),
+        (RH, "e_month = conditional_escape(month_name)"),
     ),
-    (DC, "ResizablePanelNode.render"): S(
-        1,
-        "direction is reset unless it is 'horizontal' or 'vertical'; min, max and initial size go through safe_css_length then conditional_escape; class and event conditional_escape'd",
-        (DC, 'if direction not in ("horizontal", "vertical"):'),
-        (DC, 'e_initial = conditional_escape(safe_css_length(initial_size, "50%"))'),
-        (UT, 'def safe_css_length(value: Any, default: str = "") -> str:'),
+    (RH, "DataTableHandler.render"): S(
+        2,
+        "everything the guard cannot see through is the nested _dbtn(val, label), whose only call sites pass the literals ('compact', 'comfortable', 'spacious') and their labels, and whose `density_event` was conditional_escape'd at the top; the rest of the table (cells, toolbar, search, pagination, footer) is proved by the guard: every kw value is conditional_escape'd or int()-coerced where it is read, the footer aggregates are sum/min/max/round/len of float() values",
+        (RH, 'density_event = conditional_escape(kw.get("density_event", "on_table_density"))'),
+        (RH, "f\"{_dbtn('compact', 'Compact')}\""),
+        (RH, "f\"{_dbtn('comfortable', 'Comfortable')}\""),
+        (RH, "f\"{_dbtn('spacious', 'Spacious')}\""),
+        (RH, "vals.append(float(v))"),
+        (RH, "agg_val = round(sum(vals) / len(vals), 2)"),
     ),
-    (DC, "LightboxNode.render"): S(
+    (RH, "FeedbackWidgetHandler.render"): S(
         1,
-        "the image through url_attr(image=True); alt, caption, events and class conditional_escape'd; idx int()",
-        (DC, 'e_src = url_attr(img.get("src", ""), image=True)'),
-        (DC, "idx = int(active)"),
+        "mode is checked against VALID_MODES before it reaches the class; the three button builders take the conditional_escape'd event and render constants, an int star index (range) and escaped emoji keys; `value` is only compared or digit-checked, never printed; same as FeedbackWidgetNode",
+        (RH, "if mode not in self.VALID_MODES:"),
+        (RH, "e_event = conditional_escape(str(event))"),
+        (RH, 'VALID_MODES = {"thumbs", "stars", "emoji"}', "FeedbackWidgetHandler"),
+        (
+            RH,
+            'current = int(cast("str | int | float", value)) if value and str(value).isdigit() else 0',
+            "FeedbackWidgetHandler._render_stars",
+        ),
+        (RH, "e_val = conditional_escape(val)", "FeedbackWidgetHandler._render_emoji"),
     ),
-    (DC, "DashboardGridNode.render"): S(
+    (RH, "FileTreeHandler.render"): S(
         1,
-        "columns and every panel cell are clamp_columns / clamp_cells ints; gap and row height through safe_css_length then conditional_escape; id, title and content conditional_escape'd",
-        (DC, "col, row, w, h = clamp_cells("),
-        (PKG + "components/components/dashboard_grid.py", "def clamp_cells("),
-        (DC, 'e_row_height = conditional_escape(safe_css_length(row_height, "200px"))'),
+        "class, event and selected conditional_escape'd; the tree is _render_tree_node, which conditional_escape's name and type, takes its icons from class constants, and whose `depth` is an int at every call site (0 here, depth + 1 in the recursion); same as FileTreeNode",
+        (RH, "e_class = conditional_escape(str(custom_class))"),
+        (RH, "self._render_tree_node(node, 0, str(event), show_icons, str(selected))"),
+        (RH, "e_name = conditional_escape(name)", "FileTreeHandler._render_tree_node"),
+        (RH, "e_event = conditional_escape(str(event))", "FileTreeHandler._render_tree_node"),
+        (
+            RH,
+            "self._render_tree_node(child, depth + 1, event, show_icons, selected)",
+            "FileTreeHandler._render_tree_node",
+        ),
+    ),
+    (RH, "HeatmapHandler.render"): S(
+        1,
+        "cell_size int(); every coordinate is arithmetic on it and on len() of the data; values are float(); cell colours come from interpolate_color (a #rrggbb string built from ints; it raises on a colour that is not hex); axis labels and title conditional_escape'd; same as HeatmapNode",
+        (RH, 'cell_size = int(cast("str | int | float", cell_size))'),
+        (RH, "val = float(v)"),
+        (RH, "color = self._interpolate_color(str(color_min), str(color_max), t)"),
+        (RH, "_interpolate_color = staticmethod(interpolate_color)", "HeatmapHandler"),
+        (UT, 'return f"#{r:02x}{g:02x}{b:02x}"', "interpolate_color"),
+        (RH, 'e_title = conditional_escape(str(title)) if title else "Heatmap"'),
+    ),
+    (RH, "OrgChartHandler.render"): S(
+        1,
+        "the tree comes from _render_node, which conditional_escape's id, name and title, sends the avatar through url_attr and takes the already-escaped event (e_event here) from this method; same as OrgChartNode",
+        (RH, 'e_event = conditional_escape(str(event)) if event else ""'),
+        (RH, "tree_html = self._render_node(root_id, node_map, children, e_event)"),
+        (RH, 'src="{url_attr(avatar, image=True)}"', "OrgChartHandler._render_node"),
+        (
+            RH,
+            'name = conditional_escape(str(node.get("name", "")))',
+            "OrgChartHandler._render_node",
+        ),
+    ),
+    (RH, "ProgressHandler.render"): S(
+        1,
+        "value is the Python tag's clamp, max(0, min(100, int(value))): an int in 0..100; label, size and colour conditional_escape'd; the track size is a constant looked up by the escaped size",
+        (RH, 'value = _progress(value=kw.get("value", 0))["value"]'),
+        (RH, 'label = conditional_escape(kw.get("label", ""))'),
+        (DC, "value = max(0, min(100, int(value)))", "progress"),
+    ),
+    (RH, "PromptEditorHandler.render"): S(
+        1,
+        "the template text is conditional_escape'd FIRST; {{var}} tokens are \\w+ and are replaced by conditional_escape'd values inside <mark>; rows int(); same as PromptEditorNode",
+        (RH, "preview_text = conditional_escape(str(tmpl))"),
+        (RH, "e_v = conditional_escape(v)"),
+        (RH, 'rows = int(cast("str | int | float", rows))'),
+    ),
+    (RH, "RibbonHandler.render"): S(
+        1,
+        "position is checked against the four corner names; the variant class is a constant from VARIANT_MAP; text and class conditional_escape'd; same as RibbonNode",
+        (RH, 'variant_cls = self.VARIANT_MAP.get(str(variant), "dj-ribbon--primary")'),
+        (RH, 'classes.append(f"dj-ribbon--{pos}")'),
+        (RH, "e_text = conditional_escape(str(text))"),
+    ),
+    (DT, "FileTreeNode.render"): S(
+        1,
+        "class, event and selected conditional_escape'd; the tree is _render_tree_node, which conditional_escape's name and type, takes its icons from class constants, and whose `depth` is an int at every call site (0 here, depth + 1 in the recursion)",
+        (DT, "e_class = conditional_escape(str(custom_class))"),
+        (
+            DT,
+            "nodes_html.append(self._render_tree_node(node, 0, event, show_icons, str(selected)))",
+        ),
+        (DT, "e_name = conditional_escape(name)", "FileTreeNode._render_tree_node"),
+        (DT, "e_event = conditional_escape(str(event))", "FileTreeNode._render_tree_node"),
+    ),
+    (JS, "JSChain.__html__"): S(
+        1,
+        "the value is json.dumps(self.ops) through escape_json_for_script, which neutralises < > & and U+2028/9, so it cannot end an inline <script> element; it is NOT attribute-safe (the JSON's own quotes end a quoted value) and the docstring says so. Flagged since #3848 because the guard clears escape_json_for_script only for json.dumps output placed in script text, and cannot follow self.to_json() through JSChain.__getattr__",
+        (JS, "return str(mark_safe(escape_json_for_script(self.to_json())))"),
+        (JS, 'return json.dumps(self.ops, separators=(",", ":"))', "JSChain.to_json"),
     ),
 }
 
@@ -831,14 +613,27 @@ def package_files(root: Path = ROOT) -> list[Path]:
 
 def scan(root: Path = ROOT) -> dict[tuple[str, str], list[str]]:
     """``(path, function) -> [finding, ...]`` for every flagged sink in the audited tree."""
-    from scripts.lib.safe_markup_taint import find_unsafe_markup
+    from scripts.lib.safe_markup_taint import dynamic_class_names, find_unsafe_markup
 
     found: dict[tuple[str, str], list[str]] = {}
-    for path in package_files(root):
+    files = package_files(root)
+    # classes that write attributes under names the source does not show (``Component``)
+    dynamic = dynamic_class_names(p.read_text() for p in files)
+    for path in files:
         rel = str(path.relative_to(root))
-        for finding in find_unsafe_markup(path.read_text()):
+        module, is_package = module_name(path, root)
+        for finding in find_unsafe_markup(path.read_text(), module, is_package, dynamic):
             found.setdefault((rel, finding.function), []).append(str(finding))
     return found
+
+
+def module_name(path: Path, root: Path = ROOT) -> tuple[str, bool]:
+    """``(dotted name, is a package)`` of a file under ``python/``: how the guard resolves a
+    relative import to its ORIGIN (``from ..utils import safe_url`` is ``djust.components.utils``)."""
+    parts = list(path.relative_to(root / "python").with_suffix("").parts)
+    if parts[-1] == "__init__":
+        return ".".join(parts[:-1]), True
+    return ".".join(parts), False
 
 
 def reconcile(

@@ -12,7 +12,11 @@ from typing import Any, Dict, List
 
 from django import template
 
-from ._registry import register, _resolve, _parse_kv_args, conditional_escape, mark_safe
+# ``conditional_escape`` comes from where it is DEFINED, not through ``._registry``: the safe-markup
+# guard trusts an escaper by its origin, and a re-export is a different origin (#3774, #3820).
+from django.utils.html import conditional_escape
+
+from ._registry import register, _resolve, _parse_kv_args, mark_safe
 
 
 def _safe(html: str) -> str:

@@ -46,6 +46,12 @@ NOT_DETECTABLE = {
         "workflow and .test_durations: a PR that adds a test file moves the shards another "
         "PR's durations were cut for"
     ),
+    "python/tests/test_safe_markup_gate_3848.py": (
+        "runs the safe-markup guard over python/djust and reconciles it with the committed audit "
+        "baseline: a PR that adds an interpolated mark_safe / _safe / safe_html, or a class that "
+        "writes its constructor keywords with setattr, changes what another PR's baseline must hold "
+        "(#3848)"
+    ),
     "python/tests/test_template_library_parity_3663.py": (
         "runs scripts/template-library-parity.py over the whole template corpus against a "
         "committed baseline CSV that every parity PR edits (#3757 names it)"

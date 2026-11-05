@@ -13,11 +13,11 @@ from django import template
 from django.utils.html import conditional_escape
 from django.utils.safestring import SafeString
 
+from djust.components.utils import safe_url  # from where it is DEFINED, not ``._registry`` (#3820)
 from ._registry import (
     register,
     _resolve,
     _parse_kv_args,
-    safe_url,
     mark_safe,
     CURRENCY_SYMBOLS,
 )

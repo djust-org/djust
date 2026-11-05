@@ -434,7 +434,7 @@ class PostProcessingMixin:
         debug_info_script = ""
         debug_css_link = ""
         if panel_enabled:
-            from ..security import escape_json_for_script
+            from ..security.json_script import escape_json_for_script  # the defining module (#3820)
 
             debug_info = self.get_debug_info()
             # get_debug_info() includes repr()s of user-controlled public view

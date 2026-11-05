@@ -603,7 +603,7 @@ def _initial_parameter_contracts(view: Any, view_path: str) -> Optional[str]:
     page, as the socket path keeps a legacy session's frame shape.
     """
     from .._parameter_metadata import parameter_contract_manifest
-    from ..security import escape_json_for_script
+    from ..security.json_script import escape_json_for_script  # the defining module (#3820)
     from ..validation import _strict_possible
 
     try:

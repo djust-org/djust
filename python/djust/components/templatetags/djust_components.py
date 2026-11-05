@@ -23,7 +23,7 @@ from django import template
 from django.utils.html import conditional_escape
 from django.utils.safestring import SafeString
 
-from ._registry import safe_url
+from djust.components.utils import safe_url  # from where it is DEFINED, not ``._registry`` (#3820)
 from djust.components.utils import rich_html, unique_ids as _unique_ids, url_attr, srcset_attr
 from djust.components.utils import (
     safe_css_color,
