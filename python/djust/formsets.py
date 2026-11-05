@@ -162,9 +162,7 @@ def remove_row(
     # ``row_prefix`` is the client's (``dj-value-prefix``), so the key it names is judged like any other
     # key a client names in a form's data (#3858, #3834): past ``max_form_fields`` / ``max_form_data_size``
     # / ``max_form_members`` the call is a logged no-op, like an add past the cap.
-    message = _form_data_bounds.refusal(
-        data, {key: "on"}, _schema_keys(prefix, (*data, key), data)
-    )
+    message = _form_data_bounds.refusal(data, {key: "on"}, _schema_keys(prefix, (*data, key), data))
     if message is not None:
         logger.warning("remove_row refused form data: %s", message)
         return formset_cls(data or None, prefix=prefix)

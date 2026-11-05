@@ -136,9 +136,13 @@ class TestTheWizardTotalIsBounded:
             goto(view, 1)
             view.update_step_field(field="b1", value="y")
         with livecfg(max_form_members=30):
-            view.update_step_field(field="b1", value="")  # a replacement that shrinks: still refused
+            view.update_step_field(
+                field="b1", value=""
+            )  # a replacement that shrinks: still refused
             view.update_step_field(field="b2", value="z")
-            assert bounds.refusal({}, {}, (), [held(view)["a"]]) is not None  # not even an empty one
+            assert (
+                bounds.refusal({}, {}, (), [held(view)["a"]]) is not None
+            )  # not even an empty one
         assert held(view)["b"] == {"b1": "y"}
         assert "more values" in view.wizard_step_errors["b"]["__all__"][0]
 
