@@ -362,7 +362,33 @@ GROUP_IDS = [g[0] for g in GROUPS]
 def _render(engine, which, src, context):
     if which == "rust":
         return str(engine.from_string(src).render(dict(context)))
+    if which == "liveview":
+        return _render_held_as_liveview_state(src, context)
     return str(Engine().from_string(src).render(Context(dict(context))))
+
+
+def _render_held_as_liveview_state(src, context):
+    """The same template over the same objects, each held as an attribute of a ``LiveView`` (#3767).
+
+    A form held as view state used to reach the engine as ``{name: widget HTML}`` and never as the
+    form, so none of the spellings below ran against it. It now rides the raw-Python sidecar, so every
+    producer and sink in this grammar applies to it, and the floor has to hold for each."""
+    from djust import LiveView
+    from djust.testing import LiveViewTestClient
+
+    class Held(LiveView):
+        template = "<div dj-root>" + src + "</div>"
+
+        def mount(self, request, **kwargs):
+            for name, value in context.items():
+                setattr(self, name, value)
+
+    client = LiveViewTestClient(Held)
+    client.mount()
+    html = client.render()
+    match = re.search(r"<div[^>]*dj-root[^>]*>(.*)</div>", html, re.S)
+    assert match, html[:200]
+    return match.group(1)
 
 
 def _leaks(out, secrets):
@@ -403,6 +429,57 @@ class TestNoRouteReachesTheSecret:
             if found:
                 leaks.append((src, [s[-12:] for s in found]))
         assert not leaks, leaks[:5]
+
+
+@pytest.mark.parametrize("group_id,ctx_key,templates", GROUPS, ids=GROUP_IDS)
+class TestAFormHeldAsLiveViewStateIsHeldToTheSameFloor:
+    """The root is the view's own attribute (#3767), not an argument to a standalone render.
+
+    Two assertions per template, both against the already-floored native engine rather than a
+    hand-written expectation: no part of the secret appears, AND the render is the one the plain
+    backend gives (so the floor is not "held" by rendering nothing). Only the whitespace and the
+    ``dj-id`` / ``<!--dj-if-->`` bookkeeping of a LiveView render are normalised away."""
+
+    @staticmethod
+    def _canon(text):
+        text = re.sub(r"<!--dj-if-->", "", text)
+        text = re.sub(r'\s*dj-[a-z-]+="[^"]*"', "", text)
+        # ``empty_form`` is a NEW form on every access: its repr carries a fresh address.
+        text = re.sub(r"0x[0-9a-f]+", "0x?", text)
+        # ... and its ``date_joined`` initial is ``now()`` to the second, which two renders straddle.
+        text = re.sub(r"\d{4}-\d\d-\d\d[ T]\d\d:\d\d:\d\d(\.\d+)?", "<now>", text)
+        return re.sub(r"\s+", " ", text).strip()
+
+    @staticmethod
+    def _attempt(engine, which, src, context):
+        try:
+            return ("ok", _render(engine, which, src, context))
+        except Exception as exc:  # noqa: BLE001 - the exception IS the observation
+            return ("err", type(exc).__name__)
+
+    def test_no_part_of_the_secret_is_printed(self, engine, world, group_id, ctx_key, templates):
+        contexts, secrets = world
+        leaks = []
+        for src in templates:
+            kind, out = self._attempt(engine, "liveview", src, contexts[ctx_key])
+            found = _leaks(out, secrets) if kind == "ok" else []
+            if found:
+                leaks.append((src, [s[-12:] for s in found]))
+        assert not leaks, leaks[:5]
+
+    def test_it_renders_what_the_plain_backend_renders(
+        self, engine, world, group_id, ctx_key, templates
+    ):
+        contexts, _ = world
+        mismatches = []
+        for src in templates:
+            native = self._attempt(engine, "rust", src, contexts[ctx_key])
+            held = self._attempt(engine, "liveview", src, contexts[ctx_key])
+            if native[0] != held[0] or (
+                native[0] == "ok" and self._canon(native[1]) != self._canon(held[1])
+            ):
+                mismatches.append((src, native, held))
+        assert not mismatches, mismatches[:3]
 
 
 def _control_is_empty_by_construction(group_id: str) -> bool:

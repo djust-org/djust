@@ -568,10 +568,11 @@ class TestATagIsHandedTheRealObject:
 
 
 class Page:
-    """A plain object holding a form. A LiveView's own top-level ``form`` attribute is not part of the
-    raw-object sidecar the engine walks (``mixins/rust_bridge.py`` skips ``BaseForm``), so it never
-    reached these paths; a form held by another object does, and a standalone render
-    (``DjustTemplateBackend``) walks a top-level form."""
+    """A plain object holding a form: reached through the engine's attribute walk. Until #3767 a
+    LiveView's own top-level ``form`` attribute was not part of the raw-object sidecar
+    (``mixins/rust_bridge.py`` flattened it into the state and skipped it), so it never reached these
+    paths; it does now, and ``test_form_floor_differential_3790.py::TestAFormHeldAsLiveViewState...``
+    runs the whole grammar against a form held directly as view state."""
 
     def __init__(self, form) -> None:
         self.form = form

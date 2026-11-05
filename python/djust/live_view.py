@@ -208,6 +208,9 @@ _FRAMEWORK_INTERNAL_ATTRS: frozenset = frozenset(
         "_prev_context_refs",
         "_prev_context_immutables",
         "_prev_context_fingerprints",
+        # The context names that are a form or hold one (#3767): the sidecar answers
+        # for them, and a name not sent this sync keeps this answer.
+        "_form_held_keys",
         "_dirty_baseline",
         "_rust_render_timing",
         # Adaptive loop-cache bypass bookkeeping (#3071), written after a render.

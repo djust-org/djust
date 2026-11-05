@@ -18,7 +18,7 @@ from .._exposure_providers import (
 from .._accumulating_containers import view_accumulating_container_ids
 from ..change_detection import deep_fingerprint, fingerprints_by_content, warn_fingerprint_truncated
 from ..security import sanitize_for_log
-from ..serialization import normalize_django_value
+from ..serialization import holds_form, normalize_django_value
 from ..state_pass import convert_for_render, fingerprint_and_convert
 from ..template_filters import _ensure_custom_filters_bridged
 from ..utils import get_template_dirs
@@ -906,8 +906,6 @@ class RustBridgeMixin:
           3. Computed value changes — id() reference comparison against previous render
         """
         if self._rust_view:
-            from django import forms
-
             # Per-render, before anything is formatted (#2209, #2221).
             self._apply_render_env()
 
@@ -1212,6 +1210,12 @@ class RustBridgeMixin:
             _JSON_PRIMITIVES = (int, float, bool, type(None))
             safe_keys: List[str] = []
             sidecar_only_keys: Set[str] = set()
+            # Names whose value is a form, or holds one (#3767): sidecar only, never
+            # state. Re-decided for every name sent this sync; a name that was not
+            # sent is unchanged, so it keeps the answer it had (``_form_held_keys``,
+            # stored below), which is what lets the sidecar below keep a list of
+            # forms that did not change this event.
+            form_held_keys: Set[str] = set()
             rendered_context: Dict[str, Any] = {}
             # Rust values already produced by ``state_pass``; every other key
             # goes through ``normalize_django_value`` below as before.
@@ -1245,14 +1249,7 @@ class RustBridgeMixin:
                     if isinstance(value, SafeData) or is_request_scoped_data(value):
                         sidecar_only_keys.add(key)
                     continue
-                if isinstance(value, forms.BaseForm):
-                    from djust.serialization import render_form_value
-
-                    rendered_context[key] = render_form_value(value)
-                    for field_name in value.fields:
-                        safe_keys.append(f"{key}.{field_name}")
-                    needs_normalize = True
-                elif isinstance(value, _JSON_PRIMITIVES):
+                if isinstance(value, _JSON_PRIMITIVES):
                     # Fast path: primitives are JSON-native and can't be SafeString
                     rendered_context[key] = value
                 elif isinstance(value, str):
@@ -1271,12 +1268,28 @@ class RustBridgeMixin:
                     if converted is None:
                         converted = convert_for_render(value, key)
                     if converted is None:
+                        # A form, or a container holding one (#3767), is not state:
+                        # it reaches the template from the raw-Python sidecar. The
+                        # walk above gives up on exactly the values that can hold
+                        # one, so a plain-data container never pays this scan.
+                        if holds_form(value):
+                            form_held_keys.add(key)
+                            continue
                         safe_keys.extend(_collect_safe_keys(value, key))
                     else:
                         safe_keys.extend(converted[0])
                         converted_values[key] = converted[1]
                     rendered_context[key] = value
                     needs_normalize = True
+
+            # The names that are a form (or hold one) now: the ones decided above and
+            # the ones this sync did not send, which are unchanged (#3767).
+            form_held_now = form_held_keys | {
+                k
+                for k in getattr(self, "_form_held_keys", ())
+                if k in full_context and k not in context
+            }
+            self._form_held_keys = frozenset(form_held_now)
 
             # Skip normalize_django_value when context only has JSON-native types
             if needs_normalize:
@@ -1328,12 +1341,17 @@ class RustBridgeMixin:
                     # A ``RequestScopedList`` is a ``list`` but is NOT in the
                     # state (#3631), so the sidecar is the only way it reaches
                     # the renderer: it must not be skipped as "JSON friendly".
+                    #
+                    # A dict / list / tuple that holds a form (#3767) is the same
+                    # case in the other direction: it is not in the state, so the
+                    # sidecar is the only way it reaches the renderer.
                     if (
                         isinstance(_raw_val, _JSON_FRIENDLY)
                         and not isinstance(_raw_val, MultiValueDict)
                         and not (
                             _raw_key in _request_scoped_keys and is_request_scoped_data(_raw_val)
                         )
+                        and _raw_key not in form_held_now
                     ):
                         continue
                     # A `Component`/`LiveComponent` used to be excluded here
@@ -1364,8 +1382,6 @@ class RustBridgeMixin:
                     # OUTPUT, not `full_context`), and only when a template
                     # still uses the `.render` spelling the docs no longer
                     # recommend.
-                    if isinstance(_raw_val, forms.BaseForm):
-                        continue
                     sidecar[_raw_key] = _raw_val
                 # ADR-024: models captured before the normalize loop replaced
                 # them with dicts. The eager dict wins every direct hit; the
@@ -1464,7 +1480,9 @@ class RustBridgeMixin:
             # being in this render's context.
             removed_keys: List[str] = []
             if hasattr(self._rust_view, "retain_state_keys"):
-                keep_keys = [k for k in full_context if k not in sidecar_only_keys]
+                keep_keys = [
+                    k for k in full_context if k not in sidecar_only_keys and k not in form_held_now
+                ]
                 if getattr(self, "_static_assigns_sent", False):
                     keep_keys.extend(getattr(self, "static_assigns", None) or [])
                 removed_keys = self._rust_view.retain_state_keys(keep_keys)

@@ -34,6 +34,8 @@ from typing import Any, Dict, List, Optional, Union
 
 from django.utils.safestring import mark_safe
 
+from djust._html import attr_name as _checked_attr_name
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -216,7 +218,7 @@ def render_icon(
     extra = ""
     for key, val in attrs.items():
         # Convert python_name to html-name (aria_label -> aria-label)
-        attr_name = _html.escape(key.replace("_", "-"))
+        attr_name = _checked_attr_name(key.replace("_", "-"))
         attr_val = _html.escape(str(val))
         extra += f' {attr_name}="{attr_val}"'
 
