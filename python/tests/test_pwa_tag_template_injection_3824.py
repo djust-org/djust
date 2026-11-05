@@ -201,38 +201,109 @@ class TestNothingButKnownNamesReachTheSource:
         assert "icons" not in pwa._TAG_PARAMS["djust_pwa_manifest"]
 
 
-class TestOnlyKnownTemplateSourceBuildersExist:
-    """The set of ``Template(...)`` constructions in the tag-handler modules.
+def _template_source_sites(root: pathlib.Path) -> dict[str, set[str]]:
+    """``{relative path: {why flagged}}`` for every template-compiling call.
 
-    #3824 was one such construction fed a value. The set is pinned so a second
-    one — in any ``template_tags/`` or ``templatetags/`` module — is a decision
-    made on purpose rather than a copy of the old shape.
+    Flags, in every non-test module under ``root``: a call to ``Template`` /
+    ``from_string`` / ``Engine(...)`` by its own name or an alias introduced by
+    ``from ... import Template as T`` or ``T = Template``, an
+    ``Engine(...).from_string`` chain, and ``getattr`` / ``import_module`` /
+    ``__import__`` given a string that names one of them.
+    """
+    targets = {"Template", "from_string", "Engine"}
+    found: dict[str, set[str]] = {}
+    for path in sorted(root.rglob("*.py")):
+        rel = path.relative_to(root).as_posix()
+        if "/tests/" in "/" + rel or rel.startswith("tests/") or path.name.startswith("test_"):
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        names = set(targets)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom):
+                for alias in node.names:
+                    if alias.name in targets and alias.asname:
+                        names.add(alias.asname)
+            elif isinstance(node, ast.Assign) and isinstance(node.value, (ast.Name, ast.Attribute)):
+                src = node.value.id if isinstance(node.value, ast.Name) else node.value.attr
+                if src in targets:
+                    names.update(t.id for t in node.targets if isinstance(t, ast.Name))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            fn = node.func
+            called = fn.id if isinstance(fn, ast.Name) else getattr(fn, "attr", "")
+            if called in names:
+                found.setdefault(rel, set()).add("call:" + called)
+            if called in {"getattr", "import_module", "__import__"}:
+                for arg in node.args:
+                    if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                        if arg.value in targets or arg.value.startswith("django.template"):
+                            found.setdefault(rel, set()).add("dynamic:" + arg.value)
+    return found
+
+
+class TestOnlyKnownTemplateSourceBuildersExist:
+    """A TRIPWIRE, not a guard: every template-compiling call site in ``djust``.
+
+    #3824 was one such call fed a value. This pins the set of modules that
+    contain one, across all of ``python/djust`` (not just the tag modules), so
+    a new one is a decision made on purpose rather than a copy of the old shape.
+
+    What it does NOT do: it cannot tell whether a value reaches the source at a
+    known site, it will not see a call it has no name for (``render_to_string``
+    of a name built from data, a ``Template`` reached through a variable it
+    cannot trace, ``eval``), and it is not a substitute for reading the new
+    site. The behaviour rows above are the guard; this is what makes you go and
+    look.
     """
 
-    #: file -> why a Template/from_string call is legitimate there.
+    #: file -> why a template-compiling call is legitimate there. Each is
+    #: author-written source (a class attribute, a template file read from
+    #: disk, a constant), never a resolved tag argument. (`template_libraries.py`
+    #: only mentions `Template(...)` in a comment and builds a stub engine; it
+    #: compiles nothing, so it is not a site.)
     KNOWN = {
-        "template_tags/pwa.py": "source is built from constants by _tag_source_and_context",
+        "template_tags/pwa.py": "source is constants; values go in the context (_tag_source_and_context)",
         "template_tags/_django_expr.py": "compiles the empty template, a constant",
         "templatetags/live_tags.py": "a child view's own `template` attribute, author source",
+        "_template_bindings.py": "scans a view's declared `template` / `template_name`",
+        "streaming.py": "the view's own `template` attribute",
+        "websocket.py": "a child view's `get_template()` source",
+        "management/commands/generate_sw.py": "the service-worker template, a string constant",
+        "mcp/server.py": "template source an MCP caller asks to be checked (dev tool)",
+        "components/base.py": "a component's own template string",
+        "theming/templatetags/theme_tags.py": "the preview template, a module constant",
+        "components/gallery/views.py": "gallery example sources, module constants",
     }
 
     def test_the_construction_sites_are_exactly_the_known_ones(self) -> None:
         root = pathlib.Path(pwa.__file__).resolve().parents[1]
-        found: set[str] = set()
-        for sub in ("template_tags", "templatetags"):
-            for path in sorted((root / sub).glob("*.py")):
-                tree = ast.parse(path.read_text(encoding="utf-8"))
-                for node in ast.walk(tree):
-                    if not isinstance(node, ast.Call):
-                        continue
-                    fn = node.func
-                    name = fn.id if isinstance(fn, ast.Name) else getattr(fn, "attr", "")
-                    if name in {"Template", "from_string"}:
-                        found.add(f"{sub}/{path.name}")
-        assert found == set(self.KNOWN), (
-            "a tag-handler module now builds a Template: confirm no resolved "
-            f"argument reaches its source, then add it to KNOWN. Found: {sorted(found)}"
+        found = _template_source_sites(root)
+        assert set(found) == set(self.KNOWN), (
+            "the set of modules compiling template source changed. Confirm no "
+            "resolved argument reaches the source at the new site, then update "
+            f"KNOWN. New: {sorted(set(found) - set(self.KNOWN))}; "
+            f"gone: {sorted(set(self.KNOWN) - set(found))}"
         )
+
+    def test_the_scanner_sees_the_shapes_it_claims_to(self, tmp_path) -> None:
+        """Gate for the scanner itself: each evasion shape it names is flagged."""
+        (tmp_path / "alias.py").write_text("from django.template import Template as T\nT('x')\n")
+        (tmp_path / "assign.py").write_text(
+            "from django.template import Template\nT = Template\nT('x')\n"
+        )
+        (tmp_path / "chain.py").write_text(
+            "e = Engine()\ne.from_string('x')\nEngine().from_string('y')\n"
+        )
+        (tmp_path / "dyn.py").write_text(
+            "import importlib\nm = importlib.import_module('django.template')\ngetattr(m, 'Template')('x')\n"
+        )
+        (tmp_path / "plain.py").write_text("x = 1\n")
+        sub = tmp_path / "pkg"
+        sub.mkdir()
+        (sub / "deep.py").write_text("Template('x')\n")
+        got = _template_source_sites(tmp_path)
+        assert set(got) == {"alias.py", "assign.py", "chain.py", "dyn.py", "pkg/deep.py"}
 
 
 # ---------------------------------------------------------------------------
@@ -255,6 +326,32 @@ class TestShapeChecks:
         assert '<meta name="theme-color" content="#007bff">' in out, (
             "a non-colour theme_color must fall back to the default, not render"
         )
+
+    @pytest.mark.parametrize("engine", ["native", "django"])
+    @pytest.mark.parametrize("bad", ['"><b>x</b>', "red;}</style>", "a\nb", "{{ x }}", "x" * 80])
+    def test_a_background_color_that_is_not_a_colour_renders_the_default(
+        self, engine: str, bad: str
+    ) -> None:
+        tag = "djust_pwa_manifest"
+        out = (
+            _native(tag, "background_color", bad, False)
+            if engine == "native"
+            else _django(tag, "background_color", bad)
+        )
+        assert "&quot;background_color&quot;: &quot;#ffffff&quot;" in out, (
+            "a non-colour background_color must fall back to the default, not render"
+        )
+
+    @pytest.mark.parametrize("engine", ["native", "django"])
+    @pytest.mark.parametrize("good", ["#101010", "navy", "rgb(1, 2, 3)"])
+    def test_a_real_background_colour_is_kept(self, engine: str, good: str) -> None:
+        tag = "djust_pwa_manifest"
+        out = (
+            _native(tag, "background_color", good, False)
+            if engine == "native"
+            else _django(tag, "background_color", good)
+        )
+        assert "&quot;background_color&quot;: &quot;%s&quot;" % good in out
 
     @pytest.mark.parametrize("engine", ["native", "django"])
     @pytest.mark.parametrize(
