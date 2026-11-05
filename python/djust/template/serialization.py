@@ -17,6 +17,7 @@ from uuid import UUID
 from django.db.models.fields.files import FieldFile
 
 from djust.serialization import django_json_datetime
+from djust._exposure_diagnostics import log_failure
 
 logger = logging.getLogger(__name__)
 
@@ -228,10 +229,16 @@ def serialize_value(
             try:
                 return type(value)(*items)
             except Exception as exc:  # noqa: BLE001 - see above: the user's __new__ is arbitrary
-                logger.debug(
-                    "namedtuple %s could not be rebuilt for rendering, using a plain tuple: %s",
-                    type(value).__name__,
+                # Through ``log_failure`` (ADR-038): the user's ``__new__`` is arbitrary code, so
+                # its exception text may carry undeclared state and is logged only where
+                # diagnostics are allowed (``test_log_exposure_pin`` pins this).
+                log_failure(
+                    logger,
                     exc,
+                    "namedtuple %s could not be rebuilt for rendering, using a plain tuple",
+                    type(value).__name__,
+                    level="debug",
+                    traceback=True,
                 )
         return tuple(items)
 
