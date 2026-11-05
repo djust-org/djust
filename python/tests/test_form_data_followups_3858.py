@@ -127,6 +127,21 @@ class TestTheWizardTotalIsBounded:
             view.update_step_field(field="a1", value=["x"] * 3)  # a shrink is accepted
         assert len(held(view)["a"]["a1"]) == 3
 
+    def test_other_steps_alone_past_the_limit_refuse_every_event(self):
+        """A limit lowered after data was stored: the other steps are over it, so nothing more is kept
+        (a shrink of the current step cannot bring the total back under it), and nothing raises."""
+        view = mounted(FourStepWizard)
+        with livecfg(max_form_members=0):
+            view.update_step_field(field="a1", value=["x"] * 50)
+            goto(view, 1)
+            view.update_step_field(field="b1", value="y")
+        with livecfg(max_form_members=30):
+            view.update_step_field(field="b1", value="")  # a replacement that shrinks: still refused
+            view.update_step_field(field="b2", value="z")
+            assert bounds.refusal({}, {}, (), [held(view)["a"]]) is not None  # not even an empty one
+        assert held(view)["b"] == {"b1": "y"}
+        assert "more values" in view.wizard_step_errors["b"]["__all__"][0]
+
     def test_zero_removes_the_total_too(self):
         view = mounted(FourStepWizard)
         with livecfg(max_form_members=0, max_form_data_size=0):
@@ -233,6 +248,28 @@ class TestRemoveRowIsBounded:
         assert all(view._formset_data["rows-%d-DELETE" % i] == "on" for i in range(4))
         assert "bogus-1-DELETE" in view._formset_data
         assert "bogus-2-DELETE" not in view._formset_data
+
+    @pytest.mark.parametrize("bogus", ["rows-4", "rows-99", "rows-abc", "rows-", "rows--x"])
+    def test_a_row_the_formset_does_not_have_is_the_clients_even_under_its_prefix(self, bogus):
+        """Four rows exist (0-3): ``rows-4`` is the first that does not, and a prefix of the formset's
+        own spelling is no exemption. The one key the limit allows is spent on the first."""
+        view = rows_view()
+        for _ in range(4):
+            view.add_row(formset="rows")
+        with livecfg(fields=1):
+            view.remove_row(formset="rows", prefix="first-bogus")
+            view.remove_row(formset="rows", prefix=bogus)
+        assert "%s-DELETE" % bogus not in view._formset_data
+        assert "first-bogus-DELETE" in view._formset_data
+
+    def test_the_last_row_the_formset_has_is_the_formsets_own(self):
+        view = rows_view()
+        for _ in range(4):
+            view.add_row(formset="rows")
+        with livecfg(fields=1):
+            view.remove_row(formset="rows", prefix="first-bogus")
+            view.remove_row(formset="rows", prefix="rows-3")  # TOTAL_FORMS is 4: rows 0-3 exist
+        assert view._formset_data["rows-3-DELETE"] == "on"
 
     def test_the_function_form_is_bounded_too(self):
         """``remove_row()`` is also called directly from a project's handler with the client's prefix."""

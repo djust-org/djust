@@ -370,9 +370,8 @@ def _held_beside(others: Sequence[Mapping[str, Any]], limit: int, count: bool) -
     *limit*: O(limit) however much they hold (#3858)."""
     held = 0
     for other in others:
+        # Once *held* is past *limit* the budget is negative, and each later one is judged in O(1).
         held += _weigh_members(other, limit - held, count)
-        if held > limit:
-            break
     return held
 
 
@@ -389,10 +388,9 @@ def _over(
     Judged WITHOUT building the merged mapping: what *incoming* adds, plus what *current* holds, less
     what *incoming* replaces (#3841); *others* are charged first, as they are, and shrink the room
     the rest has (#3858)."""
-    beside = _held_beside(others, limit, count) if others else 0
-    if beside > limit:
-        return True
-    limit -= beside
+    # *others* shrink the room *incoming* and *current* have. When they alone pass *limit* the room is
+    # negative, and the verdict below is "over" for every event, an empty one included.
+    limit -= _held_beside(others, limit, count) if others else 0
     size = _weigh_members(incoming, limit, count)
     if size <= limit and current:
         budget = limit - size
