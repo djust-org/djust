@@ -35,7 +35,7 @@ from django.conf import settings
 from django.core.exceptions import PermissionDenied
 from django.template import Context, Node, Template, TemplateSyntaxError
 from django.template.base import NodeList, Parser, Token
-from django.utils.html import escape, format_html, format_html_join
+from django.utils.html import conditional_escape, escape, format_html, format_html_join
 from django.utils.safestring import SafeString, mark_safe
 
 from .._attr_policy import passthrough_attrs
@@ -2486,9 +2486,14 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
         # — parsed as HTMLUnknownElement on browsers without a
         # registered custom-element class; fully selectable via
         # querySelector and replaceable via replaceWith.
+        #
+        # The placeholder follows Django's own rule (#3819): a marked-safe value
+        # (``mark_safe`` / ``format_html`` / a ``SafeString``, anything with ``__html__``)
+        # is markup and is spliced in as written; a plain ``str`` is TEXT and is escaped,
+        # so a ``lazy={"placeholder": some_data}`` cannot inject markup.
         custom_placeholder = lazy_config["placeholder"]
         if custom_placeholder:
-            inner = str(custom_placeholder)
+            inner = str(conditional_escape(custom_placeholder))
         else:
             inner = ""
         # #1147 — propagate ``request.csp_nonce`` onto the <dj-lazy-slot>

@@ -30,7 +30,9 @@ value reaching the markup) and no ``N`` (needs a decision) sites remain in this 
 ``U`` the audit found, ``live_input``'s attribute NAME (``event=`` becomes ``dj-...`` unescaped),
 was fixed in ``djust._html.attr_name`` rather than allowlisted, and the ``N`` items were filed
 as their own issues: #3818 (live_input passthrough policy), #3819 (raw-markup slots), and #3820 (teaching the guard
-so this list can shrink).
+so this list can shrink). #3818 and #3819 are decided and fixed (``djust._attr_policy``; the
+``live_render`` placeholder follows Django's escaping rule; the route map is script-escaped), so those
+entries cite the fix rather than a verdict N.
 
 Refs #3774, #3766, #3775, #1859, #1468.
 """
@@ -151,9 +153,10 @@ AUDITED: dict[tuple[str, str], Audit] = {
     ),
     (LT, "_client_config_html"): S(
         1,
-        "the three meta prefixes are escape()'d; the route-map script is routing.get_route_map_script (format_html around json.dumps of developer URL config)",
+        "the three meta prefixes are escape()'d; the route-map script is routing.get_route_map_script (format_html around json.dumps of developer URL config, which since #3819 is passed through escape_json_for_script so `<`, `>` and `&` cannot end the script whatever the config holds)",
         (LT, "api_escaped = escape(api_prefix)"),
         (PKG + "routing.py", "def get_route_map_script(request: Any = None) -> str:"),
+        (PKG + "routing.py", "route_json = escape_json_for_script(json.dumps(all_routes))"),
     ),
     (LT, "live_input"): S(
         1,
@@ -195,13 +198,14 @@ AUDITED: dict[tuple[str, str], Audit] = {
     ),
     (LT, "live_render"): S(
         2,
-        "ids and the CSP nonce are escape()'d, lazy['trigger'] is checked against ('flush', 'visible'), the child body is a template render stamped by _stamp_view_id. The one raw piece, lazy['placeholder'], is a developer-supplied HTML slot (verdict N, #3819)",
+        "ids and the CSP nonce are escape()'d, lazy['trigger'] is checked against ('flush', 'visible'), the child body is a template render stamped by _stamp_view_id. The one formerly raw piece, lazy['placeholder'], goes through conditional_escape since #3819: a marked-safe value is markup, a plain str is text (Django's own rule)",
         (LT, 'if lazy_config["trigger"] not in ("flush", "visible"):'),
         (
             LT,
             "_csp_nonce_attr = ' nonce=\"' + escape(_csp_nonce_raw) + '\"' if _csp_nonce_raw else \"\"",
         ),
         (LT, 'custom_placeholder = lazy_config["placeholder"]'),
+        (LT, "inner = str(conditional_escape(custom_placeholder))"),
     ),
     (CH, "BarChartNode.render"): S(
         1,

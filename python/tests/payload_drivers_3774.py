@@ -224,6 +224,8 @@ def live_render(mode):
                 "placeholder": "<i>wait</i>",
             }
         },
+        # A plain-str placeholder is TEXT (#3819): the payload must come out escaped.
+        {"lazy": {"placeholder": PAYLOAD}},
     ):
         request = HttpRequest()
         request.method = "GET"
