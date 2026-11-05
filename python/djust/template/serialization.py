@@ -17,7 +17,6 @@ from uuid import UUID
 from django.db.models.fields.files import FieldFile
 
 from djust.serialization import django_json_datetime
-from djust._exposure_diagnostics import log_failure
 
 logger = logging.getLogger(__name__)
 
@@ -231,7 +230,11 @@ def serialize_value(
             except Exception as exc:  # noqa: BLE001 - see above: the user's __new__ is arbitrary
                 # Through ``log_failure`` (ADR-038): the user's ``__new__`` is arbitrary code, so
                 # its exception text may carry undeclared state and is logged only where
-                # diagnostics are allowed (``test_log_exposure_pin`` pins this).
+                # diagnostics are allowed (``test_log_exposure_pin`` pins this). Imported here,
+                # not at module level: the template backend must not load the exposure modules
+                # at import time (``test_lazy_package_init_2559`` pins the allowlist).
+                from djust._exposure_diagnostics import log_failure
+
                 log_failure(
                     logger,
                     exc,
