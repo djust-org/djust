@@ -53,9 +53,11 @@ ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "template-library-url-sweep.py"
 
 #: Tags chosen for what they read, not for being fast: a native tag with a plain URL parameter,
-#: a ``**attrs`` tag, a block tag whose two engines disagree on purpose (the only cell that
-#: reads ``carries`` to find a difference), and two that take a ``form`` (a bound form that is
-#: not in the context the shortcut builds from the template's names).
+#: a ``**attrs`` tag, a block tag, and two that take a ``form`` (a bound form that is not in the
+#: context the shortcut builds from the template's names). No real tag has the two engines
+#: disagree since #3669 (``nav_item`` was the last), so the runs PLANT a Python-only hole in
+#: ``avatar`` (``PLANT``): the planted cells are the ones that read ``carries`` to find a
+#: difference, which is what the shortcut must not change.
 SAMPLE = (
     "djust_components:avatar",
     "djust_components:nav_item",
@@ -100,6 +102,9 @@ class TestWhereCarriesIsMeasured:
         assert cell.python_carries is None and cell.rust_carries is None
 
 
+PLANT = ("--plant", "djust_components:avatar")
+
+
 def _run(out: Path, *extra: str) -> dict:
     env = isolated_git_env()
     env.pop("DJANGO_SETTINGS_MODULE", None)
@@ -120,8 +125,8 @@ def _run(out: Path, *extra: str) -> dict:
 def both(tmp_path_factory: pytest.TempPathFactory) -> tuple[dict, dict]:
     out = tmp_path_factory.mktemp("urlsweepcapacity")
     only = ",".join(SAMPLE)
-    return _run(out / "fast.json", "--only", only), _run(
-        out / "full.json", "--only", only, "--exhaustive"
+    return _run(out / "fast.json", "--only", only, *PLANT), _run(
+        out / "full.json", "--only", only, *PLANT, "--exhaustive"
     )
 
 
@@ -132,7 +137,10 @@ class TestTheShortcutsChangeNothing:
         assert set(fast["driven"]) == set(SAMPLE), sorted(set(SAMPLE) ^ set(fast["driven"]))
         assert fast["cells"] > 5000 and fast["rendered_both"] > fast["cells"] // 2
         assert fast["reached"], "no URL reached an attribute: the sweep read the wrong input"
-        assert fast["disagreements"], "nav_item's deliberate engine difference was not seen"
+        assert fast["disagreements"], "the planted engine difference was not seen"
+        assert {d[0] for d in fast["disagreements"]} == {"djust_components:avatar"}, (
+            "only the planted tag may differ (nav_item's difference was fixed in #3669)"
+        )
 
     def test_the_exhaustive_run_really_takes_no_shortcut(self, both):
         """Else the comparison below compares a run with itself and cannot fail (#1859)."""
