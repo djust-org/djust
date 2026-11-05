@@ -17,7 +17,7 @@ from django.template.base import TextNode
 from django.test import override_settings
 
 from djust import LiveView
-from payload_sweep_3774 import PAYLOAD
+from payload_sweep_3774 import PAYLOAD, URL_PAYLOAD
 
 
 def _request():
@@ -57,6 +57,24 @@ def live_input(mode):
             )
         )
     out.append(tag(PAYLOAD, handler="h"))  # the unknown-type comment
+    # Passthrough attributes are judged (#3818): an event-handler NAME is refused (ValueError)
+    # and a script-bearing URL value is neutralised to ``#``, so what the sweep sees is the markup that survived;
+    # remove the policy and these cells inject. (A submitting ``type`` is not an injection the
+    # sweep's detector reads; it is pinned in test_passthrough_attr_policy_3818.py.)
+    url = URL_PAYLOAD if mode == "url" else PAYLOAD
+    for attrs in (
+        {"onmouseover": PAYLOAD},
+        {"formaction": url},
+        {"href": url},
+        {"src": url},
+        {"poster": url},
+        {"srcset": url},
+        {"ping": url},
+    ):
+        try:
+            out.append(tag("text", handler="h", **attrs))
+        except ValueError:
+            pass
     return out
 
 
@@ -202,6 +220,8 @@ def live_render(mode):
                 "placeholder": "<i>wait</i>",
             }
         },
+        # A plain-str placeholder is TEXT (#3819): the payload must come out escaped.
+        {"lazy": {"placeholder": PAYLOAD}},
     ):
         request = HttpRequest()
         request.method = "GET"

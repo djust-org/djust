@@ -105,6 +105,7 @@ class _Injection(HTMLParser):
 #: (parsing every output is the slow part of the sweep).
 _RAW = (
     '"onmouseover=' + TAG.lower(),
+    ' onmouseover="',  # an event-handler ATTRIBUTE whose value is escaped (#3818)
     "<b id=" + TAG.lower(),
     "<svg onload=" + TAG.lower(),
     "'" + TAG.lower() + "<",

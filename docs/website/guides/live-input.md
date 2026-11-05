@@ -123,6 +123,31 @@ class NotesView(LiveView):
 | `checked` | `bool` | For `checkbox` — whether the box is checked. |
 | `**kwargs` | | Any other kwarg is forwarded as an HTML attribute. Keys with `_` are normalised to `-` (e.g. `aria_label="Search"` → `aria-label="Search"`). |
 
+### Which keyword attributes are forwarded
+
+Escaping stops a value leaving its quotes; it does not decide what an attribute *does*. The extra
+keywords are therefore judged by one policy (`djust._attr_policy.passthrough_attrs`, shared with
+`FormMixin.as_live` widget `attrs` and `render_icon` extras):
+
+| Attribute | Result |
+|---|---|
+| `aria_*`, `data_*`, `placeholder`, `rows`, `maxlength`, `pattern`, `id`, `title`, `style`, `x_model`, `dj_*` ... | forwarded unchanged |
+| `type` of `date`, `color`, `range`, ... | forwarded: it overrides the field's own `type`, as before |
+| `type` whose value is `image`, `submit`, `reset` or `button` (any case) | left out, and logged: the field keeps its own `type` |
+| an event-handler attribute NAME: `onclick`, `onfocus`, any `on...`, and the `@click` / `x-on:` / `v-on:` / `hx-on` spellings | `ValueError`: that is inline script; use a `dj-*` binding |
+| `href`, `src`, `action`, `formaction`, `poster`, `srcset`, `ping`, `data`, `background`, `xlink:href`, `dj_navigate`, `dj_patch` whose value has a scheme the URL allowlist rejects (`javascript:`, `vbscript:`, `data:`, `blob:`, `file:`, a custom scheme; however spelled: case, spaces, tabs or newlines inside the scheme) | rendered as `#`, and logged (a `srcset` / `ping` list is judged entry by entry) |
+
+Only an attribute NAME raises (`ValueError`, at development time). A VALUE never does: a template can
+take it from data (`formaction=profile.website`), and an error page that a stored hostile value
+triggers for every viewer would be an availability hole of its own. The log line carries the
+attribute name, never the value.
+
+`http(s)`, `mailto`, `tel`, relative and `#fragment` URLs are unchanged. This is the policy
+`djust.theming` applies to its component attributes, and a test runs the two against the same
+payloads. `style`, framework expression attributes (`x-data`, `x-init`, `:href`, `hx-vals`) and
+author-defined `data-*` attributes are printed as written: passing user data to them is the same
+decision as writing them by hand.
+
 ## XSS safety
 
 Every attribute value and every text content node passes through

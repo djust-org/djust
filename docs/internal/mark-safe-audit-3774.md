@@ -11,7 +11,7 @@ them. It covers those sites, and only those: see "Out of scope" for what the gua
 |---|---|---|
 | **S** | safe: every raw-looking value is a constant, escaped, coerced or validated (evidence cited) | **125** sites: 96 sinks in 93 functions kept in the audited baseline, 29 re-sourced (below) |
 | **U** | a raw value reaches the markup unescaped | **0** in the flagged sinks; one CLASS found one call below them and fixed: attribute NAMES (below) |
-| **N** | needs a decision | **3** items, filed as #3818, #3819 (two items); one adjacent finding filed as #3824 |
+| **N** | needs a decision | **3** items, filed as #3818, #3819 (two items), all since decided and fixed (below); one adjacent finding filed as #3824, also fixed |
 
 None of the 125 sinks is vulnerable. They are flagged because the guard is name-based and
 single-function (its docstring says so): it does not follow a value across a call into a helper that
@@ -97,9 +97,10 @@ bar's SVG `<title>{name}`. The unmutated tree stays at zero findings.
 
 What the sweep does not do: it drives the Django-engine functions, not the Rust handlers (which call
 the same `render_*` functions for the block tags); `_dev_tools.py` is rendered but not audited by the
-guard; the placeholder of `live_render(lazy=...)` is given a plain value because its raw HTML is
-verdict N (#3819); `live_input` is not given URL-valued passthrough attributes because their policy
-is #3818; `ColocatedHookNode` is not given a hostile NAME (see its row).
+guard; `ColocatedHookNode` is not given a hostile NAME (see its row). Since #3818 / #3819 the
+`live_input` driver also passes an `on*` attribute and URL-valued attributes holding the payload
+(they must be refused or neutralised), and `live_render` is given a plain-`str` placeholder holding the
+payload (it must come out escaped).
 
 ## Out of scope: sinks the guard cannot see
 
@@ -135,17 +136,28 @@ safe), `Button` and `Card` `data-*` keys, `PaginationComponent._click`'s `data-*
 guarded its `data-*` keys with `_DATA_KEY_RE`. Tests: `python/tests/test_attr_name_injection_3774.py`,
 each fix gate-offed on its own.
 
-## N: filed, not decided here
+## N: decided and fixed
 
-* **#3818** — `live_input` passthrough attributes have no URL-scheme / `on*` / `type`-override policy
-  (`formaction="javascript:..."` renders as given; theming's `_passthrough_attrs` rejects it).
-  Template-author-written today; a policy decision.
-* **#3819** — two raw-markup slots with no escaping contract: `live_render`'s `lazy={"placeholder": ...}`
-  (spliced as HTML), and `routing.get_route_map_script`'s `mark_safe(route_json)` inside a `<script>`
-  (`json.dumps` does not escape `<`; the data is developer URL config).
-* **#3824** (adjacent, found by the writer grep) — `template_tags/pwa.py` writes resolved tag
+* **#3818** — `live_input` passthrough attributes had no URL-scheme / `on*` / `type`-override policy
+  (`formaction="javascript:..."` rendered as given; theming's `_passthrough_attrs` rejected it). Decided:
+  one policy in `djust._attr_policy.passthrough_attrs`, used by every passthrough writer (`live_input`,
+  `FormMixin.as_live` widget attrs, `render_icon` extras, and with it the native `{% icon %}` handler):
+  an `on*` NAME (and `@`, `x-on`, `v-on`, `hx-on`) raises `ValueError`; a URL VALUE the shared allowlist
+  rejects renders `#` in every URL attribute (`href` / `src` / `action` / `formaction`, `poster`, `srcset`,
+  `ping`, `data`, `background`, `xlink:href`, `dj-navigate` ...) and never raises, because a value can come
+  from data and an error page it triggers for every viewer is its own hole; a `type` VALUE of `image` /
+  `submit` / `reset` / `button` is left out; everything else unchanged.
+  `python/tests/test_passthrough_attr_policy_3818.py` pins it on both engines and against theming's
+  own implementation.
+* **#3819** — two raw-markup slots with no escaping contract. Decided: `live_render`'s
+  `lazy={"placeholder": ...}` follows Django's rule (`conditional_escape`): a marked-safe value is markup,
+  a plain `str` is text. `routing.get_route_map_script` (and the two other developer-config JSON blobs
+  inlined in a `<script>`: the handler-metadata script and `DJUST_LOADING_GROUPING_CLASSES`) now pass
+  their JSON through `djust.security.json_script.escape_json_for_script`.
+  `python/tests/test_raw_slots_3819.py`.
+* **#3824** (adjacent, found by the writer grep) — `template_tags/pwa.py` wrote resolved tag
   arguments into Django template SOURCE, so a context value reaching `{% djust_pwa_head name=var %}`
-  can end the tag and print markup. Needs its failure-exit test re-based, so not folded in here.
+  could end the tag and print markup. Fixed in #3828.
 
 ## Re-sourced: flagged only because the escaper was imported through a re-export
 
@@ -172,18 +184,18 @@ first match inside its scope.
 <!-- audit-table:begin -->
 | `assets/tags.py:214` | `asset_tags` | 1 | S | joins _tag() results; _tag builds every branch with format_html, so src and integrity are escaped | `assets/tags.py:219`<br>`assets/tags.py:190`<br>`assets/tags.py:201` |
 | `components/base.py:317` | `Component.asset_tags` | 1 | S | joins djust.assets.tags.asset_tags() results, which are format_html SafeStrings | `components/base.py:319`<br>`assets/tags.py:214` |
-| `components/icons.py:173` | `render_icon` | 1 | S | class names are the constant size label plus html.escape(custom_class); every extra attribute VALUE is html.escape'd and every extra attribute NAME is checked by attr_name (before #3774 the name was only html.escape'd, which cannot make a name safe: `x onfocus=alert(1) y` rendered a live handler; fixed, python/tests/test_attr_name_injection_3774.py); px is int(); svg_inner is the bundled / DJUST_COMPONENTS_ICON_SETS (developer settings) markup keyed by name, never the caller's text | `components/icons.py:214`<br>`components/icons.py:222`<br>`components/icons.py:221`<br>`components/icons.py:206`<br>`components/icons.py:198` |
-| `forms.py:821` | `FormMixin.as_live` | 1 | S | joins adapter.render_field() output; BaseAdapter escapes wrapper/label/help text/errors/choices/values and (since #3774) checks attribute names in _build_tag; a custom adapter owes the same (FrameworkAdapter contract) | `forms.py:862`<br>`frameworks.py:114`<br>`frameworks.py:247` |
+| `components/icons.py:174` | `render_icon` | 1 | S | class names are the constant size label plus html.escape(custom_class); every extra attribute VALUE is html.escape'd and every extra attribute NAME is checked by attr_name (before #3774 the name was only html.escape'd, which cannot make a name safe: `x onfocus=alert(1) y` rendered a live handler; fixed, python/tests/test_attr_name_injection_3774.py); since #3818 the extra attributes first pass djust._attr_policy.passthrough_attrs (an on* name is refused with ValueError, a URL the allowlist rejects renders `#`); px is int(); svg_inner is the bundled / DJUST_COMPONENTS_ICON_SETS (developer settings) markup keyed by name, never the caller's text | `components/icons.py:215`<br>`components/icons.py:225`<br>`components/icons.py:224`<br>`components/icons.py:221`<br>`components/icons.py:207`<br>`components/icons.py:199` |
+| `forms.py:821` | `FormMixin.as_live` | 1 | S | joins adapter.render_field() output; BaseAdapter escapes wrapper/label/help text/errors/choices/values and (since #3774) checks attribute names in _build_tag; since #3818 the widget attrs it merges pass djust._attr_policy.passthrough_attrs (an inline event handler name is refused with ValueError, a rejected URL renders `#`, a submitting `type` is left out); a custom adapter owes the same (FrameworkAdapter contract) | `forms.py:862`<br>`frameworks.py:115`<br>`frameworks.py:261`<br>`frameworks.py:200`<br>`frameworks.py:221` |
 | `template_tags/lorem.py:42` | `LoremTagHandler.render` | 1 | S | wraps the paragraphs of django.utils.lorem_ipsum (a fixed corpus) in <p>; same as Django's own lorem tag | `template_tags/lorem.py:64`<br>`template_tags/lorem.py:26` |
 | `templatetags/djust_pwa.py:190` | `djust_sw_register` | 1 | S | nonce_attr is escape()'d in _nonce_attr; the URL and scope are _script_json(): json.dumps with < > & and U+2028/9 escaped, so neither can end the script element | `templatetags/djust_pwa.py:216`<br>`templatetags/djust_pwa.py:90`<br>`templatetags/djust_pwa.py:100` |
 | `templatetags/djust_pwa.py:256` | `djust_offline_indicator` | 1 | S | texts and classes are escape()'d locals; show_when selects a constant visibility attribute; the style block is a constant plus the escaped nonce | `templatetags/djust_pwa.py:307`<br>`templatetags/djust_pwa.py:310` |
 | `templatetags/djust_pwa.py:394` | `djust_offline_styles` | 1 | S | constant CSS plus the nonce attribute built by _nonce_attr (escape()'d) | `templatetags/djust_pwa.py:413`<br>`templatetags/djust_pwa.py:90` |
-| `templatetags/live_tags.py:253` | `_client_config_html` | 1 | S | the three meta prefixes are escape()'d; the route-map script is routing.get_route_map_script (format_html around json.dumps of developer URL config) | `templatetags/live_tags.py:278`<br>`routing.py:471` |
-| `templatetags/live_tags.py:802` | `live_input` | 1 | S | html is build_tag output: every attribute VALUE is escape()'d, select options escape()'d, textarea content escaped; attribute NAMES (event=, passthrough keys) were not checked until #3774 (the audit's one U, fixed in djust._html.attr_name, python/tests/test_attr_name_injection_3774.py; passthrough URL/on* policy is N, #3818) | `templatetags/live_tags.py:902`<br>`_html.py:26`<br>`_html.py:84`<br>`templatetags/live_tags.py:709` |
-| `templatetags/live_tags.py:1027` | `ColocatedHookNode.render` | 1 | S | the name is the tag's parse-time literal (plus the view's module.qualname): template/code, not request data; it is escape()'d into data-hook; the body is </script>-escaped; the nonce is escape()'d. NOT escaped: the JS-comment banner `/* COLOCATED HOOK: <name> */` interpolates the name raw, so a name carrying `</script>` or `*/` would end the script or the comment; it is a parse-time literal the template author wrote, hence not exploitable, and the sweep drives this tag with a plain name for that reason | `templatetags/live_tags.py:1042`<br>`templatetags/live_tags.py:1037`<br>`templatetags/live_tags.py:1054` |
-| `templatetags/live_tags.py:1150` | `djust_skeleton` | 1 | S | shape is checked against _SKELETON_VALID_SHAPES; width/height pass _SKELETON_SIZE_RE; class_ goes through build_tag (escaped); count is int()-clamped | `templatetags/live_tags.py:1196`<br>`templatetags/live_tags.py:1137`<br>`templatetags/live_tags.py:1205` |
-| `templatetags/live_tags.py:1795` | `_render_sticky_child_html` | 2 | S | the wrapper's ids are escape()'d; the body is the child's own template render (autoescaped by the engine) stamped by _stamp_view_id, which escape()s view_id | `templatetags/live_tags.py:1856`<br>`templatetags/live_tags.py:1862`<br>`templatetags/live_tags.py:1855` |
-| `templatetags/live_tags.py:1978` | `live_render` | 2 | S | ids and the CSP nonce are escape()'d, lazy['trigger'] is checked against ('flush', 'visible'), the child body is a template render stamped by _stamp_view_id. The one raw piece, lazy['placeholder'], is a developer-supplied HTML slot (verdict N, #3819) | `templatetags/live_tags.py:2257`<br>`templatetags/live_tags.py:2305`<br>`templatetags/live_tags.py:2481` |
+| `templatetags/live_tags.py:254` | `_client_config_html` | 1 | S | the three meta prefixes are escape()'d; the route-map script is routing.get_route_map_script (format_html around json.dumps of developer URL config, which since #3819 is passed through escape_json_for_script so `<`, `>` and `&` cannot end the script whatever the config holds) | `templatetags/live_tags.py:279`<br>`routing.py:472`<br>`routing.py:535` |
+| `templatetags/live_tags.py:810` | `live_input` | 1 | S | html is build_tag output: every attribute VALUE is escape()'d, select options escape()'d, textarea content escaped; attribute NAMES (event=, passthrough keys) were not checked until #3774 (the audit's one U, fixed in djust._html.attr_name, python/tests/test_attr_name_injection_3774.py); the passthrough attributes are judged by djust._attr_policy.passthrough_attrs (#3818: an on* name is refused with ValueError, a URL the allowlist rejects renders `#`, a submitting `type` is left out; python/tests/test_passthrough_attr_policy_3818.py) | `templatetags/live_tags.py:910`<br>`templatetags/live_tags.py:633`<br>`_attr_policy.py:171`<br>`_html.py:26`<br>`_html.py:84`<br>`templatetags/live_tags.py:717` |
+| `templatetags/live_tags.py:1035` | `ColocatedHookNode.render` | 1 | S | the name is the tag's parse-time literal (plus the view's module.qualname): template/code, not request data; it is escape()'d into data-hook; the body is </script>-escaped; the nonce is escape()'d. NOT escaped: the JS-comment banner `/* COLOCATED HOOK: <name> */` interpolates the name raw, so a name carrying `</script>` or `*/` would end the script or the comment; it is a parse-time literal the template author wrote, hence not exploitable, and the sweep drives this tag with a plain name for that reason | `templatetags/live_tags.py:1050`<br>`templatetags/live_tags.py:1045`<br>`templatetags/live_tags.py:1062` |
+| `templatetags/live_tags.py:1158` | `djust_skeleton` | 1 | S | shape is checked against _SKELETON_VALID_SHAPES; width/height pass _SKELETON_SIZE_RE; class_ goes through build_tag (escaped); count is int()-clamped | `templatetags/live_tags.py:1204`<br>`templatetags/live_tags.py:1145`<br>`templatetags/live_tags.py:1213` |
+| `templatetags/live_tags.py:1803` | `_render_sticky_child_html` | 2 | S | the wrapper's ids are escape()'d; the body is the child's own template render (autoescaped by the engine) stamped by _stamp_view_id, which escape()s view_id | `templatetags/live_tags.py:1864`<br>`templatetags/live_tags.py:1870`<br>`templatetags/live_tags.py:1863` |
+| `templatetags/live_tags.py:1986` | `live_render` | 2 | S | ids and the CSP nonce are escape()'d, lazy['trigger'] is checked against ('flush', 'visible'), the child body is a template render stamped by _stamp_view_id. The one formerly raw piece, lazy['placeholder'], goes through conditional_escape since #3819: a marked-safe value is markup, a plain str is text (Django's own rule) | `templatetags/live_tags.py:2265`<br>`templatetags/live_tags.py:2313`<br>`templatetags/live_tags.py:2494`<br>`templatetags/live_tags.py:2496` |
 | `components/templatetags/_charts.py:33` | `BarChartNode.render` | 1 | S | width/height int() with a numeric fallback; values float(); title, labels, colour and class conditional_escape'd; every other interpolation is a float | `components/templatetags/_charts.py:13`<br>`components/templatetags/_charts.py:112` |
 | `components/templatetags/_charts.py:155` | `LineChartNode.render` | 1 | S | width/height int(); values float(); series name and colour conditional_escape'd; coordinates are floats | `components/templatetags/_charts.py:13`<br>`components/templatetags/_charts.py:230` |
 | `components/templatetags/_charts.py:329` | `PieChartNode.render` | 1 | S | width/height int(), inner_radius float(); segment colour and label conditional_escape'd; the path data is floats | `components/templatetags/_charts.py:13`<br>`components/templatetags/_charts.py:412` |

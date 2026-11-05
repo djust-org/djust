@@ -32,7 +32,9 @@ value reaching the markup) and no ``N`` (needs a decision) sites remain in this 
 ``U`` the audit found, ``live_input``'s attribute NAME (``event=`` becomes ``dj-...`` unescaped),
 was fixed in ``djust._html.attr_name`` rather than allowlisted, and the ``N`` items were filed
 as their own issues: #3818 (live_input passthrough policy), #3819 (raw-markup slots), and #3820 (teaching the guard
-so this list can shrink).
+so this list can shrink). #3818 and #3819 are decided and fixed (``djust._attr_policy``; the
+``live_render`` placeholder follows Django's escaping rule; the route map is script-escaped), so those
+entries cite the fix rather than a verdict N.
 
 Refs #3774, #3766, #3775, #1859, #1468.
 """
@@ -105,19 +107,22 @@ AUDITED: dict[tuple[str, str], Audit] = {
     ),
     (PKG + "components/icons.py", "render_icon"): S(
         1,
-        "class names are the constant size label plus html.escape(custom_class); every extra attribute VALUE is html.escape'd and every extra attribute NAME is checked by attr_name (before #3774 the name was only html.escape'd, which cannot make a name safe: `x onfocus=alert(1) y` rendered a live handler; fixed, python/tests/test_attr_name_injection_3774.py); px is int(); svg_inner is the bundled / DJUST_COMPONENTS_ICON_SETS (developer settings) markup keyed by name, never the caller's text",
+        "class names are the constant size label plus html.escape(custom_class); every extra attribute VALUE is html.escape'd and every extra attribute NAME is checked by attr_name (before #3774 the name was only html.escape'd, which cannot make a name safe: `x onfocus=alert(1) y` rendered a live handler; fixed, python/tests/test_attr_name_injection_3774.py); since #3818 the extra attributes first pass djust._attr_policy.passthrough_attrs (an on* name is refused with ValueError, a URL the allowlist rejects renders `#`); px is int(); svg_inner is the bundled / DJUST_COMPONENTS_ICON_SETS (developer settings) markup keyed by name, never the caller's text",
         (PKG + "components/icons.py", "classes.append(_html.escape(custom_class))"),
         (PKG + "components/icons.py", "attr_val = _html.escape(str(val))"),
-        (PKG + "components/icons.py", "attr_name = _checked_attr_name(key.replace"),
+        (PKG + "components/icons.py", "attr_name = _checked_attr_name(key)"),
+        (PKG + "components/icons.py", "html_attrs = passthrough_attrs({key.replace"),
         (PKG + "components/icons.py", "px = int(size)"),
         (PKG + "components/icons.py", "svg_inner = icon_data.get(name)"),
     ),
     (PKG + "forms.py", "FormMixin.as_live"): S(
         1,
-        "joins adapter.render_field() output; BaseAdapter escapes wrapper/label/help text/errors/choices/values and (since #3774) checks attribute names in _build_tag; a custom adapter owes the same (FrameworkAdapter contract)",
+        "joins adapter.render_field() output; BaseAdapter escapes wrapper/label/help text/errors/choices/values and (since #3774) checks attribute names in _build_tag; since #3818 the widget attrs it merges pass djust._attr_policy.passthrough_attrs (an inline event handler name is refused with ValueError, a rejected URL renders `#`, a submitting `type` is left out); a custom adapter owes the same (FrameworkAdapter contract)",
         (PKG + "forms.py", "html += self.as_live_field(field_name, adapter=adapter, **kwargs)"),
         (PKG + "frameworks.py", "escape(field.help_text)"),
         (PKG + "frameworks.py", '{attr_name(k)}="{escape(str(v))}"'),
+        (PKG + "frameworks.py", "attrs.update(passthrough_attrs(merged))"),
+        (PKG + "frameworks.py", 'passthrough_attrs({"type": widget_type})'),
     ),
     (PKG + "template_tags/lorem.py", "LoremTagHandler.render"): S(
         1,
@@ -150,14 +155,20 @@ AUDITED: dict[tuple[str, str], Audit] = {
     ),
     (LT, "_client_config_html"): S(
         1,
-        "the three meta prefixes are escape()'d; the route-map script is routing.get_route_map_script (format_html around json.dumps of developer URL config)",
+        "the three meta prefixes are escape()'d; the route-map script is routing.get_route_map_script (format_html around json.dumps of developer URL config, which since #3819 is passed through escape_json_for_script so `<`, `>` and `&` cannot end the script whatever the config holds)",
         (LT, "api_escaped = escape(api_prefix)"),
         (PKG + "routing.py", "def get_route_map_script(request: Any = None) -> str:"),
+        (PKG + "routing.py", "route_json = escape_json_for_script(json.dumps(all_routes))"),
     ),
     (LT, "live_input"): S(
         1,
-        "html is build_tag output: every attribute VALUE is escape()'d, select options escape()'d, textarea content escaped; attribute NAMES (event=, passthrough keys) were not checked until #3774 (the audit's one U, fixed in djust._html.attr_name, python/tests/test_attr_name_injection_3774.py; passthrough URL/on* policy is N, #3818)",
+        "html is build_tag output: every attribute VALUE is escape()'d, select options escape()'d, textarea content escaped; attribute NAMES (event=, passthrough keys) were not checked until #3774 (the audit's one U, fixed in djust._html.attr_name, python/tests/test_attr_name_injection_3774.py); the passthrough attributes are judged by djust._attr_policy.passthrough_attrs (#3818: an on* name is refused with ValueError, a URL the allowlist rejects renders `#`, a submitting `type` is left out; python/tests/test_passthrough_attr_policy_3818.py)",
         (LT, "html = _render_textarea("),
+        (LT, "return passthrough_attrs(out)", "_collect_passthrough_attrs"),
+        (
+            PKG + "_attr_policy.py",
+            "def passthrough_attrs(attrs: Mapping[str, Any]) -> dict[str, Any]:",
+        ),
         (HTML, "def attr_name(name: Any) -> str:"),
         (HTML, "parts.append(f'{key}=\"{escape(str(value))}\"')"),
         (
@@ -189,13 +200,14 @@ AUDITED: dict[tuple[str, str], Audit] = {
     ),
     (LT, "live_render"): S(
         2,
-        "ids and the CSP nonce are escape()'d, lazy['trigger'] is checked against ('flush', 'visible'), the child body is a template render stamped by _stamp_view_id. The one raw piece, lazy['placeholder'], is a developer-supplied HTML slot (verdict N, #3819)",
+        "ids and the CSP nonce are escape()'d, lazy['trigger'] is checked against ('flush', 'visible'), the child body is a template render stamped by _stamp_view_id. The one formerly raw piece, lazy['placeholder'], goes through conditional_escape since #3819: a marked-safe value is markup, a plain str is text (Django's own rule)",
         (LT, 'if lazy_config["trigger"] not in ("flush", "visible"):'),
         (
             LT,
             "_csp_nonce_attr = ' nonce=\"' + escape(_csp_nonce_raw) + '\"' if _csp_nonce_raw else \"\"",
         ),
         (LT, 'custom_placeholder = lazy_config["placeholder"]'),
+        (LT, "inner = str(conditional_escape(custom_placeholder))"),
     ),
     (CH, "BarChartNode.render"): S(
         1,

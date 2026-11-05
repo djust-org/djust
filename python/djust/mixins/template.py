@@ -936,17 +936,20 @@ class TemplateMixin:
         # django-csp is not installed or the request doesn't carry one —
         # backward compatible with apps still using 'unsafe-inline'.
         req = request if request is not None else getattr(self, "request", None)
+        from ..security.json_script import escape_json_for_script
         from ..utils import get_csp_nonce
 
         nonce = get_csp_nonce(req)
         nonce_attr = f' nonce="{nonce}"' if nonce else ""
 
-        # Build script tag
+        # Build script tag. ``metadata`` is handler names and decorator settings written by the
+        # developer, but ``json.dumps`` leaves ``<``, ``>`` and ``&`` raw, so the JSON is
+        # script-escaped here rather than trusted (#3819).
         script = f"""
 <script{nonce_attr}>
 // Handler metadata for client-side decorators
 window.handlerMetadata = window.handlerMetadata || {{}};
-Object.assign(window.handlerMetadata, {json.dumps(metadata)});
+Object.assign(window.handlerMetadata, {escape_json_for_script(json.dumps(metadata))});
 </script>"""
 
         # Inject once, before the document's real </body> (else its real

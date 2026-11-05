@@ -35,9 +35,10 @@ from django.conf import settings
 from django.core.exceptions import PermissionDenied
 from django.template import Context, Node, Template, TemplateSyntaxError
 from django.template.base import NodeList, Parser, Token
-from django.utils.html import escape, format_html, format_html_join
+from django.utils.html import conditional_escape, escape, format_html, format_html_join
 from django.utils.safestring import SafeString, mark_safe
 
+from .._attr_policy import passthrough_attrs
 from .._html import build_tag
 from ..auth._login_required_middleware import mark_embedded
 from ..config import config
@@ -602,6 +603,11 @@ def _collect_passthrough_attrs(kwargs: Dict[str, Any]) -> Dict[str, Any]:
     Known configuration kwargs are stripped; everything else passes through
     to the rendered tag as an attribute, with ``_`` in keys converted to
     ``-`` (so ``aria_label="Search"`` becomes ``aria-label="Search"``).
+
+    The result is judged by :func:`djust._attr_policy.passthrough_attrs` (#3818): an ``on*``
+    NAME raises ``ValueError``; a VALUE never does (it can come from data): a URL the shared
+    allowlist rejects renders ``#`` and a ``type`` of ``image`` / ``submit`` / ``reset`` /
+    ``button`` is left out, so the field keeps its own type.
     """
     _KNOWN = {
         "handler",
@@ -622,7 +628,9 @@ def _collect_passthrough_attrs(kwargs: Dict[str, Any]) -> Dict[str, Any]:
         # Normalize underscores to dashes for HTML attributes
         attr = k.replace("_", "-")
         out[attr] = v
-    return out
+    # The one policy every passthrough writer shares (#3818): event-handler attributes and a
+    # ``type`` that submits / navigates are refused, URL-valued attributes are judged.
+    return passthrough_attrs(out)
 
 
 def _render_text_like(
@@ -2478,9 +2486,14 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
         # — parsed as HTMLUnknownElement on browsers without a
         # registered custom-element class; fully selectable via
         # querySelector and replaceable via replaceWith.
+        #
+        # The placeholder follows Django's own rule (#3819): a marked-safe value
+        # (``mark_safe`` / ``format_html`` / a ``SafeString``, anything with ``__html__``)
+        # is markup and is spliced in as written; a plain ``str`` is TEXT and is escaped,
+        # so a ``lazy={"placeholder": some_data}`` cannot inject markup.
         custom_placeholder = lazy_config["placeholder"]
         if custom_placeholder:
-            inner = str(custom_placeholder)
+            inner = str(conditional_escape(custom_placeholder))
         else:
             inner = ""
         # #1147 — propagate ``request.csp_nonce`` onto the <dj-lazy-slot>

@@ -411,7 +411,11 @@ class PostProcessingMixin:
             ["d-flex", "btn-group", "input-group", "form-group", "btn-toolbar"],
         )
 
-        loading_classes_js = json.dumps(loading_grouping_classes)
+        # Settings value inlined in a <script>: script-escaped like ``debug_info_json`` below
+        # (``json.dumps`` leaves ``<``, ``>`` and ``&`` raw; #3819).
+        from ..security.json_script import escape_json_for_script as _escape_script_json
+
+        loading_classes_js = _escape_script_json(json.dumps(loading_grouping_classes))
 
         # The two inline scripts below carry the request's CSP nonce, as the
         # handler-metadata script does (mixins/template.py): under a policy
