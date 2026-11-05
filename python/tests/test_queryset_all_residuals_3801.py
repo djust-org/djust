@@ -5,6 +5,8 @@ Every case renders through the REAL native engine (a LiveView mount via
 the oracle, on REAL ``User`` / ``Group`` rows (#1650 / #1638).
 """
 
+# ruff: noqa: F811
+
 from __future__ import annotations
 
 import html as html_lib
@@ -72,7 +74,6 @@ class TestALoopAndAMethodOnOneAll3801:
         # ``<!--dj-if-->`` is the LiveView's placeholder for a false ``{% if %}``.
         got = html_lib.unescape(render(source, MAKE_CONTEXT[shape]())).replace("<!--dj-if-->", "")
         assert got == expected, f"{name} {shape}: Django {expected!r}, got {got!r}"
-
 
     @pytest.mark.parametrize("render", RENDERS)
     @pytest.mark.parametrize(
@@ -195,6 +196,39 @@ class TestTheMethodReadWidensNothing3801:
         assert kept(U + LOOP + E) == {}
         assert kept(U + "{{ u.groups.all.count }}" + E) == {}
 
+    def test_the_kept_rows_do_not_outlive_the_value(self, world) -> None:
+        """Rebuilt every render: once the name is no longer a QuerySet, the rows
+        it was kept for are released (they hold evaluated models)."""
+        from djust.live_view import LiveView
+        from djust.testing import LiveViewTestClient
+
+        class _V(LiveView):
+            def mount(self, request, **kwargs):
+                self.users = _users()
+
+            def clear(self, **kwargs):
+                self.users = []
+
+        _V.template = f"<div dj-root>{MIXED['count-then-loop']}</div>"
+        client = LiveViewTestClient(_V)
+        client.mount()
+        client.render()
+        assert "users" in client.view_instance.__dict__["_all_method_rows"]
+        client.send_event("clear")
+        client.render()
+        assert client.view_instance.__dict__["_all_method_rows"] == {}
+
+    @pytest.mark.parametrize("render", RENDERS)
+    def test_a_method_alone_on_a_model_with_a_same_named_field(self, bins, render) -> None:
+        """``items`` rows have a ``count`` / ``first`` FIELD, so the serializer
+        ships rows for ``b.items.all.count`` even with no loop to say so; Django
+        calls the QuerySet method."""
+        source = "{% for b in bins %}[{{ b.items.all.count }}|{{ b.items.all.exists }}]{% endfor %}"
+        make = lambda: {"bins": QSBin.objects.order_by("pk")}  # noqa: E731
+        expected = _django_render(source, make())
+        assert expected == "[2|True][0|False]", expected
+        assert html_lib.unescape(render(source, make())) == expected
+
 
 # ===========================================================================
 # 7. A container deeper than the bound is reported, once
@@ -236,7 +270,6 @@ from python.tests.test_queryset_all_followups_3788 import (  # noqa: E402
     CALLS,
     QSBin,
     QSItem,  # noqa: F401
-    QSNote,
     bins,  # noqa: F401
 )
 

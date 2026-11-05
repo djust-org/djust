@@ -602,23 +602,24 @@ QuerySet within four containers of the context, or assign it to a top-level name
   `.all.last`. The method runs on the QuerySet (a `COUNT`, an `EXISTS`, a
   `LIMIT 1`) and its answer is sent; the relation is not read into rows.
 
-The method reading is used only when the template does **not** also read the
-relation as rows, and the row model has no attribute of that name. So on a
-LiveView these still render the method empty (Django renders the count), because
-the relation is also read whole (#3801):
+The method reading (a `{"count": n, ...}` dict in place of the rows) is used
+only when the template does **not** also read the relation as rows, and the row
+model has no attribute of that name. When it does (#3801) -- a loop beside
+`.count`, `|length` beside `.count`, `{% if u.groups.all %}{{ u.groups.all.count }}`,
+`{% with gs=u.groups.all %}{{ gs.count }}`, `|slice` beside `.count`, a row model
+with a `count` / `exists` / `first` / `last` *field* -- the relation ships as rows
+and the method is answered another way: the evaluated rows of that name (a
+top-level QuerySet or `list[Model]`) are kept in the render sidecar, and the
+engine's guarded getattr walk, the one `DjustTemplateBackend` renders through,
+calls the method on the real QuerySet. A method marked `alters_data` or
+`do_not_call_in_templates` is still never called, and the serialization floor
+still governs every row. Only a name read both ways pays for this (a proxy per
+kept row); a plain loop and a method-only read do not. A QuerySet nested in a
+dict is not covered: read the count at a top-level name, or annotate it
+(`Count("groups")`).
 
-- `{% for g in u.groups.all %}...{% endfor %}` next to `{{ u.groups.all.count }}`
-- `{{ u.groups.all|length }}` next to `{{ u.groups.all.count }}`
-- `{% if u.groups.all %}{{ u.groups.all.count }}{% endif %}`
-- `{% with gs=u.groups.all %}{{ gs.count }}{% endwith %}`
-- `{{ u.groups.all|slice:":2" }}` next to `.count`
-
-Read the number or the rows, not both, from one `.all`; or annotate the count
-(`Count("groups")`) and read the annotation. A model with a `count`, `exists`,
-`first` or `last` *field* keeps `all` a list of rows, so `u.items.all.count`
-stays empty there (the field is what `{% for i in u.items.all %}{{ i.count }}`
-reads); and on a `list[Model]` the Python serializer drops a row's integer
-`count` / `exists` field (pre-existing, #3801).
+A row's integer `count` / `exists` field survives on a `list[Model]` too (the
+Python serializer only calls a leaf that is callable).
 
 ```python
 # settings.py
@@ -635,7 +636,7 @@ of 2**62 or more, removes the cap; `None` is the same as unset (the default, not
 "no cap"); anything that is not a non-negative integer is logged and replaced by
 the default. **The cap bounds the work the serializer does, not memory**: the
 optimizer still prefetches the whole relation before the serializer runs
-(#3801), so a huge relation is loaded whatever the cap is.
+(#3862), so a huge relation is loaded whatever the cap is.
 
 ### Debugging Serialization Issues
 
