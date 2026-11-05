@@ -1328,15 +1328,8 @@ fn call_custom_tag(
     }
     let mut context_map = bridged_context_map(context)?;
     if !returns_bindings && crate::registry::tag_handler_wants_typed_args(name) {
-        let typed = typed_operands(args, context);
-        if !typed.is_empty() {
-            // PROVENANCE (provenance_flatten_site_inventory): the operands of an inline tag
-            // are folded into the handler's context; the handler's output returns as a plain,
-            // never-authored `String`. See `typed_operands` for the full classification.
-            context_map
-                .map
-                .insert(TYPED_ARGS_KEY.to_string(), Value::Object(typed));
-        }
+        let only = crate::registry::tag_handler_typed_standins_only(name);
+        add_typed_operands(&mut context_map, args, context, only);
     }
     if returns_bindings {
         let (html, bindings) = crate::registry::call_handler_with_bindings(
@@ -1374,6 +1367,27 @@ fn call_custom_tag(
 /// inserted, and the application's value would stand in for the engine's.
 pub(crate) const TYPED_ARGS_KEY: &str = "__djust_typed_args__";
 
+/// Fold a `TYPED_ARGS` handler's operands into the context map it is called with, under
+/// [`TYPED_ARGS_KEY`] (#3756). The ONE site that does it for the inline tag
+/// ([`call_custom_tag`]) and the block tag ([`call_block_custom_tag`], #3768), so the two
+/// cannot resolve an operand differently (#1646).
+fn add_typed_operands(
+    context_map: &mut BridgedContextMap,
+    args: &[String],
+    context: &Context,
+    standins_only: bool,
+) {
+    let typed = typed_operands(args, context, standins_only);
+    if !typed.is_empty() {
+        // PROVENANCE (provenance_flatten_site_inventory): the operands of a tag
+        // are folded into the handler's context; the handler's output returns as a plain,
+        // never-authored `String`. See `typed_operands` for the full classification.
+        context_map
+            .map
+            .insert(TYPED_ARGS_KEY.to_string(), Value::Object(typed));
+    }
+}
+
 /// Each `key=<expression>` operand of an inline tag, resolved to a [`Value`] through
 /// [`get_value`] and keyed by `key` (#3756).
 ///
@@ -1392,6 +1406,7 @@ pub(crate) const TYPED_ARGS_KEY: &str = "__djust_typed_args__";
 fn typed_operands(
     args: &[String],
     context: &Context,
+    standins_only: bool,
 ) -> indexmap::IndexMap<djust_core::ObjectKey, Value> {
     let mut typed = indexmap::IndexMap::new();
     for arg in args {
@@ -1412,6 +1427,13 @@ fn typed_operands(
                 Value::String(text) if safe => Value::SafeString(text),
                 other => other,
             };
+            // `standins_only` (#3768): a handler that reads only the types its string argument
+            // loses wants a tuple and an object (a `UUID`, a `Path`). A list, a dict, a number or a
+            // string is left out, so a large operand is not materialised a second time as Python
+            // objects for nothing: the handler has it, as JSON or text, in its string argument.
+            if standins_only && !matches!(value, Value::Tuple(_) | Value::Encoded(_)) {
+                continue;
+            }
             if !matches!(value, Value::Missing) {
                 // PROVENANCE: this folds a resolved operand into the object the handler is
                 // handed; it is not a rendered-output conversion. The handler's OUTPUT comes
@@ -1498,7 +1520,13 @@ fn call_block_custom_tag<L: TemplateLoader>(
     context.take_provenance_flatten();
     // #2710: through the ONE bridge, so a deferred `block.super` is
     // materialised for the flat map Python resolves against.
-    let context_map = bridged_context_map(context)?;
+    let mut context_map = bridged_context_map(context)?;
+    // A block handler that declared `TYPED_ARGS` is handed its operands as typed values, as an
+    // inline one is (#3768): the same helper, after the body is rendered and the args resolved.
+    if crate::registry::block_handler_wants_typed_args(name) {
+        let only = crate::registry::block_handler_typed_standins_only(name);
+        add_typed_operands(&mut context_map, args, context, only);
+    }
     // Forward raw-Python sidecar so block handlers can reach Python-only
     // context (request, view) the same way ``Node::CustomTag`` handlers do
     // (#1167).
