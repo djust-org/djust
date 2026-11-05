@@ -617,38 +617,72 @@ class TestPerformanceBaseline:
 
     @patch("djust.presence.get_channel_layer")
     @patch("djust.presence.async_to_sync")
-    def test_broadcast_latency_scales(self, mock_sync, mock_layer):
+    def test_broadcast_latency_scales(self, mock_sync, mock_layer, fresh_presence_backend):
         """
-        Simulate a broadcast with N subscribers already in presence state
-        and measure the overhead of computing the group name + initiating send.
+        A broadcast to N subscribers costs one channel-layer send, however many
+        subscribers there are (#3831).
 
-        #1016 — the fixed 10 ms and then 30 ms budgets here were hit by py3.14 runner
-        variance (a 12x over-budget slot in PR #990 CI that passed on rerun). The claim
-        is constant-time dispatch overhead, so four times the subscribers must cost
-        under 1.5x as much (best of seven runs: the cost is tens of microseconds per
-        call, so each run makes many calls). An O(n) walk of the subscribers adds to
-        the cost in proportion to them and moves the ratio well past that.
+        This used to time ``broadcast_to_presence`` at 25 and 100 subscribers and
+        assert the ratio of the two (#1016, then #3711). That ratio compares two
+        wall-clock runs of a few milliseconds, and it failed on CI at ``1.7x``
+        (``0.00600s -> 0.01015s``) in a PR that did not touch this code.
+
+        The property is a number of operations, not a duration: the group name is
+        computed and ONE ``group_send`` is made (the channel layer fans it out), and
+        the subscribers' presence records are never read. An O(n) walk of the
+        subscribers shows up as more sends per broadcast or as backend calls, so
+        four times the subscribers is four times the count -- exactly, and
+        independent of how loaded the runner is.
         """
         mock_layer.return_value = Mock()
         group_send = Mock()
         mock_sync.return_value = group_send
 
+        # Every public method of the backend counts its calls: a broadcast that
+        # walks the subscribers has to read them from here.
+        backend_calls = []
+        for name in dir(fresh_presence_backend):
+            method = getattr(fresh_presence_backend, name)
+            if name.startswith("_") or not callable(method):
+                continue
+
+            def counted(*args, _name=name, _method=method, **kwargs):
+                backend_calls.append(_name)
+                return _method(*args, **kwargs)
+
+            setattr(fresh_presence_backend, name, counted)
+
+        sizes = (25, 100)
         views = {}
-        for scale, n_subscribers in ((1, 25), (4, 100)):
+        for n_subscribers in sizes:
             key = f"perf:broadcast:{n_subscribers}"
             for i in range(n_subscribers):
                 PresenceManager.join_presence(key, str(i), {"name": f"user{i}"})
-            views[scale] = _make_view_class(key)(user=FakeUser("sender", 9999))
+            assert len(PresenceManager.list_presences(key)) == n_subscribers
+            views[n_subscribers] = _make_view_class(key)(user=FakeUser("sender", 9999))
 
-        calls = 200
+        broadcasts = 5
+        sends = {}
+        for n_subscribers in sizes:
+            group_send.reset_mock()
+            del backend_calls[:]
+            for _ in range(broadcasts):
+                views[n_subscribers].broadcast_to_presence("ping", {"ts": 1})
+            sends[n_subscribers] = group_send.call_count
+            assert backend_calls == [], (
+                f"a broadcast to {n_subscribers} subscribers read the presence backend "
+                f"({backend_calls}): its cost now depends on how many there are"
+            )
+            groups = {call.args[0] for call in group_send.call_args_list}
+            group = PresenceManager.presence_group_name(f"perf:broadcast:{n_subscribers}")
+            assert groups == {group}
 
-        def broadcast_many(scale):
-            for _ in range(calls):
-                views[scale].broadcast_to_presence("ping", {"ts": time.time()})
-
-        group_send.reset_mock()
-        assert_scales_linearly(broadcast_many, limit=1.5, runs=7, what="broadcast_to_presence")
-        assert group_send.call_count and group_send.call_count % calls == 0
+        # One send per broadcast at both sizes: four times the subscribers must not
+        # mean four times the sends.
+        assert sends == {25: broadcasts, 100: broadcasts}, (
+            f"broadcast_to_presence made {sends} channel-layer sends for {broadcasts} "
+            "broadcasts at 25 and 100 subscribers; expected one per broadcast at both sizes"
+        )
 
     @pytest.mark.asyncio
     async def test_concurrent_actor_throughput(self):
