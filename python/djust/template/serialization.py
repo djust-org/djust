@@ -177,7 +177,19 @@ def serialize_value(
     # Handle list/tuple - recursively serialize
     if isinstance(value, (list, tuple)):
         items = [serialize_value(item, for_render=for_render) for item in value]
-        return tuple(items) if for_render and isinstance(value, tuple) else items
+        if not (for_render and isinstance(value, tuple)):
+            return items
+        if hasattr(value, "_fields"):
+            # A namedtuple keeps its type (#3849): the engine holds it as ``Value::NamedTuple``
+            # (name + fields + items) and prints ``P(x=1, y=2)`` as Django does, where a plain
+            # ``tuple(items)`` printed ``(1, 2)``. Rebuilt POSITIONALLY: ``type(value)(items)``
+            # would wrap the list in the first field. A subclass whose ``__new__`` takes more
+            # than its fields cannot be rebuilt and degrades to the plain tuple, as it did.
+            try:
+                return type(value)(*items)
+            except TypeError:
+                return tuple(items)
+        return tuple(items)
 
     # Pass through other types (str, int, float, bool, etc.)
     return cast(JSONValue, value)
