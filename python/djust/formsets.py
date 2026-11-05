@@ -33,11 +33,13 @@ unconditionally, so the server-side form-valid step sees the deletion.
 
 from __future__ import annotations
 
+import weakref
 from typing import Any, Dict, FrozenSet, Iterable, Optional, Type
 
 from django.forms import BaseFormSet
 
 from . import _form_data_bounds
+from ._exposure_diagnostics import log_failure_for
 from .decorators import event_handler
 
 
@@ -80,16 +82,54 @@ _ROW_EXTRAS = ("DELETE", "ORDER", "id")
 _MAX_INDEX_DIGITS = 9
 
 
-def _row_suffixes(formset_cls: Type[BaseFormSet]) -> FrozenSet[str]:
-    """The names a row's key may end in: the fields the formset's form class declares, the foreign key an
-    inline formset adds, and Django's own ``DELETE`` / ``ORDER`` / ``id``. Derived from the CLASS, never
-    from the client's data (#3858)."""
+#: ``_row_suffixes`` per formset class. Keyed weakly, so a class a project builds per request (a
+#: ``formset_factory`` call in a handler) is not kept alive by the cache.
+_SUFFIX_CACHE: "weakref.WeakKeyDictionary[type, FrozenSet[str]]" = weakref.WeakKeyDictionary()
+
+
+def _declared_row_names(formset_cls: Type[BaseFormSet]) -> FrozenSet[str]:
+    """The class-declared part of a row's names: the fields the formset's form class declares, the
+    foreign key an inline formset adds, and Django's own ``DELETE`` / ``ORDER`` / ``id``. The fallback
+    when the formset cannot be built without arguments (:func:`_row_suffixes`)."""
     names = set(_ROW_EXTRAS)
     names.update(getattr(getattr(formset_cls, "form", None), "base_fields", None) or ())
     fk_name = getattr(getattr(formset_cls, "fk", None), "name", None)
     if isinstance(fk_name, str):
         names.add(fk_name)
     return frozenset(name for name in names if isinstance(name, str))
+
+
+def _row_suffixes(formset_cls: Type[BaseFormSet]) -> FrozenSet[str]:
+    """The names a row's key may end in: the fields a row of this formset really has. Derived from the
+    CLASS, never from the client's data (#3858), and computed once per class (#3861).
+
+    A form may add fields in its ``__init__``, so ``form.base_fields`` is not all of them. The names
+    come from ``formset_cls().empty_form.fields``: the formset built with no data and no arguments, as
+    Django builds a row for the page, which includes what ``__init__`` adds, the inline formset's
+    foreign key, and ``DELETE`` / ``ORDER`` / ``id``. Nothing in that construction is the client's: the
+    form is unbound, so a field a form adds only when it holds data (``self.data``) is not one of them.
+    When the formset cannot be built without arguments (a form whose ``__init__`` requires a
+    ``form_kwargs`` entry), the class-declared names are used instead (:func:`_declared_row_names`):
+    narrower, so a field added by such a form counts toward ``max_form_fields``, which fails closed."""
+    cached = _SUFFIX_CACHE.get(formset_cls)
+    if cached is not None:
+        return cached
+    try:
+        names = {*_ROW_EXTRAS, *formset_cls().empty_form.fields}
+    except Exception as exc:  # noqa: BLE001 - an app's form code runs here; any failure is the fallback
+        log_failure_for(
+            logger,
+            (formset_cls,),
+            exc,
+            "formset %s cannot be built without arguments; only the fields its form class declares "
+            "are exempt from max_form_fields",
+            getattr(formset_cls, "__name__", "?"),
+            level="warning",
+        )
+        names = set(_declared_row_names(formset_cls))
+    result = frozenset(name for name in names if isinstance(name, str))
+    _SUFFIX_CACHE[formset_cls] = result
+    return result
 
 
 def _row_index(text: str) -> Optional[int]:
