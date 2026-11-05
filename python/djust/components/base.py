@@ -15,6 +15,7 @@ from typing import Callable, ClassVar, Dict, Any, List, Optional, Tuple, Type, c
 from abc import ABC
 from django.utils.safestring import SafeString, mark_safe
 
+from djust._html import attr_name
 from djust._template_guards import TemplateMutatorGuard, alters_data
 from djust.decorators import is_event_handler
 
@@ -437,7 +438,7 @@ class Component(TemplateMutatorGuard, ABC):
         """
         if not event:
             return ""
-        parts = [f'dj-{trigger}="{_html.escape(str(event), quote=True)}"']
+        parts = [f'{attr_name("dj-" + str(trigger))}="{_html.escape(str(event), quote=True)}"']
         instance_name = self.__dict__.get("_identity")
         if instance_name and "name" not in params:
             params["name"] = instance_name
@@ -459,7 +460,7 @@ class Component(TemplateMutatorGuard, ABC):
                 # rendered before — untyped, so the handler receives the string
                 # it always did (review 🔴3).
                 suffix, text = "", str(value)
-            attr = "dj-value-" + str(key).replace("_", "-")
+            attr = attr_name("dj-value-" + str(key).replace("_", "-"))
             parts.append(f'{attr}{suffix}="{_html.escape(text, quote=True)}"')
         return " ".join(parts)
 

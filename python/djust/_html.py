@@ -10,10 +10,30 @@ See issue #650 (``{% live_input %}`` standalone field tag).
 
 from __future__ import annotations
 
+import re
 from typing import Any, Mapping, Optional, cast
 
 from django.utils.html import escape
 from django.utils.safestring import mark_safe
+
+#: An HTML attribute NAME as the HTML spec defines it: one or more characters that are not
+#: whitespace, a control, a quote, ``<``, ``>``, ``/`` or ``=``. Every plain name (``type``,
+#: ``dj-input``, ``aria-label``, ``@click``, ``:class``, ``x-on:click.prevent``,
+#: ``dj-keydown.enter``) matches; ``x onfocus=alert(1) y`` does not.
+_ATTR_NAME_RE = re.compile(r"[^\s\x00-\x1f\x7f-\x9f\"'<>/=]+")
+
+
+def attr_name(name: Any) -> str:
+    """``name`` if it is a legal HTML attribute name, else ``ValueError`` (#3774).
+
+    A value is escaped, so it cannot leave its quotes; a NAME is written into the tag as given,
+    and escaping cannot make one safe (``x onfocus=alert(1) y`` has nothing to escape), so it is
+    checked instead. The one data-reachable source is a template argument used as a name, such as
+    ``{% live_input ... event=var %}``.
+    """
+    if not isinstance(name, str) or not _ATTR_NAME_RE.fullmatch(name):
+        raise ValueError(f"{name!r} is not a valid HTML attribute name")
+    return name
 
 
 def build_tag(
@@ -56,6 +76,7 @@ def build_tag(
     for key, value in attrs.items():
         if value is None or value is False:
             continue
+        key = attr_name(key)
         if value is True:
             # HTML boolean attributes are canonically rendered as name="name".
             parts.append(f'{key}="{escape(key)}"')
