@@ -35,7 +35,7 @@ from djust import _form_data_bounds as bounds
 from djust.config import DEFAULT_MAX_FORM_MEMBERS, config as djust_config
 
 from test_form_data_accounting_3841 import Shouting, value as generated_value
-from test_form_data_bounds_3834 import Wizard, WsContact, limits as livecfg, mounted
+from test_form_data_bounds_3834 import Wizard, WsContact, drive, limits as livecfg, mounted
 
 pytestmark = [pytest.mark.django_db, pytest.mark.pr_tier]
 
@@ -439,6 +439,39 @@ class TestTheEventPathIsBounded:
             self._flood(view, 40, 400)
             handed = _synced(view)
         assert limit - 2 * 401 < handed <= limit
+
+
+class TestOverTheRealSocket:
+    """The review's scenario, through ``LiveViewConsumer``: every event is a ``validate_field`` carrying
+    ``[""] * 15000`` (about 60 KB of JSON, under the default frame limit)."""
+
+    @pytest.fixture(autouse=True)
+    def _env(self):
+        pytest.importorskip("channels")
+        WsContact.last = None
+        with override_settings(LIVEVIEW_ALLOWED_MODULES=[WsContact.__module__], DEBUG=False):
+            yield
+
+    @staticmethod
+    def _events(count: int):
+        return [
+            {"event": "validate_field", "params": {"field": "f%d" % i, "value": [""] * 15_000}}
+            for i in range(count)
+        ]
+
+    def test_the_default_limits_stop_the_flood_at_the_member_limit(self, native):
+        with livecfg():
+            answers = drive(self._events(30))
+        stored = reference_members(WsContact.last.form_data)
+        assert 0 < stored <= DEFAULT_MAX_FORM_MEMBERS, stored
+        assert stored > DEFAULT_MAX_FORM_MEMBERS - 2 * 15_001  # six fit; the rest were refused
+        assert "more values than the server accepts (100000)" in WsContact.last.form_errors[0]
+        assert all(frame[-1]["type"] != "error" for frame in answers[1:])  # refusals, not crashes
+
+    def test_without_the_member_limit_the_same_flood_is_stored_whole(self, native):
+        with livecfg(max_form_members=0):
+            drive(self._events(30))
+        assert reference_members(WsContact.last.form_data) > 4 * DEFAULT_MAX_FORM_MEMBERS
 
 
 class TestTheLimitHoldsOnEveryPath:
