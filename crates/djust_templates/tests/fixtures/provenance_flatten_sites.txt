@@ -678,6 +678,9 @@ Ok(py_list.into())
 Ok(py_dict.into())
 Ok(result_list.into())
 Ok(result_dict.into())
+let str_repr = value.str()?.to_string();
+return Ok(str_repr.into_pyobject(py)?.to_owned().into_any().unbind());
+Ok(text) => WalkKey::Row(class, text.to_string()),
 .map_or("unknown".to_string(), |s| s.to_string());
 return Ok(result_list.into());
 return Ok(result_list.into());
@@ -689,6 +692,8 @@ let str_repr = value.str()?.to_string();
 return Ok(str_repr.into_pyobject(py)?.to_owned().into_any().unbind());
 return Ok(f.into_pyobject(py)?.to_owned().into_any().unbind());
 return Ok(wrapper.into());
+let str_repr = value.str()?.to_string();
+return Ok(str_repr.into_pyobject(py)?.to_owned().into_any().unbind());
 let str_repr = value.str()?.to_string();
 return Ok(str_repr.into_pyobject(py)?.to_owned().into_any().unbind());
 return Ok(iso_str.into_pyobject(py)?.to_owned().into_any().unbind());

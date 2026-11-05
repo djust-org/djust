@@ -1932,6 +1932,10 @@ def _password_field_names(fields: Any) -> frozenset:
     A field is held under its own name (``initial`` / ``cleaned_data`` / ``BoundField``). A
     ``MultiWidget`` field is also submitted under one key per part (``pair_0``, ``pair_1``:
     ``widget.widgets_names``), and that is what ``form.data`` holds, so those keys are named too.
+
+    This SCANS every field. A template path asks the question once per step, so a path that runs
+    through a form must ask :func:`_password_name_held` (one name, no scan) or hold a
+    :class:`_FormPasswordNames` (#3816).
     """
     if not fields:
         return frozenset()
@@ -1945,7 +1949,82 @@ def _password_field_names(fields: Any) -> frozenset:
     return frozenset(names)
 
 
-def _floor_for_model(model_class: Any, password_names: frozenset = frozenset()) -> tuple:
+#: Longest name :func:`_password_name_held` splits by lookup; past it the form is scanned instead.
+#: Django field names are Python identifiers, so none approaches it.
+_NAME_SPLIT_LIMIT = 256
+
+
+def _password_name_held(fields: Any, name: str) -> bool:
+    """Is *name* in ``_password_field_names(fields)``? The same answer, with no scan of *fields*.
+
+    *name* is held when it is a password-widget field's own name, or that field's name followed by
+    one of its ``widgets_names`` (the keys a ``MultiWidget`` is submitted under). So every way to
+    split *name* into ``<field name><suffix>`` is asked of the form once, each a dict lookup: the
+    cost is the length of *name*, not the width of the form. A loop over a 100-field form asked the
+    scan above once per field per path step, which was quadratic (+35-50% of a render, #3816).
+
+    Nothing is remembered: the form is read as it is on this call, so a widget swapped on a live form
+    (``form.fields["pin"].widget = PasswordInput()``, a field added, replaced or removed) is followed
+    on the very next step, and no answer can be shared between forms, requests or threads. A memo
+    keyed on ``fields`` would miss a swap, and a memo that validates itself has to read every
+    field's widget to do it, which is the scan again.
+    """
+    if len(name) > _NAME_SPLIT_LIMIT:
+        # A name this long is no field's: it can be held only by being the exact name of a field
+        # (or a field plus a suffix) that is as long, and a form has no such field. It is also the
+        # shape an ATTACKER chooses (a POST key reaches here through ``form.data``): the split below
+        # slices and hashes the name once per character, quadratic in its length (an 8 KB key pinned
+        # a worker for ~30 s). One scan of the form is exact and linear in the name.
+        return name in _password_field_names(fields)
+    for cut in range(len(name) + 1):
+        field = fields.get(name[:cut])
+        if field is None or not field_has_password_widget(field):
+            continue
+        if cut == len(name):
+            return True
+        if name[cut:] in getattr(getattr(field, "widget", None), "widgets_names", ()):
+            return True
+    return False
+
+
+class _FormPasswordNames:
+    """``_password_field_names(fields)`` as a read-through VIEW of a form's live ``fields`` (#3816).
+
+    The floor tuple of a form carries its password names as element 4, and everything that holds
+    the floor asks it ``name in names``. Built eagerly, that is a scan of the whole form on every
+    template path step; as a view it is :func:`_password_name_held`, one name at a time. It holds the
+    form's ``fields`` mapping, not an answer, so it is as current as the form is.
+    """
+
+    __slots__ = ("_fields",)
+    __hash__ = None  # type: ignore[assignment]  # equal by value (below), so not hashable
+
+    def __init__(self, fields: Any) -> None:
+        self._fields = fields
+
+    def __contains__(self, name: object) -> bool:
+        return isinstance(name, str) and _password_name_held(self._fields, name)
+
+    def _names(self) -> frozenset:
+        return _password_field_names(self._fields)
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, _FormPasswordNames):
+            return other._fields is self._fields or self._names() == other._names()
+        if isinstance(other, (set, frozenset)):
+            return self._names() == other
+        return NotImplemented
+
+
+def _form_password_names(fields: Any) -> Any:
+    """The password names of a form's *fields*, as a view when *fields* can be looked up by name,
+    else as the scanned set."""
+    if fields and hasattr(fields, "get") and hasattr(fields, "values"):
+        return _FormPasswordNames(fields)
+    return _password_field_names(fields)
+
+
+def _floor_for_model(model_class: Any, password_names: Any = frozenset()) -> tuple:
     """``(model class, denied, allowed, optout, password names)`` for a model CLASS: the SAME three
     sets ``_SidecarModelProxy`` is built from, and the names of the form's password-widget fields
     (#3798). ``model_class`` is ``None`` for a form with no model behind it (a plain ``Form``): its
@@ -1962,6 +2041,12 @@ def _floor_for_model(model_class: Any, password_names: frozenset = frozenset()) 
         DjangoJSONEncoder._get_sensitive_optout_fields(stand_in),
         password_names,
     )
+
+
+def _pinned_floor(form: Any) -> Optional[tuple]:
+    """The floor a formset pinned on a form it handed out (its management form), else ``None``."""
+    pinned = form.__dict__.get("_djust_floor") if hasattr(form, "__dict__") else None
+    return pinned  # type: ignore[no-any-return]
 
 
 def _model_form_floor(form: Any) -> Optional[tuple]:
@@ -1981,10 +2066,10 @@ def _model_form_floor(form: Any) -> Optional[tuple]:
     # A formset's management form is a plain ``Form`` with no instance; the formset pins its own floor
     # on it when it hands it out (``_SidecarFormSetProxy``), so a field of it and the ``.form`` of that
     # field lead back to a proxied form and not to the real one holding the formset's whole data.
-    pinned = form.__dict__.get("_djust_floor") if hasattr(form, "__dict__") else None
+    pinned = _pinned_floor(form)
     if pinned is not None:
-        return pinned  # type: ignore[no-any-return]
-    passwords = _password_field_names(getattr(form, "fields", None))
+        return pinned
+    fields = getattr(form, "fields", None)
     # ONLY a ``ModelForm`` has a model floor. A plain ``Form`` that happens to carry
     # ``self.instance = <Model>`` is the view author's own form: its fields are not the model's
     # columns, and "a plain Form has no model floor" stays true.
@@ -1993,9 +2078,41 @@ def _model_form_floor(form: Any) -> Optional[tuple]:
         instance = getattr(form, "instance", None)
         if isinstance(instance, models.Model):
             model_class = type(instance)
-    if model_class is None and not passwords:
+    if model_class is not None:
+        # On the floor whatever the password fields are, so nothing needs to know whether there are
+        # any: the names ride as a view of the live fields and no step scans the form (#3816).
+        return _floor_for_model(model_class, _form_password_names(fields))
+    passwords = _password_field_names(fields)
+    if not passwords:
         return None
-    return _floor_for_model(model_class, passwords)
+    return _floor_for_model(None, passwords)
+
+
+def _bound_field_floor(bound_field: Any) -> Optional[tuple]:
+    """The floor that governs *bound_field*'s value, or ``None`` when it is not on one.
+
+    ``_model_form_floor(bound_field.form)``, except that a bound field of a PLAIN form (no model
+    floor, no pinned floor) is asked about by name (:func:`_password_name_held`) and never builds the
+    form's floor: that scanned every field of the form for every field a template walked, so a loop
+    over a wide form was quadratic (#3816). The answer a caller needs is the same: a plain form's
+    floor is its password names alone, so the field is on it exactly when its name is held. One
+    function for every reader of a bound field, so the walk and the component readers cannot disagree
+    (#1646).
+    """
+    form = bound_field.form
+    if form is None:
+        return None
+    fields = getattr(form, "fields", None)
+    if (
+        fields is not None
+        and hasattr(fields, "get")
+        and isinstance(bound_field.name, str)
+        and not isinstance(form, _form_classes()[3])
+        and _pinned_floor(form) is None
+        and not _password_name_held(fields, bound_field.name)
+    ):
+        return None
+    return _model_form_floor(form)
 
 
 def _formset_floor(formset: Any) -> Optional[tuple]:
@@ -2066,6 +2183,12 @@ def _without_floor_keys(value: Any, floor: tuple, readable: Any = None) -> Any:
     refused, so the common form (no floor field in it) pays one key scan and keeps identity.
     A list of mappings (a formset's ``initial`` / ``cleaned_data``) is filtered mapping by mapping."""
     readable = readable or _floor_field_readable
+    if isinstance(floor[4], _FormPasswordNames):
+        # This asks the floor about EVERY key of the mapping, and each ``-``-delimited tail of it
+        # (``_floor_data_key_readable``): keys a client chose. Answer them from the names as a SET
+        # (linear in the key, as before #3816) instead of by lookup per split (quadratic in the key,
+        # cubic with dashes): one scan of the form per call, not per key.
+        floor = floor[:4] + (floor[4]._names(),)
     if isinstance(value, (list, tuple)) and not isinstance(value, str):
         filtered = [_without_floor_keys(item, floor, readable) for item in value]
         if all(new is old for new, old in zip(filtered, value)):
@@ -2142,8 +2265,9 @@ def form_field_floor_state(bound_field: Any) -> Optional[str]:
     exactly what Django draws, and a re-save posts what the person types, not what was typed before.
     The value is stripped whether or not the field is editable (nothing is lost, nothing is reported).
     """
-    form = getattr(bound_field, "form", None)
-    floor = _model_form_floor(form) if form is not None else None
+    floor = (
+        _bound_field_floor(bound_field) if getattr(bound_field, "form", None) is not None else None
+    )
     if floor is None or _floor_field_readable(floor, bound_field.name):
         return None
     if bound_field.name in floor[4]:
@@ -2449,7 +2573,7 @@ def _protect_sidecar_walk(value: Any) -> Any:
         floor = _model_form_floor(value)
         return value if floor is None else _SidecarFormProxy(value, floor)
     if isinstance(value, bound_field):
-        floor = _model_form_floor(value.form)
+        floor = _bound_field_floor(value)
         if floor is None or _floor_field_readable(floor, value.name):
             return value
         return _cached_bound_field_proxy(value, floor)
