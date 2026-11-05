@@ -31,6 +31,16 @@ from djust import _rust
 from djust.template import DjustTemplateBackend
 
 
+@pytest.fixture(autouse=True)
+def _fresh_refusal_log():
+    """The refusal is logged once per (type, method) per process: start each test clean."""
+    from djust._template_guards import _reset_refusal_log
+
+    _reset_refusal_log()
+    yield
+    _reset_refusal_log()
+
+
 # ---------------------------------------------------------------------------
 # Payloads: a real object whose render() mutates (a counter) and may be flagged
 # ---------------------------------------------------------------------------
@@ -209,7 +219,7 @@ def test_extends_never_calls_an_arbitrary_render(kind):
 
 def test_the_refusal_is_logged_not_raised(caplog):
     obj = _payload("alters_data")()
-    with caplog.at_level(logging.WARNING, logger="djust.template.operands"):
+    with caplog.at_level(logging.WARNING, logger="djust._template_guards"):
         assert plain_render("[{% include obj %}]", {"obj": obj}) == "[]"
     assert any("alters_data" in r.getMessage() for r in caplog.records), caplog.text
 
@@ -331,3 +341,201 @@ def test_unflagged_get_full_name_still_prints(sink):
     out = sink(user)
     assert type(user).calls == 1
     assert "Full Name" in out
+
+
+# ---------------------------------------------------------------------------
+# Bind ONCE: the callable whose markers are read is the callable that is called
+# ---------------------------------------------------------------------------
+class _Shifty:
+    """``render`` is a property: the FIRST read is harmless, every later read is flagged.
+
+    A check-then-call that reads the attribute twice checks the harmless one and calls the
+    flagged one. Records which callable ran and how many times the attribute was read.
+    """
+
+    def __init__(self) -> None:
+        self.reads = 0
+        self.ran: list[str] = []
+
+    @property
+    def render(self) -> Callable[..., str]:
+        self.reads += 1
+        label = "first" if self.reads == 1 else "later"
+
+        def render(context: Any = None) -> str:
+            self.ran.append(label)
+            return label
+
+        if label == "later":
+            render.alters_data = True  # type: ignore[attr-defined]
+        return render
+
+
+def test_include_reads_render_once_and_calls_what_it_checked():
+    from djust.template.operands import render_template_object
+
+    obj = _Shifty()
+    assert render_template_object(obj, {}, True) == "first"
+    assert obj.reads == 1
+    assert obj.ran == ["first"]
+
+
+class _ShiftyUser:
+    def __init__(self) -> None:
+        self.reads = 0
+        self.ran: list[str] = []
+
+    @property
+    def get_full_name(self) -> Callable[..., str]:
+        self.reads += 1
+        label = "first" if self.reads == 1 else "later"
+
+        def get_full_name() -> str:
+            self.ran.append(label)
+            return label
+
+        if label == "later":
+            get_full_name.alters_data = True  # type: ignore[attr-defined]
+        return get_full_name
+
+
+def test_call_method_for_template_reads_once_and_calls_what_it_checked():
+    from djust._template_guards import call_method_for_template
+
+    user = _ShiftyUser()
+    assert call_method_for_template(user, "get_full_name") == "first"
+    assert user.reads == 1
+    assert user.ran == ["first"]
+
+
+# ---------------------------------------------------------------------------
+# What counts as a marker: TRUTHINESS, as in Django's getattr(...) and the Rust guard
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("value", ["yes", 1, [0], object()])
+@pytest.mark.parametrize("marker", ["alters_data", "do_not_call_in_templates"])
+def test_a_truthy_non_true_marker_refuses(marker, value):
+    from djust.template.operands import render_template_object
+
+    obj = _payload("plain")()
+    setattr(type(obj).render, marker, value)
+    assert render_template_object(obj, {}, True) == ""
+    assert type(obj).calls == 0
+
+
+@pytest.mark.parametrize("value", [0, "", None, [], False])
+def test_a_falsy_marker_does_not_refuse(value):
+    from djust.template.operands import render_template_object
+
+    obj = _payload("plain")()
+    type(obj).render.alters_data = value
+    type(obj).render.do_not_call_in_templates = value
+    assert render_template_object(obj, {}, True) == "RENDERED"
+    assert type(obj).calls == 1
+
+
+# ---------------------------------------------------------------------------
+# get_full_name that is not callable; a real django User
+# ---------------------------------------------------------------------------
+class _NotCallableName:
+    get_full_name = "Not A Method"
+
+    def __str__(self) -> str:
+        return "username"
+
+
+@pytest.mark.parametrize("sink", FULL_NAME_SINKS)
+def test_a_non_callable_get_full_name_falls_back_to_str(sink):
+    out = sink(_NotCallableName())
+    assert "username" in out
+    assert "Not A Method" not in out
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("sink", FULL_NAME_SINKS)
+def test_a_real_django_user_still_prints_its_full_name(sink):
+    from django.contrib.auth.models import User
+
+    user = User.objects.create(username="jr", first_name="Jordan", last_name="Reyes")
+    assert "Jordan Reyes" in sink(user)
+
+
+@pytest.mark.django_db
+def test_a_real_user_whose_get_full_name_is_flagged_is_not_called(monkeypatch):
+    from django.contrib.auth.models import User
+
+    calls = []
+
+    def get_full_name(self: Any) -> str:
+        calls.append(1)
+        return "Jordan Reyes"
+
+    get_full_name.alters_data = True  # type: ignore[attr-defined]
+    monkeypatch.setattr(User, "get_full_name", get_full_name)
+    user = User.objects.create(username="jr", first_name="Jordan", last_name="Reyes")
+    out = _avatar_group_class(user)
+    assert calls == []
+    assert "Jordan Reyes" not in out
+
+
+# ---------------------------------------------------------------------------
+# One WARNING per (type, method) per process, for BOTH refusals
+# ---------------------------------------------------------------------------
+def test_include_refusal_logs_once_per_type(caplog):
+    obj = _payload("alters_data")()
+    with caplog.at_level(logging.WARNING, logger="djust._template_guards"):
+        for _ in range(3):
+            plain_render("[{% include obj %}]", {"obj": obj})
+    assert len([r for r in caplog.records if "alters_data" in r.getMessage()]) == 1
+
+
+def test_get_full_name_refusal_logs_once_per_type_and_names_no_object(caplog):
+    user = _user("alters_data")
+    with caplog.at_level(logging.WARNING, logger="djust._template_guards"):
+        for _ in range(3):
+            _avatar_group_class(user)
+    records = [r for r in caplog.records if "get_full_name" in r.getMessage()]
+    assert len(records) == 1
+    assert "alters_data" in records[0].getMessage()
+    assert "username" not in records[0].getMessage()  # str(user) is never logged
+
+
+# ---------------------------------------------------------------------------
+# NOT covered, pinned as it is: child templates render through Django's stock engine
+# ---------------------------------------------------------------------------
+def _child_view(obj: Any) -> Any:
+    from djust.live_view import LiveView
+
+    class _Child(LiveView):
+        template = "[{% include obj %}]"
+
+        def mount(self, request, **kwargs):
+            self.obj = obj
+
+        def get_context_data(self, **kwargs):
+            return {"obj": self.obj}
+
+    child = _Child()
+    child.mount(None)
+    return child
+
+
+def test_PIN_embedded_child_template_still_calls_a_flagged_render():
+    """Embedded children render through Django's stock engine, which is NOT guarded.
+
+    This pins today's behaviour so that moving child rendering onto the guarded path flips
+    this test on purpose (the follow-up issue is linked from the PR).
+    """
+    from djust.websocket import render_embedded_child_html
+
+    obj = _payload("alters_data")()
+    assert render_embedded_child_html(_child_view(obj)) == "[RENDERED]"
+    assert type(obj).calls == 1
+
+
+def test_PIN_sticky_child_template_still_calls_a_flagged_render():
+    from djust.templatetags.live_tags import _render_sticky_child_html
+
+    obj = _payload("alters_data")()
+    html = str(_render_sticky_child_html(_child_view(obj), "v1", None, None, "x.Child"))
+    assert "[RENDERED]" in html
+    assert type(obj).calls == 1

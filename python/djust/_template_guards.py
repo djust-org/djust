@@ -7,7 +7,11 @@ without touching the ``live_view -> components.base`` cycle that
 re-exports :func:`alters_data` as the public spelling.
 """
 
+import logging
+import threading
 from typing import Any, Callable, TypeVar
+
+logger = logging.getLogger(__name__)
 
 F = TypeVar("F", bound=Callable[..., Any])
 
@@ -125,6 +129,41 @@ def refused_marker(obj: Any) -> str | None:
     return None
 
 
+#: ``"module.Type.method"`` keys already warned about, so a refusal that repeats on every
+#: LiveView event logs once per process, not once per render. Capped: a program that makes
+#: classes dynamically cannot grow it without bound (past the cap a new key is not logged).
+_WARNED: set[str] = set()
+_WARNED_CAP = 256
+_WARNED_LOCK = threading.Lock()
+
+
+def warn_refused_once(where: str, owner: Any, name: str, marker: str) -> None:
+    """Log, once per (type, method) per process, that a template-reachable call was refused.
+
+    Only the type name, the method name and the marker are logged: never the object, its
+    ``str()`` or an exception (the log-exposure pin).
+    """
+    kind = type(owner)
+    key = f"{kind.__module__}.{kind.__qualname__}.{name}"
+    with _WARNED_LOCK:
+        if key in _WARNED or len(_WARNED) >= _WARNED_CAP:
+            return
+        _WARNED.add(key)
+    logger.warning(
+        "%s: %s.%s() is marked %s and was not called by a template (#3815)",
+        where,
+        kind.__qualname__,
+        name,
+        marker,
+    )
+
+
+def _reset_refusal_log() -> None:
+    """Forget what was warned about (for tests)."""
+    with _WARNED_LOCK:
+        _WARNED.clear()
+
+
 def call_method_for_template(obj: Any, name: str, default: Any = "") -> Any:
     """``obj.<name>()`` when a template may call it, else ``default`` (#3815).
 
@@ -136,7 +175,11 @@ def call_method_for_template(obj: Any, name: str, default: Any = "") -> Any:
     for a refused call and this returns ``default``. Exceptions the method raises
     propagate, as they did before the guard.
     """
-    method = getattr(obj, name, None)
-    if not callable(method) or refused_marker(method) is not None:
+    method = getattr(obj, name, None)  # bound ONCE: the method checked is the method called
+    if not callable(method):
+        return default
+    marker = refused_marker(method)
+    if marker is not None:
+        warn_refused_once("component tag", obj, name, marker)
         return default
     return method()

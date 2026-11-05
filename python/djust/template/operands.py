@@ -1,14 +1,11 @@
 """Python template objects crossing the native include/inheritance boundary."""
 
-import logging
 from typing import Any
 
 from django.template import Context, Template
 from django.template.backends.django import Template as BackendTemplate
 
-from djust._template_guards import refused_marker
-
-logger = logging.getLogger(__name__)
+from djust._template_guards import refused_marker, warn_refused_once
 
 
 def template_source(value: Any) -> tuple[str, str | None, str, Any] | None:
@@ -40,12 +37,9 @@ def render_template_object(value: Any, data: dict[str, Any], autoescape: bool) -
     """
     if isinstance(value, BackendTemplate):
         value = value.template
-    marker = refused_marker(value.render)
+    render = value.render  # bound ONCE: the method whose markers are read is the one called
+    marker = refused_marker(render)
     if marker is not None:
-        logger.warning(
-            "{%% include %%}: %s.render() is marked %s and was not called (#3815)",
-            type(value).__name__,
-            marker,
-        )
+        warn_refused_once("{% include %}", value, "render", marker)
         return ""
-    return value.render(Context(data, autoescape=autoescape))
+    return render(Context(data, autoescape=autoescape))
