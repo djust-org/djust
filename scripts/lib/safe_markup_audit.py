@@ -234,6 +234,18 @@ AUDITED: dict[tuple[str, str], Audit] = {
         ),
         (PKG + "components/rust_handlers.py", "return str(render_confirm_dialog(kw, body))"),
     ),
+    (DC, "render_filter_bar"): S(
+        1,
+        "bar id, class, event and clear_event, every control's name, label, option value and label, date and search value and placeholder are conditional_escape'd; debounce is int(); `extra_html` is whatever else the template put in the bar, the Rust block handler's already-rendered children (autoescaped by the engine) with the filter comments removed, and empty for the Django tag",
+        (DC, "e_event = conditional_escape(event)"),
+        (DC, "e_clear = conditional_escape(clear_event)"),
+        (DC, 'dj-debounce="{int(debounce)}"'),
+        (
+            PKG + "components/rust_handlers.py",
+            'extra_html=rest if rest.strip() else ""',
+            "FilterBarHandler.render",
+        ),
+    ),
     (FM, "render_popconfirm"): S(
         1,
         "every kwarg is conditional_escape'd; `content` is the rendered tag body (nodelist.render / the Rust block handler's children)",
