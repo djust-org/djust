@@ -33,10 +33,11 @@ unconditionally, so the server-side form-valid step sees the deletion.
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional, Type
+from typing import Any, Dict, FrozenSet, Iterable, Optional, Type
 
 from django.forms import BaseFormSet
 
+from . import _form_data_bounds
 from .decorators import event_handler
 
 
@@ -66,6 +67,30 @@ def _effective_cap(formset_cls: Type[BaseFormSet]) -> int:
     # No explicit max_num — fall back to absolute_max (Django's last-resort
     # ceiling) so we never grow unboundedly.
     return int(getattr(formset_cls, "absolute_max", 2000))
+
+
+_MANAGEMENT_KEYS = ("TOTAL_FORMS", "INITIAL_FORMS", "MIN_NUM_FORMS", "MAX_NUM_FORMS")
+
+
+def _schema_keys(prefix: str, keys: Iterable[str], data: Dict[str, Any]) -> FrozenSet[str]:
+    """The *keys* that belong to the formset itself: its management form and the fields of the rows it
+    has (``<prefix>-<n>-<field>`` for ``n`` below ``TOTAL_FORMS``). They are not the client's to add, so
+    they do not count toward ``max_form_fields`` (#3858); a ``-DELETE`` key for a row that does not
+    exist, under any prefix the client invented, is."""
+    head = prefix + "-"
+    try:
+        total = int(data.get(f"{prefix}-TOTAL_FORMS", 0))
+    except (TypeError, ValueError):
+        total = 0
+    own = set()
+    for key in keys:
+        if not isinstance(key, str) or not key.startswith(head):
+            continue
+        rest = key[len(head) :]
+        index, _, field = rest.partition("-")
+        if rest in _MANAGEMENT_KEYS or (field and index.isdigit() and int(index) < total):
+            own.add(key)
+    return frozenset(own)
 
 
 def add_row(
@@ -125,10 +150,25 @@ def remove_row(
     remain counted until submit so the index gap doesn't confuse the
     management form. The server's ``formset.save()`` handles the actual
     removal.
+
+    *row_prefix* is usually the client's, so the key it names is bounded like any other key a client
+    names in a form's data: when storing it would take *data* past ``max_form_fields`` (counting only
+    keys that are not the formset's own), ``max_form_data_size`` or ``max_form_members``, nothing is
+    stored and the call is a logged no-op (#3858).
     """
     data = dict(data) if data else {}
-    data[f"{row_prefix}-DELETE"] = "on"
     prefix = _resolve_prefix(formset_cls, prefix)
+    key = f"{row_prefix}-DELETE"
+    # ``row_prefix`` is the client's (``dj-value-prefix``), so the key it names is judged like any other
+    # key a client names in a form's data (#3858, #3834): past ``max_form_fields`` / ``max_form_data_size``
+    # / ``max_form_members`` the call is a logged no-op, like an add past the cap.
+    message = _form_data_bounds.refusal(
+        data, {key: "on"}, _schema_keys(prefix, (*data, key), data)
+    )
+    if message is not None:
+        logger.warning("remove_row refused form data: %s", message)
+        return formset_cls(data or None, prefix=prefix)
+    data[key] = "on"
     return formset_cls(data, prefix=prefix)
 
 

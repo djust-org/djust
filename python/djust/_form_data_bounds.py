@@ -48,7 +48,18 @@ footing, and the message is cleared by the next event that is accepted.
 
 Every path that lets a client name a key of a bound form's data asks :func:`refusal` first: ``FormMixin``
 (``validate_field``, ``submit_form``), ``WizardMixin`` (``update_step_field``, ``validate_field``), the
-admin form view, and a ``params_form`` bound to a ``url_change``'s parameters.
+admin form view, a ``params_form`` bound to a ``url_change``'s parameters, and ``remove_row`` of
+``djust.formsets`` (the ``-DELETE`` key of a client-named row prefix, #3858).
+
+A wizard keeps one mapping per step. ``max_form_fields`` is a step's (a step is a form, as Django's field
+limit is a form's), but the characters and the members are the wizard's TOTAL, every step together
+(``others`` of :func:`refusal`, #3858): a per-step bound let a four-step wizard of ``required=False``
+fields keep four times the limit (~360,000 members against 100,000), every one handed to the template
+engine on every event.
+
+Each field counts as TWO members (its key and its value), so the default of 100,000 members is 50,000
+fields: raise ``max_form_fields`` above that and ``max_form_members`` must be raised with it, or the
+member limit is the one that refuses.
 """
 
 from __future__ import annotations
@@ -303,6 +314,7 @@ def refusal(
     current: Optional[Mapping[str, Any]],
     incoming: Mapping[str, Any],
     declared: Collection[str] = (),
+    others: Sequence[Mapping[str, Any]] = (),
 ) -> Optional[str]:
     """Why *incoming* may not be merged into *current*, or ``None`` when the result stays in bounds.
 
@@ -320,6 +332,12 @@ def refusal(
     The size is exactly the characters the merged mapping's keys and values add up to, and a size equal
     to the limit is within it (:func:`_weigh_members`). It is judged WITHOUT building the merged
     mapping: what *incoming* adds, plus what *current* holds, less what *incoming* replaces (#3841).
+
+    *others* is data held BESIDE *current* that the size and member limits bound together with it: a
+    wizard keeps one mapping per step, and each is bound to its own step's form, so ``max_form_fields``
+    is judged on *current* alone (a step is a form), while the characters and members are a TOTAL, the
+    steps' together (#3858). *others* alone already past a limit refuse every event (a shrink of
+    *current* cannot bring the total back under it); *current* alone past it still lets a shrink through.
     """
     max_fields, max_size = limits()
     max_members = member_limit()
@@ -340,18 +358,41 @@ def refusal(
     # Members before characters: a member costs at least a character, so the count reaches its limit
     # first for the shapes that make an event slow (millions of tiny members), and it is judged in
     # O(max_members), not O(max_size).
-    if max_members and _over(current, incoming, max_members, True):
+    if max_members and _over(current, incoming, max_members, True, others):
         return _too_many_members(max_members)
-    if max_size and _over(current, incoming, max_size, False):
+    if max_size and _over(current, incoming, max_size, False, others):
         return _too_large(max_size)
     return None
 
 
-def _over(current: Mapping[str, Any], incoming: Mapping[str, Any], limit: int, count: bool) -> bool:
-    """Would ``{**current, **incoming}`` weigh more than *limit* (characters, or members when *count*)?
+def _held_beside(others: Sequence[Mapping[str, Any]], limit: int, count: bool) -> int:
+    """What *others* add up to (characters, or members when *count*), stopping once that passes
+    *limit*: O(limit) however much they hold (#3858)."""
+    held = 0
+    for other in others:
+        held += _weigh_members(other, limit - held, count)
+        if held > limit:
+            break
+    return held
+
+
+def _over(
+    current: Mapping[str, Any],
+    incoming: Mapping[str, Any],
+    limit: int,
+    count: bool,
+    others: Sequence[Mapping[str, Any]] = (),
+) -> bool:
+    """Would ``{**current, **incoming}``, together with *others*, weigh more than *limit* (characters,
+    or members when *count*)?
 
     Judged WITHOUT building the merged mapping: what *incoming* adds, plus what *current* holds, less
-    what *incoming* replaces (#3841)."""
+    what *incoming* replaces (#3841); *others* are charged first, as they are, and shrink the room
+    the rest has (#3858)."""
+    beside = _held_beside(others, limit, count) if others else 0
+    if beside > limit:
+        return True
+    limit -= beside
     size = _weigh_members(incoming, limit, count)
     if size <= limit and current:
         budget = limit - size
@@ -385,20 +426,22 @@ def _replaced_weight(
 
 def _too_many(limit: int) -> str:
     return (
-        "This form received more fields than the server accepts (%d). It was not submitted." % limit
+        "This form received more fields than the server accepts (%d). "
+        "The limit is the max_form_fields setting. It was not submitted." % limit
     )
 
 
 def _too_many_members(limit: int) -> str:
     return (
-        "This form contains more values than the server accepts (%d). It was not submitted." % limit
+        "This form contains more values than the server accepts (%d). "
+        "The limit is the max_form_members setting. It was not submitted." % limit
     )
 
 
 def _too_large(limit: int) -> str:
     return (
-        "This form's data is larger than the server accepts (%d characters). It was not submitted."
-        % limit
+        "This form's data is larger than the server accepts (%d characters). "
+        "The limit is the max_form_data_size setting. It was not submitted." % limit
     )
 
 
