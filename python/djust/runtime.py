@@ -2796,9 +2796,9 @@ class SSESessionTransport:
         producer never waits on it, so a stalled reader would grow it without
         bound. At ``_MAX_QUEUED_SERVER_FRAMES`` queued frames a tick is skipped
         and a push is deferred (see the runtime's back-pressure note)."""
-        from .sse import _MAX_QUEUED_SERVER_FRAMES
+        from . import sse as _sse
 
-        return bool(self._session.queue.qsize() >= _MAX_QUEUED_SERVER_FRAMES)
+        return bool(self._session.queue.qsize() >= _sse._MAX_QUEUED_SERVER_FRAMES)
 
     def render_busy(self, view: Any) -> bool:
         """Whether a turn holds the session's render lock right now (#3809).
