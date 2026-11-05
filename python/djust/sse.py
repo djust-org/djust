@@ -110,6 +110,13 @@ _CLOSE_DISPATCH_WAIT_S = 10.0
 _MAX_SESSIONS_PER_CLIENT = 20
 _MAX_SESSIONS_TOTAL = 10_000
 
+#: Back-pressure for server-driven frames (#3809). ``SSESession.push`` is a
+#: ``put_nowait`` on an unbounded queue, so a producer never waits for a client
+#: that stopped reading. At this many queued frames a tick is skipped and a
+#: ``self.server_push()`` is deferred (queued, coalescing, bounded) until the
+#: client drains below it. Frames answering an event are never held back.
+_MAX_QUEUED_SERVER_FRAMES = 128
+
 
 def _max_sessions_per_client() -> int:
     """Per-client live-session cap (settings-overridable)."""

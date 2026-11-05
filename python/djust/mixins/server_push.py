@@ -45,6 +45,10 @@ class ServerPushMixin:
         set when ``mount()`` runs on a WebSocket or an SSE session (the
         transport stamps it before ``mount()``), so ``mount()`` can decide
         whether to start background followers.
+
+        The name is reserved: it is a read-only property, so assigning
+        ``self.live_transport = ...`` in a view raises ``AttributeError``. A
+        class-level attribute of that name in a subclass shadows it.
         """
         state = self.__dict__
         if state.get("_ws_consumer") is not None:
@@ -73,8 +77,8 @@ class ServerPushMixin:
         created from one).
 
         Returns ``True`` when the push ran or was queued. It returns ``False``
-        and does nothing (a debug log, no exception) when there is nobody to
-        push to: on the HTTP render and on a fallback POST's fresh instance,
+        and does nothing when the handler is refused (a warning) or missing, and
+        (a debug log, no exception) when there is nobody to push to: on the HTTP render and on a fallback POST's fresh instance,
         in ``LiveViewTestClient``, after the view was closed or replaced by a
         ``live_redirect``, and before ``mount()`` has finished (a push issued
         from inside ``mount()`` itself; start a task there, as above).
@@ -87,6 +91,18 @@ class ServerPushMixin:
         if payload is not None and not isinstance(payload, dict):
             raise TypeError("server_push() payload must be a dict of keyword arguments")
         event: Dict[str, Any] = {"handler": handler, "payload": dict(payload or {})}
+
+        # Refuse here what the turn would refuse, so the caller can tell a
+        # refusal (False, and a warning from the check) from a run.
+        from ..websocket import LiveViewConsumer
+
+        if LiveViewConsumer._prepare_server_push(self, event) is None:
+            logger.debug(
+                "[djust] server_push on %s refused — %r is not a push target",
+                type(self).__name__,
+                handler,
+            )
+            return False
 
         state = self.__dict__
         consumer = state.get("_ws_consumer")
