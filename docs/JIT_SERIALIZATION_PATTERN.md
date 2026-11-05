@@ -613,10 +613,13 @@ top-level QuerySet or `list[Model]`) are kept in the render sidecar, and the
 engine's guarded getattr walk, the one `DjustTemplateBackend` renders through,
 calls the method on the real QuerySet. A method marked `alters_data` or
 `do_not_call_in_templates` is still never called, and the serialization floor
-still governs every row. Only a name read both ways pays for this (a proxy per
-kept row); a plain loop and a method-only read do not. A QuerySet nested in a
-dict is not covered: read the count at a top-level name, or annotate it
-(`Count("groups")`).
+still governs every row. A model method that mutates but carries neither flag is
+now callable from a template on a LiveView, exactly as Django and
+`DjustTemplateBackend` already call it: mark such a method `alters_data = True`.
+Only a name read both ways pays for this (a proxy per kept row, roughly 2.4 KB
+and +50% render time per row in a 20,000-row measurement); a plain loop and a
+method-only read do not. A QuerySet nested in a dict is not covered: read the
+count at a top-level name, or annotate it (`Count("groups")`).
 
 A row's integer `count` / `exists` field survives on a `list[Model]` too (the
 Python serializer only calls a leaf that is callable).

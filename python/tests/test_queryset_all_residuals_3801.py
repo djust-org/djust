@@ -240,7 +240,7 @@ class TestTheDepthBoundIsReported3801:
 
         from djust.mixins import context as ctx
 
-        monkeypatch.setattr(ctx, "_DEPTH_BOUND_REPORTED", False)
+        monkeypatch.setitem(ctx._DEPTH_BOUND_REPORTED, "reported", False)
         deep = {"a": {"b": {"c": {"d": {"e": User.objects.none()}}}}}
         with caplog.at_level(logging.WARNING, logger="djust.mixins.context"):
             assert not ctx._holds_db_value(deep)
@@ -256,7 +256,7 @@ class TestTheDepthBoundIsReported3801:
 
         from djust.mixins import context as ctx
 
-        monkeypatch.setattr(ctx, "_DEPTH_BOUND_REPORTED", False)
+        monkeypatch.setitem(ctx._DEPTH_BOUND_REPORTED, "reported", False)
         with caplog.at_level(logging.WARNING, logger="djust.mixins.context"):
             assert ctx._holds_db_value({"a": {"b": {"c": {"d": User.objects.none()}}}})
             assert not ctx._holds_db_value({"a": {"b": {"c": {"d": {"e": [1, "x", None]}}}}})

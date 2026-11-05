@@ -112,7 +112,7 @@ _NESTED_DB_DEPTH = 4
 
 
 #: Set once the bound has been reported (#3801); the warning is per process.
-_DEPTH_BOUND_REPORTED = False
+_DEPTH_BOUND_REPORTED: dict[str, bool] = {"reported": False}
 
 #: How many values past the bound are looked at to learn whether a Model or
 #: QuerySet is there. The report is a hint, so it stays cheap on a long list.
@@ -128,12 +128,11 @@ def _warn_once_if_deeper_db_value(items: Any) -> None:
     ``_DEPTH_BOUND_PROBE``): finding a deeper one would mean the scan the bound
     exists to avoid, so a value deeper still is not reported.
     """
-    global _DEPTH_BOUND_REPORTED
-    if _DEPTH_BOUND_REPORTED:
+    if _DEPTH_BOUND_REPORTED["reported"]:
         return
     for item in itertools.islice(items, _DEPTH_BOUND_PROBE):
         if isinstance(item, (models.Model, models.QuerySet)):
-            _DEPTH_BOUND_REPORTED = True
+            _DEPTH_BOUND_REPORTED["reported"] = True
             logger.warning(
                 "A %s is nested more than %s containers deep in the context, past what the "
                 "template serializer looks at: it is sent as a flat field dict and its "
