@@ -17,6 +17,7 @@ import json as _json
 import re as _re
 import uuid
 from urllib.parse import urlencode
+from collections.abc import Mapping
 from typing import Any
 
 from django import template
@@ -747,6 +748,41 @@ def _checked_column_widths(columns: Any) -> Any:
             col = {**col, "width": ""}
         checked.append(col)
     return checked
+
+
+@register.filter
+def table_cell(row: Any, key: Any) -> Any:
+    """``row[key]`` of a dict row, as ``table.html`` writes a cell and a row's ``data-value`` (#3870).
+
+    The template read a cell as ``{{ row|dictsort:col.key|first }}``: ``dictsort`` over a dict
+    iterates its KEYS and resolves ``col.key`` against each one, so every cell was ``""``. Django
+    has no lookup by a name held in a variable, and ``row.items`` is the row's ``items`` key when it
+    has one, so this is the lookup.
+
+    A row that is not a mapping, and a key it lacks, are ``""`` (what the native table writes).
+    Anything but a string is written the way the native table writes it, ``str()``: a number is not
+    localised (``1,000`` is not a row id), ``None`` is ``None``. A string, a ``mark_safe`` one
+    included, is returned as it is and escaped (or not) by the template.
+    """
+    if not isinstance(row, Mapping):
+        return ""
+    try:
+        value = row.get(key, "")
+    except TypeError:  # an unhashable key
+        return ""
+    return value if isinstance(value, str) else str(value)
+
+
+@register.filter
+def table_href(row: Any, key: Any) -> Any:
+    """``row[key]`` as a URL for ``href`` / ``data-href``: escaped, and a dangerous scheme is ``#``.
+
+    Reading the value out of the row (#3870) is what made these two sinks live: they were ``""``
+    for every dict row. A row is data, often someone else's, so ``javascript:`` is neutralised
+    here as for every other URL of a component (``url_attr``). The result is escaped, so it is
+    marked safe for the template.
+    """
+    return mark_safe(url_attr(table_cell(row, key)))
 
 
 @register.inclusion_tag("djust_components/table.html")

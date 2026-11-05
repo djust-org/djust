@@ -47,7 +47,11 @@ _TPL_DIR = Path(__file__).resolve().parents[1] / "templates" / "djust_components
 
 
 def _engine_template(name):
-    return Engine().from_string((_TPL_DIR / name).read_text())
+    # table.html loads the component filters (``table_cell``, #3870).
+    engine = Engine(
+        libraries={"djust_components": "djust.components.templatetags.djust_components"}
+    )
+    return engine.from_string((_TPL_DIR / name).read_text())
 
 
 # ---------------------------------------------------------------------------
@@ -375,7 +379,7 @@ class TestDataTableAria:
     def test_tabindex_only_on_sortable_th(self):
         """tabindex is part of the sortable-<th> branch, not the plain branch.
 
-        The template's `{% if col.sortable|default:True %}` branch is what
+        The template's `{% if col.sortable|default_if_none:True %}` branch is what
         carries `tabindex="0"`; the non-sortable `{% else %}` branch emits
         only `role="columnheader"`. Assert the focusable affordance is
         scoped to the sortable branch (it sits next to `aria-sort`, which
