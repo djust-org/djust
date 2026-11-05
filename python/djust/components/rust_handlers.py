@@ -10,6 +10,7 @@ Block handlers implement:  render(self, args, content, context) -> str
 """
 
 import json as _json
+import re as _re_filters
 import pathlib as _pathlib
 import uuid as _uuid
 from html.parser import HTMLParser
@@ -828,8 +829,11 @@ class DjButtonHandler:
         )
         label = conditional_escape(label_)
         variant = conditional_escape(variant_)
-        event = conditional_escape(event_)
-        confirm = conditional_escape(confirm_)
+        # Truthiness is decided on the VALUE, before it becomes text: ``confirm=None`` (or
+        # False, 0, [] ...) wires nothing in the Python tag, and escaping first would turn it
+        # into the string "None" and a spurious confirm dialog.
+        event = conditional_escape(event_) if event_ else ""
+        confirm = conditional_escape(confirm_) if confirm_ else ""
         classes = ["btn", f"btn-{variant}"]
         if size and size != "md":
             classes.append(f"btn-{conditional_escape(size)}")
@@ -1062,7 +1066,10 @@ class DataTableHandler:
         compact = kw.get("compact", False)
         # Row navigation: a clickable row fires ``row_click_event`` (#1111). The Python
         # template wires it; the native table did not (#3669).
-        row_click_event = conditional_escape(kw.get("row_click_event", ""))
+        # Decided on the value, not on its escaped text: ``row_click_event=None`` wires nothing
+        # in the Python template, and "None" is truthy.
+        _rce = kw.get("row_click_event", "")
+        row_click_event = conditional_escape(_rce) if _rce else ""
         row_click_value_key = str(kw.get("row_click_value_key", "id"))
         # Backward-compatible pager (``total_pages > 1`` without ``paginate``), as the Python
         # template draws it (#3669).
@@ -2398,28 +2405,6 @@ def register_with_rust_engine() -> None:
         "split_pane",
         "endsplit_pane",
         LibraryRawBlockTagHandler("djust_components", "split_pane", _components_lib.do_split_pane),
-    )
-
-    # {% filter_bar %} — the same reason (#3669). The bar draws every control from its
-    # `{% filter_select %}` / `{% filter_date_range %}` / `{% filter_search %}` children's
-    # arguments, owns the one `event` they all fire and the "Clear filters" button, and a
-    # native block handler is handed only the children's rendered HTML. The id keeps the
-    # constant the native handler always used when none is given: Django's tag draws a
-    # random one, which would change on every socket render.
-    def _do_filter_bar(parser: object, token: object) -> object:
-        node = _components_lib.do_filter_bar(parser, token)
-        node.kwargs.setdefault("id", "filter-bar")
-        return node
-
-    register_raw_block_tag_handler(
-        "filter_bar",
-        "endfilter_bar",
-        LibraryRawBlockTagHandler(
-            "djust_components",
-            "filter_bar",
-            _do_filter_bar,
-            libraries=(_components_lib.register,),
-        ),
     )
 
     # {% tabs %}…{% tab %}…{% endtab %}…{% endtabs %} — the same reason. The
@@ -4692,6 +4677,10 @@ class NavItemHandler:
         # The Python tag counts child ``{% nav_item %}`` nodes and ignores any other body, so
         # an item with an ``event`` and a text body stays a clickable button there; "any
         # non-blank body" dropped that ``dj-click`` (#3669).
+        # KNOWN LIMIT (#3873, pinned by a test): a block handler is handed rendered HTML, so a
+        # child is recognised by the markup this handler draws. A literal
+        # ``<li class="dj-nav__item">`` in the body matches too, and a sub-item inside
+        # ``{% if %}`` / ``{% for %}`` counts here where Django counts only direct child nodes.
         has_children = _NAV_ITEM_MARKUP in content
 
         if has_children:
@@ -4960,33 +4949,81 @@ class InlineEditHandler:
 # ---------------------------------------------------------------------------
 
 
-class _FilterControlHandler:
-    """``{% filter_select %}`` / ``{% filter_date_range %}`` / ``{% filter_search %}``.
+#: How a ``{% filter_select %}`` / ``{% filter_date_range %}`` / ``{% filter_search %}`` tells the
+#: ``{% filter_bar %}`` that holds it what it was given (#3669). The Python tags render NOTHING of
+#: their own: the bar reads its children's arguments and draws every control, wiring its own
+#: ``event`` and ``clear_event`` onto them (a child's ``event=`` is never read). A native block
+#: handler is handed its children already rendered, so a child leaves its arguments in a comment
+#: the bar reads and removes; a child reached outside a bar leaves an invisible comment, where
+#: the Python tag leaves nothing.
+_FILTER_MARK = _re_filters.compile(
+    r"<!--djust-filter:(select|date_range|search):([A-Za-z0-9_=-]*)-->"
+)
 
-    The Python tags render NOTHING of their own: ``{% filter_bar %}`` reads its children's
-    arguments and draws every control, wiring ``event`` and ``clear_event`` onto them
-    itself (a child's own ``event=`` is ignored). A native block handler is handed its
-    children already rendered and cannot read those arguments, so the native ``filter_bar``
-    would have had to guess which ``dj-change`` was which and could not draw the "Clear
-    filters" button at all (#3669). ``{% filter_bar %}`` is therefore a RAW block tag (see
-    ``register_with_rust_engine``): Django's own tag renders the whole bar, children included,
-    and a child that is reached on its own renders nothing, as in Python.
-    """
+
+class _FilterControlHandler:
+    KIND = ""
 
     def render(self, args: list[str], context: dict[str, object]) -> str:
-        return ""
+        import base64
+
+        payload = _json.dumps(_parse_args(args, context), default=str, separators=(",", ":"))
+        token = base64.urlsafe_b64encode(payload.encode("utf-8")).decode("ascii")
+        kind = conditional_escape(self.KIND)
+        return _safe(f"<!--djust-filter:{kind}:{conditional_escape(token)}-->")
 
 
 class FilterSelectHandler(_FilterControlHandler):
     """Inline handler for {% filter_select name="status" options=statuses %}"""
 
+    KIND = "select"
+
 
 class FilterDateRangeHandler(_FilterControlHandler):
     """Inline handler for {% filter_date_range name="dates" %}"""
 
+    KIND = "date_range"
+
 
 class FilterSearchHandler(_FilterControlHandler):
     """Inline handler for {% filter_search name="q" %}"""
+
+    KIND = "search"
+
+
+class FilterBarHandler:
+    """Block handler for {% filter_bar %}...{% endfilter_bar %}
+
+    Draws the bar with the Python tag's own renderer (``render_filter_bar``) from the controls
+    its children left, so ``event``, ``clear_event`` and the "Clear filters" button are decided
+    in one place (#3669). Anything else in the bar is kept after the controls, as before.
+    """
+
+    def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
+        import base64
+
+        from djust.components.templatetags.djust_components import render_filter_bar
+
+        kw = _parse_args(args, context)
+        controls: list[tuple[str, dict[str, Any]]] = []
+
+        def take(match: Any) -> str:
+            try:
+                data = _json.loads(base64.urlsafe_b64decode(match.group(2).encode("ascii")))
+            except ValueError:
+                return ""
+            if isinstance(data, dict):
+                controls.append((match.group(1), data))
+            return ""
+
+        rest = _FILTER_MARK.sub(take, content)
+        # The id keeps the constant this handler always drew: the Django tag draws a random one,
+        # which would change on every socket render.
+        return str(
+            render_filter_bar(
+                kw, controls, default_id="filter-bar", extra_html=rest if rest.strip() else ""
+            )
+        )
 
 
 INLINE_HANDLERS.extend(
@@ -5003,6 +5040,7 @@ BLOCK_HANDLERS.extend(
     [
         ("toolbar", "endtoolbar", ToolbarHandler()),
         ("toolbar_overflow", "endtoolbar_overflow", ToolbarOverflowHandler()),
+        ("filter_bar", "endfilter_bar", FilterBarHandler()),
     ]
 )
 

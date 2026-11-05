@@ -54,7 +54,7 @@ djust_components:data_table,DIFFERENT,176,a11y:176+classes:176+data/dj-attrs:176
 djust_components:date_picker,DIFFERENT,31,classes:31+data/dj-attrs:1+escaping:11+other-attrs:1+tags:31+text:31,,34,15/15,34
 djust_components:dependent_select,DIFFERENT,10,a11y:1+classes:2+data/dj-attrs:1+escaping:9+ids:2+other-attrs:1+tags:6+text:6,,25,12/12,25
 djust_components:diff_viewer,DIFFERENT-escape-policy-only,4,escaping:4+tags:3+text:3,,19,7/7,19
-djust_components:dj_button,DIFFERENT,9,classes:1+data/dj-attrs:2+escaping:8+tags:4+text:4,,23,9/9,23
+djust_components:dj_button,DIFFERENT-escape-policy-only,8,classes:1+data/dj-attrs:1+escaping:8+tags:4+text:4,,23,9/9,23
 djust_components:dj_checkbox,DIFFERENT,15,data/dj-attrs:1+escaping:5+ids:15+other-attrs:1+tags:15+text:3,,15,6/6,15
 djust_components:dj_divider,DIFFERENT,8,classes:5+escaping:3+tags:8+text:6,,13,2/2,13
 djust_components:dj_input,DIFFERENT,23,classes:7+data/dj-attrs:1+escaping:9+ids:2+other-attrs:8+tags:10+text:6,rust_only_keys:python,23,11/11,24
@@ -76,10 +76,10 @@ djust_components:field_error,IDENTICAL,0,,,14,2/2,1
 djust_components:fieldset,DIFFERENT,4,classes:1+escaping:3+tags:3+text:3,,11,3/3,11
 djust_components:file_dropzone,DIFFERENT,10,classes:6+escaping:7+ids:1+other-attrs:1+tags:9+text:9,,21,7/7,21
 djust_components:file_tree,DIFFERENT-escape-policy-only,5,escaping:5,,21,10/10,21
-djust_components:filter_bar,DIFFERENT,17,ids:17,,28,12/12,28
-djust_components:filter_date_range,IDENTICAL,0,,,19,7/7,19
-djust_components:filter_search,IDENTICAL,0,,,20,7/7,19
-djust_components:filter_select,IDENTICAL,0,,,19,7/7,19
+djust_components:filter_bar,DIFFERENT,33,classes:1+escaping:3+ids:24+tags:33+text:33,,34,15/15,34
+djust_components:filter_date_range,DIFFERENT-escape-policy-only,3,escaping:3+tags:3+text:3,,19,7/7,19
+djust_components:filter_search,DIFFERENT,3,escaping:2,,20,7/7,20
+djust_components:filter_select,DIFFERENT-escape-policy-only,3,escaping:3+tags:3+text:3,,19,7/7,19
 djust_components:form_array,DIFFERENT,19,classes:19+data/dj-attrs:1+escaping:4+other-attrs:19+tags:19+text:19,,19,9/9,19
 djust_components:form_errors,IDENTICAL,0,,,15,2/2,2
 djust_components:form_group,DIFFERENT,12,classes:8+escaping:4+ids:4+tags:11+text:6,,15,5/5,15

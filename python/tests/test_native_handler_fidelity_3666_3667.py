@@ -1099,12 +1099,12 @@ class TestTypeDispatch:
     def test_the_fix_removed_the_cells_it_claims(self, facts):
         """The headline number, derived rather than restated (#2727): the recorded residual's size
         is computed from the pin, the before-count is the measurement the issue reported, and the
-        measurement must still be the 21,390 cells those were counted over, plus the 90 cells
+        measurement must still be the 21,390 cells those were counted over, plus the 135 cells
         #3669 added by making the native handlers read more parameters (re-measured, with the
         grid still 15 types, not estimated)."""
         residual = sum(sum(m.values()) for m in RESIDUAL_STANDIN_LOSS.values())
         assert residual < STANDIN_LOSS_BEFORE_3768
-        assert facts["typed_values"]["cells"] == 21390 + 90, (
+        assert facts["typed_values"]["cells"] == 21390 + 135, (
             "the cell grid changed: re-derive both counts"
         )
         measured = sum(

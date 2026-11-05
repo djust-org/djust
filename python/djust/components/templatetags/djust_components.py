@@ -6598,6 +6598,115 @@ class FilterSearchNode(template.Node):
         return ""  # rendered by FilterBarNode
 
 
+def render_filter_bar(
+    kw: Any, controls: Any, *, default_id: Any = None, extra_html: Any = ""
+) -> SafeString:
+    """Markup for ``{% filter_bar %}``, shared by the Django tag and the native handler (#3669).
+
+    ``kw`` is the bar's own resolved arguments; ``controls`` is a list of ``(kind, kwargs)``
+    with ``kind`` one of ``select`` / ``date_range`` / ``search`` and ``kwargs`` the child
+    tag's resolved arguments. The bar owns ``event`` and ``clear_event``: a child's own
+    ``event=`` is never read. ``default_id`` is the id used when the bar has none (the Django
+    tag draws a random one; the native handler passes a constant so a socket render does not
+    change it). ``extra_html`` is appended inside the controls row (the native handler keeps
+    whatever else the template put in the bar; the Django tag has none).
+    """
+    bar_id = kw.get(
+        "id", default_id if default_id is not None else f"filter-bar-{uuid.uuid4().hex[:8]}"
+    )
+    event = kw.get("event", "filter_change")
+    custom_class = kw.get("class", "")
+    clear_event = kw.get("clear_event", "filter_clear")
+
+    cls = "dj-filter-bar"
+    if custom_class:
+        cls += f" {conditional_escape(custom_class)}"
+
+    e_event = conditional_escape(event)
+    e_clear = conditional_escape(clear_event)
+
+    parts = []
+    has_values = False
+    for kind, nkw in controls:
+        if kind == "select":
+            name = conditional_escape(nkw.get("name", ""))
+            label = conditional_escape(nkw.get("label", name))
+            options = nkw.get("options", [])
+            value = nkw.get("value", "")
+            if value:
+                has_values = True
+            opt_html = f'<option value="">{label}</option>'
+            if isinstance(options, list):
+                for opt in options:
+                    if isinstance(opt, dict):
+                        ov = conditional_escape(str(opt.get("value", "")))
+                        ol = conditional_escape(str(opt.get("label", ov)))
+                    else:
+                        ov = conditional_escape(str(opt))
+                        ol = ov
+                    selected = (
+                        " selected"
+                        if str(opt.get("value", opt) if isinstance(opt, dict) else opt)
+                        == str(value)
+                        else ""
+                    )
+                    opt_html += f'<option value="{ov}"{selected}>{ol}</option>'
+            parts.append(
+                f'<div class="dj-filter-bar__control dj-filter-bar__select-wrap">'
+                f'<select class="dj-filter-bar__select" name="{name}" '
+                f'dj-change="{e_event}">{opt_html}</select></div>'
+            )
+        elif kind == "date_range":
+            name = conditional_escape(nkw.get("name", ""))
+            label = conditional_escape(nkw.get("label", name))
+            value_start = conditional_escape(str(nkw.get("start", "")))
+            value_end = conditional_escape(str(nkw.get("end", "")))
+            if value_start or value_end:
+                has_values = True
+            parts.append(
+                f'<div class="dj-filter-bar__control dj-filter-bar__date-range">'
+                f'<label class="dj-filter-bar__label">{label}</label>'
+                f'<input class="dj-filter-bar__date" type="date" name="{name}_start" '
+                f'value="{value_start}" dj-change="{e_event}">'
+                f'<span class="dj-filter-bar__date-sep">&ndash;</span>'
+                f'<input class="dj-filter-bar__date" type="date" name="{name}_end" '
+                f'value="{value_end}" dj-change="{e_event}"></div>'
+            )
+        elif kind == "search":
+            name = conditional_escape(nkw.get("name", ""))
+            placeholder = conditional_escape(nkw.get("placeholder", "Search\u2026"))
+            value = conditional_escape(str(nkw.get("value", "")))
+            debounce = nkw.get("debounce", 300)
+            if value:
+                has_values = True
+            parts.append(
+                f'<div class="dj-filter-bar__control dj-filter-bar__search-wrap">'
+                f'<input class="dj-filter-bar__search" type="search" name="{name}" '
+                f'placeholder="{placeholder}" value="{value}" '
+                f'dj-input="{e_event}" dj-debounce="{int(debounce)}"></div>'
+            )
+
+    clear_html = ""
+    if has_values:
+        clear_html = (
+            f'<div class="dj-filter-bar__actions">'
+            f'<button class="dj-filter-bar__clear" dj-click="{e_clear}">Clear filters</button></div>'
+        )
+
+    return mark_safe(
+        f'<div class="{cls}" id="{conditional_escape(bar_id)}" role="search">'
+        f'<div class="dj-filter-bar__controls">{"".join(parts)}{extra_html}</div>'
+        f"{clear_html}</div>"
+    )
+
+
+_FILTER_KINDS = {
+    FilterSelectNode: "select",
+    FilterDateRangeNode: "date_range",
+    FilterSearchNode: "search",
+}
+
+
 class FilterBarNode(template.Node):
     def __init__(self, nodelist: Any, kwargs: Any) -> None:
         self.nodelist = nodelist
@@ -6605,98 +6714,12 @@ class FilterBarNode(template.Node):
 
     def render(self, context: Any) -> SafeString:
         kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
-        bar_id = kw.get("id", f"filter-bar-{uuid.uuid4().hex[:8]}")
-        event = kw.get("event", "filter_change")
-        custom_class = kw.get("class", "")
-        clear_event = kw.get("clear_event", "filter_clear")
-
-        cls = "dj-filter-bar"
-        if custom_class:
-            cls += f" {conditional_escape(custom_class)}"
-
-        e_event = conditional_escape(event)
-        e_clear = conditional_escape(clear_event)
-
-        filter_nodes = [
-            n
+        controls = [
+            (_FILTER_KINDS[type(n)], {k: _resolve(v, context) for k, v in n.kwargs.items()})
             for n in self.nodelist
-            if isinstance(n, (FilterSelectNode, FilterDateRangeNode, FilterSearchNode))
+            if type(n) in _FILTER_KINDS
         ]
-
-        parts = []
-        has_values = False
-        for node in filter_nodes:
-            nkw = {k: _resolve(v, context) for k, v in node.kwargs.items()}
-            if isinstance(node, FilterSelectNode):
-                name = conditional_escape(nkw.get("name", ""))
-                label = conditional_escape(nkw.get("label", name))
-                options = nkw.get("options", [])
-                value = nkw.get("value", "")
-                if value:
-                    has_values = True
-                opt_html = f'<option value="">{label}</option>'
-                if isinstance(options, list):
-                    for opt in options:
-                        if isinstance(opt, dict):
-                            ov = conditional_escape(str(opt.get("value", "")))
-                            ol = conditional_escape(str(opt.get("label", ov)))
-                        else:
-                            ov = conditional_escape(str(opt))
-                            ol = ov
-                        selected = (
-                            " selected"
-                            if str(opt.get("value", opt) if isinstance(opt, dict) else opt)
-                            == str(value)
-                            else ""
-                        )
-                        opt_html += f'<option value="{ov}"{selected}>{ol}</option>'
-                parts.append(
-                    f'<div class="dj-filter-bar__control dj-filter-bar__select-wrap">'
-                    f'<select class="dj-filter-bar__select" name="{name}" '
-                    f'dj-change="{e_event}">{opt_html}</select></div>'
-                )
-            elif isinstance(node, FilterDateRangeNode):
-                name = conditional_escape(nkw.get("name", ""))
-                label = conditional_escape(nkw.get("label", name))
-                value_start = conditional_escape(str(nkw.get("start", "")))
-                value_end = conditional_escape(str(nkw.get("end", "")))
-                if value_start or value_end:
-                    has_values = True
-                parts.append(
-                    f'<div class="dj-filter-bar__control dj-filter-bar__date-range">'
-                    f'<label class="dj-filter-bar__label">{label}</label>'
-                    f'<input class="dj-filter-bar__date" type="date" name="{name}_start" '
-                    f'value="{value_start}" dj-change="{e_event}">'
-                    f'<span class="dj-filter-bar__date-sep">&ndash;</span>'
-                    f'<input class="dj-filter-bar__date" type="date" name="{name}_end" '
-                    f'value="{value_end}" dj-change="{e_event}"></div>'
-                )
-            elif isinstance(node, FilterSearchNode):
-                name = conditional_escape(nkw.get("name", ""))
-                placeholder = conditional_escape(nkw.get("placeholder", "Search\u2026"))
-                value = conditional_escape(str(nkw.get("value", "")))
-                debounce = nkw.get("debounce", 300)
-                if value:
-                    has_values = True
-                parts.append(
-                    f'<div class="dj-filter-bar__control dj-filter-bar__search-wrap">'
-                    f'<input class="dj-filter-bar__search" type="search" name="{name}" '
-                    f'placeholder="{placeholder}" value="{value}" '
-                    f'dj-input="{e_event}" dj-debounce="{int(debounce)}"></div>'
-                )
-
-        clear_html = ""
-        if has_values:
-            clear_html = (
-                f'<div class="dj-filter-bar__actions">'
-                f'<button class="dj-filter-bar__clear" dj-click="{e_clear}">Clear filters</button></div>'
-            )
-
-        return mark_safe(
-            f'<div class="{cls}" id="{conditional_escape(bar_id)}" role="search">'
-            f'<div class="dj-filter-bar__controls">{"".join(parts)}</div>'
-            f"{clear_html}</div>"
-        )
+        return render_filter_bar(kw, controls)
 
 
 @register.tag("filter_bar")
