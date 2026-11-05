@@ -353,6 +353,16 @@ class TestRemoveRowIsBounded:
             view.remove_row(formset="rows", prefix="bogus-1")
         assert ("bogus-1-DELETE" in view._formset_data) is kept
 
+    @pytest.mark.parametrize("junk", ["abc", "²", "9" * 5000, "-1", "03", "٣", "1.5", ""])
+    def test_a_total_forms_that_is_not_a_canonical_count_is_no_rows_and_does_not_raise(self, junk):
+        """A project-seeded ``TOTAL_FORMS`` that is not canonical ASCII digits counts as no rows, so the
+        row keys under it are the client's to be counted, and nothing raises."""
+        view = rows_view()
+        view._formset_data = {"rows-TOTAL_FORMS": junk, "rows-0-street": "s"}
+        with livecfg(fields=1):
+            view.remove_row(formset="rows", prefix="bogus-1")  # rows-0-street is counted: no room
+        assert "bogus-1-DELETE" not in view._formset_data
+
     def test_a_huge_total_forms_a_project_seeded_does_not_widen_the_exemption(self):
         """Nothing here stores a client's ``TOTAL_FORMS`` (``remove_row`` only writes ``-DELETE`` keys and
         ``add_row`` stops at the formset's cap), but a huge one a project seeded is clamped to that cap."""
