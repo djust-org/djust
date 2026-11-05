@@ -821,6 +821,14 @@ V008 is broader than V006 and will flag any custom class instantiation, not just
 
 **Fix**: Use an int, or a dict with `mount`, `render`, `event` and `events`; name only synchronous `@event_handler` methods in `events`. Suppress with `DJUST_CONFIG = {"suppress_checks": ["V024"]}`.
 
+### V025: `get_http_status()` overridden under a project-wide status map
+
+**Severity**: Warning
+
+**What causes it**: `LIVEVIEW_CONFIG["http_status_of_state"]` holds a map (`{"not_found": 404}`), and a class defines `get_http_status()`. The default `get_http_status()` is what reads the map, so the override replaces it for every view that inherits the override. Message: "<class> overrides get_http_status() while LIVEVIEW_CONFIG['http_status_of_state'] is configured; ..."
+
+**Fix**: Delete the override and set `self.state` to a state the map names. For a real special case, call `super().get_http_status()` first so the map still applies. Suppress with `DJUST_CONFIG = {"suppress_checks": ["V025"]}`.
+
 ---
 
 ## Security Errors (S0xx)

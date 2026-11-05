@@ -55,6 +55,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | V022 | LiveView | Warning | View code assigns an attribute djust's `LiveView` keeps its own state under (`self._streams = ...`) |
 | V023 | LiveView | Error | A `params_form` the request path cannot use: not a form class, or a form whose `__init__` needs arguments beyond `data=` |
 | V024 | LiveView | Error | A `query_budget` nothing can enforce: an unknown key, a bool or negative number, a handler named in `events` that the view lacks or that is `async def` / `@background` |
+| V025 | LiveView | Warning | A class defines `get_http_status()` while `LIVEVIEW_CONFIG['http_status_of_state']` is configured: the override replaces the project-wide map |
 | S001 | Security | Error | mark_safe() with f-string (XSS risk) |
 | S002 | Security | Warning | @csrf_exempt without justification comment |
 | S003 | Security | Warning | Bare except: pass swallows all exceptions |
@@ -477,6 +478,14 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 - **What it detects**: a LiveView whose `query_budget` (read from the class) is a declaration nothing can enforce: a dict key other than `mount`, `render`, `event`, `events`; a `bool`, a non-int, a negative number or one over 1,000,000; an `events` that is not a `{handler: n}` dict; a handler named in `events` that the view does not have; or one that a budget cannot be enforced on, an `async def` handler (it runs on the event loop) or a `@background` handler (its work runs later, in `start_async`). The verdict is `djust._query_budget.declared_budget`, the one reader that `LiveViewSmokeTest`, the run-time meter and `djust_audit` also use: the smoke test raises `ValueError` on the same declaration, the run-time meter logs it once and measures nothing, and `djust_audit` lists it as invalid.
 - **Fix**: use an int, or a dict with those keys; name only synchronous `@event_handler` methods of the view in `events`.
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["V024"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.V024"]`
+
+### V025 — `get_http_status()` overridden under a project-wide status map
+- **Severity**: Warning
+- **Method**: Runtime (class inspection; no view is constructed). Silent unless `LIVEVIEW_CONFIG['http_status_of_state']` (or the same key in `DJUST_CONFIG`) holds a map.
+- **What it detects**: a class that defines `get_http_status()` itself, reported once for the class whose body holds the method, wherever the views that use it inherit it from (a view, an abstract base or a mixin). The default `get_http_status()` is what reads the project-wide map, so an override replaces the map for every view that uses it, which is how per-view copies of the same status logic creep back. djust's own classes are not reported.
+- **Fix**: delete the override and set `self.state` to a state the map names; or, for a real special case, have the override call `super().get_http_status()` first so the map still applies. It is a Warning because an override can be right (a status that is not a function of one state), and the check cannot see a `super()` call.
+- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["V025"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.V025"]`
+- **False positives**: an override that calls `super().get_http_status()`
 
 ---
 

@@ -60,6 +60,7 @@ from .mixins import (
     StickyChildRegistry,
     ActivityMixin,
 )
+from .mixins.request import UNDECLARED_STATUS_MAP
 
 # Configure logger
 logger = logging.getLogger(__name__)
@@ -742,7 +743,13 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
     # the default is empty, so a view that declares nothing keeps answering 200.
     # Only the HTTP response has a status. A view that overrides
     # ``get_http_status()`` keeps its own answer.
-    http_status_of_state: Mapping[str, int] = {}
+    #
+    # A project-wide default is ``LIVEVIEW_CONFIG["http_status_of_state"]`` (#3706).
+    # The view's own attribute wins, then the config, never merged: the config is
+    # read only while this attribute is still the framework's own
+    # ``UNDECLARED_STATUS_MAP`` (an empty read-only map, equal to ``{}``), so a
+    # view that declares ``{}`` opts out of the project's map.
+    http_status_of_state: Mapping[str, int] = UNDECLARED_STATUS_MAP
     state_attribute: str = "state"
 
     # URL parameters a view declares as a Django form (#3689). When set, the
