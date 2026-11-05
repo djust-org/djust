@@ -62,11 +62,21 @@ def _parse_args(args: list[str], context: dict[str, object]) -> dict[str, object
     """
 
     result: dict[str, object] = {}
+    # The operands the engine could only hand over as a stand-in (#3768): a tuple, a namedtuple,
+    # a UUID, a Path. Read once, and consulted BEFORE the text is parsed: the typed value replaces
+    # the operand, so decoding the stand-in (for a 2,000,000-element tuple, a JSON list built and
+    # thrown away) is work for nothing (#3849). The key keeps its place in ``result``.
+    typed = context.get(TYPED_ARGS_KEY)
+    if not isinstance(typed, dict):
+        typed = {}
     for arg in args:
         if "=" not in arg:
             continue
         key, val = arg.split("=", 1)
         key = key.strip()
+        if key in typed and isinstance(typed[key], _RECOVERED_TYPES):
+            result[key] = _from_typed(typed[key])
+            continue
         val = val.strip()
         # String literal — strip quotes
         if (val.startswith('"') and val.endswith('"')) or (
@@ -101,12 +111,6 @@ def _parse_args(args: list[str], context: dict[str, object]) -> dict[str, object
                 except ValueError:
                     # Variable reference — look up in context
                     result[key] = context.get(val, val)
-    # A value the engine could only hand over as a stand-in (#3768).
-    typed = context.get(TYPED_ARGS_KEY)
-    if isinstance(typed, dict):
-        for key, value in typed.items():
-            if key in result and (type(value) is tuple or isinstance(value, STANDIN_TYPES)):
-                result[key] = _from_typed(value)
     return result
 
 
@@ -118,6 +122,8 @@ class TupleValue(list):  # type: ignore[type-arg]
     list", turning ``rows=my_tuple_of_dicts`` (an ordinary thing to pass) into an empty table. So
     the handler keeps getting a ``list``, a subclass that prints the way the tuple does. A text
     slot then reads ``(1, 2)`` as Django's tag prints it, where it read ``[1, 2]``.
+
+    ``NamedTupleValue`` is the same for a namedtuple (#3849).
     """
 
     __slots__ = ()
@@ -127,12 +133,12 @@ class TupleValue(list):  # type: ignore[type-arg]
         # printed under Django and under this engine before #3768), and a recursive ``repr`` here
         # would raise RecursionError one level at a time. Only TupleValue members recurse in
         # this walk; any other member is printed by its own ``repr``.
-        out = ["("]
+        out = [_opening(self)]
         stack: list[tuple[TupleValue, int]] = [(self, 0)]
         while stack:
             node, index = stack[-1]
             if index == len(node):
-                if len(node) == 1:
+                if len(node) == 1 and not isinstance(node, NamedTupleValue):
                     out.append(",")
                 out.append(")")
                 stack.pop()
@@ -140,9 +146,11 @@ class TupleValue(list):  # type: ignore[type-arg]
             stack[-1] = (node, index + 1)
             if index:
                 out.append(", ")
+            if isinstance(node, NamedTupleValue) and index < len(node._fields):
+                out.append(node._fields[index] + "=")
             item = node[index]
             if isinstance(item, TupleValue):
-                out.append("(")
+                out.append(_opening(item))
                 stack.append((item, 0))
             else:
                 out.append(repr(item))
@@ -151,22 +159,72 @@ class TupleValue(list):  # type: ignore[type-arg]
     __str__ = __repr__
 
 
+class NamedTupleValue(TupleValue):
+    """A namedtuple a native handler was given, still a ``list`` (#3849).
+
+    Prints as the namedtuple does (``P(x=1, y=2)``, which is what Django's tag prints), and is a
+    ``list`` for the reason ``TupleValue`` is. The class it came from is gone (the engine holds a
+    namedtuple as a name, its fields and its items), so a ``__repr__`` the class defined for itself
+    is not reproduced: this prints the default one.
+    """
+
+    __slots__ = ("_name", "_fields")
+
+    def __init__(self, items: Any = (), name: str = "tuple", fields: tuple[str, ...] = ()) -> None:
+        super().__init__(items)
+        self._name = name
+        self._fields = fields
+
+
+def _opening(node: TupleValue) -> str:
+    """The text a ``TupleValue`` opens with: ``(`` for a tuple, ``P(`` for a namedtuple."""
+    return node._name + "(" if isinstance(node, NamedTupleValue) else "("
+
+
+def _namedtuple_shape(source: tuple[Any, ...]) -> tuple[str, tuple[str, ...]] | None:
+    """``(name, fields)`` when ``source`` is a namedtuple, else ``None``.
+
+    A ``_fields`` tuple with one name per member. This is NARROWER than the engine's rule when it
+    reads a Python object (``Value::NamedTuple`` also accepts a ``list`` ``_fields``): it does not
+    need to be wider, because the typed channel hands a handler the class the engine REBUILT with
+    ``collections.namedtuple``, whose ``_fields`` is always a ``tuple``.
+    """
+    fields = getattr(source, "_fields", None)
+    if type(fields) is tuple and len(fields) == len(source):
+        return type(source).__name__, fields
+    return None
+
+
+def _empty_like(source: tuple[Any, ...]) -> TupleValue:
+    shape = _namedtuple_shape(source)
+    return TupleValue() if shape is None else NamedTupleValue((), *shape)
+
+
 def _from_typed(value: object) -> object:
-    """A typed operand as a handler is handed it: a plain ``tuple`` becomes a ``TupleValue``.
+    """A typed operand as a handler is handed it: a ``tuple`` becomes a ``TupleValue``, a
+    namedtuple a ``NamedTupleValue`` (#3849); anything else is returned as it is.
 
     Iterative, not recursive: the members of a tuple are converted too (a row of a tuple of
     tuples must be a list), and a recursive walk raised RecursionError for a tuple nested 500
     deep that rendered before. An explicit stack has no depth limit but memory.
+
+    A tuple with no tuple among its members, the usual case and the only one that can be large, is
+    copied in one C-level pass (``list(value)``): the member types are collected with
+    ``set(map(type, value))``, which runs no Python bytecode per member, and a per-member Python
+    loop on a 2,000,000-element tuple was the cost the review of #3843 measured (#3849).
     """
-    if type(value) is not tuple:
+    if not isinstance(value, tuple):
         return value
-    root = TupleValue()
+    if not any(issubclass(kind, tuple) for kind in set(map(type, value))):
+        shape = _namedtuple_shape(value)
+        return TupleValue(value) if shape is None else NamedTupleValue(value, *shape)
+    root = _empty_like(value)
     pending = [(value, root)]
     while pending:
         source, target = pending.pop()
         for item in source:
-            if type(item) is tuple:
-                child = TupleValue()
+            if isinstance(item, tuple):
+                child = _empty_like(item)
                 target.append(child)
                 pending.append((item, child))
             else:
@@ -186,6 +244,10 @@ def _from_typed(value: object) -> object:
 #: as the engine's ``TemplateObject`` wrapper, not as itself (``value_into_handler_pyobject``), so
 #: they cannot be recovered here (recorded in ``KNOWN_TYPE_LOSS``, #3768).
 STANDIN_TYPES = (_uuid.UUID, _pathlib.PurePath)
+
+#: What ``_parse_args`` takes off the typed channel: ``STANDIN_TYPES`` and any ``tuple`` (a plain
+#: one, and a namedtuple, #3849: the engine hands a namedtuple over as its rebuilt class).
+_RECOVERED_TYPES = (tuple, *STANDIN_TYPES)
 
 
 def _typed_args(context: dict[str, object]) -> dict[str, object]:
