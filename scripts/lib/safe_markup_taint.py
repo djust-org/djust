@@ -106,7 +106,16 @@ What it does NOT see (probed, and pinned in ``KNOWN_MISSES`` of its test)
   name, whatever ``x`` is.
 * WHERE a clean fragment is placed. ``format_html`` output, ``rich_html`` and the record builders are
   markup: right in an element, wrong inside an attribute value. The guard asks whether a value is raw,
-  not which HTML context it lands in.
+  not which HTML context it lands in. The exception is the context-sensitive escapers
+  (``safe_url`` / ``url_attr`` / ``safe_css_*``: text or a quoted value; ``escape_json_for_script``:
+  script text): their output is checked against the literal text in front of it in an f-string, a
+  ``+`` chain, a ``%`` format string and ``str.format`` (a prefix held in a name that only holds one
+  literal counts), and is NOT clean anywhere else (``join``, a list, a helper's return, an argument).
+  What that check still cannot see (#3850): a prefix the guard cannot read (any unknown earlier part
+  is assumed to be position-neutral), an f-string leaf inside a ``+`` chain (its own prefix only),
+  ``format_map`` / a dict ``%``, a metaclass data descriptor of the same name as a class attribute,
+  and a module attribute replaced from outside the file (``sys.modules[__name__].helper = ...``,
+  ``setattr`` on an imported module).
 * A subclass in ANOTHER file that overrides a method or class attribute the guard resolved with
   something computed: that is the developer's own code, not request data. (One in the same file is
   seen: the name is no longer trusted.)
@@ -120,6 +129,7 @@ from __future__ import annotations
 
 import ast
 import re
+import string
 import sys
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -187,8 +197,11 @@ CONTEXT_SENSITIVE_ORIGINS = frozenset(
 #: name the source does not show: ``setattr(self, key, value)`` over constructor kwargs (what
 #: ``Component`` does), ``self.__dict__.update``, ``object.__setattr__``, ``vars(self)[...]``. No class
 #: attribute or method of such a file is trusted. ``__getattr__`` is NOT one of them: Python calls it
-#: only for a name normal lookup did not find, so it cannot replace an attribute a class defines
-#: (``__getattribute__`` intercepts every lookup, and is).
+#: only for a name normal lookup did not find, so it cannot replace an attribute a class body defines
+#: unconditionally (``__getattribute__`` intercepts every lookup, and is). It DOES supply the value of
+#: one the body defines only inside an ``if`` / ``try`` / loop, or deletes: for a class with a
+#: ``__getattr__``, a base other than ``object`` or a class keyword, only an unconditional top-level
+#: assignment is the value (:meth:`_Module._falls_through`, #3850).
 DYNAMIC_ATTR_NAMES = frozenset({"__setattr__", "__delattr__", "__getattribute__", "__dict__"})
 DYNAMIC_ATTR_CALLS = frozenset({"setattr", "delattr", "vars"})
 DYNAMIC_GLOBAL_CALLS = frozenset({"globals", "exec", "eval", "vars"})
@@ -338,6 +351,13 @@ ELEMENT_CALLS = frozenset({"list", "tuple", "set", "frozenset", "sorted", "rever
 CONTAINER_METHODS = frozenset({"get", "pop", "setdefault", "copy"})
 ITERATION_METHODS = frozenset({"values", "keys", "items"})
 _DEPTH = 40
+#: ``clean`` carries this in ``seen`` when the caller has checked WHERE a context-sensitive escaper's
+#: output (``safe_url``, ``escape_json_for_script``) lands; the call consumes it, any other call strips it
+_CTX_OK = ("position-checked",)
+#: one conversion of a ``%`` format string: ``%s``, ``%d``, ``%-5.2f``, ``%(name)s`` (``%%`` is group 2)
+_PERCENT_SPEC = re.compile(
+    r"%(\([^)]*\))?[-#0 +]*(?:\d+|\*)?(?:\.(?:\d+|\*))?[hlL]?([diouxXeEfFgGcrsa%])"
+)
 
 
 class _Raw:
@@ -532,10 +552,22 @@ class _Module:
             if isinstance(node, (ast.Global, ast.Nonlocal)):
                 self.rebound_names.update(node.names)
             elif isinstance(node, ast.Attribute):
-                if isinstance(node.ctx, ast.Store):
+                # ``del C.LABEL`` removes what the class body wrote (#3850): a lookup then falls
+                # through to ``__getattr__`` or a base, so a delete is as much a rebind as a store
+                if isinstance(node.ctx, (ast.Store, ast.Del)):
                     self.assigned_attrs.add(node.attr)
                 if node.attr in DYNAMIC_ATTR_NAMES:
                     self.dynamic_attrs = True
+            elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Del):
+                # ``del LABEL`` in a class or module body (a local of a function is the flow's)
+                scope_node = parents.get(id(node))
+                while scope_node is not None and not isinstance(
+                    scope_node,
+                    (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda),
+                ):
+                    scope_node = parents.get(id(scope_node))
+                if isinstance(scope_node, (ast.Module, ast.ClassDef)):
+                    self.rebound_names.add(node.id)
             elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 if node.name in DYNAMIC_ATTR_NAMES:
                     self.dynamic_attrs = True
@@ -1125,6 +1157,8 @@ class _Module:
             return None  # ``setattr(self, key, value)`` and kin: any attribute may be replaced
         if self._mutated_or_rebound(e.attr) or e.attr in self.assigned_attrs:
             return None
+        if self._falls_through(cls) and not self._defined_unconditionally(cls, e.attr):
+            return None
         values = cls.assigns.get(e.attr, [])
         if not self._stable(e.attr, values, cls):
             return None
@@ -1132,6 +1166,36 @@ class _Module:
         if not values or e.attr in cls.def_nodes or self._overridden_in_file(cls, e.attr):
             return None
         return cls, values
+
+    @staticmethod
+    def _falls_through(cls: _Scope) -> bool:
+        """A lookup the class body does not satisfy can reach other code: ``__getattr__``, a base class
+        other than ``object`` (it may define the name), a metaclass or other class keyword (#3850)."""
+        node = cls.node
+        if node.keywords:  # type: ignore[attr-defined]
+            return True
+        if any(
+            not (isinstance(b, ast.Name) and b.id == "object")
+            for b in node.bases  # type: ignore[attr-defined]
+        ):
+            return True
+        return "__getattr__" in cls.def_nodes or "__getattr__" in cls.assigns
+
+    @staticmethod
+    def _defined_unconditionally(cls: _Scope, name: str) -> bool:
+        """The class body binds ``name`` by a top-level statement (not inside ``if`` / ``try`` /
+        ``for`` / ``with``), so the name is there whatever runs at class-creation time."""
+        for stmt in cls.node.body:  # type: ignore[attr-defined]
+            if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                if stmt.name == name:
+                    return True
+            elif isinstance(stmt, ast.Assign):
+                if any(name in _target_names(t) for t in stmt.targets):
+                    return True
+            elif isinstance(stmt, ast.AnnAssign):
+                if stmt.value is not None and name in _target_names(stmt.target):
+                    return True
+        return False
 
     def _overridden_in_file(self, cls: _Scope, attr: str) -> bool:
         """A class of THIS file that inherits from ``cls`` (directly or through others of this file)
@@ -1199,6 +1263,10 @@ class _Module:
         if isinstance(e, ast.NamedExpr):
             return self.clean(e.value, sc, d, seen)
         if isinstance(e, ast.BinOp):
+            if isinstance(e.op, ast.Add):
+                return self._add_clean(e, sc, d, seen)
+            if isinstance(e.op, ast.Mod):
+                return self._percent_clean(e, sc, d, seen)
             return self.clean(e.left, sc, d, seen) and self.clean(e.right, sc, d, seen)
         if isinstance(e, ast.UnaryOp):
             return self.clean(e.operand, sc, d, seen)
@@ -1240,7 +1308,9 @@ class _Module:
                 return True
             return self._name_clean(e, sc, d, seen)
         if isinstance(e, ast.Call):
-            return self._call_clean(e, sc, d, seen)
+            if self._sens_kind(e, sc) and _CTX_OK not in seen:
+                return False  # a context-sensitive escaper's output whose position nobody checked
+            return self._call_clean(e, sc, d, seen - {_CTX_OK})
         return False
 
     def _origin_of_import(self, e: ast.Name, sc: _Scope) -> str | None:
@@ -1249,37 +1319,191 @@ class _Module:
             return None
         return self.imports.get(e.id)
 
-    def _sensitive(self, value: ast.expr, sc: _Scope) -> bool:
-        """``value`` is (or is a name that holds) the result of an escaper whose output is only clean
-        in a quoted attribute value or in text: ``safe_url(x)``, ``url_attr(x)``, ``safe_css_*(x)``."""
+    def _holds_call_of(
+        self, value: ast.expr, sc: _Scope, origins: frozenset, depth: int = 0
+    ) -> bool:
+        """``value`` is, or can hold (through a name, ``a if c else b``, ``a or b``, ``(n := ...)``),
+        a call of one of ``origins``."""
+        if depth > 6:
+            return False
         if isinstance(value, ast.Call):
-            return self.origin(value.func, sc) in CONTEXT_SENSITIVE_ORIGINS
+            return self.origin(value.func, sc) in origins
+        if isinstance(value, ast.IfExp):
+            return self._holds_call_of(value.body, sc, origins, depth + 1) or self._holds_call_of(
+                value.orelse, sc, origins, depth + 1
+            )
+        if isinstance(value, ast.BoolOp):
+            return any(self._holds_call_of(v, sc, origins, depth + 1) for v in value.values)
+        if isinstance(value, ast.NamedExpr):
+            return self._holds_call_of(value.value, sc, origins, depth + 1)
         if isinstance(value, ast.Name):
             owner = sc.find(value.id)
             if owner is None:
                 return False
             values, _ = self._bindings(value, value.id, owner, sc)
             return any(
-                isinstance(v, ast.Call) and self.origin(v.func, owner) in CONTEXT_SENSITIVE_ORIGINS
+                isinstance(v, ast.expr) and self._holds_call_of(v, owner, origins, depth + 1)
                 for v in values
             )
         return False
 
+    def _sensitive(self, value: ast.expr, sc: _Scope) -> bool:
+        """``value`` is (or is a name that holds) the result of an escaper whose output is only clean
+        in a quoted attribute value or in text: ``safe_url(x)``, ``url_attr(x)``, ``safe_css_*(x)``."""
+        return self._holds_call_of(value, sc, CONTEXT_SENSITIVE_ORIGINS)
+
     def _json_escaped(self, value: ast.expr, sc: _Scope) -> bool:
         """``value`` is (or holds) ``escape_json_for_script(...)``: clean in ``<script>`` TEXT only. Its
         output leaves ``"`` alone, so inside a quoted attribute the JSON's own quotes end the value."""
-        if isinstance(value, ast.Call):
-            return self.origin(value.func, sc) in JSON_ESCAPERS
-        if isinstance(value, ast.Name):
-            owner = sc.find(value.id)
-            if owner is None:
-                return False
-            values, _ = self._bindings(value, value.id, owner, sc)
-            return any(
-                isinstance(v, ast.Call) and self.origin(v.func, owner) in JSON_ESCAPERS
-                for v in values
+        return self._holds_call_of(value, sc, JSON_ESCAPERS)
+
+    def _sens_kind(self, value: ast.expr, sc: _Scope) -> str | None:
+        """``"json"`` (clean in text only), ``"sens"`` (clean in text or a quoted value) or ``None``."""
+        if self._json_escaped(value, sc):
+            return "json"
+        if self._sensitive(value, sc):
+            return "sens"
+        return None
+
+    def _leaf_text(self, e: ast.expr, sc: _Scope) -> str:
+        """The literal text ``e`` contributes in front of a later part of the same string: its own for a
+        string constant, a name that only ever holds one (``p = "<a href="``) or an f-string (a field
+        counts as ``\x00``); ``\x00`` for anything the guard cannot read."""
+        if isinstance(e, ast.Constant):
+            return e.value if isinstance(e.value, str) else "\x00"
+        if isinstance(e, ast.JoinedStr):
+            return "".join(
+                v.value
+                if isinstance(v, ast.Constant) and isinstance(v.value, str)
+                else (
+                    self._leaf_text(v.value, sc)
+                    if isinstance(v, ast.FormattedValue)
+                    and v.conversion == -1
+                    and v.format_spec is None
+                    else "\x00"
+                )
+                for v in e.values
             )
-        return False
+        if isinstance(e, ast.Name):
+            owner = sc.find(e.id)
+            if owner is None:
+                return "\x00"
+            values, _ = self._bindings(e, e.id, owner, sc)
+            if (
+                len(values) == 1
+                and isinstance(values[0], ast.Constant)
+                and isinstance(values[0].value, str)
+            ):
+                return values[0].value
+        return "\x00"
+
+    def _position_ok(self, kind: str, prefix: str) -> bool:
+        """A ``kind`` of escaper output may sit after ``prefix``: text for ``"json"``; text or a quoted
+        value for ``"sens"``; never an unquoted attribute or a tag name."""
+        where = self._position(prefix)
+        return where == "text" if kind == "json" else where != "tag"
+
+    def _add_clean(self, e: ast.BinOp, sc: _Scope, d: int, seen: frozenset) -> bool:
+        """``a + b + c``: each part clean, and a context-sensitive part (``safe_url(x)``) only where the
+        literal text before it puts it in text or a quoted value (#3850: not only in an f-string)."""
+        leaves: list[ast.expr] = []
+
+        def flat(x: ast.expr) -> None:
+            if isinstance(x, ast.BinOp) and isinstance(x.op, ast.Add):
+                flat(x.left)
+                flat(x.right)
+            else:
+                leaves.append(x)
+
+        flat(e)
+        before = ""
+        for leaf in leaves:
+            kind = self._sens_kind(leaf, sc)
+            if kind:
+                if not self._position_ok(kind, before):
+                    return False
+                if not self.clean(leaf, sc, d, seen | {_CTX_OK}):
+                    return False
+            elif not self.clean(leaf, sc, d, seen):
+                return False
+            before += self._leaf_text(leaf, sc)
+        return True
+
+    def _percent_clean(self, e: ast.BinOp, sc: _Scope, d: int, seen: frozenset) -> bool:
+        """``"<a href=%s>" % safe_url(x)``: the format string is a literal, its conversions pair with the
+        arguments one to one, and a context-sensitive argument sits where its prefix allows."""
+        args = list(e.right.elts) if isinstance(e.right, ast.Tuple) else [e.right]
+        fmt = e.left
+        prefixes: list[str] | None = None
+        if isinstance(fmt, ast.Constant) and isinstance(fmt.value, str):
+            specs = [m for m in _PERCENT_SPEC.finditer(fmt.value) if m.group(2) != "%"]
+            if len(specs) == len(args):
+                prefixes, before, last = [], "", 0
+                for m in specs:
+                    before += fmt.value[last : m.start()].replace("%%", "%")
+                    prefixes.append(before)
+                    before += "\x00"
+                    last = m.end()
+        if not self.clean(fmt, sc, d, seen):
+            return False
+        for i, arg in enumerate(args):
+            kind = self._sens_kind(arg, sc)
+            if kind:
+                if prefixes is None or not self._position_ok(kind, prefixes[i]):
+                    return False
+                if not self.clean(arg, sc, d, seen | {_CTX_OK}):
+                    return False
+            elif not self.clean(arg, sc, d, seen):
+                return False
+        return True
+
+    def _format_clean(
+        self, call: ast.Call, recv: ast.expr, sc: _Scope, d: int, seen: frozenset
+    ) -> bool:
+        """``"<a href={}>".format(safe_url(x))``: as :meth:`_percent_clean`, for ``str.format``."""
+        if not self.clean(recv, sc, d, seen):
+            return False
+        marks: dict[int, list[str]] = {}
+        func = call.func
+        if (
+            isinstance(func, ast.Attribute)
+            and func.attr == "format"
+            and isinstance(recv, ast.Constant)
+            and isinstance(recv.value, str)
+            and not self._has_star(call)
+        ):
+            keywords = {kw.arg: kw.value for kw in call.keywords if kw.arg}
+            try:
+                fields = list(string.Formatter().parse(recv.value))
+            except ValueError:
+                fields = []
+            before, auto = "", 0
+            for literal, field, _spec, _conv in fields:
+                before += literal
+                if field is None:
+                    continue
+                arg: ast.expr | None = None
+                if field == "":
+                    arg = call.args[auto] if auto < len(call.args) else None
+                    auto += 1
+                elif field.isdigit():
+                    arg = call.args[int(field)] if int(field) < len(call.args) else None
+                elif field.isidentifier():
+                    arg = keywords.get(field)
+                if arg is not None:
+                    marks.setdefault(id(arg), []).append(before)
+                before += "\x00"
+        for arg in [*call.args, *(kw.value for kw in call.keywords)]:
+            kind = self._sens_kind(arg, sc)
+            if kind:
+                prefixes = marks.get(id(arg))
+                if not prefixes or not all(self._position_ok(kind, p) for p in prefixes):
+                    return False
+                if not self.clean(arg, sc, d, seen | {_CTX_OK}):
+                    return False
+            elif not self.clean(arg, sc, d, seen):
+                return False
+        return True
 
     @staticmethod
     def _position(prefix: str) -> str:
@@ -1328,16 +1552,14 @@ class _Module:
             and _NUMERIC_SPEC.fullmatch("".join(v.value for v in spec.values))  # type: ignore[attr-defined]
         ):
             return True
-        sensitive = self._sensitive(field.value, sc)
-        text_only = self._json_escaped(field.value, sc)
-        if sensitive or text_only:
-            prefix = "".join(
-                v.value if isinstance(v, ast.Constant) and isinstance(v.value, str) else "\x00"
-                for v in (joined.values[:index] if joined is not None else [])
-            )
-            where = self._position(prefix) if joined is not None else "tag"
-            if where == "tag" or (text_only and where != "text"):
+        kind = self._sens_kind(field.value, sc)
+        if kind:
+            if joined is None:
                 return False
+            prefix = self._leaf_text(ast.JoinedStr(values=list(joined.values[:index])), sc)
+            if not self._position_ok(kind, prefix):
+                return False
+            return self.clean(field.value, sc, d, seen | {_CTX_OK})
         return self.clean(field.value, sc, d, seen)
 
     def _trusted_call(self, e: ast.Call, sc: _Scope) -> bool:
@@ -1380,9 +1602,7 @@ class _Module:
                     self.elements_clean(a, sc, d, seen) for a in args
                 )
             if name in FORMAT_METHODS:
-                return self.clean(recv, sc, d, seen) and all(
-                    self.clean(a, sc, d, seen) for a in args
-                )
+                return self._format_clean(e, recv, sc, d, seen)
             if name in STR_METHODS:
                 return self.clean(recv, sc, d, seen) and all(
                     self.clean(a, sc, d, seen) for a in args
@@ -1476,6 +1696,8 @@ class _Module:
             if cls.node.decorator_list or self._class_dynamic(cls):  # type: ignore[attr-defined]
                 return None
             if func.attr in self.assigned_attrs or self._overridden_in_file(cls, func.attr):
+                return None
+            if self._falls_through(cls) and not self._defined_unconditionally(cls, func.attr):
                 return None
             name, holder = func.attr, cls
         else:

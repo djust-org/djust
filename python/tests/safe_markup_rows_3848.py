@@ -648,3 +648,269 @@ def f(raw):
 """,
     True,
 )
+
+# --- #3850 item 2: the two source rules no earlier row isolated --------------------------
+# ``escaped_elements``: an ELEMENT of a table is handed on (``inner = T["a"]``), so something else can
+# change the list inside it; the append goes through the alias, never through ``T``.
+row(
+    "an inner list of a table handed on and appended to",
+    """
+T = {"a": ["<i>"]}
+def f(raw):
+    inner = T["a"]
+    inner.append(raw)
+    return mark_safe("".join(T["a"]))
+""",
+    True,
+)
+row(
+    "an inner list of a table only read in place",
+    """
+T = {"a": ["<i>"]}
+def f(raw):
+    return mark_safe("".join(T["a"]) + escape(raw))
+""",
+    False,
+)
+# ``setdefault`` in MUTATORS: ``T.setdefault(k)`` (one argument) adds the key ``k`` with ``None``; the
+# two-argument form is also caught as a ``contents`` write, this one is not.
+row(
+    "setdefault with one argument adds a key to a membership table",
+    """
+ALLOWED = {"a": 1}
+def add(k):
+    ALLOWED.setdefault(k)
+def f(raw):
+    add(raw)
+    if raw in ALLOWED:
+        return mark_safe(f"<b>{raw}</b>")
+    return ""
+""",
+    True,
+)
+row(
+    "a membership table nothing adds a key to",
+    """
+ALLOWED = {"a": 1}
+def add(k):
+    return ALLOWED.get(k)
+def f(raw):
+    add(raw)
+    if raw in ALLOWED:
+        return mark_safe(f"<b>{raw}</b>")
+    return ""
+""",
+    False,
+)
+row(
+    "setdefault with one argument on a class table reached through self",
+    """
+class C:
+    ALLOWED = {"a": 1}
+    def add(self, k):
+        self.ALLOWED.setdefault(k)
+    def r(self, raw):
+        self.add(raw)
+        if raw in self.ALLOWED:
+            return mark_safe(f"<b>{raw}</b>")
+        return ""
+""",
+    True,
+)
+
+# --- #3850 item 3: a class attribute the class body may not define --------------------------
+# ``__getattr__`` (or a base class) supplies the value when the body did not define the name, so only an
+# unconditional, top-level, never-deleted assignment is the value.
+row(
+    "a conditionally defined class attribute and a __getattr__",
+    """
+class C:
+    if FLAG:
+        LABEL = "ok"
+    def __getattr__(self, name):
+        return DATA
+    def r(self):
+        return mark_safe(f"<b>{self.LABEL}</b>")
+""",
+    True,
+)
+row(
+    "an unconditionally defined class attribute and a __getattr__",
+    """
+class C:
+    LABEL = "ok"
+    def __getattr__(self, name):
+        return DATA
+    def r(self):
+        return mark_safe(f"<b>{self.LABEL}</b>")
+""",
+    False,
+)
+row(
+    "a class attribute deleted from outside and a __getattr__",
+    """
+class C:
+    LABEL = "ok"
+    def __getattr__(self, name):
+        return DATA
+    def r(self):
+        return mark_safe(f"<b>{self.LABEL}</b>")
+del C.LABEL
+""",
+    True,
+)
+row(
+    "a class attribute deleted in the class body and a __getattr__",
+    """
+class C:
+    LABEL = "ok"
+    del LABEL
+    def __getattr__(self, name):
+        return DATA
+    def r(self):
+        return mark_safe(f"<b>{self.LABEL}</b>")
+""",
+    True,
+)
+row(
+    "a conditionally defined class attribute of a class with a base",
+    """
+class C(Base):
+    if FLAG:
+        LABEL = "ok"
+    def r(self):
+        return mark_safe(f"<b>{self.LABEL}</b>")
+""",
+    True,
+)
+row(
+    "a conditionally defined class attribute of a class with no base and no fall-through",
+    """
+class C:
+    if FLAG:
+        LABEL = "ok"
+    def r(self):
+        return mark_safe(f"<b>{self.LABEL}</b>")
+""",
+    False,
+)
+row(
+    "a conditionally defined method and a __getattr__",
+    """
+class C:
+    if FLAG:
+        def label(self):
+            return "ok"
+    def __getattr__(self, name):
+        return lambda: DATA
+    def r(self):
+        return mark_safe(f"<b>{self.label()}</b>")
+""",
+    True,
+)
+
+# --- #3850 item 1: a context-sensitive escaper's output is not clean in every position -------
+# ``safe_url`` / ``url_attr`` are clean in text or inside a quoted attribute value, never in an unquoted
+# attribute or a tag name; ``escape_json_for_script`` only in script text. Every way of building the
+# string is judged by the literal text in front of the value, not only the f-string.
+_URL = "from djust.components.utils import safe_url\n"
+_JSON = "import json\nfrom djust.security.json_script import escape_json_for_script\n"
+for _label, _body, _bad in (
+    ("concatenation", '"<a href=" + safe_url(x) + ">go</a>"', True),
+    ("concatenation into a quoted value", '\'<a href="\' + safe_url(x) + \'">go</a>\'', False),
+    ("concatenation into text", '"<p>" + safe_url(x) + "</p>"', False),
+    ("a % format string", '"<a href=%s>go</a>" % safe_url(x)', True),
+    ("a % format string into a quoted value", '\'<a href="%s">go</a>\' % safe_url(x)', False),
+    ("str.format", '"<a href={}>go</a>".format(safe_url(x))', True),
+    ("str.format into a quoted value", '\'<a href="{}">go</a>\'.format(safe_url(x))', False),
+    ("str.format by name", '"<a href={u}>go</a>".format(u=safe_url(x))', True),
+    ("join", '"<a href=" + ",".join(safe_url(y) for y in x) + ">"', True),
+):
+    row(
+        f"safe_url in an unquoted attribute by {_label}" if _bad else f"safe_url kept by {_label}",
+        f"{_URL}def f(x):\n    return mark_safe({_body})\n",
+        _bad,
+    )
+row(
+    "safe_url after a prefix held in a variable",
+    f"{_URL}def f(x):\n    p = '<a href='\n    return mark_safe(p + safe_url(x))\n",
+    True,
+)
+row(
+    "safe_url after a prefix held in a variable, in an f-string",
+    f'{_URL}def f(x):\n    p = "<a href="\n    return mark_safe(f"{{p}}{{safe_url(x)}}")\n',
+    True,
+)
+row(
+    "safe_url after a quoted prefix held in a variable",
+    f"{_URL}def f(x):\n    p = '<a href=\"'\n    return mark_safe(p + safe_url(x) + '\">')\n",
+    False,
+)
+row(
+    "safe_url held in a variable and placed in an unquoted attribute",
+    f'{_URL}def f(x):\n    u = safe_url(x)\n    return mark_safe("<a href=" + u + ">go</a>")\n',
+    True,
+)
+row(
+    "safe_url chosen by a conditional expression and placed in an unquoted attribute",
+    f'{_URL}def f(x):\n    u = safe_url(x) if x else "#"\n    return mark_safe(f"<a href={{u}}>go</a>")\n',
+    True,
+)
+row(
+    "safe_url chosen by a conditional expression and placed in a quoted attribute",
+    f'{_URL}def f(x):\n    u = safe_url(x) if x else "#"\n    return mark_safe(f\'<a href="{{u}}">go</a>\')\n',
+    False,
+)
+row(
+    "safe_url passed through an escaped earlier attribute into a quoted one",
+    f"{_URL}def f(x, y):\n    return mark_safe('<a title=\"' + escape(y) + '\" href=\"' + safe_url(x) + '\">')\n",
+    False,
+)
+row(
+    "escape_json_for_script concatenated into an attribute",
+    f"{_JSON}def f(x):\n    return mark_safe('<div data-x=\"' + escape_json_for_script(json.dumps(x)) + '\">')\n",
+    True,
+)
+row(
+    "escape_json_for_script concatenated into script text",
+    f'{_JSON}def f(x):\n    return mark_safe("<script>" + escape_json_for_script(json.dumps(x)) + "</script>")\n',
+    False,
+)
+row(
+    "a conditionally defined class attribute of a class with a metaclass",
+    """
+class C(metaclass=Meta):
+    if FLAG:
+        LABEL = "ok"
+    def r(self):
+        return mark_safe(f"<b>{self.LABEL}</b>")
+""",
+    True,
+)
+row(
+    "a conditionally defined class attribute and a __getattr__ assigned in the body",
+    """
+class C:
+    if FLAG:
+        LABEL = "ok"
+    __getattr__ = handler
+    def r(self):
+        return mark_safe(f"<b>{self.LABEL}</b>")
+""",
+    True,
+)
+row(
+    "a % format string whose conversions do not pair with its arguments",
+    f"{_URL}def f(x):\n    return mark_safe('<a href=\"%s\" title=%s>' % (safe_url(x),))\n",
+    True,
+)
+row(
+    "a helper that returns safe_url, placed in an unquoted attribute",
+    f'{_URL}def link(p):\n    return safe_url(p)\ndef f(x):\n    return mark_safe(f"<a href={{link(x)}}>go</a>")\n',
+    True,
+)
+row(
+    "safe_url chosen between a direct call and a helper that returns it (the position check stops at the call)",
+    f'{_URL}def link(p):\n    return safe_url(p)\ndef f(x, c):\n    u = safe_url(x) if c else link(x)\n    return mark_safe(f\'<a href="{{u}}">go</a>\')\n',
+    True,
+)
