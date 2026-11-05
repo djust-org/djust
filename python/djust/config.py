@@ -13,6 +13,7 @@ import copy
 import logging
 import os
 import threading
+from collections.abc import Mapping
 from typing import Any, ClassVar, Dict, Optional, Tuple
 
 logger = logging.getLogger(__name__)
@@ -29,6 +30,27 @@ DEFAULT_MAX_FORM_MEMBERS = 100_000
 #: The three form-data limits (#3834, #3844). Every one is a non-negative integer (``0`` = no limit),
 #: validated when the config loads AND when a value is written in code (``set`` / ``update``, #3858).
 _FORM_LIMIT_KEYS = ("max_form_fields", "max_form_data_size", "max_form_members")
+
+#: The project-wide default of ``LiveView.http_status_of_state`` (#3706): a mapping of a state name to
+#: the HTTP status the page answers for it. Validated like the form limits, on load and on every
+#: ``set`` / ``update`` that names it; a bad value is the default (no map, the page answers 200).
+_STATUS_MAP_KEY = "http_status_of_state"
+#: Every key whose written value is sanitized, so what a reload replays is what is stored (#3858).
+_SANITIZED_KEYS = _FORM_LIMIT_KEYS + (_STATUS_MAP_KEY,)
+
+
+def valid_http_status_map(value: Any) -> bool:
+    """Whether *value* is a usable ``http_status_of_state``: a mapping of state names (``str``) to HTTP
+    status codes (``int``, not ``bool``, 100-599). Empty is valid and means "no map"."""
+    if not isinstance(value, Mapping):
+        return False
+    return all(
+        isinstance(state, str)
+        and isinstance(status, int)
+        and 100 <= status <= 599  # also refuses True / False (== 1 / 0)
+        for state, status in value.items()
+    )
+
 
 #: Flat ``DJUST_*`` settings aliasing keys of the ``service_worker`` dict.
 _SERVICE_WORKER_ALIASES = (
@@ -128,6 +150,10 @@ class LiveViewConfig:
         # never. A view that declares no query_budget is never measured. See
         # djust._query_budget.
         "query_budget": None,
+        # The HTTP status a page answers for a state it renders itself, for every view that does
+        # not declare ``http_status_of_state`` itself (#3706): ``{"not_found": 404, "gone": 410}``.
+        # A view's own attribute wins, then this; ``{}`` = no project-wide map.
+        "http_status_of_state": {},
         # With worker_threads on: True (default) pins each WebSocket session to
         # one pool thread; False gives it a lane, its calls one at a time and
         # in order on any free thread of the pool, so a slow hop of one session
@@ -673,6 +699,20 @@ class LiveViewConfig:
                 )
                 target[key] = self._defaults[key]
 
+    def _validate_status_map(self, target: Dict[str, Any]) -> None:
+        """Replace ``http_status_of_state`` in *target* by the default (no map) when it is not a mapping
+        of state names to HTTP statuses (#3706). Run where the form limits are, so a value written in
+        code is sanitized before it is stored and recorded."""
+        val = target.get(_STATUS_MAP_KEY)
+        if not valid_http_status_map(val):
+            logger.warning(
+                "Invalid %s=%r (must be a mapping of state name to HTTP status, 100-599, e.g. "
+                "{'not_found': 404}). Using the default: no project-wide map, pages answer 200.",
+                _STATUS_MAP_KEY,
+                val,
+            )
+            target[_STATUS_MAP_KEY] = {}
+
     def _validate_config(self, target: Optional[Dict[str, Any]] = None) -> None:
         """Validate security-critical config values (the live config when
         ``target`` is omitted)."""
@@ -690,6 +730,7 @@ class LiveViewConfig:
 
         # A limit that is not a non-negative integer is the default, never "no limit" (#3834).
         self._validate_form_limits(target)
+        self._validate_status_map(target)
 
         # Validate rate_limit values
         defaults = self._defaults["rate_limit"]
@@ -792,10 +833,11 @@ class LiveViewConfig:
         with self._lock:
             new = _detached(self._config)
             _set_path(new, key, _detached(value))
-            if key in _FORM_LIMIT_KEYS:
-                # The default replaces a bad limit, and that is what is recorded, so a reload replays
-                # the sanitized value and not the one written (#3858).
+            if key in _SANITIZED_KEYS:
+                # The default replaces a bad value, and that is what is recorded, so a reload replays
+                # the sanitized value and not the one written (#3858, #3706).
                 self._validate_form_limits(new)
+                self._validate_status_map(new)
                 value = new[key]
             self._record_programmatic(key, value)
             self._config = new
@@ -876,8 +918,9 @@ class LiveViewConfig:
             new = _detached(self._config)  # copy-on-write, as in ``set()``
             new.update(_detached(config_dict))
             self._validate_form_limits(new)  # the same rule ``set()`` applies (#3858)
+            self._validate_status_map(new)
             for key, value in config_dict.items():
-                self._record_programmatic(key, new[key] if key in _FORM_LIMIT_KEYS else value)
+                self._record_programmatic(key, new[key] if key in _SANITIZED_KEYS else value)
             self._config = new
 
     def as_dict(self) -> Dict[str, Any]:

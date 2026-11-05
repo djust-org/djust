@@ -878,7 +878,8 @@ CLASS_ATTRIBUTES: List[Dict[str, Any]] = [
         "type": "Mapping[str, int]",
         "default": "{}",
         "description": "HTTP status a page answers for a state it renders itself; the default "
-        "get_http_status() reads the attribute state_attribute names",
+        "get_http_status() reads the attribute state_attribute names. A view that declares none "
+        "reads LIVEVIEW_CONFIG['http_status_of_state']; its own attribute (even {}) wins, never merged",
         "example": "http_status_of_state = {'not_found': 404, 'gone': 410}",
     },
     {
