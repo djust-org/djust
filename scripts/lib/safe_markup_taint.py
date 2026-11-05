@@ -113,9 +113,13 @@ What it does NOT see (probed, and pinned in ``KNOWN_MISSES`` of its test)
   literal, a call of a function of this file that always returns one, or passed as a literal argument
   counts; a trailing ``<`` is a tag name). A string BUILT from such an output (``'' + safe_url(x)``,
   ``'%s' % ..``, a helper that returns one, a ``join`` or container of it) is judged again where it is
-  placed, unless the text in front of the output in the builder opens markup of its own (``' style="'
-  + safe_css_length(x)``), and a bare output anywhere nobody checked (``join`` of bare outputs, an
-  argument) is not clean. What that check still cannot see (#3850, #3864): a prefix the guard cannot
+  placed. The exception is a BALANCED fragment: the output sits inside a quote the builder itself
+  opens (the literal text before the first part the guard cannot read leaves a quote open, as in
+  ``' style="' + safe_css_length(x)``) and the builder's whole literal text leaves no quote open. A
+  plain ``<`` or an unclosed quote does not qualify. Such a fragment is placed UNCHECKED: between
+  attributes, which is its purpose, but also inside a quoted value or as an unquoted value, where it
+  would be wrong and the guard does not see it (#3864). A bare output anywhere nobody checked
+  (``join`` of bare outputs, an argument) is not clean. What that check still cannot see (#3850, #3864): a prefix the guard cannot
   read (any unknown earlier part is assumed position-neutral), a function that takes the output as a
   PARAMETER and builds the tag (the helper is judged with its parameter raw), a lambda,
   ``format_map`` / a dict ``%`` (flagged, not cleared), a metaclass data descriptor of the same name as
@@ -1545,12 +1549,21 @@ class _Module:
                 elif level == 2 and self._joined_elements_kind(alt, asc, kind, found):
                     pass
                 elif level == 2:
-                    # built from the output: when the literal text in front of the first unreadable
-                    # part opens markup of its own (``' style="' + safe_css_length(x)``, ``'<a ' + ..``),
-                    # the builder's own position check (``clean``) decides; otherwise
-                    # (``'' + safe_url(x)``, ``'%s' % ...``, ``f'{...}'``) the position is the outer one
-                    head = self._leaf_text(alt, asc).split("\x00")[0]
-                    if not ("<" in head or self._position("<x " + head) == "quoted"):
+                    # built from the output. It is judged again where it is placed, unless it is a
+                    # BALANCED fragment of its own: the output sits inside a quote the builder opens
+                    # ("the head": the literal text before the first part the guard cannot read, in an
+                    # attribute: ``' style="' + safe_css_length(x)``) and the builder's whole literal
+                    # text leaves no quote open. Such a fragment is then placed unchecked: between
+                    # attributes (the case that matters), but also inside a quoted value or an
+                    # unquoted one, which the guard does not see (#3864).
+                    text = self._leaf_text(alt, asc)
+                    head = text.split("\x00")[0]
+                    whole = text.replace("\x00", "0")
+                    balanced = (
+                        self._position("<x " + head) == "quoted"
+                        and self._position("<x " + whole) != "quoted"
+                    )
+                    if not balanced:
                         found.append(kind + "*")
                 if level:
                     break

@@ -1209,3 +1209,29 @@ row(
     _URL + "def f(x):\n    return mark_safe('<a href=' + ['' + safe_url(x)][0] + '>')\n",
     True,
 )
+
+# --- round 3: an exempt fragment must be BALANCED, and a plain-text < is not markup ------------
+row(
+    "fragment: a plain-text less-than sign in front of the output, placed in an unquoted attribute",
+    _URL
+    + "def f(x):\n    frag = '1 < 2 ' + safe_url(x)\n    return mark_safe('<a href=' + frag + '>')\n",
+    True,
+)
+row(
+    "fragment: an UNCLOSED quote in front of the output, placed in an unquoted attribute",
+    _URL
+    + "def f(x):\n    frag = 'x=\"' + safe_url(x)\n    return mark_safe('<a href=' + frag + '>')\n",
+    True,
+)
+row(
+    "fragment: a balanced attribute fragment, placed between attributes",
+    _URL
+    + "def f(x):\n    frag = ' title=\"' + safe_url(x) + '\"'\n    return mark_safe('<a class=\"a\"' + frag + '>go</a>')\n",
+    False,
+)
+row(
+    "fragment: a balanced attribute fragment with an element after it, placed between attributes",
+    _URL
+    + "def f(x):\n    frag = '<i title=\"' + safe_url(x) + '\">x</i>'\n    return mark_safe('<p>' + frag + '</p>')\n",
+    False,
+)
