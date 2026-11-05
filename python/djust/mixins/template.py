@@ -1772,15 +1772,18 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
             safe_keys = []
             context_for_sidecar: Optional[Dict[str, Any]] = None
             if serialized_context is not None:
-                from ..serialization import normalize_django_value
+                from ..serialization import normalize_django_value, without_form_values
                 from ..mixins.rust_bridge import _collect_safe_keys
 
                 # #3061: the HTTP GET passes the context WITH processor output
                 # applied. Keep the non-serializable request-scoped values
                 # out of the normalizer, as ``_sync_state_to_rust`` does for
                 # the dj-root (#1786); they reach the shell via the sidecar.
+                #
+                # #3767: a form (or a container holding one) is not state; the
+                # sidecar built from the same context below answers for it.
                 json_compatible_context = normalize_django_value(
-                    _drop_request_scoped_values(self, serialized_context)
+                    without_form_values(_drop_request_scoped_values(self, serialized_context))
                 )
                 for key, value in json_compatible_context.items():
                     safe_keys.extend(_collect_safe_keys(value, key))
@@ -1824,10 +1827,12 @@ Object.assign(window.handlerMetadata, {json.dumps(metadata)});
                 }
                 context_for_sidecar = context
 
-                from ..serialization import normalize_django_value
+                from ..serialization import normalize_django_value, without_form_values
                 from ..mixins.rust_bridge import _collect_safe_keys
 
-                json_compatible_context = normalize_django_value(rendered_context)
+                json_compatible_context = normalize_django_value(
+                    without_form_values(rendered_context)
+                )
                 for key, value in json_compatible_context.items():
                     safe_keys.extend(_collect_safe_keys(value, key))
 
