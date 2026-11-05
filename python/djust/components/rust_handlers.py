@@ -303,7 +303,13 @@ class _TypedOperands:
         self._handler = handler
 
     def render(self, *args: Any, **kwargs: Any) -> Any:
+        args, kwargs = self._adjust(args, kwargs)
         return self._handler.render(*args, **kwargs)
+
+    def _adjust(self, args: tuple, kwargs: dict) -> tuple[tuple, dict]:
+        """The arguments the wrapped handler is called with; a subclass changes them here, so
+        ``render`` keeps one signature for every wrapper."""
+        return args, kwargs
 
     def __getattr__(self, name: str) -> Any:
         # Only reached for names not found on the wrapper itself.
@@ -341,10 +347,10 @@ class _TypedBlockOperands(_TypedOperands):
     #: ``TYPED_ARGS_STANDINS_ONLY`` avoids for a 100,000-row inline operand is not a cost here.
     TYPED_ARGS_STANDINS_ONLY = False
 
-    def render(self, args: list[str], content: str, context: dict[str, object]) -> Any:
-        return self._handler.render(
-            _without_unresolved(args, _typed_args(context)), content, context
-        )
+    def _adjust(self, args: tuple, kwargs: dict) -> tuple[tuple, dict]:
+        # A block handler is called ``render(args, content, context)``.
+        arg_list, content, context = args
+        return (_without_unresolved(arg_list, _typed_args(context)), content, context), kwargs
 
 
 _KEYWORD = _re_filters.compile(r"\w+")
