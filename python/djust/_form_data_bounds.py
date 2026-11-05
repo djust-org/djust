@@ -31,12 +31,9 @@ from __future__ import annotations
 import logging
 from typing import Any, Mapping, Optional, Tuple
 
-logger = logging.getLogger("djust.forms")
+from .config import DEFAULT_MAX_FORM_DATA_SIZE, DEFAULT_MAX_FORM_FIELDS, config
 
-#: Django's ``DATA_UPLOAD_MAX_NUMBER_FIELDS`` default.
-DEFAULT_MAX_FORM_FIELDS = 1000
-#: Django's ``DATA_UPLOAD_MAX_MEMORY_SIZE`` default (2.5 MB).
-DEFAULT_MAX_FORM_DATA_SIZE = 2_621_440
+logger = logging.getLogger("djust.forms")
 
 #: How deep :func:`_weigh` follows a nested value. A frame is JSON, so a value can be a list of lists;
 #: past this a value is charged as if it were a string of that depth. The frame limit bounds the rest.
@@ -50,8 +47,6 @@ def limits() -> Tuple[int, int]:
     config validates both when it loads: a value that is not a non-negative integer is the default,
     never "unlimited", so a typo cannot remove a bound.
     """
-    from .config import config
-
     return (
         config.get("max_form_fields", DEFAULT_MAX_FORM_FIELDS),
         config.get("max_form_data_size", DEFAULT_MAX_FORM_DATA_SIZE),

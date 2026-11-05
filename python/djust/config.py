@@ -15,9 +15,13 @@ import os
 import threading
 from typing import Any, ClassVar, Dict, Optional, Tuple
 
-from ._form_data_bounds import DEFAULT_MAX_FORM_DATA_SIZE, DEFAULT_MAX_FORM_FIELDS
-
 logger = logging.getLogger(__name__)
+
+#: Django's ``DATA_UPLOAD_MAX_NUMBER_FIELDS`` / ``DATA_UPLOAD_MAX_MEMORY_SIZE`` defaults, the defaults of
+#: ``max_form_fields`` / ``max_form_data_size`` (#3834). Defined here, not in ``_form_data_bounds``,
+#: because the config loads at ``django.setup()`` and that module must not.
+DEFAULT_MAX_FORM_FIELDS = 1000
+DEFAULT_MAX_FORM_DATA_SIZE = 2_621_440
 
 #: Flat ``DJUST_*`` settings aliasing keys of the ``service_worker`` dict.
 _SERVICE_WORKER_ALIASES = (
