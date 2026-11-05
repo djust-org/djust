@@ -448,6 +448,11 @@ class TestAFormHeldAsLiveViewStateIsHeldToTheSameFloor:
         text = re.sub(r"0x[0-9a-f]+", "0x?", text)
         # ... and its ``date_joined`` initial is ``now()`` to the second, which two renders straddle.
         text = re.sub(r"\d{4}-\d\d-\d\d[ T]\d\d:\d\d:\d\d(\.\d+)?", "<now>", text)
+        # ... and the same instant in Django's locale spelling ("Nov. 5, 2026, 6:48 a.m."), which
+        # straddles a MINUTE rollover just as the ISO form straddles a second (main, 2026-11-05).
+        text = re.sub(
+            r"[A-Z][a-z]{2,8}\.? \d{1,2}, \d{4}, \d{1,2}(?::\d\d)? [ap]\.m\.", "<now>", text
+        )
         return re.sub(r"\s+", " ", text).strip()
 
     @staticmethod
@@ -503,6 +508,24 @@ def _control_is_empty_by_construction(group_id: str) -> bool:
         "for-context",
         "via-fields-loop",
     }
+
+
+class TestTheCanonMasksTheClock:
+    """Two renders of ``empty_form`` straddle the clock; ``_canon`` must not turn that into a failure
+    (main's py3.14 run, 2026-11-05: the same instant rendered 6:48 a.m. then 6:49 a.m.)."""
+
+    canon = staticmethod(TestAFormHeldAsLiveViewStateIsHeldToTheSameFloor._canon)
+
+    def test_a_minute_rollover_is_masked(self):
+        a = self.canon("True Nov. 5, 2026, 6:48 a.m. None")
+        b = self.canon("True Nov. 5, 2026, 6:49 a.m. None")
+        assert a == b
+
+    def test_an_hour_only_and_a_long_month_are_masked(self):
+        assert self.canon("Sept. 12, 2026, 11 p.m.") == self.canon("Sept. 12, 2026, 10 p.m.")
+
+    def test_other_text_is_not_masked(self):
+        assert self.canon("a 6:48 b") != self.canon("a 6:49 b")
 
 
 @pytest.mark.parametrize("group_id,ctx_key,templates", GROUPS, ids=GROUP_IDS)
