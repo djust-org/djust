@@ -33,7 +33,8 @@ line is one of the pinned evidence literals (``RibbonNode``'s ``e_text`` is not,
 ``scripts/lib/safe_markup_audit.py --table`` (it resolves every evidence literal to a line).
 
 Verdict codes: ``S`` safe (inputs are constants, escaped or validated). No ``U`` (unescaped raw
-value reaching the markup) and no ``N`` (needs a decision) sites remain in this list: the one
+value reaching the markup) and no ``N`` (needs a decision) site was found in this list: every site was
+read and traced by a person, which is not a proof that none exists (#3850). The one
 ``U`` the audit found, ``live_input``'s attribute NAME (``event=`` becomes ``dj-...`` unescaped),
 was fixed in ``djust._html.attr_name`` rather than allowlisted, and the ``N`` items were filed
 as their own issues: #3818 (live_input passthrough policy), #3819 (raw-markup slots), and #3820 (teaching the guard
@@ -549,7 +550,7 @@ AUDITED: dict[tuple[str, str], Audit] = {
     ),
     (JS, "JSChain.__html__"): S(
         1,
-        "the value is json.dumps(self.ops) through escape_json_for_script, which neutralises < > & and U+2028/9, so it cannot end an inline <script> element; it is NOT attribute-safe (the JSON's own quotes end a quoted value) and the docstring says so. Flagged since #3848 because the guard clears escape_json_for_script only for json.dumps output placed in script text, and cannot follow self.to_json() through JSChain.__getattr__",
+        "the value is json.dumps(self.ops) through escape_json_for_script, which neutralises < > & and U+2028/9, so it cannot end an inline <script> element; it is NOT attribute-safe (the JSON's own quotes end a quoted value) and the docstring says so. Flagged since #3848 because the guard clears escape_json_for_script only for json.dumps output placed in script text, and cannot follow self.to_json(): JSChain carries a class decorator (@dataclass(frozen=True)), so the guard does not trust its methods or attributes (a dataclass field is a default the constructor replaces); __getattr__ is not the cause",
         (JS, "return str(mark_safe(escape_json_for_script(self.to_json())))"),
         (JS, 'return json.dumps(self.ops, separators=(",", ":"))', "JSChain.to_json"),
     ),
