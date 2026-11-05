@@ -22,7 +22,11 @@ independent of the machine: the strings a function is handed (a "cut to 512
 characters first" bound: ``test_ai_catalog_3448``, ``test_mcp_ui_components_3448``),
 the records and heartbeats a listing touches (``test_realtime_multiuser``,
 ``test_presence_list_scales_linearly``), the characters a scanner's ``find`` and
-``search`` calls examine (``test_template_checks_skip_comments_3283``), the members
+``search`` calls examine (``test_template_checks_skip_comments_3283``,
+``test_accessibility_checks::test_unclosed_comment_openers_are_linear``; the
+:class:`Examined` / :class:`CountingPattern` / :func:`counting_str` spies below do the
+counting, and a counting test keeps a sibling that runs the same measurement on a
+rescanning pass and asserts it reads ~16x, so the assertion can fail), the members
 a weigher pulls (``test_form_data_accounting_3841``). A latency claim about code
 with no hook goes to ``tests/benchmarks/`` as a median against a target
 (``test_lazy_provenance_cost_3835``).
@@ -39,6 +43,56 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 from typing import Awaitable, Callable
+
+
+# -- counting how much of the input a scanner looked at (#3835) ---------------------------
+#
+# A scanner that is a Python loop of ``str.find`` / ``pattern.search`` calls goes
+# quadratic by rescanning to the end of the text once per opener. Each such call
+# examines the characters between where it started and where it stopped, so the sum over
+# every call is the work, and it is a number: 4.0x for 4x the input when linear, 16x when
+# a rescan per opener. Nothing here reads a clock.
+
+
+class Examined:
+    """A running total of characters examined by the searches a scan made."""
+
+    total = 0
+
+
+class CountingPattern:
+    """Stands in for a compiled pattern: ``search`` adds the characters between where it
+    started and where it stopped (a hit's start, or the end of the text for a miss)."""
+
+    def __init__(self, pattern, examined: Examined):
+        self._pattern = pattern
+        self._examined = examined
+
+    def search(self, string, pos=0, endpos=None):
+        if endpos is None:
+            match = self._pattern.search(string, pos)
+        else:
+            match = self._pattern.search(string, pos, endpos)
+        stop = match.start() if match else (len(string) if endpos is None else endpos)
+        self._examined.total += max(stop - pos, 0) + 1
+        return match
+
+
+def counting_str(examined: Examined) -> type:
+    """A ``str`` subclass whose ``find`` adds the characters it examined to ``examined``.
+
+    Only ``find`` is counted: slices and ``in`` return plain ``str`` / ``bool`` and are not
+    searches the scanner repeats per opener."""
+
+    class Spy(str):
+        def find(self, sub, start=0, end=None):
+            found = str.find(self, sub, start, end)
+            stop = found if found != -1 else (len(self) if end is None else min(end, len(self)))
+            examined.total += max(stop - start, 0) + 1
+            return found
+
+    return Spy
+
 
 #: Input is scaled by this much between the two measured sizes.
 FACTOR = 4
