@@ -480,6 +480,35 @@ def tweak(o, v):
     True,
 )
 row(
+    "a class attribute read through self, a class in the file defines __getattribute__",
+    """
+class Spy:
+    def __getattribute__(self, name):
+        return object.__getattribute__(self, name)
+class K:
+    LABEL = "ok"
+    def r(self):
+        return mark_safe(f"<b>{self.LABEL}</b>")
+""",
+    True,
+)
+row(
+    "a class attribute read through self, a class in the file defines __getattr__",
+    # __getattr__ runs only for a name normal lookup did not find: it cannot replace LABEL
+    """
+class Proxy:
+    def __init__(self, inner):
+        self._inner = inner
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+class K:
+    LABEL = "ok"
+    def r(self):
+        return mark_safe(f"<b>{self.LABEL}</b>")
+""",
+    False,
+)
+row(
     "a class attribute read through self, nothing writes it",
     """
 class K:

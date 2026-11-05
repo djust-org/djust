@@ -186,10 +186,10 @@ CONTEXT_SENSITIVE_ORIGINS = frozenset(
 #: A call to any of these (or a class body that defines one) means attributes can be written under a
 #: name the source does not show: ``setattr(self, key, value)`` over constructor kwargs (what
 #: ``Component`` does), ``self.__dict__.update``, ``object.__setattr__``, ``vars(self)[...]``. No class
-#: attribute or method of such a file is trusted.
-DYNAMIC_ATTR_NAMES = frozenset(
-    {"__setattr__", "__delattr__", "__getattribute__", "__getattr__", "__dict__"}
-)
+#: attribute or method of such a file is trusted. ``__getattr__`` is NOT one of them: Python calls it
+#: only for a name normal lookup did not find, so it cannot replace an attribute a class defines
+#: (``__getattribute__`` intercepts every lookup, and is).
+DYNAMIC_ATTR_NAMES = frozenset({"__setattr__", "__delattr__", "__getattribute__", "__dict__"})
 DYNAMIC_ATTR_CALLS = frozenset({"setattr", "delattr", "vars"})
 DYNAMIC_GLOBAL_CALLS = frozenset({"globals", "exec", "eval", "vars"})
 #: Methods that change a container in place.
