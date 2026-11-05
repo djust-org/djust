@@ -72,23 +72,61 @@ def _effective_cap(formset_cls: Type[BaseFormSet]) -> int:
 _MANAGEMENT_KEYS = ("TOTAL_FORMS", "INITIAL_FORMS", "MIN_NUM_FORMS", "MAX_NUM_FORMS")
 
 
-def _schema_keys(prefix: str, keys: Iterable[str], data: Dict[str, Any]) -> FrozenSet[str]:
-    """The *keys* that belong to the formset itself: its management form and the fields of the rows it
-    has (``<prefix>-<n>-<field>`` for ``n`` below ``TOTAL_FORMS``). They are not the client's to add, so
-    they do not count toward ``max_form_fields`` (#3858); a ``-DELETE`` key for a row that does not
-    exist, under any prefix the client invented, is."""
+#: The suffixes a formset's forms always carry besides their own fields (Django's deletion, ordering and
+#: primary-key fields).
+_ROW_EXTRAS = ("DELETE", "ORDER", "id")
+#: Rows are indexed by a handful of digits at most; a longer index is never a row the formset has (and a
+#: longer string must not reach ``int()``, which refuses more than 4,300 digits).
+_MAX_INDEX_DIGITS = 9
+
+
+def _row_suffixes(formset_cls: Type[BaseFormSet]) -> FrozenSet[str]:
+    """The names a row's key may end in: the fields the formset's form class declares, the foreign key an
+    inline formset adds, and Django's own ``DELETE`` / ``ORDER`` / ``id``. Derived from the CLASS, never
+    from the client's data (#3858)."""
+    names = set(_ROW_EXTRAS)
+    names.update(getattr(getattr(formset_cls, "form", None), "base_fields", None) or ())
+    names.add(getattr(getattr(formset_cls, "fk", None), "name", None))
+    return frozenset(name for name in names if isinstance(name, str))
+
+
+def _row_index(text: str) -> Optional[int]:
+    """*text* as a row index, or ``None`` unless it is the canonical spelling of one: ASCII digits only
+    (``int()`` also reads Arabic-Indic and full-width digits, and ``str.isdigit()`` is true of ``"\u00b2"``,
+    which ``int()`` refuses), no leading zeros, at most :data:`_MAX_INDEX_DIGITS` of them. A key that
+    spells a row any other way is not the formset's row (``fs-00-x`` is not ``fs-0-x``)."""
+    if not (text.isascii() and text.isdigit()) or len(text) > _MAX_INDEX_DIGITS:
+        return None
+    if len(text) > 1 and text[0] == "0":
+        return None
+    return int(text)
+
+
+def _schema_keys(
+    formset_cls: Type[BaseFormSet], prefix: str, keys: Iterable[str], data: Dict[str, Any]
+) -> FrozenSet[str]:
+    """The *keys* that belong to the formset itself: its management form, and ``<prefix>-<n>-<field>``
+    for a row ``n`` below ``TOTAL_FORMS`` and a ``<field>`` the form really has (:func:`_row_suffixes`).
+    They are not the client's to add, so they do not count toward ``max_form_fields`` (#3858). Anything
+    else under the formset's prefix is: the suffix is as much the client's as the prefix is, so
+    ``fs-0-anything`` under a real row is counted, and so is ``fs-00-street`` or ``fs-5000-street``."""
     head = prefix + "-"
-    try:
-        total = int(data.get(f"{prefix}-TOTAL_FORMS", 0))
-    except (TypeError, ValueError):
-        total = 0
+    rows = _row_index(str(data.get(f"{prefix}-TOTAL_FORMS", ""))) or 0
+    rows = min(
+        rows, max(_effective_cap(formset_cls), int(getattr(formset_cls, "absolute_max", 0) or 0))
+    )
+    suffixes = _row_suffixes(formset_cls)
     own = set()
     for key in keys:
         if not isinstance(key, str) or not key.startswith(head):
             continue
         rest = key[len(head) :]
+        if rest in _MANAGEMENT_KEYS:
+            own.add(key)
+            continue
         index, _, field = rest.partition("-")
-        if rest in _MANAGEMENT_KEYS or (field and index.isdigit() and int(index) < total):
+        row = _row_index(index)
+        if row is not None and row < rows and field in suffixes:
             own.add(key)
     return frozenset(own)
 
@@ -162,7 +200,9 @@ def remove_row(
     # ``row_prefix`` is the client's (``dj-value-prefix``), so the key it names is judged like any other
     # key a client names in a form's data (#3858, #3834): past ``max_form_fields`` / ``max_form_data_size``
     # / ``max_form_members`` the call is a logged no-op, like an add past the cap.
-    message = _form_data_bounds.refusal(data, {key: "on"}, _schema_keys(prefix, (*data, key), data))
+    message = _form_data_bounds.refusal(
+        data, {key: "on"}, _schema_keys(formset_cls, prefix, (*data, key), data)
+    )
     if message is not None:
         logger.warning("remove_row refused form data: %s", message)
         return formset_cls(data or None, prefix=prefix)

@@ -275,6 +275,94 @@ class TestRemoveRowIsBounded:
             view.remove_row(formset="rows", prefix="rows-3")  # TOTAL_FORMS is 4: rows 0-3 exist
         assert view._formset_data["rows-3-DELETE"] == "on"
 
+    # -- F1/F2 of the review of #3860: the suffix is the client's too -------------------------
+
+    @staticmethod
+    def _with_rows(rows: int) -> "RowsView":
+        view = rows_view()
+        for _ in range(rows):
+            view.add_row(formset="rows")
+        return view
+
+    def test_the_review_reproducer_invented_suffixes_under_a_real_row_are_counted(self):
+        """``rows-0-f<i>-DELETE``: row 0 exists, but ``f<i>`` is not one of its fields. 1,500 of them
+        stored 1,500 keys against a limit of 1,000."""
+        view = self._with_rows(1)
+        for i in range(1500):
+            view.remove_row(formset="rows", prefix="rows-0-f%d" % i)
+        assert (
+            len(view._formset_data) == 4 + DEFAULT_MAX_FORM_FIELDS
+        )  # the 4 management keys + 1000
+
+    @pytest.mark.parametrize("invented, kept", [(4, True), (5, True), (6, False)])
+    def test_invented_suffixes_at_limit_minus_one_the_limit_and_one_past(self, invented, kept):
+        view = self._with_rows(1)
+        with livecfg(fields=5):
+            for i in range(invented - 1):
+                view.remove_row(formset="rows", prefix="rows-0-f%d" % i)
+            view.remove_row(formset="rows", prefix="rows-0-last")
+        assert ("rows-0-last-DELETE" in view._formset_data) is kept
+
+    @pytest.mark.parametrize(
+        "bogus",
+        ["rows-00", "rows-000", "rows-01", "rows-٠", "rows-١", "rows-０", "rows-+0"],
+    )
+    def test_a_row_index_that_is_not_canonical_ascii_is_counted(self, bogus):
+        """Zero-padded, Arabic-Indic, full-width: ``int()`` reads them as a row that exists, the formset
+        does not."""
+        view = self._with_rows(3)
+        with livecfg(fields=1):
+            view.remove_row(formset="rows", prefix="first-bogus")
+            view.remove_row(formset="rows", prefix=bogus)
+        assert "%s-DELETE" % bogus not in view._formset_data
+
+    @pytest.mark.parametrize("bogus", ["rows-²1", "rows-²", "rows-" + "9" * 5000])
+    def test_an_index_int_cannot_parse_fails_closed_without_raising(self, bogus):
+        """``"²".isdigit()`` is true and ``int("²")`` raises; so does a 5,000-digit index."""
+        view = self._with_rows(3)
+        with livecfg(fields=1):
+            view.remove_row(formset="rows", prefix="first-bogus")
+            view.remove_row(formset="rows", prefix=bogus)  # must not raise
+        assert "%s-DELETE" % bogus not in view._formset_data
+        view = self._with_rows(3)
+        view.remove_row(
+            formset="rows", prefix=bogus
+        )  # inside the limit it is stored, still no error
+        assert "%s-DELETE" % bogus in view._formset_data
+
+    @pytest.mark.parametrize("suffix", ["street", "DELETE", "id", "ORDER"])
+    @pytest.mark.parametrize("row, exempt", [(0, True), (2, True), (3, False), (4, False)])
+    def test_only_the_forms_own_fields_of_a_row_that_exists_are_exempt(self, suffix, row, exempt):
+        """TOTAL_FORMS is 3 (rows 0-2). A seeded ``rows-<n>-<field>`` is the formset's for a real field
+        and ``n <= 2``, and counts at ``n = 3``. The limit is 1 and one counted key is spent on the
+        removal itself, so a counted seed leaves no room for it."""
+        view = self._with_rows(3)
+        view._formset_data["rows-%d-%s" % (row, suffix)] = "v"
+        with livecfg(fields=1):
+            view.remove_row(formset="rows", prefix="bogus-1")
+        assert ("bogus-1-DELETE" in view._formset_data) is exempt
+
+    @pytest.mark.parametrize("seeded, kept", [(0, True), (1, True), (2, False)])
+    def test_an_invented_field_under_an_existing_row_in_the_data_is_counted(self, seeded, kept):
+        """The suffix check, alone: ``rows-0-zzz<i>`` is under row 0 (which exists) but no field of the
+        form. The limit is 2, so ``seeded`` of them plus the removal's own key fit up to ``seeded = 1``."""
+        view = self._with_rows(1)
+        for i in range(seeded):
+            view._formset_data["rows-0-zzz%d" % i] = "v"
+        with livecfg(fields=2):
+            view.remove_row(formset="rows", prefix="bogus-1")
+        assert ("bogus-1-DELETE" in view._formset_data) is kept
+
+    def test_a_huge_total_forms_a_project_seeded_does_not_widen_the_exemption(self):
+        """Nothing here stores a client's ``TOTAL_FORMS`` (``remove_row`` only writes ``-DELETE`` keys and
+        ``add_row`` stops at the formset's cap), but a huge one a project seeded is clamped to that cap."""
+        view = rows_view()
+        view._formset_data = {"rows-TOTAL_FORMS": "999999999"}
+        with livecfg(fields=1):
+            view.remove_row(formset="rows", prefix="first-bogus")
+            view.remove_row(formset="rows", prefix="rows-5000")
+        assert "rows-5000-DELETE" not in view._formset_data
+
     def test_the_function_form_is_bounded_too(self):
         """``remove_row()`` is also called directly from a project's handler with the client's prefix."""
         data: Dict[str, Any] = {}
