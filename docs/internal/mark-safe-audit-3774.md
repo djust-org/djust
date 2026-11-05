@@ -38,8 +38,14 @@ their input unstripped. Neither can carry a quote, `<` or `;`, so inside an attr
 ## The baseline is machine-checked
 
 `scripts/lib/safe_markup_audit.py` holds one entry per `(file, function)`: the number of flagged
-sinks, the reason, and **evidence**: `(file, literal)` pairs, each of which must appear in the CODE
-(comments and docstrings do not count) of its scope. The scope defaults to the audited function
+sinks, the reason, and **evidence**: `(file, literal)` pairs, each of which must appear in LIVE CODE
+of its scope: comments, docstrings, a string dropped into a body, an `if False:` / `while 0:` branch
+(or the `else` of `if True:`), statements after a `return` / `raise` / `break` / `continue`, and a
+nested `def` with no decorator that nothing in its function reads do not count (#3827). That is
+decided on the AST (`_dead_statements`) and stops there: a branch that is referenced but never runs
+at runtime (`if flag():` with a flag that is always false), a callback that is registered and never
+fired, and a `lambda` are still counted, and a runtime fact is the payload sweep's to catch. The
+scope defaults to the audited function
 itself when the literal is in the audited function's file, so a twin of the escape elsewhere in the
 file does not satisfy it (the first version checked the whole file, and `slider`'s
 `e_name = conditional_escape(name)` occurs in several functions); a helper's literal names its own
@@ -48,7 +54,7 @@ scope as a third element. Every entry needs at least one literal in its own body
 `python/tests/test_safe_markup_audit_3774.py` fails on a flagged site with no entry, on a function
 that gained a sink (the older theming allowlist, keyed by function only, would have waved it
 through), on an entry with no site or a different count, on an entry without a reason or evidence,
-on evidence that is not in its scope's code, and on an entry with no literal in its own body. The
+on evidence that is not live code in its scope, and on an entry with no literal in its own body. The
 table below is generated from the same data (`python scripts/lib/safe_markup_audit.py --table`); the
 test compares it, without line numbers, to the table in this file.
 
@@ -57,8 +63,8 @@ test compares it, without line numbers, to the table in this file.
 `python/tests/payload_sweep_3774.py` and `payload_drivers_3774.py` drive the audited sinks with a
 hostile value and PARSE the output (an event-handler attribute, an element the payload opened, a
 `style` carrying the payload, or a navigation attribute whose value starts with `javascript:` /
-`vbscript:` / `data:text/html` fails). Two payload modes: `markup` (`ZQ"onmouseover=ZQ<b id=ZQ>'...`
-in every argument) and `url` (the same, but an argument that looks like a URL gets
+`vbscript:` / `data:text/html` fails). Two payload modes: `markup`
+(`ZQ"onmouseover=ZQ<b id=ZQ>'ZQ</script></textarea></title><svg onload=ZQ>` in every argument) and `url` (the same, but an argument that looks like a URL gets
 `javascript:ZQ(1)`: escaping alone does not stop that, only `safe_url` / `url_attr` do). Each
 argument takes the shape the code coerces it from: a keyword the tags `int()` is a number, a
 parameter whose default is a number is a number, a list parameter gets dicts carrying the payload
@@ -80,6 +86,14 @@ baseline alone cannot be relied on for this: it judges a function by its sink CO
 escaped value for a raw one inside an audited function leaves the guard exactly as flagged as
 before, and it notices only if the removed line happens to be one of the pinned evidence literals.
 The sweep does not depend on someone having pinned that line.
+
+The payload carries `</textarea></title>` ahead of its `<svg onload=ZQ>` (#3827). The contents of
+`<textarea>` and `<title>` are RCDATA: the parser never turns text inside them into elements, so a
+payload that is interpolated raw INTO one stayed inert text and the sweep reported it clean, while a
+browser ends the element at the first `</textarea>` / `</title>` it finds in that text. Four gate-offs
+passed the sweep without the closers and fail it with them: `build_tag` printing a `<textarea>`
+body raw, `PromptEditor`'s `{tmpl}</textarea>`, `dj_textarea`'s `{value}</textarea>` and the Gantt
+bar's SVG `<title>{name}`. The unmutated tree stays at zero findings.
 
 What the sweep does not do: it drives the Django-engine functions, not the Rust handlers (which call
 the same `render_*` functions for the block tags); `_dev_tools.py` is rendered but not audited by the
@@ -157,13 +171,13 @@ first match inside its scope.
 |---|---|---|---|---|---|
 <!-- audit-table:begin -->
 | `assets/tags.py:214` | `asset_tags` | 1 | S | joins _tag() results; _tag builds every branch with format_html, so src and integrity are escaped | `assets/tags.py:219`<br>`assets/tags.py:190`<br>`assets/tags.py:201` |
-| `components/base.py:314` | `Component.asset_tags` | 1 | S | joins djust.assets.tags.asset_tags() results, which are format_html SafeStrings | `components/base.py:316`<br>`assets/tags.py:214` |
+| `components/base.py:317` | `Component.asset_tags` | 1 | S | joins djust.assets.tags.asset_tags() results, which are format_html SafeStrings | `components/base.py:319`<br>`assets/tags.py:214` |
 | `components/icons.py:173` | `render_icon` | 1 | S | class names are the constant size label plus html.escape(custom_class); every extra attribute VALUE is html.escape'd and every extra attribute NAME is checked by attr_name (before #3774 the name was only html.escape'd, which cannot make a name safe: `x onfocus=alert(1) y` rendered a live handler; fixed, python/tests/test_attr_name_injection_3774.py); px is int(); svg_inner is the bundled / DJUST_COMPONENTS_ICON_SETS (developer settings) markup keyed by name, never the caller's text | `components/icons.py:214`<br>`components/icons.py:222`<br>`components/icons.py:221`<br>`components/icons.py:206`<br>`components/icons.py:198` |
 | `forms.py:821` | `FormMixin.as_live` | 1 | S | joins adapter.render_field() output; BaseAdapter escapes wrapper/label/help text/errors/choices/values and (since #3774) checks attribute names in _build_tag; a custom adapter owes the same (FrameworkAdapter contract) | `forms.py:862`<br>`frameworks.py:114`<br>`frameworks.py:247` |
 | `template_tags/lorem.py:42` | `LoremTagHandler.render` | 1 | S | wraps the paragraphs of django.utils.lorem_ipsum (a fixed corpus) in <p>; same as Django's own lorem tag | `template_tags/lorem.py:64`<br>`template_tags/lorem.py:26` |
-| `templatetags/djust_pwa.py:141` | `djust_sw_register` | 1 | S | nonce_attr is escape()'d in _nonce_attr; the URL and scope are _script_json(): json.dumps with < > & and U+2028/9 escaped, so neither can end the script element | `templatetags/djust_pwa.py:166`<br>`templatetags/djust_pwa.py:43`<br>`templatetags/djust_pwa.py:53` |
-| `templatetags/djust_pwa.py:206` | `djust_offline_indicator` | 1 | S | texts and classes are escape()'d locals; show_when selects a constant visibility attribute; the style block is a constant plus the escaped nonce | `templatetags/djust_pwa.py:257`<br>`templatetags/djust_pwa.py:260` |
-| `templatetags/djust_pwa.py:344` | `djust_offline_styles` | 1 | S | constant CSS plus the nonce attribute built by _nonce_attr (escape()'d) | `templatetags/djust_pwa.py:363`<br>`templatetags/djust_pwa.py:43` |
+| `templatetags/djust_pwa.py:190` | `djust_sw_register` | 1 | S | nonce_attr is escape()'d in _nonce_attr; the URL and scope are _script_json(): json.dumps with < > & and U+2028/9 escaped, so neither can end the script element | `templatetags/djust_pwa.py:216`<br>`templatetags/djust_pwa.py:90`<br>`templatetags/djust_pwa.py:100` |
+| `templatetags/djust_pwa.py:256` | `djust_offline_indicator` | 1 | S | texts and classes are escape()'d locals; show_when selects a constant visibility attribute; the style block is a constant plus the escaped nonce | `templatetags/djust_pwa.py:307`<br>`templatetags/djust_pwa.py:310` |
+| `templatetags/djust_pwa.py:394` | `djust_offline_styles` | 1 | S | constant CSS plus the nonce attribute built by _nonce_attr (escape()'d) | `templatetags/djust_pwa.py:413`<br>`templatetags/djust_pwa.py:90` |
 | `templatetags/live_tags.py:253` | `_client_config_html` | 1 | S | the three meta prefixes are escape()'d; the route-map script is routing.get_route_map_script (format_html around json.dumps of developer URL config) | `templatetags/live_tags.py:278`<br>`routing.py:471` |
 | `templatetags/live_tags.py:802` | `live_input` | 1 | S | html is build_tag output: every attribute VALUE is escape()'d, select options escape()'d, textarea content escaped; attribute NAMES (event=, passthrough keys) were not checked until #3774 (the audit's one U, fixed in djust._html.attr_name, python/tests/test_attr_name_injection_3774.py; passthrough URL/on* policy is N, #3818) | `templatetags/live_tags.py:902`<br>`_html.py:26`<br>`_html.py:84`<br>`templatetags/live_tags.py:709` |
 | `templatetags/live_tags.py:1027` | `ColocatedHookNode.render` | 1 | S | the name is the tag's parse-time literal (plus the view's module.qualname): template/code, not request data; it is escape()'d into data-hook; the body is </script>-escaped; the nonce is escape()'d. NOT escaped: the JS-comment banner `/* COLOCATED HOOK: <name> */` interpolates the name raw, so a name carrying `</script>` or `*/` would end the script or the comment; it is a parse-time literal the template author wrote, hence not exploitable, and the sweep drives this tag with a plain name for that reason | `templatetags/live_tags.py:1042`<br>`templatetags/live_tags.py:1037`<br>`templatetags/live_tags.py:1054` |

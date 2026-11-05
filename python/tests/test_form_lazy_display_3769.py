@@ -24,11 +24,16 @@ What each class proves, and what removing its mechanism does:
 * ``TestTheFloorStillHolds``: laziness changes WHEN ``str()`` is asked, never of WHICH object. The
   asked object is the walk-floored handle, so a floor field's typed value is still not printed.
 
-Refs #3769, #3770, #3755, #3790, #1646, #1468.
+* ``TestTheDeferralIsNarrow``: the other half of the deferral (#3832): an ordinary iterable's
+  ``__str__`` is still read when it is converted, and a model formset that arrives as
+  ``_SidecarFormSetProxy`` is deferred. Neither changes the output, only the call count.
+
+Refs #3769, #3770, #3755, #3790, #3832, #1646, #1468.
 """
 
 from __future__ import annotations
 
+import collections
 import re
 from typing import Any
 
@@ -609,3 +614,98 @@ class TestAnOrdinaryIterableIsNotAskedAboutFormsets:
             f"{Counting.hits} formset class lookups for 120 ordinary iterables: the class is "
             "resolved per value again"
         )
+
+
+# --------------------------------------------------------------------------- #
+def _counting(base: type) -> type:
+    """A subclass of ``base`` that counts how many times ``str()`` is asked of an instance."""
+
+    class Counting(base):  # type: ignore[valid-type, misc]
+        calls = 0
+
+        def __str__(self) -> str:
+            type(self).calls += 1
+            return super().__str__()
+
+    return Counting
+
+
+class TestTheDeferralIsNarrow:
+    """Two properties of the lazy conversion that no output can show, only a call count (#3832).
+
+    The text of a form or formset is deferred; the text of everything else is still read when the
+    value is converted, because there a raising ``__str__`` must still decline the carrier and the
+    objects whose ``str()`` is cheap have nothing to save. Both halves are PERFORMANCE and
+    SIDE-EFFECT properties: the rendered output is the same either way, so a mutation of either is
+    invisible to every test that compares output, and was found by gate-off, not by a failing test.
+
+    Not pinned here: after ``importlib.reload(djust.serialization)`` the process-wide formset-class
+    tuple (``live_handle_is_formset``, ``crates/djust_core/src/context.rs``) still names the
+    PRE-reload ``_SidecarFormSetProxy``, so a post-reload proxy is read eagerly. That is the
+    fail-safe direction (the text is read now, as it was before #3769) and a development-server
+    effect only; a test would reload a module other tests hold references into, which costs more
+    than the note is worth.
+    """
+
+    @pytest.mark.parametrize(
+        "base", [set, frozenset, list, collections.deque], ids=lambda b: b.__name__
+    )
+    def test_an_ordinary_iterable_is_asked_for_its_text_when_converted(self, base):
+        from djust._rust import RustLiveView
+
+        Counting = _counting(base)
+        view = RustLiveView("{{ obj }}")
+        view.update_state({"obj": Counting([1, 2])})
+        # Exactly once, at conversion: not deferred (0), which is what a formset gets.
+        assert Counting.calls == 1, (
+            f"str() of a {base.__name__} subclass was asked {Counting.calls}x by the conversion; "
+            "an ordinary iterable keeps the eager read (0 means every iterable is deferred now)"
+        )
+
+    def test_the_form_is_the_contrast_and_is_deferred(self):
+        # The same probe over a form reads 0: the counts above are not just "update_state never asks".
+        from djust._rust import RustLiveView
+
+        view = RustLiveView("{{ obj }}")
+        view.update_state({"obj": _form()})
+        assert CountingForm.form_calls == 0
+
+    @pytest.mark.django_db
+    def test_a_model_formset_reaching_conversion_as_the_sidecar_proxy_is_deferred(self):
+        from django.contrib.auth.forms import UserChangeForm
+        from django.contrib.auth.models import User
+        from django.forms import BaseModelFormSet, modelformset_factory
+
+        from djust import serialization
+        from djust._rust import RustLiveView
+
+        class CountingModelFormSet(BaseModelFormSet):
+            calls = 0
+
+            # counted on THIS class: `type(self)` is the subclass modelformset_factory makes
+            def __str__(self) -> str:
+                CountingModelFormSet.calls += 1
+                return super().__str__()
+
+            def __html__(self) -> str:
+                # a printed value is read through `__html__` first (as under Django)
+                CountingModelFormSet.calls += 1
+                return super().__html__()
+
+        FormSet = modelformset_factory(
+            User, form=UserChangeForm, formset=CountingModelFormSet, extra=1
+        )
+        formset = FormSet(queryset=User.objects.none())
+        # What a template walk hands the conversion for a formset over a model (#3790): the
+        # PROXY, which is not a `BaseFormSet` and so is deferred only if the proxy class is named.
+        proxy = serialization._protect_sidecar_walk(formset)
+        assert isinstance(proxy, serialization._SidecarFormSetProxy), "premise: the floor wraps it"
+        assert not isinstance(proxy, BaseModelFormSet)
+
+        view = RustLiveView("{{ fs }}")
+        view.update_state({"fs": proxy})
+        assert CountingModelFormSet.calls == 0, (
+            "str() of the formset was asked at conversion: the sidecar proxy is no longer deferred"
+        )
+        assert 'name="form-0-username"' in view.render(), "premise: it prints when read"
+        assert CountingModelFormSet.calls >= 1

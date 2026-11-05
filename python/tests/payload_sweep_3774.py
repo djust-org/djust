@@ -8,7 +8,8 @@ it reached all of them).
 
 Two payload modes:
 
-* ``markup``: ``ZQ"onmouseover=ZQ<b id=ZQ>'ZQ</script><svg onload=ZQ>`` in every argument. Fails when
+* ``markup``: ``ZQ"onmouseover=ZQ<b id=ZQ>'ZQ</script></textarea></title><svg onload=ZQ>`` in every
+  argument. Fails when
   it became an event-handler attribute or an element.
 * ``url``: the same, except an argument that looks like a URL (``url``, ``href``, ``src``, ``avatar``,
   ``image``, ...) gets ``javascript:ZQ(1)``. Fails when a navigation or load attribute carries the
@@ -33,8 +34,24 @@ from django.template import Context, Node, NodeList
 from django.utils.html import conditional_escape
 
 TAG = "ZQ"
+#: ``</textarea></title>`` precedes the element for a reason (#3827): the contents of ``<textarea>``
+#: and ``<title>`` are RCDATA, text the parser never turns into elements, so a raw value inside one
+#: only becomes an element if it first closes it (exactly what a browser does with it). Without the
+#: closers a raw ``{value}</textarea>`` or SVG ``<title>{name}`` interpolation was invisible here.
+RCDATA_CLOSERS = "</textarea></title>"
 PAYLOAD = (
-    TAG + '"onmouseover=' + TAG + "<b id=" + TAG + ">'" + TAG + "</script><svg onload=" + TAG + ">"
+    TAG
+    + '"onmouseover='
+    + TAG
+    + "<b id="
+    + TAG
+    + ">'"
+    + TAG
+    + "</script>"
+    + RCDATA_CLOSERS
+    + "<svg onload="
+    + TAG
+    + ">"
 )
 URL_PAYLOAD = "javascript:" + TAG + "(1)"
 MODES = ("markup", "url")

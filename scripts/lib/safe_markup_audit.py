@@ -7,13 +7,15 @@ it flagged 125 sites. This module is the record of reading each one.
 
 Every entry is a ``(path, function)`` pair, the number of flagged sinks in that function, the
 reason the sinks are safe (what escapes or validates which value), and EVIDENCE: ``(path,
-literal)`` pairs that must still appear verbatim in that file. The test
+literal)`` pairs that must still appear as live code in their scope (the audited function itself,
+or the named function or file; comments, docstrings, dead strings, ``if False:`` branches, code
+after a ``return`` and nested ``def``s nothing reads do not count, see ``_dead_statements``). The test
 (``python/tests/test_safe_markup_audit_3774.py``) fails when
 
 * a site is flagged that has no entry (a new interpolated ``mark_safe``: classify it);
 * a function has MORE sinks than audited (a sink was added to an audited function);
 * an entry has no site any more, or a different number (delete or update it);
-* an entry has no reason, or no evidence, or evidence that no longer exists in the file.
+* an entry has no reason, or no evidence, or evidence that is no longer live code in its scope.
 
 The guard is name-based and single-function (see its docstring), so "audited" means a person
 traced each flagged value to its source, not that the guard proved it.
@@ -882,12 +884,139 @@ def _tree(path: str, root: Path) -> ast.Module:
     return ast.parse(_text(path, root))
 
 
+def _constant_truth(test: ast.expr) -> bool | None:
+    """The truth of a condition that is a literal (``False``, ``0``, ``None``, ``not True``), else
+    ``None``: a name, a call or a comparison is not decided here."""
+    if isinstance(test, ast.Constant):
+        return bool(test.value)
+    if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not):
+        inner = _constant_truth(test.operand)
+        return None if inner is None else not inner
+    return None
+
+
+def _is_inert_statement(stmt: ast.stmt) -> bool:
+    """A bare constant (a docstring, a string left in a function body, ``...``): it does nothing."""
+    if not isinstance(stmt, ast.Expr):
+        return False
+    value = stmt.value
+    if isinstance(value, ast.Constant):
+        return True
+    return isinstance(value, ast.JoinedStr) and all(
+        isinstance(part, ast.Constant) for part in value.values
+    )
+
+
+def _blocks(node: ast.AST) -> list[list[ast.stmt]]:
+    """Every list of statements a node directly holds (body, else, finally, each handler)."""
+    out = []
+    for field in ("body", "orelse", "finalbody"):
+        block = getattr(node, field, None)
+        if isinstance(block, list) and block and isinstance(block[0], ast.stmt):
+            out.append(block)
+    for handler in getattr(node, "handlers", ()):
+        out.append(handler.body)
+    for case in getattr(node, "cases", ()):
+        out.append(case.body)
+    return out
+
+
+def _dead_statements(tree: ast.Module) -> set[ast.stmt]:
+    """Statements that cannot change what a function does, so a literal in one proves nothing.
+
+    * a bare constant statement (a string dropped into the body: ``"e_text = escape(v)"``);
+    * the branch of ``if False:`` / ``while 0:`` that never runs (and the ``else`` of ``if True:``);
+    * statements after an unconditional ``return`` / ``raise`` / ``break`` / ``continue`` in the
+      same block;
+    * a nested ``def`` that has no decorator and whose name nothing live in its enclosing function
+      ever reads (defined, never called, passed or returned).
+
+    What this does NOT see: a nested ``def``, ``lambda`` or branch that IS referenced but never
+    runs at runtime (``if some_flag():`` that is always false; a callback registered and never
+    fired). That is a runtime fact; the payload sweep is the check for it.
+    """
+    dead: set[ast.stmt] = set()
+
+    def mark(stmts: list[ast.stmt]) -> None:
+        dead.update(stmts)
+
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.If, ast.While)):
+            truth = _constant_truth(node.test)
+            if truth is False:
+                mark(node.body)
+            elif truth is True and isinstance(node, ast.If):
+                mark(node.orelse)
+        for block in _blocks(node):
+            for index, stmt in enumerate(block):
+                if _is_inert_statement(stmt):
+                    dead.add(stmt)
+                if isinstance(stmt, (ast.Return, ast.Raise, ast.Break, ast.Continue)):
+                    mark(block[index + 1 :])
+                    break
+
+    # Nested defs nothing reads. A fixpoint: a def read only by another dead def is dead too.
+    for outer in ast.walk(tree):
+        if not isinstance(outer, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        nested = [fn for fn in _direct_defs(outer) if not fn.decorator_list]
+        changed = bool(nested)
+        while changed:
+            changed = False
+            for fn in nested:
+                if fn in dead:
+                    continue
+                # Read anywhere else in live code (its own body does not count: recursion is
+                # not a use).
+                reads = {
+                    name.id
+                    for name in _live_names(outer, dead | {fn})
+                    if isinstance(name.ctx, ast.Load)
+                }
+                if fn.name not in reads:
+                    dead.add(fn)
+                    changed = True
+    return dead
+
+
+def _direct_defs(outer: ast.AST) -> list[ast.FunctionDef | ast.AsyncFunctionDef]:
+    """The ``def``s whose nearest enclosing function is ``outer``, not those of a class body (a
+    method is reached through an attribute, never by a bare name) or of another nested function."""
+    found: list[ast.FunctionDef | ast.AsyncFunctionDef] = []
+    stack = list(ast.iter_child_nodes(outer))
+    while stack:
+        node = stack.pop()
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            found.append(node)
+        elif not isinstance(node, (ast.ClassDef, ast.Lambda)):
+            stack.extend(ast.iter_child_nodes(node))
+    return found
+
+
+def _live_names(node: ast.AST, dead: set[ast.stmt]) -> list[ast.Name]:
+    """Every ``Name`` under ``node`` that is not inside a dead statement."""
+    names: list[ast.Name] = []
+
+    def visit(current: ast.AST) -> None:
+        for child in ast.iter_child_nodes(current):
+            if isinstance(child, ast.stmt) and child in dead:
+                continue
+            if isinstance(child, ast.Name):
+                names.append(child)
+            visit(child)
+
+    visit(node)
+    return names
+
+
 @lru_cache(maxsize=None)
 def _code_lines(path: str, root: Path) -> tuple[str, ...]:
-    """The file's lines with every comment and every docstring blanked (same line structure).
+    """The file's lines with everything that is not live CODE blanked (same line structure).
 
-    Evidence must be CODE: a literal that survives only in a comment or a docstring (the entry for
-    ``PromptEditorNode.render`` pointed at a comment) proves nothing about what runs.
+    Evidence must be code that can run: a literal that survives only in a comment, a docstring, a
+    string dropped into a body, an ``if False:`` branch, the tail after a ``return`` or a nested
+    ``def`` nothing reads (the entry for ``PromptEditorNode.render`` once pointed at a comment)
+    proves nothing about what runs. See :func:`_dead_statements` for exactly what is excluded.
     """
     import io
     import tokenize
@@ -897,17 +1026,8 @@ def _code_lines(path: str, root: Path) -> tuple[str, ...]:
     for tok in tokenize.generate_tokens(io.StringIO(_text(path, root)).readline):
         if tok.type == tokenize.COMMENT:
             spans.append((*tok.start, *tok.end))
-    for node in ast.walk(_tree(path, root)):
-        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
-            first = node.body[0] if node.body else None
-            if (
-                isinstance(first, ast.Expr)
-                and isinstance(first.value, ast.Constant)
-                and isinstance(first.value.value, str)
-            ):
-                spans.append(
-                    (first.lineno, first.col_offset, first.end_lineno, first.end_col_offset)
-                )
+    for stmt in _dead_statements(_tree(path, root)):
+        spans.append((stmt.lineno, stmt.col_offset, stmt.end_lineno, stmt.end_col_offset))
     for r1, c1, r2, c2 in spans:
         for r in range(r1, r2 + 1):
             line = lines[r - 1]
