@@ -2568,22 +2568,6 @@ def _is_form_object(value: Any) -> bool:
     return isinstance(value, (BaseForm, BoundField, _SidecarFormProxy, _SidecarBoundFieldProxy))
 
 
-def _is_formset_object(value: Any) -> bool:
-    """Is ``value`` a Django formset (or its walk proxy)? (#3769)
-
-    Asked by the Rust engine (``context::live_handle_is_formset``) for an iterable object it is
-    about to carry, to decide whether ``str(o)`` is read now or on first use. ``str(formset)`` is
-    the render of the management form and of every form in it, which is the same cost as
-    ``str(form)`` times the number of forms; and like a form it is rendered by Django only where
-    a template prints it. It is NOT part of :func:`_is_form_object`: that answer decides how a
-    bridged Python tag receives an iterable (#3755), and a formset has never been handed over as
-    a live object there.
-    """
-    from django.forms.formsets import BaseFormSet
-
-    return isinstance(value, (BaseFormSet, _SidecarFormSetProxy))
-
-
 def _crosses_as_encoded(value: Any) -> bool:
     """Does ``impl FromPyObject for Value`` model this object as ``Encoded``?
 

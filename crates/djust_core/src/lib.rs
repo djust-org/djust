@@ -422,9 +422,11 @@ pub enum Value {
 ///
 /// A Django `Form` / `BoundField` / formset crosses with a `display` that is the render of the
 /// whole form (`as_div`, a widget per field), and the carrier is built for EVERY such object in
-/// the context on EVERY render, several times over — including the ones a template never
-/// prints. `hello` over a context holding a form called `str(form)` three times; `{{ form.f0 }}`
-/// rendered every OTHER field too (4-5x the flattened cost, #3769). So the text of such a
+/// the context on EVERY render — including the ones a template never prints. `hello` over a
+/// context holding a form called `str(form)` once, and `{{ form }}` twice (measured through
+/// `DjustTemplateBackend.from_string(..).render({"form": f})`; a form that is ALSO inside a list
+/// in the context is converted once more per occurrence); `{{ form.f0 }}` rendered every OTHER
+/// field too (4-5x the flattened cost, #3769). So the text of such a
 /// carrier is DEFERRED: the first reader asks the object, and the answer is kept.
 ///
 /// **One reader per fact, and the reader forces.** `text`, `safe` and `raised` are the only ways
@@ -1268,6 +1270,21 @@ pub const CMP_DOMAIN_DATETIME_AWARE: u8 = 4;
 /// domain — see the `datetime.time` arm of [`comparison_key`].
 pub const CMP_DOMAIN_TIME_NAIVE: u8 = 5;
 
+/// Do two [`Encoded`]s carry the same encoder spelling? (#3769)
+///
+/// Compared WITHOUT reading [`Encoded::json`] when both mirror their text (`json: None`): that
+/// accessor forces a deferred `display`, and `display` is compared one line away by
+/// [`DisplayText`]'s own `==`, whose shortcut for two texts of the SAME object exists so that a
+/// structural `==` does not render a form to say so. A mirror and an explicit spelling are
+/// compared through the accessor, as before.
+fn json_spelling_equal(a: &Encoded, b: &Encoded) -> bool {
+    match (&a.json, &b.json) {
+        (None, None) => true,
+        (Some(x), Some(y)) => x == y,
+        _ => a.json() == b.json(),
+    }
+}
+
 /// STRUCTURAL equality for two [`Encoded`]s — every carried spelling, plus the
 /// attribute map (#2481).
 ///
@@ -1286,7 +1303,7 @@ impl PartialEq for Encoded {
     fn eq(&self, other: &Self) -> bool {
         self.type_name == other.type_name
             && self.display == other.display
-            && self.json() == other.json()
+            && json_spelling_equal(self, other)
             && self.truthy == other.truthy
             && self.len == other.len
             && self.iterable == other.iterable

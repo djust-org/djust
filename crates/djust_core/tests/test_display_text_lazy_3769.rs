@@ -20,7 +20,7 @@
 //! Run with an embeddable interpreter (#2072):
 //! `PYO3_PYTHON="$(bash scripts/embeddable-python.sh)" cargo test -p djust_core --test test_display_text_lazy_3769`
 
-use djust_core::DisplayText;
+use djust_core::{values_structurally_equal, DisplayText, Encoded, Value};
 use pyo3::ffi::c_str;
 use pyo3::prelude::*;
 use std::sync::Arc;
@@ -111,6 +111,34 @@ fn the_text_is_asked_for_once_when_first_read_and_never_before() {
         "== between two texts of one object must not call str()"
     );
     assert!(!text.is_forced() && !same_object.is_forced());
+
+    // ---- a structural `==` of two Encoded of ONE object does not render it (json mirrors display) ----
+    let carrier = |text: DisplayText| {
+        Value::Encoded(Box::new(Encoded {
+            type_name: "F".into(),
+            display: text,
+            json: None,
+            truthy: true,
+            len: None,
+            iterable: true,
+            repr: "<F>".into(),
+            cmp_key: None,
+            attrs: Default::default(),
+            items: None,
+            eq_class: None,
+            live: Some(handle.clone()),
+        }))
+    };
+    let (ca, cb) = (
+        carrier(DisplayText::deferred(handle.clone(), "<standin>".into())),
+        carrier(DisplayText::deferred(handle.clone(), "<standin>".into())),
+    );
+    assert!(values_structurally_equal(&ca, &cb));
+    assert_eq!(
+        calls(&obj),
+        0,
+        "Encoded == must not read json() of two mirrors, which would force the text"
+    );
 
     // ---- the first read asks exactly once; the answer is kept ----
     assert_eq!(text.text(), "rendered");

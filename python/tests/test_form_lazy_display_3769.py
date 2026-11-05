@@ -161,8 +161,8 @@ class TestTheFormIsNotRenderedUntilRead:
 
 class TestEachOccurrenceIsOneRead:
     """A template that prints the form N times renders it N times, as Django does. The eager
-    conversion rendered it 3 times before the template printed anything (the context is converted
-    for the state, again for the sidecar and again for the lookup), plus once per occurrence."""
+    conversion rendered it once before the template printed anything, plus once per occurrence
+    (``hello`` 1 call, ``{{ form }}`` 2; now 0 and 1)."""
 
     def test_a_form_printed_twice_is_rendered_twice_and_no_more(self, rust):
         _render_rust(rust, "{{ form }}|{{ form }}", form=_form())
@@ -541,3 +541,71 @@ class TestATeardownReleasesTheObjectADeferredTextWouldAsk:
         assert Counting.calls == 0, "premise: updating state does not ask"
         view.clear_live_handles()
         assert Counting.calls == 0, "a teardown must not run the object's code"
+
+    def test_a_render_after_the_clear_shows_the_stand_in_not_the_form(self):
+        """PINNED, not endorsed: the teardown never runs the object's code, so a form whose text was
+        never asked (the state's copy; a render asks its own re-read of the object) renders its
+        ``repr`` if something renders the state AFTER the clear. The clear runs at disconnect, and a
+        reconnect re-converts from Python first (``clear_live_handles`` docs, #2570), so no
+        connected view renders through it; what the eager text kept there was ``str(form)`` computed
+        at conversion. A text that was asked keeps its answer (the Rust unit test)."""
+        import html
+
+        from djust._rust import RustLiveView
+
+        form = Plain()
+        stand_in = html.escape(repr(form))
+        view = RustLiveView("{{ obj }}")
+        view.update_state({"obj": form})
+        before = view.render()
+        assert 'name="name"' in before, "premise: the render before the clear is the form"
+        view.clear_live_handles()
+        after = view.render()
+        assert after == stand_in, after
+        assert 'name="name"' not in after
+
+
+class TestAnOrdinaryIterableIsNotAskedAboutFormsets:
+    """``live_handle_is_formset`` is asked of every iterable that is not a form. It resolves the two
+    classes once per process and answers with one C-level ``isinstance``: no import, no module
+    lookup, no Python call per value (the first version imported ``django.forms.formsets`` for each
+    ``set`` / ``range`` it converted: +4-6% CPU)."""
+
+    def test_no_formset_class_lookup_per_value(self):
+        import collections
+        import sys
+        import types
+
+        import django.forms.formsets as real
+        from djust._rust import RustLiveView
+
+        view = RustLiveView("{{ s }}")
+        # warm the once-per-process cache with a real formset (and prove the check still answers)
+        view.update_state({"fs": formset_factory(Plain, extra=1)()})
+
+        class Counting(types.ModuleType):
+            hits = 0
+
+            def __getattribute__(self, name):
+                if name == "BaseFormSet":
+                    type(self).hits += 1
+                return getattr(real, name)
+
+        original = sys.modules["django.forms.formsets"]
+        sys.modules["django.forms.formsets"] = Counting("django.forms.formsets")
+        try:
+            for i in range(30):
+                view.update_state(
+                    {
+                        "s": {i, i + 1},
+                        "fz": frozenset({i}),
+                        "r": range(i, i + 3),
+                        "d": collections.deque([i]),
+                    }
+                )
+        finally:
+            sys.modules["django.forms.formsets"] = original
+        assert Counting.hits == 0, (
+            f"{Counting.hits} formset class lookups for 120 ordinary iterables: the class is "
+            "resolved per value again"
+        )

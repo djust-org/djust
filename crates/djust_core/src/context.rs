@@ -204,14 +204,29 @@ pub(crate) fn live_handle_is_form_object(
 /// The conversion asks it ONLY to decide whether `str(o)` is read now or on first use: a formset's
 /// text is the render of its management form and of every form in it. It is a separate question
 /// from [`live_handle_is_form_object`], which also decides how a bridged tag receives the object
-/// (#3755) and has never included a formset. Fail-CLOSED, like it: anything but a clean `True`
-/// answers `false`, and the text is read now, as it always was.
+/// (#3755) and has never included a formset.
+///
+/// **Asked of every iterable that is not a form** (a `set`, a `range`, a `deque`...), so it makes
+/// no Python-level call: the two classes are resolved ONCE per process into a tuple and the
+/// answer is one C-level `isinstance`. (The first version imported `django.forms.formsets` and
+/// called a Python helper per value: +4-6% CPU on a conversion of a `set`.) Only a SUCCESSFUL
+/// lookup is cached; a failed one (djust's Python not importable yet, Django absent) is retried,
+/// and answers `false` meanwhile: fail-closed, the text is read now, as it always was.
 pub(crate) fn live_handle_is_formset(py: Python<'_>, obj: &pyo3::Bound<'_, pyo3::PyAny>) -> bool {
-    py.import("djust.serialization")
-        .and_then(|m| m.getattr("_is_formset_object"))
-        .and_then(|check| check.call1((obj,)))
-        .and_then(|answer| answer.is_truthy())
-        .unwrap_or(false)
+    static CLASSES: pyo3::sync::PyOnceLock<Py<pyo3::PyAny>> = pyo3::sync::PyOnceLock::new();
+    let classes = CLASSES.get_or_try_init(py, || -> PyResult<Py<pyo3::PyAny>> {
+        let formset = py.import("django.forms.formsets")?.getattr("BaseFormSet")?;
+        let proxy = py
+            .import("djust.serialization")?
+            .getattr("_SidecarFormSetProxy")?;
+        Ok(pyo3::types::PyTuple::new(py, [formset, proxy])?
+            .into_any()
+            .unbind())
+    });
+    match classes {
+        Ok(classes) => obj.is_instance(classes.bind(py)).unwrap_or(false),
+        Err(_) => false,
+    }
 }
 
 /// Reuse only exact builtin values with no user-defined timezone behavior.
