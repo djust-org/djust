@@ -462,7 +462,9 @@ class TestTheFloorStillHolds:
         for src in ("{{ form }}", "{% for f in form %}{{ f }}{{ f.value }}{% endfor %}"):
             assert "Typed-Pw-3769" not in _render_rust(rust, src, form=form), src
 
-    def test_a_form_nested_in_a_container_is_floored_before_its_text_is_asked(self, rust, django_engine):
+    def test_a_form_nested_in_a_container_is_floored_before_its_text_is_asked(
+        self, rust, django_engine
+    ):
         """A raw form that arrives INSIDE a list / dict (nothing wraps it on the way in) is floored by
         the conversion (``floored_form_handle``): the handle the deferred text keeps, and every
         sink that reads it afterwards, is the floored object. Django prints the typed value; this
@@ -486,7 +488,9 @@ class TestTheFloorStillHolds:
             "{% for f in rows.0 %}[{{ f.value }}]{% endfor %}",
         ):
             control = _render_django(django_engine, src, **make())
-            assert secret in control, f"the control must print the secret, or this proves nothing: {src}"
+            assert secret in control, (
+                f"the control must print the secret, or this proves nothing: {src}"
+            )
             assert secret not in _render_rust(rust, src, **make()), src
 
 
@@ -537,4 +541,3 @@ class TestATeardownReleasesTheObjectADeferredTextWouldAsk:
         assert Counting.calls == 0, "premise: updating state does not ask"
         view.clear_live_handles()
         assert Counting.calls == 0, "a teardown must not run the object's code"
-
