@@ -936,26 +936,29 @@ _FIELD_TYPE_MAP = {
 
 
 def _bound_field_value(bound_field: Any) -> Any:
-    """``bound_field.value()``, held to the serialization floor (#3790).
+    """``bound_field.value()``, held to the serialization floor (#3790, #3797).
 
     The one reader every component that fills a control from a ``BoundField`` calls
     (``_render_field``, the hidden-field loop of ``dj_form``, ``_from_bound_field``), so they cannot
-    disagree. A floor field of a ``ModelForm`` (``password``, ``is_superuser``, ``is_staff``,
-    ``DJUST_SENSITIVE_FIELDS``, ...) that is ``disabled`` reads as ``None``: Django ignores what is
-    posted for it, so the control can be drawn without the value and a re-save cannot change it. An
-    EDITABLE floor field keeps its value, because the browser posts the control back and a blank one
-    clears the column (an unchecked checkbox demotes the user); the reader says so once, loudly.
-    A field whose widget is a password input reads as ``None`` too, editable or not (#3798): what was
-    typed into it is on the floor, and Django's own widget never writes it back into the control.
+    disagree with each other or with a template's own ``{{ form.field }}`` (which draws the same
+    control without the value, :func:`djust.serialization._floor_blank_bound_field`). A floor field of
+    a ``ModelForm`` (``password``, ``is_superuser``, ``is_staff``, ``DJUST_SENSITIVE_FIELDS``, ...)
+    reads as ``None``, and so does a field whose widget is a password input (#3798): what was typed
+    into it is on the floor. A ``disabled`` one is simply drawn empty: Django ignores what is posted
+    for it. An EDITABLE one is drawn empty too, and the reader says so once, loudly: the browser posts
+    the control back, so a blank text control clears the column and an unchecked checkbox demotes the
+    user. (Until #3797 a component drew an editable floor field WITH its value, for that reason; a
+    template's ``{{ form.field }}`` did too. The maintainer's decision is that the value is never
+    rendered, whatever the widget.)
     """
     from djust.serialization import form_field_floor_state, warn_editable_floor_field
 
     state = form_field_floor_state(bound_field)
-    if state in ("disabled", "password"):
-        return None
+    if state is None:
+        return bound_field.value()
     if state == "editable":
         warn_editable_floor_field(bound_field)
-    return bound_field.value()
+    return None
 
 
 def _get_field_type(bound_field: Any) -> Any:

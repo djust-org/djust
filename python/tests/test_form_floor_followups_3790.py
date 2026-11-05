@@ -5,15 +5,15 @@ of that fix measured what it did not reach, and each class here is one of those 
 
 * ``TestComponentsDoNotPrintAFloorFieldsValue``: djust's own component tags (``dj_form``,
   ``combobox``, ``rich_select``) read ``bound_field.value()`` in Python and drew the hash of a
-  ``UserChangeForm`` into a text input. A DISABLED floor field is now drawn without its value; an
-  EDITABLE one keeps it, for the reason ``TestWhatPostingBackDoes`` measures, and a component says so
-  once in the log.
+  ``UserChangeForm`` into a text input. A floor field is drawn without its value, disabled or
+  editable (#3797); an EDITABLE one says so once in the log, because posting it back writes the
+  emptiness.
 * ``TestWhatPostingBackDoes``: the facts that choice rests on. A control rendered blank or left out of
   the page and posted back clears a text column and demotes a user whose ``is_staff`` checkbox it was.
 * ``TestPrefixedAndQueryDictData``: ``form.data`` is keyed ``u-password``, not ``password``.
 * ``TestFormsets``: ``formset.data`` / ``cleaned_data`` / ``initial`` hold the same values the forms do.
-* ``TestWhatWidgetsDo``: the widget the form author chose still renders its value. Pinned, so the
-  limit is a fact a test states and not a sentence in a doc.
+* ``TestWhatWidgetsDo``: what the widget the form author chose draws for a floor field: no value
+  since #3797 (``test_floor_widget_value_3797`` holds every route and shape).
 * ``TestTheRefusalIsLoud``: a template that read a floor field's value back is told once, by name.
 * ``TestFailClosed`` / ``TestStaleExtension``: a floor that raises drops the value; an extension that
   predates the floor says so at startup.
@@ -144,17 +144,19 @@ class TestComponentsDoNotPrintAFloorFieldsValue:
             )
         assert "secret-3790@example.com" not in out, out
 
-    def test_an_editable_floor_field_keeps_its_value_and_the_component_says_so(
+    def test_an_editable_floor_field_is_drawn_without_its_value_and_the_component_says_so(
         self, engine, user, caplog
     ):
-        """Stripping it would clear it on the next save (TestWhatPostingBackDoes). The component
-        reports that it rendered one, naming the field, so the choice is never silent."""
+        """#3797: the value is never rendered, editable or not. Posting the control back writes the
+        emptiness (TestWhatPostingBackDoes), so the component reports that it drew one, naming the
+        field: the choice is never silent."""
         with (
             override_settings(DJUST_SENSITIVE_FIELDS=["email"]),
             caplog.at_level(logging.WARNING, logger="djust.serialization"),
         ):
             out = render(engine, "{% dj_form form %}", form=ProfileForm(instance=user))
-        assert "secret-3790@example.com" in out
+        assert "secret-3790@example.com" not in out
+        assert 'name="email"' in out, "the control is still drawn"
         messages = [r.getMessage() for r in caplog.records]
         assert any("User.email" in m and "EDITABLE" in m for m in messages), messages
 
@@ -545,9 +547,12 @@ class TestAFloorFieldIsTheSameFieldEachTimeItIsReached:
 
 
 class TestWhatWidgetsDo:
-    """The limit, as facts. The floor guards what a template can READ BACK; a widget is the form
-    rendering itself, drawn by the view author's own choice of widget, so it is not blanked (blanking
-    an editable control clears it on save: ``TestWhatPostingBackDoes``)."""
+    """What a widget draws for a floor field. Until #3797 the widget the form author chose drew the
+    value (blanking an editable control clears it on save: ``TestWhatPostingBackDoes``); the
+    maintainer's decision is that a floor field's value is never rendered, whatever the widget, and
+    ``test_floor_widget_value_3797`` holds every route and shape. Two widgets keep their own
+    rendering by their own contract: Django's ``ReadOnlyPasswordHashWidget`` (a masked summary) and
+    ``PasswordInput(render_value=True)`` (the form author's explicit echo)."""
 
     def test_the_read_only_password_widget_shows_a_summary_never_the_hash(self, engine, user):
         form = UserChangeForm(instance=user)
@@ -561,7 +566,7 @@ class TestWhatWidgetsDo:
             assert user.password not in out, src
             assert "algorithm" in out, src
 
-    def test_a_text_input_over_the_password_column_renders_its_value(self, engine, user):
+    def test_a_text_input_over_the_password_column_renders_no_value(self, engine, user):
         form = PasswordTextForm(instance=user)
         for src in (
             "{{ form.password }}",
@@ -569,14 +574,17 @@ class TestWhatWidgetsDo:
             "{{ form }}",
             "{% for x in form %}{{ x }}{% endfor %}",
         ):
-            assert user.password in render(engine, src, form=form), src
+            out = render(engine, src, form=form)
+            assert user.password not in out, src
+            assert 'name="password"' in out, "the control is still drawn: " + src
 
-    def test_a_configured_sensitive_field_renders_its_value_in_its_widget(self, engine, user):
+    def test_a_configured_sensitive_field_renders_no_value_in_its_widget(self, engine, user):
         with override_settings(DJUST_SENSITIVE_FIELDS=["email"]):
             out = render(
                 engine, "{{ form.email }}|{{ form.as_p }}", form=ProfileForm(instance=user)
             )
-        assert out.count("secret-3790@example.com") == 2
+        assert "secret-3790@example.com" not in out
+        assert out.count('name="email"') == 2
 
     def test_the_value_readers_of_the_same_forms_stay_refused(self, engine, user):
         form = PasswordTextForm(instance=user)
@@ -615,11 +623,13 @@ class TestTheRefusalIsLoud:
         assert attrs == ["data", "initial", "value"]
 
     def test_the_rendered_checkbox_is_the_documented_break(self, engine, user):
-        """`{% if form.is_staff.value %}checked{% endif %}` is empty now: the migration is to read the
-        value in the view and pass it, or to render `{{ form.is_staff }}`."""
+        """`{% if form.is_staff.value %}checked{% endif %}` is empty, and (#3797) so is the checkbox
+        `{{ form.is_staff }}` draws: the value is never rendered. The migration is to read the value
+        in the view and pass it, or to declare the field disabled / leave it out of the form."""
         form = UserChangeForm(instance=user)
         assert render(engine, "{% if form.is_staff.value %}checked{% endif %}", form=form) == ""
-        assert "checked" in render(engine, "{{ form.is_staff }}", form=form)
+        assert "checked" not in render(engine, "{{ form.is_staff }}", form=form)
+        assert 'name="is_staff"' in render(engine, "{{ form.is_staff }}", form=form)
 
 
 # ---------------------------------------------------------------------------------------------

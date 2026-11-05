@@ -107,20 +107,36 @@ flag, a PII column — because serialization defaulted to *allow everything*.
 > **What the form floor does NOT do (stated as limits, each pinned by a test in
 > `python/tests/test_form_floor_followups_3790.py`).**
 >
-> - *Widgets are not blanked.* `{{ form.field }}`, `as_p`, `{{ form }}` and a
->   loop's `{{ x }}` render the widget the view author chose. Django's
->   `ReadOnlyPasswordHashWidget` shows a summary of the hash, never the hash;
->   but a `TextInput` over the `password` column, or over a
->   `DJUST_SENSITIVE_FIELDS` field, prints `value="..."`. Blanking an editable
->   control clears it on the next save (a blank or omitted text control clears
->   the column; an unchecked checkbox demotes the user), so the floor guards
->   what a template can *read back*, not what the form draws. Tracked in
->   [#3797](https://github.com/djust-org/djust/issues/3797).
-> - *Components draw a disabled floor field without its value; an editable one is not stripped.* `dj_form`,
->   `combobox` and `rich_select` draw a `disabled` floor field without its
->   value (Django ignores what is posted for it). An *editable* floor field is
->   drawn with its value, and the component logs once that it did; declare the
->   form field `disabled=True`, or leave it out, to draw it without.
+> - *A floor field's control is drawn without its value, and re-posting it writes
+>   the emptiness (#3797).* The value of a floor field is **never rendered**,
+>   whatever widget the form author chose: `{{ form.field }}`, `as_widget`,
+>   `as_field_group`, `as_p` / `as_table` / `as_ul` / `as_div` / `render` /
+>   `{{ form }}`, a loop's `{{ x }}`, `visible_fields`, a formset's `as_p`, and the
+>   `{name: html}` snapshot of a form kept in state all draw the control the way
+>   Django draws a field that has none: a text control with no `value=`, a
+>   `<textarea>` with no body, no `selected` option, an unchecked checkbox, a
+>   `MultiWidget` with empty parts (`_floor_blank_bound_field`). Because Django's
+>   own widget does the drawing, a custom or third-party widget needs no
+>   cooperation. **The consequence is the author's to know**: an editable control
+>   that is drawn empty is posted back empty, so a blank text control clears the
+>   column and an unchecked `is_staff` checkbox demotes the user. djust logs it once
+>   per field. Declare the form field `disabled=True` (Django ignores what is
+>   posted for it), leave it out of the form, or opt the model field out of the
+>   floor with `djust_serialize_sensitive_fields` (then it is not a floor field).
+>   The stock `django.template` engine is the oracle and is not changed: the
+>   floor is a boundary of djust's own rendering (the native engine and
+>   `DjustTemplateBackend`), and a view's own Python (`form["password"].value()`)
+>   keeps reading the real value. Two widgets keep their own rendering by their own
+>   contract: Django's `ReadOnlyPasswordHashWidget`, matched by exact type (a
+>   masked summary: algorithm, iterations, the first six characters of the salt
+>   and hash; a subclass is not trusted), and `PasswordInput(render_value=True)`,
+>   the form author's explicit echo. Not covered: a form class's own custom
+>   render method (`def as_bootstrap(self)`) or a project form-renderer template
+>   that reads `form.instance` / `form.data` itself; those are the project's code.
+> - *Components draw a floor field without its value, editable or not.* `dj_form`,
+>   `combobox` and `rich_select` read `bound_field.value()` in Python through
+>   `_bound_field_value`, which returns `None` for a floor field (#3797; until then an
+>   editable one was drawn with its value). The editable case logs once.
 > - *A management form handed to the template DIRECTLY* as a context variable is a plain
 >   `Form` with no floor ([#3799](https://github.com/djust-org/djust/issues/3799)); only a
 >   formset's own `management_form` is pinned. The same goes for any plain `Form` that
@@ -138,9 +154,9 @@ flag, a PII column — because serialization defaulted to *allow everything*.
 >   applying the base names to every form would make a login form's typed
 >   `password` read back empty, a product decision.
 > - *`PasswordInput(render_value=True)` writes the value into the control.* That
->   is the widget the view author chose, so `{{ form.pw }}` still prints it (the
->   same as every floor field above); the template's READS of the value are still
->   refused. Pinned in `TestTheControlStillDraws`.
+>   is the form author's explicit choice, so `{{ form.pw }}` still prints it; the
+>   template's READS of the value are still refused. Pinned in
+>   `TestTheControlStillDraws` and `test_floor_widget_value_3797.py`.
 > - *Values held in plain data are not forms.* A view's own dict
 >   (`form_data`, `{"pw": request.POST["password"]}`) is not a `Form`: the floor
 >   guards forms and models, never a dict the author built. (`FormMixin`'s

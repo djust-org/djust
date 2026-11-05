@@ -4,6 +4,7 @@ JSON serialization utilities for Django models and Python types.
 Extracted from live_view.py for modularity.
 """
 
+import copy
 import functools
 import importlib.util
 import json
@@ -2475,21 +2476,218 @@ def form_field_floor_state(bound_field: Any) -> Optional[str]:
 _EDITABLE_FLOOR_WARNED: set = set()
 
 
-def warn_editable_floor_field(bound_field: Any) -> None:
-    """Say, once per model field, that a component rendered an EDITABLE floor field with its value."""
-    floor = _model_form_floor(bound_field.form)
+def warn_editable_floor_field(bound_field: Any, floor: Optional[tuple] = None) -> None:
+    """Say, once per model field, that an EDITABLE floor field was rendered WITHOUT its value (#3797).
+
+    A component (:func:`djust.components.templatetags._forms._bound_field_value`) and a template's own
+    rendering of the form (:func:`_floor_blank_bound_field`) both do it, so they say the same thing.
+    The consequence is the author's to know about: the control is drawn empty, and an unmodified
+    re-post writes that emptiness (a blank text control clears the column, an unchecked checkbox
+    demotes the user: ``test_form_initial_floor_3790.TestWhatPostingBackDoes``).
+    """
+    if floor is None:
+        floor = _model_form_floor(bound_field.form)
     key = (floor[0] if floor else None, bound_field.name)
     if key in _EDITABLE_FLOOR_WARNED:
         return
     _EDITABLE_FLOOR_WARNED.add(key)
     logger.warning(
-        "[djust] form field %s.%s is on the serialization floor and EDITABLE, so a component rendered "
-        "it with its value: stripping it would clear it on the next save (a blank text control clears "
-        "it, an unchecked checkbox demotes). Declare the form field disabled=True to render it "
-        "without the value, or leave it out of the form (#3790).",
-        floor[0].__name__ if floor else "?",
+        "[djust] form field %s.%s is on the serialization floor and EDITABLE, so its control is "
+        "rendered WITHOUT its stored value (#3797): posting the form back as rendered writes that "
+        "emptiness (a blank text control clears it, an unchecked checkbox demotes). Declare the form "
+        "field disabled=True (Django then ignores what is posted for it), leave it out of the form, "
+        "or opt the model field out of the floor with djust_serialize_sensitive_fields.",
+        floor[0].__name__ if floor and floor[0] is not None else "?",
         bound_field.name,
     )
+
+
+_KEEPS_VALUE_WIDGETS: Optional[tuple] = None
+
+
+def _widget_keeps_its_value(widget: Any) -> bool:
+    """May a floor field's widget keep drawing as it does? (#3797) Exactly two cases, both the widget's
+    OWN explicit contract and neither a way for a template to ask for a value:
+
+    * ``PasswordInput(render_value=True)``: the form author wrote that flag to echo the value into the
+      control (pinned in ``test_password_widget_floor_3798.TestTheControlStillDraws``). It is the one
+      widget-level opt-out there is, and it is the AUTHOR's, in the form class.
+    * Django's own ``ReadOnlyPasswordHashWidget``, matched by exact type: ``UserChangeForm.password``.
+      It draws a summary (algorithm, iterations, and the first six characters of the salt and the
+      hash, then ``*``), never the value. Blanked it would say "No password set." about a user who has
+      one. A subclass is NOT matched: its template is its own and can print ``widget.value``.
+    """
+    global _KEEPS_VALUE_WIDGETS
+    if _KEEPS_VALUE_WIDGETS is None:
+        from django.forms import PasswordInput
+
+        try:
+            from django.contrib.auth.forms import ReadOnlyPasswordHashWidget
+        except Exception:  # noqa: BLE001 - contrib.auth not installed: there is no such widget to keep
+            ReadOnlyPasswordHashWidget = type("_NoHashWidget", (), {})  # type: ignore[misc,assignment]
+        _KEEPS_VALUE_WIDGETS = (PasswordInput, ReadOnlyPasswordHashWidget)
+    password_input, hash_widget = _KEEPS_VALUE_WIDGETS
+    if isinstance(widget, password_input):
+        return bool(getattr(widget, "render_value", False))
+    return type(widget) is hash_widget
+
+
+def _no_value() -> None:
+    """``BoundField.value`` of a floor field as it is rendered: there is none."""
+    return None
+
+
+def _field_submission_keys(bound_field: Any) -> frozenset:
+    """Every key of ``form.data`` / ``form.files`` the control of *bound_field* is read from: its own
+    name, the name of its hidden-initial twin, and one per part of a ``MultiWidget``
+    (``widgets_names``: ``date_0``, ``date_1``) for each of the two."""
+    suffixes = getattr(bound_field.field.widget, "widgets_names", ())
+    names = (bound_field.html_name, bound_field.html_initial_name)
+    return frozenset(n + suffix for n in names for suffix in ("", *suffixes))
+
+
+def _floor_blank_bound_field(bound_field: Any, floor: Optional[tuple] = None) -> Any:
+    """A COPY of *bound_field* that draws its control without the stored value, else ``None`` (#3797).
+
+    A control is drawn from three reads on the ``BoundField``: ``value()`` (``as_widget``,
+    ``__str__``, ``as_hidden``, and the ``subwidgets`` it builds), ``initial`` (what ``value()`` is
+    made of), and ``data``, which on Django 5 ``as_widget(only_initial=True)`` takes straight out of
+    ``form.data`` (the posted hidden-initial value) without asking ``value()``. The copy answers ``None``
+    to the first two and is bound to a copy of the form whose ``data`` and ``files`` lack the control's
+    own keys (:func:`_field_submission_keys`), so ``data`` is empty too. The real ``BoundField`` is untouched:
+    the view's own code (``form["password"].value()``) and every other reader still see the value.
+
+    The widget therefore renders as it does for a field that has none: a text control with no
+    ``value=``, a ``<textarea>`` with no body, no ``<option selected>``, an unchecked checkbox, a
+    ``MultiWidget`` with empty parts. That is Django's own rendering of an empty field, not a djust
+    one, so a custom or third-party widget needs no cooperation.
+
+    ``None`` when the copy cannot be made or does not answer as promised (a ``BoundField`` subclass
+    with ``__slots__`` or a ``value`` that is a property): the caller renders nothing. A control that
+    cannot be drawn without its value is not drawn.
+    """
+    try:
+        if _widget_keeps_its_value(bound_field.field.widget):
+            return bound_field
+        blank = copy.copy(bound_field)
+        state = blank.__dict__
+        # ``subwidgets`` is cached from ``value()``: drop it, it is rebuilt from the answer below.
+        state.pop("subwidgets", None)
+        state.pop("_djust_floor_proxy", None)
+        state["value"] = _no_value
+        state["initial"] = None
+        form = bound_field.form
+        keys = _field_submission_keys(bound_field)
+        data, files = getattr(form, "data", None), getattr(form, "files", None)
+        if any(c is not None and k in c for c in (data, files) for k in keys):
+            # The control's own posted keys leave a copy of the form (``form.errors`` is computed on
+            # the REAL form first, so the copy shares the result and validates nothing twice).
+            form.errors  # noqa: B018
+            stripped = copy.copy(form)
+            stripped.data = _filter_floor_keys(data, lambda k: k not in keys)
+            stripped.files = _filter_floor_keys(files, lambda k: k not in keys)
+            state["form"] = stripped
+        if blank.value() is not None or blank.initial is not None:
+            raise TypeError("the copy still answers with the value")
+    except Exception:  # noqa: BLE001 - fail closed: nothing is drawn rather than the value
+        logger.warning(
+            "[djust] form field %s could not be drawn without its stored value, so it was not drawn "
+            "(#3797)",
+            getattr(bound_field, "name", "?"),
+        )
+        return None
+    if floor is not None and bound_field.name not in floor[4]:
+        if not getattr(bound_field.field, "disabled", False):
+            warn_editable_floor_field(bound_field, floor)
+    return blank
+
+
+def _floor_render(bound_field: Any, floor: Optional[tuple] = None) -> str:
+    """*bound_field*'s control as HTML without its stored value; ``""`` when it cannot be drawn."""
+    blank = _floor_blank_bound_field(bound_field, floor)
+    return "" if blank is None else str(blank)
+
+
+def _floor_render_form(form: Any, floor: tuple) -> Any:
+    """A copy of *form* whose floor fields draw without their stored value (#3797); a stand-in that
+    draws nothing when that cannot be done.
+
+    Django renders ``as_p`` / ``as_table`` / ``as_ul`` / ``as_div`` / ``render`` / ``str(form)`` from
+    ``self[name]``, and ``self[name]`` is ``self._bound_fields_cache[name]``. The copy shares every
+    piece of the form's state (``fields``, ``data``, ``initial``, the computed errors) and has its OWN
+    cache, filled with the form's real ``BoundField`` for every field that is not on the floor and a
+    blank one (:func:`_floor_blank_bound_field`) for every field that is. Django's own code then does
+    the rendering, on the copy; nothing of the real form is changed.
+
+    A form's errors are computed on the real form first (rendering does it unconditionally), so the
+    copy neither validates a second time nor holds a result the real form lacks. The work is one pass
+    over the fields: the same as the render.
+    """
+    try:
+        form.errors  # noqa: B018
+        shadow = copy.copy(form)
+        cache = {}
+        for name in list(form.fields):
+            bound_field = form[name]
+            if _floor_field_readable(floor, name):
+                cache[name] = bound_field
+                continue
+            blank = _floor_blank_bound_field(bound_field, floor)
+            if blank is None:
+                raise TypeError("a floor field cannot be drawn without its value")
+            cache[name] = blank
+        shadow._bound_fields_cache = cache
+    except Exception:  # noqa: BLE001 - fail closed: the form is not drawn rather than drawn with a value
+        logger.warning("[djust] a form with floor fields could not be drawn without them (#3797)")
+        return _UNDRAWABLE
+    return shadow
+
+
+class _Undrawable:
+    """What a form that cannot be drawn without its floor values renders as: nothing."""
+
+    def __getattr__(self, name: str) -> Any:
+        if name.startswith("_"):
+            raise AttributeError(name)
+        return lambda *args, **kwargs: ""
+
+    def __str__(self) -> str:
+        return ""
+
+    __html__ = __str__
+
+
+_UNDRAWABLE = _Undrawable()
+
+
+def _floor_render_formset(formset: Any) -> Any:
+    """A copy of *formset* whose forms are :func:`_floor_render_form` copies (#3797): the formset's own
+    ``as_p`` / ``render`` / ``str()`` iterate ``self.forms`` and render each of them."""
+    try:
+        shadow = copy.copy(formset)
+        forms = []
+        for form in formset.forms:
+            floor = _model_form_floor(form)
+            forms.append(form if floor is None else _floor_render_form(form, floor))
+        shadow.__dict__["forms"] = forms
+    except Exception:  # noqa: BLE001 - fail closed
+        logger.warning(
+            "[djust] a formset with floor fields could not be drawn without them (#3797)"
+        )
+        return _UNDRAWABLE
+    return shadow
+
+
+#: The form methods that RENDER the form's controls (``RenderableMixin``). The proxy runs them on
+#: :func:`_floor_render_form`'s copy. ``__str__`` / ``__html__`` are ``render`` and are routed the same.
+_FLOOR_FORM_RENDER_ATTRS = frozenset({"render", "as_p", "as_table", "as_ul", "as_div"})
+
+#: The ``BoundField`` methods that render the CONTROL (``as_widget``, and ``as_field_group`` / ``render``,
+#: which draw the label and the control from ``self``). Run on the blank copy. ``as_text`` /
+#: ``as_textarea`` / ``as_hidden`` stay refused (:data:`_FLOOR_BOUND_FIELD_ATTRS`).
+_FLOOR_BOUND_FIELD_RENDER_ATTRS = frozenset(
+    {"as_widget", "as_field_group", "render", "get_context"}
+)
 
 
 class _SidecarFormProxy:
@@ -2521,6 +2719,9 @@ class _SidecarFormProxy:
         if name.startswith("_"):
             raise AttributeError(name)
         form = object.__getattribute__(self, "_form")
+        if name in _FLOOR_FORM_RENDER_ATTRS:
+            # The form's own rendering runs on a copy whose floor fields draw without their value (#3797)
+            return getattr(_floor_render_form(form, object.__getattribute__(self, "_floor")), name)
         value = getattr(form, name)
         if name in _FLOOR_FORM_DICT_ATTRS:
             floor = object.__getattribute__(self, "_floor")
@@ -2541,10 +2742,12 @@ class _SidecarFormProxy:
         return attribute_names(object.__getattribute__(self, "_form"))
 
     def __str__(self) -> str:
-        return str(object.__getattribute__(self, "_form"))
+        return str(_floor_render_form(object.__getattribute__(self, "_form"), self._floor))
 
     def __html__(self) -> str:
-        return object.__getattribute__(self, "_form").__html__()  # type: ignore[no-any-return]
+        return _floor_render_form(  # type: ignore[no-any-return]
+            object.__getattribute__(self, "_form"), self._floor
+        ).__html__()
 
     def __repr__(self) -> str:
         return repr(object.__getattribute__(self, "_form"))
@@ -2578,6 +2781,9 @@ class _SidecarFormSetProxy:
         if name.startswith("_"):
             raise AttributeError(name)
         formset = object.__getattribute__(self, "_fs")
+        if name in _FLOOR_FORM_RENDER_ATTRS:
+            # each form's floor fields drawn without their value (#3797)
+            return getattr(_floor_render_formset(formset), name)
         value = getattr(formset, name)
         floor = object.__getattribute__(self, "_floor")
         if name in _FLOOR_FORM_DICT_ATTRS:
@@ -2614,10 +2820,12 @@ class _SidecarFormSetProxy:
         return attribute_names(object.__getattribute__(self, "_fs"))
 
     def __str__(self) -> str:
-        return str(object.__getattribute__(self, "_fs"))
+        return str(_floor_render_formset(object.__getattribute__(self, "_fs")))
 
     def __html__(self) -> str:
-        return object.__getattribute__(self, "_fs").__html__()  # type: ignore[no-any-return]
+        return _floor_render_formset(  # type: ignore[no-any-return]
+            object.__getattribute__(self, "_fs")
+        ).__html__()
 
     def __repr__(self) -> str:
         return repr(object.__getattribute__(self, "_fs"))
@@ -2658,6 +2866,12 @@ class _SidecarBoundFieldProxy:
             if name in ("value", "initial", "data"):
                 _warn_refused_floor_read(object.__getattribute__(self, "_floor"), bf.name, name)
             raise AttributeError(name)
+        if name in _FLOOR_BOUND_FIELD_RENDER_ATTRS:
+            # The control is drawn from a copy that has no value (#3797)
+            blank = _floor_blank_bound_field(bf, object.__getattribute__(self, "_floor"))
+            if blank is None:
+                raise AttributeError(name)
+            return _protect_sidecar_walk(getattr(blank, name))
         return _protect_sidecar_walk(getattr(bf, name))
 
     def __getitem__(self, idx: Any) -> Any:
@@ -2687,10 +2901,12 @@ class _SidecarBoundFieldProxy:
         ]
 
     def __str__(self) -> str:
-        return str(object.__getattribute__(self, "_bf"))
+        return _floor_render(
+            object.__getattribute__(self, "_bf"), object.__getattribute__(self, "_floor")
+        )
 
     def __html__(self) -> str:
-        return object.__getattribute__(self, "_bf").__html__()  # type: ignore[no-any-return]
+        return self.__str__()
 
     # No ``__repr__`` / ``__eq__`` / ``__hash__`` on purpose. The engine decides what ``==`` means
     # for an object when it converts it: a class with the default ``__eq__`` AND ``__repr__`` (a
@@ -2810,10 +3026,25 @@ def render_form_value(value: Any) -> Any:
     from django.utils.safestring import mark_safe
 
     if isinstance(value, BoundField):
+        # Held to the floor (#3797): this snapshot lands in LiveView state and the session, where the
+        # widget HTML of a floor field would be its stored value for good.
+        floor = _bound_field_floor(value) if value.form is not None else None
+        if floor is not None and not _floor_field_readable(floor, value.name):
+            return mark_safe(_floor_render(value, floor))
         return mark_safe(str(value))
 
     if isinstance(value, BaseForm):
-        return {name: mark_safe(str(value[name])) for name in value.fields}
+        floor = _model_form_floor(value)
+        if floor is None:
+            return {name: mark_safe(str(value[name])) for name in value.fields}
+        return {
+            name: mark_safe(
+                str(value[name])
+                if _floor_field_readable(floor, name)
+                else _floor_render(value[name], floor)
+            )
+            for name in value.fields
+        }
 
     return None
 
