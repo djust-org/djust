@@ -161,10 +161,11 @@ LIVEVIEW_CONFIG = {
     "max_message_size": 65536,  # 64KB
     "max_form_fields": 1000,           # fields one form's submitted data may hold (Django's default)
     "max_form_data_size": 2_621_440,   # characters of keys + values (Django's 2.5 MB)
+    "max_form_members": 100_000,       # keys, values and nested containers (bounds the time of an event)
 }
 ```
 
-`max_message_size` bounds one frame; a form's data is the sum of many, so `max_form_fields` and `max_form_data_size` bound what `FormMixin`, `WizardMixin`, the admin form view and a `params_form` keep (an event past them is refused whole, `0` = no limit; #3834). The fields a form declares do not count toward `max_form_fields`; nested values are counted to any depth. Behaviour change: more than 1,000 undeclared fields, or 2.5 MB, over the socket is refused as it is over HTTP; raise the limits for a form that needs more.
+`max_message_size` bounds one frame; a form's data is the sum of many, so `max_form_fields`, `max_form_data_size` and `max_form_members` bound what `FormMixin`, `WizardMixin`, the admin form view and a `params_form` keep (an event past them is refused whole, `0` = no limit; #3834). The fields a form declares do not count toward `max_form_fields`; nested values are counted to any depth. `max_form_members` counts every key, every value and every list, tuple, set or mapping inside them as one, however long a string is: characters do not bound time, because every event hands the whole of the stored data to the template engine at about 0.7 microseconds a member, so 2.6 million empty strings (under the size limit) made each later event take over a second (#3844). Behaviour change: more than 1,000 undeclared fields, or 2.5 MB, over the socket is refused as it is over HTTP, and so is data of more than 100,000 members; raise the limits for a form that needs more.
 
 For expensive handlers, use the `@rate_limit` decorator:
 
@@ -828,7 +829,7 @@ Verify production-safe defaults:
 - [ ] `DEBUG` is not hardcoded to `True` anywhere
 - [ ] Rate limit defaults are reasonable (100 req/s sustained, 20 burst)
 - [ ] `max_message_size` is set (default: 64KB)
-- [ ] `max_form_fields` / `max_form_data_size` are not `0` (defaults: 1000 fields, 2.5 MB)
+- [ ] `max_form_fields` / `max_form_data_size` / `max_form_members` are not `0` (defaults: 1000 fields, 2.5 MB, 100,000 members)
 - [ ] `max_connections_per_ip` is set (default: 10)
 - [ ] CSRF protection is enabled on all non-WebSocket endpoints
 - [ ] Template auto-escaping is enabled by default in the Rust engine
