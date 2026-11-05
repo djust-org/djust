@@ -642,8 +642,14 @@ class TestPerformanceBaseline:
         # walks the subscribers has to read them from here.
         backend_calls = []
         for name in dir(fresh_presence_backend):
-            method = getattr(fresh_presence_backend, name)
-            if name.startswith("_") or not callable(method):
+            # Public names only, and the name is checked BEFORE the lookup:
+            # ``dir()`` on 3.13+ lists ``__provides__`` (a zope.interface hook)
+            # and ``getattr`` on it raises AttributeError, which failed this test on
+            # 3.13, 3.14 and 3.15 while 3.12 passed.
+            if name.startswith("_"):
+                continue
+            method = getattr(fresh_presence_backend, name, None)
+            if not callable(method):
                 continue
 
             def counted(*args, _name=name, _method=method, **kwargs):
