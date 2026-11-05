@@ -1429,7 +1429,10 @@ class TestTheHandleNeverReachesTheWire2539:
         core = self._core()
         body = core.split("pub fn opaque_value", 1)[1].split("\n/// ", 1)[0]
         assert "resolve_lazy" not in body, "the deleted ADR-027 gate is back (#2628)"
-        producer = "Some(std::sync::Arc::new(ob.clone().unbind()))"
+        # The handle is BUILT in one expression. `opaque_value` binds it before wrapping it in
+        # `Some(..)` because the deferred text of a form shares the same `Arc` (#3769), so the
+        # pin counts the construction, which is what a "producer" is.
+        producer = "std::sync::Arc::new(ob.clone().unbind())"
         # FOUR producers since #2628: `opaque_value` (unconditional since
         # #2628), `handle_only_encoded` (the terminal arm for an object one of
         # `opaque_value`'s probes refused — #2628, replacing the deleted

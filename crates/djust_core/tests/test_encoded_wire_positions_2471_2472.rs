@@ -92,8 +92,8 @@ fn tag() -> String {
 fn sample() -> Encoded {
     Encoded {
         type_name: "datetime.timedelta".to_string(),
-        display: "0:01:30".to_string(),
-        json: "P0DT00H01M30S".to_string(),
+        display: "0:01:30".to_string().into(),
+        json: Some("P0DT00H01M30S".to_string()),
         truthy: true,
         // `None` — no `__len__`, which is what a `timedelta` answers. Slot 5
         // is an OPTION since #2477, not a boolean, so the "three consecutive
@@ -128,8 +128,6 @@ fn sample() -> Encoded {
         eq_class: Some(djust_core::EqClass::Identity),
         // TRANSIENT, never on the wire (#2539).
         live: None,
-        display_safe: false,
-        str_raised: false,
     }
 }
 
@@ -168,8 +166,8 @@ fn decode_parts(parts: Vec<Value>) -> Value {
 fn parts_of(e: &Encoded) -> Vec<Value> {
     let mut v = vec![
         Value::String(e.type_name.clone()),
-        Value::String(e.display.clone()),
-        Value::String(e.json.clone()),
+        Value::String(e.display().to_string()),
+        Value::String(e.json().to_string()),
         Value::Bool(e.truthy),
         match e.len {
             Some(n) => Value::Integer(n as i64),
@@ -951,7 +949,8 @@ fn the_older_widths_still_read_with_the_documented_fallbacks() {
             assert_eq!(back.len, None, "the 6-element bool slot 4 is `false`");
             assert_eq!(back.iterable, e.iterable);
             assert_eq!(
-                back.repr, e.display,
+                back.repr,
+                e.display(),
                 "a 6-element read must not invent a repr"
             );
             assert_eq!(back.cmp_key, None, "a 6-element read must not invent a key");
@@ -965,7 +964,7 @@ fn the_older_widths_still_read_with_the_documented_fallbacks() {
         Value::Encoded(back) => {
             assert_eq!(back.truthy, e.truthy);
             assert!(back.len.is_none() && !back.iterable);
-            assert_eq!(back.repr, e.display);
+            assert_eq!(back.repr, e.display());
             assert_eq!(back.cmp_key, None);
             assert!(back.attrs.is_empty());
         }
@@ -975,8 +974,8 @@ fn the_older_widths_still_read_with_the_documented_fallbacks() {
     // THREE — the #2448 shape: truthiness derived from the display.
     match decode_parts(legacy(3, false)) {
         Value::Encoded(back) => {
-            assert_eq!(back.truthy, !e.display.is_empty());
-            assert_eq!(back.repr, e.display);
+            assert_eq!(back.truthy, !e.display().is_empty());
+            assert_eq!(back.repr, e.display());
             assert_eq!(back.cmp_key, None);
             assert!(back.attrs.is_empty());
         }
