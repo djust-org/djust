@@ -199,7 +199,11 @@ def bind_params(view: Any, form_class: type, params: Any) -> BoundParams:
     # The parameters are a JSON object the client wrote (a ``url_change`` frame), so they are held to
     # the same field / size limits as any other data a client binds to a form (#3834): past them
     # the form is bound to nothing and the URL is invalid, with the reason in ``params_errors``.
-    refused = _form_data_bounds.refusal(None, params) if isinstance(params, Mapping) else None
+    refused = (
+        _form_data_bounds.refusal(None, params, getattr(form_class, "base_fields", None) or ())
+        if isinstance(params, Mapping)
+        else None
+    )
     if refused is not None:
         _form_data_bounds.warn(view, refused)
         form = form_class(data=QueryDict(mutable=True))

@@ -587,17 +587,33 @@ class FormMixin:
             return self.form_data
         return {f"{prefix}-{name}": value for name, value in self.form_data.items()}
 
+    def _declared_field_names(self) -> FrozenSet[str]:
+        """The names of the fields the form declares: the keys ``form_data`` holds from mount on, and
+        so not the client's to add (they do not count toward ``max_form_fields``)."""
+        try:
+            form_class = self.get_form_class()
+            return frozenset(getattr(form_class, "base_fields", None) or ())
+        except Exception:  # noqa: BLE001 - a dynamic get_form_class() that needs state: count them
+            return frozenset()
+
     def _refuse_form_data(self, incoming: Mapping[str, Any]) -> bool:
         """Refuse *incoming* when merging it into ``form_data`` would take the form past
         ``max_form_fields`` / ``max_form_data_size`` (#3834). True when refused: nothing of it was
-        stored, the log says so, and the form's errors tell the person using the form.
+        stored, the log says so, and the form's errors tell the person using the form. When it is
+        accepted, the refusal message an earlier event left in ``form_errors`` is cleared.
 
         ``form_data`` outlives the frame that filled it and is bound to the form on every event, so
         the bound that matters is on what it HOLDS, not on a frame (``max_message_size``)."""
-        message = _form_data_bounds.refusal(getattr(self, "form_data", None), incoming)
+        message = _form_data_bounds.refusal(
+            getattr(self, "form_data", None), incoming, self._declared_field_names()
+        )
         if message is None:
+            earlier = self.__dict__.pop("_form_data_refusal", None)
+            if earlier is not None and getattr(self, "form_errors", None) == [earlier]:
+                self.form_errors = {}
             return False
         _form_data_bounds.warn(self, message)
+        self._form_data_refusal = message
         self.is_valid = False
         self.form_errors = [message]
         return True

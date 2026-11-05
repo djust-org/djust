@@ -13,13 +13,13 @@ and every event after that copies and filters all of it.
 So the bound lives where the data is KEPT, not where a frame is read. Two settings, in
 ``LIVEVIEW_CONFIG``, defaulting to Django's own numbers:
 
-* ``max_form_fields`` (1000): how many keys a form's data may hold;
+* ``max_form_fields`` (1000): how many keys a form's data may hold beyond the fields it declares;
 * ``max_form_data_size`` (2,621,440): how many characters its keys and values may add up to.
 
 ``0`` removes a limit, as ``max_message_size = 0`` does. An event that would take the data past a limit
 is refused WHOLE (nothing of it is stored: a half-merged submit is a form nobody posted) and the view
 reports why in the form's errors; the data stays as it was, so the next event is judged on the same
-footing.
+footing, and the message is cleared by the next event that is accepted.
 
 Every path that lets a client name a key of a bound form's data asks :func:`refusal` first: ``FormMixin``
 (``validate_field``, ``submit_form``), ``WizardMixin`` (``update_step_field``, ``validate_field``), the
@@ -28,16 +28,17 @@ admin form view, and a ``params_form`` bound to a ``url_change``'s parameters.
 
 from __future__ import annotations
 
+import itertools
 import logging
-from typing import Any, Mapping, Optional, Tuple
+from typing import Any, Collection, Mapping, Optional, Tuple
 
 from .config import DEFAULT_MAX_FORM_DATA_SIZE, DEFAULT_MAX_FORM_FIELDS, config
 
 logger = logging.getLogger("djust.forms")
 
-#: How deep :func:`_weigh` follows a nested value. A frame is JSON, so a value can be a list of lists;
-#: past this a value is charged as if it were a string of that depth. The frame limit bounds the rest.
-_MAX_WEIGH_DEPTH = 8
+#: How many containers deep :func:`_weigh` follows a value before it refuses it. Each level costs the
+#: budget at least one character, so this only bounds the weigher's own stack, not what a client may send.
+_MAX_WEIGH_NESTING = 1000
 
 
 def limits() -> Tuple[int, int]:
@@ -53,35 +54,47 @@ def limits() -> Tuple[int, int]:
     )
 
 
-def _weigh(value: Any, budget: int, depth: int = 0) -> int:
-    """The characters *value* adds up to, stopping once they exceed *budget* (the caller only needs to
-    know whether they do). A string is its length; a number or ``None`` is the width of its text; a
-    list or mapping is its members."""
-    if isinstance(value, str):
-        return len(value)
-    if value is None or isinstance(value, (bool, int, float)):
-        return 8
-    if depth >= _MAX_WEIGH_DEPTH:
-        return 8
+_END = object()
+
+
+def _weigh(value: Any, budget: int) -> int:
+    """The characters *value* adds up to, stopping as soon as they exceed *budget* (the caller only
+    needs to know whether they do), so the work is O(budget) however the value is shaped.
+
+    A string, ``bytes`` or ``bytearray`` is its length; a list, tuple, set or mapping is one character
+    plus its members (and a mapping's keys); anything else is a small constant. There is NO depth at
+    which a container stops being looked into: a flat charge at some depth was a hole a client walks
+    through by wrapping its payload in that many lists. The walk is iterative (a stack of iterators,
+    one member pulled at a time), every node costs at least one character, so a cycle or a very deep
+    value runs out of budget instead of recursion; past ``_MAX_WEIGH_NESTING`` levels it is refused.
+    """
     total = 0
-    if isinstance(value, Mapping):
-        for key, member in value.items():
-            total += _weigh(key, budget - total, depth + 1) + _weigh(
-                member, budget - total, depth + 1
-            )
-            if total > budget:
-                return total
-        return total
-    if isinstance(value, (list, tuple, set, frozenset)):
-        for member in value:
-            total += _weigh(member, budget - total, depth + 1)
-            if total > budget:
-                return total
-        return total
-    return 8
+    stack = [iter((value,))]
+    while stack:
+        item = next(stack[-1], _END)
+        if item is _END:
+            stack.pop()
+            continue
+        if isinstance(item, (str, bytes, bytearray)):
+            total += len(item)
+        elif isinstance(item, Mapping):
+            total += 1
+            stack.append(itertools.chain.from_iterable(item.items()))
+        elif isinstance(item, (list, tuple, set, frozenset)):
+            total += 1
+            stack.append(iter(item))
+        else:
+            total += 8
+        if total > budget or len(stack) > _MAX_WEIGH_NESTING:
+            return max(total, budget + 1)
+    return total
 
 
-def refusal(current: Optional[Mapping[str, Any]], incoming: Mapping[str, Any]) -> Optional[str]:
+def refusal(
+    current: Optional[Mapping[str, Any]],
+    incoming: Mapping[str, Any],
+    declared: Collection[str] = (),
+) -> Optional[str]:
     """Why *incoming* may not be merged into *current*, or ``None`` when the result stays in bounds.
 
     *current* is the data the form already holds; *incoming* is what the client just sent. The result
@@ -89,17 +102,24 @@ def refusal(current: Optional[Mapping[str, Any]], incoming: Mapping[str, Any]) -
     add a field), and *incoming* is looked at first, so a flood of keys is refused on its length
     without being copied. The message is for the person using the form and names the limit, never the
     keys.
+
+    *declared* is the names of the fields the form itself declares. They are not the client's to add
+    (a mounted form already holds one key for each), so they do not count toward ``max_form_fields``:
+    a form that declares 1,200 fields can be submitted, and what the limit bounds is the keys a client
+    adds beyond them. Their values still count toward ``max_form_data_size``.
     """
     max_fields, max_size = limits()
     if not max_fields and not max_size:
         return None
     current = current or {}
     if max_fields:
-        if len(incoming) > max_fields:
+        if len(incoming) > max_fields + len(declared):
             return _too_many(max_fields)
-        # How many keys would be new: the merged count without building the merged mapping.
-        added = sum(1 for key in incoming if key not in current)
-        if len(current) + added > max_fields:
+        # The keys the client added: the merged keys that are not declared fields, counted without
+        # building the merged mapping.
+        extra = sum(1 for key in current if key not in declared)
+        extra += sum(1 for key in incoming if key not in current and key not in declared)
+        if extra > max_fields:
             return _too_many(max_fields)
     if max_size:
         size = _weigh(incoming, max_size)

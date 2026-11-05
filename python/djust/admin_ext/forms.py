@@ -6,7 +6,7 @@ readonly fields, and fieldset-based rendering.
 """
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, FrozenSet, List, Optional
 
 from django import forms
 from django.http import Http404
@@ -233,6 +233,12 @@ class AdminFormMixin(FormMixin):
         except Exception:
             logger.debug("Failed to get field value for %s", field_name, exc_info=True)
             return default
+
+    def _declared_field_names(self) -> FrozenSet[str]:
+        """The fields of the ModelAdmin form (``form_class`` is unset here), which are not the
+        client's to add: they do not count toward ``max_form_fields`` (#3834)."""
+        fields = getattr(getattr(self, "form_instance", None), "fields", None)
+        return frozenset(fields or ())
 
     def validate_field(
         self, field: str = "", field_name: str = "", value: Any = None, **kwargs: Any

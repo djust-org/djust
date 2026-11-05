@@ -273,6 +273,53 @@ class TestInvalidation:
             assert "first_name" not in proxy_of(form).data
         assert "first_name" in proxy_of(form).data
 
+    def test_sensitive_field_types_in_the_config_is_followed(self):
+        """``LIVEVIEW_CONFIG["sensitive_field_types"]`` is read by the TYPE floor, past the floor tuple."""
+        form = user_form({"username": "u", "email": "e@x.y"})
+        with override_settings(LIVEVIEW_CONFIG={"sensitive_field_types": []}):
+            assert "email" in proxy_of(form).data
+        with override_settings(LIVEVIEW_CONFIG={"sensitive_field_types": ["EmailField"]}):
+            assert "email" not in proxy_of(form).data
+            assert uncached(form) == {"username": "u"}
+        with override_settings(LIVEVIEW_CONFIG={"sensitive_field_types": []}):
+            assert "email" in proxy_of(form).data
+
+    def test_the_optout_set_is_followed(self, monkeypatch):
+        """An opt-out lets a name the allowlist omits through: the fingerprint must follow it."""
+        form = user_form({"username": "u", "first_name": "f"})
+        monkeypatch.setattr(User, "djust_serializable_fields", ("username",), raising=False)
+        assert set(proxy_of(form).data) == {"username"}
+        monkeypatch.setattr(
+            User, "djust_serialize_sensitive_fields", ("first_name",), raising=False
+        )
+        assert set(proxy_of(form).data) == {"username", "first_name"}
+        monkeypatch.setattr(User, "djust_serialize_sensitive_fields", None, raising=False)
+        assert set(proxy_of(form).data) == {"username"}
+
+    def test_a_column_added_to_the_model_at_runtime_is_followed(self):
+        """The TYPE floor resolves a key against the model's columns, so they are in the fingerprint."""
+        from django.db import models
+        from django.test.utils import isolate_apps
+
+        with isolate_apps("django.contrib.auth"):
+
+            class Grows(models.Model):
+                plain = models.CharField(max_length=3)
+
+                class Meta:
+                    app_label = "auth"
+
+            class GrowsForm(forms.ModelForm):
+                class Meta:
+                    model = Grows
+                    fields = ["plain"]
+
+            form = GrowsForm({"plain": "p", "blob": "bytes"})
+            assert set(proxy_of(form).data) == {"plain", "blob"}  # no such column yet
+            Grows.add_to_class("blob", models.BinaryField(null=True))  # the TYPE floor refuses it
+            assert uncached(form) == {"plain": "p"}
+            assert set(proxy_of(form).data) == {"plain"}
+
     def test_an_allowlist_set_on_the_model_is_followed(self, monkeypatch):
         form = user_form({"username": "u", "first_name": "f"})
         assert "first_name" in proxy_of(form).data
@@ -372,6 +419,7 @@ def apply_dict_step(rng, form, monkeypatch):
             "widget-pin",
             "widget-note",
             "settings",
+            "types",
             "model-floor",
             "noop",
             "noop",
@@ -395,6 +443,8 @@ def apply_dict_step(rng, form, monkeypatch):
     elif op == "settings":
         # applied for ONE read by the caller via override_settings; here: recorded on the form
         form._sensitive = rng.choice([[], ["first_name"], ["email", "note"]])
+    elif op == "types":
+        form._types = rng.choice([[], ["EmailField"], ["CharField"], ["BinaryField", "EmailField"]])
     elif op == "model-floor":
         monkeypatch.setattr(
             User,
@@ -402,12 +452,26 @@ def apply_dict_step(rng, form, monkeypatch):
             rng.choice([None, ("first_name",), ("email", "title")]),
             raising=False,
         )
+        monkeypatch.setattr(
+            User,
+            "djust_serializable_fields",
+            rng.choice([None, ("username",), ("username", "email", "first_name")]),
+            raising=False,
+        )
+        monkeypatch.setattr(
+            User,
+            "djust_serialize_sensitive_fields",
+            rng.choice([None, ("first_name",), ("password", "email")]),
+            raising=False,
+        )
     return op
 
 
 def apply_querydict_step(rng, form, monkeypatch):
     data = form.data
-    op = rng.choice(["add", "add", "remove", "mutable-add", "swap-data", "widget-pin", "noop"])
+    op = rng.choice(
+        ["add", "add", "remove", "mutable-add", "swap-data", "widget-pin", "types", "noop"]
+    )
     if op == "add":
         data._mutable = True
         data.appendlist(random_key(rng), "v")
@@ -425,6 +489,8 @@ def apply_querydict_step(rng, form, monkeypatch):
         form.data = copy
     elif op == "widget-pin" and "pin" in getattr(form, "fields", ()):
         form.fields["pin"].widget = rng.choice([forms.PasswordInput(), forms.TextInput()])
+    elif op == "types":
+        form._types = rng.choice([[], ["EmailField"], ["CharField"], ["BinaryField", "EmailField"]])
     return op
 
 
@@ -454,7 +520,11 @@ class TestCachedEqualsUncachedAfterEveryStep:
             step = apply_querydict_step if querydict else apply_dict_step
             step(rng, holder, monkeypatch)
             sensitive = getattr(holder, "_sensitive", [])
-            with override_settings(DJUST_SENSITIVE_FIELDS=sensitive):  # [] = none configured
+            types = getattr(holder, "_types", [])
+            with override_settings(
+                DJUST_SENSITIVE_FIELDS=sensitive,  # [] = none configured
+                LIVEVIEW_CONFIG={"sensitive_field_types": types},
+            ):
                 memo_before = holder.__dict__.get(serialization._DATA_FLOOR_MEMO_ATTR)
                 got = proxy_of(holder).data
                 want = uncached(holder)

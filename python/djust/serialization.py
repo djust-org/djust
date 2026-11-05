@@ -2290,6 +2290,11 @@ class _DataFloorMemo:
     input and compares it again before it trusts the answer: the keys in order, and a fingerprint of
     the floor taken as COPIES, so a set mutated in place after the fact cannot make the old and the new
     floor compare equal.
+
+    The memo keeps the key tuple of the mapping it was made for until the next read replaces it or the
+    form is dropped: replacing ``form.data`` and never reading it again leaves that tuple (one pointer
+    per key, bounded by the form-data limits over the socket) on the form, the same lifetime as the
+    form itself.
     """
 
     __slots__ = ("fingerprint", "keys", "refused")
@@ -2301,20 +2306,39 @@ class _DataFloorMemo:
 
 
 def _floor_fingerprint(floor: tuple) -> tuple:
-    """Everything :func:`_floor_field_readable` reads from *floor*, as values that cannot change.
+    """Everything :func:`_floor_field_readable` reads, as values that cannot change under it.
 
-    The model class is itself (a class is the same class); the sets are copied; the form's password
-    names are read NOW from the live ``fields`` the :class:`_FormPasswordNames` view looks through,
-    so a widget swapped on a live form is a different fingerprint from the one before it."""
+    That is the five parts of *floor* and the two things it reaches past them for, all listed here
+    because a verdict kept on an input this omits is a password key a template can read:
+
+    * the model class (itself: a class is the same class), the denied / allowed / opt-out sets
+      (copied, so a set edited in place afterwards is a different fingerprint), and the form's
+      password names, read NOW from the live ``fields`` the :class:`_FormPasswordNames` view looks
+      through, so a widget swapped on a live form is a different fingerprint;
+    * ``LIVEVIEW_CONFIG["sensitive_field_types"]`` (:func:`_sensitive_field_types`), which the TYPE
+      floor (:func:`_field_type_excluded_for`) matches the model's columns against;
+    * the model's columns, which that same floor resolves a key against (``_meta.get_field``) and
+      :func:`_floor_special_name_bound` measures. ``_meta.get_fields`` returns Django's cached tuple,
+      which Django replaces whenever a field is added to or removed from the model, so a column
+      added at runtime is a different fingerprint. A column whose CLASS is swapped in place
+      (``field.__class__ = ...``) is the one thing not seen; no Django API does that.
+
+    Everything else the verdict touches is a module constant (the identity keys, the sensitive model
+    methods and their prefixes)."""
     model_class, denied, allowed, optout, passwords = floor
     if isinstance(passwords, _FormPasswordNames):
         passwords = passwords._names()
+    columns = (
+        None if model_class is None else tuple(model_class._meta.get_fields(include_hidden=True))
+    )
     return (
         model_class,
         frozenset(denied),
         None if allowed is None else frozenset(allowed),
         frozenset(optout),
         frozenset(passwords),
+        _sensitive_field_types(),
+        columns,
     )
 
 

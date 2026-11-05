@@ -174,8 +174,9 @@ class TestTheLimitsHoldOverTheSocket:
         with limits(fields=25):
             drive(events)
         data = WsContact.last.form_data
-        assert len(data) == 25
-        assert set(data) == {"name", *("f%d" % i for i in range(24))}  # the first 24 were kept
+        # the declared field is not the client's to add, so 25 added fields fit beside it
+        assert len(data) == 26
+        assert set(data) == {"name", *("f%d" % i for i in range(25))}
         assert "more fields" in WsContact.last.form_errors[0]
 
     def test_a_field_sent_again_replaces_and_never_counts_twice(self):
@@ -277,7 +278,7 @@ class TestFormMixinHandlers:
             view.validate_field(field="a", value="1")
             view.validate_field(field="b", value="2")
             view.validate_field(field="c", value="3")
-        assert view.form_data == {**DECLARED, "a": "1"}
+        assert view.form_data == {**DECLARED, "a": "1", "b": "2"}
         assert view.is_valid is False and view.form_errors
 
     def test_submit_form_is_all_or_nothing(self):
@@ -289,7 +290,7 @@ class TestFormMixinHandlers:
 
     def test_a_refusal_does_not_poison_the_next_event(self):
         view = mounted()
-        with limits(fields=3):
+        with limits(fields=2):
             view.submit_form(a="1", b="2", c="3")
             view.submit_form(a="1", b="2")
         assert view.form_data == {**DECLARED, "a": "1", "b": "2"}
@@ -404,3 +405,235 @@ class TestConfigValidation:
             "max_form_fields" in r.getMessage() and "no limit" in r.getMessage()
             for r in caplog.records
         )
+
+
+# ---------------------------------------------------------------------------------------------
+def nest(value, depth):
+    for _ in range(depth):
+        value = [value]
+    return value
+
+
+DEPTHS = [0, 1, 7, 8, 9, 20, 50, 500]
+
+
+class TestNestingIsNotAWayAround:
+    """``_weigh`` once charged a flat 8 for any container at depth 8, so ``[[...["x" * 60000]...]]`` nine
+    lists deep was free: 1,000 such events stored 59,943,890 characters (23x the limit)."""
+
+    @pytest.mark.parametrize("depth", DEPTHS)
+    def test_the_weight_does_not_depend_on_the_depth(self, depth):
+        payload = {"k": nest("x" * 3000, depth)}
+        assert _form_data_bounds._weigh(payload, 10**9) >= 3000
+
+    @pytest.mark.parametrize("depth", DEPTHS)
+    def test_a_nested_payload_is_refused_like_a_flat_one(self, depth):
+        with limits(size=1000):
+            assert _form_data_bounds.refusal({}, {"k": nest("x" * 3000, depth)}) is not None
+
+    @pytest.mark.parametrize("depth", DEPTHS)
+    def test_nested_in_a_mapping_a_tuple_and_a_set_too(self, depth):
+        deep: Any = "x" * 3000
+        for i in range(depth):
+            deep = [{"a": deep}] if i % 2 else (deep,)
+        with limits(size=1000):
+            assert _form_data_bounds.refusal({}, {"k": deep}) is not None
+
+    def test_bytes_are_their_length(self):
+        with limits(size=1000):
+            assert _form_data_bounds.refusal({}, {"k": b"x" * 3000}) is not None
+            assert _form_data_bounds.refusal({}, {"k": [bytearray(3000)]}) is not None
+
+    def test_a_value_nested_past_the_stack_bound_is_refused_not_recursed_into(self):
+        deep: Any = "x"
+        for _ in range(5000):
+            deep = [deep]
+        with limits(size=10**9):
+            assert _form_data_bounds.refusal({}, {"k": deep}) is not None
+
+    def test_a_cycle_runs_out_of_budget(self):
+        cycle: list = []
+        cycle.append(cycle)
+        with limits(size=1000):
+            assert _form_data_bounds.refusal({}, {"k": cycle}) is not None
+
+    def test_the_work_is_bounded_by_the_budget_not_the_value(self):
+        pulled = []
+
+        class Endless(list):
+            def __iter__(self):
+                def gen():
+                    for i in range(10**9):
+                        pulled.append(i)
+                        yield "ab"
+
+                return gen()
+
+        weight = _form_data_bounds._weigh({"k": Endless()}, 1000)
+        assert weight > 1000
+        assert len(pulled) < 1000  # a few hundred members, not a billion
+
+    @pytest.mark.parametrize("depth", [9, 50])
+    def test_form_mixin_handlers(self, depth):
+        view = mounted()
+        payload = nest("x" * 3000, depth)
+        with limits(size=10_000):
+            for i in range(10):
+                view.validate_field(field="f%d" % i, value=payload)
+            view2 = mounted()
+            view2.submit_form(k=payload, j=payload, l=payload, m=payload)
+        stored = sum(len(k) for k in view.form_data) + 3000 * (len(view.form_data) - 1)
+        assert stored <= 10_000 + 3000
+        assert len(view.form_data) < 10
+        assert view2.form_data == DECLARED  # all four together are over: refused whole
+
+    @pytest.mark.parametrize("depth", [9, 50])
+    def test_wizard(self, depth):
+        view = mounted(Wizard)
+        with limits(size=10_000):
+            for i in range(10):
+                view.update_step_field(field="f%d" % i, value=nest("x" * 3000, depth))
+        assert len(view.wizard_step_data["one"]) < 10
+        assert "larger than the server accepts" in view.wizard_step_errors["one"]["__all__"][0]
+
+    @pytest.mark.parametrize("depth", [9, 50])
+    def test_admin_form_view(self, depth):
+        view = TestAdminFormView()._view()
+        with limits(size=10_000):
+            for i in range(10):
+                view.validate_field(field="f%d" % i, value=nest("x" * 3000, depth))
+            view.submit_form(**{"g%d" % i: nest("x" * 3000, depth) for i in range(5)})
+        assert len(view.form_data) < 10
+
+    @pytest.mark.parametrize("depth", [9, 50])
+    def test_params_form(self, depth):
+        from djust._params_form import bind_params
+
+        view = SimpleNamespace()
+        with limits(size=1000):
+            form, values = bind_params(view, Contact, {"name": nest("x" * 3_000_000, depth)})
+        assert values is None
+        assert "larger than the server accepts" in view.params_errors["__all__"][0]
+
+    def test_through_the_real_socket(self):
+        """The payload of the review: distinct names, each a string wrapped nine lists deep."""
+        events = [
+            {
+                "event": "validate_field",
+                "params": {"field": "f%d" % i, "value": nest("x" * 20_000, 9)},
+            }
+            for i in range(30)
+        ]
+        with limits(size=100_000):
+            drive(events)
+        data = WsContact.last.form_data
+        chars = sum(len(k) for k in data) + sum(20_000 for k in data if k != "name")
+        assert chars <= 100_000 + 20_000
+        assert 0 < len(data) < 30
+        assert "larger than the server accepts" in WsContact.last.form_errors[0]
+
+
+# ---------------------------------------------------------------------------------------------
+Big = type("Big", (forms.Form,), {"f%d" % i: forms.CharField(required=False) for i in range(1200)})
+
+
+class BigView(FormMixin, LiveView):
+    form_class = Big
+    template = "<div dj-root></div>"
+
+
+class TestDeclaredFieldsAreNotTheClientsToAdd:
+    """A form that declares 1,200 fields holds 1,200 keys from mount on; submitting them must work."""
+
+    def test_the_whole_form_can_be_submitted_at_the_default_limit(self):
+        view = mounted(BigView)
+        assert len(view.form_data) == 1200
+        view.submit_form(**{"f%d" % i: "v" for i in range(1200)})
+        assert view.form_errors in ({}, [])
+        assert view.form_data["f1199"] == "v"
+
+    def test_what_the_client_adds_beyond_them_is_what_is_limited(self):
+        view = mounted(BigView)
+        with limits(fields=10):
+            view.submit_form(
+                **{"f%d" % i: "v" for i in range(1200)}, **{"x%d" % i: "v" for i in range(10)}
+            )
+            assert "x9" in view.form_data
+            view.submit_form(x10="v")
+        assert "x10" not in view.form_data
+        assert "more fields" in view.form_errors[0]
+
+    def test_a_flood_is_still_refused_on_its_length(self):
+        view = mounted(BigView)
+        with limits(fields=10):
+            view.submit_form(**{"x%d" % i: "v" for i in range(2000)})
+        assert not any(k.startswith("x") for k in view.form_data)
+
+
+class TestARefusalDoesNotLinger:
+    def test_the_message_is_cleared_by_the_next_accepted_event(self):
+        view = mounted()
+        with limits(fields=1):
+            view.validate_field(field="a", value="1")
+            view.validate_field(field="b", value="2")
+            assert view.form_errors and "more fields" in view.form_errors[0]
+            view.validate_field(field="a", value="3")  # a replacement: accepted
+        assert view.form_errors == {}
+        assert view.form_data["a"] == "3"
+
+    def test_a_form_errors_value_somebody_else_set_is_left_alone(self):
+        view = mounted()
+        with limits(fields=1):
+            view.validate_field(field="a", value="1")
+            view.validate_field(field="b", value="2")
+            view.form_errors = ["their own"]
+            view.validate_field(field="a", value="3")
+        assert view.form_errors == ["their own"]
+
+    def test_the_wizard_step_message_is_cleared_too(self):
+        view = mounted(Wizard)
+        with limits(fields=1):
+            view.update_step_field(field="a", value="1")
+            view.update_step_field(field="b", value="2")
+            assert "one" in view.wizard_step_errors
+            view.update_step_field(field="a", value="3")
+        assert "one" not in view.wizard_step_errors
+
+
+Wide = type("Wide", (forms.Form,), {"w%d" % i: forms.CharField(required=False) for i in range(30)})
+
+
+class WideWizard(WizardMixin, LiveView):
+    wizard_steps = [{"name": "one", "title": "One", "form_class": Wide}]
+    template = "<div dj-root></div>"
+
+
+class TestDeclaredFieldsOnTheOtherPaths:
+    """The wizard step form and the ``params_form`` declare their fields too; they are not counted."""
+
+    def test_wizard_step_declared_fields_are_not_counted(self):
+        view = mounted(WideWizard)
+        with limits(fields=10):
+            for i in range(30):
+                view.update_step_field(field="w%d" % i, value="v")
+            for i in range(10):
+                view.update_step_field(field="x%d" % i, value="v")
+            assert "one" not in view.wizard_step_errors
+            view.update_step_field(field="x10", value="v")
+        assert "x9" in view.wizard_step_data["one"] and "x10" not in view.wizard_step_data["one"]
+        assert "more fields" in view.wizard_step_errors["one"]["__all__"][0]
+
+    def test_params_form_declared_fields_are_not_counted(self):
+        from djust._params_form import bind_params
+
+        view = SimpleNamespace()
+        with limits(fields=10):
+            form, values = bind_params(view, Wide, {"w%d" % i: "v" for i in range(30)})
+            assert values is not None and view.params_errors == {}
+            form, values = bind_params(
+                view,
+                Wide,
+                {**{"w%d" % i: "v" for i in range(30)}, **{"x%d" % i: "v" for i in range(11)}},
+            )
+        assert values is None
+        assert "more fields" in view.params_errors["__all__"][0]

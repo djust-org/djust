@@ -541,15 +541,22 @@ class WizardMixin:
         """Keep one client-named field of the current step, unless that takes the step's data past
         ``max_form_fields`` / ``max_form_data_size`` (#3834): ``wizard_step_data`` outlives the frame
         that filled it and is bound to the step's form on every event. A refusal stores nothing and
-        says so in the step's errors (``__all__``, Django's key for errors of no field)."""
-        step_name = self._steps[self.wizard_step_index]["name"]
-        step = self.wizard_step_data.setdefault(step_name, {})
-        message = _form_data_bounds.refusal(step, {name: value})
+        says so in the step's errors (``__all__``, Django's key for errors of no field); the next
+        accepted field clears that message."""
+        step = self._steps[self.wizard_step_index]
+        step_name = step["name"]
+        data = self.wizard_step_data.setdefault(step_name, {})
+        declared = getattr(step.get("form_class"), "base_fields", None) or ()
+        message = _form_data_bounds.refusal(data, {name: value}, declared)
+        earlier = self.__dict__.pop("_form_data_refusal", None)
         if message is not None:
             _form_data_bounds.warn(self, message)
+            self._form_data_refusal = message
             self.wizard_step_errors[step_name] = {"__all__": [message]}
             return
-        step[name] = value
+        if earlier is not None and self.wizard_step_errors.get(step_name) == {"__all__": [earlier]}:
+            del self.wizard_step_errors[step_name]
+        data[name] = value
 
     @event_handler()
     def update_step_field(self, field: str = "", value: Any = "", **kwargs: Any) -> None:

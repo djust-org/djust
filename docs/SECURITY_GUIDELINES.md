@@ -164,7 +164,7 @@ LIVEVIEW_CONFIG = {
 }
 ```
 
-`max_message_size` bounds one frame; a form's data is the sum of many, so `max_form_fields` and `max_form_data_size` bound what `FormMixin`, `WizardMixin`, the admin form view and a `params_form` keep (an event past them is refused whole, `0` = no limit; #3834).
+`max_message_size` bounds one frame; a form's data is the sum of many, so `max_form_fields` and `max_form_data_size` bound what `FormMixin`, `WizardMixin`, the admin form view and a `params_form` keep (an event past them is refused whole, `0` = no limit; #3834). The fields a form declares do not count toward `max_form_fields`; nested values are counted to any depth. Behaviour change: more than 1,000 undeclared fields, or 2.5 MB, over the socket is refused as it is over HTTP; raise the limits for a form that needs more.
 
 For expensive handlers, use the `@rate_limit` decorator:
 
