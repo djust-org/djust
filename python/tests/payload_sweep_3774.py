@@ -64,6 +64,11 @@ TAG_MODULES = (
     "djust.templatetags.djust_pwa",
     "djust.templatetags.live_tags",
 )
+#: The Rust-native handlers (#3820): ``_safe(...)`` is a guard sink, so their markup is audited and
+#: swept like the Django tags'. The sweep calls ``handler.render(args, [content,] context)`` the way
+#: the engine does: ``key=__v_key`` operands resolved from the context, the block body as a
+#: ``SafeString`` (registry.rs, #2379).
+HANDLER_MODULES = ("djust.components.rust_handlers",)
 SHAPES = ("str", "list_str", "list_dict", "dict", "numbers", "matrix", "records")
 #: Parameters that are, by contract, already-rendered (escaped) markup rather than data.
 RENDERED_PARAMS = frozenset({"content", "body", "children"})
@@ -130,11 +135,12 @@ def keys() -> tuple[set[str], set[str]]:
     """Every kwarg name the tags read, and the ones they ``int()`` straight away."""
     found: set[str] = set()
     numeric: set[str] = set()
-    for name in TAG_MODULES:
+    for name in (*TAG_MODULES, *HANDLER_MODULES):
         src = inspect.getsource(importlib.import_module(name))
         found |= set(re.findall(r'kw\.get\(\s*"(\w+)"', src))
         found |= set(re.findall(r'nkw\.get\(\s*"(\w+)"', src))
         numeric |= set(re.findall(r'int\(\s*kw\.get\(\s*"(\w+)"', src))
+        numeric |= set(re.findall(r'int\(cast\([^,]+,\s*kw\.get\(\s*"(\w+)"', src))
     return found, numeric
 
 
@@ -191,6 +197,39 @@ def kwargs_for(shape: str, mode: str, all_keys: set[str], numeric: set[str]) -> 
             columns=[{"key": text, "label": text}],
         )
     return kw
+
+
+def handlers() -> list[tuple[str, object, bool]]:
+    """``(tag, handler instance, takes a block body)`` for every native handler the module registers."""
+    module = importlib.import_module(HANDLER_MODULES[0])
+    out: list[tuple[str, object, bool]] = [(t, h, False) for t, h in module.INLINE_HANDLERS]
+    out += [(t, h, True) for t, _end, h in module.BLOCK_HANDLERS]
+    return out
+
+
+def render_handler(
+    handler, block: bool, shape: str, mode: str, all_keys, numeric, flags_off: bool = False
+):
+    """Call a native handler with the payload; ``None`` if it rejects it.
+
+    ``flags_off`` gives every flag key (``loading``, ``disabled`` ...) ``False`` instead of the
+    payload: a flag holding the payload is truthy, and ``DataTableHandler`` returns its loading
+    skeleton before the table it builds with the flags off.
+    """
+    from djust.components.rust_handlers import TYPED_ARGS_KEY
+
+    kw = kwargs_for(shape, mode, all_keys, numeric)
+    if flags_off:
+        kw = {k: (False if k in flag_keys() else v) for k, v in kw.items()}
+    context = {f"__v_{k}": v for k, v in kw.items()}
+    context[TYPED_ARGS_KEY] = dict(kw)
+    args = [f"{k}=__v_{k}" for k in kw]
+    try:
+        if block:
+            return handler.render(args, conditional_escape(PAYLOAD), context)
+        return handler.render(args, context)
+    except Exception:  # noqa: BLE001 - a handler that rejects the payload is not rendering it
+        return None
 
 
 def render_node(cls, shape: str, mode: str, all_keys: set[str], numeric: set[str]):
@@ -338,6 +377,27 @@ def sweep(extra_drivers=()) -> dict:
                             found += [
                                 (module_name, name, variant, mode, h) for h in injections(out)
                             ]
+    handlers_discovered = handlers_rendered = 0
+    seen_classes: set[type] = set()
+    for tag, handler, block in handlers():
+        if type(handler) in seen_classes or not hasattr(handler, "render"):
+            continue
+        seen_classes.add(type(handler))
+        if type(handler).__module__ != HANDLER_MODULES[0]:
+            continue  # a handler another module registers (function components, suspense) has its own tests
+        handlers_discovered += 1
+        ok = False
+        for mode in MODES:
+            for shape in SHAPES:
+                for flags_off in (False, True):
+                    if flags_off and shape not in ("str", "dict", "list_dict"):
+                        continue
+                    out = render_handler(handler, block, shape, mode, all_keys, numeric, flags_off)
+                    if out is None:
+                        continue
+                    ok = True
+                    found += [(HANDLER_MODULES[0], tag, shape, mode, h) for h in injections(out)]
+        handlers_rendered += ok
     for label, produce in extra_drivers:
         for mode in MODES:
             try:
@@ -347,4 +407,10 @@ def sweep(extra_drivers=()) -> dict:
                 continue
             for out in outputs:
                 found += [("driver", label, mode, h) for h in injections(out)]
-    return {"found": found, "rendered": rendered, "discovered": discovered}
+    return {
+        "found": found,
+        "rendered": rendered,
+        "discovered": discovered,
+        "handlers_rendered": handlers_rendered,
+        "handlers_discovered": handlers_discovered,
+    }

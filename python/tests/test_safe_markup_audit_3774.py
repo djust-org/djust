@@ -4,7 +4,9 @@
 outside tests and theming. Each one was read: the value traced to where it is escaped, validated or
 coerced. The record is ``scripts/lib/safe_markup_audit.py`` (what makes each site safe, plus
 evidence that must still be live code in its scope) and ``docs/internal/mark-safe-audit-3774.md`` (the same
-table with line numbers, generated).
+table with line numbers, generated). Since #3820 the guard also sees the ``_safe`` / ``safe_html``
+wrappers (199 sinks with them) and proves most of them itself, so what is audited here is the 54 sinks in
+50 functions it still cannot (``test_safe_markup_guard_3820.py`` holds the guard's own rules).
 
 What each class proves:
 
@@ -19,9 +21,10 @@ What each class proves:
 * ``TestTheEscaperIsRecognisedByOrigin`` pins why ``_advanced`` / ``_charts`` / ``_forms`` import
   ``conditional_escape`` from ``django.utils.html``: the guard trusts an escaper by ORIGIN, so the
   same call through ``._registry`` re-flags every site it escapes.
-* ``TestPayloadSweep`` is the empirical backstop for "safe": every component tag is rendered with a
-  hostile payload in every argument it reads, in seven shapes (``payload_sweep_3774.SHAPES``), and
-  the output is PARSED. A payload that became an attribute, an event handler or an element fails,
+* ``TestPayloadSweep`` is the empirical backstop for "safe": every component tag AND every Rust-native
+  handler (#3820) is rendered with a hostile payload in every argument it reads, in seven shapes
+  (``payload_sweep_3774.SHAPES``), and the output is PARSED. It covers what the guard now proves too,
+  so a clean verdict from the guard is still run. A payload that became an attribute, an event handler or an element fails,
   including one interpolated raw inside ``<textarea>`` or an SVG ``<title>`` (the payload closes
   both first, #3827). Its own checker is shown to catch a deliberately unescaped tag.
 * ``TestTheDocMatchesTheAudit`` keeps the generated table honest.
@@ -369,6 +372,22 @@ class TestTheCheckerCanFail:
             "<a href=javascript:zq(1)...>",
         }
 
+    class VulnerableHandler:
+        """A Rust-native handler that prints an operand raw: the sweep must see it."""
+
+        def render(self, args, context):
+            from djust.components.rust_handlers import _parse_args
+
+            kw = _parse_args(args, context)
+            return mark_safe(f'<a title="{kw["x"]}">{kw["x"]}</a>')
+
+    def test_it_catches_an_unescaped_native_handler(self):
+        all_keys, numeric = sweepmod.keys()
+        out = sweepmod.render_handler(
+            self.VulnerableHandler(), False, "str", "markup", all_keys | {"x"}, numeric
+        )
+        assert set(injections(out)) >= {"<a onmouseover=...>", "<b id=ZQ>", "<svg onload=...>"}
+
     def test_an_escaped_twin_is_clean_even_with_a_script_url(self):
         # Escaping stops attribute breakout; it does NOT stop ``javascript:`` in an href. That is
         # what safe_url / url_attr are for, and why the url mode exists: it fails any tag that
@@ -431,6 +450,25 @@ class TestPayloadSweep:
         assert result["found"] == [], f"a payload became markup or a script URL: {result['found']}"
         # A sweep that renders almost nothing proves nothing: most of the tags must have rendered.
         assert result["rendered"] >= 0.85 * result["discovered"], result
+        # ... and the same for the Rust-native handlers (#3820), which are most of the new sinks.
+        assert result["handlers_discovered"] >= 150, result
+        assert result["handlers_rendered"] >= 0.85 * result["handlers_discovered"], result
+
+    def test_the_sweep_reads_a_real_handler_with_the_payload(self):
+        from djust.components.rust_handlers import RibbonHandler
+
+        all_keys, numeric = sweepmod.keys()
+        out = str(
+            sweepmod.render_handler(RibbonHandler(), False, "str", "markup", all_keys, numeric)
+        )
+        assert "dj-ribbon" in out and TAG in out and "&quot;onmouseover" in out
+
+    def test_a_block_handler_is_given_the_body_the_engine_gives_it(self):
+        from djust.components.rust_handlers import CardHandler
+
+        all_keys, numeric = sweepmod.keys()
+        out = sweepmod.render_handler(CardHandler(), True, "str", "markup", all_keys, numeric)
+        assert out is not None and TAG in str(out)
 
     def test_the_sweep_reads_a_real_tag_with_the_payload(self):
         all_keys, numeric = sweepmod.keys()
