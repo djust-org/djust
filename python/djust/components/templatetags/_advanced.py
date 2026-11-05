@@ -11,12 +11,13 @@ import calendar as _calendar
 from typing import Any
 
 from django import template
+from django.utils.html import conditional_escape
 from django.utils.safestring import SafeString
 
 from djust.components.utils import url_attr
 from djust.components.utils import safe_css_color, safe_css_length
 
-from ._registry import register, _resolve, _parse_kv_args, conditional_escape, mark_safe, safe_url
+from ._registry import register, _resolve, _parse_kv_args, mark_safe, safe_url
 
 # ---------------------------------------------------------------------------
 # Tour / Onboarding Guide

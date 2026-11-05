@@ -2594,6 +2594,13 @@ def render_form_value(value: Any) -> Any:
 
     Returns the rendered value, or *None* if *value* is not a Form or
     BoundField (caller should continue with its own logic).
+
+    This is the **JSON-state** converter (the session save, a signed
+    snapshot, anything that must be ``json.dumps``-able). It is NOT how a form
+    reaches the template: a form held as LiveView state, or by a container
+    that is, rides the raw-Python sidecar as the object (:func:`holds_form`,
+    #3767), because a ``{name: widget HTML}`` dict cannot answer ``.errors``,
+    ``.label`` or ``{% for f in form %}``.
     """
     from django.forms import BaseForm
     from django.forms.boundfield import BoundField
@@ -2606,6 +2613,55 @@ def render_form_value(value: Any) -> Any:
         return {name: mark_safe(str(value[name])) for name in value.fields}
 
     return None
+
+
+#: How deep :func:`holds_form` looks inside dict / list / tuple. A form is held by a context
+#: name directly or one container (a wizard's ``steps``, a page's ``{"login": ..., "signup": ...}``);
+#: past this a value stays in state as :func:`render_form_value` rendered it, which is the
+#: behaviour the engine had before #3767 for it.
+_FORM_SCAN_DEPTH = 4
+
+
+def holds_form(value: Any, _depth: int = 0) -> bool:
+    """Is ``value`` a Django ``Form`` / ``BoundField`` / formset, or a dict / list / tuple holding one? (#3767)
+
+    A form is not state. ``LiveView`` state is JSON, and :func:`render_form_value` can only keep
+    the widget HTML of it (``{name: SafeString}``), which is why ``{{ form.name.errors }}``,
+    ``{% for f in form %}`` and ``{% field_error field=form.name %}`` were empty under the native
+    engine while ``DjustTemplateBackend`` (which hands the engine the form itself, #3755) and Django
+    rendered them. The engine already has a channel for the live object: the raw-Python sidecar
+    (``set_raw_py_values``), resolved lazily at the lookup, per segment, under the serialization
+    floor (#3790, #3798). A name for which this is True therefore goes there and **not** into the
+    Rust state, so the value stack has nothing to answer first (the shared assumption of the
+    options the issue lists: that the form must also be in state). This is the one decision, read
+    by every path that syncs a context to a ``RustLiveView``: ``_sync_state_to_rust``, the page
+    shell and a ``template_name`` component (see :func:`without_form_values`).
+
+    Containers are looked into because the sidecar is keyed by top-level name: a form one level
+    down is otherwise flattened inside the dict that holds it. A plain object that merely holds a
+    form is not looked into; it is already a sidecar value, and the engine's attribute walk reaches
+    the form through it.
+    """
+    from django.forms import BaseForm, BaseFormSet
+    from django.forms.boundfield import BoundField
+
+    if isinstance(value, (BaseForm, BaseFormSet, BoundField)):
+        return True
+    if _depth >= _FORM_SCAN_DEPTH or not isinstance(value, (dict, list, tuple)):
+        return False
+    items = value.values() if isinstance(value, dict) else value
+    return any(holds_form(item, _depth + 1) for item in items)
+
+
+def without_form_values(context: Dict[str, Any]) -> Dict[str, Any]:
+    """``context`` minus every name :func:`holds_form` claims (#3767).
+
+    For the entries that hand the engine a state dict and the raw objects separately
+    (``update_state`` / ``set_raw_py_values``) and build the raw side from the whole context
+    (``build_render_sidecar``): the state side must not carry what the sidecar answers, or the
+    flattened copy is found first.
+    """
+    return {k: v for k, v in context.items() if not holds_form(v)}
 
 
 def _is_form_object(value: Any) -> bool:

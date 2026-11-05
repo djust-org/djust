@@ -9,6 +9,7 @@ from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional, List
 from django import forms
 from django.utils.html import escape
+from ._html import attr_name
 from .config import config
 
 
@@ -243,7 +244,7 @@ class BaseAdapter(FrameworkAdapter):
         )
 
     def _build_tag(self, tag: str, attrs: Dict[str, str], content: Optional[str] = None) -> str:
-        attrs_str = " ".join(f'{k}="{escape(str(v))}"' for k, v in attrs.items())
+        attrs_str = " ".join(f'{attr_name(k)}="{escape(str(v))}"' for k, v in attrs.items())
         if content is not None:
             return f"<{tag} {attrs_str}>{content}</{tag}>"
         else:

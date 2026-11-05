@@ -10,13 +10,13 @@ import math as _math
 from typing import Any
 
 from django import template
+from django.utils.html import conditional_escape
 from django.utils.safestring import SafeString
 
 from ._registry import (
     register,
     _resolve,
     _parse_kv_args,
-    conditional_escape,
     mark_safe,
     interpolate_color,
 )

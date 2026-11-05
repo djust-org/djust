@@ -5,6 +5,7 @@ from typing import Any, Optional
 
 from django.utils.html import conditional_escape
 from djust import Component
+from djust._html import attr_name
 
 
 class Card(Component):
@@ -145,7 +146,7 @@ class Card(Component):
 
         # Add data attributes
         for k, v in self.data.items():
-            attrs.append(f'data-{html.escape(k)}="{html.escape(str(v))}"')
+            attrs.append(f'{attr_name("data-" + str(k))}="{html.escape(str(v))}"')
 
         attrs_str = " ".join(attrs)
 
