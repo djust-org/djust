@@ -122,16 +122,22 @@ def _parse_kv_args(bits: Any, parser: Any) -> Any:
 
 
 # Placed by {% modal_description %}; render_modal swaps it for the id.
-_MODAL_DESCRIPTION_MARKER = " data-dj-modal-description"
+#
+# render_modal finds the block in the already-rendered body, so what it looks for must be
+# something no ESCAPED variable can spell. A marker of plain characters (the old
+# ' data-dj-modal-description') survives escaping, so text inside an attribute value earlier in
+# the body could take the replacement - which carries a raw '"' - and break out of the value.
+# '<' is always escaped in variable output, so a marker that starts with one can only have been
+# written by this module (or by a template author who marks their own text safe).
+_MODAL_DESCRIPTION_MARKER = "<!--dj-modal-description-->"
+_MODAL_DESCRIPTION_OPEN = '<div class="dj-modal__description">'
 
 
 def render_modal_description(content: Any) -> SafeString:
     """Markup for ``{% modal_description %}``: the body of a modal's
     description, which the enclosing ``{% modal %}`` names in
     ``aria-describedby``."""
-    return mark_safe(
-        f'<div class="dj-modal__description"{_MODAL_DESCRIPTION_MARKER}>{content}</div>'
-    )
+    return mark_safe(f"{_MODAL_DESCRIPTION_MARKER}{_MODAL_DESCRIPTION_OPEN}{content}</div>")
 
 
 def render_modal(kw: Any, content: Any) -> SafeString:
@@ -182,10 +188,16 @@ def render_modal(kw: Any, content: Any) -> SafeString:
         level = 3
     description = kw.get("description", "")
     desc_id = f"{modal_id}-desc"
-    has_slot = not description and _MODAL_DESCRIPTION_MARKER in str(content)
+    marked = f"{_MODAL_DESCRIPTION_MARKER}{_MODAL_DESCRIPTION_OPEN}"
+    has_slot = not description and marked in str(content)
     if has_slot:
         # The {% modal_description %} block marked itself; give it the id.
-        content = str(content).replace(_MODAL_DESCRIPTION_MARKER, f' id="{desc_id}"', 1)
+        content = str(content).replace(
+            marked, f'<div class="dj-modal__description" id="{desc_id}">', 1
+        )
+    # No marker may reach the page: a second block, a block beside a description=, or a block
+    # outside any modal leaves it behind otherwise.
+    content = str(content).replace(_MODAL_DESCRIPTION_MARKER, "")
     described_ids = ([desc_id] if description or has_slot else []) + str(
         kw.get("describedby", "") or ""
     ).split()
