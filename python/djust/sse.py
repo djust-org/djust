@@ -13,6 +13,11 @@ Feature limitations compared to WebSocket transport:
 - No actor-based state management
 - No MessagePack binary encoding
 - No embedded child-view scoped updates (full-page updates only)
+- ``push_to_view()`` groups, ``scope=`` push scopes and ``db_notify`` are WebSocket-only:
+  they are delivered through the channel layer, which an SSE session does not join,
+  and SSE sessions are in-process, so a push from another process cannot reach one.
+  What an SSE session does get from the server: ``tick_interval`` / ``handle_tick()``
+  and ``await self.server_push(handler, payload)`` from the view's own code (#3809).
 
 Usage: Add SSE URL patterns to your Django URL configuration::
 
@@ -104,6 +109,13 @@ _CLOSE_DISPATCH_WAIT_S = 10.0
 # HTTP 503 when the whole process is saturated.
 _MAX_SESSIONS_PER_CLIENT = 20
 _MAX_SESSIONS_TOTAL = 10_000
+
+#: Back-pressure for server-driven frames (#3809). ``SSESession.push`` is a
+#: ``put_nowait`` on an unbounded queue, so a producer never waits for a client
+#: that stopped reading. At this many queued frames a tick is skipped and a
+#: ``self.server_push()`` is deferred (queued, coalescing, bounded) until the
+#: client drains below it. Frames answering an event are never held back.
+_MAX_QUEUED_SERVER_FRAMES = 128
 
 
 def _max_sessions_per_client() -> int:
@@ -759,6 +771,7 @@ class SSESession:
             await slot.runtime.finish_state_saves()
         except Exception:  # noqa: BLE001 — teardown goes on; storage errors may carry values
             logger.warning("SSE: finishing a released view's trailing save failed")
+        slot.runtime.stop_server_work()
         slot.runtime.view_instance = None
         slot.session.view_instance = None
         if view is None:
@@ -829,6 +842,7 @@ class SSESession:
                 # The latest state is stored before the old page goes (#3248):
                 # the new runtime's mount may restore from it.
                 await old_runtime.finish_state_saves()
+                old_runtime.stop_server_work()
                 old_runtime.view_instance = None
                 self.view_instance = None
                 # With one record per user (a backend on the old contract) the
@@ -959,6 +973,8 @@ class SSESession:
         for slot in list(self._slots.values()):
             self._shutdown_slot(slot)
         self._slots.clear()
+        # The tick and the queued pushes (#3809) go with the view.
+        self.runtime.stop_server_work()
         view = self.view_instance
         if view is not None:
             self._untrack_presence(view)
@@ -974,6 +990,7 @@ class SSESession:
         """The close of one view mounted beside the page view: ``shutdown``'s steps for it."""
         from ._child_lifecycle import release_root_view
 
+        slot.runtime.stop_server_work()
         view = slot.view
         if view is None:
             return

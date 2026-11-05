@@ -37,6 +37,7 @@ for all three verbs (mount / event / url_change).
 from __future__ import annotations
 
 import asyncio
+import collections
 import contextlib
 import contextvars
 import hashlib
@@ -739,6 +740,9 @@ def maybe_start_tick_task(consumer: Any, view_class: Any) -> bool:
     # The view this task ticks for, so a failed mount stops only its own task
     # (#3027). The runtime holds the mounting view when this runs.
     runtime = getattr(consumer, "_runtime", None)
+    if runtime is None and isinstance(consumer, ViewRuntime):
+        # SSE has no consumer: the runtime owns the tick (#3809).
+        runtime = consumer
     try:
         consumer._tick_task._djust_tick_view = getattr(runtime, "view_instance", None)
     except AttributeError:
@@ -1455,6 +1459,31 @@ async def _stored_scope_user(scope: Any) -> Any:
 
     store = import_module(settings.SESSION_ENGINE).SessionStore(key)
     return await get_user({**scope, "session": store})
+
+
+def _stored_request_user(request: Any) -> Any:
+    """``request`` as the session store holds its principal NOW (SSE server turns).
+
+    The SSE twin of :func:`_stored_scope_user`: a copy of the mount request whose
+    session is re-read by key from the configured engine and whose user is
+    resolved from it, so a sign-out elsewhere (the stored session is gone) or a
+    deactivated account resolves to ``AnonymousUser``. A request with no session
+    key has nothing stored to re-read, so it is returned as it is.
+    """
+    from copy import copy
+    from importlib import import_module
+
+    from django.conf import settings
+    from django.contrib.auth import get_user
+
+    session = getattr(request, "session", None)
+    key = getattr(session, "session_key", None)
+    if not key:
+        return request
+    fresh = copy(request)
+    fresh.session = import_module(settings.SESSION_ENGINE).SessionStore(key)
+    fresh.user = get_user(fresh)
+    return fresh
 
 
 class WSConsumerTransport:
@@ -2756,14 +2785,36 @@ class SSESessionTransport:
         request = getattr(session, "_request", None)
         if request is not None:
             view_instance._websocket_query_string = request.META.get("QUERY_STRING", "")
+        # The periodic tick, as the WebSocket starts it (#3809): the same
+        # opt-in rule, run by this session's runtime.
+        maybe_start_tick_task(session.runtime, type(view_instance))
+
+    def client_backlogged(self) -> bool:
+        """Whether the client has stopped reading server-driven frames (#3809).
+
+        The session queue holds every frame until the stream writes it, and a
+        producer never waits on it, so a stalled reader would grow it without
+        bound. At ``_MAX_QUEUED_SERVER_FRAMES`` queued frames a tick is skipped
+        and a push is deferred (see the runtime's back-pressure note)."""
+        from . import sse as _sse
+
+        return bool(self._session.queue.qsize() >= _sse._MAX_QUEUED_SERVER_FRAMES)
+
+    def render_busy(self, view: Any) -> bool:
+        """Whether a turn holds the session's render lock right now (#3809).
+
+        A server push that finds the session busy is deferred, as the
+        WebSocket's is, instead of waiting inside the caller."""
+        return bool(self._session._render_lock.locked())
 
     async def on_mount_failed(self, view: Any) -> None:
         """A view whose mount failed is not the session's mounted view.
 
         ``on_view_mounted`` set ``session.view_instance``, which the event and
-        message endpoints read; clear it, and untrack the presence ``mount()``
-        may have tracked."""
+        message endpoints read; clear it, stop the tick it started (#3809), and
+        untrack the presence ``mount()`` may have tracked."""
         session = self._session
+        session.runtime.stop_server_work(view)
         if getattr(session, "view_instance", None) is view:
             session.view_instance = None
         if getattr(view, "_presence_tracked", False):
@@ -2892,9 +2943,17 @@ class SSESessionTransport:
             # (``session._request``) defensively if the endpoint didn't stamp one
             # (e.g. a direct runtime.dispatch_event call) — the mount request
             # still carries a real user, so the re-check stays meaningful.
-            request = getattr(session, "_event_request", None) or getattr(session, "_request", None)
+            request = getattr(session, "_event_request", None)
             if request is None:
-                return True
+                # A server-originated turn (tick, push, background result): no
+                # POST is in flight. The mount request's user was resolved when
+                # the stream opened and stays cached, so it cannot see a logout
+                # or a deactivation since: re-read the session and the user, as
+                # the WebSocket does (#3809).
+                request = getattr(session, "_request", None)
+                if request is None:
+                    return True
+                request = await sync_to_async(_stored_request_user)(request)
             # An ``async def check_permissions`` is awaited on the loop.
             authorized = await acheck_view_auth_lightweight(view, request)
         except Exception as exc:  # noqa: BLE001 — fail CLOSED: an unverifiable check denies
@@ -3290,6 +3349,11 @@ def _public_decorator_metadata(view_instance: Any) -> List[Tuple[str, Dict[str, 
     return found
 
 
+#: How often a deferred SSE push re-checks that the client is draining (#3809).
+#: A pause between checks only while the client is backlogged; nothing asserts on it.
+_BACKLOG_POLL_S = 0.05
+
+
 class ViewRuntime(RuntimeTurnPort):
     """Wire-blind runtime for a single mounted LiveView session.
 
@@ -3368,6 +3432,13 @@ class ViewRuntime(RuntimeTurnPort):
         # render when the transport asks for it (``capture_document_title``,
         # WS: during a live_redirect mount). See ``navigation_title``.
         self.mount_document_title: Optional[str] = None
+        # Server-originated turns on a transport with no channel layer (SSE,
+        # #3809). ``_mount_sent_for`` is the view whose mount frame went out;
+        # the tick task and the deferred-push queue and drain belong to it.
+        self._mount_sent_for: Any = None
+        self._tick_task: Optional["asyncio.Task[None]"] = None
+        self._deferred_pushes: Optional["collections.deque[Tuple[Any, Dict[str, Any]]]"] = None
+        self._push_drain_task: Optional["asyncio.Future[None]"] = None
 
     # ------------------------------------------------------------------ #
     # Public properties
@@ -4591,6 +4662,9 @@ class ViewRuntime(RuntimeTurnPort):
                 }
 
         await self.transport.send(mount_msg)
+        # From here a server-originated turn (push / tick, #3809) may address
+        # this view: before the mount frame the client has nothing to patch.
+        self._mount_sent_for = view_instance
         logger.info(
             "Runtime: mounted view %s (session %s)",
             sanitize_for_log(view_path),
@@ -8907,6 +8981,8 @@ class ViewRuntime(RuntimeTurnPort):
         snapshot_fields: Optional[Dict[str, Any]] = None,
         *,
         force_html: bool = False,
+        source: str = "async",
+        broadcast: bool = False,
     ) -> None:
         """Re-sync + re-render after background work and emit the result frame.
 
@@ -8945,7 +9021,7 @@ class ViewRuntime(RuntimeTurnPort):
                 "patches": patch_list,
                 "version": wire_version,
                 "event_name": event_name,
-                "source": "async",
+                "source": source,
             }
         else:
             if hasattr(view, "_strip_comments_and_whitespace"):
@@ -8957,10 +9033,406 @@ class ViewRuntime(RuntimeTurnPort):
                 "html": html,
                 "version": wire_version,
                 "event_name": event_name,
-                "source": "async",
+                "source": source,
             }
+        if broadcast:
+            # A server push (#3809) is tagged as the WebSocket's push turn tags
+            # its frames, so the client treats both transports alike.
+            msg["broadcast"] = True
         if snapshot_fields:
             # An explicit root's refreshed signed snapshot (ADR-038 E3).
             msg.update(snapshot_fields)
         await self._send_render_frame(msg)
         await self._flush_all_pending()
+
+    # ------------------------------------------------------------------ #
+    # Server-originated turns without a channel layer: SSE (#3809).
+    #
+    # The WebSocket consumer owns the server push, the tick and their render
+    # lock (``LiveViewConsumer._server_push_to_view`` / ``_run_tick``); both are
+    # wired to the channel layer and to the consumer's own lock, so the runtime
+    # cannot run them for a socket. An SSE session has no channel layer: its
+    # sessions live in this process, and the view's own code is the only caller.
+    # These are the SSE twins of those two turns, on the session's render lock
+    # borrowed through ``transport.event_context`` (the #560 version-interleave
+    # guard; a runtime-local lock would not serialize against the event spine).
+    # What stays WebSocket-only over SSE: ``push_to_view`` groups, push scopes
+    # and ``db_notify`` (they need the channel layer), the worker-pool offload
+    # of a push turn, and ``sync_push_scope_groups``.
+    #
+    # Back-pressure. A WebSocket tick or push awaits ``send`` under the render
+    # lock, so a client that does not read slows them. An SSE frame is a
+    # ``put_nowait`` on the session queue, so nothing slows a producer. While
+    # the queue holds ``_MAX_QUEUED_SERVER_FRAMES`` frames or more (the client
+    # is not draining), a tick is skipped and a push is deferred (queued,
+    # coalescing, bounded: the newest wins), exactly as when a turn is in
+    # progress. Frames answering an event are never held back.
+    # ------------------------------------------------------------------ #
+
+    async def server_push(self, view: Any, event: Dict[str, Any]) -> bool:
+        """Run ``event`` (``{"handler": ..., "payload": ...}``) on ``view`` as a
+        ``push``/``server_push`` turn, deferring it while the session is busy.
+
+        The SSE twin of ``LiveViewConsumer._server_push_to_view``: a push that
+        finds a turn in progress, a client that is not draining, or earlier
+        pushes still queued, is queued and replayed in arrival order once the
+        render lock frees; identical queued pushes coalesce and the queue is
+        bounded, as on the socket (#3001). A failing handler or render is
+        logged and swallowed, as on the socket. Returns whether the push was run
+        or queued; ``False`` when ``view`` is not the mounted view (replaced,
+        closed, or its mount frame not sent).
+        """
+        if view is None or self.view_instance is not view or self._mount_sent_for is not view:
+            return False
+        task = self._push_drain_task
+        draining = task is not None and not task.done()
+        # ``draining`` also covers earlier pushes still queued (the queue is only
+        # non-empty while a drain runs), so a push never overtakes them.
+        if draining or self._server_turn_busy(view) or self._client_backlogged():
+            logger.debug("[djust] server_push on %s deferred — session busy", type(view).__name__)
+            self._defer_server_push(view, event)
+            return True
+        await self._run_server_push(view, lambda: [event])
+        return True
+
+    def _server_turn_busy(self, view: Any) -> bool:
+        """Whether a turn holds the lock(s) a server-originated turn would take."""
+        from ._exposure import uses_legacy_exposure
+
+        if not uses_legacy_exposure(view) and self._explicit_event_lock.locked():
+            return True
+        busy = getattr(self.transport, "render_busy", None)
+        return bool(busy and busy(view))
+
+    def _client_backlogged(self) -> bool:
+        """Whether the client has stopped draining server-driven frames."""
+        backlogged = getattr(self.transport, "client_backlogged", None)
+        return bool(backlogged and backlogged())
+
+    def _defer_server_push(self, view: Any, event: Dict[str, Any]) -> None:
+        """Queue a push that found the session busy and make sure a drain runs.
+
+        ``LiveViewConsumer._defer_server_push``'s rules: an identical push
+        already waiting is superseded (it keeps the position of its latest
+        arrival), the queue is bounded and drops the OLDEST past the bound, and
+        each entry remembers the view it was addressed to, so a push queued
+        before a navigation or a close is dropped rather than applied to
+        another view.
+        """
+        queue = self._deferred_pushes
+        if queue is None:
+            from .websocket import _MAX_DEFERRED_PUSHES
+
+            queue = self._deferred_pushes = collections.deque(maxlen=_MAX_DEFERRED_PUSHES)
+        for queued in list(queue):
+            if queued[0] is view and queued[1] == event:
+                queue.remove(queued)
+        if len(queue) == queue.maxlen:
+            logger.debug("[djust] deferred server_push queue full — dropping the oldest")
+        queue.append((view, event))
+        task = self._push_drain_task
+        if task is None or task.done():
+            self._push_drain_task = asyncio.ensure_future(self._drain_deferred_pushes())
+
+    async def _drain_deferred_pushes(self) -> None:
+        """Replay the deferred pushes, in order, as turns on the lock they waited for."""
+        queue = self._deferred_pushes
+        while queue:
+            view = self.view_instance
+            if view is None:
+                queue.clear()
+                return
+            if self._client_backlogged():
+                # The client is not reading: hold the pushes (they coalesce and
+                # are bounded) until it does, or until the view goes away.
+                await asyncio.sleep(_BACKLOG_POLL_S)
+                continue
+
+            def take(view: Any = view, queue: Any = queue) -> List[Dict[str, Any]]:
+                # After the lock: pushes that queued while this waited join the
+                # same turn, so a backlog costs one render (#3001). Entries for
+                # a view that has since been replaced are dropped.
+                events: List[Dict[str, Any]] = []
+                while queue:
+                    queued_view, event = queue.popleft()
+                    if queued_view is view:
+                        events.append(event)
+                return events
+
+            await self._run_server_push(view, take)
+
+    async def _run_server_push(self, view: Any, take: Callable[[], List[Dict[str, Any]]]) -> None:
+        """Take the render lock, then run what ``take()`` returns as one push turn.
+
+        Never raises: a failure is logged and the caller (a view's task, or the
+        drain with a batch already popped) carries on, as the socket's push turn
+        does. Work the handlers queued with ``start_async`` runs once the lock is
+        free (#2955), even when the render failed.
+        """
+        from ._exposure import uses_legacy_exposure
+
+        applied = [False]
+        explicit_lock = (
+            contextlib.nullcontext() if uses_legacy_exposure(view) else self._explicit_event_lock
+        )
+        try:
+            async with explicit_lock, self.transport.event_context(view):
+                events = take()
+                if events and self.view_instance is view:
+                    turn = Turn(
+                        "push",
+                        self.turn_transport,
+                        source="server_push",
+                        view=view,
+                        scope=self.scope,
+                        session_id=self._turn_session_id(),
+                        port=self,
+                    )
+                    turn._locked = True
+
+                    async def body(_turn: Turn) -> None:
+                        await self._server_push_body(view, events, applied)
+
+                    await run_turn(turn, body)
+        except Exception as exc:  # noqa: BLE001 — logged, never into the caller
+            from ._exposure_diagnostics import log_failure_for
+
+            log_failure_for(
+                logger,
+                (view,),
+                exc,
+                "Error in server_push: %s",
+                type(exc).__name__,
+                level="warning",
+                traceback=True,
+            )
+        if applied[0] and self.view_instance is view:
+            self._dispatch_async_work(None)
+
+    async def _server_push_body(
+        self, view: Any, events: List[Dict[str, Any]], applied: List[bool]
+    ) -> None:
+        """Apply the pushes, render once, send. Sets ``applied[0]`` once a hook ran.
+
+        The caller holds the render lock and has checked ``view`` is mounted.
+        ``LiveViewConsumer._run_server_push_turn``'s stock path: the handler is
+        the one ``_prepare_server_push`` allows (``handle_*``, ``@event_handler``
+        or ``@push_handler``; anything else is refused with a warning, and a
+        payload cannot name another), each hook runs in arrival order and a
+        raising one is logged and skipped, and the turn renders unless every
+        applied hook asked to skip.
+        """
+        from ._exposure import uses_legacy_exposure
+        from .websocket import LiveViewConsumer, _resolve_skip_render
+
+        legacy = uses_legacy_exposure(view)
+        if not legacy:
+            try:
+                await self.authorize_explicit_turn(view)
+            except Exception:  # noqa: BLE001 — no auth provider values on the wire/log
+                if self.view_instance is view:
+                    await self.deny_explicit_turn()
+                view.__dict__.pop("_djust_event_request", None)
+                return
+        try:
+            with _tenant_context(getattr(view, "_tenant", None)):
+                render = False
+                for event in events:
+                    try:
+                        hook = LiveViewConsumer._prepare_server_push(view, event)
+                        if hook is not None:
+                            handler_fn, payload = hook
+                            await call_hook(handler_fn, **payload)
+                    except Exception as exc:  # noqa: BLE001 — logged, the next push still runs
+                        from ._exposure_diagnostics import log_failure_for
+
+                        log_failure_for(
+                            logger,
+                            (view,),
+                            exc,
+                            "Error in server_push: %s",
+                            type(exc).__name__,
+                            level="warning",
+                            traceback=True,
+                        )
+                        if self.view_instance is not view:
+                            return
+                        continue
+                    applied[0] = True
+                    if not _resolve_skip_render(view):
+                        render = True
+                    if self.view_instance is not view:
+                        return
+                if not applied[0]:
+                    return
+                if not render:
+                    # No frame of its own (#3034): a push has no ``ref`` to acknowledge.
+                    await self._flush_all_pending()
+                    return
+                snapshot_fields = None
+                if not legacy:
+                    if not await self.commit_explicit_turn(view, source="async"):
+                        return
+                    snapshot_fields = await self._explicit_event_snapshot(view)
+                await self._render_async_result(
+                    None, snapshot_fields=snapshot_fields, source="broadcast", broadcast=True
+                )
+        finally:
+            view.__dict__.pop("_djust_event_request", None)
+
+    async def _run_tick(self, interval_ms: int) -> None:
+        """The SSE twin of ``LiveViewConsumer._run_tick``: one :meth:`_tick_once`
+        every ``interval_ms`` until the view goes away or the task is cancelled."""
+        interval_s = interval_ms / 1000.0
+        own_view = self.view_instance
+        while True:
+            await asyncio.sleep(interval_s)
+            view = self.view_instance
+            if view is None or (own_view is not None and view is not own_view):
+                # Closed, navigated away, or another view mounted (it has its own task).
+                return
+            try:
+                await self._tick_once(view)
+            except Exception as exc:  # noqa: BLE001 — a failing tick must not end the loop
+                from ._exposure_diagnostics import log_failure_for
+
+                log_failure_for(
+                    logger,
+                    (view,),
+                    exc,
+                    "Error in tick handler: %s",
+                    type(exc).__name__,
+                    level="warning",
+                    traceback=True,
+                )
+
+    async def _tick_once(self, view: Any) -> bool:
+        """One tick: ``handle_tick``, render when state changed, send. Returns
+        whether a frame was sent. The SSE twin of ``LiveViewConsumer._tick_once``.
+
+        Every early return is a skip, not a stop. A tick yields to a turn in
+        progress and to a client that is not draining (it is skipped, not
+        queued: the next interval picks up any change, #560), waits for the
+        mount frame, and runs the turn chain, so
+        ``LIVEVIEW_CONFIG["sync_turn_wrapper"]`` and ``reauth_on_event`` apply.
+        """
+        if self.view_instance is not view or self._mount_sent_for is not view:
+            return False  # gone, or still mounting: the client has nothing to patch yet
+        if self._server_turn_busy(view) or self._client_backlogged():
+            logger.debug("[djust] Tick on %s skipped — session busy", type(view).__name__)
+            return False
+        from ._exposure import uses_legacy_exposure
+
+        sent = False
+        ran = [False]
+        explicit_lock = (
+            contextlib.nullcontext() if uses_legacy_exposure(view) else self._explicit_event_lock
+        )
+        try:
+            async with explicit_lock, self.transport.event_context(view):
+                if self.view_instance is not view:
+                    return False
+                turn = Turn(
+                    "push",
+                    self.turn_transport,
+                    source="tick",
+                    view=view,
+                    scope=self.scope,
+                    session_id=self._turn_session_id(),
+                    port=self,
+                )
+                turn._locked = True
+
+                async def body(_turn: Turn) -> None:
+                    nonlocal sent
+                    sent = await self._tick_body(view, ran)
+
+                await run_turn(turn, body)
+        finally:
+            # start_async work handle_tick queued runs once the lock is free
+            # (#2955), even when the render failed.
+            if ran[0] and self.view_instance is view:
+                self._dispatch_async_work(None)
+        return sent
+
+    async def _tick_body(self, view: Any, ran: List[bool]) -> bool:
+        """The locked part of a tick: whether a frame was sent. ``ran[0]`` is set
+        once ``handle_tick`` has run."""
+        from ._exposure import uses_legacy_exposure
+        from ._view_hooks import call_tick
+        from .websocket import _resolve_skip_render, _snapshot_assigns
+
+        legacy = uses_legacy_exposure(view)
+        if not legacy:
+            try:
+                await self.authorize_explicit_turn(view)
+            except Exception:  # noqa: BLE001 — no auth provider values on the wire/log
+                if self.view_instance is view:
+                    await self.deny_explicit_turn()
+                view.__dict__.pop("_djust_event_request", None)
+                return False
+        try:
+            with _tenant_context(getattr(view, "_tenant", None)):
+                pre_assigns = _snapshot_assigns(view)
+                await call_tick(view)
+                ran[0] = True
+                if self.view_instance is not view:
+                    return False
+                if _resolve_skip_render(view):
+                    await self._flush_all_pending()
+                    return False
+                force_full_html = getattr(view, "_force_full_html", False)
+                if pre_assigns == _snapshot_assigns(view) and not force_full_html:
+                    await self._flush_all_pending()
+                    return False
+                snapshot_fields = None
+                if not legacy:
+                    if not await self.commit_explicit_turn(view, source="async"):
+                        return False
+                    snapshot_fields = await self._explicit_event_snapshot(view)
+                await self._render_async_result(
+                    "tick", snapshot_fields=snapshot_fields, source="tick"
+                )
+                return True
+        finally:
+            view.__dict__.pop("_djust_event_request", None)
+
+    def stop_server_work(self, view: Any = None) -> None:
+        """Stop the tick and drop the queued pushes of ``view`` (every one when
+        ``None``). Safe from any thread: ``SSESession.shutdown`` also runs on a
+        worker thread (``_StreamGuard.abandon``), where ``Task.cancel`` on the
+        loop's task is not allowed, so off the loop the work is handed to it.
+
+        A drain already waiting on the lock finds an empty queue (or another
+        view) and ends by itself; nothing it holds outlives the lock.
+        """
+
+        def stop() -> None:
+            task = self._tick_task
+            if task is not None:
+                ticking_for = getattr(task, "_djust_tick_view", None)
+                if view is None or ticking_for is None or ticking_for is view:
+                    self._tick_task = None
+                    if not task.done():
+                        # A task of a CLOSED loop (multi-loop teardown) cannot be
+                        # woken: ``cancel`` raises, and nothing is left to cancel.
+                        with contextlib.suppress(RuntimeError):
+                            task.cancel()
+            queue = self._deferred_pushes
+            if queue:
+                if view is None:
+                    queue.clear()
+                else:
+                    for queued in [q for q in queue if q[0] is view]:
+                        queue.remove(queued)
+
+        owner = self._tick_task or self._push_drain_task
+        loop = owner.get_loop() if owner is not None else None
+        try:
+            here: Optional[asyncio.AbstractEventLoop] = asyncio.get_running_loop()
+        except RuntimeError:
+            here = None
+        if loop is None or loop is here or loop.is_closed() or not loop.is_running():
+            stop()
+        else:
+            loop.call_soon_threadsafe(stop)

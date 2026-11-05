@@ -39,6 +39,7 @@ from .session_utils import (  # noqa: F401
 
 from .mixins import (
     AsyncWorkMixin,
+    ServerPushMixin,
     StreamsMixin,
     StreamingMixin,
     TemplateMixin,
@@ -569,6 +570,7 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
     LayoutMixin,
     WaiterMixin,
     AsyncWorkMixin,
+    ServerPushMixin,
     NotificationMixin,
     StickyChildRegistry,
     ActivityMixin,

@@ -584,6 +584,9 @@ ALLOWED: Dict[Tuple[str, str, str], Entry] = {
     ("runtime.py", "WSConsumerTransport.explicit_event_request", "fresh_socket_request"): plumbing(
         _SESSION
     ),
+    ("runtime.py", "SSESessionTransport.recheck_event_auth", "_stored_request_user"): plumbing(
+        _SESSION
+    ),
     ("runtime.py", "ViewRuntime._dispatch_mount_body", "run_on_mount_hooks"): leaf(),
     ("runtime.py", "ViewRuntime._dispatch_component_event", "view.render_with_diff"): plumbing(
         _RENDER, _GET_TEMPLATE
