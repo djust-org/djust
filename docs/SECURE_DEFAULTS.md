@@ -124,7 +124,11 @@ flag, a PII column — because serialization defaulted to *allow everything*.
 > - *A management form handed to the template DIRECTLY* as a context variable is a plain
 >   `Form` with no floor ([#3799](https://github.com/djust-org/djust/issues/3799)); only a
 >   formset's own `management_form` is pinned. The same goes for any plain `Form` that
->   carries `self.instance = <Model>`: the floor is a `ModelForm`'s.
+>   carries `self.instance = <Model>`: the floor is a `ModelForm`'s. **This holds for a view
+>   that keeps `formset.management_form` as an attribute** ([#3767](https://github.com/djust-org/djust/issues/3767)):
+>   a LiveView used to flatten it to `{TOTAL_FORMS: html, ...}` (no data readable), and it now
+>   reaches the template as the form, so `{{ mf.data }}` prints the formset's whole submitted
+>   data, as on the plain backend. Read the counts in the view, or render `{{ mf }}`.
 > - *A plain `Form` has no MODEL floor*
 >   ([#3799](https://github.com/djust-org/djust/issues/3799)): only its
 >   password-widget fields are held (above). A plain `Form` that is handed
