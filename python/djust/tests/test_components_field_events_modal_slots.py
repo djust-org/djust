@@ -159,3 +159,57 @@ class TestModalDescriptionSlot:
     def test_without_a_slot_nothing_is_described(self):
         for out in _both('{% modal open=True title="T" %}x{% endmodal %}').values():
             assert "aria-describedby" not in out
+
+
+class TestTheDescriptionMarkerCannotBeForgedByEscapedText:
+    """``render_modal`` finds the ``{% modal_description %}`` block in the already-rendered body.
+    Whatever it searches for must be something an escaped variable cannot spell: a marker made of
+    plain characters, found by a first-occurrence replace, lets text in an ATTRIBUTE value
+    earlier in the body take the replacement - which carries a raw ``"`` - and leave the value."""
+
+    FORGED = " data-dj-modal-description onfocus=alert(1) autofocus"
+    SRC = (
+        '{% modal open=True native=n title="T" id="m" %}'
+        '<input name="q" value="{{ v }}">'
+        "{% modal_description %}Approvers are notified.{% endmodal_description %}"
+        "{% endmodal %}"
+    )
+
+    @staticmethod
+    def _input_tag(out):
+        return re.search(r"<input[^>]*>", out).group(0)
+
+    @pytest.mark.parametrize("native", [False, True])
+    def test_text_in_an_attribute_stays_inside_the_attribute(self, native):
+        for engine, out in _both(self.SRC, {"n": native, "v": self.FORGED}).items():
+            tag = self._input_tag(out)
+            assert "onfocus" not in re.sub(r'value="[^"]*"', "", tag), (engine, tag)
+            assert tag.count('"') == 4, (engine, tag)  # name="q" value="..." and nothing else
+
+    @pytest.mark.parametrize("native", [False, True])
+    def test_the_real_block_is_still_described(self, native):
+        for engine, out in _both(self.SRC, {"n": native, "v": self.FORGED}).items():
+            assert 'aria-describedby="m-desc"' in out, engine
+            assert re.search(
+                r'<div class="dj-modal__description" id="m-desc">Approvers are notified\.</div>', out
+            ), (engine, out)
+
+    @pytest.mark.parametrize("native", [False, True])
+    def test_forged_text_in_the_body_is_left_as_text(self, native):
+        src = (
+            '{% modal open=True native=n title="T" id="m" %}<p>{{ v }}</p>'
+            "{% modal_description %}D{% endmodal_description %}{% endmodal %}"
+        )
+        for engine, out in _both(src, {"n": native, "v": self.FORGED}).items():
+            assert "<p>" + self.FORGED + "</p>" in out, (engine, out)
+
+    @pytest.mark.parametrize("native", [False, True])
+    def test_no_marker_survives_in_the_output(self, native):
+        for engine, out in _both(self.SRC, {"n": native, "v": "x"}).items():
+            assert "dj-modal-description" not in out, (engine, out)
+        src = (
+            '{% modal open=True native=n title="T" id="m" description="given" %}'
+            "{% modal_description %}D{% endmodal_description %}{% endmodal %}"
+        )
+        for engine, out in _both(src, {"n": native}).items():
+            assert "dj-modal-description" not in out, (engine, out)
