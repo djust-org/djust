@@ -4,6 +4,7 @@ JSON serialization utilities for Django models and Python types.
 Extracted from live_view.py for modularity.
 """
 
+import functools
 import importlib.util
 import json
 import logging
@@ -2157,24 +2158,103 @@ def _floor_field_readable(floor: tuple, name: Any) -> bool:
     return not _field_type_excluded_for(model_class, name)
 
 
-def _floor_data_key_readable(floor: tuple, key: Any) -> bool:
-    """May a template read the submitted-data key *key*?
+def _floor_special_name_bound(floor: tuple) -> Optional[int]:
+    """The length of the longest NAME the floor treats specially, else ``None`` (= cannot tell).
+
+    :func:`_floor_field_readable` is a pure function of the name, and a name outside a finite set
+    gets the SAME answer as any other name outside it that begins the same way. The finite set is
+    what the floor can name: the form's password names, the model's denied / allowed / opt-out sets,
+    the identity keys, the sensitive model methods, and the model's own fields (``name`` and
+    ``attname``, which is what ``Options.get_field`` resolves). Past it the verdict is decided by the
+    name's LEADING characters only (``_`` prefix, the sensitive-method prefixes, whether an allowlist
+    exists), so the longest prefix a rule tests is part of the bound.
+
+    ``None`` when any of that cannot be read (a set holding a non-string, a ``_meta`` that raises):
+    the caller then asks the floor about every tail in full, the unbounded answer it always had.
+    """
+    model_class, denied, allowed, optout, passwords = floor
+    try:
+        if isinstance(passwords, _FormPasswordNames):
+            passwords = passwords._names()
+        bound = max((len(name) for name in passwords), default=0)
+        if model_class is None:
+            return bound
+        for names in (denied, allowed or (), optout, _IDENTITY_KEYS, _SENSITIVE_MODEL_METHODS):
+            bound = max(bound, max((len(name) for name in names), default=0))
+        bound = max(bound, 1, max(len(prefix) for prefix in _SENSITIVE_MODEL_METHOD_PREFIXES))
+        for field in model_class._meta.get_fields(include_hidden=True):
+            bound = max(bound, len(field.name), len(getattr(field, "attname", "")))
+    except Exception:  # noqa: BLE001 - unreadable means "unbounded", which is always correct
+        logger.debug("[djust] a form floor's special names could not be bounded; asking in full")
+        return None
+    return bound
+
+
+class _DataKeyReader:
+    """Is a ``form.data`` key readable? :func:`_floor_data_key_readable`, set up once per mapping.
 
     ``form.data`` is keyed by ``form.add_prefix(name)`` (``u-password`` for ``prefix="u"``,
     ``form-0-password`` in a formset), not by the bare field name every other mapping a form holds
-    uses. So the key is readable only when the whole key AND every ``-``-delimited tail of it is: the
+    uses. So a key is readable only when the whole key AND every ``-``-delimited tail of it is: the
     tail after the prefix is the field name, whatever the prefix (or a formset's ``form-<n>``) is.
+
+    The keys are what a CLIENT posted, so a key's length is the client's to choose, and slicing every
+    tail was quadratic in it (a 32 KB key of dashes cost ~0.7 s and a 2.5 MB one extrapolated to
+    ~80 min, #3830). A tail longer than the longest name the floor treats specially
+    (:func:`_floor_special_name_bound`) cannot be one of those names, and the floor answers it as it
+    answers every other such name that begins the same way: so it is asked in the form of its first
+    ``bound + 1`` characters, which is the SAME answer (a differential test holds the two functions
+    to it over generated keys) at a cost that no longer grows with the tail. The work per key is
+    linear in its length; the constant is the form's own longest name, not the key's.
+
+    The form's password names are read ONCE, here, as a set, so no tail is asked of the form.
     """
-    if not isinstance(key, str):
-        return True
-    if not _floor_field_readable(floor, key):
-        return False
-    cut = key.find("-")
-    while cut != -1:
-        if not _floor_field_readable(floor, key[cut + 1 :]):
+
+    __slots__ = ("_floor", "_bound", "_memo")
+
+    #: How many distinct truncated tails are remembered for one mapping. A key chosen so that every
+    #: tail differs would otherwise grow the memo by one entry per dash.
+    _MEMO_LIMIT = 256
+
+    def __init__(self, floor: tuple) -> None:
+        if isinstance(floor[4], _FormPasswordNames):
+            floor = floor[:4] + (floor[4]._names(),)
+        self._floor = floor
+        self._bound = _floor_special_name_bound(floor)
+        self._memo: Dict[str, bool] = {}
+
+    def __call__(self, key: Any) -> bool:
+        if not isinstance(key, str):
+            return True
+        floor = self._floor
+        if not _floor_field_readable(floor, key):
             return False
-        cut = key.find("-", cut + 1)
-    return True
+        bound = self._bound
+        end = len(key)
+        cut = key.find("-")
+        while cut != -1:
+            start = cut + 1
+            if bound is not None and end - start > bound:
+                head = key[start : start + bound + 1]
+                readable = self._memo.get(head)
+                if readable is None:
+                    readable = _floor_field_readable(floor, head)
+                    if len(self._memo) >= self._MEMO_LIMIT:
+                        self._memo.clear()
+                    self._memo[head] = readable
+            else:
+                readable = _floor_field_readable(floor, key[start:])
+            if not readable:
+                return False
+            cut = key.find("-", start)
+        return True
+
+
+def _floor_data_key_readable(floor: tuple, key: Any) -> bool:
+    """May a template read the submitted-data key *key*? (:class:`_DataKeyReader`, for one key.)
+
+    A caller with many keys (:func:`_without_floor_keys`) sets the reader up once instead."""
+    return _DataKeyReader(floor)(key)
 
 
 def _without_floor_keys(value: Any, floor: tuple, readable: Any = None) -> Any:
@@ -2182,20 +2262,29 @@ def _without_floor_keys(value: Any, floor: tuple, readable: Any = None) -> Any:
     refuses. A COPY: the form keeps its own mapping. The caller's own object when nothing is
     refused, so the common form (no floor field in it) pays one key scan and keeps identity.
     A list of mappings (a formset's ``initial`` / ``cleaned_data``) is filtered mapping by mapping."""
-    readable = readable or _floor_field_readable
     if isinstance(floor[4], _FormPasswordNames):
-        # This asks the floor about EVERY key of the mapping, and each ``-``-delimited tail of it
-        # (``_floor_data_key_readable``): keys a client chose. Answer them from the names as a SET
-        # (linear in the key, as before #3816) instead of by lookup per split (quadratic in the key,
-        # cubic with dashes): one scan of the form per call, not per key.
+        # This asks the floor about EVERY key of the mapping (and, for ``data``, each ``-``-delimited
+        # tail of it): keys a client chose. Answer them from the names as a SET (linear in the key,
+        # as before #3816) instead of by lookup per split (quadratic in the key, cubic with
+        # dashes): one scan of the form per call, not per key.
         floor = floor[:4] + (floor[4]._names(),)
+    keep: Callable[[Any], bool]
+    if readable is _floor_data_key_readable:
+        keep = _DataKeyReader(floor)  # set up once for every key of the mapping (#3830)
+    else:
+        keep = functools.partial(readable or _floor_field_readable, floor)
+    return _filter_floor_keys(value, keep)
+
+
+def _filter_floor_keys(value: Any, keep: Any) -> Any:
+    """:func:`_without_floor_keys` with the question already bound: ``keep(key)``."""
     if isinstance(value, (list, tuple)) and not isinstance(value, str):
-        filtered = [_without_floor_keys(item, floor, readable) for item in value]
+        filtered = [_filter_floor_keys(item, keep) for item in value]
         if all(new is old for new, old in zip(filtered, value)):
             return value
         return type(value)(filtered) if type(value) in (list, tuple) else filtered
     if isinstance(value, MultiValueDict):
-        refused = [k for k in value.keys() if not readable(floor, k)]
+        refused = [k for k in value.keys() if not keep(k)]
         if not refused:
             return value
         # ``QueryDict.copy()`` is always mutable; the original's mutability is restored below.
@@ -2207,9 +2296,9 @@ def _without_floor_keys(value: Any, floor: tuple, readable: Any = None) -> Any:
             copy._mutable = mutable
         return copy
     if isinstance(value, dict):
-        if all(readable(floor, k) for k in value):
+        if all(keep(k) for k in value):
             return value
-        return {k: v for k, v in value.items() if readable(floor, k)}
+        return {k: v for k, v in value.items() if keep(k)}
     return value
 
 
