@@ -207,8 +207,11 @@ class NavigationMixin:
         field) still falls back to the initial values, because the fields that
         passed one by one are the combination the form refused, and so does a
         merged result the form's ``clean()`` rejects when run once more on it
-        (a kept field paired with a replaced field's initial value). Override it to
-        refuse the URL instead::
+        (a kept field paired with a replaced field's initial value). That second
+        ``clean()`` runs where ``super()`` is called: from an ``async def``
+        override it is on the event loop, where a ``clean()`` that uses the ORM
+        fails and the plain initial values are used (with a logged warning).
+        Override it to refuse the URL instead::
 
             def handle_invalid_params(self, form, uri):
                 raise Http404("No such page.")

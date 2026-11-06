@@ -149,6 +149,57 @@ class CrashesOnNoneParams(forms.Form):
         return cleaned
 
 
+class RepairParams(forms.Form):
+    """``clean()`` REPAIRS an inverted range (in place); the valid path hands over the repair."""
+
+    lo = forms.IntegerField(required=False, initial=0)
+    hi = forms.IntegerField(required=False, initial=3)
+
+    def clean(self):
+        cleaned = super().clean()
+        if cleaned.get("lo") is not None and cleaned.get("hi") is not None:
+            if cleaned["lo"] > cleaned["hi"]:
+                cleaned["hi"] = cleaned["lo"]
+        return cleaned
+
+
+class RepairReturnsParams(RepairParams):
+    """The same repair, handed back as a NEW dict (``clean()``'s return value wins)."""
+
+    def clean(self):
+        cleaned = forms.Form.clean(self)
+        if cleaned.get("lo") is not None and cleaned.get("hi") is not None:
+            if cleaned["lo"] > cleaned["hi"]:
+                return {**cleaned, "hi": cleaned["lo"]}
+        return cleaned
+
+
+class CleanFieldParams(forms.Form):
+    """A rule spanning two fields in ``clean_end``, which the second pass does not run."""
+
+    start = forms.IntegerField(required=False, initial=10)
+    end = forms.IntegerField(required=False, initial=20)
+
+    def clean_end(self):
+        end, start = self.cleaned_data["end"], self.cleaned_data.get("start")
+        if start is not None and end is not None and end < start:
+            raise forms.ValidationError("end before start")
+        return end
+
+
+class OrmParams(forms.Form):
+    """``clean()`` uses the ORM: fine in a worker thread, an error on the event loop."""
+
+    a = forms.IntegerField(required=False, initial=1)
+    b = forms.IntegerField(required=False, initial=2)
+
+    def clean(self):
+        from django.contrib.auth.models import User
+
+        User.objects.count()
+        return super().clean()
+
+
 class NoteParams(forms.Form):
     """A field with NO initial value: ``None`` when replaced, never the empty string."""
 
@@ -224,6 +275,33 @@ class PostCleanFields(_Base):
     params_form_fallback = "fields"
 
 
+class RepairFields(_Base):
+    params_form = RepairParams
+    params_form_fallback = "fields"
+
+
+class CleanFieldFields(_Base):
+    params_form = CleanFieldParams
+    params_form_fallback = "fields"
+
+
+class OrmSync(_Base):
+    """A sync override that calls ``super()``: the default runs off the loop, so the ORM works."""
+
+    params_form = OrmParams
+    params_form_fallback = "fields"
+
+    def handle_invalid_params(self, form, uri):
+        super().handle_invalid_params(form, uri)
+
+
+class OrmAsync(OrmSync):
+    """An ``async def`` override that calls ``super()``: the second clean() runs ON the loop."""
+
+    async def handle_invalid_params(self, form, uri):
+        super().handle_invalid_params(form, uri)
+
+
 class CrashFields(_Base):
     params_form = CrashesOnNoneParams
     params_form_fallback = "fields"
@@ -277,6 +355,10 @@ _VIEWS = (
     SpanFields,
     SpanRaisesFields,
     CrashFields,
+    RepairFields,
+    CleanFieldFields,
+    OrmSync,
+    OrmAsync,
     PostCleanFields,
     AsyncFields,
     SuperFields,
@@ -385,6 +467,11 @@ CASES = [
         {"lo": 0, "hi": 10, "page": 1},
         {"__all__"},
     ),
+    # What clean() repairs it repairs here as on the valid path: (lo=9, hi=3) -> hi repaired to 9.
+    ("RepairFields", {"lo": "9", "hi": "zzz"}, {"lo": 9, "hi": 9}, {"hi"}),
+    # The documented limit: clean_<field>() is NOT run again on the merged values, so a rule that
+    # spans fields there is skipped (start failed, end=1 sits next to start's initial 10).
+    ("CleanFieldFields", {"start": "zz", "end": "1"}, {"start": 10, "end": 1}, {"start"}),
     # A clean() that cannot take the None an initial can be falls back to the initials, not a 500.
     ("CrashFields", {"lo": "-1", "hi": "zzz"}, {"lo": 0, "hi": None}, {"hi"}),
     # A kept field the URL left out and whose form declares NO initial is the value the valid path
@@ -901,6 +988,23 @@ class TestFallbackValues:
         assert form.cleaned_data["sort"] == "name" and "sort" in form.errors
         assert fallback_values(form, "fields") == {"page": 2, "sort": "date"}
 
+    def test_a_field_the_recheck_clean_removes_takes_its_initial_value(self):
+        from djust._params_form import fallback_values
+
+        class Removes(forms.Form):
+            lo = forms.IntegerField(required=False, initial=0)
+            hi = forms.IntegerField(required=False, initial=3)
+            n = forms.IntegerField(required=False, initial=1)
+
+            def clean(self):
+                cleaned = super().clean()
+                cleaned.pop("hi", None)
+                return cleaned
+
+        form, values, _ = self._bound(Removes, {"lo": "2", "n": "zzz"})
+        assert values is None
+        assert fallback_values(form, "fields") == {"lo": 2, "hi": 3, "n": 1}
+
     def test_the_keys_are_the_declared_fields_in_order_and_nothing_else(self):
         from djust._params_form import fallback_values
 
@@ -977,7 +1081,7 @@ class TestFallbackValues:
         form, _, _ = self._bound(CrashesOnNoneParams, {"lo": "-1", "hi": "zzz"})
         with caplog.at_level(logging.WARNING, logger="djust._params_form"):
             assert fallback_values(form, "fields", DefaultView()) == {"lo": 0, "hi": None}
-        assert any("clean() failed on the kept fields" in r.getMessage() for r in caplog.records)
+        assert any("clean() failed on the merged fields" in r.getMessage() for r in caplog.records)
 
     def test_a_form_with_nothing_kept_does_not_run_clean_again(self):
         from djust._params_form import fallback_values
@@ -1050,6 +1154,119 @@ class TestFallbackValues:
         assert values is None
         assert fallback_values(form, "fields") == {"lo": 0, "hi": 3}
         assert calls["hi"] == 1
+
+    @pytest.mark.parametrize("form_class", [RepairParams, RepairReturnsParams])
+    def test_what_clean_repairs_is_what_the_valid_path_hands_over(self, form_class):
+        """In place or returned, the repair is read the way BaseForm._clean_form reads it."""
+        from djust._params_form import fallback_values
+
+        _, valid, _ = self._bound(form_class, {"lo": "9", "hi": "3"})
+        assert valid == {"lo": 9, "hi": 9}
+        form, values, _ = self._bound(form_class, {"lo": "9", "hi": "zzz"})
+        assert values is None
+        assert fallback_values(form, "fields") == valid
+
+    def test_a_clean_that_mutates_a_list_in_place_never_touches_the_held_form(self):
+        """Deep-copied: the form the caller holds keeps what the first pass made.
+
+        The result carries the second pass's own append: ``clean()`` runs on what it already
+        cleaned once (documented: it must be idempotent). Without the copy the SAME list would
+        be the held form's, the merged dict's and the result's.
+        """
+        from djust._params_form import fallback_values
+
+        class Tags(forms.Form):
+            tags = forms.MultipleChoiceField(
+                choices=[("a", "A"), ("b", "B")], required=False, initial=["a"]
+            )
+            n = forms.IntegerField(required=False, initial=1)
+
+            def clean(self):
+                cleaned = super().clean()
+                if "tags" in cleaned:
+                    cleaned["tags"].append("X")
+                return cleaned
+
+        _, valid, _ = self._bound(Tags, {"tags": ["b"], "n": "1"})
+        assert valid["tags"] == ["b", "X"]
+        form, values, _ = self._bound(Tags, {"tags": ["b"], "n": "zzz"})
+        assert values is None
+        held = form.cleaned_data["tags"]
+        assert held == ["b", "X"]  # the first pass's own append
+        result = fallback_values(form, "fields")
+        assert result["tags"] == ["b", "X", "X"]  # clean() ran again on its own output
+        assert result["tags"] is not held
+        assert held == ["b", "X"]  # the held form's list was not mutated
+
+    def test_values_that_cannot_be_copied_give_the_plain_initials_and_a_warning(self, caplog):
+        import logging
+
+        from djust._params_form import fallback_values
+
+        class Uncopyable:
+            def __deepcopy__(self, memo):
+                raise TypeError("no copies")
+
+        class Odd(forms.Field):
+            def to_python(self, value):
+                return Uncopyable() if value else None
+
+        class OddForm(forms.Form):
+            odd = Odd(required=False)
+            n = forms.IntegerField(required=False, initial=1)
+
+        form, values, _ = self._bound(OddForm, {"odd": "x", "n": "zzz"})
+        assert values is None
+        with caplog.at_level(logging.WARNING, logger="djust._params_form"):
+            result = fallback_values(form, "fields", DefaultView())
+        assert result == {"odd": None, "n": 1}
+        assert any("failed on the merged fields" in r.getMessage() for r in caplog.records)
+
+    @pytest.mark.parametrize("exc", ["PermissionDenied", "Http404"])
+    def test_an_exception_raised_only_on_the_second_call_gives_the_plain_initials(
+        self, exc, caplog
+    ):
+        """Documented: swallowed with a warning (the first pass would have raised it)."""
+        import logging
+
+        from django.core.exceptions import PermissionDenied
+        from django.http import Http404
+
+        from djust._params_form import fallback_values
+
+        raised = {"PermissionDenied": PermissionDenied, "Http404": Http404}[exc]
+        calls = []
+
+        class Second(SpanParams):
+            def clean(self):
+                calls.append(1)
+                if len(calls) > 1:
+                    raise raised("only the second time")
+                return super().clean()
+
+        form, values, _ = self._bound(Second, {"lo": "2", "hi": "zzz"})
+        assert values is None
+        with caplog.at_level(logging.WARNING, logger="djust._params_form"):
+            assert fallback_values(form, "fields", DefaultView()) == {"lo": 0, "hi": 3}
+        assert any("failed on the merged fields" in r.getMessage() for r in caplog.records)
+
+    def test_a_callable_initial_on_a_kept_field_is_evaluated_once_when_the_recheck_rejects(self):
+        """N15: kept-unsupplied field's initial is evaluated for the merge and reused for the fallback."""
+        from djust._params_form import fallback_values
+
+        calls = {"q": 0}
+
+        def q_initial():
+            calls["q"] += 1
+            return "dq"
+
+        class Counted(SpanParams):
+            q = forms.CharField(required=False, initial=q_initial)
+
+        form, values, _ = self._bound(Counted, {"lo": "9", "hi": "2"})
+        assert values is None
+        assert fallback_values(form, "fields") == {"lo": 0, "hi": 3, "q": "dq"}
+        assert calls["q"] == 1
 
     def test_the_valid_path_is_unchanged(self):
         form, values, view = self._bound(DeletesParams, {"page": "2", "sort": "name"})
@@ -1169,3 +1386,49 @@ class TestV023Fallback:
         else:
             with pytest.raises(ImproperlyConfigured, match="params_form_fallback"):
                 run_handle_params_sync(Probe(), {}, "/")
+
+
+# --------------------------------------------------------------------------- #
+# An async override that calls super(): the second clean() runs on the event loop
+# --------------------------------------------------------------------------- #
+
+_ORM_WARNING = "used the ORM on the event loop"
+
+
+@pytest.mark.django_db(transaction=True)
+class TestAsyncOverrideRunsTheRecheckOnTheLoop:
+    """The documented limit: a clean() that uses the ORM falls back to the plain initials there."""
+
+    QUERY = {"a": "5", "b": "zz"}
+
+    async def test_a_sync_override_keeps_the_valid_field_over_the_socket(self):
+        communicator, frame = await _connect("OrmSync", self.QUERY)
+        try:
+            assert frame["type"] == "mount", frame
+            assert CALLS[-1][0] == {"a": 5, "b": 2}
+        finally:
+            await communicator.disconnect()
+
+    async def test_an_async_override_gets_the_plain_initials_and_a_warning_over_the_socket(
+        self, caplog
+    ):
+        with caplog.at_level("WARNING", logger="djust._params_form"):
+            communicator, frame = await _connect("OrmAsync", self.QUERY)
+        try:
+            assert frame["type"] == "mount", frame
+            assert CALLS[-1][0] == {"a": 1, "b": 2}
+            assert any(_ORM_WARNING in r.getMessage() for r in caplog.records)
+        finally:
+            await communicator.disconnect()
+
+    async def test_a_sync_override_keeps_the_valid_field_over_http(self):
+        response = await sync_to_async(Client().get)(_url("OrmSync", self.QUERY))
+        assert response.status_code == 200
+        assert CALLS[-1][0] == {"a": 5, "b": 2}
+
+    async def test_an_async_override_gets_the_plain_initials_and_a_warning_over_http(self, caplog):
+        with caplog.at_level("WARNING", logger="djust._params_form"):
+            response = await sync_to_async(Client().get)(_url("OrmAsync", self.QUERY))
+        assert response.status_code == 200
+        assert CALLS[-1][0] == {"a": 1, "b": 2}
+        assert any(_ORM_WARNING in r.getMessage() for r in caplog.records)

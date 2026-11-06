@@ -206,10 +206,23 @@ Now `?page=abc&sort=name` hands `handle_params()` `page=1` (its initial value) a
   merged values, on a copy of the form, and if it raises `ValidationError`, reports an error
   with `add_error()` or fails any other way (it compared with the `None` an initial can be),
   nothing is kept and the view gets the plain initial values. **The result is always a
-  combination `clean()` accepts, or the plain initials.** This is one extra call of
-  `clean()` and only on this path; the fields' own validators are not run again, and a
-  replaced field's own validity is not asked (a required field with no initial is `None`).
-  Make `clean()` tolerate a missing or `None` field, as it must for the first pass.
+  combination `clean()` accepts, or the plain initials.** What `clean()` repairs it repairs
+  here as on the valid path (a `clean()` that sets `hi = lo` for an inverted range hands
+  back the repaired pair), and an in-place change it makes to a list is applied once. This
+  is one extra call of `clean()` and only on this path; **the fields' own `clean_<field>()`
+  validators are not run again on the merged values**: a `clean_end()` that checks
+  `end >= start` was skipped when `start` failed, so `?start=zz&end=1` hands over `start` at
+  its initial value `10` next to `end=1`. Put a rule that spans fields in `clean()`. A
+  replaced field's own validity is not asked either (a required field with no initial is
+  `None`). Make `clean()` tolerate a missing or `None` field, as it must for the first pass.
+  Anything else going wrong in the second call (a `None` comparison, a value that cannot be
+  deep-copied, `PermissionDenied` or `Http404` that `clean()` raises only on the second call)
+  is logged as a warning and gives the plain initials, never a 500.
+- **An `async def handle_invalid_params` that calls `super()` runs that second `clean()` on the
+  event loop.** A `clean()` that uses the ORM raises `SynchronousOnlyOperation` there, and the
+  view silently gets the plain initial values, with a warning that says so. Call `super()` from
+  a sync override (the default and a sync override run off the loop), or keep ORM work out of
+  `clean()`.
 - A URL past the form-data bounds (`max_form_fields` and the others) is bound to nothing
   and reports its reason under `"__all__"`; nothing of it was validated, so nothing is kept.
 - `params_errors` is the same in either mode: one entry per failed field, so the template

@@ -32,7 +32,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from asgiref.sync import sync_to_async
 from django import forms
-from django.core.exceptions import ImproperlyConfigured, ValidationError
+from django.core.exceptions import ImproperlyConfigured, SynchronousOnlyOperation, ValidationError
 from django.http import QueryDict
 
 from . import _form_data_bounds
@@ -239,38 +239,55 @@ def _cleaned_values(form: forms.BaseForm) -> Dict[str, Any]:
     return values
 
 
-def _clean_accepts(view: Any, form: forms.BaseForm, values: Dict[str, Any]) -> bool:
-    """Whether ``form.clean()`` accepts ``values`` as the cleaned data of every field.
+def _rechecked(view: Any, form: forms.BaseForm, values: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The declared fields ``form.clean()`` leaves of ``values``, or ``None`` when it does not accept them.
 
-    Runs the form's own ``clean()`` on a copy whose ``cleaned_data`` is ``values``
-    and whose errors start empty, so the form the caller holds (its ``errors``,
-    its ``cleaned_data``) is not touched. Accepted means ``clean()`` neither
-    raised ``ValidationError`` nor reported an error with ``add_error()``. A
-    ``clean()`` that fails any other way on this combination (a comparison with
-    the ``None`` an initial value can be) is not accepted either: it ran on data
-    the form never produced, and the answer is the plain initial values, not a
-    500.
+    Runs the form's own ``clean()`` on a copy whose ``cleaned_data`` is a deep copy
+    of ``values`` and whose errors start empty, so the form the caller holds (its
+    ``errors``, its ``cleaned_data``) is not touched and an in-place change
+    ``clean()`` makes to a list is applied once. What it leaves is read the way
+    ``BaseForm._clean_form`` reads it on the valid path (the returned dict, else
+    ``self.cleaned_data``), so a ``clean()`` that repairs a value hands back the
+    same repair here as there. Accepted means ``clean()`` neither raised
+    ``ValidationError`` nor reported an error with ``add_error()``.
+
+    ``None`` (nothing is kept) also for anything else that goes wrong: a
+    ``clean()`` that compares with the ``None`` an initial value can be, that uses
+    the ORM on the event loop (an ``async def handle_invalid_params`` that calls
+    ``super()``), that raises ``PermissionDenied`` or ``Http404`` only on this
+    second call, or values that cannot be deep-copied. The answer is the plain
+    initial values and a logged warning, not a 500.
     """
-    probe = copy.copy(form)
-    probe.cleaned_data = dict(values)
-    probe._errors = type(form.errors)()
     try:
-        probe.clean()
+        probe = copy.copy(form)
+        probe.cleaned_data = copy.deepcopy(values)
+        probe._errors = type(form.errors)()
+        returned = probe.clean()
+        if returned is not None:
+            probe.cleaned_data = returned
+        if probe._errors:
+            return None
+        return {
+            name: probe.cleaned_data[name] for name in form.fields if name in probe.cleaned_data
+        }
     except ValidationError:
-        return False
+        return None
     except Exception as exc:  # noqa: BLE001 — application code runs inside clean()
         from ._exposure_diagnostics import log_failure_for
 
-        log_failure_for(
-            logger,
-            (view,),
-            exc,
-            "params_form clean() failed on the kept fields; using the initial values: %s",
-            exc,
-            level="warning",
-        )
-        return False
-    return not probe._errors
+        if isinstance(exc, SynchronousOnlyOperation):
+            message = (
+                "params_form clean() used the ORM on the event loop, so the fields it did not "
+                "see are not kept: call super().handle_invalid_params() from a sync "
+                "handle_invalid_params, or keep ORM work out of clean(); using the initial "
+                "values: %s"
+            )
+        else:
+            message = (
+                "params_form clean() failed on the merged fields; using the initial values: %s"
+            )
+        log_failure_for(logger, (view,), exc, message, exc, level="warning")
+        return None
 
 
 def fallback_values(form: forms.BaseForm, mode: str, view: Any = None) -> Dict[str, Any]:
@@ -288,14 +305,17 @@ def fallback_values(form: forms.BaseForm, mode: str, view: Any = None) -> Dict[s
     deleted counts as not valid. The request's raw value of a field that failed
     never reaches ``handle_params``.
 
-    The result is always a combination the form accepts or the plain initial
-    values. A kept field is now paired with the initial value of a replaced one,
-    a pair ``clean()`` never saw (``lo=9`` kept, ``hi=2`` replaced by ``3``), so
-    the form's ``clean()`` runs once more on exactly that combination
-    (:func:`_clean_accepts`); if it objects, nothing is kept. Only ``clean()``
-    runs again: the fields were validated one by one the first time, and a
-    replaced field's own validity is not asked (a required field with no initial
-    value is replaced by ``None``).
+    The result is always a combination the form's ``clean()`` accepts, or the
+    plain initial values. A kept field is now paired with the initial value of a
+    replaced one, a pair ``clean()`` never saw (``lo=9`` kept, ``hi=2`` replaced
+    by ``3``), so the form's ``clean()`` runs once more on exactly that
+    combination (:func:`_rechecked`); if it objects, nothing is kept, and what
+    it repairs it repairs here as on the valid path. **Only ``clean()`` runs
+    again, not the fields' own ``clean_<field>()``:** a ``clean_end()`` that
+    checks ``end >= start`` was skipped when ``start`` failed and is not run on
+    the merged values, so ``?start=zz&end=1`` hands over ``start`` at its initial
+    value 10 next to ``end=1``. A replaced field's own validity is not asked
+    either (a required field with no initial value is replaced by ``None``).
 
     Three cases keep nothing. A form-level error (``NON_FIELD_ERRORS``) says the
     *combination* is wrong, so the siblings that validated one by one would hand
@@ -328,7 +348,11 @@ def fallback_values(form: forms.BaseForm, mode: str, view: Any = None) -> Dict[s
     values: Dict[str, Any] = {name: cleaned[name] for name in kept}
     _fill_unsupplied(form, values, kept, initial_of)
     merged = {name: values[name] if name in values else initial_of(name) for name in form.fields}
-    return merged if _clean_accepts(view, form, merged) else all_initial()
+    repaired = _rechecked(view, form, merged)
+    if repaired is None:
+        return all_initial()
+    # A field clean() removed is not valid, as one it was never given: its initial value.
+    return {name: repaired[name] if name in repaired else initial_of(name) for name in form.fields}
 
 
 def _error_messages(form: forms.BaseForm) -> Dict[str, List[str]]:
