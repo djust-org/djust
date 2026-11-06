@@ -172,6 +172,8 @@ CLEAN_ORIGINS = frozenset(
         "djust.components.utils.safe_url",  # always conditional_escape()d, or "#"
         "djust.components.utils.url_attr",  # safe_url; or what the developer marked safe
         "djust.components.utils.srcset_attr",  # each URL through url_attr, descriptors escaped
+        "djust.components.utils.data_url_attr",  # url_attr that never honours the safe marker (#3898)
+        "djust.components.utils.attr_text",  # django.utils.html.escape of the exact str (#3898)
     }
 )
 #: NOT in ``CLEAN_ORIGINS`` on purpose (review of #3848):
@@ -196,6 +198,7 @@ CONTEXT_SENSITIVE_ORIGINS = frozenset(
         "djust.components.utils.safe_url",
         "djust.components.utils.url_attr",
         "djust.components.utils.srcset_attr",
+        "djust.components.utils.data_url_attr",
         "djust.components.utils.safe_css_color",
         "djust.components.utils.safe_css_length",
         "djust.components.utils.safe_css_ratio",
