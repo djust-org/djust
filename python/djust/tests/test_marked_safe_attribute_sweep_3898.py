@@ -2434,45 +2434,52 @@ def _choice_form(widget: str, value: object):
     return ChoiceForm()
 
 
+ENGINES = ("django", "native")
+
+
+def _form_render(engine: str, widget: str, value: object) -> str | None:
+    """``{% dj_form %}`` of a one-choice form through Django's engine or the native one. ``None``
+    is a render that raised: a value the field does not accept fails closed."""
+    src = "{% load djust_components %}{% dj_form form=f %}"
+    ctx = {"f": _choice_form(widget, value)}
+    if engine == "django":
+        return _django_render(src, ctx)
+    from djust.tests.test_components_csp_aria import _rust
+
+    try:
+        return _rust(src, ctx)
+    except Exception:  # noqa: BLE001 - a call the engine rejects fails closed
+        return None
+
+
 class TestFormFieldChoices:
     """``dj_form`` draws a field's choices into ``value=``: the choice value is the form's schema,
-    not a list handed to a tag, and is treated the same way (#3904 review)."""
+    not a list handed to a tag, and is treated the same way (#3904 review). Both engines draw the
+    field: the native engine hands the form to the same Python tag, so the marker reaches it."""
 
+    @pytest.mark.parametrize("engine", ENGINES)
     @pytest.mark.parametrize("widget", CHOICE_WIDGETS)
     @pytest.mark.parametrize("claim", sorted(set(ITEM_CLAIMS) - {"plain"}))
     def test_a_marked_safe_choice_value_is_neutralised_like_the_plain_string(
-        self, widget: str, claim: str
+        self, engine: str, widget: str, claim: str
     ) -> None:
-        src = "{% load djust_components %}{% dj_form form=f %}"
         for _label, payload in ITEM_PAYLOADS:
-            plain = _django_render(src, {"f": _choice_form(widget, payload)})
-            marked = _django_render(src, {"f": _choice_form(widget, ITEM_CLAIMS[claim](payload))})  # type: ignore[operator]
+            plain = _form_render(engine, widget, payload)
+            marked = _form_render(engine, widget, ITEM_CLAIMS[claim](payload))  # type: ignore[operator]
             assert plain is not None, "the plain choice did not render"
             if marked is None:
                 continue  # a value no field accepts fails closed
-            assert holes_in(marked) == [], (widget, claim)
+            assert holes_in(marked) == [], (engine, widget, claim)
             if claim not in NOT_COMPARED_WITH_PLAIN:
                 slots = ("value", "id", "for")
-                assert _slots(marked, slots) == _slots(plain, slots), (widget, claim)
+                assert _slots(marked, slots) == _slots(plain, slots), (engine, widget, claim)
 
+    @pytest.mark.parametrize("engine", ENGINES)
     @pytest.mark.parametrize("widget", CHOICE_WIDGETS)
-    def test_the_choice_is_drawn_into_the_pinned_attribute(self, widget: str) -> None:
-        out = _django_render(
-            "{% load djust_components %}{% dj_form form=f %}",
-            {"f": _choice_form(widget, REACH_PROBE)},
-        )
+    def test_the_choice_is_drawn_into_the_pinned_attribute(self, engine: str, widget: str) -> None:
+        """The cell is driven in each engine: the probe is found in a ``value=`` (an engine that
+        draws no field would fail this instead of passing for nothing)."""
+        out = _form_render(engine, widget, REACH_PROBE)
         assert out is not None
         names = {a.name for a in url_sweep.attributes(out) if REACH_PROBE in a.value}
-        assert "value" in names, (widget, sorted(names))
-
-    def test_the_native_engine_draws_no_field_from_a_form_object(self) -> None:
-        """Pinned, not assumed: the native engine is handed the form as data it cannot draw, so a
-        choice value cannot reach it. If it starts drawing the fields, this fails and the choice
-        needs the same cells under the native engine."""
-        from djust.tests.test_components_csp_aria import _rust
-
-        out = _rust(
-            "{% load djust_components %}{% dj_form form=f %}",
-            {"f": _choice_form("select", REACH_PROBE)},
-        )
-        assert REACH_PROBE not in out and "<select" not in out, out
+        assert "value" in names, (engine, widget, sorted(names))
