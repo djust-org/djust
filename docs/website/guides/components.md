@@ -103,6 +103,8 @@ class Badge(Component):
 
 Most components only need a `template`. Use `_render_custom()` instead of a `template` when you need framework-specific HTML (Bootstrap vs Tailwind). `_render_custom()` is reached only when the class has no `template`: a template that fails in the Rust engine is re-rendered by Django's engine, not by `_render_custom()`, so in the `Badge` above it never runs. Add `_rust_impl_class` for hot-path components rendered hundreds of times per page.
 
+**Attributes in a `template`.** A `{{ value }}` that sits inside a start tag (`class="btn-{{ variant }}"`, `<img src="{{ src }}">`) is escaped whatever the value is marked as, and in a URL attribute (`href`, `src`, `action` ...) the value is first checked against the scheme allowlist (`javascript:` and the like become `#`), exactly as the Rust instance and `_render_custom()` treat the same value. That matters most for a lazy string (`gettext_lazy`, `format_lazy`): the Rust constructor takes plain text only, so a lazy value is drawn by the `template`. A URL that comes from a `{% for %}` / `{% with %}` variable, a dotted path or a filter is escaped but its scheme cannot be judged there; pass it through a plain top-level name. Text between tags keeps the usual autoescape rules.
+
 ### Updating a Component
 
 Write the attribute. A plain component's constructor kwargs are its state,
