@@ -782,8 +782,12 @@ def table_href(row: Any, key: Any) -> Any:
     for every dict row. A row is data, often someone else's, so ``javascript:`` is neutralised
     here as for every other URL of a component (``url_attr``). The result is escaped, so it is
     marked safe for the template.
+
+    A marked-safe value (``mark_safe``, a lazy one, ``Markup``) is checked and escaped like any
+    other (``honor_safe=False``, as the class-based components do): marking a cell safe keeps its
+    markup in a TEXT cell, and says nothing about using it as a URL (#3894).
     """
-    return mark_safe(url_attr(table_cell(row, key)))
+    return mark_safe(url_attr(table_cell(row, key), honor_safe=False))
 
 
 @register.inclusion_tag("djust_components/table.html")

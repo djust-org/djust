@@ -28,7 +28,7 @@
         </th>
         {% endif %}
         {% for col in columns %}
-        <th{% if col.sortable|default_if_none:True %} class="sortable{% if sort_by == col.key %} active{% endif %}" role="columnheader" tabindex="0" aria-sort="{% if sort_by == col.key %}{% if sort_desc %}descending{% else %}ascending{% endif %}{% else %}none{% endif %}" dj-click="{{ sort_event }}" data-value="{{ col.key }}"{% else %} role="columnheader"{% endif %}{% if col.width %} style="width:{{ col.width }}"{% endif %}>
+        <th{% if col.sortable|default_if_none:True %} class="sortable{% if sort_by == col.key %} active{% endif %}" role="columnheader" tabindex="0" aria-sort="{% if sort_by == col.key %}{% if sort_desc %}descending{% else %}ascending{% endif %}{% else %}none{% endif %}" dj-click="{{ sort_event }}" data-value="{{ col.key|force_escape }}"{% else %} role="columnheader"{% endif %}{% if col.width %} style="width:{{ col.width }}"{% endif %}>
           {{ col.label }}
           {% if sort_by == col.key %}
             <span class="data-table-sort-glyph" aria-hidden="true">{% if sort_desc %}&#8595;{% else %}&#8593;{% endif %}</span>
@@ -55,7 +55,7 @@
           <input type="checkbox" class="data-table-checkbox"
                  aria-label="Select row"
                  {% if row.id|stringformat:'s' in selected_rows %}checked{% endif %}
-                 dj-click="{{ select_event }}" data-value="{{ row.id }}">
+                 dj-click="{{ select_event }}" data-value="{{ row.id|force_escape }}">
         </td>
         {% endif %}
         {% for col in columns %}
@@ -65,7 +65,7 @@
           class on the <a>. Falls through to plain text when col.link
           is unset, preserving pre-#1110 behavior.
         {% endcomment %}
-        <td>{% if col.link %}<a href="{{ row|table_href:col.link }}"{% if col.link_class %} class="{{ col.link_class }}"{% endif %}>{{ row|table_cell:col.key }}</a>{% else %}{{ row|table_cell:col.key }}{% endif %}</td>
+        <td>{% if col.link %}<a href="{{ row|table_href:col.link }}"{% if col.link_class %} class="{{ col.link_class|force_escape }}"{% endif %}>{{ row|table_cell:col.key }}</a>{% else %}{{ row|table_cell:col.key }}{% endif %}</td>
         {% endfor %}
       </tr>
       {% empty %}
