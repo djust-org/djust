@@ -5950,19 +5950,27 @@ impl<'py> IntoPyObject<'py> for Value {
 /// cache changes is that two values of the SAME shape now share a class —
 /// `type(a) is type(b)` — which is what Python itself gives them; a class per
 /// value was the accident, not the contract.
+///
+/// A shape the factory REFUSES is remembered too (`Ok(None)`, #3849): without that, every
+/// conversion of a refused namedtuple re-ran `collections.namedtuple()` (an `exec` that raises),
+/// 115 ms against 92 ms per 20,000 rows in the review of #3856. Only the shape's own refusal
+/// (`ValueError` / `TypeError`) is remembered; any other failure is not a fact about the shape and
+/// is tried again.
 fn named_tuple_class<'py>(
     py: Python<'py>,
     name: &str,
     fields: &[String],
-) -> PyResult<Bound<'py, PyAny>> {
+) -> PyResult<Option<Bound<'py, PyAny>>> {
     use std::collections::HashMap;
     use std::sync::Mutex;
-    type Cache = Mutex<HashMap<(String, Vec<String>), Py<PyAny>>>;
+    // `None` is a shape `collections.namedtuple` REFUSED (#3849): remembered, so a refused shape
+    // costs one lookup per conversion instead of a class-creation attempt (an `exec` that raises).
+    type Cache = Mutex<HashMap<(String, Vec<String>), Option<Py<PyAny>>>>;
     static CACHE: pyo3::sync::PyOnceLock<Cache> = pyo3::sync::PyOnceLock::new();
     let cache = CACHE.get_or_init(py, || Mutex::new(HashMap::new()));
     let key = (name.to_string(), fields.to_vec());
     if let Some(cls) = cache.lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
-        return Ok(cls.bind(py).clone());
+        return Ok(cls.as_ref().map(|cls| cls.bind(py).clone()));
     }
     // Built OUTSIDE the lock: `namedtuple()` runs Python, which can re-enter
     // this function (a field default's `__repr__`, a GC callback) and would
@@ -5972,10 +5980,25 @@ fn named_tuple_class<'py>(
     // it first — a value that depends on request order is not a value.
     let kwargs = pyo3::types::PyDict::new(py);
     kwargs.set_item("module", "djust._rust")?;
-    let cls = py
+    let built = py
         .import("collections")?
         .getattr("namedtuple")?
-        .call((name, fields.to_vec()), Some(&kwargs))?;
+        .call((name, fields.to_vec()), Some(&kwargs));
+    let cls = match built {
+        Ok(cls) => Some(cls.unbind()),
+        // The shape's own refusal (`ValueError`: a duplicate, a leading underscore, a keyword, a
+        // name that is not an identifier; `TypeError`: a field that is not a string) is a fact
+        // about the SHAPE, so it is remembered. Anything else (`MemoryError`, a
+        // `KeyboardInterrupt`, an exception from a patched `namedtuple`) is not, and propagates
+        // uncached: the next conversion tries again.
+        Err(err)
+            if err.is_instance_of::<pyo3::exceptions::PyValueError>(py)
+                || err.is_instance_of::<pyo3::exceptions::PyTypeError>(py) =>
+        {
+            None
+        }
+        Err(err) => return Err(err),
+    };
     // The ENTRY is returned, not the class just built: two threads can build
     // the same shape at once (no GIL on 3.14t — measured 171/200 first
     // conversions), and only one build may become the canonical class. The
@@ -5985,8 +6008,8 @@ fn named_tuple_class<'py>(
     // key is the shape of a class the app created. No eviction, because an
     // evicted shape would come back as a second class.
     let mut guard = cache.lock().unwrap_or_else(|e| e.into_inner());
-    let entry = guard.entry(key).or_insert_with(|| cls.unbind());
-    Ok(entry.bind(py).clone())
+    let entry = guard.entry(key).or_insert(cls);
+    Ok(entry.as_ref().map(|cls| cls.bind(py).clone()))
 }
 
 /// A [`Value::NamedTuple`] as the Python object it crosses back to: an instance of
@@ -6006,8 +6029,9 @@ fn named_tuple_or_tuple<'py>(
     args: Vec<Bound<'py, PyAny>>,
 ) -> PyResult<Bound<'py, PyAny>> {
     match named_tuple_class(py, name, fields) {
-        Ok(cls) => cls.call(pyo3::types::PyTuple::new(py, args)?, None),
-        Err(_) => Ok(pyo3::types::PyTuple::new(py, args)?.into_any()),
+        Ok(Some(cls)) => cls.call(pyo3::types::PyTuple::new(py, args)?, None),
+        // Refused (cached, #3849) or failed some other way (not cached): the plain tuple.
+        Ok(None) | Err(_) => Ok(pyo3::types::PyTuple::new(py, args)?.into_any()),
     }
 }
 
