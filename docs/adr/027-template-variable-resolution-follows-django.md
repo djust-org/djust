@@ -570,6 +570,25 @@ or a top-level queryset loop still receives the dict. `{{ rows|json_script:"x" }
 data-dump tag such as `json_viewer` spell each model as its `str()` (Django raises for the
 `json_script` case), so code that reads such data in JavaScript must build the data explicitly.
 
+**What a read through a handle can return (closed set, #3888).** The handle does not list the names it
+refuses; it decides by the KIND of what a read returns, in one place (`_floored_result`,
+`python/djust/serialization.py`). Plain data (strings, numbers, dates, decimals, UUIDs, bytes, `None`)
+comes back as is, and so does a list / tuple / dict / set of it, rebuilt member by member. A model, a
+manager and a queryset come back as floor proxies. Any callable (a bound method, a manager's `.all`)
+comes back as a call wrapper whose result goes through the same function. A class, a module or a
+descriptor is refused. Any other instance (a file field, an enum member) comes back as a read-only
+view that answers reads, calls and items through the same function. Every underscore-prefixed name is
+refused by every one of these, except `__class__` (answered as the proxy's own type, so `isinstance`
+and `issubclass` against `collections.abc` classes work) and the serialisation hook the engine asks
+for. A model's own exception classes (`{{ u.DoesNotExist }}`) are classes, so they are refused too.
+`python/tests/test_model_handle_closed_set_3888.py` enumerates `dir()` of `User`, `Group`,
+`Permission`, `ContentType` and a custom model with a relation, a property, a file field and a
+method, and asserts that no result, at the first or the second level, is a model instance, a model
+class, a manager, a queryset, a bound method, a module or a type; the second level is every
+underscore name that would reach one (`__self__`, `__func__`, `__wrapped__`, `__globals__`,
+`__code__`, `__closure__`, `__dict__`, `__module__`). The test guarantees the KIND of what is
+returned for the members of those five models; it does not guarantee the content of a field.
+
 ## Non-goals
 
 `string_if_invalid` as an engine option (enabled, not delivered); parse-time `TemplateSyntaxError`s
