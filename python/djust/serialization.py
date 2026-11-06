@@ -1844,7 +1844,7 @@ class _Hook:
 _HK_GET, _HK_SET = _slot_accessors(_Hook, "_s")
 
 
-def _smp_serialize(self: Any) -> Any:
+def _smp_serialize(self: Any) -> Any:  # noqa: dead-method-allowed (handed to _Hook by reference)
     """Denylist-filtered dict for terminal Value conversion (called by the Rust
     ``FromPyObject``). Routes through the eager serializer so a model that becomes a template
     value (queryset item, terminal model) is floor-filtered instead of ``__dict__``-dumped.
@@ -2098,7 +2098,7 @@ class _SidecarQuerySetProxy:
 _SQP_GET, _SQP_SET = _slot_accessors(_SidecarQuerySetProxy, "_s")
 
 
-def _sqp_serialize(self: Any) -> Any:
+def _sqp_serialize(self: Any) -> Any:  # noqa: dead-method-allowed (handed to _Hook by reference)
     """The rows, each as its FLOOR PROXY, for terminal Value conversion (called by the Rust
     ``FromPyObject``). A ``{% for x in member.groups.all %}`` loop resolves the queryset to this
     value; the conversion carries each proxy as a live handle (#3888), so ``{{ x.name }}`` works,
