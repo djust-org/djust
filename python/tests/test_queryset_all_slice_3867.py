@@ -26,7 +26,9 @@ mechanical:
 
 ``TestASlicedListOfModelsOnTheBackend`` is a different finding made while measuring this (#3888): a
 relation read inside a sliced loop over a ``list[Model]`` is empty on the Django-backend engine with
-no kept rows involved.
+no kept rows involved. Its diagnosis (a raw model row carries neither a handle nor the relation data,
+so a filtered operand has nothing to read it from) and the full filter x read x container matrix are
+in ``python/tests/test_sliced_list_of_models_3888.py``; the two cells here are the issue's own.
 
 Engine path: the Django-backend engine and a LiveView; Django's own engine is the oracle, on REAL
 ``User`` / ``Group`` rows (#1650 / #1638).
