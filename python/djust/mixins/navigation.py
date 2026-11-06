@@ -203,7 +203,8 @@ class NavigationMixin:
         ``params_form_fallback = "fields"`` to keep what validated: the fields
         that passed arrive as they would on a valid URL and only the ones in
         ``form.errors`` take their initial value, so ``?page=abc&sort=name``
-        keeps ``sort``. A form-level error (``clean()`` raising without naming a
+        keeps ``sort``. As on a valid URL, ``clean()`` runs first and a field
+        the URL left out or empty takes its initial value after it. A form-level error (``clean()`` raising without naming a
         field) still falls back to the initial values, because the fields that
         passed one by one are the combination the form refused, and so does a
         merged result the form's ``clean()`` rejects when run once more on it

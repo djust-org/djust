@@ -194,6 +194,11 @@ Now `?page=abc&sort=name` hands `handle_params()` `page=1` (its initial value) a
 - A kept field is the value the valid path would hand over: a field the URL left out
   or empty takes its `initial`, exactly as on a valid URL. An optional field the URL
   omitted is valid by the form's own say-so; a required one is an error and is replaced.
+  **The order is the valid path's.** `clean()` runs on the raw cleaned values and the
+  `initial` fill comes *after* it, so a kept field the URL left out or empty takes its
+  `initial` over whatever `clean()` wrote into it (when the `initial` is not `None`; a field
+  with no `initial` keeps `clean()`'s value, on both paths). The re-check described below
+  therefore sees the same raw values `clean()` saw on the first pass, not the filled ones.
 - Only the declared fields are handed over, in the form's order. A key `clean()` derived
   and added to `cleaned_data` is not carried into the fallback (the valid path keeps it).
 - A form-level error keeps nothing. If `clean()` raises a plain `ValidationError` (the
@@ -229,8 +234,8 @@ Now `?page=abc&sort=name` hands `handle_params()` `page=1` (its initial value) a
   raw value. A `clean()` that copies raw request data into a **kept** field (`c["a"] =
   self.data.get("q")` with `q` failed) hands it over through that field, as it does on the
   valid path for a field the URL supplied; that is `clean()`'s trust boundary, not the
-  fallback's. (For a kept field the URL left out, the valid path applies its `initial` after
-  `clean()` and the fallback does not: tracked in #3891.)
+  fallback's. For a kept field the URL left out or empty, both paths apply its `initial`
+  after `clean()`, so the copy does not get out through that field on either.
 - A kept `ModelChoiceField` value is a deep copy of the instance the first pass produced: equal
   by primary key, not the same object.
   Anything else going wrong in the second call (a `None` comparison, a value that cannot be
