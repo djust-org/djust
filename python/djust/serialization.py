@@ -1679,24 +1679,28 @@ class _SidecarModelProxy:
     def __getattribute__(self, name: str) -> Any:
         """Refuse every ``_``-prefixed name, STRUCTURALLY (#3888 review).
 
-        ``__getattr__`` below is only reached for names that are not found, and the four slots
-        above are found, so a reader that takes the proxy and walks a dotted attribute path (a
-        custom filter or tag handler receives this object) was never asked. This runs for EVERY
-        instance attribute read, so the live handle refuses underscore-prefixed names (the wrapped
-        instance, the slots, ``__class__``, ``__dict__``, ``__reduce__``...) whoever reads it.
+        A ``__getattr__`` is only reached for names that are not found, and the four slots above
+        are found, so a reader that takes the proxy and walks a dotted attribute path (a custom
+        filter or tag handler receives this object) was never asked. This runs for EVERY instance
+        attribute read, so the live handle refuses underscore-prefixed names (the wrapped instance,
+        the slots, ``__class__``, ``__dict__``, ``__reduce__``...) whoever reads it, and answers
+        every other name through :meth:`_read` (one call, no exception round trip: a render reads
+        a field per row).
 
         Our own code reads the slots through ``object.__getattribute__`` (as the methods below do),
         and the interpreter finds the special methods on the TYPE, so neither goes through here.
         The one name the engine itself asks the instance for is ``__djust_serialize__`` (the hook
         that answers the floored dict), which carries no instance.
         """
-        if name[:1] == "_" and name != "__djust_serialize__":
-            raise AttributeError(name)
-        return object.__getattribute__(self, name)
+        if name == "__djust_serialize__":
+            return object.__getattribute__(self, name)
+        # ONE authority for the refusal: `_read` asks `_attr_is_serializable`, whose first rule is
+        # the underscore prefix (#2614), for the slots and the dunders exactly as for any name.
+        return _SidecarModelProxy._read(self, name)
 
-    def __getattr__(self, name: str) -> Any:
-        # ``__getattr__`` fires only for names not in ``__slots__`` — i.e.
-        # every attribute the template can reference on the wrapped model.
+    def _read(self, name: str) -> Any:
+        # Every attribute the template can reference on the wrapped model, NOT ``_``-prefixed
+        # (``__getattribute__`` above refuses those before this runs).
         # Django-parity: refuse ``_``-prefixed names outright. Templates never
         # resolve them, and allowing them lets ``{{ obj._meta }}`` segfault the
         # worker (Options extraction) + ``{{ obj._meta.db_table }}`` disclose

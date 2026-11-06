@@ -128,6 +128,20 @@ class TestAPythonReaderCannotReachTheWrappedObject:
         got = _backend(src, {"rows": list(users)})
         assert "ERR:AttributeError" in got, got
 
+    @pytest.mark.parametrize(
+        "name", ["_qs", "_is_projection", "__class__", "__dict__", "__reduce__"]
+    )
+    def test_the_queryset_proxy_refuses_underscore_names_for_a_plain_getattr(
+        self, users, name
+    ) -> None:
+        """The wrapped queryset lives in a real slot, which a ``__getattr__`` is never asked about."""
+        from djust.serialization import _SidecarModelProxy
+
+        manager = _SidecarModelProxy(users[0]).groups
+        with pytest.raises(AttributeError):
+            getattr(manager, name)
+        assert manager.count() == 1
+
     def test_a_manager_call_still_works_and_still_warns_as_an_orm_call(self, users) -> None:
         """The wrapper replaced a function: ``alters_data`` and the ORM-call marker survive."""
         from djust.serialization import _SidecarModelProxy
@@ -276,6 +290,12 @@ class TestASnapshotKeepsTheFieldsOfAModelInAnUnconvertedContainer:
 # -- 4. a model whose __str__ raises is described by its own class -----------------------------------
 @pytest.mark.django_db
 class TestAModelWhoseStrRaisesIsNamedByItsClass:
+    def test_an_error_message_names_the_model_class(self, users) -> None:
+        """Iterating a model is Django's ``'User' object is not iterable``; a carried model must
+        not say it is a ``_SidecarModelProxy``."""
+        with pytest.raises(Exception, match=r"'User' object is not iterable"):
+            _backend("{% for x in rows|first %}{{ x }}{% endfor %}", {"rows": list(users)})
+
     def test_the_container_spelling_names_the_model_not_the_proxy(self) -> None:
         from django.db import models as dj_models
 

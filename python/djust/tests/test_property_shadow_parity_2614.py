@@ -347,7 +347,7 @@ class TestStructuralChokepoint:
             assert "_field_is_serializable(" not in src, f"{site} still calls the field-only check"
 
     def test_sidecar_calls_the_chokepoint(self):
-        src = inspect.getsource(_SidecarModelProxy.__getattr__)
+        src = inspect.getsource(_SidecarModelProxy._read)  # the former __getattr__ body (#3888)
         assert "_attr_is_serializable(" in src
         assert "_SENSITIVE_MODEL_METHODS" not in src
 
