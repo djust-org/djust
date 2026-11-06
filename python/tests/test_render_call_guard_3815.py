@@ -994,7 +994,7 @@ def test_install_recognises_the_guard_under_a_functools_wrapper():
         lambda self, context: guard.guarded_include_render(self, context)
     )
     IncludeNode.render = wrapped  # type: ignore[method-assign]
-    guard._installed = False  # a fresh copy of the module
+    guard._STATE["installed"] = False  # a fresh copy of the module
     guard.install()
     assert IncludeNode.render is wrapped, "install() put a second guard under a wrapped one"
 
