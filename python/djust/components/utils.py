@@ -223,6 +223,19 @@ _COLOR_FUNC_RE = re.compile(
 _CSS_VAR_RE = re.compile(_CSS_VAR)
 
 
+def _exact_str(value: Any) -> str:
+    """``value`` as the EXACT ``str`` type, with the content ``str(value)`` has.
+
+    The URL and CSS checks below read the text with ``strip()``, ``lower()``, slices and the like.
+    On a ``str`` subclass those methods are the subclass's, and one may hand back a marked-safe
+    (or otherwise special) object, so a check that ran on its result could be skipped by the
+    value's own type. ``"".join`` builds a new base ``str`` from the content alone, and every
+    later operation is then the base type's.
+    """
+    text = str(value)
+    return text if type(text) is str else "".join((text,))
+
+
 def safe_css_color(value: Any, default: str = "") -> str:
     """Return ``value`` if it is a plain CSS colour, else ``default``.
 
@@ -235,7 +248,7 @@ def safe_css_color(value: Any, default: str = "") -> str:
     """
     if value is None:
         return default
-    text = str(value)
+    text = _exact_str(value)
     candidate = text.strip()
     if not candidate or len(candidate) > _CSS_MAX_VALUE_LEN:
         return default
@@ -287,7 +300,7 @@ def safe_css_length(value: Any, default: str = "") -> str:
     """
     if value is None:
         return default
-    text = str(value)
+    text = _exact_str(value)
     candidate = text.strip()
     if not candidate or len(candidate) > _CSS_MAX_VALUE_LEN:
         return default
@@ -321,7 +334,7 @@ def safe_css_ratio(value: Any, default: str = "") -> str:
     ``auto``, ``auto 4/3``), else ``default``."""
     if value is None:
         return default
-    text = str(value)
+    text = _exact_str(value)
     candidate = text.strip()
     if candidate and len(candidate) <= _CSS_MAX_VALUE_LEN and _CSS_RATIO_RE.fullmatch(candidate):
         return text
@@ -339,7 +352,7 @@ def safe_css_number(value: Any, default: str = "", *, integer: bool = False) -> 
     takes) are accepted."""
     if value is None or isinstance(value, bool):
         return default
-    text = str(value)
+    text = _exact_str(value)
     candidate = text.strip()
     if len(candidate) > _CSS_MAX_VALUE_LEN:
         return default
@@ -383,7 +396,7 @@ def safe_url(value: Any) -> str:
         control-char/whitespace-obfuscated variants, and any value that fails to
         parse → replaced with ``"#"`` (fail-closed).
     """
-    s = str(value).strip()
+    s = _exact_str(value).strip()
     if not s:
         return ""
     if not url_allowed(s):
@@ -414,7 +427,7 @@ def url_allowed(value: Any, *, image: bool = False) -> bool:
     raw and ``mark_safe("&#x6A;avascript:x")`` passes this check (it has no scheme
     until a browser decodes the reference).
     """
-    s = str(value).strip()
+    s = _exact_str(value).strip()
     if not s:
         return True
     if image and _is_data_image(s):
@@ -437,7 +450,7 @@ _DATA_IMAGE_RE = re.compile(r"^data:image/[a-z0-9.+-]+[;,]")
 
 def _is_data_image(value: Any) -> bool:
     """Whether ``value`` is an inline ``data:image/...`` URI (control chars ignored)."""
-    return bool(_DATA_IMAGE_RE.match(_CTRL_WS_RE.sub("", str(value)).lower()))
+    return bool(_DATA_IMAGE_RE.match(_CTRL_WS_RE.sub("", _exact_str(value)).lower()))
 
 
 def unique_ids(items: Any) -> bool:
@@ -479,12 +492,13 @@ def url_attr(value: Any, *, image: bool = False, honor_safe: bool = True) -> str
     """
     if value is None:
         return ""
-    if not image and str(value).strip().lower() in _NOOP_HREFS:
-        return str(value).strip().lower()
+    text = _exact_str(value)  # the base type: every check below is the base type's own
+    if not image and text.strip().lower() in _NOOP_HREFS:
+        return text.strip().lower()
     if honor_safe and isinstance(value, SafeData):
-        return str(value)
-    if image and _is_data_image(value):
-        escaped: str = conditional_escape(str(value).strip())
+        return text
+    if image and _is_data_image(text):
+        escaped: str = conditional_escape(text.strip())
         return escaped
     return safe_url(value)
 
@@ -509,7 +523,7 @@ def attr_text(value: Any) -> str:
     which is right in a text slot and lets the value out of an attribute. This always escapes
     (``django.utils.html.escape``), so it is for ``class=``, ``id=``, ``data-*`` and the like.
     """
-    return str(escape(str(value)))
+    return str(escape(_exact_str(value)))
 
 
 #: The HTML spec's "ASCII whitespace": TAB, LF, FF, CR and SPACE. Not VT, and not
@@ -602,7 +616,7 @@ def srcset_attr(value: Any, *, honor_safe: bool = True) -> str:
     if honor_safe and isinstance(value, SafeData):
         return str(value)
     parts = []
-    for url, descriptors in _srcset_candidates(str(value)):
+    for url, descriptors in _srcset_candidates(_exact_str(value)):
         candidate = url_attr(url, image=True, honor_safe=False)
         if not candidate:
             continue

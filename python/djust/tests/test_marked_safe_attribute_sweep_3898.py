@@ -670,3 +670,48 @@ class TestTextSlotsKeepTheirMarkup:
         item = {"id": "n1", "title": marked, "name": marked, "user": marked, "action": "did"}
         out = _django(src, {"p_list_dict": [item], "p_scalar": "n1"})
         assert "<b>shown</b>" in out, out
+
+
+class TestModelTable:
+    """``model_table`` keeps a marked-safe value in its CELLS (text) and never in the attributes it
+    also writes: the row id (``dj-value-row``), the column key and the filter values (#3898)."""
+
+    @staticmethod
+    def _queryset(**fields: object):
+        from django.contrib.auth.models import User
+
+        class QS(list):
+            model = User
+
+        return QS([User(**fields)])
+
+    @staticmethod
+    def _render(qs, **kw: object) -> str:
+        from djust.components.templatetags._forms import model_table
+
+        return str(model_table(queryset=qs, include=["username"], **kw))
+
+    @pytest.mark.parametrize("claim", sorted(CLAIMS))
+    @pytest.mark.parametrize(
+        "payload", ['x" onmouseover="alert(1)" y="', "x' onmouseover='alert(1)"]
+    )
+    def test_a_marked_safe_row_id_stays_inside_dj_value_row(self, claim: str, payload: str) -> None:
+        qs = self._queryset(id=CLAIMS[claim](payload), username="u")
+        out = self._render(qs, selectable=True)
+        assert "dj-value-row" in out
+        assert holes_in(out) == [], out
+
+    @pytest.mark.parametrize("claim", sorted(CLAIMS))
+    def test_a_marked_safe_cell_keeps_its_markup(self, claim: str) -> None:
+        qs = self._queryset(id=1, username=CLAIMS[claim]("<i>mark</i>"))
+        out = self._render(qs)
+        # SafeString family and lazy keep the markup (``conditional_escape(str(v))``); an
+        # ``__html__`` str is the one the cell code escapes, as before
+        assert ("<i>mark</i>" in out) == (claim != "html-object"), out
+
+    @pytest.mark.parametrize("claim", sorted(CLAIMS))
+    def test_a_marked_safe_filter_value_stays_inside_value(self, claim: str) -> None:
+        qs = self._queryset(id=1, username="u")
+        out = self._render(qs, filters={"username": CLAIMS[claim]('x" onmouseover="alert(1)" y="')})
+        assert "data-table__filter-input" in out
+        assert holes_in(out) == [], out
