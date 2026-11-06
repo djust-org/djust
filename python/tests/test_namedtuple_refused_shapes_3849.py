@@ -29,6 +29,8 @@ Engine path: both native entry points (Django-backend engine, ``RustLiveView``) 
 Refs #3849, #3856, #1646, #1468.
 """
 
+# ruff: noqa: F811
+
 from __future__ import annotations
 
 import logging
@@ -41,6 +43,14 @@ from django.utils.translation import gettext_lazy
 
 from djust.components import rust_handlers
 from djust.template.serialization import serialize_value
+
+from python.tests.test_typed_tuple_shapes_3849 import (  # noqa: F401
+    GATE,
+    engines,
+    render_backend,
+    render_django,
+    render_live,
+)
 
 
 def _odd(name: str, fields: Any, items: tuple = (1, 2, 3)) -> Any:
@@ -221,3 +231,36 @@ class TestARebuildThatRaisesDegrades:
         # message: ``log_failure`` (ADR-038) keeps the message value-free.
         assert "not rebuildable" not in records[0].getMessage()
         assert records[0].exc_info and "not rebuildable" in str(records[0].exc_info[1])
+
+
+#: The one refused shape whose TYPE Django prints and the engine cannot: a real ``rename=True`` namedtuple
+#: (``Renamed(a=1, _1=2, b=3)``). The fallback keeps the items and loses the class, by design.
+_TYPE_IS_LOST = {"rename_true_duplicate"}
+
+
+class TestARefusedShapeAgainstDjango3849:
+    """The review of #3856: these tests compared a refused shape with a ``None`` baseline (the same
+    template without the value), which proves the render does not fail but not what it prints. As an
+    OPERAND the value is printed, so Django's own tag is the reference."""
+
+    @pytest.mark.parametrize("route", ["backend", "live"])
+    @pytest.mark.parametrize(
+        "name,value",
+        [(n, v) for n, v in REFUSED if n not in _TYPE_IS_LOST],
+        ids=lambda x: x if isinstance(x, str) else None,
+    )
+    def test_an_operand_prints_as_django_prints_it(self, engines, route, name, value):
+        render = {"backend": render_backend, "live": render_live}[route]
+        assert render(engines, GATE, {"v": value}) == render_django(engines, GATE, {"v": value})
+
+    @pytest.mark.parametrize("route", ["backend", "live"])
+    def test_a_real_rename_true_namedtuple_loses_its_class_and_keeps_its_items(
+        self, engines, route
+    ):
+        """Recorded, not fixed: Django prints ``Renamed(a=1, _1=2, b=3)``; the engine cannot rebuild
+        that class (``namedtuple()`` refuses ``_1``), so the plain tuple is printed."""
+        value = Renamed(1, 2, 3)
+        render = {"backend": render_backend, "live": render_live}[route]
+        assert "Renamed(a=1, _1=2, b=3)" in render_django(engines, GATE, {"v": value})
+        out = render(engines, GATE, {"v": value})
+        assert "Renamed" not in out and "(1, 2, 3)" in out, out
