@@ -544,3 +544,73 @@ class TestTheConversionContract:
         ctx = {"rows": list(User.objects.order_by("pk"))}
         assert _django_render(source, ctx).count("[") == 2
         assert _got(source, ctx) == ""
+
+
+@pytest.mark.django_db
+class TestTheFloorOfTheHandleItself:
+    """What the PROXY (the handle) enforces where no template walk stands between it and a reader:
+    the type-based floor, the wrapping of a related object, equality of two handles, and the
+    floor's own presence (review round 1)."""
+
+    def test_two_distinct_handles_of_one_row_are_equal(self, rows_world) -> None:
+        """Both handles come from separate relation walks, so they are different proxy objects over
+        the same group row: only the proxy's own ``__eq__`` can say they are the same row."""
+        source = (
+            "{% for a in rows|slice:':1' %}{% for b in rows|slice:'1:2' %}"
+            "{% if a.groups.first == b.groups.first %}SAME{% else %}DIFF{% endif %}"
+            "{% endfor %}{% endfor %}"
+        )
+        users = list(User.objects.filter(username__in=["u0", "u1"]).order_by("pk"))
+        assert _got(source, {"rows": users}) == "SAME"
+
+    def test_a_binary_field_is_not_readable_on_the_handle(self) -> None:
+        """The type-based floor (#1987) applies to the handle, whatever the field is named."""
+        from django.db import models as dj_models
+
+        class Blob3888(dj_models.Model):
+            name = dj_models.CharField(max_length=5)
+            blob = dj_models.BinaryField(default=b"BLOBBYTES")
+
+            class Meta:
+                app_label = "auth"
+
+        got = _got(
+            "{% for r in rows|slice:':1' %}[{{ r.name }}|{{ r.blob }}]{% endfor %}",
+            {"rows": [Blob3888(name="n")]},
+        )
+        assert got == "[n|]", got
+
+    def test_dictsort_cannot_rank_rows_by_a_floor_field_of_a_related_row(
+        self, secure_world
+    ) -> None:
+        """``dictsort`` reads ``owner.password`` off the handle with no walk in between, so a related
+        object that was not wrapped would be sorted by it. The proxy wraps what it returns."""
+        from django.db import models as dj_models
+
+        class Owned3888(dj_models.Model):
+            owner = dj_models.ForeignKey(User, on_delete=dj_models.CASCADE)
+            nick = dj_models.CharField(max_length=5)
+
+            class Meta:
+                app_label = "auth"
+
+        a, b = list(User.objects.order_by("pk"))
+        rows = [Owned3888(owner=a, nick="a"), Owned3888(owner=b, nick="b")]  # input order != sorted
+        floor = "{% for r in rows|dictsort:'owner.password' %}[{{ r.nick }}]{% endfor %}"
+        assert _got(floor, {"rows": rows}) == ""
+        # and a readable related field does sort: a dotted key reads EVERY part, not the first
+        ok = "{% for r in rows|dictsort:'owner.username' %}[{{ r.nick }}]{% endfor %}"
+        assert _django_render(ok, {"rows": rows}) == "[b][a]"  # premise: the sort moves the rows
+        assert _got(ok, {"rows": rows}) == "[b][a]"
+
+    def test_a_missing_floor_never_leaves_the_raw_model_as_the_handle(self, monkeypatch) -> None:
+        """When the floor cannot wrap the model (it hands the object back unchanged), the conversion
+        keeps the denylist dict. It never carries the raw model as its own handle."""
+        from djust import _rust, serialization
+
+        monkeypatch.setattr(serialization, "_protect_sidecar_value", lambda value: value)
+        user = User(username="x", password="pbkdf2$secret", is_superuser=True)
+        # Asked of the conversion itself, not of a render: with the floor function replaced by the
+        # identity the WHOLE floor is gone (the walk uses it too), which is not what this pins.
+        assert _rust.crosses_as_encoded(user) is False
+        assert _rust.crosses_as_encoded_by_conversion(user) is False

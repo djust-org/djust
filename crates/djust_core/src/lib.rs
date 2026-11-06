@@ -1500,6 +1500,16 @@ impl Serialize for Value {
         S: serde::Serializer,
     {
         use serde::ser::SerializeMap;
+        // A carried MODEL (#3888) is written as the floored dict it always was on the wire: the
+        // tag-argument text a native or bridged handler parses, and the state snapshot a backend
+        // round-trips. The handle is render-local; what survives a serialisation is the same
+        // denylist dict the conversion used to build for every model, read from the handle only
+        // when something asks for it (the render itself never does).
+        if let Value::Encoded(e) = self {
+            if let Some(dict) = e.floored_model_dict() {
+                return dict.serialize(serializer);
+            }
+        }
         match self {
             Value::Decimal(d) if !serializer.is_human_readable() => {
                 let mut m = serializer.serialize_map(Some(1))?;
@@ -4671,6 +4681,7 @@ impl<'py> FromPyObject<'_, 'py> for Value {
             if let Some(encoded) = opaque_value(&ob.to_owned()) {
                 return Ok(Value::Encoded(Box::new(as_carried_model(
                     encoded,
+                    &ob,
                     is_floored_model,
                 ))));
             }
@@ -4746,12 +4757,31 @@ fn is_model_floor_proxy(ob: &Bound<'_, PyAny>) -> bool {
 ///   [`OPAQUE_ITEM_CAP`] spells the same items through the same handles, so the two sides of the
 ///   cap agree by construction. Python's `repr` (`<User: u0>`) is what Django prints for a LIST of
 ///   models and is a different, separate divergence; it is deliberately not changed here.
-fn as_carried_model(mut encoded: Encoded, is_model: bool) -> Encoded {
+fn as_carried_model(mut encoded: Encoded, ob: &Bound<'_, PyAny>, is_model: bool) -> Encoded {
     if is_model {
         encoded.eq_class = Some(EqClass::Live);
         encoded.repr = encoded.display().to_string();
+        // The MODEL's class, not the proxy's: a message built from it says `User`.
+        if let Some(name) = model_proxy_class_name(ob) {
+            encoded.type_name = name;
+        }
     }
     encoded
+}
+
+/// The wrapped model's class name, asked of the floor proxy (#3888). `None` when it cannot be
+/// read, which leaves the proxy's own name in place.
+fn model_proxy_class_name(proxy: &Bound<'_, PyAny>) -> Option<String> {
+    proxy
+        .py()
+        .import("djust.serialization")
+        .ok()?
+        .getattr("_model_proxy_class_name")
+        .ok()?
+        .call1((proxy,))
+        .ok()?
+        .extract::<String>()
+        .ok()
 }
 
 /// The object a Django `Form` / `BoundField` is carried by (#3790): the walk-floored proxy of it
@@ -5275,6 +5305,29 @@ impl Encoded {
         }))
     }
 
+    /// The denylist dict of a carried MODEL, read from its live handle (#3888); `None` for any
+    /// other value, and for a model whose handle a round trip dropped (it was already a dict then).
+    ///
+    /// Asked by [`Value`]'s `Serialize` only, so a render that never serialises a model never pays
+    /// for it. The handle is the floor proxy, whose `__djust_serialize__` is the same
+    /// `normalize_django_value` the conversion used before the handle.
+    pub fn floored_model_dict(&self) -> Option<Value> {
+        if self.eq_class != Some(EqClass::Live) {
+            return None;
+        }
+        let handle = self.live.as_ref()?;
+        Python::attach(|py| {
+            handle
+                .bind(py)
+                .getattr("__djust_serialize__")
+                .ok()?
+                .call0()
+                .ok()?
+                .extract::<Value>()
+                .ok()
+        })
+    }
+
     /// One NAMED attribute of the live object, read as `dictsort`'s key is (#3888).
     ///
     /// Django's `_property_resolver` reads `value[part]` and falls back to `getattr(value, part)`
@@ -5752,6 +5805,12 @@ fn handle_only_encoded(ob: &Bound<'_, PyAny>) -> Encoded {
         .ok()
         .and_then(|n| n.extract::<String>().ok())
         .unwrap_or_else(|| "object".to_string());
+    // A model proxy is described by the MODEL's class (`<User object>`), never by the proxy's.
+    let type_name = if is_model_floor_proxy(ob) {
+        model_proxy_class_name(ob).unwrap_or(type_name)
+    } else {
+        type_name
+    };
     let text = ob.str().ok();
     let str_raised = text.is_none();
     let display_safe = text
@@ -5791,7 +5850,7 @@ fn handle_only_encoded(ob: &Bound<'_, PyAny>) -> Encoded {
     };
     // A floored model whose `str` / `repr` / `bool` raised is carried here, so it answers what
     // every carried model does (#3888): its own `==`, and `str()` as its container spelling.
-    as_carried_model(encoded, is_model_floor_proxy(ob))
+    as_carried_model(encoded, ob, is_model_floor_proxy(ob))
 }
 
 /// The Python types [`equality_class`] dispatches on, resolved once per

@@ -276,6 +276,9 @@ let year = dt.format("%Y").to_string().parse::<i32>().unwrap_or(2000);
 'r' => result.push_str(&dt.format("%a, %d %b %Y %H:%M:%S %z").to_string()),
 'U' => result.push_str(&dt.timestamp().to_string()),
 'N' => result.push_str(&dt.format("%b.").to_string()), // Month abbrev AP style
+type_name: "User".to_string(),
+display: "u0".to_string().into(),
+repr: "u0".to_string(),
 context.set("value_arg".into(), Value::String("-->".into()));
 template: "\"boom.html\"".to_string(),
 Err(DjangoRustError::TemplateError("exit blew up".to_string()))

@@ -1676,6 +1676,24 @@ class _SidecarModelProxy:
         object.__setattr__(self, "_allowed", DjangoJSONEncoder._get_allowlist_fields(obj))
         object.__setattr__(self, "_optout", DjangoJSONEncoder._get_sensitive_optout_fields(obj))
 
+    def __getattribute__(self, name: str) -> Any:
+        """Refuse every ``_``-prefixed name, STRUCTURALLY (#3888 review).
+
+        ``__getattr__`` below is only reached for names that are not found, and the four slots
+        above are found, so a reader that takes the proxy and walks a dotted attribute path (a
+        custom filter or tag handler receives this object) was never asked. This runs for EVERY
+        instance attribute read, so the live handle refuses underscore-prefixed names (the wrapped
+        instance, the slots, ``__class__``, ``__dict__``, ``__reduce__``...) whoever reads it.
+
+        Our own code reads the slots through ``object.__getattribute__`` (as the methods below do),
+        and the interpreter finds the special methods on the TYPE, so neither goes through here.
+        The one name the engine itself asks the instance for is ``__djust_serialize__`` (the hook
+        that answers the floored dict), which carries no instance.
+        """
+        if name[:1] == "_" and name != "__djust_serialize__":
+            raise AttributeError(name)
+        return object.__getattribute__(self, name)
+
     def __getattr__(self, name: str) -> Any:
         # ``__getattr__`` fires only for names not in ``__slots__`` — i.e.
         # every attribute the template can reference on the wrapped model.
@@ -1736,6 +1754,43 @@ class _SidecarModelProxy:
         return repr(object.__getattribute__(self, "_obj"))
 
 
+class _FlooredCall:
+    """The callable a :class:`_SidecarQuerySetProxy` answers for a method (``.all``, ``.first``...):
+    it calls the real method and protects the result. Carries the markers the engine reads
+    (``alters_data``, ``do_not_call_in_templates``, ``djust_orm_call``) and nothing else: every
+    ``_``-prefixed name is refused, so the bound method and its receiver are not reachable."""
+
+    __slots__ = ("_fn", "alters_data", "do_not_call_in_templates", "djust_orm_call")
+
+    def __init__(self, fn: Any) -> None:
+        object.__setattr__(self, "_fn", fn)
+        for marker in ("alters_data", "do_not_call_in_templates"):
+            if hasattr(fn, marker):
+                object.__setattr__(self, marker, getattr(fn, marker))
+        object.__setattr__(
+            self,
+            "djust_orm_call",
+            isinstance(getattr(fn, "__self__", None), (models.Manager, models.QuerySet)),
+        )
+
+    def __getattribute__(self, name: str) -> Any:
+        if name[:1] == "_":
+            raise AttributeError(name)
+        return object.__getattribute__(self, name)
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        return _protect_sidecar_value(object.__getattribute__(self, "_fn")(*args, **kwargs))
+
+
+def _model_proxy_class_name(proxy: Any) -> str:
+    """The wrapped model's CLASS name, for the engine's carrier of a model proxy (#3888 review).
+
+    Asked only by the Rust conversion, so a model whose ``__str__`` raises is described as
+    ``RvRaises object`` (what it was before the handle) and not as ``_SidecarModelProxy object``.
+    """
+    return type(object.__getattribute__(proxy, "_obj")).__name__
+
+
 class _SidecarQuerySetProxy:
     """Floor-preserving wrapper for a Django ``Manager`` / ``QuerySet`` reached
     in the template getattr sidecar walk (#1986 review).
@@ -1776,6 +1831,13 @@ class _SidecarQuerySetProxy:
         # detects the projection class we must refuse.
         object.__setattr__(self, "_is_projection", getattr(qs, "_fields", None) is not None)
 
+    def __getattribute__(self, name: str) -> Any:
+        """Refuse every ``_``-prefixed name structurally, as :class:`_SidecarModelProxy` does: the
+        wrapped queryset lives in a real slot, which ``__getattr__`` is never asked about."""
+        if name[:1] == "_" and name != "__djust_serialize__":
+            raise AttributeError(name)
+        return object.__getattribute__(self, name)
+
     def __getattr__(self, name: str) -> Any:
         if name.startswith("_"):
             raise AttributeError(name)
@@ -1786,20 +1848,11 @@ class _SidecarQuerySetProxy:
         qs = object.__getattribute__(self, "_qs")
         attr = getattr(qs, name)
         if callable(attr) and not isinstance(attr, type):
-
-            def _wrapped(*args: Any, **kwargs: Any) -> Any:
-                return _protect_sidecar_value(attr(*args, **kwargs))
-
-            # Preserve the template-callable guards + ORM ``__self__`` so the
-            # Rust walk auto-calls (or refuses) the wrapper exactly as it would
-            # the bound method (e.g. ``qs.delete`` keeps ``alters_data=True``).
-            for _marker in ("alters_data", "do_not_call_in_templates", "__self__"):
-                if hasattr(attr, _marker):
-                    try:
-                        setattr(_wrapped, _marker, getattr(attr, _marker))
-                    except (AttributeError, TypeError):  # pragma: no cover - defensive
-                        pass
-            return _wrapped
+            # Preserve the template-callable guards + ORM-call flag so the Rust walk auto-calls (or
+            # refuses) the wrapper exactly as it would the bound method (e.g. ``qs.delete`` keeps
+            # ``alters_data=True``). A call wrapper OBJECT, not a function: a function exposes
+            # ``__self__`` / ``__closure__`` / ``__globals__`` to a reader that walks attributes.
+            return _FlooredCall(attr)
         return _protect_sidecar_value(attr)
 
     def __iter__(self) -> Any:
