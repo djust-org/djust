@@ -752,6 +752,19 @@ def _checked_column_widths(columns: Any) -> Any:
 
 
 @register.filter
+def table_width(value: Any) -> Any:
+    """``col.width`` as a CSS length for ``style="width:..."``, or ``""``.
+
+    Checked HERE, in the template, so it holds whatever the columns are (a list of dicts, of
+    objects, any other iterable) and whatever the width is marked as: the value is judged as the
+    plain text it prints (``safe_css_length``) and escaped, so a marked-safe width cannot leave
+    the attribute (#3894). ``_checked_column_widths`` only reaches dicts in a list or tuple."""
+    if not value:
+        return ""
+    return mark_safe(conditional_escape(safe_css_length(str(value), "")))
+
+
+@register.filter
 def table_cell(row: Any, key: Any) -> Any:
     """``row[key]`` of a dict row, as ``table.html`` writes a cell and a row's ``data-value`` (#3870).
 
@@ -782,8 +795,12 @@ def table_href(row: Any, key: Any) -> Any:
     for every dict row. A row is data, often someone else's, so ``javascript:`` is neutralised
     here as for every other URL of a component (``url_attr``). The result is escaped, so it is
     marked safe for the template.
+
+    A marked-safe value (``mark_safe``, a lazy one, ``Markup``) is checked and escaped like any
+    other (``honor_safe=False``, as the class-based components do): marking a cell safe keeps its
+    markup in a TEXT cell, and says nothing about using it as a URL (#3894).
     """
-    return mark_safe(url_attr(table_cell(row, key)))
+    return mark_safe(url_attr(table_cell(row, key), honor_safe=False))
 
 
 @register.inclusion_tag("djust_components/table.html")
