@@ -9,6 +9,7 @@ from typing import Any, Dict, List
 from ..base import Component
 
 from django.utils.html import conditional_escape
+from djust.components.utils import attr_text
 
 
 # Try to import Rust implementation (will be added later)
@@ -167,7 +168,7 @@ class ButtonGroup(Component):
             disabled_attr = " disabled" if disabled else ""
 
             button_html.append(
-                f'<button type="button" class="btn btn-{conditional_escape(variant)}{active_class}"{disabled_attr}>{label}</button>'
+                f'<button type="button" class="btn btn-{attr_text(variant)}{active_class}"{disabled_attr}>{label}</button>'
             )
 
         buttons_str = "\n".join(button_html)
@@ -258,7 +259,7 @@ class ButtonGroup(Component):
             disabled_attr = " disabled" if disabled else ""
 
             button_html.append(
-                f'<button type="button" class="button button-{conditional_escape(variant)}{active_class}"{disabled_attr}>{label}</button>'
+                f'<button type="button" class="button button-{attr_text(variant)}{active_class}"{disabled_attr}>{label}</button>'
             )
 
         buttons_str = "\n".join(button_html)

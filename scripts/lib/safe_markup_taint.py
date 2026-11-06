@@ -199,6 +199,7 @@ CONTEXT_SENSITIVE_ORIGINS = frozenset(
         "djust.components.utils.url_attr",
         "djust.components.utils.srcset_attr",
         "djust.components.utils.data_url_attr",
+        "djust.components.utils.attr_text",
         "djust.components.utils.safe_css_color",
         "djust.components.utils.safe_css_length",
         "djust.components.utils.safe_css_ratio",

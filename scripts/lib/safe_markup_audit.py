@@ -521,7 +521,7 @@ AUDITED: dict[tuple[str, str], Audit] = {
         "the tree comes from _render_node, which conditional_escape's id, name and title, sends the avatar through url_attr and takes the already-escaped event (e_event here) from this method; same as OrgChartNode",
         (RH, 'e_event = conditional_escape(str(event)) if event else ""'),
         (RH, "tree_html = self._render_node(root_id, node_map, children, e_event)"),
-        (RH, 'src="{url_attr(avatar, image=True)}"', "OrgChartHandler._render_node"),
+        (RH, 'src="{data_url_attr(avatar, image=True)}"', "OrgChartHandler._render_node"),
         (
             RH,
             'name = conditional_escape(str(node.get("name", "")))',

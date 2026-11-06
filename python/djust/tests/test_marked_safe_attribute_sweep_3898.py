@@ -1,26 +1,29 @@
-"""A marked-safe value read out of a component's DATA is not a URL and not an attribute (#3898, #3894).
+"""A marked-safe value is not a URL and not an attribute value (#3898, #3894).
 
-``url_attr`` honours a ``SafeData`` value by default: a marked-safe string skips the scheme
-allowlist AND the escaping. That is right for a developer's own tag argument and wrong for a value
-a view assembled into an item dict, a list of images or a constructor argument of a class-based
-component, which "have always escaped what they were given, a marked-safe value included"
-(``url_attr``'s own docstring). ``mark_safe`` on a value keeps its markup in a TEXT slot; it never
-meant "use it as a URL" or "write it into an attribute".
+``mark_safe`` on a value (also a lazy one, or any ``str`` with ``__html__``) means "no HTML
+escaping needed" in a TEXT slot. It never meant "navigable", and it never meant "write it into a
+quoted attribute". So, in ``djust.components``:
 
-This is the sweep that makes the rule hold for every component, not the ones somebody listed:
+* a URL is checked against the scheme allowlist and escaped whatever it is marked as (data, a
+  constructor argument, a tag's own keyword, the native handlers), except the literal no-op hrefs
+  ``javascript:void(0)`` / ``javascript:;``;
+* an ITEM value (an entry of a list of items, an item dict) that lands in an attribute is escaped
+  whatever it is marked as;
+* a text slot keeps its markup; a scalar argument in a non-URL attribute is the developer's own.
 
-* it DERIVES the classes (every class-based component whose module calls ``url_attr``) and the
-  parameters (the constructor's, or the keys a ``LiveComponent`` reads), with the helpers the URL
-  sweep uses;
-* it drives each parameter with each way a value claims to be safe (``mark_safe``, a ``SafeString``
-  subclass, a lazy marked-safe string, ``markupsafe.Markup``) in three shapes (a scalar, a dict, a
-  list of dicts), under all three CSS frameworks, with script schemes and attribute-breakout
-  payloads;
-* a hole is a script-capable URL in an attribute (``url_sweep.findings``) or an ``on...`` attribute
-  the payload created.
+What each class here proves, and what it does NOT:
 
-``TestCallerSet`` pins which ``url_attr`` call sites still honour a marked-safe value: only the
-tags whose value is the developer's own argument. A new site fails until it is decided.
+* ``TestTheSweep`` / ``TestEveryClass``: the classes whose module names ``url_attr`` (all four
+  claims, six payloads), and EVERY class the URL sweep can drive (200+; two claims, two payloads,
+  item shapes only for attributes). The classes, parameters and per-class item keys are DERIVED
+  from the code (``url_sweep.component_classes``, ``component_params``, ``harness.discover``), under
+  all three CSS frameworks, with and without the companions that make conditional sections draw.
+* ``TestTags``: the 18 tags that print a URL out of an item, on both engines.
+* ``TestEveryTag``: EVERY tag of every library, every parameter, item keys read from each tag's own
+  source. It does not claim they are clean: it pins the exact list that still leaks
+  (``KNOWN_TAG_ITEM_LEAKS``, #3904), so the claim equals the coverage and the list can only shrink.
+* ``TestCallerSet`` fails on any ``url_attr`` / ``srcset_attr`` call (the native handlers
+  included) that leaves ``honor_safe`` at its default.
 """
 
 from __future__ import annotations
@@ -122,15 +125,44 @@ ONLY = {w for w in os.environ.get("MARKED_SAFE_SWEEP_ONLY", "").split(",") if w}
 CLASSES = {
     key: cls for key, cls in url_classes().items() if not ONLY or any(word in key for word in ONLY)
 }
+#: EVERY class the URL sweep can drive (derived: every ``Component`` / ``LiveComponent`` in the
+#: component packages), not only the ones whose module names ``url_attr``: an attribute breakout
+#: needs no URL helper, so the claim "an item value never leaves an attribute" is made for all.
+ALL_CLASSES = {
+    key: cls
+    for key, cls in url_sweep.component_classes().items()
+    if not ONLY or any(word in key for word in ONLY)
+}
 KEYS = set(url_sweep.COMMON_KEYS)
+#: Attribute-ish item keys no URL sweep names (a lightbox image's ``alt``, a card's ``caption``).
+ATTR_KEYS = frozenset(
+    {"alt", "caption", "description", "subtitle", "tooltip", "class", "color", "status", "target",
+     "rel", "placeholder", "aria_label", "name", "email", "key", "slug", "category", "user",
+     "action", "time", "badge", "content", "message", "type", "variant", "size", "role", "value",
+     "label", "title", "id", "text", "icon", "content_id", "panel", "header", "body"}
+)  # fmt: skip
+
+
+def class_keys(cls: type) -> set[str]:
+    """The item keys ``cls`` reads, DERIVED from its source (``.get("x")`` / ``["x"]``, followed
+    through its helpers by the harness), plus the common URL keys and :data:`ATTR_KEYS`."""
+    try:
+        found, _params = harness.discover(cls)
+    except Exception:  # noqa: BLE001 - a class the harness cannot read keeps the common keys
+        found = set()
+    return set(KEYS) | set(ATTR_KEYS) | {k for k in found if k.isidentifier()}
+
+
 #: The item keys the tags read besides the URL-shaped ones (a card's category, a feed's user, a
 #: node's parent ...): derived from the tags' own keys would need the harness; these are the ones
 #: the data tags' sources name, and ``test_each_tag_is_reached_by_the_driver`` shows the driver
 #: gets as far as an attribute.
-TAG_KEYS = KEYS | {
-    "category", "user", "action", "target", "time", "description", "badge", "event", "active",
-    "nid",
-}  # fmt: skip
+TAG_KEYS = (
+    KEYS
+    | ATTR_KEYS
+    | {"category", "user", "action", "target", "time", "description", "badge", "event", "active"}
+    | {"nid"}
+)
 
 
 #: Item attributes a component reads off an OBJECT item (``NavItem``): the dict keys plus these.
@@ -140,31 +172,31 @@ OBJ_KEYS = KEYS | {"target", "badge", "badge_variant", "active", "external", "ic
 N_ITEMS = 5
 
 
-def _item(value: object) -> dict:
+def _item(value: object, keys: set[str] = KEYS) -> dict:
     """An item dict whose every key is ``value``, with a nested ``dropdown`` list of the same
     (a navbar's dropdown entries are items under the ``dropdown`` key)."""
-    item = url_sweep.dict_of(value, KEYS)  # type: ignore[arg-type]
-    item["dropdown"] = [url_sweep.dict_of(value, KEYS) for _ in range(2)]  # type: ignore[arg-type]
+    item = url_sweep.dict_of(value, keys)  # type: ignore[arg-type]
+    item["dropdown"] = [url_sweep.dict_of(value, keys) for _ in range(2)]  # type: ignore[arg-type]
     return item
 
 
-def _obj(value: object) -> SimpleNamespace:
+def _obj(value: object, keys: set[str] = KEYS) -> SimpleNamespace:
     """An object item (``NavItem``): every attribute is ``value``, except the badge, which the
     component compares with ``> 0``."""
-    return SimpleNamespace(**{**dict.fromkeys(OBJ_KEYS, value), "badge": 1})
+    return SimpleNamespace(**{**dict.fromkeys(OBJ_KEYS | keys, value), "badge": 1})
 
 
-def _shapes(value: object) -> dict[str, object]:
+def _shapes(value: object, keys: set[str] = KEYS) -> dict[str, object]:
     return {
         "scalar": value,
         "list_str": [value] * N_ITEMS,
-        "dict": url_sweep.dict_of(value, KEYS),  # type: ignore[arg-type]
+        "dict": url_sweep.dict_of(value, keys),  # type: ignore[arg-type]
         # alternate items WITH a dropdown and plain ones: a navbar draws the two differently
         "list_dict": [
-            _item(value) if i % 2 == 0 else url_sweep.dict_of(value, KEYS)  # type: ignore[arg-type]
+            _item(value, keys) if i % 2 == 0 else url_sweep.dict_of(value, keys)  # type: ignore[arg-type]
             for i in range(N_ITEMS)
         ],
-        "list_obj": [_obj(value) for _ in range(N_ITEMS)],
+        "list_obj": [_obj(value, keys) for _ in range(N_ITEMS)],
     }
 
 
@@ -231,6 +263,9 @@ def sweep(
     only_claims: tuple[str, ...] = tuple(CLAIMS),
     force_python: bool = False,
     companions: bool = False,
+    classes: dict[str, type] | None = None,
+    payloads: tuple[tuple[str, str], ...] = PAYLOADS,
+    wide: bool = False,
 ) -> tuple[list[tuple], int, set[tuple[str, str]]]:
     """``([(class, param, shape, claim, payload label, holes)], renders, hybrid-template cells)``.
 
@@ -241,8 +276,9 @@ def sweep(
     found: list[tuple] = []
     rendered = 0
     hybrid: set[tuple[str, str]] = set()
-    for key, cls in CLASSES.items():
+    for key, cls in (CLASSES if classes is None else classes).items():
         names, required = url_sweep.component_params(cls)
+        keys = class_keys(cls)
         # ``component_id`` is a LiveComponent's own constructor argument (it lands in ``id=``)
         if issubclass(cls, LiveComponent) and "component_id" not in names:
             names = [*names, "component_id"]
@@ -251,8 +287,8 @@ def sweep(
         # same three times)
         frameworks = url_sweep.FRAMEWORKS
         for claim in only_claims:
-            for label, payload in PAYLOADS:
-                for shape, value in _shapes(CLAIMS[claim](payload)).items():
+            for label, payload in payloads:
+                for shape, value in _shapes(CLAIMS[claim](payload), keys).items():
                     for name in names:
                         for framework in frameworks:
                             kwargs = {
@@ -279,6 +315,17 @@ def sweep(
                                 continue
                             rendered += 1
                             holes = holes_in(out)
+                            if wide:
+                                # the classes outside the URL family: a payload's handler in an
+                                # attribute an ITEM value reached, or a script URL a browser FOLLOWS
+                                # (``exec``). A scalar constructor argument is the developer's own,
+                                # and an author-named ``data-url`` attribute is inert.
+                                holes = [
+                                    h
+                                    for h in holes
+                                    if (len(h) == 4 and h[2] == "exec")
+                                    or (len(h) == 2 and shape != "scalar")
+                                ]
                             if holes:
                                 found.append((key, name, shape, claim, label, tuple(holes)))
     return found, rendered, hybrid
@@ -348,15 +395,12 @@ class TestTheSweep:
 def _call_sites() -> set[tuple[str, str, str]]:
     """``(file, function, first argument)`` of every ``url_attr`` / ``srcset_attr`` call that does
     not say ``honor_safe=False`` and is not the shared data helper, under ``python/djust``
-    (tests and the native handlers excluded: those are handed text)."""
+    (tests excluded). The native handlers are in: they are handed text today, and that is
+    the engine's doing, not a property of the handler."""
     sites: set[tuple[str, str, str]] = set()
     for path in sorted((ROOT / "python/djust").rglob("*.py")):
         rel = str(path.relative_to(ROOT / "python/djust"))
-        if (
-            "/tests/" in "/" + rel
-            or path.name.startswith("test_")
-            or path.name == "rust_handlers.py"
-        ):
+        if "/tests/" in "/" + rel or path.name.startswith("test_"):
             continue
         sites |= _honouring_calls(path.read_text(), rel)
     return sites
@@ -587,6 +631,9 @@ class TestTheNoOpHrefException:
             ("javascript:;", "javascript:;"),
             ("  JavaScript:Void(0)  ", "javascript:void(0)"),
             ("JAVASCRIPT:;", "javascript:;"),
+            # whitespace around the literal is stripped (the rule says so); nothing inside it
+            ("javascript:void(0) ", "javascript:void(0)"),
+            ("\tjavascript:;\n", "javascript:;"),
         ],
     )
     def test_the_literal_is_kept(self, claim: str, given: str, kept: str) -> None:
@@ -600,6 +647,19 @@ class TestTheNoOpHrefException:
         "given",
         [
             "javascript:void(0);alert(1)",
+            # the spellings a widened ``_NOOP_HREFS`` would let through: each is refused
+            "javascript:void(0);",
+            "JAVASCRIPT:VOID(0);",
+            "javascript:void (0)",
+            "javascript:void(0)\x00",
+            "javascript:void(0) x",
+            "javascript:;;",
+            "javascript:; ;",
+            "javascript:void(0),",
+            "javascript:void(0)#",
+            "javascript:undefined",
+            "javascript:0",
+            "javascript:void 0",
             "javascript:void(0) 1x",
             "javascript:void(0)//x",
             "javascript:void( 0 )",
@@ -719,3 +779,129 @@ class TestModelTable:
         out = self._render(qs, filters={"username": CLAIMS[claim]('x" onmouseover="alert(1)" y="')})
         assert "data-table__filter-input" in out
         assert holes_in(out) == [], out
+
+
+# --- EVERY tag of every library: what is covered and what is not, derived ----------------------
+
+#: ``library/tag/parameter`` of the template tags where an ITEM value (a list of items, an item)
+#: that is marked safe still leaves an attribute, DERIVED by :func:`wide_tag_leaks` (every tag of
+#: every library, every parameter, item keys read from each tag's own source). This is the list of
+#: what #3898 does NOT cover for tags, kept exact: a new leak fails, and a fixed tag fails until
+#: it is removed here. Tracked in the follow-up issue linked from the PR.
+KNOWN_TAG_ITEM_LEAKS: frozenset[str] = frozenset(
+    {
+        f"djust_components/{tag}"
+        for tag in (
+            "audit_log/entries",
+            "autocomplete/suggestions",
+            "collab_selection/users",
+            "combobox/options",
+            "combobox/selected",
+            "cursors/users",
+            "dashboard_grid/panels",
+            "data_grid/columns",
+            "data_grid/rows",
+            "dependent_select/options",
+            "dj_select/options",
+            "export_dialog/columns",
+            "export_dialog/formats",
+            "fab/actions",
+            "file_tree/nodes",
+            "gantt_chart/tasks",
+            "kanban_board/columns",
+            "line_chart/series",
+            "masonry_grid/items",
+            "meter/segments",
+            "model_selector/options",
+            "multi_select/options",
+            "notification_center/notifications",
+            "reactions/options",
+            "scroll_spy/sections",
+            "sortable_list/items",
+            "tag_input/suggestions",
+            "tag_input/tags",
+            "toast_container/toasts",
+            "tour/steps",
+            "tree_view/nodes",
+            "wizard/steps",
+        )  # fmt: skip
+    }
+    | {"theme_components/theme_radio/options", "theme_components/theme_select/options"}
+)
+
+
+def wide_tag_leaks() -> set[str]:
+    """``library/tag/parameter`` for every (tag, parameter) where a marked-safe ITEM value (a
+    list of items, a list of text, an item) creates the payload's ``onmouseover`` attribute, in
+    Django's engine. The scalar arguments of a tag are the developer's own and are not counted."""
+    from django.template import engines
+
+    from scripts.lib.template_library_parity import variants
+
+    python_engine = engines["django"]
+    value = mark_safe('x" onmouseover="alert(zq7)" y="')
+    leaks: set[str] = set()
+    for _key, info in sorted(url_sweep.inventory().items()):
+        if info.name.startswith("end"):
+            continue
+        names = variants.passed_names(info)
+        if not names:
+            continue
+        keys = url_sweep.keys_read(info, url_sweep._fn_of(info)) | set(TAG_KEYS) | set(ATTR_KEYS)
+        parent = variants.PARENT.get(info.name)
+        ctx = {
+            "p_list_str": [value, value],
+            "p_dict": url_sweep.dict_of(value, keys),  # type: ignore[arg-type]
+            "p_list_dict": [url_sweep.dict_of(value, keys)] * 2,  # type: ignore[arg-type]
+        }
+        for name in names:
+            for shape in DATA_SHAPES:
+                args = url_sweep.typical_args(info, name) + [f"{name}=p_{shape}"]
+                src = url_sweep.wrap(info, " ".join(args), parent, "open=True" if parent else "")
+                html = url_sweep._render(python_engine, src, ctx)
+                if html and any(len(h) == 2 for h in holes_in(html)):
+                    leaks.add(f"{info.lib}/{info.name}/{name}")
+    return leaks
+
+
+class TestEveryClass:
+    """EVERY class component (all of them the URL sweep can drive, 200+), not only the ones whose
+    module names ``url_attr``: an item value that is marked safe never creates the payload's
+    handler in an attribute, and no script URL a browser follows is printed. A scalar constructor
+    argument is the developer's own (see ``wide`` in :func:`sweep`)."""
+
+    @pytest.mark.parametrize("companions", [False, True], ids=["bare", "companions"])
+    def test_no_class_lets_a_marked_safe_item_value_out_of_an_attribute(
+        self, companions: bool
+    ) -> None:
+        payloads = tuple(p for p in PAYLOADS if p[0] in {"js", "breakout-dq"})
+        found, rendered, _ = sweep(
+            only_claims=("mark_safe", "html-object"),
+            force_python=True,
+            companions=companions,
+            classes=ALL_CLASSES,
+            payloads=payloads,
+            wide=True,
+        )
+        assert rendered > (50 if ONLY else 40_000), f"the sweep barely ran ({rendered})"
+        assert ONLY or len(ALL_CLASSES) > 150, len(ALL_CLASSES)
+        assert not found, _report(found)
+
+    def test_the_classes_are_derived_not_listed(self) -> None:
+        """Every driven class is swept (the set is the URL sweep's own), and the URL family is a
+        subset of it."""
+        assert set(CLASSES) <= set(ALL_CLASSES)
+        assert ONLY or len(ALL_CLASSES) > len(CLASSES) * 4
+
+
+class TestEveryTag:
+    def test_the_item_leaks_of_the_tags_are_exactly_the_listed_ones(self) -> None:
+        leaks = wide_tag_leaks()
+        assert leaks == set(KNOWN_TAG_ITEM_LEAKS), (
+            f"new leaks (escape the item value with attr_text): {sorted(leaks - KNOWN_TAG_ITEM_LEAKS)}\n"
+            f"fixed (delete from KNOWN_TAG_ITEM_LEAKS): {sorted(set(KNOWN_TAG_ITEM_LEAKS) - leaks)}"
+        )
+
+    def test_the_tags_this_change_edits_are_not_among_them(self) -> None:
+        edited = {f"djust_components/{t}" for t in DATA_TAGS}
+        assert not [k for k in KNOWN_TAG_ITEM_LEAKS if "/".join(k.split("/")[:2]) in edited]

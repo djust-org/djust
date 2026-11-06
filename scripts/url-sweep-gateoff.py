@@ -79,7 +79,7 @@ MUTATIONS: list[tuple[str, pathlib.Path, str, str, str, str]] = [
     (
         "responsive_image handler: srcset only escaped",
         HANDLERS,
-        '        srcset = srcset_attr(kw.get("srcset", ""))',
+        '        srcset = srcset_attr(kw.get("srcset", ""), honor_safe=False)',
         '        srcset = conditional_escape(str(kw.get("srcset", "")))',
         SINKS,
         "",

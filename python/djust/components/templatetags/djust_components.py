@@ -2911,7 +2911,7 @@ def carousel(
     for i, img in enumerate(images):
         if isinstance(img, dict):
             src = data_url_attr(img.get("src", img.get("url", "")), image=True)
-            alt = conditional_escape(str(img.get("alt", f"Slide {i + 1}")))
+            alt = attr_text(img.get("alt", f"Slide {i + 1}"))  # only in alt=
             caption = img.get("caption", "")
         else:
             src = data_url_attr(img, image=True)
@@ -10089,7 +10089,7 @@ class LightboxNode(template.Node):
             img = images[idx]
             if isinstance(img, dict):
                 e_src = data_url_attr(img.get("src", ""), image=True)
-                e_alt = conditional_escape(str(img.get("alt", "")))
+                e_alt = attr_text(img.get("alt", ""))  # only in alt=
                 caption = img.get("caption", "")
                 img_html = f'<img class="dj-lightbox__image" src="{e_src}" alt="{e_alt}">'
                 if caption:

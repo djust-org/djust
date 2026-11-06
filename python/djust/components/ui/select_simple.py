@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional, Union
 from ..base import Component
 
 from django.utils.html import conditional_escape
+from djust.components.utils import attr_text
 
 try:
     from djust._rust import RustSelect  # type: ignore[attr-defined]
@@ -175,7 +176,7 @@ class Select(Component):
             opt_label = opt["label"]
             selected = " selected" if opt_value == self.value else ""
             parts.append(
-                f'        <option value="{conditional_escape(opt_value)}"{selected}>{conditional_escape(opt_label)}</option>'
+                f'        <option value="{attr_text(opt_value)}"{selected}>{conditional_escape(opt_label)}</option>'
             )
 
         parts.append("    </select>")

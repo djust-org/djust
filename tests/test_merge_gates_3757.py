@@ -74,10 +74,6 @@ EXCLUDED: dict[str, str] = {
     ),
     "python/djust/tests/test_free_threaded_class_caches_3151.py": _SOURCE,
     "python/djust/tests/test_log_exposure_pin.py": _SOURCE,
-    "python/djust/tests/test_marked_safe_attribute_sweep_3898.py": (
-        _SOURCE + " It also derives the components and tags it drives from that source, so a PR "
-        "that adds a component with a URL call is swept by this file as a normal CI test."
-    ),
     "python/djust/tests/test_module_getattr_hooks.py": _SOURCE,
     "python/djust/tests/test_property_shadow_parity_2614.py": _SOURCE,
     "python/djust/tests/test_template_auto_call_1985.py": _SOURCE,
