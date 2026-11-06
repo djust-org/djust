@@ -20,8 +20,11 @@ What each class here proves, and what it does NOT:
   all three CSS frameworks, with and without the companions that make conditional sections draw.
 * ``TestTags``: the 18 tags that print a URL out of an item, on both engines.
 * ``TestEveryTag``: EVERY tag of every library, every parameter, item keys read from each tag's own
-  source. It does not claim they are clean: it pins the exact list that still leaks
-  (``KNOWN_TAG_ITEM_LEAKS``, #3904), so the claim equals the coverage and the list can only shrink.
+  source, with each tag's other lists filled too. It pins the exact list of tags that still leak
+  (``KNOWN_TAG_ITEM_LEAKS``), empty since #3904, so a new leak fails.
+* ``TestEveryItemParameter``: the 37 tag parameters that print an item in an attribute (#3904),
+  one cell each: driven (a plain probe lands in the pinned attributes), and every way of marking a
+  value safe leaves those attributes as the plain string does.
 * ``TestCallerSet`` fails on any ``url_attr`` / ``srcset_attr`` call (the native handlers
   included) that leaves ``honor_safe`` at its default.
 """
@@ -33,9 +36,12 @@ import contextlib
 import importlib
 import inspect
 import os
+from collections import Counter
+from functools import lru_cache
 from html.parser import HTMLParser
 from pathlib import Path
 from types import SimpleNamespace
+from typing import NamedTuple
 from unittest.mock import patch
 
 import pytest
@@ -1096,61 +1102,117 @@ class TestModelTable:
 
 #: ``library/tag/parameter`` of the template tags where an ITEM value (a list of items, an item)
 #: that is marked safe still leaves an attribute, DERIVED by :func:`wide_tag_leaks` (every tag of
-#: every library, every parameter, item keys read from each tag's own source). This is the list of
-#: what #3898 does NOT cover for tags, kept exact: a new leak fails, and a fixed tag fails until
-#: it is removed here. Tracked in the follow-up issue linked from the PR.
-KNOWN_TAG_ITEM_LEAKS: frozenset[str] = frozenset(
+#: every library, every parameter, item keys read from each tag's own source, and a parameter
+#: that only draws when another list parameter is filled). Empty since #3904, and kept as the
+#: pin: a new leak fails, and the list can only shrink.
+KNOWN_TAG_ITEM_LEAKS: frozenset[str] = frozenset()
+
+#: The other list parameters of a tag, filled with these (the harness's own benign lists) while
+#: one parameter is under test: ``audit_log`` draws a row's cells only when ``entries`` is filled,
+#: and only then does a ``columns`` name reach a ``class=`` attribute.
+COMPANIONS: tuple[str | None, ...] = (None, "lst_dict", "lst_str")
+
+#: Item keys that hold a LIST of items of the same kind (a kanban column's ``cards``), beyond the
+#: URL sweep's ``NESTED_KEYS``. A flat item fills such a key with the claim itself, and a tag
+#: iterating it then walks the characters of a string (or crashes), so what is inside the nested
+#: items was never reached: the ``list_nested`` shape puts one flat item into each of them.
+ITEM_CONTAINERS = frozenset(
     {
-        f"djust_components/{tag}"
-        for tag in (
-            "audit_log/entries",
-            "autocomplete/suggestions",
-            "collab_selection/users",
-            "combobox/options",
-            "combobox/selected",
-            "cursors/users",
-            "dashboard_grid/panels",
-            "data_grid/columns",
-            "data_grid/rows",
-            "dependent_select/options",
-            "dj_select/options",
-            "export_dialog/columns",
-            "export_dialog/formats",
-            "fab/actions",
-            "file_tree/nodes",
-            "gantt_chart/tasks",
-            "kanban_board/columns",
-            "line_chart/series",
-            "masonry_grid/items",
-            "meter/segments",
-            "model_selector/options",
-            "multi_select/options",
-            "notification_center/notifications",
-            "reactions/options",
-            "scroll_spy/sections",
-            "sortable_list/items",
-            "tag_input/suggestions",
-            "tag_input/tags",
-            "toast_container/toasts",
-            "tour/steps",
-            "tree_view/nodes",
-            "wizard/steps",
-        )  # fmt: skip
+        *url_sweep.NESTED_KEYS,
+        "cards",
+        "tasks",
+        "panels",
+        "rows",
+        "segments",
+        "series",
+        "points",
+        "data",
     }
-    | {"theme_components/theme_radio/options", "theme_components/theme_select/options"}
 )
+#: A scalar parameter that makes an item "selected" or "current" when it equals the item's own
+#: text (a combobox draws its input's value from the matching option, a multi-select its chips
+#: from the options listed in ``selected``): filled with the item's own text in the cells that
+#: ask for it. The scalar is the developer's own and is never marked safe here.
+MATCHING = {"value": "p_scalar", "selected": "p_scalar_list"}
+#: ``list_pair``: a list of ``(value, label)`` pairs, which several option parameters accept.
+ITEM_SHAPES = (*DATA_SHAPES, "list_nested", "list_pair")
+
+
+class ItemCell(NamedTuple):
+    """One way of calling a tag with an item parameter filled."""
+
+    shape: str
+    companion: str | None  # the tag's other lists, filled with benign items
+    flags: bool  # the boolean parameters on (typical) or left out (their defaults)
+    match: bool  # the scalar parameters that make an item selected, filled with its text
+    src: str
+
+
+def _nested_item(value: object, keys: set[str]) -> dict:
+    """An item whose container keys each hold one flat item (the keys it reads, no deeper)."""
+    containers = keys & ITEM_CONTAINERS
+    flat = {k: value for k in keys - containers}
+    return {**flat, **{c: [dict(flat)] for c in containers}}
+
+
+def _item_sources(info, name: str) -> list[ItemCell]:
+    """Every cell for parameter ``name`` of the tag: shape x companions x flags x matching."""
+    from scripts.lib.template_library_parity import variants
+
+    names = variants.passed_names(info)
+    others = [n for n in names if variants.kind_of(n) == "list" and n != name]
+    matching = [f"{k}={v}" for k, v in MATCHING.items() if k in names and k != name]
+    typical = url_sweep.typical_args(info, name)
+    bare = [a for a in typical if variants.kind_of(a.split("=")[0]) != "bool"]
+    parent = variants.PARENT.get(info.name)
+    out = []
+    for shape in ITEM_SHAPES:
+        for companion in COMPANIONS:
+            if companion and not others:
+                continue
+            for flags in (True, False):
+                if not flags and bare == typical:
+                    continue
+                for match in (False, True):
+                    if match and not matching:
+                        continue
+                    args = [*(typical if flags else bare), f"{name}=p_{shape}"]
+                    if companion:
+                        args += [f"{q}={companion}" for q in others]
+                    if match:
+                        args += matching
+                    src = url_sweep.wrap(
+                        info, " ".join(args), parent, "open=True" if parent else ""
+                    )
+                    out.append(ItemCell(shape, companion, flags, match, src))
+    return out
+
+
+def _item_context(value: object, keys: set[str], scalar: str) -> dict:
+    """The context of an item cell: ``value`` is the claim, ``scalar`` the plain text of it."""
+    return {
+        **harness.make_context(False),
+        "p_scalar": scalar,
+        "p_scalar_list": [scalar, scalar],
+        "p_list_str": [value, value],
+        "p_list_pair": [(value, value)] * 2,
+        "p_dict": url_sweep.dict_of(value, keys),  # type: ignore[arg-type]
+        "p_list_dict": [url_sweep.dict_of(value, keys)] * 2,  # type: ignore[arg-type]
+        "p_list_nested": [_nested_item(value, keys)] * 2,
+    }
 
 
 def wide_tag_leaks() -> set[str]:
     """``library/tag/parameter`` for every (tag, parameter) where a marked-safe ITEM value (a
-    list of items, a list of text, an item) creates the payload's ``onmouseover`` attribute, in
-    Django's engine. The scalar arguments of a tag are the developer's own and are not counted."""
+    list of items, a list of text, a list of pairs, an item) creates the payload's ``onmouseover``
+    attribute, in Django's engine, in any of the cells of :func:`_item_sources`. The scalar
+    arguments of a tag are the developer's own and are not counted."""
     from django.template import engines
 
     from scripts.lib.template_library_parity import variants
 
     python_engine = engines["django"]
-    value = mark_safe('x" onmouseover="alert(zq7)" y="')
+    payload = 'x" onmouseover="alert(zq7)" y="'
     leaks: set[str] = set()
     for _key, info in sorted(url_sweep.inventory().items()):
         if info.name.startswith("end"):
@@ -1159,19 +1221,13 @@ def wide_tag_leaks() -> set[str]:
         if not names:
             continue
         keys = url_sweep.keys_read(info, url_sweep._fn_of(info)) | set(TAG_KEYS) | set(ATTR_KEYS)
-        parent = variants.PARENT.get(info.name)
-        ctx = {
-            "p_list_str": [value, value],
-            "p_dict": url_sweep.dict_of(value, keys),  # type: ignore[arg-type]
-            "p_list_dict": [url_sweep.dict_of(value, keys)] * 2,  # type: ignore[arg-type]
-        }
+        ctx = _item_context(mark_safe(payload), keys, payload)
         for name in names:
-            for shape in DATA_SHAPES:
-                args = url_sweep.typical_args(info, name) + [f"{name}=p_{shape}"]
-                src = url_sweep.wrap(info, " ".join(args), parent, "open=True" if parent else "")
-                html = url_sweep._render(python_engine, src, ctx)
+            for cell in _item_sources(info, name):
+                html = url_sweep._render(python_engine, cell.src, ctx)
                 if html and any(len(h) == 2 for h in holes_in(html)):
                     leaks.add(f"{info.lib}/{info.name}/{name}")
+                    break
     return leaks
 
 
@@ -1459,6 +1515,208 @@ class TestEveryTag:
             f"fixed (delete from KNOWN_TAG_ITEM_LEAKS): {sorted(set(KNOWN_TAG_ITEM_LEAKS) - leaks)}"
         )
 
-    def test_the_tags_this_change_edits_are_not_among_them(self) -> None:
-        edited = {f"djust_components/{t}" for t in DATA_TAGS}
-        assert not [k for k in KNOWN_TAG_ITEM_LEAKS if "/".join(k.split("/")[:2]) in edited]
+
+# --- the tag parameters that take ITEMS and print them in an attribute (#3904) -----------------
+
+#: ``library/tag/parameter`` -> ``(the attributes an item value lands in, whether an item of it
+#: is also printed as TEXT)``. The decision for each parameter: an item value in an attribute is
+#: escaped whatever it is marked as (``attr_text``; the template tags ``force_escape``); an item
+#: printed as text keeps the markup of a marked-safe value. No parameter here writes a URL: the
+#: one ``href`` is the in-page fragment ``#<id>`` of ``scroll_spy``. The attribute names are
+#: MEASURED (a plain probe is searched for in the output), so a rename or a new slot fails.
+ITEM_PARAMETERS: dict[str, tuple[tuple[str, ...], bool]] = {
+    "djust_components/audit_log/columns": (("class",), False),
+    "djust_components/audit_log/entries": (("class",), True),
+    "djust_components/autocomplete/suggestions": (("data-value",), True),
+    "djust_components/collab_selection/users": (("data-user",), True),
+    "djust_components/combobox/options": (("data-value",), True),
+    "djust_components/combobox/selected": (("data-value", "value"), True),
+    "djust_components/cursors/users": (("data-user",), True),
+    "djust_components/dashboard_grid/panels": (("data-panel-id",), True),
+    "djust_components/data_grid/columns": (("data-col-key", "data-type"), True),
+    "djust_components/data_grid/rows": (("data-row-key",), False),
+    "djust_components/dependent_select/options": (("value",), True),
+    "djust_components/dj_select/options": (("value",), True),
+    "djust_components/export_dialog/columns": (("value",), True),
+    "djust_components/export_dialog/formats": (("value",), False),
+    "djust_components/fab/actions": (("aria-label", "dj-click"), True),
+    "djust_components/file_tree/nodes": (("class", "data-name", "data-type"), True),
+    "djust_components/gantt_chart/tasks": (("fill",), True),
+    "djust_components/kanban_board/columns": (
+        ("class", "data-card-id", "data-col-id", "data-value", "dj-key"),
+        True,
+    ),
+    "djust_components/line_chart/series": (("fill", "stroke"), True),
+    "djust_components/masonry_grid/items": (("class",), True),
+    "djust_components/meter/segments": (("aria-label",), True),
+    "djust_components/model_selector/options": (("data-value",), True),
+    "djust_components/multi_select/options": (("data-value", "dj-value-option", "value"), True),
+    "djust_components/notification_center/notifications": (("data-value",), True),
+    "djust_components/reactions/options": (("aria-label", "dj-value-emoji"), True),
+    "djust_components/scroll_spy/sections": (("data-section", "data-sections", "href"), True),
+    "djust_components/sortable_list/items": (("data-id",), True),
+    "djust_components/split_button/options": (("dj-click",), True),
+    "djust_components/tag_input/suggestions": (("value",), False),
+    "djust_components/tag_input/tags": (("data-value", "value"), True),
+    "djust_components/toast_container/toasts": (("class", "data-value"), True),
+    "djust_components/toggle_group/options": (("data-value",), True),
+    "djust_components/tour/steps": (("data-target",), True),
+    "djust_components/tree_view/nodes": (("data-value",), True),
+    "djust_components/wizard/steps": (("data-value",), True),
+    "theme_components/theme_radio/options": (("for", "id", "value"), True),
+    "theme_components/theme_select/options": (("value",), True),
+}  # fmt: skip
+
+
+#: The plain string first (the control every other claim is compared with), then every way a
+#: value says "do not escape me" (``CLAIMS``): a marked-safe string, its subclass, a lazy one, a
+#: ``str`` with ``__html__``, an object whose text form is marked safe, and a callable that
+#: returns one.
+ITEM_CLAIMS: dict[str, object] = {"plain": str, **CLAIMS}
+#: A callable is called by a template and printed by a tag as a callable, so only the first
+#: reading is equal to the plain string; for the others the cell is "no hole", not "equal".
+NOT_COMPARED_WITH_PLAIN = ENGINE_CLAIMS
+
+#: ``library/tag/parameter`` -> the claims whose value the tag REJECTS outright (an exception, no
+#: page): an object that is no string where the tag calls a string method on it or serialises the
+#: item as JSON. A tag that fails closed is not a hole, but the cell then proves nothing, so the
+#: set is pinned: a claim that starts or stops rendering is a decision to make here.
+REJECTED_CLAIMS: dict[str, frozenset[str]] = {
+    "djust_components/audit_log/columns": frozenset(
+        {"text-form-marked-safe", "callable-marked-safe"}
+    ),
+    "djust_components/scroll_spy/sections": frozenset(
+        {"lazy-mark_safe", "text-form-marked-safe", "callable-marked-safe"}
+    ),
+}
+
+REACH_PROBE = "ZQITEMREACH"
+#: None of the parameters writes a URL, so the payloads that differ only in how a script scheme is
+#: spelled add nothing: a script URL, and a breakout of a double and of a single quote.
+ITEM_PAYLOADS = tuple(p for p in PAYLOADS if p[0] in {"js", "breakout-dq", "breakout-sq"})
+
+
+@lru_cache(maxsize=1)
+def _tag_infos() -> dict:
+    return {f"{i.lib}/{i.name}": i for i in url_sweep.inventory().values()}
+
+
+def _django_render(src: str, ctx: dict) -> str | None:
+    from django.template import engines
+
+    return url_sweep._render(engines["django"], src, ctx)
+
+
+def _keys_of(info) -> set[str]:
+    return url_sweep.keys_read(info, url_sweep._fn_of(info)) | set(TAG_KEYS) | set(ATTR_KEYS)
+
+
+def _slots(markup: str, names: tuple[str, ...]) -> list[tuple[str, str, str]]:
+    """``(element, attribute, value)`` of the attributes called ``names``, as a browser reads them."""
+    return sorted(
+        (a.element, a.name, a.value) for a in url_sweep.attributes(markup) if a.name in names
+    )
+
+
+class ReachedCell(NamedTuple):
+    cell: ItemCell
+    #: the attribute holds the item's own text, not the ``repr`` of a dict or a pair the tag
+    #: printed for a string it expected (an object claim is formatted differently there)
+    direct: bool
+
+
+@lru_cache(maxsize=None)
+def _reached_cells(key: str) -> tuple[tuple[ReachedCell, ...], frozenset[str], bool]:
+    """``(cells, attributes, text)`` of ``library/tag/parameter``.
+
+    ``cells`` are the cells in which a plain probe lands in an attribute (a shape, flags or
+    companion that takes another branch of the tag reaches other sites, so none is dropped as a
+    duplicate); ``attributes`` are the names of those attributes; ``text`` is whether a marked-safe
+    ``<i>`` item is printed with its markup as text."""
+    lib, tag, name = key.split("/")
+    info = _tag_infos()[f"{lib}/{tag}"]
+    keys = _keys_of(info)
+    probe_ctx = _item_context(REACH_PROBE, keys, REACH_PROBE)
+    marked_ctx = _item_context(mark_safe("<i>mark</i>"), keys, "<i>mark</i>")
+    other_ctx = _item_context("ZQOTHERITEM", keys, REACH_PROBE)
+    cells: list[ReachedCell] = []
+    attributes: set[str] = set()
+    text = False
+    for cell in _item_sources(info, name):
+        out = _django_render(cell.src, probe_ctx)
+        found = Counter(
+            (a.element, a.name) for a in url_sweep.attributes(out or "") if REACH_PROBE in a.value
+        )
+        if cell.match:
+            # the scalar that makes an item selected is the probe too: what it prints on its own
+            # (the same call with other items) is not the item's
+            ref = _django_render(cell.src, other_ctx)
+            found -= Counter(
+                (a.element, a.name)
+                for a in url_sweep.attributes(ref or "")
+                if REACH_PROBE in a.value
+            )
+        if found:
+            landed = [
+                a
+                for a in url_sweep.attributes(out or "")
+                if REACH_PROBE in a.value and (a.element, a.name) in found
+            ]
+            direct = all(not set("{('") & set(a.value.replace(REACH_PROBE, "")) for a in landed)
+            attributes |= {a.name for a in landed}
+            cells.append(ReachedCell(cell, direct))
+        marked = _django_render(cell.src, marked_ctx)
+        text = text or bool(marked and "<i>mark</i>" in marked)
+    return tuple(cells), frozenset(attributes), text
+
+
+class TestEveryItemParameter:
+    """Each parameter above, one cell each: it is DRIVEN (an item lands in the attributes pinned
+    for it), and every way of marking a value safe leaves those attributes exactly as the plain
+    string does, with no quote breakout and no script URL."""
+
+    def test_the_table_lists_real_parameters(self) -> None:
+        missing = [k for k in ITEM_PARAMETERS if "/".join(k.split("/")[:2]) not in _tag_infos()]
+        assert not missing, missing
+
+    @pytest.mark.parametrize("key", sorted(ITEM_PARAMETERS))
+    def test_the_parameter_is_driven_and_its_slots_are_the_pinned_ones(self, key: str) -> None:
+        cells, attributes, text = _reached_cells(key)
+        pinned_attributes, pinned_text = ITEM_PARAMETERS[key]
+        assert cells, f"{key}: no item reaches an attribute through any cell (not driven)"
+        assert any(c.direct for c in cells), f"{key}: only a dict's repr reaches an attribute"
+        assert attributes == set(pinned_attributes), (key, sorted(attributes))
+        assert text == pinned_text, (key, text)
+
+    @pytest.mark.parametrize("key", sorted(ITEM_PARAMETERS))
+    def test_a_marked_safe_item_is_neutralised_like_the_plain_string(self, key: str) -> None:
+        cells, _attributes, _text = _reached_cells(key)
+        assert cells, f"{key}: not driven"
+        slots = ITEM_PARAMETERS[key][0]
+        keys = _keys_of(_tag_infos()["/".join(key.split("/")[:2])])
+        failures: list[tuple] = []
+        rendered: dict[str, int] = {claim: 0 for claim in ITEM_CLAIMS}
+        for label, payload in ITEM_PAYLOADS:
+            controls: dict[ItemCell, list] = {}
+            for claim, make in ITEM_CLAIMS.items():
+                ctx = _item_context(make(payload), keys, payload)  # type: ignore[operator]
+                for reached in cells:
+                    cell = reached.cell
+                    out = _django_render(cell.src, ctx)
+                    if out is None:
+                        continue
+                    rendered[claim] += 1
+                    where = (label, claim, cell.shape, cell.companion, cell.flags, cell.match)
+                    if holes_in(out):
+                        failures.append((*where, "hole"))
+                    if claim == "plain":
+                        controls[cell] = _slots(out, slots)
+                    elif (
+                        reached.direct
+                        and claim not in NOT_COMPARED_WITH_PLAIN
+                        and controls[cell] != _slots(out, slots)
+                    ):
+                        failures.append((*where, "differs from plain"))
+        assert not failures, f"{key}: {failures[:4]}"
+        never = frozenset(claim for claim, n in rendered.items() if n == 0)
+        assert never == REJECTED_CLAIMS.get(key, frozenset()), (key, sorted(never))

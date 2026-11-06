@@ -414,13 +414,15 @@ def autocomplete(
     suggestion_items = []
     for sug in suggestions:
         if isinstance(sug, dict):
-            sv = conditional_escape(str(sug.get("value", "")))
-            sl = conditional_escape(str(sug.get("label", sv)))
+            raw_value = sug.get("value", "")
+            sv = attr_text(raw_value)  # only in data-value= (#3904)
+            sl = conditional_escape(str(sug.get("label", raw_value)))
         elif isinstance(sug, (list, tuple)) and len(sug) >= 2:
-            sv = conditional_escape(str(sug[0]))
+            sv = attr_text(sug[0])  # only in data-value= (#3904)
             sl = conditional_escape(str(sug[1]))
         else:
-            sv = sl = conditional_escape(str(sug))
+            sv = attr_text(sug)  # only in data-value= (#3904)
+            sl = conditional_escape(str(sug))
         suggestion_items.append(
             f'<li class="dj-autocomplete__item" role="option" data-value="{sv}">{sl}</li>'
         )
@@ -704,11 +706,13 @@ def dependent_select(
         if isinstance(opt, dict):
             ov = conditional_escape(str(opt.get("value", "")))
             ol = conditional_escape(str(opt.get("label", ov)))
+            av = attr_text(opt.get("value", ""))  # the value= attribute (#3904)
         else:
             ov = conditional_escape(str(opt))
             ol = ov
+            av = attr_text(opt)
         selected = " selected" if ov == e_value else ""
-        opt_parts.append(f'<option value="{ov}"{selected}>{ol}</option>')
+        opt_parts.append(f'<option value="{av}"{selected}>{ol}</option>')
 
     spinner_html = (
         '<span class="dj-dependent-select__spinner" aria-hidden="true"></span>' if loading else ""

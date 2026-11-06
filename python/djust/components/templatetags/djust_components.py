@@ -1524,8 +1524,7 @@ def dj_select(
         ov, ol = _opt_pair(opt)
         selected_attr = " selected" if str(ov) == str(value) else ""
         options_html_parts.append(
-            f'<option value="{conditional_escape(ov)}"{selected_attr}>'
-            f"{conditional_escape(ol)}</option>"
+            f'<option value="{attr_text(ov)}"{selected_attr}>{conditional_escape(ol)}</option>'
         )
 
     required_span = '<span class="form-required"> *</span>' if required else ""
@@ -2365,7 +2364,7 @@ def combobox(
         tags_html = ""
         hidden_inputs_html = ""
         for sv in selected:
-            e_sv = conditional_escape(str(sv))
+            e_sv = attr_text(sv)  # only in data-value= / value= (#3904)
             sl = opt_label_map.get(str(sv), str(sv))
             e_sl = conditional_escape(sl)
             tags_html += (
@@ -2385,26 +2384,21 @@ def combobox(
             if isinstance(opt, dict):
                 ov = conditional_escape(str(opt.get("value", "")))
                 ol = conditional_escape(str(opt.get("label", "")))
+                av = attr_text(opt.get("value", ""))
             else:
                 ov = ol = conditional_escape(str(opt))
+                av = attr_text(opt)
             sel_cls = " combobox-option-selected" if str(ov) in selected_set else ""
             aria_sel = "true" if sel_cls else "false"
             options_html += (
                 f'<div class="combobox-option{sel_cls}" id="{id_prefix}-option-{n}" role="option" '
                 f'aria-selected="{aria_sel}" '
-                f'dj-click="{e_event}" data-value="{ov}"{field_attr}>{ol}</div>'
+                f'dj-click="{e_event}" data-value="{av}"{field_attr}>{ol}</div>'
             )
     else:
         # Single-select mode (existing behavior)
         tags_container = ""
         hidden_inputs_html = ""
-
-        # Find current label
-        current_label = e_value
-        for opt in options:
-            if isinstance(opt, dict) and str(opt.get("value", "")) == str(value):
-                current_label = conditional_escape(str(opt.get("label", value)))
-                break
 
         options_html = ""
         # Each option has a stable id for the input's aria-activedescendant
@@ -2413,14 +2407,16 @@ def combobox(
             if isinstance(opt, dict):
                 ov = conditional_escape(str(opt.get("value", "")))
                 ol = conditional_escape(str(opt.get("label", "")))
+                av = attr_text(opt.get("value", ""))
             else:
                 ov = ol = conditional_escape(str(opt))
+                av = attr_text(opt)
             is_sel = str(ov) == str(value)
             sel = " combobox-option-selected" if is_sel else ""
             options_html += (
                 f'<div class="combobox-option{sel}" id="{id_prefix}-option-{n}" role="option" '
                 f'aria-selected="{"true" if is_sel else "false"}" '
-                f'dj-click="{e_event}" data-value="{ov}"{field_attr}>{ol}</div>'
+                f'dj-click="{e_event}" data-value="{av}"{field_attr}>{ol}</div>'
             )
 
     label_html = f'<label class="form-label" for="{input_id}">{e_label}</label>' if label else ""
@@ -2449,7 +2445,7 @@ def combobox(
         current_label = e_value
         for opt in options:
             if isinstance(opt, dict) and str(opt.get("value", "")) == str(value):
-                current_label = conditional_escape(str(opt.get("label", value)))
+                current_label = attr_text(opt.get("label", value))  # only in value= (#3904)
                 break
         input_value = current_label
     else:
@@ -2775,7 +2771,7 @@ def notification_center(
     for n in notifications:
         if not isinstance(n, dict):
             continue
-        nid = conditional_escape(str(n.get("id", "")))
+        nid = attr_text(n.get("id", ""))  # only in data-value= (#3904)
         msg = conditional_escape(str(n.get("message", n.get("msg", ""))))
         time_ = conditional_escape(str(n.get("time", "")))
         unread = n.get("unread", False)
@@ -2981,7 +2977,7 @@ def tree_view(
     def render_node(node: Any, depth: Any = 0) -> Any:
         if not isinstance(node, dict):
             return ""
-        nid = conditional_escape(str(node.get("id", "")))
+        nid = attr_text(node.get("id", ""))  # only in data-value= (#3904)
         label = conditional_escape(str(node.get("label", "")))
         children = node.get("children", [])
         expanded = node.get("expanded", False)
@@ -3609,7 +3605,7 @@ def kanban_board(
     for col in columns:
         if not isinstance(col, dict):
             continue
-        col_id = conditional_escape(str(col.get("id", "")))
+        col_id = attr_text(col.get("id", ""))  # only in dj-key= / data-* (#3904)
         col_title = conditional_escape(str(col.get("title", "")))
         col_color = conditional_escape(safe_css_color(col.get("color", "#6366F1"), "#6366F1"))
         cards = col.get("cards", [])
@@ -3618,12 +3614,12 @@ def kanban_board(
         for card in cards:
             if not isinstance(card, dict):
                 continue
-            card_id = conditional_escape(str(card.get("id", "")))
+            card_id = attr_text(card.get("id", ""))  # only in dj-key= / data-* (#3904)
             card_title = conditional_escape(str(card.get("title", "")))
             card_label = card.get("label", "")
             card_sub = card.get("sub", "")
             label_html = (
-                f'<span class="kanban-card-label kanban-label-{conditional_escape(card_label)}">'
+                f'<span class="kanban-card-label kanban-label-{attr_text(card_label)}">'
                 f"{conditional_escape(card_label)}</span>"
                 if card_label
                 else ""
@@ -3820,8 +3816,8 @@ def multi_select(
                 f'<span class="multi-select-tag">'
                 f"{conditional_escape(ol)}"
                 f'<button type="button" class="multi-select-tag-remove" '
-                f'dj-click="{dj_event}" data-value="{conditional_escape(ov)}" '
-                f'dj-value-option="{conditional_escape(ov)}" dj-value-value:bool="false"'
+                f'dj-click="{dj_event}" data-value="{attr_text(ov)}" '
+                f'dj-value-option="{attr_text(ov)}" dj-value-value:bool="false"'
                 f"{disabled_attr}>&times;</button>"
                 f"</span>"
             )
@@ -3835,11 +3831,11 @@ def multi_select(
         checked_attr = " checked" if ov in selected else ""
         cb_parts.append(
             f'<label class="multi-select-option">'
-            f'<input type="checkbox" name="{e_name}" value="{conditional_escape(ov)}"'
+            f'<input type="checkbox" name="{e_name}" value="{attr_text(ov)}"'
             f'{checked_attr}{disabled_attr} dj-change="{dj_event}" '
             # A checkbox's change sends only `value` (checked or not); without
             # the option the handler could not tell WHICH box changed.
-            f'dj-value-option="{conditional_escape(ov)}">'
+            f'dj-value-option="{attr_text(ov)}">'
             f" {conditional_escape(ol)}"
             f"</label>"
         )
@@ -4021,20 +4017,21 @@ def tag_input(
     tag_parts = []
     for tag in tags:
         e_tag = conditional_escape(str(tag))
+        a_tag = attr_text(tag)  # data-value= / value=; e_tag stays the text (#3904)
         tag_parts.append(
             f'<span class="tag-input-tag">'
             f"{e_tag}"
             f'<button type="button" class="tag-input-remove" '
-            f'dj-click="{dj_event}" data-value="remove:{e_tag}"'
+            f'dj-click="{dj_event}" data-value="remove:{a_tag}"'
             f"{disabled_attr}>&times;</button>"
-            f'<input type="hidden" name="{e_name}" value="{e_tag}">'
+            f'<input type="hidden" name="{e_name}" value="{a_tag}">'
             f"</span>"
         )
 
     # Build suggestion datalist
     suggestion_parts = []
     for s in suggestions:
-        suggestion_parts.append(f'<option value="{conditional_escape(str(s))}">')
+        suggestion_parts.append(f'<option value="{attr_text(s)}">')
 
     label_html = f'<label class="form-label">{e_label}</label>' if label else ""
 
@@ -4239,7 +4236,7 @@ def toggle_group(
     for opt in options:
         if not isinstance(opt, dict):
             continue
-        opt_value = conditional_escape(str(opt.get("value", "")))
+        opt_value = attr_text(opt.get("value", ""))  # only in data-value= (#3904)
         opt_label = conditional_escape(str(opt.get("label", "")))
         opt_icon = opt.get("icon", "")
 
@@ -4332,8 +4329,8 @@ def fab(
             if not isinstance(act, dict):
                 continue
             act_icon = conditional_escape(str(act.get("icon", "")))
-            act_event = conditional_escape(str(act.get("event", "")))
-            act_label = conditional_escape(str(act.get("label", "")))
+            act_event = attr_text(act.get("event", ""))  # only in dj-click= (#3904)
+            act_label = attr_text(act.get("label", ""))  # only in aria-label= (#3904)
             act_click = f' dj-click="{act_event}"' if act_event and not disabled else ""
             act_aria = f' aria-label="{act_label}"' if act_label else ""
             action_items.append(
@@ -4420,7 +4417,7 @@ def split_button(
         if not isinstance(opt, dict):
             continue
         opt_label = conditional_escape(str(opt.get("label", "")))
-        opt_event = conditional_escape(str(opt.get("event", "")))
+        opt_event = attr_text(opt.get("event", ""))  # only in dj-click= (#3904)
         opt_click = f' dj-click="{opt_event}"' if opt_event and not disabled else ""
         opt_disabled = " disabled" if disabled else ""
         option_items.append(
@@ -5342,7 +5339,7 @@ def data_grid(
     for idx, col in enumerate(columns):
         if not isinstance(col, dict):
             continue
-        col_key = conditional_escape(str(col.get("key", "")))
+        col_key = attr_text(col.get("key", ""))  # only in data-col-key= (#3904)
         col_label = conditional_escape(str(col.get("label", col.get("key", ""))))
         width = col.get("width", "")
         width = safe_css_length(width, "") if width else ""
@@ -5372,13 +5369,13 @@ def data_grid(
     for row in rows:
         if not isinstance(row, dict):
             continue
-        rk = conditional_escape(str(row.get(row_key, "")))
+        rk = attr_text(row.get(row_key, ""))  # only in data-value= / data-row-key= (#3904)
         cells = []
         for idx, col in enumerate(columns):
             if not isinstance(col, dict):
                 continue
             col_key_raw = str(col.get("key", ""))
-            col_key = conditional_escape(col_key_raw)
+            col_key = attr_text(col_key_raw)  # only in data-col-key= (#3904)
             cell_val = conditional_escape(str(row.get(col_key_raw, "")))
             editable = col.get("editable", True)
             if isinstance(editable, str):
@@ -5392,7 +5389,7 @@ def data_grid(
                 frozen_cls = " data-grid-frozen-right"
 
             edit_attr = ' data-editable="true"' if editable else ""
-            type_attr = f' data-type="{conditional_escape(str(col_type))}"'
+            type_attr = f' data-type="{attr_text(col_type)}"'
 
             cells.append(
                 f'<td class="data-grid-cell{frozen_cls}" '
@@ -7568,7 +7565,7 @@ class ModelSelectorNode(template.Node):
             inner = self._option_inner(opt)
             opt_parts.append(
                 f'<div class="dj-model-sel__opt{active_cls}" '
-                f'data-value="{conditional_escape(ov)}" '
+                f'data-value="{attr_text(ov)}" '
                 f'dj-click="{e_event}" '
                 f'role="option" aria-selected="{"true" if ov == value else "false"}">'
                 f"{inner}</div>"
@@ -8498,7 +8495,7 @@ class WizardNode(template.Node):
         for i, step in enumerate(steps):
             if not isinstance(step, dict):
                 continue
-            step_id = conditional_escape(str(step.get("id", "")))
+            step_id = attr_text(step.get("id", ""))  # only in data-value= (#3904)
             step_label = conditional_escape(str(step.get("label", "")))
             step_cls = "dj-wizard__step"
             if i < active_idx:
@@ -8981,7 +8978,7 @@ class ScrollSpyNode(template.Node):
             else:
                 s_id = str(section)
                 s_label = s_id
-            e_id = conditional_escape(str(s_id))
+            e_id = attr_text(s_id)  # only in href="#..." / data-section= (#3904)
             e_label = conditional_escape(str(s_label))
             active_cls = " dj-scroll-spy__item--active" if str(s_id) == str(active) else ""
             nav_items.append(
@@ -9302,7 +9299,7 @@ class MeterNode(template.Node):
             else:
                 pct = 0
             color = conditional_escape(safe_css_color(seg.get("color", ""), ""))
-            seg_label = conditional_escape(str(seg.get("label", "")))
+            seg_label = attr_text(seg.get("label", ""))  # only in aria-label= (#3904)
             style = f"width:{pct:.1f}%"
             if color:
                 style += f";background:{color}"
@@ -9387,10 +9384,11 @@ class ExportDialogNode(template.Node):
         format_options = []
         for fmt in formats:
             e_fmt = conditional_escape(str(fmt))
+            a_fmt = attr_text(fmt)  # the value= attribute; e_fmt stays the text (#3904)
             checked = " checked" if str(fmt) == str(selected_format) else ""
             format_options.append(
                 f'<label class="dj-export-dialog__format">'
-                f'<input type="radio" name="export_format" value="{e_fmt}"{checked}>'
+                f'<input type="radio" name="export_format" value="{a_fmt}"{checked}>'
                 f'<span class="dj-export-dialog__format-label">{e_fmt.upper()}</span></label>'
             )
         format_section = (
@@ -9403,7 +9401,7 @@ class ExportDialogNode(template.Node):
         for col in columns:
             if not isinstance(col, dict):
                 continue
-            e_id = conditional_escape(str(col.get("id", "")))
+            e_id = attr_text(col.get("id", ""))  # only in value= (#3904)
             e_label = conditional_escape(str(col.get("label", "")))
             checked = " checked" if col.get("checked", True) else ""
             col_options.append(
@@ -9585,11 +9583,10 @@ class AuditLogNode(template.Node):
             cells = []
             for col in columns:
                 val = conditional_escape(str(entry.get(col, "")))
-                cell_cls = f"dj-audit-log__td dj-audit-log__td--{conditional_escape(col)}"
+                # a column name and an action value land in a ``class=`` attribute (#3904)
+                cell_cls = f"dj-audit-log__td dj-audit-log__td--{attr_text(col)}"
                 if col == "action":
-                    cell_cls += (
-                        f" dj-audit-log__action--{conditional_escape(str(entry.get('action', '')))}"
-                    )
+                    cell_cls += f" dj-audit-log__action--{attr_text(entry.get('action', ''))}"
                 cells.append(f'<td class="{cell_cls}">{val}</td>')
             rows.append(f'<tr class="dj-audit-log__row">{"".join(cells)}</tr>')
 
@@ -9704,7 +9701,7 @@ class SortableListNode(template.Node):
         for item in items:
             if not isinstance(item, dict):
                 continue
-            item_id = conditional_escape(str(item.get("id", "")))
+            item_id = attr_text(item.get("id", ""))  # only in data-id= / data-key= (#3904)
             key_attr = f' data-key="{item_id}"' if keyed else ""
             label = conditional_escape(str(item.get("label", "")))
             handle_html = (
@@ -10190,7 +10187,7 @@ class DashboardGridNode(template.Node):
         for panel in panels:
             if not isinstance(panel, dict):
                 continue
-            pid = conditional_escape(str(panel.get("id", "")))
+            pid = attr_text(panel.get("id", ""))  # only in data-panel-id= (#3904)
             title = conditional_escape(str(panel.get("title", "")))
             content = conditional_escape(panel.get("content", ""))
 

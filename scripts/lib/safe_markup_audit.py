@@ -351,8 +351,8 @@ AUDITED: dict[tuple[str, str], Audit] = {
     ),
     (DC, "tree_view"): S(
         1,
-        "node id and label conditional_escape'd; depth is a number; event names conditional_escape'd",
-        (DC, 'nid = conditional_escape(str(node.get("id", "")))'),
+        "node id attr_text'd (it lands only in an attribute, #3904) and label conditional_escape'd; depth is a number; event names conditional_escape'd",
+        (DC, 'nid = attr_text(node.get("id", ""))'),
         (DC, "indent = depth * 1.25"),
     ),
     (DC, "render_context_menu"): S(

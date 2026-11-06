@@ -20,6 +20,7 @@ from ._registry import (
     mark_safe,
     interpolate_color,
 )
+from djust.components.utils import attr_text
 
 # ---------------------------------------------------------------------------
 # Bar Chart
@@ -226,7 +227,8 @@ class LineChartNode(template.Node):
             if not isinstance(s, dict):
                 continue
             data = s.get("data", [])
-            color = conditional_escape(str(s.get("color", self.COLORS[si % len(self.COLORS)])))
+            # only in fill= / stroke= (#3904)
+            color = attr_text(s.get("color", self.COLORS[si % len(self.COLORS)]))
             name = conditional_escape(str(s.get("name", f"Series {si + 1}")))
 
             if not data:
@@ -287,7 +289,8 @@ class LineChartNode(template.Node):
             for si, s in enumerate(series):
                 if not isinstance(s, dict):
                     continue
-                color = conditional_escape(str(s.get("color", self.COLORS[si % len(self.COLORS)])))
+                # only in fill= / stroke= (#3904)
+                color = attr_text(s.get("color", self.COLORS[si % len(self.COLORS)]))
                 name = conditional_escape(str(s.get("name", f"Series {si + 1}")))
                 parts.append(
                     f'<rect x="{lx}" y="{ly - 6}" width="10" height="10" rx="2" fill="{color}"/>'
