@@ -227,6 +227,20 @@ def _fill_unsupplied(
             values[name] = initial
 
 
+def _copied(value: Any) -> Any:
+    """A deep copy of ``value``, or ``value`` itself when it cannot be copied.
+
+    The ``"fields"`` fallback hands over a COPY of an ``initial`` it fills in, so a
+    ``handle_params()`` that mutates a mutable one (a list, a dict) does not change
+    the form class's default for later requests. The valid path and ``"initial"``
+    mode hand the object itself over (#3926).
+    """
+    try:
+        return copy.deepcopy(value)
+    except Exception:  # noqa: BLE001 — an arbitrary initial object; the check already copied it once
+        return value
+
+
 def _cleaned_values(form: forms.BaseForm) -> Dict[str, Any]:
     """The cleaned data, with each field the URL left out or empty set to its ``initial``."""
     values: Dict[str, Any] = dict(form.cleaned_data)
@@ -304,24 +318,44 @@ def fallback_values(form: forms.BaseForm, mode: str, view: Any = None) -> Dict[s
     ``"initial"``: the initial value of every declared field.
 
     ``"fields"`` (#3874): the declared fields only, each field that validated
-    with the value the valid path would hand over (a field the URL left out or
-    empty takes its ``initial``, exactly as there) and each field that did not
+    with the value the valid path would hand over and each field that did not
     with its ``initial``. A field is "valid" when it has no entry in
     ``form.errors`` *and* is in ``form.cleaned_data``: Django removes a field
     from ``cleaned_data`` when its own ``clean_<field>()`` fails, but a field
     that merely did not fail is not proof it was checked, so a field a ``clean()``
     deleted counts as not valid. A failed field's own entry is always its initial
-    value; ``"initial"`` is the mode that never hands over a raw request value, and
-    in ``"fields"`` a ``clean()`` that copies raw request data into a KEPT field
-    hands it over through that field, as on the valid path for a field the URL
-    supplied (an unsupplied one is a known difference, #3891).
+    value; ``"initial"`` is the mode that never hands over a raw request value.
+
+    **The order is the valid path's** (#3891): the ``initial`` fill comes AFTER
+    ``clean()`` (:func:`_cleaned_values`), so a kept field the URL left out or
+    empty takes its ``initial`` over whatever ``clean()`` wrote into it, and both
+    paths hand ``handle_params`` the same value for it. The check below still
+    runs on the filled values, so what is handed over is a combination ``clean()``
+    accepts; the fill is then applied again to ``clean()``'s output. A ``clean()``
+    that copies raw request data into a KEPT field the URL SUPPLIED hands it over
+    through that field, on both paths (``clean()``'s own trust boundary). One that
+    copies it into a kept field the URL left out does not, if that field has an
+    ``initial``: a field with no ``initial`` (``None``) is not filled, on either
+    path; a ``clean()`` that also writes the field into ``self.data`` makes it
+    count as supplied; and a multi-select widget the URL left out counts as
+    supplied (#3922, shared with the valid path).
 
     The result is always a combination the form's ``clean()`` accepts, or the
     plain initial values. A kept field is now paired with the initial value of a
     replaced one, a pair ``clean()`` never saw (``lo=9`` kept, ``hi=2`` replaced
-    by ``3``), so the form's ``clean()`` runs once more on exactly that
-    combination (:func:`_rechecked`); if it objects, nothing is kept, and what
-    it repairs it repairs here as on the valid path. **Only ``clean()`` runs
+    by ``3``), and a kept field the URL left out is paired with its own
+    ``initial`` (``end=2019-01-01`` next to the default ``start=2020-01-01``),
+    so the form's ``clean()`` runs once more on exactly the combination handed
+    over (:func:`_rechecked`); if it objects, nothing is kept, and what it
+    repairs it repairs here as on the valid path. The values it is given are the
+    first pass's cleaned values of the kept fields (a ``clean()`` that wrote one
+    on the first pass is re-run on its output) with the ``initial`` fill applied
+    to the unsupplied ones, and the replaced fields' initial values. The check
+    runs on a deep copy, and the fill applied to its output hands over a copy of
+    the ``initial`` too, so a ``handle_params()`` that mutates a mutable one does
+    not change the form class's default. (A replaced field's ``initial`` and the
+    plain initial values are the objects themselves, as on the valid path and in
+    ``"initial"`` mode: #3926.) **Only ``clean()`` runs
     again, not the fields' own ``clean_<field>()``:** a ``clean_end()`` that
     checks ``end >= start`` was skipped when ``start`` failed and is not run on
     the merged values, so ``?start=zz&end=1`` hands over ``start`` at its initial
@@ -356,6 +390,10 @@ def fallback_values(form: forms.BaseForm, mode: str, view: Any = None) -> Dict[s
     kept = [name for name in form.fields if name not in form.errors and name in cleaned]
     if not kept:
         return all_initial()
+    # The re-check sees the combination that would be handed over: the kept fields' cleaned values
+    # with each field the URL left out or empty filled with its initial value, next to the initial
+    # value of every replaced field. That keeps "the result is a combination clean() accepts, or the
+    # plain initials" true for a default start next to a supplied end (#3891 kept the guarantee).
     values: Dict[str, Any] = {name: cleaned[name] for name in kept}
     _fill_unsupplied(form, values, kept, initial_of)
     merged = {name: values[name] if name in values else initial_of(name) for name in form.fields}
@@ -366,11 +404,13 @@ def fallback_values(form: forms.BaseForm, mode: str, view: Any = None) -> Dict[s
     # out counts: it is in `kept`). A replaced field is its initial value whatever clean() wrote:
     # a clean() that re-reads self.data would otherwise write the failed raw value into its own entry.
     # A kept field clean() removed is not valid, as one it was never given: its initial value.
-    adopted = set(kept)
-    return {
-        name: repaired[name] if name in adopted and name in repaired else initial_of(name)
-        for name in form.fields
-    }
+    adopted: Dict[str, Any] = {name: repaired[name] for name in kept if name in repaired}
+    # Then the initial fill AGAIN, on that OUTPUT, as ``_cleaned_values`` does after clean() on the
+    # valid path: a field the URL left out or empty takes its initial value over whatever clean()
+    # wrote into it, so a clean() that copies a failed field's raw value into an unsupplied field
+    # that has an initial cannot hand it over through that field (#3891).
+    _fill_unsupplied(form, adopted, list(adopted), lambda name: _copied(initial_of(name)))
+    return {name: adopted[name] if name in adopted else initial_of(name) for name in form.fields}
 
 
 def _error_messages(form: forms.BaseForm) -> Dict[str, List[str]]:

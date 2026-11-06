@@ -203,11 +203,15 @@ class NavigationMixin:
         ``params_form_fallback = "fields"`` to keep what validated: the fields
         that passed arrive as they would on a valid URL and only the ones in
         ``form.errors`` take their initial value, so ``?page=abc&sort=name``
-        keeps ``sort``. A form-level error (``clean()`` raising without naming a
+        keeps ``sort``. As on a valid URL, a field the URL left out or empty takes
+        its initial value after ``clean()`` (a ``clean()`` that writes into it loses
+        to the initial value, if it has one). A form-level error (``clean()`` raising without naming a
         field) still falls back to the initial values, because the fields that
         passed one by one are the combination the form refused, and so does a
         merged result the form's ``clean()`` rejects when run once more on it
-        (a kept field paired with a replaced field's initial value). That second
+        (a kept field paired with a replaced field's initial value, or a field the URL
+        left out paired with its own, such as a default ``start`` next to a supplied
+        ``end``). That second
         ``clean()`` runs where ``super()`` is called: from an ``async def``
         override it is on the event loop, where a ``clean()`` that uses the ORM
         fails and the plain initial values are used (with a logged warning).
