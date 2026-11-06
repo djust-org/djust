@@ -573,8 +573,12 @@ data-dump tag such as `json_viewer` spell each model as its `str()` (Django rais
 **What a read through a handle can return (closed set, #3888).** The handle does not list the names it
 refuses; it decides by the KIND of what a read returns, in one place (`_floored_result`,
 `python/djust/serialization.py`). Plain data comes back as is, matched by EXACT type (`str`, `int`,
-`float`, `bool`, `None`, `Decimal`, `bytes`, `datetime`, `date`, `time`, `timedelta`), and so does a list /
-tuple / dict / set of it, rebuilt member by member (a dict's keys too). A UUID is its text. Safe markup
+`float`, `bool`, `None`, `Decimal`, `bytes`, `date`, `timedelta`), and so does a list /
+tuple / dict / set of it, rebuilt member by member (a dict's keys too). A UUID is its text. A `datetime` or
+`time` passes as it is when its `tzinfo` is `None` or a C type (`datetime.timezone`, `zoneinfo.ZoneInfo`);
+a Python-defined `tzinfo` (the shape a `pytz` or `dateutil` zone has) is replaced by a floor `tzinfo` that
+gives the same `utcoffset` / `dst` / `tzname` / `str` and reports a class with no Python-level methods, so
+the value renders the same under `date`, `time`, `timesince`, `localtime` and the rest. Safe markup
 stays safe markup (`SafeData` is what the engine asks), as a `str` whose class and methods a reader
 cannot reach; a `TextChoices` / `IntegerChoices` member is its value. A model, a manager and a queryset
 come back as floor proxies. Any callable (a bound method, a manager's `.all`) comes back as a call
@@ -596,8 +600,7 @@ Python function among its members; the second level is every underscore name tha
 (`__self__`, `__func__`, `__wrapped__`, `__globals__`, `__code__`, `__closure__`, `__dict__`,
 `__module__`). `python/tests/test_model_handle_namespaces_3888.py` pins the kinds one at a time. The
 tests guarantee the KIND of what is returned for the members of those models; they do not guarantee
-the content of a field, and a `datetime` is handed over as it is (its `tzinfo` is the application's
-own object).
+the content of a field.
 
 ## Non-goals
 
