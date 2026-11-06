@@ -248,9 +248,14 @@ Now `?page=abc&sort=name` hands `handle_params()` `page=1` (its initial value) a
   also writes the field into `self.data` (the field then counts as supplied); and a
   multi-select field (`MultipleChoiceField`, `CheckboxSelectMultiple`) the URL left out,
   which both paths treat as supplied ([#3922](https://github.com/djust-org/djust/issues/3922)).
-- A mutable `initial` (a list, a dict) is handed over by reference, as the valid path and
-  `"initial"` mode do. Each form instance owns its own copy of its fields, so a
-  `handle_params()` that mutates it does not reach the form class.
+- A kept field the URL left out that the fallback fills with its `initial` gets a **copy** of
+  a mutable `initial` (a list, a dict), so a `handle_params()` that mutates it does not
+  change the form class's default for later requests. That is not so everywhere: the valid
+  path, `params_form_fallback = "initial"`, and in `"fields"` mode a replaced field's
+  `initial` (and the plain initial values) hand over the object stored on the form class, so
+  a `handle_params()` that mutates a mutable `initial` there changes the default for later
+  requests ([#3926](https://github.com/djust-org/djust/issues/3926)). Copy it in
+  `handle_params()` before changing it.
 - A kept `ModelChoiceField` value is a deep copy of the instance the first pass produced: equal
   by primary key, not the same object.
   Anything else going wrong in the second call (a `None` comparison, a value that cannot be
