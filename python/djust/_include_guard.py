@@ -34,12 +34,16 @@ from __future__ import annotations
 
 import contextlib
 import contextvars
+import functools
+import logging
 from typing import Any, Callable, Iterator
 
 from django.template.base import FilterExpression
 from django.template.loader_tags import IncludeNode
 
 from djust._template_guards import refused_marker, warn_refused_once
+
+logger = logging.getLogger(__name__)
 
 #: True while a render on behalf of a view or component is in progress on this thread / task.
 _active: contextvars.ContextVar[bool] = contextvars.ContextVar(
@@ -138,11 +142,6 @@ def guarded_include_render(self: IncludeNode, context: Any) -> Any:
 guarded_include_render._djust_original = _ORIGINAL  # type: ignore[attr-defined]
 
 
-#: True once :func:`install` has patched the class. A later wrapper (instrumentation, a test's
-#: ``mock.patch.object``) sits ON TOP of the guard; entering a scope must not knock it off.
-_STATE = {"installed": False}  # a dict, so install() and uninstall() need no ``global``
-
-
 def _wraps_the_guard(render: Callable[..., Any]) -> bool:
     """Is the guard in ``render``'s ``functools.wraps`` chain (e.g. after an ``importlib.reload``)?"""
     for _ in range(16):
@@ -154,24 +153,44 @@ def _wraps_the_guard(render: Callable[..., Any]) -> bool:
     return False
 
 
-def install() -> None:
-    """Patch ``IncludeNode.render`` ONCE (idempotent; a later patch of it is left alone).
+@functools.lru_cache(maxsize=None)
+def _warn_guard_inactive(replacement: str) -> None:
+    """Log, once per process and replacement type, that the guard is not in place."""
+    logger.warning(
+        "IncludeNode.render was replaced by a %s that does not wrap the template-call guard: "
+        "{%% include %%} in view and component renders is not guarded (#3880)",
+        replacement,
+    )
 
-    Two threads installing at once both write the same value, and the flag is only ever set
-    after the write (see :func:`_capture_original`), so there is nothing to lose a race on.
-    A wrapper that is installed on top afterwards must call the render it wraps; one that does
-    not takes the guard with it.
+
+def install() -> None:
+    """Make sure ``IncludeNode.render`` carries the guard. The class is the only state.
+
+    Read from the live class on every call, so nothing can go stale (a test's
+    ``mock.patch.object`` restoring Django's ``render`` after a scope wrote the guard is
+    simply installed again on the next entry). Three cases:
+
+    * the guard is already there, directly or under a ``functools.wraps`` wrapper put on top
+      of it (instrumentation, ``mock.patch.object(..., wraps=...)``): nothing to do, and the
+      wrapper is left alone;
+    * ``render`` is Django's own: the guard is installed (two threads doing so write the same
+      constant);
+    * someone replaced ``render`` WITHOUT wrapping the guard: their patch is left alone and
+      the guard is NOT active; a WARNING says so once per process (the replacement's type
+      name only). A replacement that calls Django's ``render`` directly takes the guard with it,
+      so a patch that wraps ``IncludeNode.render`` must call the render it replaced.
     """
-    if _STATE["installed"] or _wraps_the_guard(IncludeNode.render):
-        _STATE["installed"] = True
+    current = IncludeNode.render
+    if _wraps_the_guard(current):
         return
-    IncludeNode.render = guarded_include_render  # type: ignore[method-assign]
-    _STATE["installed"] = True
+    if current is _ORIGINAL:
+        IncludeNode.render = guarded_include_render  # type: ignore[method-assign]
+        return
+    _warn_guard_inactive(type(current).__name__)
 
 
 def uninstall() -> None:
     """Put Django's ``IncludeNode.render`` back (for tests that prove the patch is what holds)."""
-    _STATE["installed"] = False
     IncludeNode.render = _ORIGINAL  # type: ignore[method-assign]
 
 

@@ -982,7 +982,7 @@ def test_install_patches_once_and_leaves_a_later_patch_alone():
 
 
 def test_install_recognises_the_guard_under_a_functools_wrapper():
-    """After a reload the flag is fresh but the class may already carry the guard under a wrapper."""
+    """After a reload the class may already carry the guard under a wrapper: no second guard."""
     import functools
 
     from django.template.loader_tags import IncludeNode
@@ -994,9 +994,66 @@ def test_install_recognises_the_guard_under_a_functools_wrapper():
         lambda self, context: guard.guarded_include_render(self, context)
     )
     IncludeNode.render = wrapped  # type: ignore[method-assign]
-    guard._STATE["installed"] = False  # a fresh copy of the module
     guard.install()
     assert IncludeNode.render is wrapped, "install() put a second guard under a wrapped one"
+
+
+def test_the_guard_is_back_after_a_mock_restores_djangos_render():
+    """The class is the only state: a scope entered while a mock replaced ``render`` writes
+    nothing, and the entry after the mock exits installs the guard (no cached belief to go stale)."""
+    from unittest.mock import patch
+
+    from django.template.loader_tags import IncludeNode
+
+    from djust._include_guard import include_guard_scope
+
+    with patch.object(IncludeNode, "render", autospec=True):
+        with include_guard_scope():
+            pass
+    obj = _payload("alters_data")()
+    with include_guard_scope():
+        out = Engine().from_string("[{% include obj %}]").render(DjangoContext({"obj": obj}))
+    assert out == "[]"
+    assert type(obj).calls == 0
+
+
+def test_the_guard_is_back_after_something_else_restores_djangos_render():
+    from djust._include_guard import include_guard_scope, install, uninstall
+
+    install()
+    uninstall()  # what a reload of loader_tags, or a test's own cleanup, amounts to
+    obj = _payload("alters_data")()
+    with include_guard_scope():
+        out = Engine().from_string("[{% include obj %}]").render(DjangoContext({"obj": obj}))
+    assert out == "[]"
+    assert type(obj).calls == 0
+
+
+def test_a_replacement_that_does_not_wrap_the_guard_is_left_alone_and_warned_about_once(caplog):
+    """The documented trade-off: someone else's patch wins, the guard is off, and the log says so."""
+    from django.template.loader_tags import IncludeNode
+
+    from djust._include_guard import _ORIGINAL, _warn_guard_inactive, include_guard_scope
+
+    _warn_guard_inactive.cache_clear()
+
+    def replacement(self: Any, context: Any) -> Any:
+        return _ORIGINAL(self, context)  # Django's render, not the guard
+
+    IncludeNode.render = replacement  # type: ignore[method-assign]
+    obj = _payload("alters_data")()
+    with caplog.at_level(logging.WARNING, logger="djust._include_guard"):
+        for _ in range(3):
+            with include_guard_scope():
+                out = (
+                    Engine().from_string("[{% include obj %}]").render(DjangoContext({"obj": obj}))
+                )
+    assert IncludeNode.render is replacement
+    assert out == "[RENDERED]" and type(obj).calls == 3  # the guard is not active: documented
+    records = [r for r in caplog.records if r.name == "djust._include_guard"]
+    assert len(records) == 1
+    assert "function" in records[0].getMessage()  # the replacement's type name, nothing else
+    assert "RENDERED" not in records[0].getMessage()
 
 
 def test_a_render_outside_the_scope_is_stock_django():
@@ -1346,29 +1403,19 @@ _UNGUARDED_ENGINE_RENDERS = {
 #: A call that LOADS a Django template; its result's ``.render`` is a render.
 _LOADERS = {"from_string", "get_template", "select_template"}
 _ENGINE_CTORS = {"Template"}
-
-
-def _call_name(call: ast.Call) -> str | None:
-    func = call.func
-    if isinstance(func, ast.Name):
-        return func.id
-    if isinstance(func, ast.Attribute):
-        return func.attr
-    return None
-
-
-def _is_loader_call(node: ast.AST) -> bool:
-    return isinstance(node, ast.Call) and _call_name(node) in (_LOADERS | _ENGINE_CTORS)
+_FUNCTIONS = (ast.FunctionDef, ast.AsyncFunctionDef)
 
 
 def _unguarded_engine_renders(source: str) -> list[tuple[str, int]]:
     """``(qualified function, line)`` of each Django-engine render in ``source`` outside the scope.
 
-    A render is: a reference to ``render_to_string`` (called, or handed to ``sync_to_async``); a
-    ``.render`` taken off a template loader's result (``get_template(..).render``,
-    ``Template(..).render``) or off a name the same function bound to one (``t = get_template(..)``
-    then ``t.render(c)``). "Inside the scope" is lexical: the node sits in the body of a ``with``
-    whose items call ``include_guard_scope``.
+    A render is: a reference to ``render_to_string`` (called, handed to ``sync_to_async``, or taken
+    off a module: ``loader.render_to_string``); a ``.render`` taken off a template loader's result
+    (``get_template(..).render``, ``Template(..).render``) or off a name bound to one in the same
+    function or an enclosing one (``t = get_template(..)`` then ``t.render(c)``). ``from x import
+    Template as T`` and the like are resolved. "Inside the scope" is lexical: the node sits in the
+    body of a ``with`` whose items call ``include_guard_scope``, in the SAME function: a function
+    (or lambda) defined inside the block runs later, outside it.
     """
     tree = ast.parse(source)
     parents: dict[ast.AST, ast.AST] = {}
@@ -1376,10 +1423,29 @@ def _unguarded_engine_renders(source: str) -> list[tuple[str, int]]:
         for child in ast.iter_child_nodes(parent):
             parents[child] = parent
 
+    # `from django.template import Template as T` -> {"T": "Template"}
+    aliases: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                if alias.asname:
+                    aliases[alias.asname] = alias.name
+
+    def call_name(call: ast.Call) -> str | None:
+        func = call.func
+        if isinstance(func, ast.Name):
+            return aliases.get(func.id, func.id)
+        if isinstance(func, ast.Attribute):
+            return func.attr
+        return None
+
+    def is_loader_call(node: ast.AST) -> bool:
+        return isinstance(node, ast.Call) and call_name(node) in (_LOADERS | _ENGINE_CTORS)
+
     def function_of(node: ast.AST) -> ast.AST | None:
         while node in parents:
             node = parents[node]
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if isinstance(node, _FUNCTIONS):
                 return node
         return None
 
@@ -1387,27 +1453,40 @@ def _unguarded_engine_renders(source: str) -> list[tuple[str, int]]:
         names = []
         while node in parents:
             node = parents[node]
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            if isinstance(node, (*_FUNCTIONS, ast.ClassDef)):
                 names.append(node.name)
         return ".".join(reversed(names)) or "<module>"
 
     # names a function (or the module) bound to a loaded template
     template_names: dict[ast.AST | None, set[str]] = {}
     for node in ast.walk(tree):
-        if isinstance(node, ast.Assign) and any(_is_loader_call(n) for n in ast.walk(node.value)):
+        if isinstance(node, ast.Assign) and any(is_loader_call(n) for n in ast.walk(node.value)):
             owner = function_of(node)
             for target in node.targets:
                 if isinstance(target, ast.Name):
                     template_names.setdefault(owner, set()).add(target.id)
 
+    def bound_to_a_template(name: str, node: ast.AST) -> bool:
+        owner = function_of(node)
+        while True:  # this function, then each enclosing one, then the module
+            if name in template_names.get(owner, set()):
+                return True
+            if owner is None:
+                return False
+            owner = function_of(owner)
+
     def in_scope(node: ast.AST) -> bool:
         child = node
         while child in parents:
             parent = parents[child]
+            if isinstance(parent, _FUNCTIONS) and child in parent.body:
+                return False
+            if isinstance(parent, ast.Lambda) and child is parent.body:
+                return False
             if isinstance(parent, (ast.With, ast.AsyncWith)) and child in parent.body:
                 for item in parent.items:
                     expr = item.context_expr
-                    if isinstance(expr, ast.Call) and _call_name(expr) == "include_guard_scope":
+                    if isinstance(expr, ast.Call) and call_name(expr) == "include_guard_scope":
                         return True
             child = parent
         return False
@@ -1415,17 +1494,16 @@ def _unguarded_engine_renders(source: str) -> list[tuple[str, int]]:
     found: list[tuple[str, int]] = []
     for node in ast.walk(tree):
         site = False
-        if isinstance(node, ast.Name) and node.id == "render_to_string":
+        if isinstance(node, ast.Name) and aliases.get(node.id, node.id) == "render_to_string":
+            site = isinstance(node.ctx, ast.Load)
+        elif isinstance(node, ast.Attribute) and node.attr == "render_to_string":
             site = isinstance(node.ctx, ast.Load)
         elif isinstance(node, ast.Attribute) and node.attr == "render":
             receiver = node.value
-            if _is_loader_call(receiver):
+            if is_loader_call(receiver):
                 site = True
             elif isinstance(receiver, ast.Name):
-                owner = function_of(node)
-                site = receiver.id in template_names.get(owner, set()) or (
-                    owner is not None and receiver.id in template_names.get(None, set())
-                )
+                site = bound_to_a_template(receiver.id, node)
         if site and not in_scope(node):
             found.append((qualname(node), node.lineno))
     return found
@@ -1524,6 +1602,46 @@ def test_every_django_engine_render_is_inside_the_scope_or_says_why_not():
             "def a(c):\n    with other(render_to_string('x', c)), include_guard_scope():\n        pass\n",
             [("a", 2)],
             id="a-render-in-a-with-item-runs-before-the-scope",
+        ),
+        pytest.param(
+            "from django.template import Template as T\ndef a(c):\n    return T('x').render(c)\n",
+            [("a", 3)],
+            id="an-aliased-template-constructor",
+        ),
+        pytest.param(
+            "from django.template.loader import render_to_string as rts\ndef a(c):\n    return rts('x', c)\n",
+            [("a", 3)],
+            id="an-aliased-render_to_string",
+        ),
+        pytest.param(
+            "from django.template import loader\ndef a(c):\n    return loader.render_to_string('x', c)\n",
+            [("a", 3)],
+            id="render_to_string-as-a-module-attribute",
+        ),
+        pytest.param(
+            "from django.template.loader import get_template as gt\ndef a(c):\n    t = gt('x')\n    return t.render(c)\n",
+            [("a", 4)],
+            id="an-aliased-loader-bound-to-a-name",
+        ),
+        pytest.param(
+            "def a(c):\n    t = get_template('x')\n    def b():\n        return t.render(c)\n    return b\n",
+            [("a.b", 4)],
+            id="a-template-bound-in-the-enclosing-function",
+        ),
+        pytest.param(
+            "def a(c):\n    with include_guard_scope():\n        def later():\n            return render_to_string('x', c)\n    return later\n",
+            [("a.later", 4)],
+            id="a-function-defined-in-the-scope-runs-outside-it",
+        ),
+        pytest.param(
+            "def a(c):\n    with include_guard_scope():\n        f = lambda: render_to_string('x', c)\n    return f\n",
+            [("a", 3)],
+            id="a-lambda-defined-in-the-scope-runs-outside-it",
+        ),
+        pytest.param(
+            "from django.template import Template as T\ndef a(c):\n    with include_guard_scope():\n        return T('x').render(c)\n",
+            [],
+            id="an-aliased-constructor-inside-the-scope",
         ),
         pytest.param(
             "def a(node, c):\n    return node.render(c)\n",
