@@ -1176,10 +1176,9 @@ def avatar(
     return {
         # The same sanitiser the native handler uses, so both engines agree: a
         # script-capable scheme becomes "#", an inline data:image/ URI is kept
-        # (#3665). ``url_attr`` returns HTML-escaped text marked safe, so the
-        # template does not escape it a second time (pinned by
-        # ``test_a_marked_safe_src_is_not_escaped_twice_under_django``).
-        "src": url_attr(src, image=True),
+        # (#3665). The helper returns HTML-escaped text marked safe, so the template does not
+        # escape it a second time; a marked-safe ``src`` is checked like any other (#3898).
+        "src": data_url_attr(src, image=True),
         "alt": alt,
         "initials": initials or (alt[:2].upper() if alt else ""),
         "size": size,
@@ -5730,7 +5729,7 @@ def responsive_image(
     if isinstance(lazy, str):
         lazy = lazy.lower() not in ("false", "0", "")
 
-    e_src = url_attr(src, image=True)
+    e_src = data_url_attr(src, image=True)
     e_alt = conditional_escape(alt)
     e_cls = conditional_escape(custom_class)
 
@@ -5749,7 +5748,7 @@ def responsive_image(
     img_attrs = [f'src="{e_src}"', f'alt="{e_alt}"']
     if lazy:
         img_attrs.append('loading="lazy"')
-    e_srcset = srcset_attr(srcset)
+    e_srcset = srcset_attr(srcset, honor_safe=False)
     if e_srcset:
         img_attrs.append(f'srcset="{e_srcset}"')
     if sizes:
@@ -5759,7 +5758,7 @@ def responsive_image(
 
     placeholder_html = ""
     if placeholder:
-        e_ph = url_attr(placeholder, image=True)
+        e_ph = data_url_attr(placeholder, image=True)
         placeholder_html = (
             f'<img src="{e_ph}" alt="" class="dj-responsive-image__placeholder" aria-hidden="true">'
         )

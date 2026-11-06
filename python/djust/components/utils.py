@@ -454,23 +454,33 @@ def unique_ids(items: Any) -> bool:
     return bool(ids) and all(ids) and len(set(ids)) == len(ids)
 
 
+#: The two no-op hrefs a dropdown toggle or a JavaScript-driven link uses. Exact text (after
+#: ``strip`` and case-folding, nothing appended), in an ``href`` only: neither runs script. Every
+#: other ``javascript:`` URL is neutralised, marked safe or not (#3898).
+_NOOP_HREFS = frozenset({"javascript:void(0)", "javascript:;"})
+
+
 def url_attr(value: Any, *, image: bool = False, honor_safe: bool = True) -> str:
     """Return ``value`` ready to place inside a quoted ``href``/``src``/``action``.
 
-    Values the developer marked safe (``mark_safe`` / ``SafeString``) are
-    returned unchanged. Anything else goes through :func:`safe_url`: it is
-    HTML-escaped, and a URL whose scheme is not a navigation scheme
-    (``javascript:``, ``vbscript:``, ``data:``, ...) becomes ``"#"``. With
-    ``image=True`` an inline ``data:image/...`` URI is also accepted (escaped),
-    for ``<img src>``.
+    The value is HTML-escaped (:func:`safe_url`), and a URL whose scheme is not a navigation
+    scheme (``javascript:``, ``vbscript:``, ``data:``, ...) becomes ``"#"``. With ``image=True`` an
+    inline ``data:image/...`` URI is also accepted (escaped), for ``<img src>``.
 
-    ``honor_safe=False`` treats a ``SafeData`` value as untrusted text (it is
-    checked and escaped like any other string). The class-based components pass
-    it: they have always escaped what they were given, a marked-safe value
-    included, and the scheme check must not widen that into an opt-out.
+    A value marked safe (``mark_safe`` / ``SafeString`` / a lazy one / anything with ``__html__``)
+    is NOT exempt (#3898): the marker means "no HTML escaping needed" in a text slot, not
+    "navigable". The one exception is the literal no-op ``href`` ``javascript:void(0)`` /
+    ``javascript:;`` (:data:`_NOOP_HREFS`), accepted marked or not, never for an image.
+
+    ``honor_safe`` is kept for a caller that must return a marked-safe value untouched; no
+    call site in the package passes ``True`` or leaves the default (pinned by
+    ``python/djust/tests/test_marked_safe_attribute_sweep_3898.py``): pass ``honor_safe=False``
+    or use :func:`data_url_attr`.
     """
     if value is None:
         return ""
+    if not image and str(value).strip().lower() in _NOOP_HREFS:
+        return str(value).strip().lower()
     if honor_safe and isinstance(value, SafeData):
         return str(value)
     if image and _is_data_image(value):
@@ -480,14 +490,14 @@ def url_attr(value: Any, *, image: bool = False, honor_safe: bool = True) -> str
 
 
 def data_url_attr(value: Any, *, image: bool = False) -> str:
-    """:func:`url_attr` for a URL that is DATA: read out of an item dict, a list of images, a row,
-    or the constructor of a class-based component (#3898, #3894).
+    """:func:`url_attr` for every URL a component prints: read out of an item dict, a list of
+    images, a row, a constructor argument or a template tag's own keyword (#3898, #3894).
 
     A marked-safe value (``mark_safe``, a lazy one, ``Markup``) is checked and escaped like any
-    other. ``mark_safe`` keeps markup in a TEXT slot; it does not mean "use this as a URL". Only a
-    template tag's own keyword argument (the developer wrote it in the template) may use
-    :func:`url_attr`'s default; ``python/djust/tests/test_marked_safe_attribute_sweep_3898.py``
-    pins the call sites that still do.
+    other, except the literal no-op hrefs of :data:`_NOOP_HREFS`. ``mark_safe`` keeps markup in a
+    TEXT slot; it does not mean "use this as a URL".
+    ``python/djust/tests/test_marked_safe_attribute_sweep_3898.py`` pins that no call site uses
+    :func:`url_attr`'s ``honor_safe`` default.
     """
     return url_attr(value, image=image, honor_safe=False)
 

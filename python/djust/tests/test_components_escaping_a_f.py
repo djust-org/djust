@@ -228,9 +228,25 @@ def test_link_quote_is_escaped(name: str, factory: Factory) -> None:
 
 
 @pytest.mark.parametrize("name,factory", LINK_CASES, ids=_ids(LINK_CASES))
-def test_marked_safe_link_passes_through(name: str, factory: Factory) -> None:
+def test_marked_safe_link_is_checked_and_escaped_like_any_other(
+    name: str, factory: Factory
+) -> None:
+    """``mark_safe`` means "no HTML escaping needed", not "navigable" (#3898)."""
     out = _render(factory, mark_safe("/safe?a=1&b=2"))
-    assert 'href="/safe?a=1&b=2"' in out
+    assert 'href="/safe?a=1&amp;b=2"' in out
+    out = _render(factory, mark_safe("javascript:alert(1)"))
+    assert "javascript:" not in out
+    assert 'href="#"' in out
+
+
+@pytest.mark.parametrize("name,factory", LINK_CASES, ids=_ids(LINK_CASES))
+def test_the_no_op_toggle_href_is_still_accepted(name: str, factory: Factory) -> None:
+    """The one exception, kept on purpose: ``javascript:void(0)`` / ``javascript:;`` run nothing
+    (a dropdown toggle), marked safe or not; anything appended is neutralised."""
+    for given in ("javascript:void(0)", "javascript:;"):
+        for value in (given, mark_safe(given)):
+            assert f'href="{given}"' in _render(factory, value), (name, given)
+    assert "javascript:" not in _render(factory, mark_safe("javascript:void(0);alert(1)"))
 
 
 @pytest.mark.parametrize("name,factory", IMAGE_CASES, ids=_ids(IMAGE_CASES))

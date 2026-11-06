@@ -91,7 +91,9 @@ def test_kanban_move_event_is_escaped_into_its_attribute():
     """The move event is an HTML attribute (``data-move-event``) that the
     client bundle reads on a drop; there is no inline JS string any more."""
     cols = [{"id": "todo", "title": "To Do", "cards": []}]
-    out = _render("{% kanban_board columns=cols move_event=ev %}", cols=cols, ev="x\"');alert(1);//")
+    out = _render(
+        "{% kanban_board columns=cols move_event=ev %}", cols=cols, ev="x\"');alert(1);//"
+    )
     assert 'data-move-event="x&quot;&#x27;);alert(1);//"' in out
     assert "ondrop" not in out and "handleEvent" not in out
     # A plain event name is emitted unchanged.
@@ -202,6 +204,11 @@ def test_image_src_data_image_uri_is_kept(tag_src, build):
 
 
 @pytest.mark.parametrize("tag_src,build", _IMG_PARAMS, ids=_IMG_IDS)
-def test_marked_safe_image_src_passes_through(tag_src, build):
+def test_marked_safe_image_src_is_checked_and_escaped_like_any_other(tag_src, build):
+    """``mark_safe`` means "no HTML escaping needed", not "navigable" (#3898): the value is
+    escaped once more as the text it is, and a script scheme is neutralised."""
     out = _render(tag_src, **build(mark_safe("/safe.png?a=1&amp;b=2")))
-    assert 'src="/safe.png?a=1&amp;b=2"' in out
+    assert 'src="/safe.png?a=1&amp;amp;b=2"' in out
+    out = _render(tag_src, **build(mark_safe("javascript:alert(1)")))
+    assert 'src="javascript:' not in out
+    assert 'src="#"' in out

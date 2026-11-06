@@ -345,7 +345,7 @@ def _call_sites() -> set[tuple[str, str, str]]:
     """``(file, function, first argument)`` of every ``url_attr`` / ``srcset_attr`` call that does
     not say ``honor_safe=False`` and is not the shared data helper, under ``python/djust``
     (tests and the native handlers excluded: those are handed text)."""
-    sites = set()
+    sites: set[tuple[str, str, str]] = set()
     for path in sorted((ROOT / "python/djust").rglob("*.py")):
         rel = str(path.relative_to(ROOT / "python/djust"))
         if (
@@ -354,51 +354,75 @@ def _call_sites() -> set[tuple[str, str, str]]:
             or path.name == "rust_handlers.py"
         ):
             continue
-        tree = ast.parse(path.read_text())
-        parents = {c: n for n in ast.walk(tree) for c in ast.iter_child_nodes(n)}
-        for node in ast.walk(tree):
-            if not (
-                isinstance(node, ast.Call) and isinstance(node.func, (ast.Name, ast.Attribute))
-            ):
-                continue
-            name = node.func.id if isinstance(node.func, ast.Name) else node.func.attr
-            if name not in ("url_attr", "srcset_attr"):
-                continue
-            keywords = {k.arg: k.value for k in node.keywords}
-            honor = keywords.get("honor_safe")
-            if isinstance(honor, ast.Constant) and honor.value is False:
-                continue
-            fn = node
-            while fn in parents and not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                fn = parents[fn]
-            sites.add(
-                (rel, getattr(fn, "name", "?"), ast.unparse(node.args[0]) if node.args else "")
-            )
+        sites |= _honouring_calls(path.read_text(), rel)
     return sites
 
 
-#: The ONLY places a marked-safe value is still honoured: the value is the developer's own tag
-#: ARGUMENT (a keyword of the template tag), not data read out of an item or a constructor of a
-#: class-based component. Everything else goes through ``data_url_attr`` / ``honor_safe=False``.
-HONOURED = {
-    ("components/templatetags/djust_components.py", "avatar", "src"),
-    ("components/templatetags/djust_components.py", "responsive_image", "src"),
-    ("components/templatetags/djust_components.py", "responsive_image", "srcset"),
-    ("components/templatetags/djust_components.py", "responsive_image", "placeholder"),
-}
+def _honouring_calls(source: str, rel: str = "x.py") -> set[tuple[str, str, str]]:
+    """The ``url_attr`` / ``srcset_attr`` calls in ``source`` that are not ``honor_safe=False``."""
+    sites: set[tuple[str, str, str]] = set()
+    tree = ast.parse(source)
+    parents = {c: n for n in ast.walk(tree) for c in ast.iter_child_nodes(n)}
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, (ast.Name, ast.Attribute))):
+            continue
+        name = node.func.id if isinstance(node.func, ast.Name) else node.func.attr
+        if name not in ("url_attr", "srcset_attr"):
+            continue
+        honor = {k.arg: k.value for k in node.keywords}.get("honor_safe")
+        if isinstance(honor, ast.Constant) and honor.value is False:
+            continue
+        fn: ast.AST = node
+        while fn in parents and not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            fn = parents[fn]
+        sites.add((rel, getattr(fn, "name", "?"), ast.unparse(node.args[0]) if node.args else ""))
+    return sites
 
 
 class TestCallerSet:
-    def test_only_a_tag_argument_still_honours_a_marked_safe_value(self) -> None:
+    """ONE rule, pinned: a marked-safe value never bypasses the URL scheme allowlist, whether the
+    URL is data (an item, a row, a constructor argument) or a template tag's own keyword. So no
+    call site may leave ``honor_safe`` at its default or pass ``True``."""
+
+    def test_no_url_call_site_honours_a_marked_safe_value(self) -> None:
         sites = _call_sites()
-        assert sites == HONOURED, (
-            f"new (decide it: data goes through data_url_attr): {sorted(sites - HONOURED)}\n"
-            f"gone (delete it from HONOURED): {sorted(HONOURED - sites)}"
+        assert not sites, (
+            "a url_attr / srcset_attr call that honours a marked-safe value (use data_url_attr "
+            f"or honor_safe=False): {sorted(sites)}"
         )
 
-    def test_no_class_based_component_honours_one(self) -> None:
-        for rel, fn, arg in _call_sites():
-            assert rel.startswith("components/templatetags/"), (rel, fn, arg)
+    def test_the_scan_sees_calls(self) -> None:
+        """Not vacuous: the helper's own callers are there to be found."""
+        src = "".join(
+            p.read_text()
+            for p in (ROOT / "python/djust/components").rglob("*.py")
+            if "/tests/" not in str(p)
+        )
+        assert src.count("data_url_attr(") > 60
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            "def f(x):\n    return url_attr(x)\n",
+            "def f(x):\n    return url_attr(x, image=True)\n",
+            "def f(x):\n    return url_attr(x, honor_safe=True)\n",
+            "def f(x):\n    return srcset_attr(x)\n",
+            "def f(x, h):\n    return u.url_attr(x, honor_safe=h)\n",
+        ],
+    )
+    def test_the_scan_can_fail(self, source: str) -> None:
+        assert _honouring_calls(source), source
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            "def f(x):\n    return url_attr(x, honor_safe=False)\n",
+            "def f(x):\n    return data_url_attr(x)\n",
+            "def f(x):\n    return srcset_attr(x, honor_safe=False)\n",
+        ],
+    )
+    def test_the_scan_passes_the_helper_and_an_explicit_false(self, source: str) -> None:
+        assert not _honouring_calls(source), source
 
 
 # --- the TAGS that read a URL out of an item: both engines ------------------------------------
@@ -409,6 +433,7 @@ DATA_TAGS = (
     "activity_feed", "avatar_group", "carousel", "chat_bubble", "data_card_grid", "dropdown_menu",
     "image_cropper", "image_upload_preview", "lightbox", "live_indicator", "mentions_input",
     "menu_item", "org_chart", "presence_avatars", "rich_select", "sortable_grid",
+    "avatar", "responsive_image",
 )  # fmt: skip
 #: The tags under test (all of them unless ``MARKED_SAFE_SWEEP_ONLY`` narrows the sweep).
 TAGS = tuple(t for t in DATA_TAGS if not ONLY or t in ONLY)
@@ -544,6 +569,65 @@ class TestTags:
                         if out and url_sweep.findings(out):
                             holes.add((engine, param, claim, label))
         assert not holes, f"{tag}: {sorted(holes)[:4]}"
+
+
+class TestTheNoOpHrefException:
+    """The ONE exception, on purpose: the literal no-op hrefs of a dropdown toggle. Exact text
+    (after ``strip`` / case-folding, nothing appended), in an ``href`` only."""
+
+    @pytest.mark.parametrize("claim", ["plain", *sorted(CLAIMS)])
+    @pytest.mark.parametrize(
+        ("given", "kept"),
+        [
+            ("javascript:void(0)", "javascript:void(0)"),
+            ("javascript:;", "javascript:;"),
+            ("  JavaScript:Void(0)  ", "javascript:void(0)"),
+            ("JAVASCRIPT:;", "javascript:;"),
+        ],
+    )
+    def test_the_literal_is_kept(self, claim: str, given: str, kept: str) -> None:
+        from djust.components.utils import data_url_attr
+
+        value = given if claim == "plain" else CLAIMS[claim](given)
+        assert data_url_attr(value) == kept
+
+    @pytest.mark.parametrize("claim", ["plain", *sorted(CLAIMS)])
+    @pytest.mark.parametrize(
+        "given",
+        [
+            "javascript:void(0);alert(1)",
+            "javascript:void(0) 1x",
+            "javascript:void(0)//x",
+            "javascript:void( 0 )",
+            "javascript:void(1)",
+            "javascript:;alert(1)",
+            "javascript:",
+            "java\tscript:void(0)",
+            "\x00javascript:void(0)",
+            "vbscript:void(0)",
+            "data:;",
+            "javascript:alert(1)",
+        ],
+    )
+    def test_anything_else_is_neutralised_marked_or_not(self, claim: str, given: str) -> None:
+        from djust.components.utils import data_url_attr
+
+        value = given if claim == "plain" else CLAIMS[claim](given)
+        assert data_url_attr(value) == "#"
+
+    @pytest.mark.parametrize("claim", ["plain", *sorted(CLAIMS)])
+    @pytest.mark.parametrize("given", ["javascript:void(0)", "javascript:;"])
+    def test_an_image_source_never_gets_the_exception(self, claim: str, given: str) -> None:
+        from djust.components.utils import data_url_attr
+
+        value = given if claim == "plain" else CLAIMS[claim](given)
+        assert data_url_attr(value, image=True) == "#"
+
+    def test_the_class_components_keep_a_toggle_href(self) -> None:
+        from djust.components.components.nav_menu import NavMenu
+
+        out = str(NavMenu(items=[{"label": "a", "href": "javascript:void(0)"}]).render())
+        assert 'href="javascript:void(0)"' in out, out
 
 
 class TestTextSlotsKeepTheirMarkup:
