@@ -1521,6 +1521,11 @@ def test_every_django_engine_render_is_inside_the_scope_or_says_why_not():
             id="after-the-scope-block-ends",
         ),
         pytest.param(
+            "def a(c):\n    with other(render_to_string('x', c)), include_guard_scope():\n        pass\n",
+            [("a", 2)],
+            id="a-render-in-a-with-item-runs-before-the-scope",
+        ),
+        pytest.param(
             "def a(node, c):\n    return node.render(c)\n",
             [],
             id="a-node-render-is-not-an-engine-render",
