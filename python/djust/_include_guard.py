@@ -157,8 +157,9 @@ def _wraps_the_guard(render: Callable[..., Any]) -> bool:
 def _warn_guard_inactive(replacement: str) -> None:
     """Log, once per process and replacement type, that the guard is not in place."""
     logger.warning(
-        "IncludeNode.render was replaced by a %s that does not wrap the template-call guard: "
-        "{%% include %%} in view and component renders is not guarded (#3880)",
+        "IncludeNode.render was replaced by a %s with no functools.wraps link to the "
+        "template-call guard: unless it calls the guard, {%% include %%} in view and "
+        "component renders is not guarded (#3880)",
         replacement,
     )
 
@@ -176,9 +177,10 @@ def install() -> None:
     * ``render`` is Django's own: the guard is installed (two threads doing so write the same
       constant);
     * someone replaced ``render`` WITHOUT wrapping the guard: their patch is left alone and
-      the guard is NOT active; a WARNING says so once per process (the replacement's type
-      name only). A replacement that calls Django's ``render`` directly takes the guard with it,
-      so a patch that wraps ``IncludeNode.render`` must call the render it replaced.
+      the guard is NOT active unless that patch calls the guard; a WARNING says so once per
+      process (the replacement's type name only). A patch that wraps ``IncludeNode.render``
+      should use ``functools.wraps`` and call the render it replaced; one that calls Django's
+      own ``render`` directly takes the guard with it.
     """
     current = IncludeNode.render
     if _wraps_the_guard(current):

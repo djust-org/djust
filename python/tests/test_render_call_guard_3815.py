@@ -953,8 +953,11 @@ def test_the_embedded_child_reproducer_from_the_issue():
     assert P.calls == 0
 
 
-def test_install_patches_once_and_leaves_a_later_patch_alone():
-    """A wrapper put on top of the guard survives later scope entries (and still gets the guard)."""
+def test_install_patches_once_and_leaves_a_later_patch_alone(caplog):
+    """A ``functools.wraps`` wrapper put on top of the guard survives later scope entries, is not
+    warned about, and the guard under it still refuses."""
+    import functools
+
     from django.template.loader_tags import IncludeNode
 
     from djust._include_guard import guarded_include_render, include_guard_scope, install
@@ -965,14 +968,17 @@ def test_install_patches_once_and_leaves_a_later_patch_alone():
     below = IncludeNode.render
     seen: list[int] = []
 
+    @functools.wraps(below)
     def wrapper(self: Any, context: Any) -> Any:
         seen.append(1)
         return below(self, context)
 
     IncludeNode.render = wrapper  # type: ignore[method-assign]
     obj = _payload("alters_data")()
-    with include_guard_scope():
-        out = Engine().from_string("[{% include obj %}]").render(DjangoContext({"obj": obj}))
+    with caplog.at_level(logging.WARNING, logger="djust._include_guard"):
+        with include_guard_scope():
+            out = Engine().from_string("[{% include obj %}]").render(DjangoContext({"obj": obj}))
+    assert not [r for r in caplog.records if r.name == "djust._include_guard"]
     assert IncludeNode.render is wrapper, (
         "a scope entry replaced a later patch of IncludeNode.render"
     )
@@ -981,7 +987,7 @@ def test_install_patches_once_and_leaves_a_later_patch_alone():
     assert type(obj).calls == 0
 
 
-def test_install_recognises_the_guard_under_a_functools_wrapper():
+def test_install_recognises_the_guard_under_a_functools_wrapper(caplog):
     """After a reload the class may already carry the guard under a wrapper: no second guard."""
     import functools
 
@@ -994,8 +1000,10 @@ def test_install_recognises_the_guard_under_a_functools_wrapper():
         lambda self, context: guard.guarded_include_render(self, context)
     )
     IncludeNode.render = wrapped  # type: ignore[method-assign]
-    guard.install()
+    with caplog.at_level(logging.WARNING, logger="djust._include_guard"):
+        guard.install()
     assert IncludeNode.render is wrapped, "install() put a second guard under a wrapped one"
+    assert not [r for r in caplog.records if r.name == "djust._include_guard"]
 
 
 def test_the_guard_is_back_after_a_mock_restores_djangos_render():
@@ -1015,6 +1023,17 @@ def test_the_guard_is_back_after_a_mock_restores_djangos_render():
         out = Engine().from_string("[{% include obj %}]").render(DjangoContext({"obj": obj}))
     assert out == "[]"
     assert type(obj).calls == 0
+
+
+def test_uninstall_restores_djangos_own_render():
+    from django.template.loader_tags import IncludeNode
+
+    from djust._include_guard import _ORIGINAL, install, uninstall
+
+    install()
+    assert IncludeNode.render is not _ORIGINAL
+    uninstall()
+    assert IncludeNode.render is _ORIGINAL
 
 
 def test_the_guard_is_back_after_something_else_restores_djangos_render():
