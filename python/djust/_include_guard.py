@@ -93,8 +93,8 @@ class _NodeWithResolvedOperand:
     """The ``IncludeNode`` being rendered, with its template operand already resolved.
 
     Reads of any other attribute (``origin``, ``extra_context``, ``isolated_context``) go to
-    the node. It hashes and compares as the node, so the per-render template cache Django
-    keeps keyed on the node is the same cache.
+    the node. Stand-ins of one node hash and compare equal, so the per-render template cache
+    Django keeps keyed on the node is one cache across the loop iterations of a render.
     """
 
     __slots__ = ("_node", "template")
@@ -110,9 +110,9 @@ class _NodeWithResolvedOperand:
         return hash(self._node)
 
     def __eq__(self, other: object) -> bool:
-        return other is self._node or (
-            isinstance(other, _NodeWithResolvedOperand) and other._node is self._node
-        )
+        # Only another stand-in is ever compared: inside one scope every cache key Django stores
+        # is a stand-in, and a render context is never shared between a scope and a plain render.
+        return isinstance(other, _NodeWithResolvedOperand) and other._node is self._node
 
 
 def guarded_include_render(self: IncludeNode, context: Any) -> Any:
@@ -138,17 +138,42 @@ def guarded_include_render(self: IncludeNode, context: Any) -> Any:
 guarded_include_render._djust_original = _ORIGINAL  # type: ignore[attr-defined]
 
 
-def install() -> None:
-    """Patch ``IncludeNode.render`` (idempotent, and race-free by construction).
+#: True once :func:`install` has patched the class. A later wrapper (instrumentation, a test's
+#: ``mock.patch.object``) sits ON TOP of the guard; entering a scope must not knock it off.
+_installed = False
 
-    The whole of it is one assignment of a constant: two threads installing at once both
-    write the same value (see :func:`_capture_original`).
+
+def _wraps_the_guard(render: Callable[..., Any]) -> bool:
+    """Is the guard in ``render``'s ``functools.wraps`` chain (e.g. after an ``importlib.reload``)?"""
+    for _ in range(16):
+        if render is guarded_include_render:
+            return True
+        render = getattr(render, "__wrapped__", None)  # type: ignore[assignment]
+        if render is None:
+            return False
+    return False
+
+
+def install() -> None:
+    """Patch ``IncludeNode.render`` ONCE (idempotent; a later patch of it is left alone).
+
+    Two threads installing at once both write the same value, and the flag is only ever set
+    after the write (see :func:`_capture_original`), so there is nothing to lose a race on.
+    A wrapper that is installed on top afterwards must call the render it wraps; one that does
+    not takes the guard with it.
     """
+    global _installed
+    if _installed or _wraps_the_guard(IncludeNode.render):
+        _installed = True
+        return
     IncludeNode.render = guarded_include_render  # type: ignore[method-assign]
+    _installed = True
 
 
 def uninstall() -> None:
     """Put Django's ``IncludeNode.render`` back (for tests that prove the patch is what holds)."""
+    global _installed
+    _installed = False
     IncludeNode.render = _ORIGINAL  # type: ignore[method-assign]
 
 

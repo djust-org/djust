@@ -23,6 +23,7 @@ engine (child views, streamed fragments, pending layouts, component fallbacks): 
 
 from __future__ import annotations
 
+import ast
 import logging
 import re
 from pathlib import Path
@@ -952,6 +953,52 @@ def test_the_embedded_child_reproducer_from_the_issue():
     assert P.calls == 0
 
 
+def test_install_patches_once_and_leaves_a_later_patch_alone():
+    """A wrapper put on top of the guard survives later scope entries (and still gets the guard)."""
+    from django.template.loader_tags import IncludeNode
+
+    from djust._include_guard import guarded_include_render, include_guard_scope, install
+
+    install()
+    install()  # idempotent
+    assert IncludeNode.render is guarded_include_render
+    below = IncludeNode.render
+    seen: list[int] = []
+
+    def wrapper(self: Any, context: Any) -> Any:
+        seen.append(1)
+        return below(self, context)
+
+    IncludeNode.render = wrapper  # type: ignore[method-assign]
+    obj = _payload("alters_data")()
+    with include_guard_scope():
+        out = Engine().from_string("[{% include obj %}]").render(DjangoContext({"obj": obj}))
+    assert IncludeNode.render is wrapper, (
+        "a scope entry replaced a later patch of IncludeNode.render"
+    )
+    assert seen == [1]
+    assert out == "[]"
+    assert type(obj).calls == 0
+
+
+def test_install_recognises_the_guard_under_a_functools_wrapper():
+    """After a reload the flag is fresh but the class may already carry the guard under a wrapper."""
+    import functools
+
+    from django.template.loader_tags import IncludeNode
+
+    import djust._include_guard as guard
+
+    guard.install()
+    wrapped = functools.wraps(guard.guarded_include_render)(
+        lambda self, context: guard.guarded_include_render(self, context)
+    )
+    IncludeNode.render = wrapped  # type: ignore[method-assign]
+    guard._installed = False  # a fresh copy of the module
+    guard.install()
+    assert IncludeNode.render is wrapped, "install() put a second guard under a wrapped one"
+
+
 def test_a_render_outside_the_scope_is_stock_django():
     """Installing the patch (a child was rendered) changes nothing for a render no view makes."""
     from djust._include_guard import install
@@ -1227,6 +1274,25 @@ def bridged_inclusion_tag_site(source: str, ctx: dict) -> str:
         return liveview_render("{% load probe3880 %}{% inclusion_3880 %}", ctx)
 
 
+def gallery_site(source: str, ctx: dict) -> str:
+    """The component gallery renders a snippet with the gallery LiveView's mixin state."""
+    from djust.components.gallery.views import _render_component_cards
+
+    html = _render_component_cards(
+        [
+            {
+                "name": "Probe",
+                "label": "Probe",
+                "type": "tag",
+                "variants": [{"name": "v", "template": source, "context": ctx}],
+            }
+        ]
+    )
+    match = re.search(r'<div class="variant-preview">(.*?)</div>', html, re.S)
+    assert match is not None, html
+    return match.group(1)
+
+
 EXTRA_SITES = [
     pytest.param(streaming_inline_site, id="stream-fragment-inline"),
     pytest.param(streaming_named_site, id="stream-fragment-named"),
@@ -1238,6 +1304,7 @@ EXTRA_SITES = [
     pytest.param(live_component_extends_site, id="live-component-extends"),
     pytest.param(bound_component_extends_site, id="bound-component-extends"),
     pytest.param(bridged_inclusion_tag_site, id="bridged-inclusion-tag"),
+    pytest.param(gallery_site, id="component-gallery"),
 ]
 
 
@@ -1259,56 +1326,207 @@ def test_other_view_and_component_renders_still_render_an_unflagged_render(site,
     assert type(obj).calls >= 1
 
 
-# --- the net: a new Django-engine render site must be guarded or say why it is not ----------
-#: Files (or directory prefixes) under ``python/djust`` that render through Django's engine and are
-#: deliberately NOT inside ``include_guard_scope``, each with the reason. A template in one of
-#: these is shipped by the framework or rendered for a non-view caller; no view or component
-#: state reaches a ``{% include %}`` in it.
+# --- the net: a new Django-engine render must be inside the scope, or say why not -------------
+#: Sites under ``python/djust`` that render through Django's engine and are deliberately NOT inside
+#: ``include_guard_scope``, each with its reason. A key is ``"dir/"`` (everything under it),
+#: ``"file.py"`` (everything in it) or ``"file.py::Qualified.function"``. A template in one of these
+#: is shipped by the framework or rendered for a non-view caller; no view or component state
+#: reaches an ``{% include %}`` in it.
 _UNGUARDED_ENGINE_RENDERS = {
     "admin_ext/plugins.py": "an admin dashboard widget: Django-admin Python builds the context, no LiveView",
     "bug_capture_views.py": "a framework-owned replay page rendered with framework data",
     "management/commands/generate_sw.py": "a build-time management command writing a file",
     "template_tags/pwa.py": "the PWA tags render fixed framework source with string operands only",
     "theming/": "framework-owned theme templates, rendered from theme tokens and tag arguments",
+    "mixins/request.py::RequestMixin._get_turn_body": (
+        "`wrapper_template` receives only `liveview_content`, an already-rendered string"
+    ),
 }
 
+#: A call that LOADS a Django template; its result's ``.render`` is a render.
+_LOADERS = {"from_string", "get_template", "select_template"}
+_ENGINE_CTORS = {"Template"}
 
-def test_every_django_engine_render_site_is_guarded_or_says_why_not():
-    """A net for the commonest shapes of a Django-engine render, not a proof of coverage.
 
-    A file under ``python/djust`` that renders through ``render_to_string(...)``,
-    ``Template(...).render(...)``, ``get_template(...).render(...)`` or ``tmpl.render(...)`` must
-    enter ``include_guard_scope`` or be listed above with its reason. A new site then fails here
-    until someone decides, instead of shipping unguarded (the shape #3880 closed).
+def _call_name(call: ast.Call) -> str | None:
+    func = call.func
+    if isinstance(func, ast.Name):
+        return func.id
+    if isinstance(func, ast.Attribute):
+        return func.attr
+    return None
+
+
+def _is_loader_call(node: ast.AST) -> bool:
+    return isinstance(node, ast.Call) and _call_name(node) in (_LOADERS | _ENGINE_CTORS)
+
+
+def _unguarded_engine_renders(source: str) -> list[tuple[str, int]]:
+    """``(qualified function, line)`` of each Django-engine render in ``source`` outside the scope.
+
+    A render is: a reference to ``render_to_string`` (called, or handed to ``sync_to_async``); a
+    ``.render`` taken off a template loader's result (``get_template(..).render``,
+    ``Template(..).render``) or off a name the same function bound to one (``t = get_template(..)``
+    then ``t.render(c)``). "Inside the scope" is lexical: the node sits in the body of a ``with``
+    whose items call ``include_guard_scope``.
     """
-    pattern = re.compile(
-        r"render_to_string\(|\bTemplate\([^()]*\)\.render\(|\.from_string\([^()]*\)\.render\(|"
-        r"get_template\([^()]*\)\.render\(|\btmpl\.render\(|\btemplate\.render\("
-    )
+    tree = ast.parse(source)
+    parents: dict[ast.AST, ast.AST] = {}
+    for parent in ast.walk(tree):
+        for child in ast.iter_child_nodes(parent):
+            parents[child] = parent
+
+    def function_of(node: ast.AST) -> ast.AST | None:
+        while node in parents:
+            node = parents[node]
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                return node
+        return None
+
+    def qualname(node: ast.AST) -> str:
+        names = []
+        while node in parents:
+            node = parents[node]
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                names.append(node.name)
+        return ".".join(reversed(names)) or "<module>"
+
+    # names a function (or the module) bound to a loaded template
+    template_names: dict[ast.AST | None, set[str]] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and any(_is_loader_call(n) for n in ast.walk(node.value)):
+            owner = function_of(node)
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    template_names.setdefault(owner, set()).add(target.id)
+
+    def in_scope(node: ast.AST) -> bool:
+        child = node
+        while child in parents:
+            parent = parents[child]
+            if isinstance(parent, (ast.With, ast.AsyncWith)) and child in parent.body:
+                for item in parent.items:
+                    expr = item.context_expr
+                    if isinstance(expr, ast.Call) and _call_name(expr) == "include_guard_scope":
+                        return True
+            child = parent
+        return False
+
+    found: list[tuple[str, int]] = []
+    for node in ast.walk(tree):
+        site = False
+        if isinstance(node, ast.Name) and node.id == "render_to_string":
+            site = isinstance(node.ctx, ast.Load)
+        elif isinstance(node, ast.Attribute) and node.attr == "render":
+            receiver = node.value
+            if _is_loader_call(receiver):
+                site = True
+            elif isinstance(receiver, ast.Name):
+                owner = function_of(node)
+                site = receiver.id in template_names.get(owner, set()) or (
+                    owner is not None and receiver.id in template_names.get(None, set())
+                )
+        if site and not in_scope(node):
+            found.append((qualname(node), node.lineno))
+    return found
+
+
+def _exempt(rel: str, qual: str) -> bool:
+    for key in _UNGUARDED_ENGINE_RENDERS:
+        if key.endswith("/") and rel.startswith(key):
+            return True
+        if key == rel or key == f"{rel}::{qual}":
+            return True
+    return False
+
+
+def test_every_django_engine_render_is_inside_the_scope_or_says_why_not():
+    """Per site, not per file: a new unguarded render fails here even in a file that guards others.
+
+    Walks the AST of every module under ``python/djust`` (tests excluded) for the shapes of a
+    Django-engine render (see :func:`_unguarded_engine_renders`). A shape it cannot see -- a render
+    reached through a helper that takes the template as an argument -- is not covered; that is the
+    limit of a static net, and the behavioural matrix above is what proves each guarded site.
+    """
     root = Path(__file__).resolve().parents[1] / "djust"
     undecided = []
-    seen_guarded = 0
+    guarded_files = 0
     for path in sorted(root.rglob("*.py")):
         rel = path.relative_to(root).as_posix()
         if "/tests/" in "/" + rel or path.name.startswith("test_") or rel == "_include_guard.py":
             continue
         text = path.read_text()
-        if not pattern.search(text):
-            continue
         if "include_guard_scope" in text:
-            seen_guarded += 1
-            continue
-        if any(
-            rel == key or (key.endswith("/") and rel.startswith(key))
-            for key in _UNGUARDED_ENGINE_RENDERS
-        ):
-            continue
-        undecided.append(rel)
+            guarded_files += 1
+        for qual, line in _unguarded_engine_renders(text):
+            if not _exempt(rel, qual):
+                undecided.append(f"{rel}::{qual} (line {line})")
     assert not undecided, (
-        "renders through Django's engine without include_guard_scope (#3880): "
-        f"{undecided} -- wrap the render, or list the file in _UNGUARDED_ENGINE_RENDERS with a reason"
+        "renders through Django's engine outside include_guard_scope (#3880): "
+        f"{undecided} -- wrap the render, or list it in _UNGUARDED_ENGINE_RENDERS with a reason"
     )
-    assert seen_guarded, "the scan matched nothing: the pattern or the root is wrong"
-    # An exemption that no longer names a file is stale.
-    stale = [k for k in _UNGUARDED_ENGINE_RENDERS if not (root / k).exists()]
+    assert guarded_files >= 8, "the scan found almost no guarded file: the root is wrong"
+    stale = [k for k in _UNGUARDED_ENGINE_RENDERS if not (root / k.split("::")[0]).exists()]
     assert not stale, stale
+
+
+@pytest.mark.parametrize(
+    "source,expected",
+    [
+        pytest.param(
+            "from django.template.loader import render_to_string\n"
+            "def a(c):\n    with include_guard_scope():\n        return render_to_string('x', c)\n"
+            "def b(c):\n    return render_to_string('y', c)\n",
+            [("b", 6)],
+            id="a-new-function-in-a-file-that-already-guards",
+        ),
+        pytest.param(
+            "# include_guard_scope\ndef a(c):\n    return render_to_string('x', c)\n",
+            [("a", 3)],
+            id="the-word-in-a-comment-guards-nothing",
+        ),
+        pytest.param(
+            "def a(c):\n    t = get_template('x')\n    return t.render(c)\n",
+            [("a", 3)],
+            id="a-name-bound-to-a-loaded-template",
+        ),
+        pytest.param(
+            "def a(c):\n    loaded = engine.from_string('x')\n    return loaded.render(c)\n",
+            [("a", 3)],
+            id="any-variable-name-bound-to-from_string",
+        ),
+        pytest.param(
+            "def a(c):\n    return Template('x').render(c)\n",
+            [("a", 2)],
+            id="a-template-constructor-render",
+        ),
+        pytest.param(
+            "async def a(c):\n    return await sync_to_async(render_to_string)('x', c)\n",
+            [("a", 2)],
+            id="render_to_string-handed-to-a-thread",
+        ),
+        pytest.param(
+            "def a(c):\n    t = get_template('x')\n    with include_guard_scope():\n        return t.render(c)\n",
+            [],
+            id="a-guarded-loaded-template",
+        ),
+        pytest.param(
+            "def a(c):\n    with other():\n        return render_to_string('x', c)\n",
+            [("a", 3)],
+            id="a-with-block-that-is-not-the-scope",
+        ),
+        pytest.param(
+            "def a(c):\n    with include_guard_scope():\n        pass\n    return render_to_string('x', c)\n",
+            [("a", 4)],
+            id="after-the-scope-block-ends",
+        ),
+        pytest.param(
+            "def a(node, c):\n    return node.render(c)\n",
+            [],
+            id="a-node-render-is-not-an-engine-render",
+        ),
+    ],
+)
+def test_the_census_goes_red_for_a_synthetic_unguarded_site(source, expected):
+    """The net can fail: each synthetic site is one a new contributor could add."""
+    assert _unguarded_engine_renders(source) == expected

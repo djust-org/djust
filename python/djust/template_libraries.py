@@ -1573,8 +1573,9 @@ def _render_node(
     # floor, as `{{ }}` is; see `template_bridge_floor`.
     # #3880: a node Django renders may render a TEMPLATE (an inclusion tag's) through Django's
     # engine; its `{% include obj %}` is held to the template-call guard like every other one.
-    with floor_scope(ctx), include_guard_scope():
-        output = node.render(ctx)
+    with include_guard_scope():
+        with floor_scope(ctx):
+            output = node.render(ctx)
     after = ctx.dicts[-1]
     bindings = {
         key: value for key, value in after.items() if key not in before or before[key] is not value
