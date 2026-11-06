@@ -12,7 +12,7 @@
     "lint:fix": "eslint python/djust/static/djust/ --fix"
   },
   "devDependencies": {
-    "@vitest/coverage-istanbul": "^5.0.5",
+    "@vitest/coverage-istanbul": "^5.1.0",
     "@vitest/istanbul-lib-coverage": "^2.0.0",
     "@vitest/istanbul-lib-instrument": "^2.0.0",
     "@vitest/istanbul-lib-source-maps": "^2.0.0",
