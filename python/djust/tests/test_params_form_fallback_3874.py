@@ -92,6 +92,63 @@ class FlagParams(forms.Form):
     page = forms.IntegerField(min_value=1, required=False, initial=1)
 
 
+class SpanParams(forms.Form):
+    """The review's case: ``hi`` is replaced by ``3``, a pair with ``lo`` that ``clean()`` never saw."""
+
+    lo = forms.IntegerField(required=False, initial=0)
+    hi = forms.IntegerField(required=False, initial=3)
+
+    def clean(self):
+        cleaned = super().clean()
+        lo, hi = cleaned.get("lo"), cleaned.get("hi")
+        if lo is not None and hi is not None and lo > hi:
+            self.add_error("hi", "hi must be >= lo")
+        return cleaned
+
+
+class SpanRaisesParams(SpanParams):
+    """The same rule, raised instead of attributed: it only fires when both fields are present."""
+
+    def clean(self):
+        cleaned = forms.Form.clean(self)
+        lo, hi = cleaned.get("lo"), cleaned.get("hi")
+        if lo is not None and hi is not None and lo > hi:
+            raise forms.ValidationError("empty span")
+        return cleaned
+
+
+class PostCleanParams(RangeParams):
+    """A form-level error that does NOT come from ``clean()`` (a ModelForm's ``_post_clean`` does this).
+
+    ``clean()`` accepts the merged values, so only the form-level error of the first bind can say
+    the combination was refused.
+    """
+
+    def clean(self):
+        return forms.Form.clean(self)
+
+    def _post_clean(self):
+        super()._post_clean()
+        lo, hi = self.cleaned_data.get("lo"), self.cleaned_data.get("hi")
+        if lo is not None and hi is not None and lo > hi:
+            self.add_error(None, "The range is empty.")
+
+
+class CrashesOnNoneParams(forms.Form):
+    """``clean()`` survives a missing ``hi`` (default 0) but not the ``None`` an initial can be."""
+
+    lo = forms.IntegerField(required=False, initial=0)
+    hi = forms.IntegerField(required=False)  # no initial: replaced by None
+
+    def clean(self):
+        cleaned = super().clean()
+        if (cleaned.get("lo") or 0) < 0:
+            (
+                cleaned.get("hi", 0) + 1
+            )  # fine for a missing hi, TypeError for the None an initial can be
+        return cleaned
+
+
 class NoteParams(forms.Form):
     """A field with NO initial value: ``None`` when replaced, never the empty string."""
 
@@ -152,6 +209,26 @@ class BoolFields(_Base):
     params_form_fallback = "fields"
 
 
+class SpanFields(_Base):
+    params_form = SpanParams
+    params_form_fallback = "fields"
+
+
+class SpanRaisesFields(_Base):
+    params_form = SpanRaisesParams
+    params_form_fallback = "fields"
+
+
+class PostCleanFields(_Base):
+    params_form = PostCleanParams
+    params_form_fallback = "fields"
+
+
+class CrashFields(_Base):
+    params_form = CrashesOnNoneParams
+    params_form_fallback = "fields"
+
+
 class NoteFields(_Base):
     params_form = NoteParams
     params_form_fallback = "fields"
@@ -197,6 +274,10 @@ _VIEWS = (
     AttributedFields,
     BoolFields,
     NoteFields,
+    SpanFields,
+    SpanRaisesFields,
+    CrashFields,
+    PostCleanFields,
     AsyncFields,
     SuperFields,
     BadMode,
@@ -289,6 +370,28 @@ CASES = [
     # A checkbox the URL left out takes its initial value; one it supplied is kept.
     ("BoolFields", {"page": "abc"}, {"flag": True, "page": 1}, {"page"}),
     ("BoolFields", {"page": "abc", "flag": "false"}, {"flag": False, "page": 1}, {"page"}),
+    # The merged result is re-checked by clean(): a kept `lo=9` next to the replaced `hi`'s initial
+    # `3` is a pair clean() never saw and rejects, so nothing is kept (the review's reproducer).
+    ("SpanFields", {"lo": "9", "hi": "2"}, {"lo": 0, "hi": 3}, {"hi"}),
+    ("SpanRaisesFields", {"lo": "9", "hi": "zzz"}, {"lo": 0, "hi": 3}, {"hi"}),
+    # ... and when the merged pair satisfies the rule, the kept sibling stays.
+    ("SpanFields", {"lo": "2", "hi": "zzz"}, {"lo": 2, "hi": 3}, {"hi"}),
+    ("SpanRaisesFields", {"lo": "1", "hi": "zzz"}, {"lo": 1, "hi": 3}, {"hi"}),
+    # A form-level error raised OUTSIDE clean() (a ModelForm's _post_clean) is invisible to the
+    # re-check, so the first bind's form-level error alone must keep nothing.
+    (
+        "PostCleanFields",
+        {"lo": "5", "hi": "2", "page": "4"},
+        {"lo": 0, "hi": 10, "page": 1},
+        {"__all__"},
+    ),
+    # A clean() that cannot take the None an initial can be falls back to the initials, not a 500.
+    ("CrashFields", {"lo": "-1", "hi": "zzz"}, {"lo": 0, "hi": None}, {"hi"}),
+    # A kept field the URL left out and whose form declares NO initial is the value the valid path
+    # hands over ("" for a CharField), in the fallback as on a valid URL.
+    ("NoteFields", {"page": "abc"}, {"page": 1, "note": ""}, {"page"}),
+    ("NoteFields", {"page": "2"}, {"page": 2, "note": ""}, set()),
+    ("NoteFields", {"page": "abc", "note": "hi"}, {"page": 1, "note": "hi"}, {"page"}),
     # An async handle_params and a super() override see the same kept values.
     ("AsyncFields", {"page": "abc", "sort": "name", "q": "hello"}, KEPT, {"page"}),
     ("SuperFields", {"page": "abc", "sort": "name", "q": "hello"}, KEPT, {"page"}),
@@ -663,6 +766,45 @@ class TestTheDeclaration:
             assert "params_form_fallback" not in state
             assert "visible" in state
 
+    def test_an_override_that_never_calls_super_never_uses_the_mode_but_a_bad_one_is_refused(self):
+        """The docs say "never uses", not "never reads": the eager check runs before the hook."""
+        from djust._params_form import run_handle_params_sync
+
+        class Overrides(LiveView):
+            template = "<div dj-root></div>"
+            params_form = FilterParams
+            params_form_fallback = "fields"
+
+            def handle_params(self, params, uri):
+                CALLS.append((dict(params), uri, {}))
+
+            def handle_invalid_params(self, form, uri):
+                INVALID_CALLS.append((form, uri))
+
+        run_handle_params_sync(Overrides(), {"page": "abc", "sort": "name"}, "/")
+        assert CALLS == []  # the override took over: no mode applied
+
+        class BadOverrides(Overrides):
+            params_form_fallback = "oops"
+
+        with pytest.raises(ImproperlyConfigured, match="params_form_fallback"):
+            run_handle_params_sync(BadOverrides(), {"page": "abc"}, "/")
+
+    def test_a_mixin_listed_after_liveview_is_shadowed_by_the_default(self):
+        """Documented: LiveView defines the name, so the mixin has to come first."""
+
+        class Mixin:
+            params_form_fallback = "fields"
+
+        class After(LiveView, Mixin):
+            pass
+
+        class Before(Mixin, LiveView):
+            pass
+
+        assert After.params_form_fallback == "initial"
+        assert Before.params_form_fallback == "fields"
+
     def test_an_instance_attribute_does_not_change_the_declaration(self):
         """Read from the class, like ``params_form``: ``self.params_form_fallback = ...`` is inert."""
         from djust._params_form import declared_fallback
@@ -679,6 +821,7 @@ class TestTheDeclaration:
 
         (entry,) = [a for a in CLASS_ATTRIBUTES if a["name"] == "params_form_fallback"]
         assert entry["default"] == "'initial'"
+        assert entry["type"] == "str"
         stub = (Path(djust.__file__).parent / "live_view.pyi").read_text()
         assert 'params_form_fallback: str = "initial"' in stub
 
@@ -780,6 +923,134 @@ class TestFallbackValues:
         assert values is None
         assert "derived" not in fallback_values(form, "fields")
 
+    @pytest.mark.parametrize(
+        "params, expected",
+        [
+            ({"lo": "9", "hi": "2"}, {"lo": 0, "hi": 3}),  # the recheck rejects
+            ({"lo": "2", "hi": "zzz"}, {"lo": 2, "hi": 3}),  # the recheck accepts
+        ],
+    )
+    def test_the_form_the_caller_holds_is_not_touched_by_the_recheck(self, params, expected):
+        """``clean()`` runs on a copy: the form's errors and cleaned_data stay what the bind made."""
+        from djust._params_form import fallback_values
+
+        form, values, _ = self._bound(SpanFields.params_form, params)
+        errors = {name: list(messages) for name, messages in form.errors.items()}
+        cleaned = dict(form.cleaned_data)
+        assert fallback_values(form, "fields") == expected
+        assert {name: list(messages) for name, messages in form.errors.items()} == errors
+        assert form.cleaned_data == cleaned
+
+    def test_the_default_hook_hands_the_view_to_the_failure_log(self, monkeypatch):
+        """A failing clean() is logged for the view's exposure policy (ADR-038), not for nobody."""
+        import djust._exposure_diagnostics as diagnostics
+        from djust._params_form import bind_params
+
+        owners = []
+        monkeypatch.setattr(
+            diagnostics, "log_failure_for", lambda log, who, exc, *a, **k: owners.append(who)
+        )
+
+        class Crashing(CrashFields):
+            def handle_params(self, params, uri):
+                CALLS.append((dict(params), uri, {}))
+
+        view = Crashing()
+        form, values = bind_params(view, CrashesOnNoneParams, {"lo": "-1", "hi": "zzz"})
+        assert values is None
+        view.handle_invalid_params(form, "/")
+        assert owners == [(view,)]
+        assert CALLS[-1][0] == {"lo": 0, "hi": None}
+
+    def test_params_errors_is_the_same_whether_or_not_the_recheck_rejects(self):
+        for params in ({"lo": "9", "hi": "2"}, {"lo": "2", "hi": "zzz"}):
+            _, _, view = self._bound(SpanParams, params)
+            assert set(view.params_errors) == {"hi"}
+
+    def test_a_clean_that_fails_on_the_merged_values_is_logged_without_the_exception_text(
+        self, caplog
+    ):
+        import logging
+
+        from djust._params_form import fallback_values
+
+        form, _, _ = self._bound(CrashesOnNoneParams, {"lo": "-1", "hi": "zzz"})
+        with caplog.at_level(logging.WARNING, logger="djust._params_form"):
+            assert fallback_values(form, "fields", DefaultView()) == {"lo": 0, "hi": None}
+        assert any("clean() failed on the kept fields" in r.getMessage() for r in caplog.records)
+
+    def test_a_form_with_nothing_kept_does_not_run_clean_again(self):
+        from djust._params_form import fallback_values
+
+        calls = []
+
+        class Counts(SpanParams):
+            def clean(self):
+                calls.append(1)
+                return super().clean()
+
+        form, _, _ = self._bound(Counts, {"lo": "x", "hi": "y"})
+        before = len(calls)
+        assert fallback_values(form, "fields") == {"lo": 0, "hi": 3}
+        assert len(calls) == before
+
+    def test_clean_runs_once_more_and_only_on_the_failing_path_in_fields_mode(self):
+        from djust._params_form import fallback_values
+
+        calls = []
+
+        class Counts(SpanParams):
+            def clean(self):
+                calls.append(1)
+                return super().clean()
+
+        form, _, _ = self._bound(Counts, {"lo": "2", "hi": "zzz"})
+        assert len(calls) == 1
+        fallback_values(form, "initial")
+        assert len(calls) == 1
+        fallback_values(form, "fields")
+        assert len(calls) == 2
+
+    def test_a_callable_initial_is_evaluated_only_where_it_is_needed_and_at_most_once(self):
+        from djust._params_form import fallback_values
+
+        counts = {"supplied": 0, "omitted": 0, "replaced": 0}
+
+        def counted(name):
+            def initial():
+                counts[name] += 1
+                return 5
+
+            return initial
+
+        class Lazy(forms.Form):
+            supplied = forms.IntegerField(required=False, initial=counted("supplied"))
+            omitted = forms.IntegerField(required=False, initial=counted("omitted"))
+            replaced = forms.IntegerField(required=False, initial=counted("replaced"))
+
+        form, values, _ = self._bound(Lazy, {"supplied": "1", "replaced": "zzz"})
+        assert values is None
+        assert fallback_values(form, "fields") == {"supplied": 1, "omitted": 5, "replaced": 5}
+        assert counts == {"supplied": 0, "omitted": 1, "replaced": 1}
+
+    def test_a_callable_initial_is_evaluated_once_even_when_the_recheck_rejects(self):
+        """The fall back to the plain initials reuses the value already evaluated for the merge."""
+        from djust._params_form import fallback_values
+
+        calls = {"hi": 0}
+
+        def hi_initial():
+            calls["hi"] += 1
+            return 3
+
+        class Counted(SpanParams):
+            hi = forms.IntegerField(required=False, initial=hi_initial)
+
+        form, values, _ = self._bound(Counted, {"lo": "9", "hi": "2"})
+        assert values is None
+        assert fallback_values(form, "fields") == {"lo": 0, "hi": 3}
+        assert calls["hi"] == 1
+
     def test_the_valid_path_is_unchanged(self):
         form, values, view = self._bound(DeletesParams, {"page": "2", "sort": "name"})
         assert values == {"page": 2, "sort": "name", "q": ""}
@@ -853,6 +1124,9 @@ class TestV023Fallback:
         assert message.level == 40
         assert "must be one of 'initial', 'fields'" in message.msg
         assert "ImproperlyConfigured" in message.hint
+        assert message.fix_hint == "Fix the `params_form_fallback` declaration of `%s`." % (
+            view.__qualname__
+        )
 
     def test_the_message_names_what_was_declared(self):
         (message,) = _fallback_messages(CheckBad)

@@ -24,18 +24,22 @@ exactly as before.
 
 from __future__ import annotations
 
+import copy
 import inspect
+import logging
 from collections.abc import Mapping
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from asgiref.sync import sync_to_async
 from django import forms
-from django.core.exceptions import ImproperlyConfigured
+from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.http import QueryDict
 
 from . import _form_data_bounds
 from ._view_hooks import call_hook, call_hook_sync
 from .sync_turn import guarded_step, run_guarded_step
+
+logger = logging.getLogger(__name__)
 
 #: The key Django uses for errors that belong to no field (``NON_FIELD_ERRORS``).
 NON_FIELD_ERRORS_KEY = "__all__"
@@ -199,19 +203,26 @@ def _url_supplied(form: forms.BaseForm, name: str, field: forms.Field) -> bool:
     return key not in form.data or any(text != "" for text in form.data.getlist(key))
 
 
-def _fill_unsupplied(form: forms.BaseForm, values: Dict[str, Any], names: List[str]) -> None:
+def _fill_unsupplied(
+    form: forms.BaseForm,
+    values: Dict[str, Any],
+    names: List[str],
+    initial_of: Callable[[str], Any],
+) -> None:
     """Set each of ``names`` the URL left out or empty to its ``initial``, in ``values``.
 
     "Left out" is read from what the URL supplied, not from what the field cleaned
     to: a ``BooleanField`` cleans an absent key to ``False``, which Django does not
     count as empty, so judging by the cleaned value alone would leave
     ``initial=True`` unapplied exactly where a URL has no way to say "unchecked".
+    ``initial_of(name)`` is asked only for a field that needs it, so a callable
+    ``initial`` is not evaluated for a field the URL supplied.
     """
     for name in names:
         field = form.fields[name]
         if _url_supplied(form, name, field) and values.get(name) not in field.empty_values:
             continue
-        initial = form.get_initial_for_field(field, name)
+        initial = initial_of(name)
         if initial is not None:
             values[name] = initial
 
@@ -219,11 +230,50 @@ def _fill_unsupplied(form: forms.BaseForm, values: Dict[str, Any], names: List[s
 def _cleaned_values(form: forms.BaseForm) -> Dict[str, Any]:
     """The cleaned data, with each field the URL left out or empty set to its ``initial``."""
     values: Dict[str, Any] = dict(form.cleaned_data)
-    _fill_unsupplied(form, values, list(form.fields))
+    _fill_unsupplied(
+        form,
+        values,
+        list(form.fields),
+        lambda name: form.get_initial_for_field(form.fields[name], name),
+    )
     return values
 
 
-def fallback_values(form: forms.BaseForm, mode: str) -> Dict[str, Any]:
+def _clean_accepts(view: Any, form: forms.BaseForm, values: Dict[str, Any]) -> bool:
+    """Whether ``form.clean()`` accepts ``values`` as the cleaned data of every field.
+
+    Runs the form's own ``clean()`` on a copy whose ``cleaned_data`` is ``values``
+    and whose errors start empty, so the form the caller holds (its ``errors``,
+    its ``cleaned_data``) is not touched. Accepted means ``clean()`` neither
+    raised ``ValidationError`` nor reported an error with ``add_error()``. A
+    ``clean()`` that fails any other way on this combination (a comparison with
+    the ``None`` an initial value can be) is not accepted either: it ran on data
+    the form never produced, and the answer is the plain initial values, not a
+    500.
+    """
+    probe = copy.copy(form)
+    probe.cleaned_data = dict(values)
+    probe._errors = type(form.errors)()
+    try:
+        probe.clean()
+    except ValidationError:
+        return False
+    except Exception as exc:  # noqa: BLE001 — application code runs inside clean()
+        from ._exposure_diagnostics import log_failure_for
+
+        log_failure_for(
+            logger,
+            (view,),
+            exc,
+            "params_form clean() failed on the kept fields; using the initial values: %s",
+            exc,
+            level="warning",
+        )
+        return False
+    return not probe._errors
+
+
+def fallback_values(form: forms.BaseForm, mode: str, view: Any = None) -> Dict[str, Any]:
     """What the default ``handle_invalid_params`` hands ``handle_params`` for an invalid ``form``.
 
     ``"initial"``: the initial value of every declared field.
@@ -238,22 +288,47 @@ def fallback_values(form: forms.BaseForm, mode: str) -> Dict[str, Any]:
     deleted counts as not valid. The request's raw value of a field that failed
     never reaches ``handle_params``.
 
-    Two cases keep nothing. A form-level error (``NON_FIELD_ERRORS``) says the
+    The result is always a combination the form accepts or the plain initial
+    values. A kept field is now paired with the initial value of a replaced one,
+    a pair ``clean()`` never saw (``lo=9`` kept, ``hi=2`` replaced by ``3``), so
+    the form's ``clean()`` runs once more on exactly that combination
+    (:func:`_clean_accepts`); if it objects, nothing is kept. Only ``clean()``
+    runs again: the fields were validated one by one the first time, and a
+    replaced field's own validity is not asked (a required field with no initial
+    value is replaced by ``None``).
+
+    Three cases keep nothing. A form-level error (``NON_FIELD_ERRORS``) says the
     *combination* is wrong, so the siblings that validated one by one would hand
-    ``handle_params`` the very combination the form refused; and a form that was
+    ``handle_params`` the very combination the form refused; a form that was
     never validated (the data exceeded its bounds, :func:`bind_params`) has no
-    ``cleaned_data`` at all. Both fall back to the initial values.
+    ``cleaned_data`` at all; and a combination ``clean()`` rejects (above). All
+    fall back to the initial values.
+
+    A callable ``initial`` is evaluated at most once, and only for the fields
+    that need it: never for a field the URL supplied and that was kept.
     """
-    initial = initial_values(form)
     if mode != FALLBACK_FIELDS:
-        return initial
+        return initial_values(form)
+    evaluated: Dict[str, Any] = {}
+
+    def initial_of(name: str) -> Any:
+        if name not in evaluated:
+            evaluated[name] = form.get_initial_for_field(form.fields[name], name)
+        return evaluated[name]
+
+    def all_initial() -> Dict[str, Any]:
+        return {name: initial_of(name) for name in form.fields}
+
     cleaned = getattr(form, "cleaned_data", None)
     if cleaned is None or form.non_field_errors():
-        return initial
+        return all_initial()
     kept = [name for name in form.fields if name not in form.errors and name in cleaned]
+    if not kept:
+        return all_initial()
     values: Dict[str, Any] = {name: cleaned[name] for name in kept}
-    _fill_unsupplied(form, values, kept)
-    return {name: values[name] if name in values else initial[name] for name in form.fields}
+    _fill_unsupplied(form, values, kept, initial_of)
+    merged = {name: values[name] if name in values else initial_of(name) for name in form.fields}
+    return merged if _clean_accepts(view, form, merged) else all_initial()
 
 
 def _error_messages(form: forms.BaseForm) -> Dict[str, List[str]]:

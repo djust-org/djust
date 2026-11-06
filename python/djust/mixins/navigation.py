@@ -205,7 +205,9 @@ class NavigationMixin:
         ``form.errors`` take their initial value, so ``?page=abc&sort=name``
         keeps ``sort``. A form-level error (``clean()`` raising without naming a
         field) still falls back to the initial values, because the fields that
-        passed one by one are the combination the form refused. Override it to
+        passed one by one are the combination the form refused, and so does a
+        merged result the form's ``clean()`` rejects when run once more on it
+        (a kept field paired with a replaced field's initial value). Override it to
         refuse the URL instead::
 
             def handle_invalid_params(self, form, uri):
@@ -223,4 +225,6 @@ class NavigationMixin:
 
         # Run to completion here, so an override that calls ``super()`` without
         # ``return`` (or an ``async def handle_params``) cannot drop the call.
-        call_hook_sync(self.handle_params, fallback_values(form, declared_fallback(self)), uri)
+        call_hook_sync(
+            self.handle_params, fallback_values(form, declared_fallback(self), self), uri
+        )

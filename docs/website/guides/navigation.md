@@ -199,7 +199,17 @@ Now `?page=abc&sort=name` hands `handle_params()` `page=1` (its initial value) a
 - A form-level error keeps nothing. If `clean()` raises a plain `ValidationError` (the
   `"__all__"` entry of `params_errors`), the fields that passed one by one are the
   combination the form refused, so all of them take their initial values. A `clean()` that
-  names the field (`self.add_error("hi", ...)`) is a field error, and the siblings are kept.
+  names the field (`self.add_error("hi", ...)`) is a field error, and the siblings are kept
+  **if the combination still passes `clean()`**: a kept field is now paired with the initial
+  value of a replaced one, a pair `clean()` never saw (`?lo=9&hi=2` keeps `lo=9` next to
+  `hi`'s initial `3`, which breaks `lo <= hi`). So `clean()` runs once more on exactly the
+  merged values, on a copy of the form, and if it raises `ValidationError`, reports an error
+  with `add_error()` or fails any other way (it compared with the `None` an initial can be),
+  nothing is kept and the view gets the plain initial values. **The result is always a
+  combination `clean()` accepts, or the plain initials.** This is one extra call of
+  `clean()` and only on this path; the fields' own validators are not run again, and a
+  replaced field's own validity is not asked (a required field with no initial is `None`).
+  Make `clean()` tolerate a missing or `None` field, as it must for the first pass.
 - A URL past the form-data bounds (`max_form_fields` and the others) is bound to nothing
   and reports its reason under `"__all__"`; nothing of it was validated, so nothing is kept.
 - `params_errors` is the same in either mode: one entry per failed field, so the template
@@ -207,7 +217,12 @@ Now `?page=abc&sort=name` hands `handle_params()` `page=1` (its initial value) a
 - It is read from the class, on every request of a view that declares `params_form`. A value
   other than `"initial"` or `"fields"` raises `ImproperlyConfigured` (V023 reports it first),
   so a typo cannot silently mean the default.
-- A view that overrides `handle_invalid_params()` without calling `super()` never reads it.
+- A view that overrides `handle_invalid_params()` without calling `super()` never *uses*
+  it, but a malformed value is still refused on every request (the check runs before the hook).
+- A callable `initial` is evaluated at most once and only for a field that needs it: never
+  for a field the URL supplied and that was kept.
+- Put a mixin that sets `params_form_fallback` (or `params_form`) **before** `LiveView` in the
+  bases: `LiveView` defines both names, so a mixin listed after it is shadowed by the default.
 
 **Every transport.** The same form decides on the HTTP GET, the WebSocket and SSE
 mount, `live_patch` and back/forward (`url_change`), and the HTTP fallback POST.
