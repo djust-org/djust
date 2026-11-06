@@ -703,6 +703,7 @@ def slot_text(value: Any) -> str:
                 except TypeError:
                     return ""
                 except ValueError:
+                    # no signature to bind (a builtin, say): it is the callable's own TypeError
                     pass
                 raise
     return _exact_str(value)
