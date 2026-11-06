@@ -16,7 +16,7 @@ import uuid as _uuid
 from html.parser import HTMLParser
 from typing import Any, cast
 
-from django.utils.html import conditional_escape
+from django.utils.html import conditional_escape, escape
 from django.utils.safestring import mark_safe
 
 
@@ -1117,6 +1117,39 @@ class DjRadioHandler:
 _format_cell = _format_cell_util
 _interpolate_color_simple = interpolate_color_gradient
 
+#: What the Python table loads to make a clickable row navigate: it reads ``data-href`` and does
+#: the ``location.assign`` (and the Enter / Space keys, and the nested-control guard). The path is
+#: ``table.html``'s, character for character (#3887).
+_ROW_CLICK_SCRIPT = '<script src="/static/djust_components/data-table-row-click.js" defer></script>'
+#: What makes a clickable row reachable by keyboard and announced as a control (``table.html``).
+_ROW_NAV_A11Y = 'role="button" tabindex="0" style="cursor:pointer"'
+
+
+def _row_text(row: dict[str, object], key: object) -> str:
+    """``row[key]`` as text, the way the Python tag reads it (``table_cell``, #3870).
+
+    A key the row lacks, and a key that cannot be one (a list, a dict: unhashable in Python), are
+    ``""``. A value that is not text is written with ``str()``: ``None`` is ``"None"``, a number is
+    not localised. The Python tag reads a row it is given; this one is handed the row after a JSON
+    round trip, so a non-text key is looked up as the text its row key became (``5`` is ``"5"``).
+    """
+    if isinstance(key, (list, dict, set)):
+        return ""
+    value = row.get(key if isinstance(key, str) else str(key), "")
+    return value if isinstance(value, str) else str(value)
+
+
+def _row_href(row: dict[str, object], key: object) -> str:
+    """``row[key]`` as a URL for ``href`` / ``data-href``: escaped, and a dangerous scheme is ``#``.
+
+    The Python tag's ``table_href`` (``url_attr`` over ``table_cell``): the one URL rule every
+    component uses, so a row's URL reaches the attribute through the same allowlist (#3887).
+    """
+    # ``honor_safe=False``: a marked-safe value (or one with ``__html__``) is checked and escaped
+    # like any other. The engine hands a handler text, so this never differed in the engine; a
+    # handler called directly with a ``SafeString`` row value must not depend on that (#3894).
+    return str(url_attr(_row_text(row, key), honor_safe=False))
+
 
 class DataTableHandler:
     def render(self, args: list[str], context: dict[str, object]) -> str:
@@ -1161,6 +1194,12 @@ class DataTableHandler:
         _rce = kw.get("row_click_event", "")
         row_click_event = conditional_escape(_rce) if _rce else ""
         row_click_value_key = str(kw.get("row_click_value_key", "id"))
+        # ``row_url`` names the row key that holds the row's URL (``data-href``, which the script
+        # below navigates to). A row click wins over it, as in the Python template's ``elif``, and
+        # a falsy ``row_url`` is not the key "None": decided on the value (#3887).
+        _ru = kw.get("row_url", "")
+        row_url = _ru if _ru else ""
+        row_nav_script = _ROW_CLICK_SCRIPT if (row_click_event or row_url) else ""
         # Backward-compatible pager (``total_pages > 1`` without ``paginate``), as the Python
         # template draws it (#3669).
         prev_event = conditional_escape(kw.get("prev_event", "on_table_prev"))
@@ -1485,6 +1524,7 @@ class DataTableHandler:
                 f'<div class="data-table-loading skeleton-table">'
                 f"{skeleton_rows}"
                 f"</div>"
+                f"{row_nav_script}"
                 f"</div>"
             )
 
@@ -1772,7 +1812,12 @@ class DataTableHandler:
                 row_attrs += (
                     f' dj-click="{row_click_event}"'
                     f' data-value="{conditional_escape(str(row.get(row_click_value_key, "")))}"'
+                    f" {_ROW_NAV_A11Y}"
                 )
+            elif row_url:
+                # The row's URL (#3887). ``data-href`` is read by ``data-table-row-click.js``.
+                row_classes.append("data-table-row-clickable")
+                row_attrs += f' data-href="{_row_href(row, row_url)}" {_ROW_NAV_A11Y}'
 
             cells = ""
             # Drag handle cell
@@ -1942,6 +1987,15 @@ class DataTableHandler:
                         f'<span class="cell-renderer cell-renderer-{cell_tpl_esc}"'
                         f' data-value="{cell_val}">{cell_val}</span>'
                     )
+
+                # Link column (#3887, #1110): ``col.link`` names the row key holding the href,
+                # ``col.link_class`` is an optional class on the ``<a>``. Decided on the value:
+                # a falsy ``link`` is plain text, as ``{% if col.link %}`` in the Python template.
+                link_key = col.get("link") if isinstance(col, dict) else None
+                if link_key:
+                    link_class = col.get("link_class") if isinstance(col, dict) else None
+                    link_cls_attr = f' class="{escape(str(link_class))}"' if link_class else ""
+                    cell_val = f'<a href="{_row_href(row, link_key)}"{link_cls_attr}>{cell_val}</a>'
 
                 # Apply conditional formatting to cell content
                 if cf_html and "data-table-cf-data-bar" in " ".join(td_classes):
@@ -2292,6 +2346,7 @@ class DataTableHandler:
             f"{scroll_close}"
             f"{pagination_html}"
             f"{triggers_html}"
+            f"{row_nav_script}"
             f"</div>"
         )
 
