@@ -14,6 +14,7 @@ what it must not. Each test was gate-offed against a mutation that reintroduces 
 from __future__ import annotations
 
 import copy
+import datetime
 import enum
 import pickle
 import uuid
@@ -347,6 +348,187 @@ class TestWhatMustNotBeReachable:
 
         with pytest.raises(AttributeError):
             _proxy(NsClassKey()).by_class
+
+
+# -- review round 4: safe text, the engine bridge walker, and a Python-defined tzinfo ---------------
+
+
+class TestSafeMarkupIsNotTheRawSafeString:
+    def test_safe_markup_is_not_the_raw_safestring(self, scratch_models) -> None:  # noqa: F811
+        class NsSafeKind(models.Model):
+            class Meta:
+                app_label = "auth"
+
+            @property
+            def html(self):
+                return mark_safe("<b>x</b>")
+
+        got = _proxy(NsSafeKind()).html
+        from djust.serialization import _Opaque
+
+        assert got.__class__ is _Opaque, got.__class__
+        assert type(got).__name__ == "_FloorSafeText"
+
+    def test_safe_markup_refuses_underscore_names(self, scratch_models) -> None:  # noqa: F811
+        class NsSafeNames(models.Model):
+            class Meta:
+                app_label = "auth"
+
+            @property
+            def html(self):
+                return mark_safe("<b>x</b>")
+
+        got = _proxy(NsSafeNames()).html
+        for name in ("__dict__", "__reduce__", "__init_subclass__", "__getstate__", "_x"):
+            with pytest.raises(AttributeError):
+                getattr(got, name)
+
+
+class TestTheBridgeWalkerAsksTheModuleForTheShape:
+    """The Django-engine bridge (``template_bridge_floor``) gives Django ``inspect.signature(current)``;
+    a call wrapper has no signature to show, so the walker asks ``floored_call_signature``."""
+
+    def test_a_walked_method_that_needs_arguments_does_not_bind(self) -> None:
+        import inspect
+
+        from djust.serialization import _FlooredCall
+        from djust.template_bridge_floor import wrap
+
+        user = User(username="x")
+        needs = wrap(_FlooredCall(user.check_password))
+        with pytest.raises(TypeError):
+            inspect.signature(needs).bind()
+        inspect.signature(needs).bind("raw")
+        takes_none = wrap(_FlooredCall(user.get_full_name))
+        inspect.signature(takes_none).bind()
+
+    def test_a_plain_callable_keeps_its_own_signature(self) -> None:
+        import inspect
+
+        from djust.serialization import floored_call_signature
+        from djust.template_bridge_floor import wrap
+
+        def two(a, b):
+            return a
+
+        assert floored_call_signature(two) is None
+        with pytest.raises(TypeError):
+            inspect.signature(wrap(two)).bind()
+
+
+class PyTz(datetime.tzinfo):
+    """A DST-aware, Python-defined tzinfo: the shape a pytz or dateutil zone has."""
+
+    zone = "Europe/Test"
+
+    def utcoffset(self, d):
+        return datetime.timedelta(hours=2 if d and 4 <= d.month <= 9 else 1)
+
+    def dst(self, d):
+        return datetime.timedelta(hours=1 if d and 4 <= d.month <= 9 else 0)
+
+    def tzname(self, d):
+        return "CEST" if d and 4 <= d.month <= 9 else "CET"
+
+
+class TestAPythonTzinfoIsNotReturnedRaw:
+    def _row(self, when, at):
+        class NsTz(models.Model):
+            when = models.DateTimeField(null=True)
+            at = models.TimeField(null=True)
+
+            class Meta:
+                app_label = "auth"
+
+        return NsTz(pk=1, when=when, at=at)
+
+    def test_R4_1_a_python_tzinfo_is_not_returned_raw(self, scratch_models) -> None:  # noqa: F811
+        row = self._row(
+            datetime.datetime(2020, 7, 1, 12, 30, tzinfo=PyTz()),
+            datetime.time(8, 5, tzinfo=PyTz()),
+        )
+        p = _proxy(row)
+        for value in (p.when, p.at):
+            tz = value.tzinfo
+            assert not hasattr(getattr(tz, "utcoffset", None), "__globals__")
+            assert tz.__class__.__name__ == "_Opaque"
+            for name in ("__dict__", "_s", "__reduce__", "__init_subclass__"):
+                with pytest.raises(AttributeError):
+                    getattr(tz, name)
+            _no_python_function(tz.__class__)
+
+    def test_the_datetime_still_answers_what_the_original_did(self, scratch_models) -> None:  # noqa: F811
+        for month in (1, 7):
+            original = datetime.datetime(2020, month, 1, 12, 30, tzinfo=PyTz())
+            got = _proxy(self._row(original, None)).when
+            assert got == original and got.utcoffset() == original.utcoffset()
+            assert got.dst() == original.dst() and got.tzname() == original.tzname()
+            assert got.astimezone(datetime.timezone.utc) == original.astimezone(
+                datetime.timezone.utc
+            )
+            assert str(got.tzinfo) == str(original.tzinfo)
+            assert got.tzinfo.zone == "Europe/Test"
+        t = datetime.time(8, 5, tzinfo=PyTz())
+        got_time = _proxy(self._row(None, t)).at
+        assert got_time.utcoffset() == t.utcoffset() and got_time.tzname() == t.tzname()
+
+    def test_c_tzinfo_types_and_naive_values_pass_through_untouched(self, scratch_models) -> None:  # noqa: F811
+        import zoneinfo
+
+        for value in (
+            datetime.datetime(2020, 7, 1, 12, 30),
+            datetime.datetime(2020, 7, 1, 12, 30, tzinfo=datetime.timezone.utc),
+            datetime.datetime(2020, 7, 1, 12, 30, tzinfo=zoneinfo.ZoneInfo("Europe/Paris")),
+        ):
+            assert _proxy(self._row(value, None)).when is value
+        t = datetime.time(8, 5, tzinfo=datetime.timezone.utc)
+        assert _proxy(self._row(None, t)).at is t
+
+    def test_a_wrapped_tzinfo_is_wrapped_once(self) -> None:
+        from djust.serialization import _floored_result
+
+        first = _floored_result(datetime.datetime(2020, 7, 1, tzinfo=PyTz()))
+        assert _floored_result(first) is first
+
+    def test_rendering_is_django_s_for_the_common_filters(self, scratch_models) -> None:  # noqa: F811
+        import html
+        import zoneinfo
+
+        from django.template.backends.django import DjangoTemplates
+
+        from djust.template import DjustTemplateBackend
+
+        src = (
+            "{% load tz %}{% for r in rows|slice:':1' %}"
+            "{{ r.when|date:'c' }}|{{ r.when|date:'Y-m-d H:i T e I Z' }}|{{ r.when|time:'H:i' }}|"
+            "{{ r.when|timesince:now }}|{{ r.when|timeuntil:now }}|{{ r.when }}|"
+            "{{ r.at|time:'H:i T' }}|{{ r.when.tzinfo }}|{{ r.when.utcoffset }}|{{ r.when.tzname }}|"
+            "{{ r.when.dst }}|{{ r.when|localtime }}|{{ r.when|utc }}|{{ r.when|timezone:'Asia/Tokyo' }}"
+            "{% endfor %}"
+        )
+        now = datetime.datetime(2030, 1, 1, tzinfo=datetime.timezone.utc)
+        zones = {
+            "naive": None,
+            "timezone": datetime.timezone(datetime.timedelta(hours=3)),
+            "zoneinfo": zoneinfo.ZoneInfo("Europe/Paris"),
+            "python": PyTz(),
+        }
+        django_engine = DjangoTemplates(
+            {"NAME": "d", "DIRS": [], "APP_DIRS": False, "OPTIONS": {"libraries": {}}}
+        )
+        djust_engine = DjustTemplateBackend(
+            params={"NAME": "djust", "DIRS": [], "APP_DIRS": False, "OPTIONS": {}}
+        )
+        for label, tz in zones.items():
+            for month in (1, 7):
+                row = self._row(
+                    datetime.datetime(2020, month, 1, 12, 30, tzinfo=tz),
+                    datetime.time(8, 5, tzinfo=tz),
+                )
+                ctx = {"rows": [row], "now": now}
+                want = html.unescape(django_engine.from_string(src).render(dict(ctx)))
+                got = html.unescape(str(djust_engine.from_string(src).render(context=dict(ctx))))
+                assert got == want, (label, month)
 
 
 @pytest.fixture

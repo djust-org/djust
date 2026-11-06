@@ -12,7 +12,7 @@ import json
 import logging
 import re
 import threading
-from datetime import datetime, date, time, timedelta
+from datetime import datetime, date, time, timedelta, timezone as _dt_timezone, tzinfo as _dt_tzinfo
 from decimal import Decimal, InvalidOperation
 from typing import Any, Callable, Dict, FrozenSet, List, Optional, Union, cast
 from types import ModuleType as _ModuleType
@@ -1638,9 +1638,23 @@ def _protect_sidecar_value(value: Any) -> Any:
 #                       and the ORM-call flag, and its result goes back through this function)
 #   any other instance  only as `_FlooredObject` (a file field, an enum member, a presenter...)
 #   a class, a module, a descriptor ... not at all (the read is refused)
-_PLAIN_TYPES = frozenset(
-    {str, int, float, bool, type(None), Decimal, bytes, datetime, date, time, timedelta}
-)
+_PLAIN_TYPES = frozenset({str, int, float, bool, type(None), Decimal, bytes, date, timedelta})
+
+
+def _c_tzinfo_types() -> frozenset:
+    """The tzinfo classes that are implemented in C (no Python function behind a method):
+    ``datetime.timezone`` and, when the C accelerator is present, ``zoneinfo.ZoneInfo``."""
+    found = {_dt_timezone}
+    try:
+        from zoneinfo import ZoneInfo
+    except ImportError:  # pragma: no cover - zoneinfo is in the standard library since 3.9
+        return frozenset(found)
+    if not hasattr(ZoneInfo.utcoffset, "__globals__"):
+        found.add(ZoneInfo)
+    return frozenset(found)
+
+
+_C_TZINFO_TYPES = _c_tzinfo_types()
 
 
 class _Opaque:
@@ -1675,6 +1689,13 @@ def _floored_result(value: Any) -> Any:
     kind = type(value)
     if kind in _PLAIN_TYPES:
         return value
+    if kind is datetime or kind is time:
+        tz = value.tzinfo
+        if tz is None or type(tz) in _C_TZINFO_TYPES or type(tz) is _FloorTz:
+            return value
+        # a Python-defined tzinfo (pytz, dateutil...) has methods whose function carries its module's
+        # namespace: the same datetime, with a tzinfo that answers the same questions and shows none
+        return value.replace(tzinfo=_FloorTz(tz))
     if kind is UUID:
         # a UUID is a Python-defined class (its methods reach the ``uuid`` namespace); its text is
         # what a template renders
@@ -1872,6 +1893,37 @@ class _Hook:
 
 
 _HK_GET, _HK_SET = _slot_accessors(_Hook, "_s")
+
+
+class _FloorTz(_dt_tzinfo):
+    """A Python-defined ``tzinfo`` as a reader may hold it. ``datetime`` calls ``utcoffset`` /
+    ``dst`` / ``tzname`` on it and gets the original zone's answers; every public name a reader asks
+    for is the original's, floored (a method is a call wrapper); underscore names are refused and
+    ``__class__`` is :class:`_Opaque`, so no function (and no module namespace) is reachable."""
+
+    __slots__ = ("_s",)
+
+    def __init__(self, tz: Any) -> None:
+        _FT_SET(self, tz)
+
+    def __getattribute__(self, name: str) -> Any:
+        if name[:1] == "_":
+            if name == "__class__":
+                return _Opaque
+            raise AttributeError(name)
+        return _floored_result(getattr(_FT_GET(self), name))
+
+    def __str__(self) -> str:
+        return str(_FT_GET(self))
+
+    def __repr__(self) -> str:
+        return repr(_FT_GET(self))
+
+    def __reduce_ex__(self, protocol: Any) -> Any:
+        raise TypeError("a floor tzinfo cannot be pickled or copied")
+
+
+_FT_GET, _FT_SET = _slot_accessors(_FloorTz, "_s")
 
 
 def _safe_text_html(text: Any) -> Any:  # noqa: dead-method-allowed (handed to _Hook by reference)
