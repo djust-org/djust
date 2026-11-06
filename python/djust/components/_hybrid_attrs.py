@@ -10,7 +10,7 @@ marked as (:func:`djust.components.utils.attr_text`), and a URL is checked again
 allowlist (:func:`djust.components.utils.data_url_attr`). A template written ``{{ x }}`` does
 neither: autoescape leaves a value alone when its text form is marked safe, and there is no
 scheme check at all. This module is the one place the hybrid path is made to follow the rule. It
-reads the TEMPLATE (not a list of classes or keys) once per template string (cached).
+reads the TEMPLATE (not a list of classes or keys) once per template string (a bounded LRU).
 
 What is a slot
     A ``{{ ... }}`` in the VALUE of an attribute of a start tag, found with the HTML tokenizer's
@@ -23,30 +23,51 @@ What happens to a slot
     * Every slot gets ``|force_escape`` as its last filter (``|escape`` becomes
       ``|force_escape``). Unlike autoescape it escapes whatever the value is, however the value
       yields its text (a marked-safe string, a lazy one, an object whose text form is marked
-      safe, a callable the engine calls), and it holds under ``{% autoescape off %}``. It also
-      means a number in an attribute prints in its canonical form (``33.5``), not localized
-      (``33,5``), for a plain name, a dotted path and a filtered expression alike.
+      safe, a callable the engine calls), and it holds under ``{% autoescape off %}``.
+      It also means that in an attribute a number prints in its canonical form (``33.5``, not a
+      localized ``33,5``) and a date in its ISO form (``2026-01-02``), for a plain name, a dotted
+      path and a filtered expression alike. A value whose ``str()`` raises raises in a URL slot
+      (as the engine does); in a plain slot the Rust engine's ``force_escape`` prints the
+      escaped default repr where Django's raises, which is the crate's filter and not changed here.
     * A slot in a URL attribute (``href``, ``src``, ``action`` ... ; ``srcset`` is a list) whose
       value can choose the scheme is judged with the allowlist the other paths use, on the WHOLE
       value as it will be assembled (literal text and every slot), never on one slot alone. Where
       that is and is not done:
 
-      - the slot is first in the value, or only characters that could be part of a scheme
-        (letters, digits, ``+ - .``) precede it: judged, as one value with whatever follows it
-        and with every other slot of the value (``href="{{ u }}"``, ``href="{{ s }}:x"``,
-        ``href="{{ a }}{{ b }}"``);
-      - a literal character that cannot be part of a scheme comes first (``href="/search?q={{ q }}"``,
-        ``href="/u/{{ name }}"``, ``href="http://{{ host }}/"``): the literal already fixed the
-        scheme, so nothing in the slot can change it: escaped, not judged;
+      - the value is followed in EVERY way it can come out: a literal inside ``{% if %}`` /
+        ``{% for %}`` may be skipped, so each branch is a path of its own (a loop runs 0, 1 or
+        2 times; at most 64 paths) and only a literal outside every block is always there. A path
+        is judged unless a literal already fixes it. A path that is refused loses its slots (the
+        first becomes ``#``, the rest nothing), so a slot is judged as if a block that adds a
+        literal before it were skipped: in the branch where it is taken a good ``foo:bar`` is
+        replaced as well (it fails closed);
+      - a path is fixed when the literal text, read the way a browser reads it (character
+        references decoded, tab / newline / carriage return dropped, leading whitespace
+        dropped), reaches a character that cannot be part of a scheme before any slot
+        (``href="/search?q={{ q }}"``, ``href="http://{{ host }}/"``): nothing in the slot can
+        change it, so it is escaped, not judged. ``{% url %}`` and ``{% static %}`` print a path
+        from the project's configuration and count as such a literal when outside every block;
+        comments and ``... as var`` tags print nothing and are skipped;
+      - a path whose slot is first, or after only scheme characters (``href="{{ s }}:x"``,
+        ``href="java{{ b }}"``, ``href="&#106;ava{{ s }}"``), is judged as one value with the
+        text after it and with the other slots;
       - ``srcset``: judged candidate by candidate, but only when the slot is the whole value.
         With literal text or several slots it is escaped, not judged.
-      - NOT judged, only escaped, and listed in :attr:`Plan.unchecked_urls` (a warning is logged
-        once per template): a value that can choose the scheme and has a slot that is not a plain
-        top-level name (a dotted path, a filtered expression, a ``{% for %}`` / ``{% with %}``
-        variable, so ``{% for l in links %}<a href="{{ l.url }}">``) or a tag that prints text
-        (``{% url %}``). Those values are not in the context to be judged.
+      - NOT judged, only escaped, and listed in :attr:`Plan.unchecked_urls`: a value that can
+        choose the scheme and has a slot that is not a plain top-level name (a dotted path, a
+        filtered expression, a ``{% for %}`` / ``{% with %}`` variable, so
+        ``{% for l in links %}<a href="{{ l.url }}">``), a tag that prints text this module does
+        not know (``{% trans %}``, ``{% now %}``), more than 64 paths, or an attribute NAME built
+        by tags or a ``{{ }}`` (``<a {% if x %}href{% else %}title{% endif %}="{{ u }}">``: it
+        may be a URL attribute). Those values are not in the context to be judged.
     * An unquoted value (``title={{ x }}``) cannot be made safe by HTML escaping (a space ends
-      it); it is escaped and listed in :attr:`Plan.unquoted`, with the same warning.
+      it); it is escaped and listed in :attr:`Plan.unquoted`.
+
+The warning
+    :func:`harden_context` logs, once per component class and set of attributes, the tag and
+    attribute NAMES of the two lists above and the class name, never the template's text (a
+    template built per instance may carry runtime values). The plan cache is a bounded LRU and
+    the set of warnings given is bounded too.
 
 Text slots (``<span>{{ text }}</span>``) are untouched.
 """
@@ -54,6 +75,8 @@ Text slots (``<span>{{ text }}</span>``) are untouched.
 from __future__ import annotations
 
 import functools
+import html
+import inspect
 import logging
 import re
 from typing import Any, NamedTuple
@@ -78,14 +101,18 @@ _RAW_TEXT = frozenset({"script", "style", "textarea", "title"})
 _LITERALS = frozenset({"True", "False", "None"})
 #: Characters a URL scheme is made of (RFC 3986: ALPHA *( ALPHA / DIGIT / "+" / "-" / "." )).
 _SCHEME_CHARS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+-.")
-#: Block tags that print nothing themselves: between the parts of a value they change nothing.
-_SILENT_TAGS = frozenset(
-    {
-        "if", "elif", "else", "endif", "for", "empty", "endfor", "with", "endwith", "load",
-        "comment", "endcomment", "spaceless", "endspaceless", "autoescape", "endautoescape",
-        "block", "endblock", "ifchanged", "endifchanged", "verbatim", "endverbatim",
-    }
-)  # fmt: skip
+#: Tags that open a branch inside a block.
+_BRANCH = frozenset({"else", "elif", "empty"})
+#: Block tags whose content may be skipped (``{% for %}``: run 0, 1 or 2 times, handled apart).
+_CONDITIONAL = frozenset({"if", "ifchanged", "ifequal", "ifnotequal"})
+#: Tags that print a path from the project's own configuration (URLconf, ``STATIC_URL``).
+_PATH_TAGS = frozenset({"url", "static"})
+#: The most ways one URL value may come out before it is treated as one this cannot follow.
+_MAX_PATHS = 64
+#: Characters a browser drops from a URL before it reads the scheme.
+_DROP_WS = {ord("\t"): None, ord("\n"): None, ord("\r"): None}
+#: A tag that assigns its output to a variable instead of printing it (``{% url "x" as u %}``).
+_AS_VAR = re.compile(r"\sas\s+\w+\s*-?%\}$")
 
 _TOKEN = re.compile(r"\{\{.*?\}\}|\{%.*?%\}|\{#.*?#\}", re.S)
 _TAG_OPEN = re.compile(r"<([A-Za-z][^\s/>]*)")
@@ -282,6 +309,8 @@ class _Scanner:
             if s in ("before_name", "after_name"):
                 self.name = ""
             self.dynamic = True
+        elif s == "name":  # a tag inside a name (``{% if x %}href{% else %}title{% endif %}=``)
+            self.dynamic = True
 
 
 def values(template: str) -> list[Value]:
@@ -355,9 +384,11 @@ class Group(NamedTuple):
     attr: str
     #: ``"url"`` | ``"image"`` (``<img src>``: ``data:image/...`` allowed) | ``"srcset"``
     kind: str
-    #: ``("lit", text)`` / ``("slot", key)`` / ``("gap", "")`` (a tag that prints nothing)
-    parts: tuple[tuple[str, str], ...]
-    #: ``(synthetic context key, context name)`` of each slot, in order
+    #: EVERY way the value can come out: each ``{% if %}`` branch taken or skipped, a loop run
+    #: 0, 1 or 2 times. A path is a tuple of ``("lit", text)`` (normalised the way a browser
+    #: reads it) and ``("slot", synthetic key)``.
+    paths: tuple[tuple[tuple[str, str], ...], ...]
+    #: ``(synthetic context key, context name)`` of each slot, in template order
     slots: tuple[tuple[str, str], ...]
 
 
@@ -380,19 +411,161 @@ def _kind(value: Value) -> str:
     return "text"
 
 
-def _can_choose_scheme(parts: tuple[Part, ...]) -> bool:
-    """Whether something that is not literal text can end up where the scheme is.
+# -- the shape of a value ---------------------------------------------------------------------
+
+
+class _Unknown(Exception):
+    """The value has a part this module cannot follow (see ``_paths``)."""
+
+
+def _normal(text: str) -> str:
+    """A literal as a browser reads it before it looks for a scheme: character references
+    decoded, tab / newline / carriage return dropped."""
+    return html.unescape(text).translate(_DROP_WS)
+
+
+def _token_name(part: Part) -> str:
+    """The tag name of a ``{% %}`` part, ``"#"`` for a ``{# #}`` comment."""
+    return "#" if part.text.startswith("{#") else _tag_name(part.text)
+
+
+def _is_silent(part: Part, name: str) -> bool:
+    """A tag that prints nothing and changes no branch: a comment, ``{% load %}``, an assignment
+    (``{% url "x" as u %}``, ``{% static "x" as s %}``)."""
+    return name in ("#", "load", "comment", "endcomment") or bool(_AS_VAR.search(part.text))
+
+
+def _openers(parts: tuple[Part, ...]) -> frozenset[str]:
+    """The block tags of this value: every ``X`` for which an ``endX`` tag is in it."""
+    names = {_token_name(p) for p in parts if p.kind == "tag"}
+    return frozenset(n[3:] for n in names if n.startswith("end") and n[3:])
+
+
+def _fixed(path: tuple[tuple[str, str], ...]) -> bool:
+    """Whether a literal at the start of ``path`` already fixes the value, before any slot.
 
     Browsers drop leading whitespace and control characters; a scheme starts with a letter and
     goes on with letters, digits and ``+ - .`` up to the ``:``. The first literal character
     that is not part of that (``/``, ``?``, ``:``, a digit first ...) fixes the value as a
-    relative URL or as the scheme the literal itself spells, whatever follows. So a slot is
-    judged only if everything before it, in the value, could still be the start of a scheme.
+    relative URL or as the scheme the literal itself spells, whatever follows. A slot reached
+    while everything before it could still be the start of a scheme can choose the scheme.
     """
     started = False
+    for kind, text in path:
+        if kind != "lit":
+            return False
+        for ch in text:
+            if not started:
+                if ch <= " ":
+                    continue
+                if not (ch.isascii() and ch.isalpha()):
+                    return True
+                started = True
+            elif ch not in _SCHEME_CHARS:
+                return True
+    return True
+
+
+def _paths(
+    parts: tuple[Part, ...], bound: frozenset[str]
+) -> tuple[list[tuple[tuple[str, str], ...]], list[tuple[str, str]]]:
+    """Every way the value can come out, and its slots (``(key, name)``, template order).
+
+    Only a literal at the value's top level, outside every block, is always there; one inside
+    ``{% if %}`` / ``{% for %}`` may be skipped, so each branch is a path of its own. A path
+    set is capped; a value this cannot follow (a printing tag it does not know, a slot that is
+    not a plain top-level name, an unbalanced block) raises :class:`_Unknown`.
+    """
+    openers = _openers(parts)
+    slots_: list[tuple[str, str]] = []
+
+    def cap(paths: list) -> list:
+        if len(paths) > _MAX_PATHS:
+            raise _Unknown
+        return paths
+
+    def block(i: int) -> tuple[list, int, str]:
+        paths: list[tuple[tuple[str, str], ...]] = [()]
+        while i < len(parts):
+            part = parts[i]
+            if part.kind == "lit":
+                paths = [p + (("lit", _normal(part.text)),) for p in paths]
+            elif part.kind == "var":
+                name = part.text[2:-2].strip()
+                if (
+                    not _NAME.fullmatch(name)
+                    or name in bound
+                    or name in _LITERALS
+                    or name.startswith("_")
+                ):
+                    raise _Unknown
+                key = f"djust_attr_{part.start}"
+                if (key, name) not in slots_:
+                    slots_.append((key, name))
+                paths = [p + (("slot", key),) for p in paths]
+            else:
+                name = _token_name(part)
+                if name in _BRANCH or (name.startswith("end") and name[3:] in openers):
+                    return paths, i, name
+                if name in openers:
+                    alternatives, i = branches(i, name)
+                    paths = cap([p + alt for p in paths for alt in alternatives])
+                    continue
+                if _is_silent(part, name):
+                    pass
+                elif name in _PATH_TAGS:
+                    # a path from the project's own URL configuration or STATIC_URL: it fixes
+                    # the value (a relative URL, or the scheme the project chose)
+                    paths = [p + (("lit", "/"),) for p in paths]
+                else:
+                    raise _Unknown
+            i += 1
+        return paths, i, ""
+
+    def branches(i: int, name: str) -> tuple[list, int]:
+        body, i, term = block(i + 1)
+        bodies = [body]
+        has_else = False
+        while term in _BRANCH:
+            has_else = has_else or term in ("else", "empty")
+            nxt, i, term = block(i + 1)
+            bodies.append(nxt)
+        if term != "end" + name:
+            raise _Unknown
+        if name == "for":
+            first, rest = bodies[0], bodies[1:]
+            skipped = [alt for b in rest for alt in b] or [()]
+            twice = [a + b for a in first for b in first]
+            alternatives = skipped + first + twice
+        elif name in _CONDITIONAL:
+            alternatives = [alt for b in bodies for alt in b]
+            if not has_else:
+                alternatives.append(())
+        else:  # with, spaceless, autoescape, block ...: the content is always there
+            alternatives = bodies[0]
+        return cap(alternatives), i + 1
+
+    paths, _end, term = block(0)
+    if term:
+        raise _Unknown
+    return cap(paths), slots_
+
+
+def _maybe_chooses(parts: tuple[Part, ...]) -> bool:
+    """For a value whose shape ``_paths`` cannot follow: whether it can still choose the scheme.
+
+    Conservative: a literal fixes the value only at the top level (outside every block), and a
+    slot, or a printing tag this module does not know, can choose it.
+    """
+    openers = _openers(parts)
+    depth, started = 0, False
     for part in parts:
+        if part.kind == "var":
+            return True
         if part.kind == "lit":
-            for ch in part.text:
+            if depth:
+                continue
+            for ch in _normal(part.text):
                 if not started:
                     if ch <= " ":
                         continue
@@ -401,8 +574,17 @@ def _can_choose_scheme(parts: tuple[Part, ...]) -> bool:
                     started = True
                 elif ch not in _SCHEME_CHARS:
                     return False
-        elif part.kind == "tag" and _tag_name(part.text) in _SILENT_TAGS:
             continue
+        name = _token_name(part)
+        if name in openers:
+            depth += 1
+        elif name.startswith("end") and name[3:] in openers:
+            depth -= 1
+        elif name in _BRANCH or _is_silent(part, name):
+            continue
+        elif name in _PATH_TAGS:
+            if not depth:
+                return False
         else:
             return True
     return False
@@ -410,7 +592,7 @@ def _can_choose_scheme(parts: tuple[Part, ...]) -> bool:
 
 @functools.lru_cache(maxsize=512)
 def plan(template: str) -> Plan:
-    """The rewrite of ``template`` (cached per template string)."""
+    """The rewrite of ``template`` (cached per template string, a bounded LRU)."""
     found = values(template)
     if not any(p.kind == "var" for v in found for p in v.parts):
         return Plan(template, (), (), ())
@@ -428,17 +610,21 @@ def plan(template: str) -> Plan:
             unquoted.append((value.tag, value.attr, written))
         kind = _kind(value)
         group = None
-        if kind == "srcset" or (kind != "text" and _can_choose_scheme(value.parts)):
-            group = _group(value, kind, variables, bound)
-            if group is None:
+        if kind != "text":
+            group, listed = _group(value, kind, variables, bound)
+            if listed:
                 unchecked.append((value.tag, value.attr, written))
+        elif value.dynamic and _maybe_chooses(value.parts):
+            # an attribute NAME built by tags or a {{ }}: it may be a URL attribute; the slot is
+            # escaped but cannot be judged
+            unchecked.append((value.tag, value.attr, written))
         for part in variables:
-            expr = part.text[2:-2].strip()
             key = f"djust_attr_{part.start}"
             if group is not None:
                 filt = "safe" if group.kind == "srcset" else "force_escape"
                 edits.append((part.start, part.end, "{{ " + key + "|" + filt + " }}"))
             else:
+                expr = part.text[2:-2].strip()
                 edits.append((part.start, part.end, "{{ " + _force_escaped(expr) + " }}"))
         if group is not None:
             groups.append(group)
@@ -448,46 +634,38 @@ def plan(template: str) -> Plan:
         out.append(text)
         pos = end
     out.append(template[pos:])
-    result = Plan("".join(out), tuple(groups), tuple(unchecked), tuple(unquoted))
-    if result.unchecked_urls or result.unquoted:
-        logger.warning(
-            "A Component template has attribute values djust cannot make safe: URL values "
-            "escaped but not scheme-checked %s; unquoted values %s. Quote the value and "
-            "give a URL that can choose the scheme to the template as a plain top-level name.",
-            [f"{t} {a}={w}" for t, a, w in result.unchecked_urls],
-            [f"{t} {a}={w}" for t, a, w in result.unquoted],
+    return Plan("".join(out), tuple(groups), tuple(unchecked), tuple(unquoted))
+
+
+def _group(
+    value: Value, kind: str, variables: list[Part], bound: frozenset[str]
+) -> tuple[Group | None, bool]:
+    """``(group to judge or None, whether the value is listed as escaped but not judged)``."""
+    if kind == "srcset":
+        # judged candidate by candidate, but only when the slot is the whole value
+        name = variables[0].text[2:-2].strip()
+        printed_elsewhere = any(
+            (p.kind == "lit" and p.text.strip())
+            or (p.kind == "tag" and not _is_silent(p, _token_name(p)))
+            for p in value.parts
         )
-    return result
-
-
-def _group(value: Value, kind: str, variables: list[Part], bound: frozenset[str]) -> Group | None:
-    """The group to judge for ``value``, or ``None`` if it cannot be judged (see the docstring)."""
-    pieces: list[tuple[str, str]] = []
-    keyed: list[tuple[str, str]] = []
-    for part in value.parts:
-        if part.kind == "lit":
-            pieces.append(("lit", part.text))
-        elif part.kind == "tag":
-            if _tag_name(part.text) not in _SILENT_TAGS:
-                return None
-            pieces.append(("gap", ""))
-        else:
-            name = part.text[2:-2].strip()
-            if (
-                not _NAME.fullmatch(name)
-                or name in bound
-                or name in _LITERALS
-                or name.startswith("_")
-            ):
-                return None
-            key = f"djust_attr_{part.start}"
-            keyed.append((key, name))
-            pieces.append(("slot", key))
-    if kind == "srcset" and (
-        len(variables) != 1 or any(k == "lit" and t.strip() for k, t in pieces)
-    ):
-        return None
-    return Group(value.attr, kind, tuple(pieces), tuple(keyed))
+        simple = (
+            _NAME.fullmatch(name)
+            and name not in bound
+            and name not in _LITERALS
+            and not name.startswith("_")
+        )
+        if len(variables) != 1 or printed_elsewhere or not simple:
+            return None, True
+        key = f"djust_attr_{variables[0].start}"
+        return Group(value.attr, kind, ((("slot", key),),), ((key, name),)), False
+    try:
+        paths, slots_ = _paths(value.parts, bound)
+    except _Unknown:
+        return None, _maybe_chooses(value.parts)
+    if all(_fixed(p) for p in paths):
+        return None, False
+    return Group(value.attr, kind, tuple(paths), tuple(slots_)), False
 
 
 _MISSING = object()
@@ -518,40 +696,101 @@ def slot_text(value: Any) -> str:
             try:
                 value = value()
             except TypeError:
-                # The callable cannot be called without arguments: it is left as it is, and
-                # whatever text it has is what _exact_str gives (and the attribute escapes).
-                pass
+                # Django's rule: a TypeError because the callable NEEDS arguments prints nothing
+                # (``string_if_invalid``); any other TypeError is the callable's own and goes on.
+                try:
+                    inspect.signature(value).bind()
+                except TypeError:
+                    return ""
+                except ValueError:
+                    pass
+                raise
     return _exact_str(value)
 
 
-def _allowed(group: Group, assembled: str) -> bool:
+def _allowed(attr: str, kind: str, assembled: str) -> bool:
     from djust.components.utils import _NOOP_HREFS, url_allowed
 
-    if group.attr == "href" and assembled.strip().lower() in _NOOP_HREFS:
+    if attr == "href" and assembled.strip().lower() in _NOOP_HREFS:
         return True
-    return url_allowed(assembled, image=group.kind == "image")
+    return url_allowed(assembled, image=kind == "image")
 
 
-def harden_context(template: str, context: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+def _refused(group: Group, path: tuple[tuple[str, str], ...], texts: dict[str, str]) -> bool:
+    if _fixed(path):
+        return False
+    assembled = "".join(v if k == "lit" else texts[v] for k, v in path)
+    return not _allowed(group.attr, group.kind, assembled)
+
+
+#: Warnings already given, by (class, attributes): bounded, and never carrying template text.
+_WARNED: set[tuple[str, tuple[tuple[str, str], ...]]] = set()
+_MAX_WARNED = 512
+_PLAIN_NAME = re.compile(r"[A-Za-z][A-Za-z0-9:_.-]{0,40}")
+
+
+def _warn_once(owner: str, rewrite: Plan) -> None:
+    """Name, once per class and set of attributes, the values that are escaped but not judged.
+
+    Only the class name and the tag / attribute NAMES are logged, and only when they are plain
+    names: the template's own text is never logged (a template built per instance may carry
+    runtime values in its attributes).
+    """
+    if not (rewrite.unchecked_urls or rewrite.unquoted):
+        return
+
+    def named(items: tuple[tuple[str, str, str], ...]) -> tuple[tuple[str, str], ...]:
+        return tuple(
+            (t if _PLAIN_NAME.fullmatch(t) else "?", a if _PLAIN_NAME.fullmatch(a) else "?")
+            for t, a, _w in items
+        )
+
+    unchecked, unquoted = named(rewrite.unchecked_urls), named(rewrite.unquoted)
+    key = (owner, unchecked + unquoted)
+    if key in _WARNED or len(_WARNED) >= _MAX_WARNED:
+        return
+    _WARNED.add(key)
+    logger.warning(
+        "%s: hybrid template attribute values djust cannot make safe: URL values escaped but not "
+        "scheme-checked %s; unquoted values %s. Quote the value, and give a URL that can choose "
+        "the scheme to the template as a plain top-level name.",
+        owner,
+        [f"{t}[{a}]" for t, a in unchecked],
+        [f"{t}[{a}]" for t, a in unquoted],
+    )
+
+
+def harden_context(
+    template: str, context: dict[str, Any], owner: str = ""
+) -> tuple[str, dict[str, Any]]:
     """``(template, context)`` to hand the engine: the attribute slots of ``template`` rewritten
-    and the values of the URL groups judged. ``context`` itself is not modified."""
+    and the values of the URL groups judged. ``context`` itself is not modified. ``owner`` is the
+    component class name, for the warning."""
     rewrite = plan(template)
+    _warn_once(owner, rewrite)
     if not rewrite.groups:
         return rewrite.template, context
     hardened = dict(context)
     for group in rewrite.groups:
-        texts = [slot_text(context.get(name, _MISSING)) for _key, name in group.slots]
+        texts = {key: slot_text(context.get(name, _MISSING)) for key, name in group.slots}
         if group.kind == "srcset":
             from djust.components.utils import srcset_attr
 
-            texts = [srcset_attr(texts[0], honor_safe=False)]
+            (key,) = texts
+            texts[key] = srcset_attr(texts[key], honor_safe=False)
         else:
-            by_key = {key: text for (key, _name), text in zip(group.slots, texts)}
-            assembled = "".join(
-                by_key[v] if k == "slot" else (v if k == "lit" else "") for k, v in group.parts
-            )
-            if not _allowed(group, assembled):
-                texts = ["#"] + [""] * (len(texts) - 1)
-        for (key, _name), text in zip(group.slots, texts):
-            hardened[key] = text
+            # A path whose assembled value is refused loses its slots: the first becomes "#" and
+            # the rest nothing, so no value is left that completes a refused scheme. Repeat until
+            # every path is allowed (each round neutralises a slot, so it ends).
+            for _ in range(len(group.slots) + 1):
+                bad = [p for p in group.paths if _refused(group, p, texts)]
+                if not bad:
+                    break
+                for path in bad:
+                    first = True
+                    for kind, v in path:
+                        if kind == "slot":
+                            texts[v] = "#" if first else ""
+                            first = False
+        hardened.update(texts)
     return rewrite.template, hardened

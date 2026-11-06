@@ -12,7 +12,11 @@ with no URL check and only autoescape.
 * ``TestWholeValue``: where in a URL value a slot is, and what is judged for each position.
 * ``TestTheRule``: what the rewrite does and does not touch.
 * ``TestTheScanner``: where an attribute slot is.
-* ``TestWhatIsNotJudged``: the URL values that are escaped but not judged, and that they say so.
+* ``TestBlocksInAValue`` / ``TestLiteralsABrowserNormalises``: a literal that may be skipped or
+  that a browser reads differently never fixes the value.
+* ``TestNamesBuiltByTags`` / ``TestWhatIsNotJudged`` / ``TestTheWarning``: the URL values that
+  are escaped but not judged, and that they say so (class and attribute names only).
+* ``TestDivergencesFromTheEngine``: where a slot prints something other than the engine alone.
 * ``TestEveryHybridTemplate``: derived from the code, not listed: every class with a template.
 
 The sweep in ``test_marked_safe_attribute_sweep_3898.py`` drives the same path across every
@@ -583,6 +587,162 @@ class TestTheScanner:
         assert set(url_sweep.URL_ATTRS) - {"srcset"} <= set(hybrid.URL_ATTRS)
 
 
+class TestBlocksInAValue:
+    """A literal inside a block that may be skipped never fixes the value; a slot inside one is
+    judged on every way the value can come out."""
+
+    @pytest.mark.parametrize("kind", ["plain", "mark_safe", "text-form-marked-safe"])
+    @pytest.mark.parametrize("rel", [False, True])
+    def test_a_conditional_literal_is_skipped_or_taken(self, kind: str, rel: bool) -> None:
+        template = '<a href="{% if rel %}/{% endif %}{{ s }}">'
+        out = _draw(template, rel=rel, s=KINDS[kind](JS))
+        assert "javascript:" not in out, (rel, out)
+        # skipped: the value is the slot alone, refused. taken: judged as if skipped (fail closed)
+        assert out == ('<a href="/#">' if rel else '<a href="#">')
+
+    def test_a_good_value_after_a_conditional_literal_is_kept(self) -> None:
+        template = '<a href="{% if rel %}/{% endif %}{{ s }}">'
+        assert _draw(template, rel=True, s="ok") == '<a href="/ok">'
+        assert _draw(template, rel=False, s="/ok") == '<a href="/ok">'
+
+    @pytest.mark.parametrize("rel", [False, True])
+    def test_an_else_branch_literal(self, rel: bool) -> None:
+        template = '<a href="{% if rel %}http://x/{% else %}{% endif %}{{ s }}">'
+        assert "javascript:" not in _draw(template, rel=rel, s=JS)
+
+    @pytest.mark.parametrize("a", [False, True])
+    @pytest.mark.parametrize("b", [False, True])
+    def test_a_nested_block(self, a: bool, b: bool) -> None:
+        template = '<a href="{% if a %}{% if b %}/{% endif %}{% endif %}{{ s }}">'
+        assert "javascript:" not in _draw(template, a=a, b=b, s=JS)
+
+    @pytest.mark.parametrize("items", [[], [1], [1, 2, 3]])
+    def test_a_loop_body_literal(self, items: list) -> None:
+        template = '<a href="{% for i in items %}/{% endfor %}{{ s }}">'
+        assert "javascript:" not in _draw(template, items=items, s=JS)
+
+    def test_a_with_block_is_always_there(self) -> None:
+        """The content of ``{% with %}`` is not conditional, so its literal does fix the value."""
+        template = '<a href="{% with x=1 %}/{% endwith %}{{ s }}">'
+        assert _draw(template, s="a:b") == '<a href="/a:b">'
+
+    def test_a_top_level_literal_still_fixes_the_value(self) -> None:
+        template = '<a href="/x/{% if a %}y{% endif %}{{ s }}">'
+        assert hybrid.plan(template).groups == ()
+        assert _draw(template, a=False, s="a:b") == '<a href="/x/a:b">'
+
+    @pytest.mark.parametrize("a", [False, True])
+    def test_alternative_slots_are_judged_each_on_its_own(self, a: bool) -> None:
+        """Two slots that are alternatives are never joined into one value to be judged."""
+        template = '<a href="{% if a %}{{ x }}{% else %}{{ y }}{% endif %}">'
+        out = _draw(template, a=a, x="/ok", y=JS)
+        assert out == ('<a href="/ok">' if a else '<a href="#">')
+        out = _draw(template, a=a, x=JS, y="/ok")
+        assert out == ('<a href="#">' if a else '<a href="/ok">')
+
+    def test_an_elif_chain(self) -> None:
+        template = '<a href="{% if a %}{{ x }}{% elif b %}{{ y }}{% else %}{{ z }}{% endif %}">'
+        for a, b, expected in [(True, False, "/x"), (False, True, "/y"), (False, False, "/z")]:
+            assert _draw(template, a=a, b=b, x="/x", y="/y", z="/z") == f'<a href="{expected}">'
+            out = _draw(template, a=a, b=b, x="/x", y=JS, z="/z")
+            assert "javascript:" not in out
+
+    def test_a_comment_before_the_slot_is_silent(self) -> None:
+        plan = hybrid.plan('<a href="{# note #}{{ s }}">')
+        assert plan.unchecked_urls == () and len(plan.groups) == 1
+        assert _draw('<a href="{# note #}{{ s }}">', s=JS) == '<a href="#">'
+
+    def test_an_assignment_tag_before_the_slot_is_silent(self) -> None:
+        for template in (
+            '<a href="{% url "x" as u %}{{ s }}">',
+            '<a href="{% static "x" as u %}{{ s }}">',
+            '<a href="{% firstof a b as u %}{{ s }}">',
+        ):
+            plan = hybrid.plan(template)
+            assert plan.unchecked_urls == () and len(plan.groups) == 1, template
+        assert _draw('<a href="{% url "x" as u %}{{ s }}">', s=JS) == '<a href="#">'
+
+    def test_a_url_or_static_tag_first_fixes_the_value(self) -> None:
+        for template in (
+            "<a href=\"{% url 'x' %}?q={{ q }}\">",
+            "<img src=\"{% static 'a/' %}{{ name }}\">",
+        ):
+            plan = hybrid.plan(template)
+            assert plan.groups == () and plan.unchecked_urls == (), template
+
+    def test_a_url_tag_inside_a_block_does_not_fix_the_value(self) -> None:
+        plan = hybrid.plan("<a href=\"{% if a %}{% url 'x' %}{% endif %}{{ s }}\">")
+        assert len(plan.groups) == 1
+
+    def test_the_paths_are_every_way_the_value_comes_out(self) -> None:
+        (group,) = hybrid.plan('<a href="{% if a %}/{% endif %}{{ s }}">').groups
+        texts = sorted("".join(v if k == "lit" else "<s>" for k, v in p) for p in group.paths)
+        assert texts == ["/<s>", "<s>"]
+
+    def test_a_value_with_too_many_paths_is_listed_not_judged_loosely(self) -> None:
+        many = "".join("{% if a" + str(i) + " %}/{% endif %}" for i in range(8)) + "{{ s }}"
+        plan = hybrid.plan(f'<a href="{many}">')
+        assert plan.groups == ()
+        assert [t[:2] for t in plan.unchecked_urls] == [("a", "href")]
+
+
+class TestLiteralsABrowserNormalises:
+    """The browser decodes character references and drops tab / newline / carriage return in a
+    URL before it reads the scheme, so a literal is judged as the browser reads it."""
+
+    @pytest.mark.parametrize(
+        ("template", "value"),
+        [
+            ('<a href="&#106;ava{{ s }}">', "script:alert(1)"),
+            ('<a href="&#x6A;avascript{{ s }}">', ":alert(1)"),
+            ('<a href="java&Tab;script{{ s }}">', ":alert(1)"),
+            ('<a href="java&NewLine;script{{ s }}">', ":alert(1)"),
+            ('<a href="java\tscript{{ s }}">', ":alert(1)"),
+            ('<a href="java\nscript{{ s }}">', ":alert(1)"),
+            ('<a href="java\r\nscript{{ s }}">', ":alert(1)"),
+            ('<a href="&#9;&#106;ava{{ s }}">', "script:alert(1)"),
+        ],
+    )
+    @pytest.mark.parametrize("kind", ["plain", "mark_safe"])
+    def test_a_normalised_literal_does_not_fix_the_value(
+        self, template: str, value: str, kind: str
+    ) -> None:
+        plan = hybrid.plan(template)
+        assert len(plan.groups) == 1 and plan.unchecked_urls == ()
+        out = _draw(template, s=KINDS[kind](value))
+        assert "script:" not in out and "cript:" not in out, out
+
+    def test_a_literal_with_an_ampersand_after_a_fixing_character_still_fixes(self) -> None:
+        template = '<a href="/a?x=1&amp;q={{ s }}">'
+        assert hybrid.plan(template).groups == ()
+        assert _draw(template, s="a:b") == '<a href="/a?x=1&amp;q=a:b">'
+
+    def test_a_character_reference_that_is_not_a_scheme_character_fixes_it(self) -> None:
+        assert hybrid.plan('<a href="&#47;x/{{ s }}">').groups == ()
+
+
+class TestNamesBuiltByTags:
+    TEMPLATES = {
+        "if-else": '<a {% if x %}href{% else %}title{% endif %}="{{ u }}">',
+        "var": '<a {{ n }}="{{ u }}">',
+        "var-suffix": '<a data-{{ n }}="{{ u }}">',
+        "tag-suffix": '<a href{% if x %}-x{% endif %}="{{ u }}">',
+    }
+
+    @pytest.mark.parametrize("name", sorted(TEMPLATES))
+    def test_it_is_escaped_and_listed(self, name: str) -> None:
+        plan = hybrid.plan(self.TEMPLATES[name])
+        assert plan.groups == ()
+        assert [t[0] for t in plan.unchecked_urls] == ["a"], plan
+        out = _draw(self.TEMPLATES[name], x=True, n="href", u=mark_safe('a" onclick="x'))
+        assert "onclick" not in _attrs(out, "a"), out
+
+    def test_a_wrapping_tag_around_a_whole_attribute_is_not_a_name(self) -> None:
+        template = '<a {% if x %}href="{{ u }}"{% endif %}>'
+        assert len(hybrid.plan(template).groups) == 1
+        assert _draw(template, x=True, u=JS) == '<a href="#">'
+
+
 class TestWhatIsNotJudged:
     """Stated, not silent: these URL values are escaped and listed, and a warning says so once."""
 
@@ -591,7 +751,8 @@ class TestWhatIsNotJudged:
         "filtered": '<a href="{{ u|default:"/x" }}">',
         "loop": '{% for l in links %}<a href="{{ l }}">{% endfor %}',
         "with": '{% with x=u %}<a href="{{ x }}">{% endwith %}',
-        "printing-tag": '<a href="{% url "x" %}{{ u }}">',
+        "printing-tag": '<a href="{% now "Y" %}{{ u }}">',
+        "printing-tag-in-block": '<a href="{% if a %}{% trans "x" %}{% endif %}{{ u.k }}">',
     }
 
     @pytest.mark.parametrize("name", sorted(TEMPLATES))
@@ -604,27 +765,124 @@ class TestWhatIsNotJudged:
         out = _draw('<a href="{{ item.url }}">', item={"url": mark_safe('/x" onclick="y')})
         assert out == '<a href="/x&quot; onclick=&quot;y">'
 
-    def test_a_warning_names_it_once_per_template(self, caplog) -> None:
-        template = '<a href="{{ item.url }}" data-once="{{ item.url }}">'
-        with caplog.at_level(logging.WARNING, logger="djust.components._hybrid_attrs"):
-            hybrid.plan.cache_clear()
-            _draw(template, item={"url": "/x"})
-            _draw(template, item={"url": "/x"})
-        warned = [r for r in caplog.records if "not scheme-checked" in r.getMessage()]
-        assert len(warned) == 1
-        assert "item.url" in warned[0].getMessage()
+    def test_a_value_after_a_fixing_literal_is_not_listed(self) -> None:
+        for template in (
+            '<a href="/search?q={{ item.q }}">',
+            '<a href="http://{{ host|lower }}/">',
+            '{% for l in ls %}<a href="/x/{{ l }}">{% endfor %}',
+        ):
+            assert hybrid.plan(template).unchecked_urls == (), template
 
-    def test_an_unquoted_value_is_escaped_and_listed(self, caplog) -> None:
+    def test_an_unquoted_value_is_escaped_and_listed(self) -> None:
         template = "<a title={{ t }}>"
         plan = hybrid.plan(template)
         assert [t[:2] for t in plan.unquoted] == [("a", "title")]
         assert _draw(template, t=mark_safe('a" onclick="x')) == "<a title=a&quot; onclick=&quot;x>"
 
+
+class TestTheWarning:
+    """Once per class and set of attributes; the class name and the tag / attribute names only."""
+
+    LOGGER = "djust.components._hybrid_attrs"
+
+    @pytest.fixture(autouse=True)
+    def _fresh(self):
+        hybrid._WARNED.clear()
+        yield
+        hybrid._WARNED.clear()
+
+    def _component(self, template: str, name: str = "Linkish"):
+        return type(name, (Component,), {"template": template, "get_context_data": lambda s: {}})
+
+    def test_it_names_the_class_and_the_attribute_once(self, caplog) -> None:
+        cls = self._component('<a href="{{ item.url }}" title="{{ t }}">')
+        with caplog.at_level(logging.WARNING, logger=self.LOGGER):
+            cls().render()
+            cls().render()
+        (record,) = [r for r in caplog.records if "not scheme-checked" in r.getMessage()]
+        assert "Linkish" in record.getMessage() and "a[href]" in record.getMessage()
+
+    def test_it_never_carries_template_text(self, caplog) -> None:
+        cls = self._component('<a href="{{ item.RUNTIMEVALUE }}" data-x="{{ RUNTIMEVALUE }}">')
+        with caplog.at_level(logging.WARNING, logger=self.LOGGER):
+            cls().render()
+        assert caplog.records
+        assert "RUNTIMEVALUE" not in caplog.text and "item." not in caplog.text
+
+    def test_an_odd_attribute_name_is_not_logged(self, caplog) -> None:
+        cls = self._component('<a {{ n }}x"y="{{ u.k }}">')
+        with caplog.at_level(logging.WARNING, logger=self.LOGGER):
+            cls().render()
+        assert 'x"y' not in caplog.text
+
+    def test_another_class_with_the_same_template_warns_once_more(self, caplog) -> None:
+        template = '<a href="{{ item.url }}">'
+        with caplog.at_level(logging.WARNING, logger=self.LOGGER):
+            self._component(template, "One")().render()
+            self._component(template, "Two")().render()
+        assert len([r for r in caplog.records if "not scheme-checked" in r.getMessage()]) == 2
+
     def test_a_quoted_plain_template_warns_nothing(self, caplog) -> None:
-        with caplog.at_level(logging.WARNING, logger="djust.components._hybrid_attrs"):
-            hybrid.plan.cache_clear()
-            _draw('<a href="{{ u }}" title="{{ t }}">', u="/x", t="y")
+        cls = self._component('<a href="{{ u }}" title="{{ t }}">')
+        with caplog.at_level(logging.WARNING, logger=self.LOGGER):
+            cls().render()
         assert not caplog.records
+
+    def test_the_set_of_warnings_given_is_bounded(self) -> None:
+        for i in range(hybrid._MAX_WARNED + 50):
+            hybrid._warn_once(f"Cls{i}", hybrid.plan('<a href="{{ item.url }}">'))
+        assert len(hybrid._WARNED) <= hybrid._MAX_WARNED
+
+    def test_the_plan_cache_is_a_bounded_lru(self) -> None:
+        assert hybrid.plan.cache_info().maxsize == 512
+        hybrid.plan.cache_clear()
+        for i in range(700):
+            hybrid.plan(f'<a title="{{{{ t }}}}" data-n="{i}">')
+        assert hybrid.plan.cache_info().currsize <= 512
+
+
+class TestDivergencesFromTheEngine:
+    """Where a slot differs from what the engine alone prints, and why."""
+
+    def test_a_callable_that_needs_arguments_prints_nothing_in_every_slot(self) -> None:
+        def needs_args(x):
+            return "never"
+
+        assert _draw('<a href="{{ f }}" title="{{ f }}">', f=needs_args) == '<a href="" title="">'
+
+    def test_a_type_error_the_callable_raises_itself_goes_on(self) -> None:
+        def raises():
+            raise TypeError("its own")
+
+        with pytest.raises(TypeError, match="its own"):
+            _draw('<a href="{{ f }}">', f=raises)
+
+    def test_a_date_prints_in_its_iso_form_in_an_attribute(self) -> None:
+        import datetime
+
+        out = _draw(
+            '<i data-d="{{ d }}" data-t="{{ t }}">',
+            d=datetime.date(2026, 1, 2),
+            t=datetime.datetime(2026, 1, 2, 3, 4),
+        )
+        assert out == '<i data-d="2026-01-02" data-t="2026-01-02 03:04:00">'
+
+    def test_a_value_whose_str_raises_is_not_printed_raw(self) -> None:
+        """A URL slot raises, as the engine does. In a plain slot the Rust engine's
+        ``force_escape`` falls back to the escaped default repr where Django's raises: that is
+        the crate's filter, not changed here; the text is escaped either way."""
+
+        class Bad:
+            def __str__(self) -> str:
+                raise ValueError("boom")
+
+        with pytest.raises(ValueError, match="boom"):
+            _draw('<a href="{{ b }}">', b=Bad())
+        try:
+            out = _draw('<a title="{{ b }}">', b=Bad())
+        except ValueError:
+            return  # the Django fallback
+        assert "boom" not in out and "&lt;" in out
 
 
 def _component_classes() -> dict[str, type[Component]]:

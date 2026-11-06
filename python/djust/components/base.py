@@ -612,7 +612,7 @@ class Component(TemplateMutatorGuard, ABC):
             # #3900: the attribute slots of this template follow the rule the Rust instance
             # and `_render_custom()` follow (escaped whatever the value is marked as; a URL
             # checked against the scheme allowlist). See `_hybrid_attrs`.
-            template, context = harden_context(self.template, context)
+            template, context = harden_context(self.template, context, type(self).__name__)
             return cast(str, mark_safe(_render_template_with_fallback(template, context)))
 
         # 3. Fall back to custom Python rendering (flexible)
