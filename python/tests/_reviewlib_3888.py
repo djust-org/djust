@@ -29,3 +29,12 @@ def attr_of(obj, name):
 @register.filter
 def kind(value):
     return type(value).__name__
+
+
+@register.filter
+def abc_kinds(value):
+    """Which ``collections.abc`` classes the value is an instance of: what a generic filter asks."""
+    import collections.abc as abc
+
+    names = ("Mapping", "Iterable", "Sequence", "Hashable", "Sized", "Callable")
+    return ",".join(n for n in names if isinstance(value, getattr(abc, n)))

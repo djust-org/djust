@@ -55,21 +55,28 @@ def _backend(src: str, ctx: dict) -> str:
 
 
 # -- 1. the proxy keeps its model out of reach ----------------------------------------------------
+#: every underscore-prefixed name is refused for a reader that walks attributes: the wrapped instance
+#: lives in a slot the class's own ``__getattribute__`` refuses, with every dunder (the two it
+#: answers, ``__class__`` and the engine's hook, carry no instance and are tested separately)
 PRIVATE_PATHS = [
     "_obj",
     "_obj.password",
     "_denied",
     "_allowed",
     "_optout",
-    "__class__",
-    "__class__.__mro__",
+    "_s",
+    "_SidecarModelProxy__s",
     "__dict__",
+    "__wrapped__",
+    "__self__",
     "__slots__",
     "__reduce__",
     "__reduce_ex__",
     "__getstate__",
     "__init_subclass__",
     "__getattribute__",
+    "__eq__",
+    "__str__",
 ]
 ROUTES = {
     "plain": "{% for u in rows %}<R>{% endfor %}",
@@ -91,7 +98,7 @@ class TestAPythonReaderCannotReachTheWrappedObject:
         assert SECRET not in got and "pbkdf2" not in got, got
         assert "ERR:AttributeError" in got, got
 
-    @pytest.mark.parametrize("name", ["_obj", "__class__", "__dict__", "_denied"])
+    @pytest.mark.parametrize("name", ["_obj", "_s", "__dict__", "_denied"])
     def test_a_simple_tag_is_refused(self, users, name) -> None:
         src = (
             "{% load rv3888 %}{% for u in rows|slice:':2' %}[{% attr_of u '" + name + "' %}]"
@@ -100,10 +107,16 @@ class TestAPythonReaderCannotReachTheWrappedObject:
         got = _backend(src, {"rows": list(users)})
         assert got == "[ERR:AttributeError][ERR:AttributeError]", got
 
+    @pytest.mark.parametrize("route", ["plain", "slice"])
+    def test_class_is_the_proxys_own_type(self, users, route) -> None:
+        read = "{% load rv3888 %}[{{ u|dotted:'__class__.__name__' }}]"
+        got = _backend(ROUTES[route].replace("<R>", read), {"rows": list(users)})
+        assert "_SidecarModelProxy" in got and "User" not in got, got
+
     def test_plain_python_getattr_on_the_proxy_is_refused_and_the_floor_still_reads(
         self, users
     ) -> None:
-        """The unit: every underscore name, by plain ``getattr``, whoever asks."""
+        """The unit: the hidden names, by plain ``getattr``, whoever asks."""
         from djust.serialization import _SidecarModelProxy
 
         proxy = _SidecarModelProxy(users[0])
@@ -129,9 +142,7 @@ class TestAPythonReaderCannotReachTheWrappedObject:
         got = _backend(src, {"rows": list(users)})
         assert "ERR:AttributeError" in got, got
 
-    @pytest.mark.parametrize(
-        "name", ["_qs", "_is_projection", "__class__", "__dict__", "__reduce__"]
-    )
+    @pytest.mark.parametrize("name", ["_qs", "_is_projection", "_s", "__dict__", "__wrapped__"])
     def test_the_queryset_proxy_refuses_underscore_names_for_a_plain_getattr(
         self, users, name
     ) -> None:

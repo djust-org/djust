@@ -7,6 +7,7 @@ Extracted from live_view.py for modularity.
 import copy
 import functools
 import importlib.util
+import inspect
 import json
 import logging
 import re
@@ -14,6 +15,7 @@ import threading
 from datetime import datetime, date, time, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any, Callable, Dict, FrozenSet, List, Optional, Union, cast
+from types import ModuleType as _ModuleType
 from uuid import UUID
 
 from django.core.serializers.json import DjangoJSONEncoder as _DjangoJSONEncoder
@@ -1623,6 +1625,69 @@ def _protect_sidecar_value(value: Any) -> Any:
     return value
 
 
+# -- the closed set of kinds a floor proxy answers (#3888 review round 2) --------------------------
+#
+# A per-name blacklist kept leaking (`_obj`, then a bound method's `__self__`, then...). The
+# structural cure is to decide by the KIND of what a read returns, in ONE function, and to keep the
+# wrapped instance where no attribute read reaches it:
+#
+#   plain data ........ returned as it is (and a list / tuple / dict / set / frozenset of it, rebuilt)
+#   model / manager / queryset .... only as its floor proxy
+#   a callable ........ only as `_FlooredCall` (it exposes `alters_data`, `do_not_call_in_templates`
+#                       and the ORM-call flag, and its result goes back through this function)
+#   any other instance  only as `_FlooredObject` (a file field, an enum member, a presenter...)
+#   a class, a module, a descriptor ... not at all (the read is refused)
+_PLAIN_TYPES = frozenset(
+    {str, int, float, bool, type(None), Decimal, bytes, UUID, datetime, date, time, timedelta}
+)
+_PLAIN_BASES = (str, int, float, Decimal, bytes, UUID, datetime, date, time, timedelta)
+
+
+def _slot_accessors(cls: type, name: str) -> Any:
+    """The member descriptor's own C accessors ``(get, set)`` for slot ``name`` of ``cls``.
+
+    The wrapped object lives in a real slot (one fast read) and the class refuses EVERY
+    underscore-prefixed name in its ``__getattribute__``, so the slot is reachable only through these
+    two callables, which this module's own code keeps.
+    """
+    member = cls.__dict__[name]
+    return member.__get__, member.__set__
+
+
+def _floored_result(value: Any) -> Any:
+    """What a floor proxy may hand back for ``value``: see the table above. ONE function."""
+    kind = type(value)
+    if kind in _PLAIN_TYPES:
+        return value
+    if isinstance(value, models.Model):
+        return _SidecarModelProxy(value)
+    if isinstance(value, (models.Manager, models.QuerySet)):
+        return _SidecarQuerySetProxy(value)
+    if isinstance(value, _FORM_PROXIES):
+        # a form proxy is for a template PATH; same answer the leaf floor gives (#3790)
+        return unwrap_form_proxy_for_tag(value)
+    if isinstance(value, _PLAIN_BASES):
+        # a subclass of plain data (SafeString, a str-enum member, a lazy-free datetime subclass)
+        return value
+    if isinstance(value, type) or isinstance(value, _ModuleType):
+        raise AttributeError("a class or a module is not readable through a model")
+    if kind is list:
+        return [_floored_result(item) for item in value]
+    if kind is tuple:
+        return tuple(_floored_result(item) for item in value)
+    if kind is dict:
+        return {key: _floored_result(item) for key, item in value.items()}
+    if kind is set or kind is frozenset:
+        return kind(_floored_result(item) for item in value)
+    if isinstance(value, _FlooredCall | _FlooredObject):
+        return value
+    if callable(value):
+        return _FlooredCall(value)
+    if hasattr(type(value), "__get__") or hasattr(type(value), "__set__"):
+        raise AttributeError("a descriptor is not readable through a model")
+    return _FlooredObject(value)
+
+
 class _SidecarModelProxy:
     """Denylist-consulting wrapper for a Django ``Model`` placed in the
     template getattr sidecar (ADR-024 / #1986 review).
@@ -1666,68 +1731,55 @@ class _SidecarModelProxy:
 
     Type-based field exclusion (e.g. always-drop ``BinaryField``) is a
     separate follow-up (#1987) that hardens both serialization paths.
+
+    **What a read returns is a CLOSED SET of kinds** (#3888 review round 2), whatever the name:
+    plain data (and containers of plain data, rebuilt); a model, manager or queryset only as its
+    own floor proxy; a callable only as :class:`_FlooredCall`; any other instance only as
+    :class:`_FlooredObject`; a class, module or descriptor not at all. The wrapped instance is
+    held in a slot whose name the class refuses with every other underscore name (see
+    :func:`_slot_accessors`), so no name, however spelled, hands it back. ``test_model_handle_closed_set_3888`` enumerates ``dir(model)``.
     """
 
-    __slots__ = ("_obj", "_denied", "_allowed", "_optout")
+    __slots__ = ("_s",)
 
     def __init__(self, obj: "models.Model") -> None:
-        object.__setattr__(self, "_obj", obj)
-        object.__setattr__(self, "_denied", DjangoJSONEncoder._get_denied_fields(obj))
-        object.__setattr__(self, "_allowed", DjangoJSONEncoder._get_allowlist_fields(obj))
-        object.__setattr__(self, "_optout", DjangoJSONEncoder._get_sensitive_optout_fields(obj))
+        _SMP_SET(
+            self,
+            (
+                obj,
+                DjangoJSONEncoder._get_denied_fields(obj),
+                DjangoJSONEncoder._get_allowlist_fields(obj),
+                DjangoJSONEncoder._get_sensitive_optout_fields(obj),
+                [],  # the floored dict, once built (see __djust_serialize__)
+            ),
+        )
 
     def __getattribute__(self, name: str) -> Any:
-        """Refuse every ``_``-prefixed name, STRUCTURALLY (#3888 review).
-
-        A ``__getattr__`` is only reached for names that are not found, and the four slots above
-        are found, so a reader that takes the proxy and walks a dotted attribute path (a custom
-        filter or tag handler receives this object) was never asked. This runs for EVERY instance
-        attribute read, so the live handle refuses underscore-prefixed names (the wrapped instance,
-        the slots, ``__class__``, ``__dict__``, ``__reduce__``...) whoever reads it, and answers
-        every other name through :meth:`_read` (one call, no exception round trip: a render reads
-        a field per row).
-
-        Our own code reads the slots through ``object.__getattribute__`` (as the methods below do),
-        and the interpreter finds the special methods on the TYPE, so neither goes through here.
-        The one name the engine itself asks the instance for is ``__djust_serialize__`` (the hook
-        that answers the floored dict), which carries no instance.
-        """
-        if name == "__djust_serialize__":
-            return object.__getattribute__(self, name)
-        # ONE authority for the refusal: `_read` asks `_attr_is_serializable`, whose first rule is
-        # the underscore prefix (#2614), for the slots and the dunders exactly as for any name.
-        return _SidecarModelProxy._read(self, name)
-
-    def _read(self, name: str) -> Any:
-        # Every attribute the template can reference on the wrapped model, NOT ``_``-prefixed
-        # (``__getattribute__`` above refuses those before this runs).
-        # Django-parity: refuse ``_``-prefixed names outright. Templates never
-        # resolve them, and allowing them lets ``{{ obj._meta }}`` segfault the
-        # worker (Options extraction) + ``{{ obj._meta.db_table }}`` disclose
-        # the schema (#1986 review). Identity keys (pk/id) are not ``_``-names.
-        # ONE authority (#2614): ``_``-prefix, sensitive/expensive method
-        # names, and the serialization floor / allowlist / opt-out — the SAME
-        # ``_attr_is_serializable`` call every eager loop makes, so the two
-        # channels cannot drift (#1646). A refused name raises AttributeError.
-        denied = object.__getattribute__(self, "_denied")
-        allowed = object.__getattribute__(self, "_allowed")
-        optout = object.__getattribute__(self, "_optout")
+        # EVERY instance attribute read comes through here, so the refusal is structural: any
+        # underscore-prefixed name (the slot, the dunders a Python reader can walk: `__dict__`,
+        # `__reduce__`, `__init_subclass__`...) is refused. Two names are answered, and neither
+        # carries the instance: `__class__` is the proxy's OWN type (so `isinstance(p, SomeABC)`
+        # works) and `__djust_serialize__` is the hook the engine asks for.
+        if name[:1] == "_":
+            if name == "__class__":
+                return type(self)
+            if name == "__djust_serialize__":
+                return _Hook(_smp_serialize, self)
+            raise AttributeError(name)
+        obj, denied, allowed, optout, _cell = _SMP_GET(self)
+        # ONE authority (#2614): the sensitive / expensive method names and the serialization floor
+        # / allowlist / opt-out, the SAME `_attr_is_serializable` call every eager loop makes, so
+        # the two channels cannot drift (#1646).
         if not DjangoJSONEncoder._attr_is_serializable(name, denied, allowed, optout):
             raise AttributeError(name)
-        obj = object.__getattribute__(self, "_obj")
-        # TYPE-based floor (#1987): refuse BinaryField / configured / encrypted
-        # field types even when the NAME passes the denylist — same authority
-        # the eager path calls.
+        # TYPE-based floor (#1987): refuse BinaryField / configured / encrypted field types even
+        # when the NAME passes the denylist — same authority the eager path calls.
         if _field_type_excluded_for(type(obj), name):
             raise AttributeError(name)
-        return _protect_sidecar_value(getattr(obj, name))
-
-    def __djust_serialize__(self) -> Any:
-        """Denylist-filtered dict for terminal Value conversion (called by the
-        Rust ``FromPyObject``). Routes through the eager serializer so a model
-        that becomes a template value (queryset item, terminal model) is
-        floor-filtered instead of ``__dict__``-dumped."""
-        return normalize_django_value(object.__getattribute__(self, "_obj"))
+        value = getattr(obj, name)
+        if type(value) in _PLAIN_TYPES:
+            return value
+        return _floored_result(value)
 
     def __eq__(self, other: object) -> Any:
         """Equal when the objects behind are equal (#3771).
@@ -1738,52 +1790,188 @@ class _SidecarModelProxy:
         proxy. Identity is all this reveals; no field is read, so the floor is unchanged.
         """
         if isinstance(other, _SidecarModelProxy):
-            other = object.__getattribute__(other, "_obj")
-        return object.__getattribute__(self, "_obj").__eq__(other)
+            other = _SMP_GET(other)[0]
+        return _SMP_GET(self)[0].__eq__(other)
 
     def __hash__(self) -> int:
-        return hash(object.__getattribute__(self, "_obj"))
+        return hash(_SMP_GET(self)[0])
 
     def __str__(self) -> str:
         # ``{{ member }}`` normally renders via the eager dict's ``__str__``
         # key; this covers the case where a proxied related model is the
         # terminal value of a walk.
-        return str(object.__getattribute__(self, "_obj"))
+        return str(_SMP_GET(self)[0])
 
     def __repr__(self) -> str:
         # ``{% debug %}`` (#2556) ``pformat``s the context, and Django's
         # ``Model.__repr__`` is ``<Class: str(self)>`` — the same text
         # ``__str__`` above already hands out, so delegating leaks nothing
         # the proxy did not already expose.
-        return repr(object.__getattribute__(self, "_obj"))
+        return repr(_SMP_GET(self)[0])
+
+    def __reduce_ex__(self, protocol: Any) -> Any:
+        raise TypeError("a floor proxy cannot be pickled or copied")
+
+    def __reduce__(self) -> Any:
+        raise TypeError("a floor proxy cannot be pickled or copied")
+
+    def __getstate__(self) -> Any:
+        raise TypeError("a floor proxy cannot be pickled or copied")
+
+
+_SMP_GET, _SMP_SET = _slot_accessors(_SidecarModelProxy, "_s")
+
+
+class _Hook:
+    """What a floor proxy answers when the ENGINE asks for ``__djust_serialize__``: a callable that
+    runs the hook on its proxy and exposes nothing (not the function, not the proxy)."""
+
+    __slots__ = ("_s",)
+
+    def __init__(self, fn: Any, proxy: Any) -> None:
+        _HK_SET(self, (fn, proxy))
+
+    def __getattribute__(self, name: str) -> Any:
+        if name == "__class__":
+            return type(self)
+        raise AttributeError(name)
+
+    def __call__(self) -> Any:
+        fn, proxy = _HK_GET(self)
+        return fn(proxy)
+
+
+_HK_GET, _HK_SET = _slot_accessors(_Hook, "_s")
+
+
+def _smp_serialize(self: Any) -> Any:
+    """Denylist-filtered dict for terminal Value conversion (called by the Rust
+    ``FromPyObject``). Routes through the eager serializer so a model that becomes a template
+    value (queryset item, terminal model) is floor-filtered instead of ``__dict__``-dumped.
+
+    Built once per handle and kept (#3888 review round 2): a render is a snapshot, and a model
+    written to JSON for two tags (or twice for one) would otherwise be normalised twice."""
+    state = _SMP_GET(self)
+    cell = state[4]
+    if not cell:
+        cell.append(normalize_django_value(state[0]))
+    return cell[0]
 
 
 class _FlooredCall:
-    """The callable a :class:`_SidecarQuerySetProxy` answers for a method (``.all``, ``.first``...):
-    it calls the real method and protects the result. Carries the markers the engine reads
-    (``alters_data``, ``do_not_call_in_templates``, ``djust_orm_call``) and nothing else: every
-    ``_``-prefixed name is refused, so the bound method and its receiver are not reachable."""
+    """The callable a floor proxy answers for ANY callable it would return (a model's bound method, a
+    manager's ``.all``...): it calls the real thing and sends the result back through
+    :func:`_floored_result`. Carries the markers the engine reads (``alters_data``,
+    ``do_not_call_in_templates``, ``djust_orm_call``) and nothing else: the callable it wraps, its
+    receiver and its closure are not reachable from it."""
 
-    __slots__ = ("_fn", "alters_data", "do_not_call_in_templates", "djust_orm_call")
+    __slots__ = ("_s", "alters_data", "do_not_call_in_templates", "djust_orm_call")
 
     def __init__(self, fn: Any) -> None:
-        object.__setattr__(self, "_fn", fn)
-        for marker in ("alters_data", "do_not_call_in_templates"):
-            if hasattr(fn, marker):
-                object.__setattr__(self, marker, getattr(fn, marker))
-        object.__setattr__(
-            self,
-            "djust_orm_call",
-            isinstance(getattr(fn, "__self__", None), (models.Manager, models.QuerySet)),
+        _FC_SET(self, fn)
+        self.alters_data = bool(getattr(fn, "alters_data", False))
+        self.do_not_call_in_templates = bool(getattr(fn, "do_not_call_in_templates", False))
+        self.djust_orm_call = isinstance(
+            getattr(fn, "__self__", None), (models.Manager, models.QuerySet)
         )
 
     def __getattribute__(self, name: str) -> Any:
-        if name[:1] == "_":
-            raise AttributeError(name)
-        return object.__getattribute__(self, name)
+        if name == "__class__":
+            return type(self)
+        if name in ("alters_data", "do_not_call_in_templates", "djust_orm_call"):
+            return object.__getattribute__(self, name)
+        if name == "__signature__":
+            return _bare_signature(_FC_GET(self))
+        raise AttributeError(name)
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
-        return _protect_sidecar_value(object.__getattribute__(self, "_fn")(*args, **kwargs))
+        return _floored_result(_FC_GET(self)(*args, **kwargs))
+
+    def __reduce_ex__(self, protocol: Any) -> Any:
+        raise TypeError("a floor call wrapper cannot be pickled or copied")
+
+
+_FC_GET, _FC_SET = _slot_accessors(_FlooredCall, "_s")
+
+
+def _bare_signature(fn: Any) -> inspect.Signature:
+    """The SHAPE of ``fn``'s arguments and nothing else (names, kinds, whether each has a default).
+
+    Django's variable resolution calls a callable and, when that raises ``TypeError``, asks
+    ``inspect.signature(current).bind()`` whether the call merely lacked required arguments (then the
+    variable is invalid) or raised for another reason. A wrapper that hides its signature would turn
+    the first case into an error. Defaults and annotations are replaced so no object of the wrapped
+    callable's own is carried."""
+    try:
+        signature = inspect.signature(fn)
+    except (TypeError, ValueError):
+        return inspect.Signature(
+            [
+                inspect.Parameter("args", inspect.Parameter.VAR_POSITIONAL),
+                inspect.Parameter("kwargs", inspect.Parameter.VAR_KEYWORD),
+            ]
+        )
+    return inspect.Signature(
+        [
+            parameter.replace(
+                default=inspect.Parameter.empty if parameter.default is parameter.empty else None,
+                annotation=inspect.Parameter.empty,
+            )
+            for parameter in signature.parameters.values()
+        ]
+    )
+
+
+class _FlooredObject:
+    """Any other instance a floor proxy returns (a file field, an enum member, a property's presenter):
+    reads, calls and items go back through :func:`_floored_result`, and the object is not reachable."""
+
+    __slots__ = ("_s",)
+
+    def __init__(self, obj: Any) -> None:
+        _FO_SET(self, obj)
+
+    def __getattribute__(self, name: str) -> Any:
+        if name[:1] == "_":
+            if name == "__class__":
+                return type(self)
+            raise AttributeError(name)
+        return _floored_result(getattr(_FO_GET(self), name))
+
+    def __getitem__(self, key: Any) -> Any:
+        return _floored_result(_FO_GET(self)[key])
+
+    def __iter__(self) -> Any:
+        return (_floored_result(item) for item in _FO_GET(self))
+
+    def __len__(self) -> int:
+        return len(_FO_GET(self))
+
+    def __contains__(self, item: Any) -> bool:
+        return item in _FO_GET(self)
+
+    def __bool__(self) -> bool:
+        return bool(_FO_GET(self))
+
+    def __str__(self) -> str:
+        return str(_FO_GET(self))
+
+    def __repr__(self) -> str:
+        return repr(_FO_GET(self))
+
+    def __eq__(self, other: object) -> Any:
+        if isinstance(other, _FlooredObject):
+            other = _FO_GET(other)
+        return _FO_GET(self) == other
+
+    def __hash__(self) -> int:
+        return hash(_FO_GET(self))
+
+    def __reduce_ex__(self, protocol: Any) -> Any:
+        raise TypeError("a floored object cannot be pickled or copied")
+
+
+_FO_GET, _FO_SET = _slot_accessors(_FlooredObject, "_s")
 
 
 def _model_proxy_class_name(proxy: Any) -> str:
@@ -1792,7 +1980,7 @@ def _model_proxy_class_name(proxy: Any) -> str:
     Asked only by the Rust conversion, so a model whose ``__str__`` raises is described as
     ``RvRaises object`` (what it was before the handle) and not as ``_SidecarModelProxy object``.
     """
-    return type(object.__getattribute__(proxy, "_obj")).__name__
+    return type(_SMP_GET(proxy)[0]).__name__
 
 
 class _SidecarQuerySetProxy:
@@ -1825,49 +2013,42 @@ class _SidecarQuerySetProxy:
     ``get_context_data()``, where the eager serialization floor applies.
     """
 
-    __slots__ = ("_qs", "_is_projection")
+    __slots__ = ("_s",)
 
     def __init__(self, qs: Any) -> None:
-        object.__setattr__(self, "_qs", qs)
         # A ``.values()`` / ``.values_list()`` queryset sets ``_fields`` (to a
         # possibly-empty tuple); a normal queryset / manager leaves it ``None``.
         # This is the ONLY queryset op that sets ``_fields``, so it cleanly
         # detects the projection class we must refuse.
-        object.__setattr__(self, "_is_projection", getattr(qs, "_fields", None) is not None)
+        _SQP_SET(self, (qs, getattr(qs, "_fields", None) is not None))
 
     def __getattribute__(self, name: str) -> Any:
-        """Refuse every ``_``-prefixed name structurally, as :class:`_SidecarModelProxy` does: the
-        wrapped queryset lives in a real slot, which ``__getattr__`` is never asked about."""
-        if name[:1] == "_" and name != "__djust_serialize__":
+        if name[:1] == "_":
+            if name == "__class__":
+                return type(self)
+            if name == "__djust_serialize__":
+                return _Hook(_sqp_serialize, self)
             raise AttributeError(name)
-        return object.__getattribute__(self, name)
-
-    def __getattr__(self, name: str) -> Any:
-        if name.startswith("_"):
-            raise AttributeError(name)
+        qs, is_projection = _SQP_GET(self)
         # Refuse ALL access on a values/values_list projection — .first/.get/
         # .aggregate/etc. each return an unfiltered raw row/scalar (vector 5).
-        if object.__getattribute__(self, "_is_projection"):
+        if is_projection:
             raise AttributeError(name)
-        qs = object.__getattribute__(self, "_qs")
-        attr = getattr(qs, name)
-        if callable(attr) and not isinstance(attr, type):
-            # Preserve the template-callable guards + ORM-call flag so the Rust walk auto-calls (or
-            # refuses) the wrapper exactly as it would the bound method (e.g. ``qs.delete`` keeps
-            # ``alters_data=True``). A call wrapper OBJECT, not a function: a function exposes
-            # ``__self__`` / ``__closure__`` / ``__globals__`` to a reader that walks attributes.
-            return _FlooredCall(attr)
-        return _protect_sidecar_value(attr)
+        # a method comes back as `_FlooredCall` (its result goes back through `_floored_result`),
+        # a related model as its proxy, a class not at all: ONE function decides.
+        return _floored_result(getattr(qs, name))
 
     def __iter__(self) -> Any:
-        if object.__getattribute__(self, "_is_projection"):
+        qs, is_projection = _SQP_GET(self)
+        if is_projection:
             return iter(())  # refuse: projection rows have no per-field floor
-        return (_protect_sidecar_value(item) for item in object.__getattribute__(self, "_qs"))
+        return (_floored_result(item) for item in qs)
 
     def __len__(self) -> int:
-        if object.__getattribute__(self, "_is_projection"):
+        qs, is_projection = _SQP_GET(self)
+        if is_projection:
             return 0
-        return len(object.__getattribute__(self, "_qs"))
+        return len(qs)
 
     def __getitem__(self, key: Any) -> Any:
         """``qs[i]`` / ``qs[a:b]``, each result protected (#2717).
@@ -1897,30 +2078,38 @@ class _SidecarQuerySetProxy:
         spelled as the zero-length sequence the rest of this proxy already
         reports (vector 5 — a projection row carries no per-field floor).
         """
-        if object.__getattribute__(self, "_is_projection"):
+        qs, is_projection = _SQP_GET(self)
+        if is_projection:
             if isinstance(key, slice):
                 return []
             raise IndexError("index out of range")
-        result = object.__getattribute__(self, "_qs")[key]
+        result = qs[key]
         if isinstance(key, slice):
-            return [_protect_sidecar_value(item) for item in result]
-        return _protect_sidecar_value(result)
-
-    def __djust_serialize__(self) -> Any:
-        """The rows, each as its FLOOR PROXY, for terminal Value conversion (called by the Rust
-        ``FromPyObject``). A ``{% for x in member.groups.all %}`` loop resolves the queryset to this
-        value; the conversion carries each proxy as a live handle (#3888), so ``{{ x.name }}`` works,
-        ``{{ x.password }}`` is empty (the proxy refuses it per read) and a second relation hop
-        (``{{ x.user_set.count }}``) has the row to read it from. Before #3888 each row was its
-        ``normalize_django_value`` dict, which had no manager to read. A ``.values()`` /
-        ``.values_list()`` projection is refused (empty) — its rows carry no per-field floor
-        (vector 5)."""
-        if object.__getattribute__(self, "_is_projection"):
-            return []
-        return [_protect_sidecar_value(item) for item in object.__getattribute__(self, "_qs")]
+            return [_floored_result(item) for item in result]
+        return _floored_result(result)
 
     def __str__(self) -> str:
-        return str(object.__getattribute__(self, "_qs"))
+        return str(_SQP_GET(self)[0])
+
+    def __reduce_ex__(self, protocol: Any) -> Any:
+        raise TypeError("a floor proxy cannot be pickled or copied")
+
+
+_SQP_GET, _SQP_SET = _slot_accessors(_SidecarQuerySetProxy, "_s")
+
+
+def _sqp_serialize(self: Any) -> Any:
+    """The rows, each as its FLOOR PROXY, for terminal Value conversion (called by the Rust
+    ``FromPyObject``). A ``{% for x in member.groups.all %}`` loop resolves the queryset to this
+    value; the conversion carries each proxy as a live handle (#3888), so ``{{ x.name }}`` works,
+    ``{{ x.password }}`` is empty (the proxy refuses it per read) and a second relation hop
+    (``{{ x.user_set.count }}``) has the row to read it from. A ``.values()`` /
+    ``.values_list()`` projection is refused (empty) — its rows carry no per-field floor
+    (vector 5)."""
+    qs, is_projection = _SQP_GET(self)
+    if is_projection:
+        return []
+    return [_floored_result(item) for item in qs]
 
 
 #: Names a floor field's ``BoundField`` refuses when a template walks to them (#3790). ``value`` /
