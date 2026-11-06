@@ -182,6 +182,32 @@ class TestThePythonGatesCacheIsPerShape:
             assert type(out) is tuple and out == tuple(value)
         assert factory_calls[type(value).__name__] == 1
 
+    def test_a_str_subclass_whose_str_raises_degrades_to_the_plain_tuple(self):
+        """``isinstance(field, str)`` admits a ``str`` subclass and ``namedtuple()`` calls ``str()`` on
+        every field, so this raises ``TypeError`` out of the factory. It degraded to the plain tuple
+        before ``TypeError`` was dropped from the gate's ``except``; it must keep doing so."""
+
+        class Hostile(str):
+            def __str__(self):
+                raise TypeError("hostile __str__")
+
+        value = _fresh("PyHostile", (Hostile("a"), "b"))
+        out = serialize_value(value, for_render=True)
+        assert type(out) is tuple and out == tuple(value)
+
+    def test_the_engine_never_calls_str_on_the_names_it_extracts(self):
+        """The Rust side cannot see the same thing: the names reach ``named_tuple_class`` as Rust
+        ``String``s, extracted without calling ``__str__``."""
+        from djust import _rust
+
+        class Hostile(str):
+            def __str__(self):
+                raise TypeError("hostile __str__")
+
+        value = _fresh("EngHostile", (Hostile("a"), "b"))
+        out = _rust.render_template("{% badge label='x' %}{{ v|length }}", {"v": value})
+        assert out.endswith("2")
+
     def test_the_cache_is_keyed_by_the_whole_shape(self, factory_calls):
         name = f"PyTwin_{_TOKEN}_{next(_COUNTER)}"
         for _ in range(3):

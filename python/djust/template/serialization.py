@@ -28,10 +28,13 @@ JSONValue = Union[str, int, float, bool, None, List[Any], Dict[str, Any]]
 def _namedtuple_shape_is_buildable_cached(name: str, fields: tuple) -> bool:
     try:
         namedtuple(name, fields)
-    except (ValueError, SyntaxError):
+    except (ValueError, SyntaxError, TypeError):
         # ``SyntaxError``: fields equal only after NFKC normalisation (``("\ufb01", "fi")``) fail
         # when the generated ``__new__`` is compiled. It used to escape ``serialize_value`` and fail
-        # the render. No shape raises ``TypeError`` (the caller has checked every name is a ``str``).
+        # the render. ``TypeError``: no SHAPE raises it, but ``isinstance(x, str)`` admits a ``str``
+        # SUBCLASS and ``namedtuple()`` calls ``str()`` on every name, so a class whose ``__name__``
+        # or ``_fields`` is a ``str`` subclass with a raising ``__str__`` raises here. (Only the
+        # Rust side cannot see that: it extracts real ``String``s without calling ``__str__``.)
         return False
     return True
 
