@@ -518,6 +518,8 @@ def slot_text(value: Any) -> str:
             try:
                 value = value()
             except TypeError:
+                # The callable cannot be called without arguments: it is left as it is, and
+                # whatever text it has is what _exact_str gives (and the attribute escapes).
                 pass
     return _exact_str(value)
 
