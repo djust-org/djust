@@ -82,6 +82,7 @@ EXCLUDED: dict[str, str] = {
     "python/tests/test_passthrough_attr_policy_3818.py": _SOURCE,
     "python/tests/test_pwa_tag_template_injection_3824.py": _SOURCE,
     "python/tests/test_query_budget_review_3722.py": _SOURCE,
+    "python/tests/test_render_call_guard_3815.py": _SOURCE,
     "tests/test_red_main_attribution_behaviour_2139.py": (
         "builds a throwaway repository and globs the Rust extension inside it"
     ),

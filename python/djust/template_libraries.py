@@ -1554,6 +1554,7 @@ def _render_node(
     from django.template import Context
     from django.utils.safestring import mark_safe
 
+    from ._include_guard import include_guard_scope
     from .template_bridge_floor import floor_scope
 
     before = dict(context)
@@ -1570,8 +1571,11 @@ def _render_node(
     _share_render_context(ctx, shares_render_context)
     # #3771: every `Variable` the node resolves against `ctx` is walked through the serialization
     # floor, as `{{ }}` is; see `template_bridge_floor`.
-    with floor_scope(ctx):
-        output = node.render(ctx)
+    # #3880: a node Django renders may render a TEMPLATE (an inclusion tag's) through Django's
+    # engine; its `{% include obj %}` is held to the template-call guard like every other one.
+    with include_guard_scope():
+        with floor_scope(ctx):
+            output = node.render(ctx)
     after = ctx.dicts[-1]
     bindings = {
         key: value for key, value in after.items() if key not in before or before[key] is not value

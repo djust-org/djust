@@ -677,8 +677,11 @@ class LiveViewTestClient:
         if not template_name:
             raise RuntimeError(f"View {self.view_class.__name__} has no template_name")
 
+        from ._include_guard import include_guard_scope
+
         template = get_template(template_name)
-        return str(template.render(context))
+        with include_guard_scope():
+            return str(template.render(context))
 
     def render_with_patches(self) -> tuple:
         """Render and return ``(html, patches_list, version)`` for VDOM-diff
