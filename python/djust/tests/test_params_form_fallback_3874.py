@@ -330,6 +330,21 @@ class SpanCallableParams(SpanDefaultParams):
     start = forms.IntegerField(required=False, initial=lambda: 5)
 
 
+class SpanTextParams(forms.Form):
+    """Text fields: a CharField strips a whitespace-only value to empty (but the URL "supplied" it)."""
+
+    page = forms.IntegerField(min_value=1, required=False, initial=1)
+    start = forms.CharField(required=False, initial="m")
+    end = forms.CharField(required=False)
+
+    def clean(self):
+        cleaned = super().clean()
+        start, end = cleaned.get("start"), cleaned.get("end")
+        if start and end and end < start:
+            raise forms.ValidationError("end before start")
+        return cleaned
+
+
 class CopiesTagsParams(forms.Form):
     """A multi-select the URL left out counts as supplied (#3922): the paths must still agree."""
 
@@ -530,6 +545,11 @@ class SpanCallableFields(_Base):
     params_form_fallback = "fields"
 
 
+class SpanTextFields(_Base):
+    params_form = SpanTextParams
+    params_form_fallback = "fields"
+
+
 class AsyncFields(FieldsView):
     """An ``async def handle_params``: the default must still await it."""
 
@@ -580,6 +600,7 @@ _VIEWS = (
     CopiesModelFields,
     SpanDefaultFields,
     SpanCallableFields,
+    SpanTextFields,
     SpanFields,
     SpanRaisesFields,
     CrashFields,
@@ -779,6 +800,27 @@ CASES = [
         "SpanDefaultFields",
         {"page": "abc", "start": "", "end": "2"},
         {"page": 1, "start": 5, "end": None},
+        {"page"},
+    ),
+    # A whitespace default is "supplied" to _url_supplied (the key carries a non-empty text) but a
+    # CharField strips it to empty: it is filled before the check too, else the pair start="m",
+    # end="a" would be handed over although clean() refuses it.
+    (
+        "SpanTextFields",
+        {"page": "abc", "start": " ", "end": "a"},
+        {"page": 1, "start": "m", "end": None},
+        {"page"},
+    ),
+    (
+        "SpanTextFields",
+        {"page": "abc", "start": " ", "end": "z"},
+        {"page": 1, "start": "m", "end": "z"},
+        {"page"},
+    ),
+    (
+        "SpanTextFields",
+        {"page": "abc", "end": "a"},
+        {"page": 1, "start": "m", "end": None},
         {"page"},
     ),
     # ... and so is a callable default.
@@ -1637,40 +1679,59 @@ class TestFallbackValues:
         assert values is None
         assert fallback_values(form, "fields") == {"mode": "b", "page": 1, "q": ""}
 
-    def test_a_mutable_initial_is_returned_by_reference_as_on_the_valid_path(self):
-        """Parity, not a copy: the valid path and ``"initial"`` mode return the field's own object
-        (each form instance owns a deep copy of its fields, so this does not reach the class)."""
+    def test_a_mutable_initial_the_fallback_fills_in_is_a_copy(self):
+        """Appending to the handed-over value must not change the form class's default (#3921 review).
+
+        ``Field.__deepcopy__`` copies the field but not its ``initial``, so handing over the stored
+        object would let one request's ``handle_params()`` change every later request's default.
+        """
         from djust._params_form import fallback_values
 
-        class Lists(forms.Form):
-            tags = forms.JSONField(required=False, initial=[])
-            page = forms.IntegerField(min_value=1, required=False, initial=1)
+        class MI(forms.Form):
+            j = forms.JSONField(required=False, initial=[])
+            q = forms.CharField(max_length=5, required=False, initial="")
 
-        form, values, _ = self._bound(Lists, {"page": "abc"})
+        form, values, _ = self._bound(MI, {"q": "toolong!"})
         assert values is None
-        assert fallback_values(form, "fields")["tags"] is form.fields["tags"].initial
-        valid_form, valid, _ = self._bound(Lists, {"page": "2"})
-        assert valid["tags"] is valid_form.fields["tags"].initial  # the valid path's own object
-        assert valid_form.fields["tags"] is not form.fields["tags"]  # per-instance, never shared
+        out = fallback_values(form, "fields")
+        assert out["j"] == [] and out["q"] == ""
+        out["j"].append("x")
+        assert form.fields["j"].initial == []
+        assert MI().fields["j"].initial == []
+        assert MI.base_fields["j"].initial == []
 
-    def test_the_fill_judges_what_clean_left_not_what_the_first_pass_cleaned(self):
-        """A supplied field whose clean() blanks it takes its initial, on both paths."""
+    def test_a_clean_that_mutates_a_filled_initial_in_place_never_reaches_the_class(self):
+        """The check runs on a copy of the filled combination: ``clean()`` may append to it."""
         from djust._params_form import fallback_values
 
-        class Blanks(forms.Form):
-            a = forms.CharField(required=False, initial="da")
+        class Appends(forms.Form):
+            j = forms.JSONField(required=False, initial=[])
             q = forms.CharField(max_length=5, required=False, initial="")
 
             def clean(self):
                 cleaned = super().clean()
-                cleaned["a"] = ""
+                if isinstance(cleaned.get("j"), list):
+                    cleaned["j"].append("by-clean")
                 return cleaned
 
-        _, valid, _ = self._bound(Blanks, {"a": "x", "q": "ok"})
-        assert valid == {"a": "da", "q": "ok"}
-        form, values, _ = self._bound(Blanks, {"a": "x", "q": RAW})
+        form, values, _ = self._bound(Appends, {"q": "toolong!"})
         assert values is None
-        assert fallback_values(form, "fields") == {"a": "da", "q": ""}
+        out = fallback_values(form, "fields")
+        assert out["j"] == []  # the second fill: clean()'s write to a left-out field loses
+        assert Appends.base_fields["j"].initial == []
+        assert Appends().fields["j"].initial == []
+
+    def test_an_initial_that_cannot_be_copied_is_handed_over_as_it_is(self):
+        """The copy is a courtesy, never a new way to fail: an uncopyable initial is not copied."""
+        from djust._params_form import _copied
+
+        class Uncopyable:
+            def __deepcopy__(self, memo):
+                raise TypeError("no copies")
+
+        item = Uncopyable()
+        assert _copied(item) is item
+        assert _copied([1]) == [1]
 
     def test_the_fill_judges_the_re_checks_output_not_the_first_passs(self):
         """The value handed over is the re-check's, so emptiness is judged on it (#3891).

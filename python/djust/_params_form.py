@@ -227,6 +227,20 @@ def _fill_unsupplied(
             values[name] = initial
 
 
+def _copied(value: Any) -> Any:
+    """A deep copy of ``value``, or ``value`` itself when it cannot be copied.
+
+    The ``"fields"`` fallback hands over a COPY of an ``initial`` it fills in, so a
+    ``handle_params()`` that mutates a mutable one (a list, a dict) does not change
+    the form class's default for later requests. The valid path and ``"initial"``
+    mode hand the object itself over (#3926).
+    """
+    try:
+        return copy.deepcopy(value)
+    except Exception:  # noqa: BLE001 — an arbitrary initial object; the check already copied it once
+        return value
+
+
 def _cleaned_values(form: forms.BaseForm) -> Dict[str, Any]:
     """The cleaned data, with each field the URL left out or empty set to its ``initial``."""
     values: Dict[str, Any] = dict(form.cleaned_data)
@@ -336,9 +350,12 @@ def fallback_values(form: forms.BaseForm, mode: str, view: Any = None) -> Dict[s
     repairs it repairs here as on the valid path. The values it is given are the
     first pass's cleaned values of the kept fields (a ``clean()`` that wrote one
     on the first pass is re-run on its output) with the ``initial`` fill applied
-    to the unsupplied ones, and the replaced fields' initial values. A mutable
-    ``initial`` is returned by reference, as on the valid path and in
-    ``"initial"`` mode (each form instance has its own copy of its fields). **Only ``clean()`` runs
+    to the unsupplied ones, and the replaced fields' initial values. The check
+    runs on a deep copy, and the fill applied to its output hands over a copy of
+    the ``initial`` too, so a ``handle_params()`` that mutates a mutable one does
+    not change the form class's default. (A replaced field's ``initial`` and the
+    plain initial values are the objects themselves, as on the valid path and in
+    ``"initial"`` mode: #3926.) **Only ``clean()`` runs
     again, not the fields' own ``clean_<field>()``:** a ``clean_end()`` that
     checks ``end >= start`` was skipped when ``start`` failed and is not run on
     the merged values, so ``?start=zz&end=1`` hands over ``start`` at its initial
@@ -392,7 +409,7 @@ def fallback_values(form: forms.BaseForm, mode: str, view: Any = None) -> Dict[s
     # valid path: a field the URL left out or empty takes its initial value over whatever clean()
     # wrote into it, so a clean() that copies a failed field's raw value into an unsupplied field
     # that has an initial cannot hand it over through that field (#3891).
-    _fill_unsupplied(form, adopted, list(adopted), initial_of)
+    _fill_unsupplied(form, adopted, list(adopted), lambda name: _copied(initial_of(name)))
     return {name: adopted[name] if name in adopted else initial_of(name) for name in form.fields}
 
 
