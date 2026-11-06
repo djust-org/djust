@@ -2009,7 +2009,7 @@ def check_reserved_view_attributes(app_configs: Any, **kwargs: Any) -> list[Chec
 
 @register("djust")
 def check_params_form_declarations(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
-    """V023 (Error): a ``params_form`` the request path cannot use (#3706).
+    """V023 (Error): a ``params_form`` the request path cannot use (#3706, #3874).
 
     The framework binds the URL's parameters with ``form_class(data=...)`` and
     nothing else (``djust._params_form.bind_params``). A ``params_form`` that is
@@ -2021,12 +2021,22 @@ def check_params_form_declarations(app_configs: Any, **kwargs: Any) -> list[Chec
     instantiated, so an ``__init__`` that raises, a positional-only ``data``
     that the form's own ``super().__init__`` rejects, or a lazy object wrapping
     a form class is not found here and still fails on the first request.
+
+    A view that declares a ``params_form`` is also held to a known
+    ``params_form_fallback`` (``fallback_problem``): the request path reads it
+    on every request of such a view and raises ``ImproperlyConfigured`` on a
+    typo, rather than silently keeping the default.
     """
     messages: list[CheckMessage] = []
     if _is_check_suppressed("djust.V023"):
         return messages
     try:
-        from djust._params_form import construction_problem, form_class_problem
+        from djust._params_form import (
+            FALLBACK_INITIAL,
+            construction_problem,
+            fallback_problem,
+            form_class_problem,
+        )
         from djust.live_view import LiveView
     except Exception:  # noqa: BLE001 — djust not importable/configured: nothing to check
         return messages
@@ -2041,31 +2051,52 @@ def check_params_form_declarations(app_configs: Any, **kwargs: Any) -> list[Chec
         if declared is None:
             continue
         label = "%s.%s" % (cls.__module__, cls.__qualname__)
+        problems: list[tuple[str, str, str]] = []  # (attribute, problem, hint)
         problem = form_class_problem(declared)
         if problem is not None:
-            hint = (
-                "Set params_form to a Django form class (a subclass of "
-                "django.forms.Form), not an instance, a dotted path or another "
-                "object. Without this the first request raises ImproperlyConfigured."
+            problems.append(
+                (
+                    "params_form",
+                    problem,
+                    "Set params_form to a Django form class (a subclass of "
+                    "django.forms.Form), not an instance, a dotted path or another "
+                    "object. Without this the first request raises ImproperlyConfigured.",
+                )
             )
         else:
             problem = construction_problem(declared)
-            if problem is None:
-                continue
-            hint = (
-                "The framework calls %s(data=...) with the URL's parameters and "
-                "nothing else. Give every other __init__ argument a default, or "
-                "read it from the view in handle_params() instead. Without this "
-                "the first request raises TypeError." % declared.__name__
+            if problem is not None:
+                problems.append(
+                    (
+                        "params_form",
+                        problem,
+                        "The framework calls %s(data=...) with the URL's parameters and "
+                        "nothing else. Give every other __init__ argument a default, or "
+                        "read it from the view in handle_params() instead. Without this "
+                        "the first request raises TypeError." % declared.__name__,
+                    )
+                )
+        # The fallback mode is read with the form, on every request of a view that
+        # declares one (#3874), so a typo is as broken as a bad form class.
+        problem = fallback_problem(getattr(cls, "params_form_fallback", FALLBACK_INITIAL))
+        if problem is not None:
+            problems.append(
+                (
+                    "params_form_fallback",
+                    problem,
+                    "Use 'initial' (the default) or 'fields'. Without this the first "
+                    "request raises ImproperlyConfigured.",
+                )
             )
-        messages.append(
-            DjustError(
-                "%s.params_form %s." % (label, problem),
-                hint=hint,
-                id="djust.V023",
-                fix_hint="Fix the `params_form` declaration of `%s`." % cls.__qualname__,
+        for attribute, problem, hint in problems:
+            messages.append(
+                DjustError(
+                    "%s.%s %s." % (label, attribute, problem),
+                    hint=hint,
+                    id="djust.V023",
+                    fix_hint="Fix the `%s` declaration of `%s`." % (attribute, cls.__qualname__),
+                )
             )
-        )
     return messages
 
 
