@@ -618,8 +618,24 @@ now callable from a template on a LiveView, exactly as Django and
 `DjustTemplateBackend` already call it: mark such a method `alters_data = True`.
 Only a name read both ways pays for this (a proxy per kept row, roughly 2.4 KB
 and +50% render time per row in a 20,000-row measurement); a plain loop and a
-method-only read do not. A QuerySet nested in a dict is not covered: read the
+method-only read do not. Measured again for #3867 (release extension, 20,000 users in one or two groups each, the
+same template with and without the kept rows, three renders per process, two processes per
+variant): the render took 1.19 to 1.34 s without the kept rows and 1.96 to 2.00 s with them
+(+48 to +69%), and peak RSS rose from 296 MB to 358 to 360 MB (about 3.2 KB a row; that
+includes whatever the view holds for the render). A cProfile run of the same case shows about
+300,000 Python calls in the sidecar floor's functions (`_protect_sidecar_tree`: a
+`_SidecarModelProxy` per kept row, built up front) beside the engine's own render; the profiler
+does not separate the two, so no share is claimed. Making the proxies lazy would change how
+the floor is constructed, not trim a copy, so it is not done; annotate (`Count("groups")`)
+when a very long list is read both ways. A QuerySet nested in a dict is not covered: read the
 count at a top-level name, or annotate it (`Count("groups")`).
+
+A mixed read through a `|slice` of the top-level name itself
+(`{% for u in users|slice:':2' %}{{ u.groups.all.count }}{% for g in u.groups.all %}...`) still
+prints no count where Django prints one (#3867): the kept rows are reached by the loop
+variable's alias for `users.<N>`, a filtered operand registers none (`slice` shifts the
+index), and the serialized rows carry no handle of their own. Slice the relation instead
+(`u.groups.all|slice:':1'`, covered), slice in the view, or annotate the count.
 
 A row's integer `count` / `exists` field survives on a `list[Model]` too (the
 Python serializer only calls a leaf that is callable).
