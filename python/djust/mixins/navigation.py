@@ -199,8 +199,14 @@ class NavigationMixin:
             {% if params_errors.page %}<p>{{ params_errors.page.0 }}</p>{% endif %}
 
         The default hands :meth:`handle_params` the form's initial values, so the
-        page renders its defaults and shows the errors. Override it to refuse the
-        URL instead::
+        page renders its defaults and shows the errors. Set
+        ``params_form_fallback = "fields"`` to keep what validated: the fields
+        that passed arrive as they would on a valid URL and only the ones in
+        ``form.errors`` take their initial value, so ``?page=abc&sort=name``
+        keeps ``sort``. A form-level error (``clean()`` raising without naming a
+        field) still falls back to the initial values, because the fields that
+        passed one by one are the combination the form refused. Override it to
+        refuse the URL instead::
 
             def handle_invalid_params(self, form, uri):
                 raise Http404("No such page.")
@@ -212,9 +218,9 @@ class NavigationMixin:
         raised here fails the mount like one from ``handle_params``; a ``Http404``
         is a Django 404 only on the HTTP render.
         """
-        from .._params_form import initial_values
+        from .._params_form import declared_fallback, fallback_values
         from .._view_hooks import call_hook_sync
 
         # Run to completion here, so an override that calls ``super()`` without
         # ``return`` (or an ``async def handle_params``) cannot drop the call.
-        call_hook_sync(self.handle_params, initial_values(form), uri)
+        call_hook_sync(self.handle_params, fallback_values(form, declared_fallback(self)), uri)

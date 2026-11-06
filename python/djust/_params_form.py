@@ -10,7 +10,8 @@ instead:
 * valid input calls ``handle_params(cleaned_data, uri)``, with the form's
   ``initial`` values filling the fields the URL left empty;
 * invalid input calls ``handle_invalid_params(form, uri)``, whose default hands
-  ``handle_params`` the initial values;
+  ``handle_params`` the initial values (``params_form_fallback = "fields"`` keeps
+  the fields that validated and replaces only the ones that did not, #3874);
 * either way ``view.params_errors`` holds the messages, for the template.
 
 Every path that calls ``handle_params`` goes through :func:`run_handle_params`
@@ -55,6 +56,41 @@ def form_class_problem(declared: Any) -> Optional[str]:
     if isinstance(declared, type) and issubclass(declared, forms.BaseForm):
         return None
     return "must be a Django form class, not %r" % type(declared).__name__
+
+
+#: ``params_form_fallback``: what the default ``handle_invalid_params`` hands ``handle_params``.
+#: ``"initial"`` (the default) is the initial value of every field; ``"fields"`` keeps the
+#: fields that validated and uses the initial value only for the ones that did not (#3874).
+FALLBACK_INITIAL = "initial"
+FALLBACK_FIELDS = "fields"
+FALLBACKS = (FALLBACK_INITIAL, FALLBACK_FIELDS)
+
+
+def fallback_problem(declared: Any) -> Optional[str]:
+    """Why ``declared`` cannot be a ``params_form_fallback``, or ``None`` when it can.
+
+    The one definition, as :func:`form_class_problem` is for ``params_form``: the
+    request path raises on it (:func:`declared_fallback`) and the V023 system
+    check reports it, so the two cannot disagree.
+    """
+    if isinstance(declared, str) and declared in FALLBACKS:
+        return None
+    return "must be one of %s, not %r" % (", ".join(repr(name) for name in FALLBACKS), declared)
+
+
+def declared_fallback(view: Any) -> str:
+    """The view's ``params_form_fallback``, read from its class (like ``params_form``).
+
+    Read from the class so an instance attribute that happens to share the name
+    cannot replace the declaration. Anything but a known mode raises
+    ``ImproperlyConfigured``: a typo (``"field"``) must not silently keep the
+    conservative default the author meant to leave.
+    """
+    declared = getattr(type(view), "params_form_fallback", FALLBACK_INITIAL)
+    problem = fallback_problem(declared)
+    if problem is not None:
+        raise ImproperlyConfigured("%s.params_form_fallback %s." % (type(view).__name__, problem))
+    return declared
 
 
 def construction_problem(form_class: type) -> Optional[str]:
@@ -163,22 +199,61 @@ def _url_supplied(form: forms.BaseForm, name: str, field: forms.Field) -> bool:
     return key not in form.data or any(text != "" for text in form.data.getlist(key))
 
 
-def _cleaned_values(form: forms.BaseForm) -> Dict[str, Any]:
-    """The cleaned data, with each field the URL left out or empty set to its ``initial``.
+def _fill_unsupplied(form: forms.BaseForm, values: Dict[str, Any], names: List[str]) -> None:
+    """Set each of ``names`` the URL left out or empty to its ``initial``, in ``values``.
 
     "Left out" is read from what the URL supplied, not from what the field cleaned
     to: a ``BooleanField`` cleans an absent key to ``False``, which Django does not
     count as empty, so judging by the cleaned value alone would leave
     ``initial=True`` unapplied exactly where a URL has no way to say "unchecked".
     """
-    values: Dict[str, Any] = dict(form.cleaned_data)
-    for name, field in form.fields.items():
+    for name in names:
+        field = form.fields[name]
         if _url_supplied(form, name, field) and values.get(name) not in field.empty_values:
             continue
         initial = form.get_initial_for_field(field, name)
         if initial is not None:
             values[name] = initial
+
+
+def _cleaned_values(form: forms.BaseForm) -> Dict[str, Any]:
+    """The cleaned data, with each field the URL left out or empty set to its ``initial``."""
+    values: Dict[str, Any] = dict(form.cleaned_data)
+    _fill_unsupplied(form, values, list(form.fields))
     return values
+
+
+def fallback_values(form: forms.BaseForm, mode: str) -> Dict[str, Any]:
+    """What the default ``handle_invalid_params`` hands ``handle_params`` for an invalid ``form``.
+
+    ``"initial"``: the initial value of every declared field.
+
+    ``"fields"`` (#3874): the declared fields only, each field that validated
+    with the value the valid path would hand over (a field the URL left out or
+    empty takes its ``initial``, exactly as there) and each field that did not
+    with its ``initial``. A field is "valid" when it has no entry in
+    ``form.errors`` *and* is in ``form.cleaned_data``: Django removes a field
+    from ``cleaned_data`` when its own ``clean_<field>()`` fails, but a field
+    that merely did not fail is not proof it was checked, so a field a ``clean()``
+    deleted counts as not valid. The request's raw value of a field that failed
+    never reaches ``handle_params``.
+
+    Two cases keep nothing. A form-level error (``NON_FIELD_ERRORS``) says the
+    *combination* is wrong, so the siblings that validated one by one would hand
+    ``handle_params`` the very combination the form refused; and a form that was
+    never validated (the data exceeded its bounds, :func:`bind_params`) has no
+    ``cleaned_data`` at all. Both fall back to the initial values.
+    """
+    initial = initial_values(form)
+    if mode != FALLBACK_FIELDS:
+        return initial
+    cleaned = getattr(form, "cleaned_data", None)
+    if cleaned is None or form.non_field_errors():
+        return initial
+    kept = [name for name in form.fields if name not in form.errors and name in cleaned]
+    values: Dict[str, Any] = {name: cleaned[name] for name in kept}
+    _fill_unsupplied(form, values, kept)
+    return {name: values[name] if name in values else initial[name] for name in form.fields}
 
 
 def _error_messages(form: forms.BaseForm) -> Dict[str, List[str]]:
@@ -224,6 +299,7 @@ async def run_handle_params(view: Any, params: Any, uri: str) -> None:
         if hasattr(view, "handle_params"):
             await call_hook(view.handle_params, params, uri)
         return
+    declared_fallback(view)  # a mode nothing implements fails the request, not only an invalid one
     # A guarded step: a wrapper that swallowed a failure here would otherwise
     # leave nothing bound, and the view would act on a URL no form accepted.
     stepped = guarded_step(view, "handle_params", bind_params)
@@ -241,6 +317,7 @@ def run_handle_params_sync(view: Any, params: Any, uri: str) -> None:
         if hasattr(view, "handle_params"):
             call_hook_sync(view.handle_params, params, uri)
         return
+    declared_fallback(view)  # a mode nothing implements fails the request, not only an invalid one
     form, values = run_guarded_step(view, "handle_params", bind_params, view, form_class, params)
     if values is None:
         call_hook_sync(view.handle_invalid_params, form, uri)

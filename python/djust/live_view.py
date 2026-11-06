@@ -165,6 +165,7 @@ _FRAMEWORK_INTERNAL_ATTRS: frozenset = frozenset(
         "http_status_of_state",
         "state_attribute",
         "params_form",
+        "params_form_fallback",
         "template",
         "template_name",
         "base_template",
@@ -762,6 +763,14 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
     # socket and SSE mount, ``url_change`` and the HTTP fallback POST. ``None``
     # (the default) keeps ``handle_params`` receiving the raw dict.
     params_form: Optional[type] = None
+
+    # What the default ``handle_invalid_params`` hands ``handle_params`` when the
+    # form rejects the URL (#3874). ``"initial"`` (the default): the initial value
+    # of every field. ``"fields"``: the fields that validated, with only the ones
+    # in ``form.errors`` replaced by their initial value. Anything else raises
+    # ``ImproperlyConfigured`` (and is a V023 error). A view that overrides
+    # ``handle_invalid_params`` and does not call ``super()`` never reads it.
+    params_form_fallback: str = "initial"
 
     # Per-view query budget (#3686, #3701). ``None`` (the default) leaves the
     # view on the smoke test's class-wide ``max_queries`` and measures nothing

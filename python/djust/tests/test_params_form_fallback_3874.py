@@ -1,0 +1,897 @@
+"""``params_form_fallback = "fields"``: keep the fields that validated (#3874).
+
+When ``params_form`` rejects the URL the default ``handle_invalid_params`` handed
+``handle_params`` the initial value of EVERY field, so ``?page=abc&sort=name``
+lost the valid ``sort=name`` along with the invalid ``page``. A view that sets
+``params_form_fallback = "fields"`` keeps what validated and replaces only the
+fields in ``form.errors`` with their initial value. ``"initial"`` stays the
+default.
+
+Every case runs on every transport that applies the decision (#1646): the HTTP
+GET, the socket mount, ``url_change`` over the socket, the SSE mount, a
+``url_change`` over SSE, the stateless HTTP fallback POST, and the test client's
+``mount`` / ``url_change``. They all reach the decision through
+``run_handle_params`` / ``run_handle_params_sync``, but that is the claim under
+test, so each is driven for real rather than trusted.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+import sys
+import uuid
+
+import pytest
+from asgiref.sync import sync_to_async
+from django import forms
+from django.contrib.auth.models import AnonymousUser
+from django.contrib.sessions.backends.db import SessionStore
+from django.core.exceptions import ImproperlyConfigured
+from django.test import Client, RequestFactory, override_settings
+from django.urls import path
+
+from djust import LiveView
+from djust.testing import LiveViewTestClient
+
+from ._ws_frames import drain_extra, receive_until
+
+pytestmark = pytest.mark.django_db
+
+#: ``(params handle_params received, uri, params_errors at that moment)``, one per call.
+CALLS: list = []
+INVALID_CALLS: list = []
+
+SORTS = [("name", "Name"), ("date", "Date")]
+
+
+# --------------------------------------------------------------------------- #
+# Forms
+# --------------------------------------------------------------------------- #
+
+
+class FilterParams(forms.Form):
+    page = forms.IntegerField(min_value=1, required=False, initial=1)
+    sort = forms.ChoiceField(choices=SORTS, required=False, initial="date")
+    q = forms.CharField(required=False, initial="")
+
+
+class RequiredParams(forms.Form):
+    token = forms.CharField(required=True)
+    page = forms.IntegerField(min_value=1, required=False, initial=1)
+
+
+class RangeParams(forms.Form):
+    """``clean()`` raises WITHOUT naming a field: the combination is what is wrong."""
+
+    lo = forms.IntegerField(required=False, initial=0)
+    hi = forms.IntegerField(required=False, initial=10)
+    page = forms.IntegerField(min_value=1, required=False, initial=1)
+
+    def clean(self):
+        cleaned = super().clean()
+        lo, hi = cleaned.get("lo"), cleaned.get("hi")
+        if lo is not None and hi is not None and lo > hi:
+            raise forms.ValidationError("The range is empty.")
+        return cleaned
+
+
+class AttributedRangeParams(RangeParams):
+    """The same rule, but the error names the field that is wrong."""
+
+    def clean(self):
+        cleaned = forms.Form.clean(self)
+        lo, hi = cleaned.get("lo"), cleaned.get("hi")
+        if lo is not None and hi is not None and lo > hi:
+            self.add_error("hi", "Must not be below the low end.")
+        return cleaned
+
+
+class FlagParams(forms.Form):
+    flag = forms.BooleanField(required=False, initial=True)
+    page = forms.IntegerField(min_value=1, required=False, initial=1)
+
+
+class NoteParams(forms.Form):
+    """A field with NO initial value: ``None`` when replaced, never the empty string."""
+
+    page = forms.IntegerField(min_value=1, required=False, initial=1)
+    note = forms.CharField(required=False)
+
+
+# --------------------------------------------------------------------------- #
+# Views
+# --------------------------------------------------------------------------- #
+
+_TEMPLATE = '<div dj-root><p id="state">{{ shown }}</p><p>ERRS:{{ params_errors|length }}</p></div>'
+
+
+class _Base(LiveView):
+    login_required = False
+    template = _TEMPLATE
+
+    def mount(self, request, **kwargs):
+        self.shown = "unset"
+
+    def handle_params(self, params, uri):
+        CALLS.append((dict(params), uri, dict(self.params_errors)))
+        self.shown = json.dumps(dict(params), sort_keys=True, default=str)
+
+
+class FieldsView(_Base):
+    params_form = FilterParams
+    params_form_fallback = "fields"
+
+
+class DefaultView(_Base):
+    params_form = FilterParams
+
+
+class ExplicitInitialView(_Base):
+    params_form = FilterParams
+    params_form_fallback = "initial"
+
+
+class RequiredFields(_Base):
+    params_form = RequiredParams
+    params_form_fallback = "fields"
+
+
+class RangeFields(_Base):
+    params_form = RangeParams
+    params_form_fallback = "fields"
+
+
+class AttributedFields(_Base):
+    params_form = AttributedRangeParams
+    params_form_fallback = "fields"
+
+
+class BoolFields(_Base):
+    params_form = FlagParams
+    params_form_fallback = "fields"
+
+
+class NoteFields(_Base):
+    params_form = NoteParams
+    params_form_fallback = "fields"
+
+
+class AsyncFields(FieldsView):
+    """An ``async def handle_params``: the default must still await it."""
+
+    async def handle_params(self, params, uri):
+        CALLS.append((dict(params), uri, dict(self.params_errors)))
+        self.shown = json.dumps(dict(params), sort_keys=True, default=str)
+
+
+class SuperFields(FieldsView):
+    """The documented ``super().handle_invalid_params(form, uri)`` pattern."""
+
+    def handle_invalid_params(self, form, uri):
+        INVALID_CALLS.append((form, uri))
+        super().handle_invalid_params(form, uri)
+
+
+class BadMode(_Base):
+    params_form = FilterParams
+    params_form_fallback = "field"  # a typo for "fields"
+
+
+class NoFormBadMode(_Base):
+    """No ``params_form``: the attribute is never read, so it is not an error here."""
+
+    params_form_fallback = "nonsense"
+
+    def handle_params(self, params, uri):
+        CALLS.append((dict(params), uri, {}))
+        self.shown = "raw"
+
+
+_VIEWS = (
+    FieldsView,
+    DefaultView,
+    ExplicitInitialView,
+    RequiredFields,
+    RangeFields,
+    AttributedFields,
+    BoolFields,
+    NoteFields,
+    AsyncFields,
+    SuperFields,
+    BadMode,
+    NoFormBadMode,
+)
+for _cls in _VIEWS:
+    setattr(sys.modules[__name__], _cls.__name__, _cls)
+
+urlpatterns = [path("%s/" % cls.__name__.lower(), cls.as_view()) for cls in _VIEWS]
+
+
+@pytest.fixture(autouse=True)
+def _urls(settings):
+    settings.ROOT_URLCONF = __name__
+    settings.ALLOWED_HOSTS = ["testserver"]
+    settings.LIVEVIEW_ALLOWED_MODULES = [__name__]
+    CALLS.clear()
+    INVALID_CALLS.clear()
+    yield
+    CALLS.clear()
+    INVALID_CALLS.clear()
+
+
+def _url(view_name: str, query: dict | None = None) -> str:
+    base = "/%s/" % view_name.lower()
+    if not query:
+        return base
+    from urllib.parse import urlencode
+
+    return "%s?%s" % (base, urlencode(query))
+
+
+# --------------------------------------------------------------------------- #
+# The cases: (view, query, what handle_params receives, the fields in params_errors)
+# --------------------------------------------------------------------------- #
+
+KEPT = {"page": 1, "sort": "name", "q": "hello"}
+INITIAL = {"page": 1, "sort": "date", "q": ""}
+
+CASES = [
+    # The issue's example: the invalid page is replaced, the valid sort and q are kept.
+    ("FieldsView", {"page": "abc", "sort": "name", "q": "hello"}, KEPT, {"page"}),
+    # The other field fails: page survives, sort takes its initial value.
+    (
+        "FieldsView",
+        {"page": "2", "sort": "bogus", "q": "x"},
+        {"page": 2, "sort": "date", "q": "x"},
+        {"sort"},
+    ),
+    # A value that fails a validator (min_value) is replaced, not clamped or kept.
+    ("FieldsView", {"page": "0", "sort": "name"}, {"page": 1, "sort": "name", "q": ""}, {"page"}),
+    # Every field fails: nothing to keep, the result is the initial values.
+    ("FieldsView", {"page": "abc", "sort": "bogus"}, INITIAL, {"page", "sort"}),
+    # A field the URL left out is valid by the form's own say-so (it is optional): it takes its
+    # initial value, exactly as on a valid URL.
+    ("FieldsView", {"page": "abc"}, INITIAL, {"page"}),
+    # A valid URL never reaches the fallback: unchanged from before.
+    ("FieldsView", {"page": "3", "sort": "name"}, {"page": 3, "sort": "name", "q": ""}, set()),
+    # The same URLs with the default: the initial value of every field (unchanged behaviour).
+    ("DefaultView", {"page": "abc", "sort": "name", "q": "hello"}, INITIAL, {"page"}),
+    ("DefaultView", {"page": "2", "sort": "bogus", "q": "x"}, INITIAL, {"sort"}),
+    ("ExplicitInitialView", {"page": "abc", "sort": "name", "q": "hello"}, INITIAL, {"page"}),
+    ("DefaultView", {"page": "3", "sort": "name"}, {"page": 3, "sort": "name", "q": ""}, set()),
+    # A required field the URL left out is NOT valid by default: the form says it is required.
+    ("RequiredFields", {"page": "3"}, {"token": None, "page": 3}, {"token"}),
+    ("RequiredFields", {"token": "t", "page": "zzz"}, {"token": "t", "page": 1}, {"page"}),
+    # A form-level error says the COMBINATION is wrong: nothing is kept, not even the page.
+    (
+        "RangeFields",
+        {"lo": "5", "hi": "2", "page": "4"},
+        {"lo": 0, "hi": 10, "page": 1},
+        {"__all__"},
+    ),
+    # ... and a field error next to a form-level one still keeps nothing.
+    (
+        "RangeFields",
+        {"lo": "7", "hi": "2", "page": "zzz"},
+        {"lo": 0, "hi": 10, "page": 1},
+        {"__all__", "page"},
+    ),
+    # clean() runs on what validated; with `hi` gone it has no range to judge, so `lo` is kept.
+    ("RangeFields", {"lo": "5", "hi": "zzz"}, {"lo": 5, "hi": 10, "page": 1}, {"hi"}),
+    # clean() that names the field is a field error: the siblings are kept.
+    (
+        "AttributedFields",
+        {"lo": "5", "hi": "2", "page": "4"},
+        {"lo": 5, "hi": 10, "page": 4},
+        {"hi"},
+    ),
+    # A checkbox the URL left out takes its initial value; one it supplied is kept.
+    ("BoolFields", {"page": "abc"}, {"flag": True, "page": 1}, {"page"}),
+    ("BoolFields", {"page": "abc", "flag": "false"}, {"flag": False, "page": 1}, {"page"}),
+    # An async handle_params and a super() override see the same kept values.
+    ("AsyncFields", {"page": "abc", "sort": "name", "q": "hello"}, KEPT, {"page"}),
+    ("SuperFields", {"page": "abc", "sort": "name", "q": "hello"}, KEPT, {"page"}),
+]
+
+
+class Seen:
+    """What a transport showed for one visit."""
+
+    def __init__(self, *, failed=False, html=""):
+        self.failed = failed
+        self.html = html
+
+
+def _state(html: str) -> dict:
+    match = re.search(r'<p[^>]*id="state"[^>]*>([^<]*)</p>', html)
+    assert match, html
+    import html as html_lib
+
+    return json.loads(html_lib.unescape(match.group(1)))
+
+
+class _Cases:
+    """Every case, on whichever transport the subclass drives."""
+
+    async def visit(self, view_name: str, query: dict) -> Seen:  # pragma: no cover - abstract
+        raise NotImplementedError
+
+    #: The test client does not render the page, so it has no HTML to read back.
+    renders = True
+
+    @pytest.mark.parametrize("view_name, query, expected, error_fields", CASES)
+    async def test_the_fallback_is_what_the_view_declared(
+        self, view_name, query, expected, error_fields
+    ):
+        seen = await self.visit(view_name, query)
+        assert not seen.failed
+        params, _uri, errors = CALLS[-1]
+        assert params == expected
+        assert set(errors) == error_fields
+        if self.renders and seen.html:
+            assert _state(seen.html) == expected
+
+    async def test_a_value_that_failed_never_reaches_handle_params(self):
+        """The security property: only a cleaned value or an initial value is handed over."""
+        seen = await self.visit(
+            "FieldsView", {"page": "<script>alert(1)</script>", "sort": "x'; drop", "q": "ok"}
+        )
+        assert not seen.failed
+        assert CALLS[-1][0] == {"page": 1, "sort": "date", "q": "ok"}
+        assert "alert(1)" not in seen.html and "drop" not in seen.html
+
+    async def test_the_url_a_view_with_no_form_gets_is_untouched(self):
+        seen = await self.visit("NoFormBadMode", {"page": "abc", "x": "y"})
+        assert not seen.failed
+        assert CALLS[-1][0] == {"page": "abc", "x": "y"}
+
+    @pytest.mark.parametrize("query", [{}, {"page": "abc"}])
+    async def test_a_mode_nothing_implements_fails_the_request_valid_url_or_not(self, query):
+        """``"field"`` is a typo for ``"fields"``: it must not silently mean ``"initial"``."""
+        seen = await self.visit("BadMode", query)
+        assert seen.failed
+        assert CALLS == []
+
+    async def test_a_form_that_was_refused_before_it_was_validated_keeps_nothing(self):
+        """Past the form-data bounds the form is bound to nothing (#3834): there is nothing to keep.
+
+        An all-optional form bound to nothing is VALID-looking (no field errors), which is why
+        this must not read ``cleaned_data``: the note the URL carried was never validated.
+        """
+        query = {"note": "hello", "x1": "1", "x2": "2", "x3": "3", "x4": "4"}
+        config = {"rate_limit": {"rate": 10**9, "burst": 10**9}, "max_form_fields": 1}
+        with override_settings(LIVEVIEW_CONFIG=config):
+            seen = await self.visit("NoteFields", query)
+        assert not seen.failed
+        params, _uri, errors = CALLS[-1]
+        # `note` has no initial value: it is None (what "initial" hands over), not the "" a form
+        # bound to nothing would clean it to.
+        assert params == {"page": 1, "note": None}
+        assert set(errors) == {"__all__"}
+
+
+# --------------------------------------------------------------------------- #
+# Transports
+# --------------------------------------------------------------------------- #
+
+
+class TestHttpGet(_Cases):
+    async def visit(self, view_name, query):
+        response = await sync_to_async(Client(raise_request_exception=False).get)(
+            _url(view_name, query)
+        )
+        if response.status_code != 200:
+            return Seen(failed=True)
+        return Seen(html=response.content.decode())
+
+
+class _ScopeSession:
+    def __init__(self, key):
+        self.session_key = key
+
+
+async def _connect(view_name, query):
+    pytest.importorskip("channels")
+    from channels.testing import WebsocketCommunicator
+
+    from djust.websocket import LiveViewConsumer
+
+    def _create_session():
+        store = SessionStore()
+        store.create()
+        return store.session_key
+
+    key = await sync_to_async(_create_session)()
+    communicator = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
+    communicator.scope["session"] = _ScopeSession(key)
+    connected, _ = await communicator.connect()
+    assert connected
+    await communicator.receive_json_from()  # connect frame
+    await communicator.send_json_to(
+        {
+            "type": "mount",
+            "view": "%s.%s" % (__name__, view_name),
+            "url": _url(view_name),
+            "params": query,
+        }
+    )
+    frames = await receive_until(
+        communicator, lambda fs: any(f.get("type") in ("mount", "error") for f in fs)
+    )
+    return communicator, frames[-1]
+
+
+class TestSocketMount(_Cases):
+    async def visit(self, view_name, query):
+        communicator, frame = await _connect(view_name, query)
+        try:
+            if frame["type"] == "error":
+                return Seen(failed=True)
+            return Seen(html=frame["html"])
+        finally:
+            await communicator.disconnect()
+
+
+class TestSocketUrlChange(_Cases):
+    """Mounted on a clean URL, then ``live_patch``-ed to the one under test."""
+
+    async def visit(self, view_name, query):
+        communicator, frame = await _connect(view_name, {})
+        try:
+            if frame["type"] == "error":
+                return Seen(failed=True)
+            await drain_extra(communicator)
+            CALLS.clear()
+            await communicator.send_json_to(
+                {"type": "url_change", "params": query, "uri": _url(view_name, query)}
+            )
+            frames = await receive_until(
+                communicator,
+                lambda fs: any(f.get("type") in ("patch", "html_update", "error") for f in fs),
+            )
+            last = frames[-1]
+            if last["type"] == "error":
+                return Seen(failed=True)
+            # A patch carries only what changed; the state paragraph is the proof that matters and
+            # the CALLS record is the assertion, so the frame text is only scanned for leaks.
+            return Seen(html=json.dumps(last))
+        finally:
+            await communicator.disconnect()
+
+    # url_change's frame is a patch, not the page: the state paragraph cannot be parsed back.
+    renders = False
+
+
+def _sse_request(method, url, body, key=None):
+    factory = RequestFactory()
+    if method == "GET":
+        request = factory.get(url, data=body)
+    else:
+        request = factory.post(url, data=json.dumps(body), content_type="application/json")
+    request.session = SessionStore(key)
+    if key is None:
+        request.session.create()
+    request.session = SessionStore(request.session.session_key)
+    request.user = AnonymousUser()
+    request.tenant = None
+    return request
+
+
+def _drain(session):
+    frames = []
+    while not session.queue.empty():
+        frame = session.queue.get_nowait()
+        if frame is not None:
+            frames.append(frame)
+    return frames
+
+
+class _SseCases(_Cases):
+    async def _start(self, view_name, query):
+        from djust.sse import DjustSSEStreamView, _sse_sessions
+
+        sid = str(uuid.uuid4())
+        request = await sync_to_async(_sse_request)(
+            "GET",
+            "/djust/sse/%s/" % sid,
+            {"view": "%s.%s" % (__name__, view_name), "_djust_url": _url(view_name), **query},
+        )
+        response = await DjustSSEStreamView().get(request, session_id=sid)
+        session = _sse_sessions.get(sid)
+        return response, session, request.session.session_key, sid
+
+
+@pytest.mark.django_db(transaction=True)
+class TestSseMount(_SseCases):
+    async def visit(self, view_name, query):
+        from djust.sse import _sse_sessions
+
+        response, session, _key, sid = await self._start(view_name, query)
+        try:
+            if session is None:  # a failed mount registers nothing (#1237 finding 25)
+                return Seen(failed=True)
+            frames = _drain(session)
+            mounts = [f for f in frames if f.get("type") == "mount"]
+            if not mounts or any(f.get("type") == "error" for f in frames):
+                return Seen(failed=True)
+            return Seen(html=mounts[-1]["html"])
+        finally:
+            _sse_sessions.pop(sid, None)
+
+
+@pytest.mark.django_db(transaction=True)
+class TestSseUrlChange(_SseCases):
+    renders = False
+
+    async def visit(self, view_name, query):
+        from djust.sse import DjustSSEMessageView, _sse_sessions
+
+        response, session, key, sid = await self._start(view_name, {})
+        try:
+            if session is None:
+                return Seen(failed=True)
+            _drain(session)
+            CALLS.clear()
+            request = await sync_to_async(_sse_request)(
+                "POST",
+                "/djust/sse/%s/message/" % sid,
+                {"type": "url_change", "params": query, "uri": _url(view_name, query)},
+                key,
+            )
+            response = await DjustSSEMessageView().post(request, session_id=sid)
+            assert response.status_code == 200
+            frames = _drain(session)
+            if any(f.get("type") == "error" for f in frames):
+                return Seen(failed=True)
+            return Seen(html=json.dumps(frames))
+        finally:
+            _sse_sessions.pop(sid, None)
+
+
+def _stateless():
+    """The stateless config ON TOP OF whatever a test already set (it must not undo a limit)."""
+    from django.conf import settings
+
+    current = dict(getattr(settings, "LIVEVIEW_CONFIG", None) or {})
+    return override_settings(LIVEVIEW_CONFIG={**current, "view_state_in_session": False})
+
+
+class TestFallbackPost(_Cases):
+    """The stateless HTTP fallback POST re-runs ``handle_params`` for the URL it came from."""
+
+    renders = False
+
+    async def visit(self, view_name, query):
+        def run():
+            url = _url(view_name, query)
+            initial = RequestFactory().get(url)
+            initial.user, initial.tenant = AnonymousUser(), None
+            initial.session = SessionStore()
+            initial.session.create()
+            view_class = getattr(sys.modules[__name__], view_name)
+            with _stateless():
+                try:
+                    view_class().get(initial)
+                except ImproperlyConfigured:
+                    return Seen(failed=True)
+                CALLS.clear()
+                request = RequestFactory().post(
+                    url,
+                    data=json.dumps({}),
+                    content_type="application/json",
+                    HTTP_X_DJUST_EVENT="noop",
+                )
+                request.user, request.session, request.tenant = (
+                    initial.user,
+                    initial.session,
+                    None,
+                )
+                try:
+                    response = view_class().post(request)
+                except ImproperlyConfigured:
+                    return Seen(failed=True)
+            return Seen(failed=response.status_code >= 500)
+
+        return await sync_to_async(run)()
+
+
+class _ClientCases(_Cases):
+    renders = False
+
+    def _client(self, view_name):
+        return LiveViewTestClient(getattr(sys.modules[__name__], view_name))
+
+
+class TestTestClientMount(_ClientCases):
+    async def visit(self, view_name, query):
+        def run():
+            try:
+                self._client(view_name).mount(query_params=query)
+            except ImproperlyConfigured:
+                return Seen(failed=True)
+            return Seen()
+
+        return await sync_to_async(run)()
+
+
+class TestTestClientUrlChange(_ClientCases):
+    async def visit(self, view_name, query):
+        def run():
+            try:
+                client = self._client(view_name).mount()
+                CALLS.clear()
+                client.url_change(query)
+            except ImproperlyConfigured:
+                return Seen(failed=True)
+            return Seen()
+
+        return await sync_to_async(run)()
+
+
+# --------------------------------------------------------------------------- #
+# The declaration
+# --------------------------------------------------------------------------- #
+
+
+class TestTheDeclaration:
+    def test_the_default_is_the_conservative_one(self):
+        assert LiveView.params_form_fallback == "initial"
+
+    def test_the_name_is_framework_state_not_reactive_state(self):
+        from djust.live_view import _FRAMEWORK_INTERNAL_ATTRS
+
+        assert "params_form_fallback" in _FRAMEWORK_INTERNAL_ATTRS
+
+    def test_an_explicit_state_field_cannot_use_the_name(self):
+        from djust._exposure import ExposureContract, ExposureError, FieldExposure
+
+        with pytest.raises(ExposureError, match="reserved"):
+            ExposureContract("app.View", {"params_form_fallback": FieldExposure()})
+
+    def test_an_instance_assignment_is_not_reactive_state(self):
+        class Assigns(LiveView):
+            template = "<div dj-root></div>"
+
+            def mount(self, request, **kwargs):
+                self.params_form_fallback = "fields"
+                self.visible = 1
+
+        view = Assigns()
+        view.mount(RequestFactory().get("/"))
+        for state in (view.get_state(), view._capture_snapshot_state()):
+            assert "params_form_fallback" not in state
+            assert "visible" in state
+
+    def test_an_instance_attribute_does_not_change_the_declaration(self):
+        """Read from the class, like ``params_form``: ``self.params_form_fallback = ...`` is inert."""
+        from djust._params_form import declared_fallback
+
+        view = DefaultView()
+        view.params_form_fallback = "fields"
+        assert declared_fallback(view) == "initial"
+
+    def test_it_is_in_the_schema_and_the_stub(self):
+        from pathlib import Path
+
+        import djust
+        from djust.schema import CLASS_ATTRIBUTES
+
+        (entry,) = [a for a in CLASS_ATTRIBUTES if a["name"] == "params_form_fallback"]
+        assert entry["default"] == "'initial'"
+        stub = (Path(djust.__file__).parent / "live_view.pyi").read_text()
+        assert 'params_form_fallback: str = "initial"' in stub
+
+
+class TestFallbackProblem:
+    @pytest.mark.parametrize("declared", ["initial", "fields"])
+    def test_a_known_mode_has_no_problem(self, declared):
+        from djust._params_form import fallback_problem
+
+        assert fallback_problem(declared) is None
+
+    @pytest.mark.parametrize(
+        "declared", ["field", "Fields", "", None, True, 1, ["fields"], b"fields"]
+    )
+    def test_anything_else_does(self, declared):
+        from djust._params_form import fallback_problem
+
+        assert "must be one of 'initial', 'fields'" in fallback_problem(declared)
+
+
+# --------------------------------------------------------------------------- #
+# The decision itself, on a real bound form
+# --------------------------------------------------------------------------- #
+
+
+class DeletesParams(forms.Form):
+    """``clean()`` removes a field from ``cleaned_data`` without reporting an error."""
+
+    page = forms.IntegerField(min_value=1, required=False, initial=1)
+    sort = forms.ChoiceField(choices=SORTS, required=False, initial="date")
+    q = forms.CharField(required=False, initial="")
+
+    def clean(self):
+        cleaned = super().clean()
+        if cleaned.get("q") == "drop":
+            del cleaned["sort"]
+        return cleaned
+
+
+class LegacyErrorParams(forms.Form):
+    """Writes ``self._errors`` directly (an old pattern): the field STAYS in ``cleaned_data``."""
+
+    page = forms.IntegerField(min_value=1, required=False, initial=1)
+    sort = forms.ChoiceField(choices=SORTS, required=False, initial="date")
+
+    def clean(self):
+        cleaned = super().clean()
+        if cleaned.get("sort") == "name":
+            self._errors["sort"] = self.error_class(["Not this one."])
+        return cleaned
+
+
+class TestFallbackValues:
+    def _bound(self, form_class, params):
+        from types import SimpleNamespace
+
+        from djust._params_form import bind_params
+
+        view = SimpleNamespace()
+        form, values = bind_params(view, form_class, params)
+        return form, values, view
+
+    def test_a_field_clean_removed_without_an_error_is_not_trusted(self):
+        from djust._params_form import fallback_values
+
+        form, values, _ = self._bound(DeletesParams, {"page": "abc", "sort": "name", "q": "drop"})
+        assert values is None
+        assert "sort" not in form.cleaned_data and "sort" not in form.errors
+        assert fallback_values(form, "fields") == {"page": 1, "sort": "date", "q": "drop"}
+
+    def test_a_field_with_an_error_is_replaced_even_when_it_is_still_in_cleaned_data(self):
+        """``add_error`` removes a failed field from ``cleaned_data``; writing ``_errors`` does not."""
+        from djust._params_form import fallback_values
+
+        form, values, _ = self._bound(LegacyErrorParams, {"page": "2", "sort": "name"})
+        assert values is None
+        assert form.cleaned_data["sort"] == "name" and "sort" in form.errors
+        assert fallback_values(form, "fields") == {"page": 2, "sort": "date"}
+
+    def test_the_keys_are_the_declared_fields_in_order_and_nothing_else(self):
+        from djust._params_form import fallback_values
+
+        form, values, _ = self._bound(FilterParams, {"page": "abc", "sort": "name", "extra": "z"})
+        assert list(fallback_values(form, "fields")) == ["page", "sort", "q"]
+        assert fallback_values(form, "initial") == INITIAL
+        assert list(fallback_values(form, "initial")) == ["page", "sort", "q"]
+
+    def test_a_value_clean_added_is_not_carried_into_the_fallback(self):
+        """The valid path keeps a key ``clean()`` derived; the fallback hands over declared fields only."""
+        from djust._params_form import fallback_values
+
+        class Derives(FilterParams):
+            def clean(self):
+                cleaned = super().clean()
+                cleaned["derived"] = "from a form that may be half-validated"
+                return cleaned
+
+        form, values, _ = self._bound(Derives, {"page": "abc", "sort": "name"})
+        assert values is None
+        assert "derived" not in fallback_values(form, "fields")
+
+    def test_the_valid_path_is_unchanged(self):
+        form, values, view = self._bound(DeletesParams, {"page": "2", "sort": "name"})
+        assert values == {"page": 2, "sort": "name", "q": ""}
+        assert view.params_errors == {}
+
+    def test_the_messages_are_the_same_in_either_mode(self):
+        """``params_errors`` is published before the hook and does not depend on the fallback."""
+        _, _, view = self._bound(FilterParams, {"page": "abc", "sort": "bogus"})
+        assert set(view.params_errors) == {"page", "sort"}
+
+
+# --------------------------------------------------------------------------- #
+# V023 reports a mode the request path would refuse
+# --------------------------------------------------------------------------- #
+
+
+class CheckGood(LiveView):
+    template = "<div dj-root></div>"
+    params_form = FilterParams
+    params_form_fallback = "fields"
+
+
+class CheckBad(LiveView):
+    template = "<div dj-root></div>"
+    params_form = FilterParams
+    params_form_fallback = "field"
+
+
+class CheckBadInherited(CheckBad):
+    pass
+
+
+class CheckBadNotAString(LiveView):
+    template = "<div dj-root></div>"
+    params_form = FilterParams
+    params_form_fallback = ["fields"]
+
+
+class CheckNoForm(LiveView):
+    """No ``params_form``: the mode is never read, so there is nothing to report."""
+
+    template = "<div dj-root></div>"
+    params_form_fallback = "nonsense"
+
+
+class CheckBothBroken(LiveView):
+    template = "<div dj-root></div>"
+    params_form = "myapp.forms.Filter"
+    params_form_fallback = "nonsense"
+
+
+def _fallback_messages(*classes):
+    from djust.checks.components import check_params_form_declarations
+
+    labels = ["%s.%s" % (c.__module__, c.__qualname__) for c in classes]
+    return [
+        m
+        for m in check_params_form_declarations(None)
+        if any(m.msg.startswith(label + ".params_form_fallback ") for label in labels)
+    ]
+
+
+class TestV023Fallback:
+    def test_a_known_mode_is_silent(self):
+        assert _fallback_messages(CheckGood, DefaultView, FieldsView) == []
+
+    @pytest.mark.parametrize("view", [CheckBad, CheckBadNotAString])
+    def test_an_unknown_mode_is_an_error(self, view):
+        (message,) = _fallback_messages(view)
+        assert message.id == "djust.V023"
+        assert message.level == 40
+        assert "must be one of 'initial', 'fields'" in message.msg
+        assert "ImproperlyConfigured" in message.hint
+
+    def test_the_message_names_what_was_declared(self):
+        (message,) = _fallback_messages(CheckBad)
+        assert "'field'" in message.msg
+
+    def test_an_inherited_mode_is_reported_for_the_subclass(self):
+        assert len(_fallback_messages(CheckBadInherited)) == 1
+
+    def test_a_view_without_a_params_form_is_not_reported(self):
+        assert _fallback_messages(CheckNoForm) == []
+
+    def test_both_problems_are_reported_when_both_are_broken(self):
+        from djust.checks.components import check_params_form_declarations
+
+        label = "%s.%s" % (CheckBothBroken.__module__, CheckBothBroken.__qualname__)
+        mine = [m for m in check_params_form_declarations(None) if m.msg.startswith(label + ".")]
+        assert sorted(m.msg.split(" ")[0].rsplit(".", 1)[1] for m in mine) == [
+            "params_form",
+            "params_form_fallback",
+        ]
+
+    def test_it_can_be_suppressed(self, settings):
+        settings.DJUST_CONFIG = {"suppress_checks": ["V023"]}
+        assert _fallback_messages(CheckBad) == []
+
+    @pytest.mark.parametrize("declared", ["fields", "initial", "field", "", None, ["fields"], 3])
+    def test_the_check_judges_a_mode_as_the_runtime_does(self, declared):
+        from djust._params_form import fallback_problem, run_handle_params_sync
+
+        class Probe(LiveView):
+            template = "<div dj-root></div>"
+            params_form = FilterParams
+            params_form_fallback = declared
+
+            def handle_params(self, params, uri):
+                pass
+
+        if fallback_problem(declared) is None:
+            run_handle_params_sync(Probe(), {}, "/")
+        else:
+            with pytest.raises(ImproperlyConfigured, match="params_form_fallback"):
+                run_handle_params_sync(Probe(), {}, "/")
