@@ -211,6 +211,9 @@ class NavigationMixin:
         ``clean()`` runs where ``super()`` is called: from an ``async def``
         override it is on the event loop, where a ``clean()`` that uses the ORM
         fails and the plain initial values are used (with a logged warning).
+        **``clean()`` must be idempotent** to use ``params_form_fallback = "fields"``:
+        it is re-run on values it already cleaned, so a ``clean()`` that multiplies a
+        price by 100 hands ``handle_params`` 50000 where a valid URL hands 500.
         Override it to refuse the URL instead::
 
             def handle_invalid_params(self, form, uri):

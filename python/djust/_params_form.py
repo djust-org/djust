@@ -244,19 +244,27 @@ def _rechecked(view: Any, form: forms.BaseForm, values: Dict[str, Any]) -> Optio
 
     Runs the form's own ``clean()`` on a copy whose ``cleaned_data`` is a deep copy
     of ``values`` and whose errors start empty, so the form the caller holds (its
-    ``errors``, its ``cleaned_data``) is not touched and an in-place change
-    ``clean()`` makes to a list is applied once. What it leaves is read the way
+    ``errors``, its ``cleaned_data``) is not touched. What it leaves is read the way
     ``BaseForm._clean_form`` reads it on the valid path (the returned dict, else
-    ``self.cleaned_data``), so a ``clean()`` that repairs a value hands back the
-    same repair here as there. Accepted means ``clean()`` neither raised
-    ``ValidationError`` nor reported an error with ``add_error()``.
+    ``self.cleaned_data``; an empty returned dict is what it leaves, so no field
+    survives), so a ``clean()`` that repairs a value hands back the same repair
+    here as there. The caller adopts that output for the fields it KEPT only. Accepted
+    means ``clean()`` neither raised ``ValidationError`` nor reported an error
+    with ``add_error()``; a plain ``ValidationError`` is an ordinary rejection and
+    logs nothing.
+
+    **``clean()`` must be idempotent.** It runs on values it already cleaned once
+    (a kept value is its own first-pass output, a replaced field's initial value
+    passes through it too), so a ``clean()`` that multiplies a price by 100 hands
+    ``handle_params`` 50000 where the valid path hands 500.
 
     ``None`` (nothing is kept) also for anything else that goes wrong: a
     ``clean()`` that compares with the ``None`` an initial value can be, that uses
     the ORM on the event loop (an ``async def handle_invalid_params`` that calls
     ``super()``), that raises ``PermissionDenied`` or ``Http404`` only on this
     second call, or values that cannot be deep-copied. The answer is the plain
-    initial values and a logged warning, not a 500.
+    initial values and a logged warning, not a 500. (A kept ``ModelChoiceField``
+    value comes back as a deep copy: equal by primary key, not the same object.)
     """
     try:
         probe = copy.copy(form)
@@ -351,8 +359,15 @@ def fallback_values(form: forms.BaseForm, mode: str, view: Any = None) -> Dict[s
     repaired = _rechecked(view, form, merged)
     if repaired is None:
         return all_initial()
-    # A field clean() removed is not valid, as one it was never given: its initial value.
-    return {name: repaired[name] if name in repaired else initial_of(name) for name in form.fields}
+    # clean()'s output is adopted for the fields the fallback KEPT only (a kept field the URL left
+    # out counts: it is in `kept`). A replaced field is its initial value whatever clean() wrote:
+    # a clean() that re-reads self.data would otherwise hand the failed raw value to handle_params.
+    # A kept field clean() removed is not valid, as one it was never given: its initial value.
+    adopted = set(kept)
+    return {
+        name: repaired[name] if name in adopted and name in repaired else initial_of(name)
+        for name in form.fields
+    }
 
 
 def _error_messages(form: forms.BaseForm) -> Dict[str, List[str]]:

@@ -206,15 +206,29 @@ Now `?page=abc&sort=name` hands `handle_params()` `page=1` (its initial value) a
   merged values, on a copy of the form, and if it raises `ValidationError`, reports an error
   with `add_error()` or fails any other way (it compared with the `None` an initial can be),
   nothing is kept and the view gets the plain initial values. **The result is always a
-  combination `clean()` accepts, or the plain initials.** What `clean()` repairs it repairs
-  here as on the valid path (a `clean()` that sets `hi = lo` for an inverted range hands
-  back the repaired pair), and an in-place change it makes to a list is applied once. This
+  combination `clean()` accepts, or the plain initials.** What `clean()` repairs in a
+  **kept** field it repairs here as on the valid path (a `clean()` that sets `lo = hi` for an
+  inverted range hands back the repaired pair). A write to a **replaced** field is not adopted:
+  that field is its initial value whatever `clean()` wrote. This
   is one extra call of `clean()` and only on this path; **the fields' own `clean_<field>()`
   validators are not run again on the merged values**: a `clean_end()` that checks
   `end >= start` was skipped when `start` failed, so `?start=zz&end=1` hands over `start` at
   its initial value `10` next to `end=1`. Put a rule that spans fields in `clean()`. A
   replaced field's own validity is not asked either (a required field with no initial is
   `None`). Make `clean()` tolerate a missing or `None` field, as it must for the first pass.
+  **`clean()` must be idempotent to use `params_form_fallback = "fields"`.** The contract is
+  that `clean()` is re-run on values it already cleaned: a kept field is `clean()`'s own
+  first-pass output, and a replaced field's initial value passes through it too. A `clean()`
+  that is not idempotent hands `handle_params()` a silently different value than the valid
+  path: `cleaned["price"] *= 100` gives `500` for `?price=5` and `50000` from the fallback
+  for `?price=5&page=zz`; a LIKE-wrap (`"%" + name + "%"`) gives `%bob%` and `%%bob%%`; a
+  `page - 1` conversion gives `3` and `2`. Keep such conversions in `handle_params()`, or
+  leave the view on the default `"initial"`.
+- `clean()`'s output is adopted only for the fields the fallback **kept**. A replaced field
+  is its initial value whatever `clean()` wrote, so a `clean()` that re-reads `self.data`
+  cannot hand a failed raw value to `handle_params()`.
+- A kept `ModelChoiceField` value is a deep copy of the instance the first pass produced: equal
+  by primary key, not the same object.
   Anything else going wrong in the second call (a `None` comparison, a value that cannot be
   deep-copied, `PermissionDenied` or `Http404` that `clean()` raises only on the second call)
   is logged as a warning and gives the plain initials, never a 500.

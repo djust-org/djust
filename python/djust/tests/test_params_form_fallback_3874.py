@@ -150,13 +150,24 @@ class CrashesOnNoneParams(forms.Form):
 
 
 class RepairParams(forms.Form):
-    """``clean()`` REPAIRS an inverted range (in place); the valid path hands over the repair."""
+    """``clean()`` REPAIRS the KEPT low end of an inverted range (in place); the valid path hands over the repair."""
 
     lo = forms.IntegerField(required=False, initial=0)
     hi = forms.IntegerField(required=False, initial=3)
 
     def clean(self):
         cleaned = super().clean()
+        if cleaned.get("lo") is not None and cleaned.get("hi") is not None:
+            if cleaned["lo"] > cleaned["hi"]:
+                cleaned["lo"] = cleaned["hi"]
+        return cleaned
+
+
+class RepairHiParams(RepairParams):
+    """The repair writes the field that FAILED (``hi``): not adopted, a replaced field is its initial."""
+
+    def clean(self):
+        cleaned = forms.Form.clean(self)
         if cleaned.get("lo") is not None and cleaned.get("hi") is not None:
             if cleaned["lo"] > cleaned["hi"]:
                 cleaned["hi"] = cleaned["lo"]
@@ -170,7 +181,7 @@ class RepairReturnsParams(RepairParams):
         cleaned = forms.Form.clean(self)
         if cleaned.get("lo") is not None and cleaned.get("hi") is not None:
             if cleaned["lo"] > cleaned["hi"]:
-                return {**cleaned, "hi": cleaned["lo"]}
+                return {**cleaned, "lo": cleaned["hi"]}
         return cleaned
 
 
@@ -185,6 +196,33 @@ class CleanFieldParams(forms.Form):
         if start is not None and end is not None and end < start:
             raise forms.ValidationError("end before start")
         return end
+
+
+class RereadParams(forms.Form):
+    """``clean()`` re-reads ``self.data``: a failed field's RAW value must still never get out."""
+
+    q = forms.CharField(max_length=5, required=False, initial="")
+    page = forms.IntegerField(min_value=1, max_value=10, required=False, initial=1)
+
+    def clean(self):
+        cleaned = super().clean()
+        for name in ("q", "page"):
+            if name in self.data:
+                cleaned[name] = self.data[name]  # the raw text, valid or not
+        return cleaned
+
+
+class PriceParams(forms.Form):
+    """A NON-idempotent ``clean()``: documented to give a different value in the fallback."""
+
+    price = forms.IntegerField(required=False, initial=0)
+    page = forms.IntegerField(min_value=1, required=False, initial=1)
+
+    def clean(self):
+        cleaned = super().clean()
+        if cleaned.get("price") is not None:
+            cleaned["price"] = cleaned["price"] * 100
+        return cleaned
 
 
 class OrmParams(forms.Form):
@@ -285,6 +323,16 @@ class CleanFieldFields(_Base):
     params_form_fallback = "fields"
 
 
+class RereadFields(_Base):
+    params_form = RereadParams
+    params_form_fallback = "fields"
+
+
+class PriceFields(_Base):
+    params_form = PriceParams
+    params_form_fallback = "fields"
+
+
 class OrmSync(_Base):
     """A sync override that calls ``super()``: the default runs off the loop, so the ORM works."""
 
@@ -357,6 +405,8 @@ _VIEWS = (
     CrashFields,
     RepairFields,
     CleanFieldFields,
+    RereadFields,
+    PriceFields,
     OrmSync,
     OrmAsync,
     PostCleanFields,
@@ -467,11 +517,22 @@ CASES = [
         {"lo": 0, "hi": 10, "page": 1},
         {"__all__"},
     ),
-    # What clean() repairs it repairs here as on the valid path: (lo=9, hi=3) -> hi repaired to 9.
-    ("RepairFields", {"lo": "9", "hi": "zzz"}, {"lo": 9, "hi": 9}, {"hi"}),
+    # What clean() repairs in a KEPT field it repairs here as on the valid path: (lo=9, hi=3) -> lo
+    # repaired to 3 (hi, replaced by its initial 3, is not written by clean()).
+    ("RepairFields", {"lo": "9", "hi": "zzz"}, {"lo": 3, "hi": 3}, {"hi"}),
     # The documented limit: clean_<field>() is NOT run again on the merged values, so a rule that
     # spans fields there is skipped (start failed, end=1 sits next to start's initial 10).
     ("CleanFieldFields", {"start": "zz", "end": "1"}, {"start": 10, "end": 1}, {"start"}),
+    # clean() re-reads self.data: the failed q is its INITIAL value, never the raw URL text (what
+    # "initial" mode hands over for q); page was kept and keeps its raw-read value.
+    (
+        "RereadFields",
+        {"q": "<script>alert(1)</script>", "page": "5"},
+        {"q": "", "page": "5"},
+        {"q"},
+    ),
+    # A clean() that is NOT idempotent: documented, the valid path gives 500 and the fallback 50000.
+    ("PriceFields", {"price": "5", "page": "zz"}, {"price": 50000, "page": 1}, {"page"}),
     # A clean() that cannot take the None an initial can be falls back to the initials, not a 500.
     ("CrashFields", {"lo": "-1", "hi": "zzz"}, {"lo": 0, "hi": None}, {"hi"}),
     # A kept field the URL left out and whose form declares NO initial is the value the valid path
@@ -1161,10 +1222,20 @@ class TestFallbackValues:
         from djust._params_form import fallback_values
 
         _, valid, _ = self._bound(form_class, {"lo": "9", "hi": "3"})
-        assert valid == {"lo": 9, "hi": 9}
+        assert valid == {"lo": 3, "hi": 3}
         form, values, _ = self._bound(form_class, {"lo": "9", "hi": "zzz"})
         assert values is None
         assert fallback_values(form, "fields") == valid
+
+    def test_a_repair_of_a_replaced_field_is_not_adopted(self):
+        """clean() adopted for kept fields only: a write to the failed ``hi`` is its initial still."""
+        from djust._params_form import fallback_values
+
+        _, valid, _ = self._bound(RepairHiParams, {"lo": "9", "hi": "3"})
+        assert valid == {"lo": 9, "hi": 9}
+        form, values, _ = self._bound(RepairHiParams, {"lo": "9", "hi": "zzz"})
+        assert values is None
+        assert fallback_values(form, "fields") == {"lo": 9, "hi": 3}
 
     def test_a_clean_that_mutates_a_list_in_place_never_touches_the_held_form(self):
         """Deep-copied: the form the caller holds keeps what the first pass made.
@@ -1267,6 +1338,114 @@ class TestFallbackValues:
         assert values is None
         assert fallback_values(form, "fields") == {"lo": 0, "hi": 3, "q": "dq"}
         assert calls["q"] == 1
+
+    def test_a_non_idempotent_clean_gives_a_different_value_than_the_valid_path(self):
+        """The documented contract: clean() is re-run on its own output, so it must be idempotent."""
+        from djust._params_form import fallback_values
+
+        _, valid, _ = self._bound(PriceParams, {"price": "5", "page": "1"})
+        assert valid["price"] == 500
+        form, values, _ = self._bound(PriceParams, {"price": "5", "page": "zz"})
+        assert values is None
+        assert fallback_values(form, "fields")["price"] == 50000
+
+    def test_a_clean_that_returns_an_empty_dict_leaves_no_field_so_all_take_their_initial(self):
+        """BaseForm._clean_form adopts a returned ``{}`` (it is not None); so does the re-check."""
+        from djust._params_form import fallback_values
+
+        class EmptiesOnSecond(forms.Form):
+            lo = forms.IntegerField(required=False, initial=0)
+            hi = forms.IntegerField(required=False, initial=3)
+            n = forms.IntegerField(required=False, initial=1)
+            calls = 0
+
+            def clean(self):
+                type(self).calls += 1
+                cleaned = super().clean()
+                return {} if type(self).calls > 1 else cleaned
+
+        EmptiesOnSecond.calls = 0
+        form, values, _ = self._bound(EmptiesOnSecond, {"lo": "2", "hi": "5", "n": "zzz"})
+        assert values is None
+        assert fallback_values(form, "fields") == {"lo": 0, "hi": 3, "n": 1}
+
+    def test_an_ordinary_rejection_logs_nothing_and_a_crash_logs_a_warning(self, caplog):
+        import logging
+
+        from djust._params_form import fallback_values
+
+        form, _, _ = self._bound(SpanParams, {"lo": "9", "hi": "2"})  # add_error rejection
+        raising, _, _ = self._bound(SpanRaisesParams, {"lo": "9", "hi": "zzz"})  # ValidationError
+        with caplog.at_level(logging.DEBUG, logger="djust._params_form"):
+            assert fallback_values(form, "fields", DefaultView()) == {"lo": 0, "hi": 3}
+            assert fallback_values(raising, "fields", DefaultView()) == {"lo": 0, "hi": 3}
+        assert [r for r in caplog.records if r.name == "djust._params_form"] == []
+
+        crashing, _, _ = self._bound(CrashesOnNoneParams, {"lo": "-1", "hi": "zzz"})
+        with caplog.at_level(logging.DEBUG, logger="djust._params_form"):
+            fallback_values(crashing, "fields", DefaultView())
+        (record,) = [r for r in caplog.records if r.name == "djust._params_form"]
+        assert record.levelname == "WARNING"
+
+    def test_a_failed_field_is_its_initial_value_whatever_clean_wrote(self):
+        """clean()'s output is adopted for KEPT fields only (a clean() that re-reads self.data)."""
+        from djust._params_form import fallback_values
+
+        form, values, _ = self._bound(RereadParams, {"q": "<script>alert(1)</script>", "page": "5"})
+        assert values is None
+        assert fallback_values(form, "fields") == {"q": "", "page": "5"}
+        assert fallback_values(form, "initial") == {"q": "", "page": 1}
+
+    def test_a_failed_fields_raw_value_never_reaches_handle_params_property(self):
+        """Random invalid binds over forms whose clean() normalises or re-reads the raw data."""
+        import random
+
+        from djust._params_form import fallback_values
+
+        class Normalises(forms.Form):
+            q = forms.CharField(max_length=4, required=False, initial="dq")
+            sort = forms.ChoiceField(choices=SORTS, required=False, initial="date")
+            page = forms.IntegerField(min_value=1, max_value=9, required=False, initial=1)
+
+            def clean(self):
+                cleaned = super().clean()
+                for name in ("q", "sort", "page"):
+                    raw = self.data.get(name)
+                    if raw is not None:
+                        cleaned[name] = raw.strip().lower()  # normalises the raw, valid or not
+                return cleaned
+
+        forms_under_test = (Normalises, RereadParams, SpanParams)
+        rng = random.Random(3874)
+        marker = "RAWMARKER"
+        invalid_binds = 0
+        for i in range(600):
+            form_class = rng.choice(forms_under_test)
+            params = {}
+            for name in form_class.base_fields:
+                kind = rng.choice(("valid", "bad", "absent", "empty"))
+                if kind == "valid":
+                    params[name] = rng.choice(("1", "2", "name", "a"))
+                elif kind == "bad":
+                    params[name] = "%s%d <script>" % (marker, i)
+                elif kind == "empty":
+                    params[name] = ""
+            form, values, _ = self._bound(form_class, params)
+            if values is not None:
+                continue
+            invalid_binds += 1
+            initial = {
+                name: form.get_initial_for_field(field, name) for name, field in form.fields.items()
+            }
+            for mode in ("fields", "initial"):
+                result = fallback_values(form, mode)
+                assert list(result) == list(form.fields)
+                for name in form.errors:
+                    if name in form.fields:
+                        assert result[name] == initial[name], (form_class, params, mode, name)
+                # every `bad` value fails its field, so the marker may not appear at all
+                assert marker.lower() not in repr(result).lower(), (form_class, params, mode)
+        assert invalid_binds > 100  # the property was exercised, not vacuous
 
     def test_the_valid_path_is_unchanged(self):
         form, values, view = self._bound(DeletesParams, {"page": "2", "sort": "name"})
