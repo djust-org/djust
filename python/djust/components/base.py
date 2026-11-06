@@ -91,6 +91,24 @@ def _render_template_with_fallback(template_str: str, context: Dict[str, Any]) -
         return cast(str, template.render(django_context))
 
 
+def _render_inline_template(template_str: str, context: Dict[str, Any], owner: str = "") -> str:
+    """Render a component's INLINE ``template`` string: the one place it is done (#3900, #3913).
+
+    ``Component`` (the hybrid path), ``LiveComponent`` and ``BoundComponent`` all draw their
+    ``template`` here. The template is first read once for the slots that decide what lands in the
+    page (``djust.components._hybrid_attrs``): the attribute slots are escaped whatever the value
+    is marked as and a URL is checked against the scheme allowlist, and the text of a raw-text
+    element (``<textarea>``, ``<title>``, ``<script>`` ...) is escaped because the text there can
+    end the element. Every other text slot keeps a marked-safe value's markup.
+
+    ``owner`` is the component's class name, for the warning about what could not be made safe.
+    Not applied: a ``template_name`` file (loaded by the project's loaders, with ``{% include %}``
+    and ``{% extends %}``) and a LiveView's own template.
+    """
+    template_str, context = harden_context(template_str, context, owner)
+    return _render_template_with_fallback(template_str, context)
+
+
 def _load_template_source(template_name: str) -> Optional[str]:
     """The source of ``template_name`` as the project's loaders find it, or
     ``None`` when the configured backend does not expose one (#2530)."""
@@ -611,9 +629,11 @@ class Component(TemplateMutatorGuard, ABC):
             context["_component_key"] = self._component_key
             # #3900: the attribute slots of this template follow the rule the Rust instance
             # and `_render_custom()` follow (escaped whatever the value is marked as; a URL
-            # checked against the scheme allowlist). See `_hybrid_attrs`.
-            template, context = harden_context(self.template, context, type(self).__name__)
-            return cast(str, mark_safe(_render_template_with_fallback(template, context)))
+            # checked against the scheme allowlist). See `_render_inline_template`.
+            return cast(
+                str,
+                mark_safe(_render_inline_template(self.template, context, type(self).__name__)),
+            )
 
         # 3. Fall back to custom Python rendering (flexible)
         return cast(str, mark_safe(self._render_custom()))
@@ -872,7 +892,9 @@ class BoundComponent:
         context = dict(state)
         context["component_id"] = self.component_id
         if template:
-            html: Optional[str] = _render_template_with_fallback(template, context)
+            html: Optional[str] = _render_inline_template(
+                template, context, type(self._descriptor).__name__
+            )
         else:
             assert template_name is not None
             html = _render_template_name_with_markers(template_name, context)
@@ -1336,7 +1358,7 @@ class LiveComponent(TemplateMutatorGuard, ContextProviderMixin):
         if self.template:
             from django.utils.html import format_html
 
-            html = _render_template_with_fallback(self.template, context)
+            html = _render_inline_template(self.template, context, type(self).__name__)
             # Wrap with component ID for LiveComponent tracking (html is already safe from template engine)
             return cast(
                 str,

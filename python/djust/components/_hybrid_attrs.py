@@ -69,16 +69,37 @@ The warning
     template built per instance may carry runtime values). The plan cache is a bounded LRU and
     the set of warnings given is bounded too.
 
-Text slots (``<span>{{ text }}</span>``) are untouched.
+Raw-text elements (#3914)
+    The content of ``<textarea>``, ``<title>``, ``<script>``, ``<style>``, ``<xmp>``,
+    ``<plaintext>``, ``<noscript>``, ``<iframe>``, ``<noembed>`` and ``<noframes>`` is text that
+    ends at the first matching end tag (``<plaintext>`` has none), so markup in a value written
+    there can end the element. A ``{{ }}`` in that text is escaped even when the value is marked
+    safe. A plain top-level name is read from the context and stripped of a "this is markup" claim
+    (:func:`unmarked`: a marked-safe string, a lazy one, an object with ``__html__``, a value
+    that is not text but whose text form is marked safe, a callable returning one), then the
+    engine formats and escapes it as it always did, so an ordinary value (a date, a number, a
+    string) prints byte for byte as before. Any other expression (a dotted path, a filter chain,
+    a loop variable) ends in ``|force_escape``, as an attribute slot does, so a date or number
+    there prints in its canonical form. Under ``{% autoescape off %}`` every slot takes that
+    second form. NOT escaped, and named by the warning: a ``{% %}`` tag in such an element that
+    prints text (``{% firstof %}``, ``{% cycle %}``, ``{% blocktrans %}`` ...), and the templates
+    named by ``{% include %}`` / ``{% extends %}`` (they are not scanned).
+
+Every OTHER text slot (``<span>{{ text }}</span>``) is untouched: it keeps a marked-safe value's
+markup, as a Django template does (the #3898 rule; the difference to the Rust and custom paths of
+the same class is tracked in #3932).
 """
 
 from __future__ import annotations
 
+import datetime
+import decimal
 import functools
 import html
 import inspect
 import logging
 import re
+import uuid
 from typing import Any, NamedTuple
 
 logger = logging.getLogger(__name__)
@@ -95,8 +116,25 @@ URL_ATTRS = frozenset(
 )  # fmt: skip
 #: ``<img src>`` may be an inline ``data:image/...`` URI.
 _IMAGE_TAGS = frozenset({"img", "source", "image"})
-#: Elements whose content is text, not markup: a ``<`` inside is not the start of a tag.
-_RAW_TEXT = frozenset({"script", "style", "textarea", "title"})
+#: Elements whose content is text, not markup: a ``<`` inside is not the start of a tag, and the
+#: element ends at the first matching end tag (``<plaintext>`` has none).
+_RAW_TEXT = frozenset(
+    {"script", "style", "textarea", "title", "xmp", "iframe", "noembed", "noframes", "plaintext"}
+)
+#: ``<noscript>`` is raw text where scripting is on and markup where it is off, so its content
+#: is scanned for attributes AND its text is treated as raw text.
+_NOSCRIPT = "noscript"
+#: Tags that print nothing, or only a path / date from the project's own configuration: a
+#: ``{% %}`` of any other name inside raw-text content may print text this module cannot escape.
+_NON_PRINTING = frozenset(
+    {
+        "#", "if", "elif", "else", "endif", "for", "empty", "endfor", "with", "endwith", "load",
+        "comment", "endcomment", "verbatim", "endverbatim", "autoescape", "endautoescape",
+        "spaceless", "endspaceless", "ifchanged", "endifchanged", "ifequal", "endifequal",
+        "ifnotequal", "endifnotequal", "block", "endblock", "url", "static", "now", "csrf_token",
+        "templatetag", "include", "extends",
+    }
+)  # fmt: skip
 #: Names a template reads as literals, not as context keys.
 _LITERALS = frozenset({"True", "False", "None"})
 #: Characters a URL scheme is made of (RFC 3986: ALPHA *( ALPHA / DIGIT / "+" / "-" / "." )).
@@ -116,7 +154,7 @@ _AS_VAR = re.compile(r"\sas\s+\w+\s*-?%\}$")
 
 _TOKEN = re.compile(r"\{\{.*?\}\}|\{%.*?%\}|\{#.*?#\}", re.S)
 _TAG_OPEN = re.compile(r"<([A-Za-z][^\s/>]*)")
-_END_TAG = re.compile(r"</[A-Za-z]")
+_END_TAG = re.compile(r"</([A-Za-z][^\s/>]*)")
 _NAME = re.compile(r"[A-Za-z_]\w*")
 _TAG_NAME = re.compile(r"\{%-?\s*(\w+)")
 _FOR = re.compile(r"\{%-?\s*for\s+(.+?)\s+in\s", re.S)
@@ -174,6 +212,11 @@ class _Scanner:
         self.values: list[Value] = []
         self.comment = False
         self.raw = ""
+        self.noscript = False
+        #: ``{{ }}`` in the content of a raw-text element (see ``_RAW_TEXT``)
+        self.raw_slots: list[Slot] = []
+        #: ``(element, tag name)`` of each ``{% %}`` in raw-text content that may print text
+        self.raw_tags: list[tuple[str, str]] = []
 
     # -- value bookkeeping --------------------------------------------------
 
@@ -199,6 +242,8 @@ class _Scanner:
         self.state = "text"
         if self.tag in _RAW_TEXT:
             self.raw = self.tag
+        elif self.tag == _NOSCRIPT:
+            self.noscript = True
 
     # -- input ----------------------------------------------------------------
 
@@ -214,7 +259,9 @@ class _Scanner:
                 continue
             if s == "text":
                 if self.raw:
-                    m = re.compile(rf"</{self.raw}\b", re.I).search(text, i)
+                    if self.raw == "plaintext":  # no end tag: the rest of the document
+                        return
+                    m = re.compile(rf"</{self.raw}(?=[\s/>])", re.I).search(text, i)
                     if m is None:
                         return
                     self.raw, i = "", m.start()
@@ -232,6 +279,8 @@ class _Scanner:
                     m = _END_TAG.match(text, i)
                     if m:
                         self.state = "end_tag"
+                        if m.group(1).lower() == _NOSCRIPT:
+                            self.noscript = False
                         i = m.end()
                         continue
                 i += 1
@@ -292,10 +341,27 @@ class _Scanner:
                     self.lit += c
                 i += 1
 
+    def _raw_atom(self, token: str, start: int, end: int, kind: str, where: str) -> None:
+        """A ``{{ }}`` / ``{% %}`` in the TEXT of a raw-text element, of ``<noscript>`` or of an
+        HTML comment (``-->`` ends a comment as an end tag ends an element)."""
+        if kind == "var":
+            self.raw_slots.append(Slot(start, end, token[2:-2], where, ""))
+        else:
+            name = "#" if token.startswith("{#") else _tag_name(token)
+            if name not in _NON_PRINTING and not _AS_VAR.search(token):
+                self.raw_tags.append((where, name))
+
     def atom(self, token: str, start: int, end: int) -> None:
         kind = "var" if token.startswith("{{") else "tag"
         s = self.state
-        if self.comment or s in ("text", "end_tag"):
+        if self.comment:
+            self._raw_atom(token, start, end, kind, "comment")
+            return
+        if s == "end_tag":
+            return
+        if s == "text":
+            if self.raw or self.noscript:
+                self._raw_atom(token, start, end, kind, self.raw or _NOSCRIPT)
             return
         if s in ("dq", "sq", "unq"):
             self._flush()
@@ -313,8 +379,8 @@ class _Scanner:
             self.dynamic = True
 
 
-def values(template: str) -> list[Value]:
-    """Every attribute value of every start tag of ``template``, in order."""
+def _scan(template: str) -> _Scanner:
+    """The tokenizer's pass over ``template``: attribute values, raw-text slots and tags."""
     scanner, pos, skipping = _Scanner(), 0, ""
     for m in _TOKEN.finditer(template):
         token = m.group()
@@ -330,7 +396,37 @@ def values(template: str) -> list[Value]:
         scanner.atom(token, m.start(), m.end())
     if not skipping:
         scanner.feed(template[pos:])
-    return scanner.values
+    return scanner
+
+
+def values(template: str) -> list[Value]:
+    """Every attribute value of every start tag of ``template``, in order."""
+    return _scan(template).values
+
+
+def raw_slots(template: str) -> list[Slot]:
+    """Every ``{{ ... }}`` of ``template`` in the TEXT of a raw-text element (``<textarea>``,
+    ``<title>``, ``<script>`` ..., and ``<noscript>``), in order."""
+    return _scan(template).raw_slots
+
+
+def _includes(template: str) -> int:
+    """How many ``{% include %}`` / ``{% extends %}`` tags ``template`` has outside a
+    ``{% verbatim %}`` / ``{% comment %}`` block: the templates they name are not scanned."""
+    count, skipping = 0, ""
+    for m in _TOKEN.finditer(template):
+        token = m.group()
+        if not token.startswith("{%"):
+            continue
+        name = _tag_name(token)
+        if skipping:
+            if name == "end" + skipping:
+                skipping = ""
+        elif name in ("verbatim", "comment"):
+            skipping = name
+        elif name in ("include", "extends"):
+            count += 1
+    return count
 
 
 def _tag_name(token: str) -> str:
@@ -399,6 +495,14 @@ class Plan(NamedTuple):
     unchecked_urls: tuple[tuple[str, str, str], ...]
     #: ``(tag, attr, value as written)`` of each unquoted value
     unquoted: tuple[tuple[str, str, str], ...]
+    #: ``(synthetic context key, context name)`` of each plain-name slot in raw-text content:
+    #: the value is read from the context and stripped of a "this is markup" claim (below)
+    raw: tuple[tuple[str, str], ...] = ()
+    #: ``(element, tag name)`` of each ``{% %}`` in raw-text content that may print text and
+    #: that this module cannot escape (``{% firstof %}``, ``{% cycle %}`` ...)
+    raw_tags: tuple[tuple[str, str], ...] = ()
+    #: how many ``{% include %}`` / ``{% extends %}`` tags the template has (not scanned)
+    includes: int = 0
 
 
 def _kind(value: Value) -> str:
@@ -593,9 +697,11 @@ def _maybe_chooses(parts: tuple[Part, ...]) -> bool:
 @functools.lru_cache(maxsize=512)
 def plan(template: str) -> Plan:
     """The rewrite of ``template`` (cached per template string, a bounded LRU)."""
-    found = values(template)
-    if not any(p.kind == "var" for v in found for p in v.parts):
-        return Plan(template, (), (), ())
+    scan = _scan(template)
+    found = scan.values
+    raw_tags, includes = tuple(scan.raw_tags), _includes(template)
+    if not (any(p.kind == "var" for v in found for p in v.parts) or scan.raw_slots):
+        return Plan(template, (), (), (), (), raw_tags, includes)
     bound = _bound_names(template)
     edits: list[tuple[int, int, str]] = []
     groups: list[Group] = []
@@ -628,13 +734,46 @@ def plan(template: str) -> Plan:
                 edits.append((part.start, part.end, "{{ " + _force_escaped(expr) + " }}"))
         if group is not None:
             groups.append(group)
+    raw: list[tuple[str, str]] = []
+    # Under ``{% autoescape off %}`` a plain string is not escaped by the engine, so a plain name
+    # cannot be left to it: every slot of such a template ends in ``|force_escape``.
+    engine_escapes = not re.search(r"\{%-?\s*autoescape\b", template)
+    for slot in scan.raw_slots:
+        expr = slot.expr.strip()
+        if engine_escapes and _simple(expr, bound):
+            # a plain name: the value is read from the context and loses a "this is markup" claim
+            # (`unmarked`), then the engine formats and escapes it as it always did, so an
+            # ordinary value (a date, a number, a string) prints byte for byte as before
+            key = f"djust_raw_{slot.start}"
+            raw.append((key, expr))
+            edits.append((slot.start, slot.end, "{{ " + key + " }}"))
+        else:
+            edits.append((slot.start, slot.end, "{{ " + _force_escaped(expr) + " }}"))
     out, pos = [], 0
     for start, end, text in sorted(edits):
         out.append(template[pos:start])
         out.append(text)
         pos = end
     out.append(template[pos:])
-    return Plan("".join(out), tuple(groups), tuple(unchecked), tuple(unquoted))
+    return Plan(
+        "".join(out),
+        tuple(groups),
+        tuple(unchecked),
+        tuple(unquoted),
+        tuple(raw),
+        raw_tags,
+        includes,
+    )
+
+
+def _simple(name: str, bound: frozenset[str]) -> bool:
+    """A plain top-level context name (not a loop / ``with`` variable, not a literal)."""
+    return bool(
+        _NAME.fullmatch(name)
+        and name not in bound
+        and name not in _LITERALS
+        and not name.startswith("_")
+    )
 
 
 def _group(
@@ -683,6 +822,13 @@ def slot_text(value: Any) -> str:
 
     if value is _MISSING:
         return ""
+    return _exact_str(_called(value))
+
+
+def _called(value: Any) -> Any:
+    """``value`` after the engine's auto-call: a callable is called (when the project's setting
+    is on, and the value does not opt out), a callable that ``alters_data`` or needs arguments
+    gives ``""``. Anything else comes back as it is."""
     if (
         callable(value)
         and not isinstance(value, type)
@@ -706,7 +852,39 @@ def slot_text(value: Any) -> str:
                     # no signature to bind (a builtin, say): it is the callable's own TypeError
                     pass
                 raise
-    return _exact_str(value)
+    return value
+
+
+#: Types whose text form cannot be a marked-safe string: left to the engine as they are, so a
+#: date is localised and a number formatted the way the engine always did.
+_ORDINARY_TYPES = frozenset(
+    {
+        bool, int, float, complex, type(None), bytes, list, tuple, dict, set, frozenset, range,
+        datetime.date, datetime.datetime, datetime.time, datetime.timedelta, decimal.Decimal,
+        uuid.UUID,
+    }
+)  # fmt: skip
+
+
+def unmarked(value: Any) -> Any:
+    """``value`` as a template engine must print it inside a raw-text element: a value that
+    claims to be markup (a marked-safe string, a lazy one, an object with ``__html__``, a value
+    that is not text but whose text form is marked safe, a callable returning any of those) comes
+    back as the EXACT ``str`` type, so the engine escapes it. Every other value comes back as it
+    is, so the engine formats it (a date, a number) exactly as it did."""
+    from djust.components.utils import _exact_str
+
+    value = _called(value)
+    if type(value) in _ORDINARY_TYPES:
+        return value
+    text = str(value)
+    if type(text) is str and type(value) is str:
+        return value
+    # ``__html__`` is what every marked-safe string has (``SafeData`` defines it) and what
+    # ``conditional_escape`` honours on any object: on the value, or on the text it gives
+    if hasattr(text, "__html__") or hasattr(value, "__html__"):
+        return _exact_str(text)
+    return value
 
 
 def _allowed(attr: str, kind: str, assembled: str) -> bool:
@@ -725,39 +903,55 @@ def _refused(group: Group, path: tuple[tuple[str, str], ...], texts: dict[str, s
 
 
 #: Warnings already given, by (class, attributes): bounded, and never carrying template text.
-_WARNED: set[tuple[str, tuple[tuple[str, str], ...]]] = set()
+_WARNED: set[tuple[Any, ...]] = set()
 _MAX_WARNED = 512
 _PLAIN_NAME = re.compile(r"[A-Za-z][A-Za-z0-9:_.-]{0,40}")
 
 
 def _warn_once(owner: str, rewrite: Plan) -> None:
-    """Name, once per class and set of attributes, the values that are escaped but not judged.
+    """Name, once per class and set of attributes, what djust could not make safe in a template:
+    URL values escaped but not judged, unquoted values, tags that print text inside a raw-text
+    element, and how many ``{% include %}`` / ``{% extends %}`` tags hold templates it did not scan.
 
-    Only the class name and the tag / attribute NAMES are logged, and only when they are plain
-    names: the template's own text is never logged (a template built per instance may carry
-    runtime values in its attributes).
+    Only the class name, the tag / attribute / element NAMES and a count are logged, and only
+    when they are plain names: the template's own text is never logged (a template built per
+    instance may carry runtime values in its attributes).
     """
-    if not (rewrite.unchecked_urls or rewrite.unquoted):
+    if not (rewrite.unchecked_urls or rewrite.unquoted or rewrite.raw_tags or rewrite.includes):
         return
 
-    def named(items: tuple[tuple[str, str, str], ...]) -> tuple[tuple[str, str], ...]:
-        return tuple(
-            (t if _PLAIN_NAME.fullmatch(t) else "?", a if _PLAIN_NAME.fullmatch(a) else "?")
-            for t, a, _w in items
-        )
+    def clean(name: str) -> str:
+        return name if _PLAIN_NAME.fullmatch(name) else "?"
 
-    unchecked, unquoted = named(rewrite.unchecked_urls), named(rewrite.unquoted)
-    key = (owner, unchecked + unquoted)
+    unchecked = tuple((clean(t), clean(a)) for t, a, _w in rewrite.unchecked_urls)
+    unquoted = tuple((clean(t), clean(a)) for t, a, _w in rewrite.unquoted)
+    raw_tags = tuple((clean(e), clean(n)) for e, n in rewrite.raw_tags)
+    key = (owner, unchecked, unquoted, raw_tags, rewrite.includes)
     if key in _WARNED or len(_WARNED) >= _MAX_WARNED:
         return
     _WARNED.add(key)
+    fragments: list[str] = []
+    args: list[Any] = [owner]
+    if unchecked:
+        fragments.append("URL values escaped but not scheme-checked %s")
+        args.append([f"{t}[{a}]" for t, a in unchecked])
+    if unquoted:
+        fragments.append("unquoted values %s")
+        args.append([f"{t}[{a}]" for t, a in unquoted])
+    if raw_tags:
+        fragments.append("tags that print text inside a raw-text element, not escaped %s")
+        args.append([f"{e}:{n}" for e, n in raw_tags])
+    if rewrite.includes:
+        fragments.append(
+            "%d {%% include %%} / {%% extends %%} tag(s): included templates are not scanned"
+        )
+        args.append(rewrite.includes)
     logger.warning(
-        "%s: hybrid template attribute values djust cannot make safe: URL values escaped but not "
-        "scheme-checked %s; unquoted values %s. Quote the value, and give a URL that can choose "
-        "the scheme to the template as a plain top-level name.",
-        owner,
-        [f"{t}[{a}]" for t, a in unchecked],
-        [f"{t}[{a}]" for t, a in unquoted],
+        "%s: hybrid template parts djust cannot make safe: "
+        + "; ".join(fragments)
+        + ". Quote an attribute value, give a URL that can choose the scheme to the template as a "
+        "plain top-level name, and escape what a tag prints.",
+        *args,
     )
 
 
@@ -769,9 +963,13 @@ def harden_context(
     component class name, for the warning."""
     rewrite = plan(template)
     _warn_once(owner, rewrite)
-    if not rewrite.groups:
+    if not (rewrite.groups or rewrite.raw):
         return rewrite.template, context
     hardened = dict(context)
+    for key, name in rewrite.raw:
+        value = context.get(name, _MISSING)
+        if value is not _MISSING:
+            hardened[key] = unmarked(value)
     for group in rewrite.groups:
         texts = {key: slot_text(context.get(name, _MISSING)) for key, name in group.slots}
         if group.kind == "srcset":

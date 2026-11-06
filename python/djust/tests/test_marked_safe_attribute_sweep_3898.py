@@ -9,7 +9,9 @@ quoted attribute". So, in ``djust.components``:
   ``javascript:void(0)`` / ``javascript:;``;
 * an ITEM value (an entry of a list of items, an item dict) that lands in an attribute is escaped
   whatever it is marked as;
-* a text slot keeps its markup; a scalar argument in a non-URL attribute is the developer's own.
+* a text slot keeps its markup, except the text of a RAW-TEXT element (``<textarea>``,
+  ``<title>``, ``<script>`` ...) of a hybrid template, where markup can end the element (#3914);
+  a scalar argument in a non-URL attribute is the developer's own.
 
 What each class here proves, and what it does NOT:
 
@@ -33,6 +35,7 @@ import contextlib
 import importlib
 import inspect
 import os
+import re
 from html.parser import HTMLParser
 from pathlib import Path
 from types import SimpleNamespace
@@ -118,6 +121,35 @@ PAYLOADS = (
     ("breakout-sq", "/x' onmouseover='alert(%s)' y='" % url_sweep.MARK),
 )
 
+#: Raw-text elements (HTML): their content is text, and ends at the first matching end tag.
+RAW_TEXT_TAGS = (
+    "textarea", "title", "script", "style", "xmp", "noscript", "iframe", "noembed", "noframes",
+)  # fmt: skip
+#: Text that ends EVERY raw-text element and starts a live element carrying the marker (#3914). It is not in
+#: ``PAYLOADS``: the sweeps that cover the attribute rule over 200+ classes do not need it, and
+#: the cells that do (the hybrid templates) add it explicitly.
+RAW_TEXT_PAYLOAD = (
+    "breakout-rawtext",
+    "".join(f"</{tag}>" for tag in RAW_TEXT_TAGS) + "<b data-breakout=%s>" % url_sweep.MARK,
+)
+
+
+def raw_text_ends(markup: str) -> list[tuple[str, str]]:
+    """``(element, "ends-raw-text")`` for each raw-text element whose content begins with the
+    breakout of :data:`RAW_TEXT_PAYLOAD` printed as live markup: a chain of end tags and then the
+    payload's handler element, directly after the start tag (static text may come first). The
+    same text in an ordinary text slot (a ``<div>``) is not a finding: a text slot keeps its
+    markup (#3898)."""
+    if url_sweep.MARK not in markup:
+        return []
+    ends = "(?:</[a-z]+>)+"
+    handler = re.escape(f"<b data-breakout={url_sweep.MARK}>")
+    return [
+        (tag, "ends-raw-text")
+        for tag in RAW_TEXT_TAGS
+        if re.search(rf"<{tag}(?=[\s/>])[^>]*>[^<]*?{ends}{handler}", markup, re.I)
+    ]
+
 
 class _Handlers(HTMLParser):
     def __init__(self) -> None:
@@ -137,7 +169,7 @@ def holes_in(markup: str) -> list:
     parser = _Handlers()
     parser.feed(markup)
     parser.close()
-    return url_sweep.findings(markup) + parser.found
+    return url_sweep.findings(markup) + parser.found + raw_text_ends(markup)
 
 
 def url_classes() -> dict[str, type]:
@@ -649,6 +681,9 @@ class TestTheSweep:
         # URL helper's own sweep (``TestTheSweep`` above); this one proves the template path
         # calls the helper and escapes the attribute
         payloads = tuple(p for p in PAYLOADS if p[0] in {"js", "data-html", "breakout-dq"})
+        # ... and the text that ends a raw-text element (#3914): the text of a ``<textarea>`` is
+        # not an attribute, and a marked-safe value used to end it
+        payloads += (RAW_TEXT_PAYLOAD,)
         found, rendered = sweep(
             classes=TEMPLATE_CLASSES, hybrid=True, companions=companions, payloads=payloads
         )
@@ -660,7 +695,7 @@ class TestTheSweep:
         """The same classes drawn by ``Component.render`` itself: the crate instance where it
         takes the value, the template where it does not. The cells that reach the template are
         the ones the crate refuses, which is every claim that is not plain text."""
-        payloads = tuple(p for p in PAYLOADS if p[0] in {"js", "breakout-dq"})
+        payloads = tuple(p for p in PAYLOADS if p[0] in {"js", "breakout-dq"}) + (RAW_TEXT_PAYLOAD,)
         found, rendered = sweep(classes=TEMPLATE_CLASSES, payloads=payloads)
         assert rendered > (50 if ONLY else 2_000), f"the sweep barely ran ({rendered} renders)"
         assert not found, _report(found)
@@ -671,7 +706,7 @@ class TestTheSweep:
     ) -> None:
         """... and the item shapes (``ButtonGroup.buttons``: a ``{% for %}`` variable in a
         ``class=``), the wide rule of ``TestEveryClass``."""
-        payloads = tuple(p for p in PAYLOADS if p[0] in {"js", "breakout-dq"})
+        payloads = tuple(p for p in PAYLOADS if p[0] in {"js", "breakout-dq"}) + (RAW_TEXT_PAYLOAD,)
         found, rendered = sweep(
             only_claims=tuple(CLAIMS),
             classes=TEMPLATE_CLASSES,
@@ -701,6 +736,19 @@ class TestTheSweep:
         out = Leaky(href=mark_safe('/x" onmouseover="alert(1)" y="')).render()
         assert holes_in(out) == [("a", "onmouseover")]
         assert holes_in(Leaky(href=mark_safe("javascript:alert(1)")).render())
+
+    @pytest.mark.parametrize("tag", RAW_TEXT_TAGS)
+    def test_the_sweep_finds_a_value_that_ends_a_raw_text_element(self, tag: str) -> None:
+        """The detector of #3914 is not a tautology: text that ends the element it sits in is
+        found, the same text escaped is not, and an element ended once is not a finding."""
+        payload = RAW_TEXT_PAYLOAD[1]
+        assert (tag, "ends-raw-text") in holes_in(f"<{tag}>{payload}</{tag}>")
+        escaped = payload.replace("<", "&lt;").replace(">", "&gt;")
+        assert holes_in(f"<{tag}>{escaped}</{tag}>") == []
+        assert holes_in(f"<{tag}>fine {url_sweep.MARK}</{tag}>") == []
+        # ... and the same text in an ordinary text slot is not (a text slot keeps its markup)
+        assert holes_in(f"<div>{payload}</div>") == []
+        assert (tag, "ends-raw-text") in holes_in(f'<{tag} data-k="1">label {payload}</{tag}>')
 
 
 def _call_sites() -> set[tuple[str, str, str]]:
@@ -1367,6 +1415,56 @@ class TestEveryClassIsReached:
         assert not silent_classes, silent_classes
 
 
+def raw_text_pairs() -> set[tuple[str, str]]:
+    """``(class key, constructor parameter)`` of every slot a shipped hybrid template writes into
+    the TEXT of a raw-text element (derived from the templates, not listed)."""
+    from djust.components import _hybrid_attrs
+
+    pairs = set()
+    for key, cls in TEMPLATE_CLASSES.items():
+        for slot in _hybrid_attrs.raw_slots(cls.template):
+            name = re.match(r"\s*([A-Za-z_]\w*)", slot.expr)
+            assert name, (key, slot)
+            pairs.add((key, name.group(1)))
+    return pairs
+
+
+class TestRawTextCells:
+    """The raw-text cells of the hybrid sweep are DRIVEN, per claim kind (#3914): a pair that no
+    cell reaches, or a claim that is not applied to it, fails here instead of passing by default."""
+
+    def test_the_pairs_are_derived_and_include_the_reported_one(self) -> None:
+        pairs = raw_text_pairs()
+        assert ONLY or ("djust.components.ui.textarea_simple.TextArea", "value") in pairs, pairs
+
+    @pytest.mark.parametrize("claim", sorted(CLAIMS))
+    def test_every_pair_is_driven_with_the_breakout_and_prints_it_as_text(self, claim: str) -> None:
+        label, payload = RAW_TEXT_PAYLOAD
+        pairs = raw_text_pairs()
+        assert pairs or ONLY
+        for key, name in sorted(pairs):
+            cls = TEMPLATE_CLASSES[key]
+            names, required = class_params(cls)
+            assert name in names, (key, name, names)
+            out = drive(
+                cls, key, names, required, class_keys(cls), name, "scalar",
+                url_sweep.FRAMEWORKS[0], False, CLAIMS[claim](payload), False, True,
+            )  # fmt: skip
+            assert out is not None, (key, name, claim, "the cell was not driven")
+            text = str(out)
+            assert url_sweep.MARK in text and "&lt;/textarea&gt;" in text, (key, name, claim, text)
+            assert holes_in(text) == [], (key, name, claim, holes_in(text))
+
+    def test_the_claim_kinds_are_all_of_the_sweeps(self) -> None:
+        """A claim kind added to ``CLAIMS`` is driven here without a line changing."""
+        assert {
+            "mark_safe",
+            "lazy-mark_safe",
+            "text-form-marked-safe",
+            "callable-marked-safe",
+        } <= set(CLAIMS)
+
+
 class TestHybridCellsAreReached:
     """The hybrid cells are accounted for the way ``TestEveryClassIsReached`` accounts for the
     ``_render_custom`` ones (#3900). Until that issue was fixed they were SET ASIDE: the sweep
@@ -1430,6 +1528,11 @@ class TestHybridCellsAreReached:
         }
         assert url_pairs or ONLY, "no shipped template has a judged URL slot any more"
         assert url_pairs <= echoed, sorted(url_pairs - echoed)
+        # ... and a slot in the text of a raw-text element (#3914): its parameter is drawn with a
+        # value of this kind and printed, for the same reason
+        raw_pairs = raw_text_pairs()
+        assert raw_pairs or ONLY, "no shipped template has a raw-text slot any more"
+        assert raw_pairs <= echoed, sorted(raw_pairs - echoed)
 
     def test_every_template_class_prints_a_probe_through_some_parameter(self, outcome) -> None:
         silent = sorted(
