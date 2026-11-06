@@ -309,6 +309,42 @@ class CopiesRaisesParams(CopiesParams):
         return cleaned
 
 
+class SpanDefaultParams(forms.Form):
+    """#3921 review: a default ``start`` next to a supplied ``end`` that ``clean()`` refuses."""
+
+    page = forms.IntegerField(min_value=1, required=False, initial=1)
+    start = forms.IntegerField(required=False, initial=5)
+    end = forms.IntegerField(required=False)  # no initial
+
+    def clean(self):
+        cleaned = super().clean()
+        start, end = cleaned.get("start"), cleaned.get("end")
+        if start is not None and end is not None and end < start:
+            raise forms.ValidationError("end before start")
+        return cleaned
+
+
+class SpanCallableParams(SpanDefaultParams):
+    """The same rule with a CALLABLE default for ``start``."""
+
+    start = forms.IntegerField(required=False, initial=lambda: 5)
+
+
+class CopiesTagsParams(forms.Form):
+    """A multi-select the URL left out counts as supplied (#3922): the paths must still agree."""
+
+    tags = forms.MultipleChoiceField(
+        choices=[("ok", "ok"), ("x", "x")], required=False, initial=["x"]
+    )
+    q = forms.CharField(max_length=5, required=False, initial="")
+
+    def clean(self):
+        cleaned = super().clean()
+        if "q" in self.data:
+            cleaned["tags"] = [self.data["q"]]
+        return cleaned
+
+
 class CopiesModelParams(forms.ModelForm):
     """A ModelForm: ``last_name`` takes the instance's value as its initial, ``clean()`` overwrites it."""
 
@@ -484,6 +520,16 @@ class CopiesModelFields(_Base):
     params_form_fallback = "fields"
 
 
+class SpanDefaultFields(_Base):
+    params_form = SpanDefaultParams
+    params_form_fallback = "fields"
+
+
+class SpanCallableFields(_Base):
+    params_form = SpanCallableParams
+    params_form_fallback = "fields"
+
+
 class AsyncFields(FieldsView):
     """An ``async def handle_params``: the default must still await it."""
 
@@ -532,6 +578,8 @@ _VIEWS = (
     CopiesRequiredFields,
     CopiesRaisesFields,
     CopiesModelFields,
+    SpanDefaultFields,
+    SpanCallableFields,
     SpanFields,
     SpanRaisesFields,
     CrashFields,
@@ -715,6 +763,43 @@ CASES = [
     # clean() raising on the copied value is a form-level error: nothing is kept.
     ("CopiesRaisesFields", {"q": "boomboom"}, {"a": "da", "q": ""}, {"__all__", "q"}),
     ("CopiesRaisesFields", {"q": "boom"}, {"a": "da", "q": ""}, {"__all__"}),
+    # The guarantee (#3921 review): what is handed over is a combination clean() accepts, or the
+    # plain initials. A default start=5 next to a supplied end=2 is refused by clean(), so nothing
+    # is kept (as before #3891); end=9 is accepted and honoured; the valid URL is for comparison.
+    (
+        "SpanDefaultFields",
+        {"page": "abc", "end": "2"},
+        {"page": 1, "start": 5, "end": None},
+        {"page"},
+    ),
+    ("SpanDefaultFields", {"page": "abc", "end": "9"}, {"page": 1, "start": 5, "end": 9}, {"page"}),
+    ("SpanDefaultFields", {"end": "9"}, {"page": 1, "start": 5, "end": 9}, set()),
+    # A default the URL supplied EMPTY counts as left out: it is filled before the check too.
+    (
+        "SpanDefaultFields",
+        {"page": "abc", "start": "", "end": "2"},
+        {"page": 1, "start": 5, "end": None},
+        {"page"},
+    ),
+    # ... and so is a callable default.
+    (
+        "SpanCallableFields",
+        {"page": "abc", "end": "2"},
+        {"page": 1, "start": 5, "end": None},
+        {"page"},
+    ),
+    (
+        "SpanCallableFields",
+        {"page": "abc", "end": "9"},
+        {"page": 1, "start": 5, "end": 9},
+        {"page"},
+    ),
+    (
+        "SpanDefaultFields",
+        {"page": "abc", "start": "3", "end": "4"},
+        {"page": 1, "start": 3, "end": 4},
+        {"page"},
+    ),
     # A ModelForm: last_name's initial comes from the instance.
     (
         "CopiesModelFields",
@@ -1460,9 +1545,10 @@ class TestFallbackValues:
         assert fallback_values(form, "fields") == {"a": "da", "q": ""}
         assert fallback_values(form, "initial") == {"a": "da", "q": ""}
 
-    def test_the_recheck_sees_the_raw_cleaned_values_as_the_valid_paths_clean_does(self):
-        """The choice (#3891): clean() runs BEFORE the initial fill on both paths, so the re-check is
-        given the raw cleaned value of an unsupplied kept field (``""``), never its initial (``"da"``)."""
+    def test_the_recheck_sees_the_filled_values_and_its_output_is_filled_again(self):
+        """The design (#3891, reversed in review): the re-check is given the combination that would be
+        handed over (the unsupplied kept field already filled with its initial), and the fill is then
+        applied again to its OUTPUT, so a ``clean()`` write to that field cannot survive."""
         from djust._params_form import fallback_values
 
         seen: list = []
@@ -1474,18 +1560,98 @@ class TestFallbackValues:
             def clean(self):
                 cleaned = super().clean()
                 seen.append(dict(self.cleaned_data))
+                if len(seen) > 1:
+                    cleaned["a"] = "written-by-the-recheck"  # must not survive
                 return cleaned
 
         _, valid, _ = self._bound(Records, {"q": "ok"})
         assert valid == {"a": "da", "q": "ok"}
-        assert seen == [{"a": "", "q": "ok"}]  # the valid path's clean() saw the raw ""
+        assert seen == [{"a": "", "q": "ok"}]  # the valid path's clean() sees the raw ""
         seen.clear()
         form, values, _ = self._bound(Records, {"q": "toolong!"})
         assert values is None
         assert seen == [{"a": ""}]  # the first pass: q failed and left cleaned_data
         seen.clear()
         assert fallback_values(form, "fields") == {"a": "da", "q": None}
-        assert seen == [{"a": "", "q": None}]  # the re-check: a raw "", q paired with its initial
+        # the re-check: a already filled with its initial, q (replaced) paired with its initial
+        assert seen == [{"a": "da", "q": None}]
+
+    def test_the_recheck_is_given_what_the_first_pass_wrote_to_a_supplied_field(self):
+        """A kept field the URL supplied is re-run on the first pass's OUTPUT, not on its input."""
+        from djust._params_form import fallback_values
+
+        seen: list = []
+
+        class Writes(forms.Form):
+            a = forms.CharField(required=False, initial="da")
+            q = forms.CharField(max_length=5, required=False, initial="")
+
+            def clean(self):
+                cleaned = super().clean()
+                seen.append(dict(self.cleaned_data))
+                cleaned["a"] = "written-by-clean"
+                return cleaned
+
+        form, values, _ = self._bound(Writes, {"a": "x", "q": "toolong!"})
+        assert values is None
+        assert seen == [{"a": "x"}]  # the first pass's input
+        seen.clear()
+        assert fallback_values(form, "fields") == {"a": "written-by-clean", "q": ""}
+        assert seen == [{"a": "written-by-clean", "q": ""}]  # the re-check's input is its output
+
+    def test_a_default_start_next_to_a_supplied_end_that_clean_refuses_gives_the_plain_initials(
+        self,
+    ):
+        """The guarantee: the result is a combination clean() accepts, or the plain initials."""
+        from djust._params_form import fallback_values
+
+        form, values, _ = self._bound(SpanDefaultParams, {"page": "abc", "end": "2"})
+        assert values is None
+        assert fallback_values(form, "fields") == {"page": 1, "start": 5, "end": None}
+        accepted, values, _ = self._bound(SpanDefaultParams, {"page": "abc", "end": "9"})
+        assert fallback_values(accepted, "fields") == {"page": 1, "start": 5, "end": 9}
+        # and whatever it hands over, a fresh bind of that pair is accepted by clean() or it is the initials
+        fresh = SpanDefaultParams(data={"start": "5", "end": "9"})
+        assert fresh.is_valid()
+
+    def test_a_clean_that_defaults_an_unsupplied_field_that_has_an_initial_loses_to_the_initial(
+        self,
+    ):
+        """A behaviour change of #3891, now as on the valid path: the initial wins over clean()'s default."""
+        from djust._params_form import fallback_values
+
+        class Defaults(forms.Form):
+            mode = forms.CharField(required=False)
+            page = forms.IntegerField(min_value=1, required=False, initial=1)
+            q = forms.CharField(required=False, initial="")
+
+            def clean(self):
+                cleaned = super().clean()
+                if cleaned.get("mode") == "b" and not cleaned.get("q"):
+                    cleaned["q"] = "dflt"
+                return cleaned
+
+        _, valid, _ = self._bound(Defaults, {"mode": "b"})
+        assert valid["q"] == ""
+        form, values, _ = self._bound(Defaults, {"mode": "b", "page": "abc"})
+        assert values is None
+        assert fallback_values(form, "fields") == {"mode": "b", "page": 1, "q": ""}
+
+    def test_a_mutable_initial_is_returned_by_reference_as_on_the_valid_path(self):
+        """Parity, not a copy: the valid path and ``"initial"`` mode return the field's own object
+        (each form instance owns a deep copy of its fields, so this does not reach the class)."""
+        from djust._params_form import fallback_values
+
+        class Lists(forms.Form):
+            tags = forms.JSONField(required=False, initial=[])
+            page = forms.IntegerField(min_value=1, required=False, initial=1)
+
+        form, values, _ = self._bound(Lists, {"page": "abc"})
+        assert values is None
+        assert fallback_values(form, "fields")["tags"] is form.fields["tags"].initial
+        valid_form, valid, _ = self._bound(Lists, {"page": "2"})
+        assert valid["tags"] is valid_form.fields["tags"].initial  # the valid path's own object
+        assert valid_form.fields["tags"] is not form.fields["tags"]  # per-instance, never shared
 
     def test_the_fill_judges_what_clean_left_not_what_the_first_pass_cleaned(self):
         """A supplied field whose clean() blanks it takes its initial, on both paths."""
@@ -1540,6 +1706,7 @@ class TestFallbackValues:
             CopiesManyParams,
             CopiesRequiredParams,
             CopiesModelParams,
+            CopiesTagsParams,
         ],
     )
     def test_every_kept_field_is_what_the_valid_path_hands_over_property(self, form_class):
