@@ -1645,7 +1645,7 @@ _PLAIN_TYPES = frozenset({str, int, float, bool, type(None), Decimal, bytes, dat
 def _c_tzinfo_types() -> frozenset:
     """The tzinfo classes that are implemented in C (no Python function behind a method):
     ``datetime.timezone`` and, when the C accelerator is present, ``zoneinfo.ZoneInfo``."""
-    found = {_dt_timezone}
+    found: set[type] = {_dt_timezone}
     try:
         from zoneinfo import ZoneInfo
     except ImportError:  # pragma: no cover - zoneinfo is in the standard library since 3.9
@@ -1696,7 +1696,8 @@ def _floored_result(value: Any) -> Any:
             return value
         # a Python-defined tzinfo (pytz, dateutil...) has methods whose function carries its module's
         # namespace: the same datetime, with a tzinfo that answers the same questions and shows none
-        return value.replace(tzinfo=_FloorTz(tz))
+        # (the class defines its answers through ``__getattribute__``, which mypy cannot see)
+        return value.replace(tzinfo=cast(Any, _FloorTz)(tz))
     if kind is UUID:
         # a UUID is a Python-defined class (its methods reach the ``uuid`` namespace); its text is
         # what a template renders
