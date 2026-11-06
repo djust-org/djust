@@ -19,6 +19,7 @@ from djust._html import attr_name
 from djust._template_guards import TemplateMutatorGuard, alters_data
 from djust.decorators import is_event_handler
 
+from ._hybrid_attrs import harden_context
 from .assigns import (
     Assign,
     AssignValidationError,
@@ -608,7 +609,11 @@ class Component(TemplateMutatorGuard, ABC):
             # admits.
             context["component_key"] = self._component_key
             context["_component_key"] = self._component_key
-            return cast(str, mark_safe(_render_template_with_fallback(self.template, context)))
+            # #3900: the attribute slots of this template follow the rule the Rust instance
+            # and `_render_custom()` follow (escaped whatever the value is marked as; a URL
+            # checked against the scheme allowlist). See `_hybrid_attrs`.
+            template, context = harden_context(self.template, context, type(self).__name__)
+            return cast(str, mark_safe(_render_template_with_fallback(template, context)))
 
         # 3. Fall back to custom Python rendering (flexible)
         return cast(str, mark_safe(self._render_custom()))
