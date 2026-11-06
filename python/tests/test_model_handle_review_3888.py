@@ -108,10 +108,11 @@ class TestAPythonReaderCannotReachTheWrappedObject:
         assert got == "[ERR:AttributeError][ERR:AttributeError]", got
 
     @pytest.mark.parametrize("route", ["plain", "slice"])
-    def test_class_is_the_proxys_own_type(self, users, route) -> None:
+    def test_class_is_a_class_of_no_methods_not_the_models(self, users, route) -> None:
         read = "{% load rv3888 %}[{{ u|dotted:'__class__.__name__' }}]"
         got = _backend(ROUTES[route].replace("<R>", read), {"rows": list(users)})
-        assert "_SidecarModelProxy" in got and "User" not in got, got
+        # the class a proxy reports has no Python-level methods and is not the model's
+        assert "_Opaque" in got and "User" not in got, got
 
     def test_plain_python_getattr_on_the_proxy_is_refused_and_the_floor_still_reads(
         self, users

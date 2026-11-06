@@ -22,6 +22,7 @@ from django.core.serializers.json import DjangoJSONEncoder as _DjangoJSONEncoder
 from django.db import models
 from django.utils.datastructures import MultiValueDict
 from django.utils.functional import Promise
+from django.utils.safestring import SafeData
 from ._class_snapshot import attribute_names, namespace
 
 logger = logging.getLogger(__name__)
@@ -1638,9 +1639,24 @@ def _protect_sidecar_value(value: Any) -> Any:
 #   any other instance  only as `_FlooredObject` (a file field, an enum member, a presenter...)
 #   a class, a module, a descriptor ... not at all (the read is refused)
 _PLAIN_TYPES = frozenset(
-    {str, int, float, bool, type(None), Decimal, bytes, UUID, datetime, date, time, timedelta}
+    {str, int, float, bool, type(None), Decimal, bytes, datetime, date, time, timedelta}
 )
-_PLAIN_BASES = (str, int, float, Decimal, bytes, UUID, datetime, date, time, timedelta)
+
+
+class _Opaque:
+    """What a floor wrapper reports as ``__class__``: a class with no Python-level methods, so a reader
+    that walks attributes from a wrapper finds no function (and no module namespace behind one). It
+    carries nothing of the wrapped object; ``isinstance`` / ``collections.abc`` checks also consult the
+    wrapper's real type, so they still work."""
+
+    __slots__ = ()
+
+
+class _OpaqueCall:
+    """:class:`_Opaque` for a wrapper that is callable (``__call__`` is a C-level slot wrapper)."""
+
+    __slots__ = ()
+    __call__ = int.__add__  # type: ignore[assignment]
 
 
 def _slot_accessors(cls: type, name: str) -> Any:
@@ -1659,6 +1675,16 @@ def _floored_result(value: Any) -> Any:
     kind = type(value)
     if kind in _PLAIN_TYPES:
         return value
+    if kind is UUID:
+        # a UUID is a Python-defined class (its methods reach the ``uuid`` namespace); its text is
+        # what a template renders
+        return str(value)
+    if kind is _FloorSafeText:
+        return value
+    if isinstance(value, SafeData) and isinstance(value, str):
+        # markup that is already safe stays safe (Rust asks `isinstance(.., SafeData)`), as a str
+        # whose class and methods a reader cannot reach
+        return _FloorSafeText(value)
     if isinstance(value, models.Model):
         return _SidecarModelProxy(value)
     if isinstance(value, (models.Manager, models.QuerySet)):
@@ -1666,9 +1692,9 @@ def _floored_result(value: Any) -> Any:
     if isinstance(value, _FORM_PROXIES):
         # a form proxy is for a template PATH; same answer the leaf floor gives (#3790)
         return unwrap_form_proxy_for_tag(value)
-    if isinstance(value, _PLAIN_BASES):
-        # a subclass of plain data (SafeString, a str-enum member, a lazy-free datetime subclass)
-        return value
+    if isinstance(value, models.Choices):
+        # a TextChoices / IntegerChoices member renders as its value (`Choices.__str__`)
+        return _floored_result(value.value)
     if isinstance(value, type) or isinstance(value, _ModuleType):
         raise AttributeError("a class or a module is not readable through a model")
     if kind is list:
@@ -1676,10 +1702,12 @@ def _floored_result(value: Any) -> Any:
     if kind is tuple:
         return tuple(_floored_result(item) for item in value)
     if kind is dict:
-        return {key: _floored_result(item) for key, item in value.items()}
+        return {_floored_result(key): _floored_result(item) for key, item in value.items()}
     if kind is set or kind is frozenset:
         return kind(_floored_result(item) for item in value)
-    if isinstance(value, _FlooredCall | _FlooredObject):
+    if isinstance(
+        value, _FlooredCall | _FlooredObject | _SidecarModelProxy | _SidecarQuerySetProxy
+    ):
         return value
     if callable(value):
         return _FlooredCall(value)
@@ -1743,16 +1771,10 @@ class _SidecarModelProxy:
     __slots__ = ("_s",)
 
     def __init__(self, obj: "models.Model") -> None:
-        _SMP_SET(
-            self,
-            (
-                obj,
-                DjangoJSONEncoder._get_denied_fields(obj),
-                DjangoJSONEncoder._get_allowlist_fields(obj),
-                DjangoJSONEncoder._get_sensitive_optout_fields(obj),
-                [],  # the floored dict, once built (see __djust_serialize__)
-            ),
-        )
+        # [instance, denied, allowed, optout, floored-dict cell]. The three floor sets are read
+        # from the model class on the FIRST attribute read, not here: a handle that is only
+        # printed or serialised (`{{ u }}`) never needs them, and one is built per row.
+        _SMP_SET(self, [obj, None, None, None, []])
 
     def __getattribute__(self, name: str) -> Any:
         # EVERY instance attribute read comes through here, so the refusal is structural: any
@@ -1762,11 +1784,19 @@ class _SidecarModelProxy:
         # works) and `__djust_serialize__` is the hook the engine asks for.
         if name[:1] == "_":
             if name == "__class__":
-                return type(self)
+                return _Opaque
             if name == "__djust_serialize__":
                 return _Hook(_smp_serialize, self)
             raise AttributeError(name)
-        obj, denied, allowed, optout, _cell = _SMP_GET(self)
+        state = _SMP_GET(self)
+        obj = state[0]
+        denied = state[1]
+        if denied is None:
+            denied = state[1] = DjangoJSONEncoder._get_denied_fields(obj)
+            state[2] = DjangoJSONEncoder._get_allowlist_fields(obj)
+            state[3] = DjangoJSONEncoder._get_sensitive_optout_fields(obj)
+        allowed = state[2]
+        optout = state[3]
         # ONE authority (#2614): the sensitive / expensive method names and the serialization floor
         # / allowlist / opt-out, the SAME `_attr_is_serializable` call every eager loop makes, so
         # the two channels cannot drift (#1646).
@@ -1833,7 +1863,7 @@ class _Hook:
 
     def __getattribute__(self, name: str) -> Any:
         if name == "__class__":
-            return type(self)
+            return _OpaqueCall
         raise AttributeError(name)
 
     def __call__(self) -> Any:
@@ -1842,6 +1872,30 @@ class _Hook:
 
 
 _HK_GET, _HK_SET = _slot_accessors(_Hook, "_s")
+
+
+def _safe_text_html(text: Any) -> Any:  # noqa: dead-method-allowed (handed to _Hook by reference)
+    return text
+
+
+class _FloorSafeText(SafeData, str):
+    """Safe markup as a reader may hold it: still a ``SafeData`` ``str`` (the engine and
+    ``conditional_escape`` keep treating it as safe), but its class is :class:`_Opaque` and its
+    underscore names are refused, so no Python-level method of ``SafeString`` is reachable."""
+
+    __slots__ = ()
+
+    def __getattribute__(self, name: str) -> Any:
+        if name[:1] == "_":
+            if name == "__class__":
+                return _Opaque
+            if name == "__html__":
+                return _Hook(_safe_text_html, self)
+            raise AttributeError(name)
+        return str.__getattribute__(self, name)
+
+    def __str__(self) -> str:
+        return self
 
 
 def _smp_serialize(self: Any) -> Any:  # noqa: dead-method-allowed (handed to _Hook by reference)
@@ -1877,11 +1931,11 @@ class _FlooredCall:
 
     def __getattribute__(self, name: str) -> Any:
         if name == "__class__":
-            return type(self)
+            return _OpaqueCall
         if name in ("alters_data", "do_not_call_in_templates", "djust_orm_call"):
             return object.__getattribute__(self, name)
-        if name == "__signature__":
-            return _bare_signature(_FC_GET(self))
+        if name == "djust_requires_arguments":
+            return _Hook(_fc_requires_arguments, self)
         raise AttributeError(name)
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
@@ -1894,32 +1948,24 @@ class _FlooredCall:
 _FC_GET, _FC_SET = _slot_accessors(_FlooredCall, "_s")
 
 
-def _bare_signature(fn: Any) -> inspect.Signature:
-    """The SHAPE of ``fn``'s arguments and nothing else (names, kinds, whether each has a default).
-
-    Django's variable resolution calls a callable and, when that raises ``TypeError``, asks
-    ``inspect.signature(current).bind()`` whether the call merely lacked required arguments (then the
-    variable is invalid) or raised for another reason. A wrapper that hides its signature would turn
-    the first case into an error. Defaults and annotations are replaced so no object of the wrapped
-    callable's own is carried."""
+def _fc_requires_arguments(call: Any) -> bool:  # noqa: dead-method-allowed (handed to _Hook by reference)
+    """Django's "were arguments required?" probe (``inspect.signature(fn).bind()``) for the callable
+    behind ``call``, answered as a bool. The Rust engine reads it through the
+    ``djust_requires_arguments`` marker, so no ``inspect.Signature`` (whose class has Python-level
+    methods) is ever handed out."""
     try:
-        signature = inspect.signature(fn)
+        inspect.signature(_FC_GET(call)).bind()
     except (TypeError, ValueError):
-        return inspect.Signature(
-            [
-                inspect.Parameter("args", inspect.Parameter.VAR_POSITIONAL),
-                inspect.Parameter("kwargs", inspect.Parameter.VAR_KEYWORD),
-            ]
-        )
-    return inspect.Signature(
-        [
-            parameter.replace(
-                default=inspect.Parameter.empty if parameter.default is parameter.empty else None,
-                annotation=inspect.Parameter.empty,
-            )
-            for parameter in signature.parameters.values()
-        ]
-    )
+        return True
+    return False
+
+
+def floored_call_signature(call: Any) -> Any:
+    """``inspect.signature`` of the callable behind a :class:`_FlooredCall`, for the Django-engine
+    bridge walker (trusted code, never a template reader); ``None`` for anything else."""
+    if type(call) is _FlooredCall:
+        return inspect.signature(_FC_GET(call))
+    return None
 
 
 class _FlooredObject:
@@ -1934,7 +1980,7 @@ class _FlooredObject:
     def __getattribute__(self, name: str) -> Any:
         if name[:1] == "_":
             if name == "__class__":
-                return type(self)
+                return _Opaque
             raise AttributeError(name)
         return _floored_result(getattr(_FO_GET(self), name))
 
@@ -2025,7 +2071,7 @@ class _SidecarQuerySetProxy:
     def __getattribute__(self, name: str) -> Any:
         if name[:1] == "_":
             if name == "__class__":
-                return type(self)
+                return _Opaque
             if name == "__djust_serialize__":
                 return _Hook(_sqp_serialize, self)
             raise AttributeError(name)

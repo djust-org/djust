@@ -26,7 +26,6 @@ import logging
 import types
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
-from uuid import UUID
 
 import pytest
 from django.contrib.auth.models import Group, Permission
@@ -84,11 +83,15 @@ def _assert_closed(value, model_classes: tuple, path: str, depth: int = 0) -> No
         return
     assert not isinstance(value, _forbidden(model_classes)), (path, type(value))
     if isinstance(value, type):
-        # a class may be handed back only if it is not a model / manager / queryset class
+        # a class may be handed back only if it is not a model / manager / queryset class, and no
+        # member of it is a Python function (a function carries `__globals__`: a module namespace)
         assert not issubclass(value, (dj_models.Model, dj_models.Manager, dj_models.QuerySet)), (
             path,
             value,
         )
+        for attr in dir(value):
+            member = getattr(value, attr, None)
+            assert not hasattr(member, "__globals__"), (path, value, attr)
         return
     if depth > 3:
         return
@@ -100,7 +103,7 @@ def _assert_closed(value, model_classes: tuple, path: str, depth: int = 0) -> No
             _assert_closed(item, model_classes, f"{path}[{key!r}]", depth + 1)
 
 
-_PLAIN = (str, int, float, bool, bytes, type(None), Decimal, UUID, datetime, date, time, timedelta)
+_PLAIN = (str, int, float, bool, bytes, type(None), Decimal, datetime, date, time, timedelta)
 _CONTAINERS = (
     list,
     tuple,
@@ -302,8 +305,12 @@ class TestAnAbcCheckOnAProxy:
         assert isinstance(proxy, collections.abc.Hashable)
         assert not isinstance(proxy, collections.abc.Mapping)
         assert not isinstance(proxy, collections.abc.Iterable)
-        # and the proxy reports ITS OWN type, never the model's
-        assert proxy.__class__ is type(proxy)
+        # and the proxy reports a class of its own, never the model's
+        # (`__class__` reports a class with no Python-level methods; the check also asks `type()`)
+        from djust.serialization import _Opaque
+
+        assert proxy.__class__ is _Opaque
+        assert not isinstance(proxy.__class__, type(proxy))
 
     def test_a_custom_filter_can_ask(self, users) -> None:
         got = _backend(
@@ -409,28 +416,57 @@ class TestANonModelCarrierIsNotProbedForTheHook:
 
 
 @pytest.mark.django_db
-class TestASignatureIsTheShapeOnly:
+class TestTheArgumentsQuestionIsAnsweredWithoutASignature:
     """Django asks ``inspect.signature(current).bind()`` when a template-called callable raises
-    ``TypeError``: "no arguments were given" is an invalid variable, anything else propagates."""
+    ``TypeError``: "no arguments were given" is an invalid variable, anything else propagates. A
+    call wrapper answers through a marker the engine reads; it hands out no ``Signature`` (whose
+    class has Python-level methods)."""
 
-    def test_a_method_that_needs_arguments_binds_like_the_real_one(self, users) -> None:
-        import inspect
-
-        from djust.serialization import _SidecarModelProxy
-
-        method = _SidecarModelProxy(users[0]).check_password
-        signature = inspect.signature(method)
-        with pytest.raises(TypeError):
-            signature.bind()
-        signature.bind("raw")
-
-    def test_the_signature_carries_no_default_or_annotation_object(self, users) -> None:
-        import inspect
-
+    def test_the_wrapper_has_no_signature(self, users) -> None:
         from djust.serialization import _SidecarModelProxy
 
         method = _SidecarModelProxy(users[0]).get_full_name
-        signature = inspect.signature(method)
-        for parameter in signature.parameters.values():
-            assert parameter.annotation is inspect.Parameter.empty
-            assert parameter.default in (inspect.Parameter.empty, None)
+        with pytest.raises(AttributeError):
+            method.__signature__
+
+    def test_the_marker_answers_for_a_method_that_needs_arguments(self, users) -> None:
+        from djust.serialization import _SidecarModelProxy
+
+        proxy = _SidecarModelProxy(users[0])
+        assert proxy.check_password.djust_requires_arguments() is True
+        assert proxy.get_full_name.djust_requires_arguments() is False
+
+    def test_the_marker_object_exposes_nothing(self, users) -> None:
+        from djust.serialization import _SidecarModelProxy
+
+        marker = _SidecarModelProxy(users[0]).check_password.djust_requires_arguments
+        for name in ("_s", "__self__", "__func__", "__wrapped__", "__globals__", "__dict__"):
+            with pytest.raises(AttributeError):
+                getattr(marker, name)
+
+    def test_the_engine_renders_a_method_that_needs_arguments_empty(self, users) -> None:
+        """The Rust walk reads the marker: ``{{ u.check_password }}`` is Django's invalid variable
+        (empty), not a crash, for a row reached through a loop over a list of models."""
+        got = _backend(
+            "{% for u in rows|slice:':1' %}[{{ u.check_password }}][{{ u.get_full_name }}]{% endfor %}",
+            {"rows": list(users)},
+        )
+        assert got.startswith("[]["), got
+
+    def test_a_typeerror_inside_a_zero_argument_method_still_propagates(
+        self, scratch_models
+    ) -> None:
+        class Boom3888(dj_models.Model):
+            class Meta:
+                app_label = "auth"
+
+            def explode(self):
+                return 1 + "a"
+
+        from django.template import TemplateSyntaxError  # noqa: F401
+
+        with pytest.raises(TypeError):
+            _backend(
+                "{% for u in rows|slice:':1' %}{{ u.explode }}{% endfor %}",
+                {"rows": [Boom3888(pk=1)]},
+            )
