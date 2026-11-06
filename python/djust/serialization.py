@@ -1850,15 +1850,17 @@ class _SidecarQuerySetProxy:
         return _protect_sidecar_value(result)
 
     def __djust_serialize__(self) -> Any:
-        """Denylist-filtered LIST for terminal Value conversion (called by the
-        Rust ``FromPyObject``). A ``{% for x in member.groups.all %}`` loop
-        resolves the queryset to this value; each item is floor-filtered
-        (``{{ x.name }}`` works, ``{{ x.password }}`` is empty) instead of
-        ``__dict__``-dumped. A ``.values()``/``.values_list()`` projection is
-        refused (empty) — its rows carry no per-field floor (vector 5)."""
+        """The rows, each as its FLOOR PROXY, for terminal Value conversion (called by the Rust
+        ``FromPyObject``). A ``{% for x in member.groups.all %}`` loop resolves the queryset to this
+        value; the conversion carries each proxy as a live handle (#3888), so ``{{ x.name }}`` works,
+        ``{{ x.password }}`` is empty (the proxy refuses it per read) and a second relation hop
+        (``{{ x.user_set.count }}``) has the row to read it from. Before #3888 each row was its
+        ``normalize_django_value`` dict, which had no manager to read. A ``.values()`` /
+        ``.values_list()`` projection is refused (empty) — its rows carry no per-field floor
+        (vector 5)."""
         if object.__getattribute__(self, "_is_projection"):
             return []
-        return [normalize_django_value(item) for item in object.__getattribute__(self, "_qs")]
+        return [_protect_sidecar_value(item) for item in object.__getattribute__(self, "_qs")]
 
     def __str__(self) -> str:
         return str(object.__getattribute__(self, "_qs"))

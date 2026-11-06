@@ -6835,6 +6835,10 @@ fn encoded_equal(a: &Encoded, b: &Encoded) -> bool {
         (Some(EqClass::Mapping), Some(EqClass::Mapping)) => {
             a.live_eq(b).unwrap_or_else(|| a.repr == b.repr)
         }
+        // #3888: two raw models, carried as floored handles: the model's own `==` (class and
+        // primary key). No handle (a round trip) is "not equal", never "equal by repr": two
+        // distinct rows can print the same `__str__`.
+        (Some(EqClass::Live), Some(EqClass::Live)) => a.live_eq(b).unwrap_or(false),
         // Everything else — two Sets, two datetimes, and every CROSS-class
         // pair (which answers `None` there, i.e. false, exactly as Python
         // says `set() != complex(0)`).

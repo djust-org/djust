@@ -18,9 +18,9 @@ mechanical:
 
 * the four mixed-read spellings differ from Django on a QuerySet and on a ``list[Model]``, through
   the Django-backend engine and a LiveView: 16 cells, each ``xfail(strict=True)``. Twelve are this
-  item's gap (#3867 item 3). The other four, ``list[Model]`` on the Django-backend engine, are
-  attributed to #3888: there a relation read inside ANY sliced loop is empty (the controls in
-  ``TestASlicedListOfModelsOnTheBackend``), so they would stay red after item 3 is fixed;
+  item's gap (#3867 item 3). The other four, ``list[Model]`` on the Django-backend engine, were
+  attributed to #3888 (a relation read inside ANY sliced loop was empty there) and agree since it
+  was fixed: a raw model row carries its own handle, so they have no marker;
 * the gap is exactly the mixed read: the SAME slice over a method-only read, over a plain loop, or
   over a row field agrees (the controls below), and so does the mixed read with no slice.
 
@@ -100,18 +100,25 @@ def _mixed_cells() -> list:
     for render in RENDERS:
         for shape in MAKE_CONTEXT:
             for name in MIXED_UNDER_SLICE:
+                # A raw ``list[Model]`` through the backend carries its own handle per row since
+                # #3888, so the mixed read agrees there and is no longer a gap.
                 backend_list = render.id == "DjustTemplateBackend" and shape == "list[Model]"
-                reason = (
-                    "#3888: a relation read in a sliced loop over list[Model] is empty on the backend"
+                marks = (
+                    []
                     if backend_list
-                    else "#3867 item 3: the filtered operand has no sidecar alias; declined"
+                    else [
+                        pytest.mark.xfail(
+                            strict=True,
+                            reason="#3867 item 3: the filtered operand has no sidecar alias; declined",
+                        )
+                    ]
                 )
                 cells.append(
                     pytest.param(
                         *render.values,
                         shape,
                         name,
-                        marks=pytest.mark.xfail(strict=True, reason=reason),
+                        marks=marks,
                         id=f"{render.id}-{shape}-{name}",
                     )
                 )
@@ -156,9 +163,6 @@ class TestAMixedReadUnderASliceIsADeclinedGap3867:
 class TestASlicedListOfModelsOnTheBackend:
     """#3888: no kept rows here; the relation read under the slice is empty on the backend only."""
 
-    @pytest.mark.xfail(
-        strict=True, reason="#3888: a relation read in a sliced loop over list[Model], backend"
-    )
     @pytest.mark.parametrize("name", ["loop-only", "method-only"])
     def test_the_backend_agrees_with_django(self, world, name) -> None:
         source = CONTROLS[name]

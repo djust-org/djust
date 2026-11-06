@@ -1073,6 +1073,13 @@ pub enum EqClass {
     /// `OrderedDict(a=1) == {"a": 1}` is. After a round trip that dropped the
     /// handle, two carriers compare by `repr`. Equality only.
     Mapping,
+    /// A raw Django model carried as a floored live handle (#3888). Two such carriers
+    /// compare through Python's own `==` on the live handles ([`Encoded::live_eq`]): Django's
+    /// `Model.__eq__` is "same concrete model and same primary key", which no carried spelling
+    /// (`repr` is `__str__`, shared by distinct rows) can answer. Equality only. Without a
+    /// handle (a round trip dropped it) two carriers are NEVER equal: the direction that shows
+    /// content, where equal-by-`repr` would conflate two rows that print the same.
+    Live,
 }
 
 /// The attribute names carried on a [`Value::Encoded`] for each of the four
@@ -1747,6 +1754,9 @@ pub const EQ_CLASS_NUMBER: u8 = 2;
 pub const EQ_CLASS_IDENTITY: u8 = 3;
 /// The wire tag for [`EqClass::Mapping`] (#2899).
 pub const EQ_CLASS_MAPPING: u8 = 4;
+/// The wire tag for [`EqClass::Live`] (#3888). A build that predates it reads this tag as
+/// ABSENT (`decode_eq_class`'s unknown-tag arm) and answers "never equal".
+pub const EQ_CLASS_LIVE: u8 = 5;
 
 /// The key the [`EqClass`] triple sits under inside slot 10's map (#2480).
 ///
@@ -1769,6 +1779,7 @@ fn encode_eq_class(class: Option<EqClass>) -> IndexMap<ObjectKey, Value> {
         Some(EqClass::Number { real, imag }) => (EQ_CLASS_NUMBER, real, imag),
         Some(EqClass::Identity) => (EQ_CLASS_IDENTITY, 0.0, 0.0),
         Some(EqClass::Mapping) => (EQ_CLASS_MAPPING, 0.0, 0.0),
+        Some(EqClass::Live) => (EQ_CLASS_LIVE, 0.0, 0.0),
     };
     map.insert(
         ObjectKey::Str(EQ_CLASS_KEY.to_string()),
@@ -1815,6 +1826,7 @@ fn decode_eq_class(map: &IndexMap<ObjectKey, Value>) -> Option<EqClass> {
         }),
         Ok(EQ_CLASS_IDENTITY) => Some(EqClass::Identity),
         Ok(EQ_CLASS_MAPPING) => Some(EqClass::Mapping),
+        Ok(EQ_CLASS_LIVE) => Some(EqClass::Live),
         _ => None,
     }
 }
@@ -4546,8 +4558,16 @@ impl<'py> FromPyObject<'_, 'py> for Value {
             // to a value (queryset items in a `{% for %}`, a terminal model).
             // Only djust proxies carry this method, so `update_state` ingestion
             // (plain dicts/primitives) is unaffected.
+            let mut floored_model: Option<Bound<'_, PyAny>> = None;
             if let Ok(serializer) = ob.getattr("__djust_serialize__") {
-                if let Ok(result) = serializer.call0() {
+                if is_model_floor_proxy(&ob.to_owned()) {
+                    // #3888: a floored MODEL a template walk reached (a relation row:
+                    // `u.groups.all`, `.first`) is carried as a handle, exactly like a raw
+                    // model below, so a row has ONE representation however it arrived and a
+                    // second relation hop has a handle to read from. It is already the
+                    // floor proxy; the carrier arm below takes it from here.
+                    floored_model = Some(ob.to_owned());
+                } else if let Ok(result) = serializer.call0() {
                     // The hook returns a plain, denylist-filtered dict (model)
                     // or list-of-dicts (queryset) — recurse via Value so both
                     // shapes convert (Object / List). The result carries no
@@ -4581,17 +4601,38 @@ impl<'py> FromPyObject<'_, 'py> for Value {
             // `normalize_django_value` the eager path uses. `update_state`
             // ingestion passes pre-normalized dicts, so no raw model reaches
             // here on that path; the import is a cached sys.modules lookup.
-            if let Ok(models_mod) = ob.py().import("django.db.models") {
+            if let (None, Ok(models_mod)) = (&floored_model, ob.py().import("django.db.models")) {
                 if let Ok(model_cls) = models_mod.getattr("Model") {
                     if ob.is_instance(&model_cls).unwrap_or(false) {
-                        if let Ok(v) = ob
-                            .py()
-                            .import("djust.serialization")
-                            .and_then(|m| m.getattr("normalize_django_value"))
-                            .and_then(|f| f.call1((ob.to_owned(),)))
-                            .and_then(|r| r.extract::<Value>())
-                        {
-                            return Ok(v);
+                        // #3888: the model crosses as a FLOORED LIVE HANDLE, not as the
+                        // dict below. The dict holds fields and forward-FK objects and no
+                        // manager or `*_id` attname, so a template read of anything else
+                        // was answered from the render sidecar through the loop alias
+                        // `u == rows.<N>`, and an operand with a filter (`|slice`,
+                        // `|first`, `|dictsort`, a nested name) registers no alias, so the
+                        // read was empty. A handle travels with the row through any
+                        // filter (ADR-027), exactly as a plain object's does.
+                        //
+                        // The handle is the SAME floor proxy the sidecar walk uses
+                        // (`_SidecarModelProxy`), so the floor is enforced per attribute
+                        // READ and again after every segment of the walk
+                        // ([`Context::walk_live`]); this arm adds no reach, it moves the
+                        // existing reach from "by alias" to "by row". The proxy is carried by
+                        // the ONE carrier arm below (`opaque_value`, or the handle-only
+                        // terminal when one of its probes raised), so a model has no
+                        // policy of its own. It FALLS BACK to the denylist dict, never to
+                        // the raw model, when the floor is unavailable or raised.
+                        floored_model = floored_model_proxy(&ob.to_owned());
+                        if floored_model.is_none() {
+                            if let Ok(v) = ob
+                                .py()
+                                .import("djust.serialization")
+                                .and_then(|m| m.getattr("normalize_django_value"))
+                                .and_then(|f| f.call1((ob.to_owned(),)))
+                                .and_then(|r| r.extract::<Value>())
+                            {
+                                return Ok(v);
+                            }
                         }
                     }
                 }
@@ -4623,8 +4664,15 @@ impl<'py> FromPyObject<'_, 'py> for Value {
             // Shadows `ob` (as a `Bound`) so the two call sites below keep their spelling: the
             // structural pin on `opaque_value` having exactly one caller reads that text.
             let ob = floored_form_handle(&ob.to_owned());
+            // A model is carried by its floor proxy (#3888), not by itself: shadowed here, as the
+            // form handle above is, so the one carrier arm below reads the floored object.
+            let is_floored_model = floored_model.is_some();
+            let ob = floored_model.unwrap_or(ob);
             if let Some(encoded) = opaque_value(&ob.to_owned()) {
-                return Ok(Value::Encoded(Box::new(encoded)));
+                return Ok(Value::Encoded(Box::new(as_carried_model(
+                    encoded,
+                    is_floored_model,
+                ))));
             }
             // The terminal arm, reached only when a probe in `opaque_value`
             // raised (`bool(o)`, `str(o)`, `repr(o)`, `type(o).__name__`, or
@@ -4645,6 +4693,65 @@ impl<'py> FromPyObject<'_, 'py> for Value {
             ))))
         }
     }
+}
+
+/// The floor proxy a raw Django `Model` is carried by (#3888), or `None` for "use the denylist
+/// dict instead".
+///
+/// `None` when the floor could not be enforced (it raised: [`context::protect_sidecar_strict`]
+/// is fail-CLOSED) or when there is no djust Python side to enforce one (the same call hands the
+/// object back unchanged, and a raw model is never carried as its own handle).
+///
+/// The proxy is the handle on purpose, not the model. This is the one place a `Model` reaches
+/// the conversion RAW, so it is the one place the floor has to be applied; every sink that reads
+/// the handle afterwards (`walk_live`, `consume_live_items`, `live_get_item`, the filters'
+/// attribute reads) reads the proxy, which refuses a floor field, a sensitive method and any `_`
+/// name.
+fn floored_model_proxy<'py>(ob: &Bound<'py, PyAny>) -> Option<Bound<'py, PyAny>> {
+    let proxy = context::protect_sidecar_strict(ob.py(), ob.clone())?;
+    if proxy.is(ob) {
+        return None;
+    }
+    Some(proxy)
+}
+
+/// Is this object a floored MODEL proxy (`djust.serialization._SidecarModelProxy`)? (#3888)
+///
+/// One cached class and one `isinstance`, asked only of an object that already carries
+/// `__djust_serialize__` (a djust proxy), so an ordinary value never pays for it.
+fn is_model_floor_proxy(ob: &Bound<'_, PyAny>) -> bool {
+    static CLASS: pyo3::sync::PyOnceLock<Py<PyAny>> = pyo3::sync::PyOnceLock::new();
+    let py = ob.py();
+    let class = CLASS.get_or_try_init(py, || -> PyResult<Py<PyAny>> {
+        Ok(py
+            .import("djust.serialization")?
+            .getattr("_SidecarModelProxy")?
+            .unbind())
+    });
+    match class {
+        Ok(class) => ob.is_instance(class.bind(py)).unwrap_or(false),
+        Err(_) => false,
+    }
+}
+
+/// What a carried model answers that a carried object in general does not (#3888).
+///
+/// * **Equality** is the model's own `==` (same class, same pk). The proxy's `__eq__` is that, and
+///   [`equality_class`] cannot classify it (it only knows the default `__eq__`, a `Set`, a `Number`
+///   and a `dict`), so two rows of `{% if u == rows.0 %}` would never be equal. Set where the
+///   object is KNOWN to be a model proxy, not sniffed from its type.
+/// * **`repr`** is the model's `str()`, which is the spelling a model inside a container has
+///   always had here (`{{ rows }}` is `[u0, u1]`). The sinks that spell a whole container
+///   (`{{ v }}`, `|pprint`) read this slot for each item, and a container past
+///   [`OPAQUE_ITEM_CAP`] spells the same items through the same handles, so the two sides of the
+///   cap agree by construction. Python's `repr` (`<User: u0>`) is what Django prints for a LIST of
+///   models and is a different, separate divergence; it is deliberately not changed here.
+fn as_carried_model(mut encoded: Encoded, is_model: bool) -> Encoded {
+    if is_model {
+        encoded.eq_class = Some(EqClass::Live);
+        encoded.repr = encoded.display().to_string();
+    }
+    encoded
 }
 
 /// The object a Django `Form` / `BoundField` is carried by (#3790): the walk-floored proxy of it
@@ -5168,6 +5275,34 @@ impl Encoded {
         }))
     }
 
+    /// One NAMED attribute of the live object, read as `dictsort`'s key is (#3888).
+    ///
+    /// Django's `_property_resolver` reads `value[part]` and falls back to `getattr(value, part)`
+    /// for each dotted part, and CALLS nothing, so neither does this. A raw model is a handle over
+    /// its floor proxy, so a floor field (`password`) or a `_` name raises `AttributeError` here
+    /// exactly as it does for a template path, and the caller discards the sort (Django's own
+    /// `except (TypeError, AttributeError): return ""`). `None` is "not readable": no handle, the
+    /// read raised, or the value does not convert.
+    pub fn live_attr(&self, name: &str) -> Option<Value> {
+        // No `_` refusal here, deliberately: the caller (`dictsort_by_key`) refuses a private
+        // name before any item is read, as Django does, and a model's own floor proxy refuses
+        // it again per attribute. A third copy would be one fix plus decoration.
+        if name.is_empty() {
+            return None;
+        }
+        let handle = self.live.as_ref()?;
+        Python::attach(|py| {
+            let mut current = handle.bind(py).clone();
+            for part in name.split('.') {
+                current = match current.get_item(part) {
+                    Ok(found) => found,
+                    Err(_) => current.getattr(part).ok()?,
+                };
+            }
+            current.extract::<Value>().ok()
+        })
+    }
+
     /// Python's `o[start:stop:step]` over the live handle — Django's `slice`
     /// filter, which is a bare `value[slice(*bits)]` passthrough (#2695).
     ///
@@ -5294,12 +5429,18 @@ pub fn crosses_as_encoded(ob: &Bound<'_, PyAny>) -> bool {
     // `Encoded` (#1986 and its vector 7). Cheap, and asked in the block's own
     // order.
     if ob.getattr("__djust_serialize__").is_ok() {
-        return false;
+        // A floored MODEL proxy is carried since #3888; a queryset proxy still recurses
+        // (its hook answers the proxies of its rows, which are each carried).
+        return is_model_floor_proxy(ob);
     }
     if let Ok(models_mod) = ob.py().import("django.db.models") {
         if let Ok(model_cls) = models_mod.getattr("Model") {
             if ob.is_instance(&model_cls).unwrap_or(false) {
-                return false;
+                // The conversion carries a model as a floored live handle (#3888), by
+                // `opaque_value` or, when one of its probes raises, by the handle-only
+                // terminal; it falls back to the denylist dict only when there is no
+                // floor. Ask the same function, so the two answer one question (#1646).
+                return floored_model_proxy(ob).is_some();
             }
         }
     }
@@ -5624,7 +5765,7 @@ fn handle_only_encoded(ob: &Bound<'_, PyAny>) -> Encoded {
     let display = text
         .and_then(|t| py_string_lossy(&t).ok())
         .unwrap_or_else(|| repr.clone());
-    Encoded {
+    let encoded = Encoded {
         type_name,
         json: None,
         display: if str_raised {
@@ -5647,7 +5788,10 @@ fn handle_only_encoded(ob: &Bound<'_, PyAny>) -> Encoded {
         attrs: IndexMap::new(),
         items: None,
         eq_class: None,
-    }
+    };
+    // A floored model whose `str` / `repr` / `bool` raised is carried here, so it answers what
+    // every carried model does (#3888): its own `==`, and `str()` as its container spelling.
+    as_carried_model(encoded, is_model_floor_proxy(ob))
 }
 
 /// The Python types [`equality_class`] dispatches on, resolved once per

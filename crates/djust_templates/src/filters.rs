@@ -4731,16 +4731,16 @@ fn format_time(datetime_str: &str, format_str: &str, original: &Value) -> Result
 }
 
 fn sort_dicts_by_key(items: &[Value], sort_key: &str) -> Vec<Value> {
-    let mut sorted_items = items.to_vec();
-
-    sorted_items.sort_by(|a, b| {
-        let a_val = get_dict_value(a, sort_key);
-        let b_val = get_dict_value(b, sort_key);
-
-        compare_sort_values(&a_val, &b_val)
-    });
-
-    sorted_items
+    // The key is read ONCE per item, not once per comparison (#3888): for a dict it is a map
+    // lookup either way, but a carried object's key is an attribute read on its live handle
+    // (a Python call), and `sort_by` compares each item O(log n) times.
+    let mut keyed: Vec<(Value, &Value)> = items
+        .iter()
+        .map(|item| (get_dict_value(item, sort_key), item))
+        .collect();
+    // `sort_by` is stable, as Python's `sorted` is.
+    keyed.sort_by(|a, b| compare_sort_values(&a.0, &b.0));
+    keyed.into_iter().map(|(_, item)| item.clone()).collect()
 }
 
 /// The one ordering used by every `dictsort` path (#1646).
@@ -4892,6 +4892,12 @@ fn dictsort_by_index(items: &[Value], n: usize, reverse: bool) -> Option<Vec<Val
 fn get_dict_value(value: &Value, key: &str) -> Value {
     match value {
         Value::Object(map) => map.get(key).cloned().unwrap_or(Value::Missing),
+        // A CARRIED object (a raw model is one since #3888): Django's `_property_resolver` reads
+        // `value[part]` then `getattr(value, part)`, which is the object's own attribute and not
+        // a key of a dict. Read through the live handle, which for a model is its floor proxy:
+        // a floor field or a `_` name is unreadable here, as in a template path, and the sort
+        // fails closed (`""`) instead of ordering rows by a value that must not be seen.
+        Value::Encoded(encoded) => encoded.live_attr(key).unwrap_or(Value::Missing),
         _ => Value::Missing,
     }
 }
