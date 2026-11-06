@@ -17,7 +17,10 @@ the sidecar, so it is DECLINED here with the measurement below and recorded so t
 mechanical:
 
 * the four mixed-read spellings differ from Django on a QuerySet and on a ``list[Model]``, through
-  the Django-backend engine and a LiveView (16 cells, each ``xfail(strict=True)``);
+  the Django-backend engine and a LiveView: 16 cells, each ``xfail(strict=True)``. Twelve are this
+  item's gap (#3867 item 3). The other four, ``list[Model]`` on the Django-backend engine, are
+  attributed to #3888: there a relation read inside ANY sliced loop is empty (the controls in
+  ``TestASlicedListOfModelsOnTheBackend``), so they would stay red after item 3 is fixed;
 * the gap is exactly the mixed read: the SAME slice over a method-only read, over a plain loop, or
   over a row field agrees (the controls below), and so does the mixed read with no slice.
 
@@ -89,14 +92,36 @@ def _got(render, source, shape) -> str:
     return html_lib.unescape(render(source, MAKE_CONTEXT[shape]())).replace("<!--dj-if-->", "")
 
 
+def _mixed_cells() -> list:
+    """Every (render, shape, spelling) cell, each strict-xfailed against the issue that owns it."""
+    cells = []
+    for render in RENDERS:
+        for shape in MAKE_CONTEXT:
+            for name in MIXED_UNDER_SLICE:
+                backend_list = render.id == "DjustTemplateBackend" and shape == "list[Model]"
+                reason = (
+                    "#3888: a relation read in a sliced loop over list[Model] is empty on the backend"
+                    if backend_list
+                    else "#3867 item 3: the filtered operand has no sidecar alias; declined"
+                )
+                cells.append(
+                    pytest.param(
+                        *render.values,
+                        shape,
+                        name,
+                        marks=pytest.mark.xfail(strict=True, reason=reason),
+                        id=f"{render.id}-{shape}-{name}",
+                    )
+                )
+    return cells
+
+
+_MIXED_CELLS = _mixed_cells()
+
+
 @pytest.mark.django_db
 class TestAMixedReadUnderASliceIsADeclinedGap3867:
-    @pytest.mark.xfail(
-        strict=True, reason="#3867 item 3: the filtered operand has no sidecar alias; declined"
-    )
-    @pytest.mark.parametrize("render", RENDERS)
-    @pytest.mark.parametrize("shape", list(MAKE_CONTEXT))
-    @pytest.mark.parametrize("name", list(MIXED_UNDER_SLICE))
+    @pytest.mark.parametrize("render,shape,name", _MIXED_CELLS)
     def test_agrees_with_django(self, world, render, shape, name) -> None:
         source = MIXED_UNDER_SLICE[name]
         assert _got(render, source, shape) == _django_render(source, MAKE_CONTEXT[shape]())

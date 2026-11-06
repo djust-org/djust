@@ -7,7 +7,8 @@ converts the WHOLE context back to Python, and for a ``Value::NamedTuple`` it re
 
 * ``namedtuple("R", ["a", "a", "b"], rename=True)``: its ``_fields`` is ``('a', '_1', 'b')`` and a
   leading underscore is refused (``rename=True`` is a common idiom for raw-SQL rows);
-* a duplicate, a Python keyword, a field that is not an identifier;
+* a duplicate, a Python keyword, a field that is not an identifier, two fields equal only after NFKC
+  normalisation (``SyntaxError``, not ``ValueError``);
 * a class whose NAME is not an identifier.
 
 The conversion raised ``ValueError`` for ANY native tag in the template, whether the namedtuple was
@@ -76,6 +77,8 @@ SHAPES = [
     ("non_identifier_class_name", _odd("Bad Name", ("a", "b")), False),
     ("keyword_class_name", _odd("class", ("a", "b")), False),
     ("non_string_field", _odd("N", (1, 2)), False),
+    # Equal only after NFKC normalisation: ``namedtuple()`` raises SyntaxError, not ValueError.
+    ("nfkc_duplicate", _odd("Q", ("\ufb01", "fi")), False),
     ("ordinary", namedtuple("Ok", "a b")(1, 2), True),
     ("list_fields", _odd("L", ["a", "b"]), True),
 ]

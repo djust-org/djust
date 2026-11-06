@@ -5954,8 +5954,9 @@ impl<'py> IntoPyObject<'py> for Value {
 /// A shape the factory REFUSES is remembered too (`Ok(None)`, #3849): without that, every
 /// conversion of a refused namedtuple re-ran `collections.namedtuple()` (an `exec` that raises),
 /// 115 ms against 92 ms per 20,000 rows in the review of #3856. Only the shape's own refusal
-/// (`ValueError` / `TypeError`) is remembered; any other failure is not a fact about the shape and
-/// is tried again.
+/// (`ValueError`, or the `SyntaxError` `namedtuple()` raises for fields that are equal only after
+/// NFKC normalisation) is remembered; any other failure is not a fact about the shape and is tried
+/// again.
 fn named_tuple_class<'py>(
     py: Python<'py>,
     name: &str,
@@ -5986,14 +5987,17 @@ fn named_tuple_class<'py>(
         .call((name, fields.to_vec()), Some(&kwargs));
     let cls = match built {
         Ok(cls) => Some(cls.unbind()),
-        // The shape's own refusal (`ValueError`: a duplicate, a leading underscore, a keyword, a
-        // name that is not an identifier; `TypeError`: a field that is not a string) is a fact
-        // about the SHAPE, so it is remembered. Anything else (`MemoryError`, a
+        // The shape's own refusal is a fact about the SHAPE, so it is remembered: `ValueError` (a
+        // duplicate, a leading underscore, a keyword, a name that is not an identifier, a field
+        // that is not a string: `namedtuple()` `str()`s its fields) and `SyntaxError` (fields
+        // equal only after NFKC normalisation, e.g. `("\u{fb01}", "fi")`, which fail when the
+        // generated `__new__` is compiled). No shape raises `TypeError` (probed over every
+        // refusal above), so it is not caught. Anything else (`MemoryError`, a
         // `KeyboardInterrupt`, an exception from a patched `namedtuple`) is not, and propagates
         // uncached: the next conversion tries again.
         Err(err)
             if err.is_instance_of::<pyo3::exceptions::PyValueError>(py)
-                || err.is_instance_of::<pyo3::exceptions::PyTypeError>(py) =>
+                || err.is_instance_of::<pyo3::exceptions::PySyntaxError>(py) =>
         {
             None
         }
@@ -6002,7 +6006,9 @@ fn named_tuple_class<'py>(
     // The ENTRY is returned, not the class just built: two threads can build
     // the same shape at once (no GIL on 3.14t — measured 171/200 first
     // conversions), and only one build may become the canonical class. The
-    // loser's is dropped here.
+    // loser's is dropped here, with the lock held: harmless, a class sits in a
+    // reference cycle (`__mro__`, its methods' globals), so dropping our
+    // reference runs no finalizer and cannot re-enter this function.
     //
     // Process-lifetime, ~6 KB per shape, and only app code can grow it: the
     // key is the shape of a class the app created. No eviction, because an

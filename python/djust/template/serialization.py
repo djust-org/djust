@@ -28,7 +28,10 @@ JSONValue = Union[str, int, float, bool, None, List[Any], Dict[str, Any]]
 def _namedtuple_shape_is_buildable_cached(name: str, fields: tuple) -> bool:
     try:
         namedtuple(name, fields)
-    except (ValueError, TypeError):
+    except (ValueError, SyntaxError):
+        # ``SyntaxError``: fields equal only after NFKC normalisation (``("\ufb01", "fi")``) fail
+        # when the generated ``__new__`` is compiled. It used to escape ``serialize_value`` and fail
+        # the render. No shape raises ``TypeError`` (the caller has checked every name is a ``str``).
         return False
     return True
 

@@ -93,6 +93,17 @@ class TestTheEnginesFactoryRunsOncePerShape:
         _render(value)
         assert factory_calls[type(value).__name__] == 1
 
+    def test_a_syntax_error_refusal_is_attempted_once_too(self, factory_calls):
+        """Two fields equal only after NFKC normalisation: ``namedtuple()`` raises ``SyntaxError``
+        (the generated ``__new__`` has a duplicate argument), a deterministic refusal of the shape
+        like a duplicate's ``ValueError``. 25 renders were 25 factory calls (375 ms against 96 ms
+        per 20,000 rows) while only ``ValueError`` was remembered."""
+        value = _fresh("Nfkc", ("\ufb01", "fi"))
+        with pytest.raises(SyntaxError):  # the premise: this IS a SyntaxError, not a ValueError
+            collections.namedtuple("Probe", value._fields)
+        _render(value)
+        assert factory_calls[type(value).__name__] == 1
+
     def test_a_buildable_shape_is_built_once(self, factory_calls):
         """The control the refusal case is measured against: the existing cache for a built shape."""
         value = _fresh("Buildable", ("a", "b"))
@@ -162,6 +173,14 @@ class TestThePythonGatesCacheIsPerShape:
             for _ in range(RENDERS):
                 serialize_value(value, for_render=True)
             assert factory_calls[type(value).__name__] == 1, type(value).__name__
+
+    def test_a_syntax_error_refusal_keeps_its_items_and_never_fails_a_render(self, factory_calls):
+        """The Python gate let this ``SyntaxError`` escape ``serialize_value`` (and fail the render)."""
+        value = _fresh("PyNfkc", ("\ufb01", "fi"))
+        for _ in range(RENDERS):
+            out = serialize_value(value, for_render=True)
+            assert type(out) is tuple and out == tuple(value)
+        assert factory_calls[type(value).__name__] == 1
 
     def test_the_cache_is_keyed_by_the_whole_shape(self, factory_calls):
         name = f"PyTwin_{_TOKEN}_{next(_COUNTER)}"
