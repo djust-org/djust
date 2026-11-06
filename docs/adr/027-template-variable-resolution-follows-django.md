@@ -509,6 +509,99 @@ separate change with its own before/after (CLAUDE.md #1079), not a side effect o
 - **Behaviour changes to declare (CHANGELOG "Behavior change" sub-bullets at the flip).** `{{ o }}` on the plain path renders `str(o)`, not the attribute dict; a class in a context is instantiated (Django parity, including model classes); a generator is consumed by `{% for %}`; a callable at any segment is called (rows J/J2 — was a repr / `None`).
 - **Negative / risks.** Presenter objects on downstream sites that relied on the dict repr; `Encoded` reader-sweep completeness (the count-canary is the defence); the unmeasured cost on the `@property` fixture and `presenter_control`'s one-off list extraction (`page.rows` still converts a list of raw models per render; memoising it is a follow-up); #2532 must land first — it is the row above this one.
 
+## Addendum (#3888): a raw model that reaches the engine is a floored handle
+
+This ADR kept "models stay eager floored dicts" for the LiveView path, for four reasons: the client
+needs a JSON shape, a rolling deploy needs msgpack compatibility, the floor needs a materialised
+form, and `_normalize_db_values` turns a model into a dict so a container `!=` sees a field mutation
+behind a stable `id()`. **All four are properties of the state path, and the LiveView path still
+normalises a model in Python before it reaches Rust** (`mixins/context.py`, `rust_bridge.py`), so
+they are unchanged.
+
+What changed is the model that reaches `impl FromPyObject for Value` RAW: a `list` / `tuple` / nested
+`QuerySet` of models in a `DjustTemplateBackend` context, `render_template`, a tag's return value.
+That model used to be the denylist dict, and the dict has no manager and no `*_id` attname, so a read
+of either went to the render sidecar through the loop alias `u == rows.<N>`. A filtered operand
+(`|slice`, `|first`, `|dictsort`, a `{% with %}` of one, a nested name) registers no alias (it would
+key the safe-string marks by a shifted index, an XSS boundary, #2325/#2334), so the read was empty.
+
+It is now carried as a `Value::Encoded` whose live handle is `_SidecarModelProxy`
+(`floored_model_proxy`, `crates/djust_core/src/lib.rs`): the object ADR-027 already gives every other
+Python object, over the floor proxy this ADR already uses for a walked model. So the row carries its
+own handle through any filter, and the floor is enforced per attribute READ (and again after every
+segment of `Context::walk_live`), not once at conversion. It adds no reach: it moves the existing
+reach from "by alias" to "by row".
+
+Invariants it keeps (each has a test in `python/tests/test_model_live_handle_3888.py`):
+
+- the handle is never the raw model; if the floor cannot be built the conversion falls back to the
+  denylist dict, never to the model (fail closed);
+- a floor field, a sensitive method, a `_` name and a per-model exclusion are unreadable on the handle,
+  through any filter and through any relation (the relation yields floored rows again);
+- `alters_data` / `do_not_call_in_templates` are decided by the engine's call guard on the object the
+  proxy returns, so `{{ u.delete }}` and `{{ u.save }}` are never called;
+- the live handle refuses underscore-prefixed names for ANY reader, not only a template path: the
+  proxy defines `__getattribute__`, so a custom filter or tag handler that receives it (and walks a
+  dotted attribute path) is refused the wrapped instance and the slots, as is the queryset proxy and
+  the call wrapper it hands out;
+- `{{ u }}` is `str(u)`, and two handles of one row are `==`;
+- a handle is never serialised as itself: written to JSON (the text a native or bridged tag
+  receives as an argument) or to a msgpack state snapshot, a carried model is its floored dict, read
+  from the handle only when something serialises it. So a model inside a set / frozenset / dict view
+  held in state keeps its fields across a state-backend round trip, and
+  `{% data_table rows=rows %}` over a list of models still receives dict rows.
+
+The rows a relation read returns (`u.groups.all`, `.first`) are carried the same way: the
+`__djust_serialize__` arm of the conversion recognises the floor MODEL proxy
+(`is_model_floor_proxy`) and carries it as the handle instead of calling the hook, and a queryset
+proxy's hook answers its rows' proxies rather than their dicts. So a row has ONE representation
+however it arrived (raw, or walked), a second relation hop (`g.user_set.count` inside `u.groups.all`)
+has a row to read from, and a container of such rows spells the same on both sides of
+`OPAQUE_ITEM_CAP`. A carried model's `repr` slot is its `str()` (the spelling a model inside a
+container has always had here, `[u0, u1]`), not Python's `<User: u0>`, so no existing spelling moves.
+
+**What is still the dict form.** A top-level SINGLE model on `DjustTemplateBackend` and on a LiveView
+is serialised in Python before it reaches Rust (#3902), so `{{ u|pprint }}` of a top-level model dumps
+its fields while `{{ rows|first|pprint }}` prints its name, and a filtered rebinding of a top-level
+model reads its reverse relations empty. **What changed for Python readers.** A custom filter or
+simple tag that receives a model INSIDE a list / tuple / nested container now receives the floor
+proxy (attribute reads work, `row["field"]` does not) where it received the dict; a top-level model
+or a top-level queryset loop still receives the dict. `{{ rows|json_script:"x" }}`, `|pprint` and a
+data-dump tag such as `json_viewer` spell each model as its `str()` (Django raises for the
+`json_script` case), so code that reads such data in JavaScript must build the data explicitly.
+
+**What a read through a handle can return (closed set, #3888).** The handle does not list the names it
+refuses; it decides by the KIND of what a read returns, in one place (`_floored_result`,
+`python/djust/serialization.py`). Plain data comes back as is, matched by EXACT type (`str`, `int`,
+`float`, `bool`, `None`, `Decimal`, `bytes`, `date`, `timedelta`), and so does a list /
+tuple / dict / set of it, rebuilt member by member (a dict's keys too). A UUID is its text. A `datetime` or
+`time` passes as it is when its `tzinfo` is `None` or a C type (`datetime.timezone`, `zoneinfo.ZoneInfo`);
+a Python-defined `tzinfo` (the shape a `pytz` or `dateutil` zone has) is replaced by a floor `tzinfo` that
+gives the same `utcoffset` / `dst` / `tzname` / `str` and reports a class with no Python-level methods, so
+the value renders the same under `date`, `time`, `timesince`, `localtime` and the rest. Safe markup
+stays safe markup (`SafeData` is what the engine asks), as a `str` whose class and methods a reader
+cannot reach; a `TextChoices` / `IntegerChoices` member is its value. A model, a manager and a queryset
+come back as floor proxies. Any callable (a bound method, a manager's `.all`) comes back as a call
+wrapper whose result goes through the same function. A class, a module or a descriptor is refused. Any
+other instance (a file field, a subclass of plain data, an enum member) comes back as a read-only view
+that answers reads, calls and items through the same function. Every underscore-prefixed name is
+refused by every one of these, except the serialisation hook the engine asks for and `__class__`,
+which reports a class with no Python-level methods (so a reader that walks attributes from a wrapper
+finds no function, and no module namespace behind one) while `isinstance` / `issubclass` against
+`collections.abc` classes still work because they also consult the wrapper's real type. A call wrapper
+hands out no `inspect.Signature`; the engine asks it "were arguments required?" through a marker
+(`djust_requires_arguments`), the same way it reads `djust_orm_call`. A model's own exception classes
+(`{{ u.DoesNotExist }}`) are classes, so they are refused too.
+`python/tests/test_model_handle_closed_set_3888.py` enumerates `dir()` of `User`, `Group`,
+`Permission`, `ContentType` and a custom model with a relation, a property, a file field and a
+method, and asserts that no result, at the first or the second level, is a model instance, a model
+class, a manager, a queryset, a bound method, a module or a type, and that no class reached has a
+Python function among its members; the second level is every underscore name that would reach one
+(`__self__`, `__func__`, `__wrapped__`, `__globals__`, `__code__`, `__closure__`, `__dict__`,
+`__module__`). `python/tests/test_model_handle_namespaces_3888.py` pins the kinds one at a time. The
+tests guarantee the KIND of what is returned for the members of those models; they do not guarantee
+the content of a field.
+
 ## Non-goals
 
 `string_if_invalid` as an engine option (enabled, not delivered); parse-time `TemplateSyntaxError`s

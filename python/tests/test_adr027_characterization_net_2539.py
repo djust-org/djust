@@ -1599,8 +1599,9 @@ class TestTheRenderEnvReachesEveryRenderEntry2539:
 class TestTheAliasFallbackStays2628:
     """The by-name sidecar's alias fallback (`Context::resolve_alias` in
     `resolve_without_builtins`) is a Django-parity mechanism for a value that
-    carries NO live handle — a model crosses as a floored dict (ADR-027
-    (b)(1)) — and ADR-027 Step 5 kept it for that reason. Until this pin the
+    carries NO live handle. A raw model crossed as a floored dict (ADR-027
+    (b)(1)) and ADR-027 Step 5 kept the fallback for that reason; since #3888 a
+    raw model is a handle, and the fallback still serves a value that is not. Until this pin the
     only thing that went red without it was an incidental benchmark cell.
 
     Gate-off (verified): `match self.resolve_alias(key)` →
@@ -1622,17 +1623,30 @@ class TestTheAliasFallbackStays2628:
         assert render(source, {"user": u}) == "1"
 
     @pytest.mark.parametrize("render", ALL_FOUR)
-    def test_the_filtered_rebinding_is_a_recorded_gap_not_a_regression(self, render) -> None:
-        """A FILTERED operand registers no alias (`context.rs`, #2504 — the
-        guards are `Context::is_safe`'s XSS boundary), and a model has no
-        handle to fall back on, so this cell renders `''` where Django renders
-        `1`. Pre-existing on every entry; recorded so the row above cannot be
-        "fixed" by widening the alias guards without this going green — and
-        so a future change that closes it is noticed."""
+    def test_the_filtered_rebinding_reaches_its_reverse_relation_since_3888(
+        self, render, request
+    ) -> None:
+        """Was `..._is_a_recorded_gap_not_a_regression`: a FILTERED operand registers no alias
+        (`context.rs`, #2504 — the guards are `Context::is_safe`'s XSS boundary), and a raw model had
+        no handle to fall back on, so this cell rendered `''` where Django renders `1`. Recorded so
+        the row above could not be "fixed" by widening the alias guards.
+
+        #3888 closed it where the model reaches the Rust conversion RAW: it is a floored live
+        handle there, so the filtered rebinding keeps the model and the handle answers the read
+        (`render_template`, `render_template_with_dirs`). The alias guards are untouched.
+
+        It stays a recorded gap on the two entries that serialize a top-level model in PYTHON
+        first (`DjustTemplateBackend` -> `_jit_serialize_model`, `LiveView` ->
+        `normalize_django_value`): the Rust conversion receives a dict there, so there is still no
+        handle. Filed as #3902; delete the `''` branch when it closes."""
         source = "{% with q=user|default:user %}{{ q.groups.count }}{% endwith %}"
         u = self._alice()
         assert django_render(source, {"user": u}) == "1"
-        assert render(source, {"user": u}) == ""
+        got = render(source, {"user": u})
+        if request.node.callspec.id in ("DjustTemplateBackend", "LiveView"):
+            assert got == "", "#3902: a Python-serialized top-level model has no handle"
+        else:
+            assert got == "1"
 
 
 class TestStringIfInvalidReachesTheLiveWalk2628:

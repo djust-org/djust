@@ -3639,6 +3639,16 @@ fn attr_is_truthy(obj: &pyo3::Bound<'_, pyo3::PyAny>, name: &str) -> bool {
 /// builtin) is treated the same. A successful zero-arg bind means the
 /// `TypeError` came from INSIDE the method and must propagate.
 fn callable_requires_arguments(py: Python<'_>, obj: &pyo3::Bound<'_, pyo3::PyAny>) -> bool {
+    // A floor call wrapper (`djust.serialization._FlooredCall`) hands out no `inspect.Signature`
+    // (its class would put Python-level methods in a reader's reach); it answers the question itself
+    // through this marker.
+    if let Some(answer) = obj
+        .getattr("djust_requires_arguments")
+        .ok()
+        .and_then(|marker| marker.call0().ok())
+    {
+        return answer.is_truthy().unwrap_or(true);
+    }
     let probe = || -> PyResult<bool> {
         let inspect = py.import("inspect")?;
         let signature = inspect.call_method1("signature", (obj,))?;
@@ -3665,18 +3675,23 @@ fn warn_once_on_orm_autocall(py: Python<'_>, obj: &pyo3::Bound<'_, pyo3::PyAny>,
             return; // already warned for this path
         }
     }
-    // Only bound methods whose __self__ is a Manager/QuerySet.
-    let Ok(receiver) = obj.getattr("__self__") else {
-        return;
+    // Only bound methods whose __self__ is a Manager/QuerySet. A floored call wrapper
+    // (`djust.serialization._FlooredCall`) does not expose its receiver (a reader that walks
+    // attributes could take it), so it says the same thing with a flag.
+    let is_orm = match obj.getattr("__self__") {
+        Ok(receiver) => py
+            .import("django.db.models")
+            .and_then(|m| {
+                let manager = m.getattr("Manager")?;
+                let queryset = m.getattr("QuerySet")?;
+                Ok(receiver.is_instance(&manager)? || receiver.is_instance(&queryset)?)
+            })
+            .unwrap_or(false),
+        Err(_) => obj
+            .getattr("djust_orm_call")
+            .and_then(|flag| flag.is_truthy())
+            .unwrap_or(false),
     };
-    let is_orm = py
-        .import("django.db.models")
-        .and_then(|m| {
-            let manager = m.getattr("Manager")?;
-            let queryset = m.getattr("QuerySet")?;
-            Ok(receiver.is_instance(&manager)? || receiver.is_instance(&queryset)?)
-        })
-        .unwrap_or(false);
     if !is_orm {
         return;
     }

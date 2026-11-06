@@ -1881,6 +1881,16 @@ fn sibling_binding(binding: crate::registry::HandlerBinding) -> SiblingBinding {
 /// `[List]`/`[Object]`-collapse parallel-path-drift class (CLAUDE.md
 /// #1646, issue #2042).
 fn value_to_arg_string(v: &Value) -> String {
+    // A carried MODEL (#3888) is its floored dict here, as every model was before it was a handle:
+    // a handler parses this text, and `{% data_table rows=rows %}` reads dict rows. A model inside
+    // a list reaches the same dict through `Value`'s `Serialize`; a bare one (a loop variable,
+    // `{% with u=rows|first %}`) comes through this early return. Ahead of the `match` so no new
+    // flatten site is added beside it (the provenance inventory pins those).
+    if let Value::Encoded(e) = v {
+        if let Some(Ok(text)) = e.floored_model_dict().map(|d| serde_json::to_string(&d)) {
+            return text;
+        }
+    }
     match v {
         // Tuple included: a structured arg must be JSON-encoded, not collapsed
         // to its Display form — the #2042 `[List]`-collapse class (#2203).
@@ -6835,6 +6845,10 @@ fn encoded_equal(a: &Encoded, b: &Encoded) -> bool {
         (Some(EqClass::Mapping), Some(EqClass::Mapping)) => {
             a.live_eq(b).unwrap_or_else(|| a.repr == b.repr)
         }
+        // #3888: two raw models, carried as floored handles: the model's own `==` (class and
+        // primary key). No handle (a round trip) is "not equal", never "equal by repr": two
+        // distinct rows can print the same `__str__`.
+        (Some(EqClass::Live), Some(EqClass::Live)) => a.live_eq(b).unwrap_or(false),
         // Everything else — two Sets, two datetimes, and every CROSS-class
         // pair (which answers `None` there, i.e. false, exactly as Python
         // says `set() != complex(0)`).
@@ -7556,6 +7570,30 @@ mod tests {
     use crate::lexer::tokenize;
     use crate::parser::parse;
     use indexmap::IndexMap;
+
+    #[test]
+    fn two_carried_models_without_a_handle_are_never_equal_3888() {
+        // The class survives a snapshot (wire tag 5) and the live object does not. Equal-by-repr
+        // would conflate two rows that print the same `__str__`, so a carrier with no handle to
+        // ask is "not equal", never "equal".
+        let carried = || {
+            Value::Encoded(Box::new(djust_core::Encoded {
+                type_name: "User".to_string(),
+                display: "u0".to_string().into(),
+                json: None,
+                truthy: true,
+                len: None,
+                iterable: false,
+                repr: "u0".to_string(),
+                cmp_key: None,
+                attrs: Default::default(),
+                items: None,
+                eq_class: Some(EqClass::Live),
+                live: None,
+            }))
+        };
+        assert!(!values_equal(&carried(), &carried()));
+    }
 
     #[test]
     fn captured_literal_replay_requires_allowlisted_text_and_literal_arguments() {

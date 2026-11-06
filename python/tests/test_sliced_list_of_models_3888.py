@@ -1,38 +1,22 @@
-"""#3888: a relation read under a filtered loop operand over a ``list[Model]`` is empty on the backend.
+"""#3888: a relation read under a filtered loop operand over a ``list[Model]`` agrees with Django.
 
-Diagnosed, NOT fixed here: closing it changes what the backend ships for a raw model (or adds an
-engine mechanism), which is a design decision recorded in #3888. This file pins the measured
-boundary so that decision, and any fix for it, is checked against Django's own engine.
+Was: empty on the Django-backend engine. A raw ``Model`` crossed the engine boundary as the dict
+``normalize_django_value`` makes of it (fields and forward-FK objects; no manager, no ``*_id``
+attname), and whatever the dict lacked was read from the render sidecar through the loop alias
+``u == users.<N>``. A FILTERED operand registers no alias (``set_loop_mapping`` / ``set_alias`` in
+``crates/djust_templates/src/renderer.rs`` refuse an operand with a ``|``: ``slice`` shifts indices,
+``dictsort`` reorders, and the same alias keys the safe-string marks, an XSS boundary), so the read
+was empty.
 
-The mechanism, measured symptom-up on REAL ``User`` / ``Group`` rows (Django's engine is the oracle):
+Now: the model crosses as a floored live handle (``floored_model_handle`` in
+``crates/djust_core/src/lib.rs``): the row carries its own handle through any filter (ADR-027), and the
+handle is the floor proxy, so the floor is enforced per attribute read. This file is the matrix that
+was pinned as strict xfails by the diagnosis PR; every marker the change fixes is gone. The full
+differential (container x operand x read, four models) and the security matrix are in
+``python/tests/test_model_live_handle_3888.py``.
 
-* A raw ``Model`` in a list crosses into the engine as the DICT ``normalize_django_value`` makes of
-  it (the serialization floor, ``crates/djust_core/src/lib.rs``: "a RAW Django model reaching Value
-  conversion"). That dict holds the model's fields and forward-FK objects. It holds no manager
-  (``groups``, ``user_permissions``) and no ``*_id`` attname.
-* A read of anything the dict lacks is answered from the render sidecar, which is keyed by the
-  TOP-LEVEL name: for ``{% for u in users %}`` the engine registers the alias ``u == users.<N>`` and
-  resolves ``u.groups.all`` as ``users.N.groups.all`` against the raw list.
-* A FILTERED operand registers no alias (``{% for u in users|slice:':2' %}``: ``set_loop_mapping`` /
-  ``set_alias`` in ``crates/djust_templates/src/renderer.rs`` refuse an operand with a ``|``, because
-  ``slice`` shifts indices and ``dictsort`` reorders; the same alias keys the safe-string marks, an
-  XSS boundary), so ``u`` is the dict, the sidecar is unreachable, and the read is empty.
-* A QuerySet, and a LiveView ``list[Model]``, agree because the TOP-LEVEL rows are path-JIT
-  serialized (``_jit_serialize_queryset`` / ``_jit_serialize_model_list``): the relation data is IN
-  the row, so no sidecar is needed. ``DjustTemplate.render`` JITs a ``QuerySet`` and a single
-  ``Model`` and leaves a ``list[Model]`` / ``tuple[Model]`` raw.
-
-Measured against a throwaway prototype of the Python option (path-JIT a top-level ``list[Model]``
-and merge the rows over the normalized dict, so ``__str__`` and the fields stay): all 80 top-level
-cells below turn red (strict xpass) and every control stays green, while the nested cells and the
-``dictsort`` cells stay xfailed. That is the evidence for what the option reaches and does not.
-
-So the trigger is not ``slice`` and not the list: it is a filter that yields a NEW list
-(``slice`` with any bounds, ``first``, ``dictsort``, a chained ``slice``, ``{% with s=users|slice %}``)
-over rows that carry no handle and no relation data. ``reversed`` (a loop keyword the engine maps
-itself), ``last`` (the row here has no groups, which Django also prints empty), ``join`` and every
-row FIELD agree. The cells below are the whole matrix; the xfails are strict, so a fix turns them red
-and that is the prompt to remove the marker.
+What is still red, and why it is not this issue: a QuerySet or a LiveView row with ``dictsort`` over a
+field the template reads nowhere else (#3892): the row is path-JIT serialized and has no such field.
 
 Engine path: the Django-backend engine; LiveView and the QuerySet are the controls.
 
@@ -107,31 +91,20 @@ def _expected(source, shape) -> str:
     return _django_render(source, _ctx(shape))
 
 
-def _broken_cells() -> list:
-    cells = []
-    for shape in ("list[Model]", "tuple[Model]"):
-        for op in FILTERED:
-            for read in READS:
-                cells.append(
-                    pytest.param(
-                        shape,
-                        op,
-                        read,
-                        marks=pytest.mark.xfail(
-                            strict=True,
-                            reason="#3888: a raw model row has no handle under a filtered operand",
-                        ),
-                        id=f"{shape}-{op}-{read}",
-                    )
-                )
-    return cells
+def _cells() -> list:
+    return [
+        pytest.param(shape, op, read, id=f"{shape}-{op}-{read}")
+        for shape in ("list[Model]", "tuple[Model]")
+        for op in FILTERED
+        for read in READS
+    ]
 
 
 @pytest.mark.django_db
 class TestTheFilteredOperandOverListOfModels:
-    """The recorded gap: every filtered operand x relation read over a raw ``list`` / ``tuple``."""
+    """Every filtered operand x relation read over a raw ``list`` / ``tuple``."""
 
-    @pytest.mark.parametrize("shape,op,read", _broken_cells())
+    @pytest.mark.parametrize("shape,op,read", _cells())
     def test_the_backend_agrees_with_django(self, world, shape, op, read) -> None:
         source = _source(FILTERED[op], read)
         assert _got(_backend_render, source, shape) == _expected(source, shape)
@@ -139,10 +112,9 @@ class TestTheFilteredOperandOverListOfModels:
     @pytest.mark.parametrize("op", list(FILTERED))
     @pytest.mark.parametrize("read", list(READS))
     def test_each_cell_expects_a_value(self, world, op, read) -> None:
-        """The control for the strict xfails: Django prints a VALUE in every cell, so an xfail cannot
-        be hiding a cell where both engines print only brackets (``last`` is excluded for exactly
-        that reason: its row is in no group). It does not assert the backend DIFFERS: that is the
-        xfail above, and it must be the only thing a fix turns red."""
+        """The control for the cells above: Django prints a VALUE in every cell, so an agreement
+        cannot be two engines printing only brackets (``last`` is excluded for exactly that reason:
+        its row is in no group)."""
         source = _source(FILTERED[op], read)
         expected = _expected(source, "list[Model]")
         assert expected.replace("[", "").replace("]", "").replace(",", "") != "", expected
@@ -208,14 +180,11 @@ def _nested(shape: str) -> dict:
 
 @pytest.mark.django_db
 class TestANestedNameIsTheSameGap:
-    """The top-level JIT does not reach ``page.users``, so a QuerySet there has no relation data in
-    its rows either: the gap is "a row with no handle and no data under a filtered operand", not
-    "a list"."""
+    """The top-level JIT does not reach ``page.users``, so a QuerySet there had no relation data in
+    its rows either: the gap was "a row with no handle and no data under a filtered operand", not
+    "a list". Its rows are raw models, so they are handles now."""
 
     @pytest.mark.parametrize("shape", ["list[Model]", "QuerySet"])
-    @pytest.mark.xfail(
-        strict=True, reason="#3888: a row under a filtered operand has no handle or relation data"
-    )
     def test_the_backend_agrees_with_django(self, world, shape) -> None:
         got = html_lib.unescape(_backend_render(NESTED, _nested(shape)))
         assert got == _django_render(NESTED, _nested(shape))

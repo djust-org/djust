@@ -246,7 +246,12 @@ class _Call:
     def __signature__(self) -> inspect.Signature:
         # Django: after a TypeError from the call, `signature(current).bind()` decides between
         # "arguments were required" (string_if_invalid) and "the call itself raised" (re-raise).
-        return inspect.signature(object.__getattribute__(self, "_FloorWalker__raw"))
+        raw = object.__getattribute__(self, "_FloorWalker__raw")
+        from djust.serialization import floored_call_signature
+
+        # a floor call wrapper hides its callable (and its signature) from readers; this walker is
+        # the engine's own, so it asks the module for the shape
+        return floored_call_signature(raw) or inspect.signature(raw)
 
 
 class FloorSubscriptWalker(_Subscript, FloorWalker):

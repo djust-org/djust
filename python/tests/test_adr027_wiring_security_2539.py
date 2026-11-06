@@ -740,12 +740,21 @@ class TestTheTwoConversionsAgree2539:
                 disagreements.append((type(obj).__name__, probe, actual))
         assert disagreements == [], f"probe/conversion drift: {disagreements}"
 
-    def test_no_container_or_model_ever_carries_a_handle(self) -> None:
-        """ADR §Decision (b), enforced by the existing arm ORDER rather than
-        by a new rule: a `list`, a `dict`, a tuple, a `Model` and anything
-        with `__djust_serialize__` are claimed ABOVE `opaque_value`, so none
-        of them can ever be given a handle. That is what keeps the #2532
-        zero-crossing invariant true by construction."""
-        for make in (lambda: [1, 2], lambda: (1, 2), lambda: {"a": 1}, make_user):
+    def test_no_container_ever_carries_a_handle(self) -> None:
+        """ADR §Decision (b), enforced by the existing arm ORDER rather than by a new rule: a
+        `list`, a `dict` and a tuple are claimed ABOVE `opaque_value`, so none of them can ever be
+        given a handle. That is what keeps the #2532 zero-crossing invariant true by construction
+        for the CONTAINERS (a `list[Model]` on the LiveView path never reaches Rust as models: the
+        path normalises them first).
+
+        A raw `Model` is no longer in this list: since #3888 it crosses as a floored live handle
+        (ADR-027 addendum), pinned by `test_a_model_carries_its_floor_proxy_as_the_handle` below
+        and by `python/tests/test_model_live_handle_3888.py`."""
+        for make in (lambda: [1, 2], lambda: (1, 2), lambda: {"a": 1}):
             obj = make()
             assert _rust.crosses_as_encoded(obj) is False, type(obj).__name__
+
+    def test_a_model_carries_its_floor_proxy_as_the_handle(self) -> None:
+        """#3888: the handle is the floor proxy, never the model, and the probe says so."""
+        assert _rust.crosses_as_encoded(make_user()) is True
+        assert _rust.crosses_as_encoded_by_conversion(make_user()) is True
