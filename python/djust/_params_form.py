@@ -310,8 +310,11 @@ def fallback_values(form: forms.BaseForm, mode: str, view: Any = None) -> Dict[s
     ``form.errors`` *and* is in ``form.cleaned_data``: Django removes a field
     from ``cleaned_data`` when its own ``clean_<field>()`` fails, but a field
     that merely did not fail is not proof it was checked, so a field a ``clean()``
-    deleted counts as not valid. The request's raw value of a field that failed
-    never reaches ``handle_params``.
+    deleted counts as not valid. A failed field's own entry is always its initial
+    value; ``"initial"`` is the mode that never hands over a raw request value, and
+    in ``"fields"`` a ``clean()`` that copies raw request data into a KEPT field
+    hands it over through that field, as on the valid path for a field the URL
+    supplied (an unsupplied one is a known difference, #3891).
 
     The result is always a combination the form's ``clean()`` accepts, or the
     plain initial values. A kept field is now paired with the initial value of a
@@ -361,7 +364,7 @@ def fallback_values(form: forms.BaseForm, mode: str, view: Any = None) -> Dict[s
         return all_initial()
     # clean()'s output is adopted for the fields the fallback KEPT only (a kept field the URL left
     # out counts: it is in `kept`). A replaced field is its initial value whatever clean() wrote:
-    # a clean() that re-reads self.data would otherwise hand the failed raw value to handle_params.
+    # a clean() that re-reads self.data would otherwise write the failed raw value into its own entry.
     # A kept field clean() removed is not valid, as one it was never given: its initial value.
     adopted = set(kept)
     return {

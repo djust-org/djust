@@ -188,9 +188,9 @@ Now `?page=abc&sort=name` hands `handle_params()` `page=1` (its initial value) a
 `sort="name"` (what the URL said). The rules:
 
 - A field is kept when it has no entry in `form.errors` and is in `form.cleaned_data`.
-  Every other field takes its initial value, so a value that failed validation never
-  reaches `handle_params()`; the fallback only ever hands over a cleaned value or a
-  value the form declared.
+  Every other field takes its initial value: **a failed field's own entry is always its
+  initial value.** `"initial"` is the mode that never hands over any raw request value; in
+  `"fields"` a kept field is `clean()`'s output, handed over verbatim as on a valid URL.
 - A kept field is the value the valid path would hand over: a field the URL left out
   or empty takes its `initial`, exactly as on a valid URL. An optional field the URL
   omitted is valid by the form's own say-so; a required one is an error and is replaced.
@@ -225,8 +225,12 @@ Now `?page=abc&sort=name` hands `handle_params()` `page=1` (its initial value) a
   `page - 1` conversion gives `3` and `2`. Keep such conversions in `handle_params()`, or
   leave the view on the default `"initial"`.
 - `clean()`'s output is adopted only for the fields the fallback **kept**. A replaced field
-  is its initial value whatever `clean()` wrote, so a `clean()` that re-reads `self.data`
-  cannot hand a failed raw value to `handle_params()`.
+  is its initial value whatever `clean()` wrote, so a failed field's own entry is never the
+  raw value. A `clean()` that copies raw request data into a **kept** field (`c["a"] =
+  self.data.get("q")` with `q` failed) hands it over through that field, as it does on the
+  valid path for a field the URL supplied; that is `clean()`'s trust boundary, not the
+  fallback's. (For a kept field the URL left out, the valid path applies its `initial` after
+  `clean()` and the fallback does not: tracked in #3891.)
 - A kept `ModelChoiceField` value is a deep copy of the instance the first pass produced: equal
   by primary key, not the same object.
   Anything else going wrong in the second call (a `None` comparison, a value that cannot be

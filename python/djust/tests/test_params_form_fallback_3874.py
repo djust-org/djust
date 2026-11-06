@@ -1227,6 +1227,30 @@ class TestFallbackValues:
         assert values is None
         assert fallback_values(form, "fields") == valid
 
+    def test_a_clean_that_copies_raw_data_into_a_kept_field_hands_it_over_as_documented(self):
+        """The documented trust boundary: a failed field's OWN entry is its initial value, but a
+        clean() that copies raw request data into a KEPT field hands it over through that field,
+        exactly as on the valid path. ``"initial"`` is the mode that never hands over a raw value."""
+        from djust._params_form import fallback_values
+
+        class Copies(forms.Form):
+            a = forms.CharField(required=False, initial="da")
+            q = forms.CharField(max_length=5, required=False, initial="")
+
+            def clean(self):
+                cleaned = super().clean()
+                if "q" in self.data:
+                    cleaned["a"] = self.data["q"]  # raw request data, valid or not
+                return cleaned
+
+        raw = "<script>alert(1)</script>"
+        _, valid, _ = self._bound(Copies, {"a": "x", "q": "ok"})
+        assert valid == {"a": "ok", "q": "ok"}  # on the valid path clean()'s copy is handed over
+        form, values, _ = self._bound(Copies, {"a": "x", "q": raw})
+        assert values is None
+        assert fallback_values(form, "fields") == {"a": raw, "q": ""}  # via the kept field
+        assert fallback_values(form, "initial") == {"a": "da", "q": ""}  # never a raw value
+
     def test_a_repair_of_a_replaced_field_is_not_adopted(self):
         """clean() adopted for kept fields only: a write to the failed ``hi`` is its initial still."""
         from djust._params_form import fallback_values
