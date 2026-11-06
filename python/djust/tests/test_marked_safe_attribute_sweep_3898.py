@@ -30,13 +30,20 @@ What each class here proves, and what it does NOT:
 * ``TestTheDerivationCanFail``: a library built in the test with one planted leak of each kind
   the first derivation missed, and a clean twin of each; the derivation must report exactly the
   planted ones, and nothing when its detection is switched off.
-* ``TestTheStaticHunt``: an AST pass over the tag modules for an escaped ITEM written to a quoted
-  attribute, found without enumeration (a helper function included); every finding it makes is
-  judged in ``STATIC_SINK_ALLOWED``.
+* ``TestTheStaticHunt``: the STRUCTURAL check. An AST pass over the tag modules for an escaped ITEM
+  written to a quoted attribute, found without enumeration (a helper function included), whether
+  the string is an f-string, a concatenation, ``%`` or ``.format``; every finding it makes is
+  judged in ``STATIC_SINK_ALLOWED``. It does not see an unquoted attribute, ``format_html``, or a
+  helper that escapes a value it is handed (the item is read in the caller); none of those
+  patterns writes an item in the tag modules today. The run-time derivation above is the SECOND
+  net, not the first: a numeric key it does not know, a branch chosen by a named constant or a
+  membership test, a numeric threshold, or a child tag missing from ``variants.PARENT`` can each
+  hide a site from it, and the hunt does not depend on any of them.
 * ``TestEveryItemParameter``: the 43 tag parameters that print an item in an attribute (#3904),
   one cell each: driven (a plain probe lands in the pinned attributes), and every way of marking a
   value safe leaves those attributes as the plain string does. ``TestFormFieldChoices`` does the
-  same for a form field's choice value in ``dj_form``.
+  same for a form field's choice value in ``dj_form``, under both engines (the native engine
+  hands the form to the same Python tag).
 * ``TestCallerSet`` fails on any ``url_attr`` / ``srcset_attr`` call (the native handlers
   included) that leaves ``honor_safe`` at its default.
 """
@@ -48,6 +55,7 @@ import contextlib
 import importlib
 import inspect
 import os
+import re
 import sys
 from collections import Counter
 from functools import lru_cache
@@ -1110,6 +1118,34 @@ class TestModelTable:
         assert "data-table__filter-input" in out
         assert holes_in(out) == [], out
 
+    @pytest.mark.parametrize("claim", sorted(CLAIMS))
+    @pytest.mark.parametrize(
+        "payload", ['x" onmouseover="alert(1)" y="', "x' onmouseover='alert(1)"]
+    )
+    def test_a_marked_safe_column_key_and_filter_option_stay_inside_their_attributes(
+        self, claim: str, payload: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The columns are inferred from the model, but the tag writes them to attributes the
+        same way as the other item values, so they get the same cells (#3904 review)."""
+        from djust.components.templatetags import _forms
+
+        marked = CLAIMS[claim](payload)
+        columns = [
+            {
+                "key": marked,
+                "label": "L",
+                "sortable": True,
+                "filterable": True,
+                "filter_type": "select",
+                "filter_options": [{"value": marked, "label": "a"}],
+            }
+        ]
+        monkeypatch.setattr(_forms, "_infer_columns", lambda *a, **k: columns)
+        monkeypatch.setattr(_forms, "_queryset_to_rows", lambda *a, **k: [])
+        out = self._render(self._queryset(id=1, username="u"))
+        assert "dj-value-column" in out and "<option" in out
+        assert holes_in(out) == [], out
+
 
 # --- EVERY tag of every library: what is covered and what is not, derived ----------------------
 
@@ -1501,16 +1537,12 @@ def wide_tag_leaks(libraries: frozenset[str] | None = None) -> set[str]:
         for name in names:
             if not _takes_items(info, name):
                 continue
-            found = False
             for cell, key in item_probe_cases(info, name):
                 ctx = _item_context(mark_safe(payload), keys, payload, key=key)
                 html = _django_render(cell.src, ctx)
                 if html and any(len(h) == 2 for h in holes_in(html)):
                     leaks.add(f"{info.lib}/{info.name}/{name}")
-                    found = True
                     break
-            if found:
-                continue
     return leaks
 
 
@@ -2237,23 +2269,94 @@ def _call_name(node: ast.AST) -> str:
     return ""
 
 
-def _quoted_attribute_values(node: ast.JoinedStr) -> list[ast.expr]:
-    """The expressions of an f-string that land inside a quoted attribute value (``="{x}"``)."""
+_PERCENT = re.compile(r"%(?:\([^)]*\))?[#0\- +]*\d*(?:\.\d+)?[sdifrxXeEgGc%]")
+_BRACE = re.compile(r"\{\{|\}\}|\{([^{}!:]*)(?:![rsa])?(?::[^{}]*)?\}")
+
+
+def _pieces(node: ast.expr) -> list[str | ast.expr]:
+    """A string-building expression as the text and the expressions it is made of, in order:
+    an f-string, ``"a" + x + "b"``, ``"a%sb" % x`` and ``"a{}b".format(x)``."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return [node.value]
+    if isinstance(node, ast.JoinedStr):
+        out: list[str | ast.expr] = []
+        for part in node.values:
+            if isinstance(part, ast.Constant) and isinstance(part.value, str):
+                out.append(part.value)
+            elif isinstance(part, ast.FormattedValue):
+                out.append(part.value)
+        return out
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        return _pieces(node.left) + _pieces(node.right)
+    if (
+        isinstance(node, ast.BinOp)
+        and isinstance(node.op, ast.Mod)
+        and isinstance(node.left, ast.Constant)
+        and isinstance(node.left.value, str)
+    ):
+        right = node.right
+        args = list(right.elts) if isinstance(right, ast.Tuple) else [right]
+        out, taken, last = [], 0, 0
+        text = node.left.value
+        for m in _PERCENT.finditer(text):
+            out.append(text[last : m.start()])
+            if m.group(0) == "%%":
+                out.append("%")
+            elif taken < len(args):
+                out.append(args[taken])
+                taken += 1
+            last = m.end()
+        out.append(text[last:])
+        return out
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "format"
+        and isinstance(node.func.value, ast.Constant)
+        and isinstance(node.func.value.value, str)
+    ):
+        text = node.func.value.value
+        keywords = {k.arg: k.value for k in node.keywords if k.arg}
+        out, taken, last = [], 0, 0
+        for m in _BRACE.finditer(text):
+            out.append(text[last : m.start()])
+            field = m.group(1)
+            if field is None:
+                out.append("{" if m.group(0) == "{{" else "}")
+            else:
+                if field == "":
+                    index, taken = taken, taken + 1
+                    arg = node.args[index] if index < len(node.args) else None
+                elif field.isdigit():
+                    arg = node.args[int(field)] if int(field) < len(node.args) else None
+                else:
+                    arg = keywords.get(field.split(".")[0].split("[")[0])
+                if arg is not None:
+                    out.append(arg)
+            last = m.end()
+        out.append(text[last:])
+        return out
+    return [node]
+
+
+def _quoted_attribute_values(node: ast.expr) -> list[ast.expr]:
+    """The expressions of a string-building expression that land inside a quoted attribute value
+    (``="{x}"``, ``="' + x``, ``="%s"``)."""
     quote: str | None = None
     last = ""
     found: list[ast.expr] = []
-    for part in node.values:
-        if isinstance(part, ast.Constant) and isinstance(part.value, str):
-            for ch in part.value:
+    for part in _pieces(node):
+        if isinstance(part, str):
+            for ch in part:
                 if quote is None:
                     if last == "=" and ch in "\"'":
                         quote = ch
                 elif ch == quote:
                     quote = None
                 last = ch
-        elif isinstance(part, ast.FormattedValue):
+        else:
             if quote is not None:
-                found.append(part.value)
+                found.append(part)
             last = "}"
     return found
 
@@ -2322,8 +2425,14 @@ def static_sink_hunt(source: str, *, lines: bool = False) -> list[str]:
                     return True
             return False
 
-        for joined in [n for n in ast.walk(func) if isinstance(n, ast.JoinedStr)]:
-            for expr in _quoted_attribute_values(joined):
+        builders = [
+            n
+            for n in ast.walk(func)
+            if isinstance(n, (ast.JoinedStr, ast.BinOp))
+            or (isinstance(n, ast.Call) and _call_name(n) == "format")
+        ]
+        for built in builders:
+            for expr in _quoted_attribute_values(built):
                 candidates = (
                     bound_before(expr.id, expr.lineno) if isinstance(expr, ast.Name) else [expr]
                 )
@@ -2343,7 +2452,6 @@ HUNTED_SOURCES = (
 
 CONST = "iterates a constant table written in this module, not an item handed to the tag"
 PLAIN = "a plain str built in the function (a split of the value, a regex over the template text)"
-SCHEMA = "columns and filter options inferred from the model's fields, not a list handed to the tag"
 CHILD_SCALAR = "the id= keyword of a child tag: a scalar argument, the developer's own"
 #: ``module:function: expression`` the hunt reports and a person has judged not to be an item
 #: written to an attribute, with the reason. Exactly these: a new finding fails, and so does an
@@ -2355,8 +2463,6 @@ STATIC_SINK_ALLOWED: dict[str, str] = {
     "components/templatetags/_charts.py:render: conditional_escape(str(self.COLORS[idx % len(self.COLORS)]))": CONST,
     "components/templatetags/_dev_tools.py:render: conditional_escape(prefix)": CONST,
     "components/templatetags/_dev_tools.py:render: conditional_escape(suffix)": CONST,
-    "components/templatetags/_forms.py:model_table: conditional_escape(col['key'])": SCHEMA,
-    "components/templatetags/_forms.py:model_table: conditional_escape(str(fo.get('value', '')))": SCHEMA,
     "components/templatetags/djust_components.py:_render_emoji: conditional_escape(val)": CONST,
     "components/templatetags/djust_components.py:render: conditional_escape(tid)": CHILD_SCALAR,
     "components/templatetags/djust_components.py:rich_text_editor: conditional_escape(arg)": CONST,
@@ -2386,6 +2492,32 @@ def leaks_through_a_helper(items):
 def leaks_a_loop_variable(choices):
     return "".join(f'<input value="{conditional_escape(v)}">' for v, label in choices)
 """
+PLANTED_BUILDERS = """
+def concatenated(items):
+    return "".join('<option value="' + conditional_escape(str(i.get("v", ""))) + '">' for i in items)
+
+
+def percent(items):
+    return "".join('<option value="%s">' % conditional_escape(str(i.get("v", ""))) for i in items)
+
+
+def formatted(items):
+    return "".join('<option value="{}">'.format(conditional_escape(str(i.get("v", "")))) for i in items)
+
+
+def formatted_by_name(items):
+    return "".join('<option value="{v}">'.format(v=conditional_escape(str(i.get("v", "")))) for i in items)
+"""
+CLEAN_BUILDERS = """
+def concatenated(items, kw):
+    out = "".join('<option value="' + attr_text(i.get("v", "")) + '">' for i in items)
+    return out + '<p title="' + conditional_escape(kw.get("t", "")) + '">'
+
+
+def percent_and_format(items):
+    out = "".join('<option value="%s">' % attr_text(i.get("v", "")) for i in items)
+    return out + "".join('<i title="{}">'.format(attr_text(i.get("t", ""))) for i in items)
+"""
 CLEAN_SINK = """
 def clean(items, kw):
     out = ""
@@ -2403,6 +2535,16 @@ class TestTheStaticHunt:
         planted = static_sink_hunt(PLANTED_SINK)
         assert len(planted) == 2, planted
         assert static_sink_hunt(CLEAN_SINK) == []
+
+    def test_it_finds_a_string_built_by_concatenation_percent_or_format(self) -> None:
+        planted = static_sink_hunt(PLANTED_BUILDERS)
+        assert sorted(f.split(":")[0] for f in planted) == [
+            "concatenated",
+            "formatted",
+            "formatted_by_name",
+            "percent",
+        ], planted
+        assert static_sink_hunt(CLEAN_BUILDERS) == []
 
     def test_the_tag_modules_have_exactly_the_judged_findings(self) -> None:
         found = {f"{mod}:{f}": None for mod, fs in _hunted().items() for f in fs}
