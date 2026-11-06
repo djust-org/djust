@@ -955,6 +955,14 @@ def get_context_data(self, **kwargs):
 
 `row_click_event` takes precedence when both are set.
 
+A column can be a link too: `{"key": "claim_number", "label": "Claim #", "link": "claim_url",
+"link_class": "text-blue"}` draws the cell as `<a href>` of the row's `claim_url` value
+(`link_class` is optional). `row_url` and `link` are drawn identically by the first render
+(Django's template engine) and by every render after the socket opens (the native handler): the
+URL goes through the same scheme allowlist on the server, so `javascript:`, `data:` and other
+non-navigation schemes become `#` before they reach the page, and a `None` / `""` / `0` /
+`False` `row_url` or `link` draws nothing (it is not the key `"None"`).
+
 **Accessibility**: row-clickable `<tr>`s are focusable (`tabindex="0"`),
 announce as buttons (`role="button"`), and activate on Enter or Space.
 Screen reader users get the same affordance as mouse / touch users.
