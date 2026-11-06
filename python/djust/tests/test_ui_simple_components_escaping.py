@@ -245,9 +245,13 @@ ALWAYS_ESCAPED = {"divider", "tooltip"}
 
 
 #: These components put the value in an ATTRIBUTE as well as (``avatar``: only) in text. A
-#: marked-safe value is checked and escaped in an attribute (#3898): ``mark_safe`` keeps markup
-#: in a TEXT slot, it never meant "write this into a quoted attribute".
-ATTRIBUTE_SLOTS_ESCAPE = {"avatar", "dropdown", "navbar"}
+#: marked-safe ITEM value (an option, a button, a nav item, a dropdown entry) or a URL is checked
+#: and escaped in an attribute (#3898): ``mark_safe`` keeps markup in a TEXT slot, it never meant
+#: "write this into a quoted attribute". A SCALAR constructor argument in a non-URL attribute
+#: (``role=``, ``aria-label=``, a ``for=`` id) is the developer's own and still passes through:
+#: these cases hand the same value to every slot, so they assert only that SOME attribute
+#: escaped it and that the text slots kept the markup.
+ATTRIBUTE_SLOTS_ESCAPE = {"avatar", "dropdown", "navbar", "button_group", "radio", "select"}
 
 
 @pytest.mark.parametrize(
@@ -269,7 +273,8 @@ def test_marked_safe_value_passes_through_a_text_slot_and_is_escaped_in_an_attri
 ) -> None:
     factory, _ = CASES[name]
     html = _python_render(factory(mark_safe(SAFE)), framework)
-    assert "&lt;b&gt;ok&lt;/b&gt;" in html  # an attribute escaped it
+    if (name, framework) != ("button_group", "tailwind"):  # that one maps a variant to classes
+        assert "&lt;b&gt;ok&lt;/b&gt;" in html  # an attribute escaped it
     if name != "avatar":  # the avatar's only slots are attributes
         assert SAFE in html  # a text slot (a label) kept the markup
 
