@@ -194,11 +194,13 @@ Now `?page=abc&sort=name` hands `handle_params()` `page=1` (its initial value) a
 - A kept field is the value the valid path would hand over: a field the URL left out
   or empty takes its `initial`, exactly as on a valid URL. An optional field the URL
   omitted is valid by the form's own say-so; a required one is an error and is replaced.
-  **The order is the valid path's.** `clean()` runs on the raw cleaned values and the
-  `initial` fill comes *after* it, so a kept field the URL left out or empty takes its
-  `initial` over whatever `clean()` wrote into it (when the `initial` is not `None`; a field
-  with no `initial` keeps `clean()`'s value, on both paths). The re-check described below
-  therefore sees the same raw values `clean()` saw on the first pass, not the filled ones.
+  **The order is the valid path's.** The `initial` fill comes *after* `clean()`, so a kept
+  field the URL left out or empty takes its `initial` over whatever `clean()` wrote into it
+  (a `clean()` that sets a default into such a field loses to the field's `initial`, as it
+  does on a valid URL). The extra `clean()` call described below is given the combination
+  that would be handed over, so that field is already filled with its `initial` when
+  `clean()` sees it, and the fill is applied again to that call's output. A field with no
+  `initial` (`None`) is never filled, on either path.
 - Only the declared fields are handed over, in the form's order. A key `clean()` derived
   and added to `cleaned_data` is not carried into the fallback (the valid path keeps it).
 - A form-level error keeps nothing. If `clean()` raises a plain `ValidationError` (the
@@ -214,7 +216,13 @@ Now `?page=abc&sort=name` hands `handle_params()` `page=1` (its initial value) a
   combination `clean()` accepts, or the plain initials.** What `clean()` repairs in a
   **kept** field it repairs here as on the valid path (a `clean()` that sets `lo = hi` for an
   inverted range hands back the repaired pair). A write to a **replaced** field is not adopted:
-  that field is its initial value whatever `clean()` wrote. This
+  that field is its initial value whatever `clean()` wrote. The values `clean()` is given are
+  the first pass's output for the kept fields (a `clean()` that wrote a kept field on the
+  first pass is re-run on what it wrote), with each kept field the URL left out or empty
+  filled with its `initial`, and the `initial` value of every replaced field. A default
+  `start` next to a supplied `end` is such a pair: `?page=abc&end=2019-01-01` with
+  `start` defaulting to `2020-01-01` is refused by a `clean()` that wants `end >= start`,
+  so the view gets the plain initial values. This
   is one extra call of `clean()` and only on this path; **the fields' own `clean_<field>()`
   validators are not run again on the merged values**: a `clean_end()` that checks
   `end >= start` was skipped when `start` failed, so `?start=zz&end=1` hands over `start` at
@@ -234,8 +242,15 @@ Now `?page=abc&sort=name` hands `handle_params()` `page=1` (its initial value) a
   raw value. A `clean()` that copies raw request data into a **kept** field (`c["a"] =
   self.data.get("q")` with `q` failed) hands it over through that field, as it does on the
   valid path for a field the URL supplied; that is `clean()`'s trust boundary, not the
-  fallback's. For a kept field the URL left out or empty, both paths apply its `initial`
-  after `clean()`, so the copy does not get out through that field on either.
+  fallback's. For a kept field the URL left out or empty **that has an `initial`**, both paths
+  apply the `initial` after `clean()`, so the copy does not get out through that field. It
+  can still get out through: a field with no `initial` (nothing is filled); a `clean()` that
+  also writes the field into `self.data` (the field then counts as supplied); and a
+  multi-select field (`MultipleChoiceField`, `CheckboxSelectMultiple`) the URL left out,
+  which both paths treat as supplied ([#3922](https://github.com/djust-org/djust/issues/3922)).
+- A mutable `initial` (a list, a dict) is handed over by reference, as the valid path and
+  `"initial"` mode do. Each form instance owns its own copy of its fields, so a
+  `handle_params()` that mutates it does not reach the form class.
 - A kept `ModelChoiceField` value is a deep copy of the instance the first pass produced: equal
   by primary key, not the same object.
   Anything else going wrong in the second call (a `None` comparison, a value that cannot be
