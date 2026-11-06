@@ -411,7 +411,8 @@ class PieChartNode(template.Node):
                 val = 0
             if val <= 0:
                 continue
-            color = conditional_escape(str(seg.get("color", self.COLORS[si % len(self.COLORS)])))
+            # only in fill= (#3904)
+            color = attr_text(seg.get("color", self.COLORS[si % len(self.COLORS)]))
             label = conditional_escape(str(seg.get("label", "")))
             pct = val / total
 
@@ -459,9 +460,8 @@ class PieChartNode(template.Node):
             for si, seg in enumerate(segments):
                 if not isinstance(seg, dict):
                     continue
-                color = conditional_escape(
-                    str(seg.get("color", self.COLORS[si % len(self.COLORS)]))
-                )
+                # only in fill= (#3904)
+                color = attr_text(seg.get("color", self.COLORS[si % len(self.COLORS)]))
                 label = conditional_escape(str(seg.get("label", "")))
                 parts.append(
                     f'<rect x="{lx}" y="{ly - 6}" width="10" height="10" rx="2" fill="{color}"/>'

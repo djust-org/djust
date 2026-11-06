@@ -883,13 +883,14 @@ class ComparisonTableNode(template.Node):
             if not isinstance(plan, dict):
                 continue
             name = conditional_escape(str(plan.get("name", "")))
+            a_name = attr_text(plan.get("name", ""))  # the data-value= attribute (#3904)
             price = conditional_escape(str(plan.get("price", "")))
             highlighted = plan.get("highlighted", False)
             hl_class = " dj-compare__plan--highlighted" if highlighted else ""
 
             click_attr = ""
             if e_event:
-                click_attr = f' dj-click="{e_event}" data-value="{name}"'
+                click_attr = f' dj-click="{e_event}" data-value="{a_name}"'
 
             price_html = f'<div class="dj-compare__price">{price}</div>' if price else ""
             header_cells.append(

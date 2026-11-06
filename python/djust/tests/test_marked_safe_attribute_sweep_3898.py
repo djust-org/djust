@@ -19,12 +19,24 @@ What each class here proves, and what it does NOT:
   from the code (``url_sweep.component_classes``, ``component_params``, ``harness.discover``), under
   all three CSS frameworks, with and without the companions that make conditional sections draw.
 * ``TestTags``: the 18 tags that print a URL out of an item, on both engines.
-* ``TestEveryTag``: EVERY tag of every library, every parameter, item keys read from each tag's own
-  source, with each tag's other lists filled too. It pins the exact list of tags that still leak
-  (``KNOWN_TAG_ITEM_LEAKS``), empty since #3904, so a new leak fails.
-* ``TestEveryItemParameter``: the 37 tag parameters that print an item in an attribute (#3904),
+* ``TestEveryTag``: the list parameters of the tags of the swept libraries (``djust_components``,
+  ``djust_theming``), DERIVED at run time: a name is a list parameter if a list handed to it is
+  walked, and each is tried with every key the tag reads from its items (recorded, one key at a
+  time carries the claim and the rest are benign, numbers where a tag does arithmetic), the tag's
+  other lists filled, its flags on and off, the scalars that select a branch set (``event=``,
+  ``step="map"``), nested items, pairs, and an empty block body. It pins the exact list of tags
+  that still leak (``KNOWN_TAG_ITEM_LEAKS``), empty since #3904. Libraries outside the sweep
+  (``live_tags``, ``djust_pwa``, ``djust_auth`` ...) are not claimed.
+* ``TestTheDerivationCanFail``: a library built in the test with one planted leak of each kind
+  the first derivation missed, and a clean twin of each; the derivation must report exactly the
+  planted ones, and nothing when its detection is switched off.
+* ``TestTheStaticHunt``: an AST pass over the tag modules for an escaped ITEM written to a quoted
+  attribute, found without enumeration (a helper function included); every finding it makes is
+  judged in ``STATIC_SINK_ALLOWED``.
+* ``TestEveryItemParameter``: the 43 tag parameters that print an item in an attribute (#3904),
   one cell each: driven (a plain probe lands in the pinned attributes), and every way of marking a
-  value safe leaves those attributes as the plain string does.
+  value safe leaves those attributes as the plain string does. ``TestFormFieldChoices`` does the
+  same for a form field's choice value in ``dj_form``.
 * ``TestCallerSet`` fails on any ``url_attr`` / ``srcset_attr`` call (the native handlers
   included) that leaves ``honor_safe`` at its default.
 """
@@ -36,6 +48,7 @@ import contextlib
 import importlib
 import inspect
 import os
+import sys
 from collections import Counter
 from functools import lru_cache
 from html.parser import HTMLParser
@@ -1102,9 +1115,10 @@ class TestModelTable:
 
 #: ``library/tag/parameter`` of the template tags where an ITEM value (a list of items, an item)
 #: that is marked safe still leaves an attribute, DERIVED by :func:`wide_tag_leaks` (every tag of
-#: every library, every parameter, item keys read from each tag's own source, and a parameter
-#: that only draws when another list parameter is filled). Empty since #3904, and kept as the
-#: pin: a new leak fails, and the list can only shrink.
+#: the swept libraries, every parameter that takes a list, see the derivation below). Empty since
+#: #3904, and kept as the pin: a new leak fails, and the list can only shrink. That the
+#: derivation can find a leak at all is not assumed: ``TestTheDerivationCanFail`` plants one of
+#: each kind it has missed before and requires it to be reported.
 KNOWN_TAG_ITEM_LEAKS: frozenset[str] = frozenset()
 
 #: The other list parameters of a tag, filled with these (the harness's own benign lists) while
@@ -1134,8 +1148,43 @@ ITEM_CONTAINERS = frozenset(
 #: from the options listed in ``selected``): filled with the item's own text in the cells that
 #: ask for it. The scalar is the developer's own and is never marked safe here.
 MATCHING = {"value": "p_scalar", "selected": "p_scalar_list"}
+#: ... and the same scalars filled with the text of the BENIGN item (a number key reads as
+#: ``1``): the item that matches is then not the one whose key carries the claim, so a key
+#: written to the same attribute as the scalar (a combobox input's ``value=`` from the option
+#: label) is told apart from it.
+MATCHING_BENIGN = {"value": "p_scalar_benign", "selected": "p_scalar_list_benign"}
 #: ``list_pair``: a list of ``(value, label)`` pairs, which several option parameters accept.
 ITEM_SHAPES = (*DATA_SHAPES, "list_nested", "list_pair")
+#: Shapes whose items are text (or pairs of it): the claim is the item itself, there is no key.
+TEXT_SHAPES = ("list_str", "list_pair")
+
+#: The benign text of an item key that is not under test, and the keys whose benign value is a
+#: NUMBER. A tag that calls ``float()`` / ``int()`` on a key raises when it is handed text, skips
+#: the item, and never reaches the keys it prints in attributes: the first derivation gave every
+#: key the claim and so never saw ``pie_chart`` or ``table_of_contents``. Only the key under test
+#: carries the claim now, and the rest are benign (numbers where a tag does arithmetic).
+BENIGN = "ZQBENIGN"
+#: ``key=EVERY_KEY`` puts the claim in every key that is not a number: the question "is this item
+#: also printed as TEXT somewhere" needs no particular key.
+EVERY_KEY = "<every key>"
+NUMERIC_KEYS = frozenset(
+    {
+        "value", "count", "total", "x", "y", "width", "height", "start", "end", "duration",
+        "progress", "percent", "level", "col", "row", "min", "max", "size", "step", "amount",
+        "price", "quantity", "index", "order", "weight", "lat", "lng", "zoom", "depth", "unread",
+        "number", "offset", "limit", "page", "rating", "score", "length", "days", "radius",
+        "opacity", "angle", "r", "cx", "cy", "left", "top", "right", "bottom", "id_num",
+    }
+)  # fmt: skip
+
+
+class ItemMode(NamedTuple):
+    """Which branch of a tag a cell asks for."""
+
+    label: str
+    flags: bool  # the boolean parameters on (typical) or left out (their defaults)
+    extra: tuple[str, ...]  # further arguments: matching scalars, typical scalars, one enum literal
+    body: str | None  # a block tag's body: ``None`` is the harness's, ``""`` is empty
 
 
 class ItemCell(NamedTuple):
@@ -1143,91 +1192,325 @@ class ItemCell(NamedTuple):
 
     shape: str
     companion: str | None  # the tag's other lists, filled with benign items
-    flags: bool  # the boolean parameters on (typical) or left out (their defaults)
-    match: bool  # the scalar parameters that make an item selected, filled with its text
+    mode: ItemMode
     src: str
 
 
-def _nested_item(value: object, keys: set[str]) -> dict:
-    """An item whose container keys each hold one flat item (the keys it reads, no deeper)."""
-    containers = keys & ITEM_CONTAINERS
-    flat = {k: value for k in keys - containers}
-    return {**flat, **{c: [dict(flat)] for c in containers}}
+class _Reads(set):
+    """The item keys a tag read, recorded at run time (not read from its source)."""
 
 
-def _item_sources(info, name: str) -> list[ItemCell]:
-    """Every cell for parameter ``name`` of the tag: shape x companions x flags x matching."""
+class _RecDict(dict):
+    """An item that records the keys read from it."""
+
+    def __init__(self, data: dict, reads: _Reads) -> None:
+        super().__init__(data)
+        self._reads = reads
+
+    def get(self, key, default=None):  # noqa: ANN001
+        self._reads.add(key)
+        return super().get(key, default)
+
+    def __getitem__(self, key):  # noqa: ANN001
+        self._reads.add(key)
+        return super().__getitem__(key)
+
+    def __contains__(self, key) -> bool:  # noqa: ANN001
+        self._reads.add(key)
+        return super().__contains__(key)
+
+
+class _IterProbe(list):
+    """A list that notes it was walked or indexed: the test for "this name is a list parameter"."""
+
+    touched = False
+
+    def __iter__(self):  # noqa: ANN204
+        self.touched = True
+        return super().__iter__()
+
+    def __getitem__(self, index):  # noqa: ANN001
+        self.touched = True
+        return super().__getitem__(index)
+
+
+@lru_cache(maxsize=None)
+def _source_facts(module_name: str) -> tuple[frozenset[str], dict[str, frozenset[str]]]:
+    """``(string literals, {parameter: the literals it is compared with})`` of a tag module.
+
+    A tag that reads ``step = kw.get("step")`` and branches on ``step == "map"`` only writes its
+    attribute when the call says ``step="map"``: the second value is how a cell learns to say it."""
+    module = sys.modules.get(module_name)
+    try:
+        tree = ast.parse(inspect.getsource(module))
+    except (TypeError, OSError, SyntaxError):
+        return frozenset(), {}
+    literals = {
+        n.value for n in ast.walk(tree) if isinstance(n, ast.Constant) and isinstance(n.value, str)
+    }
+    alias: dict[str, str] = {}
+
+    def param_of(node: ast.AST) -> str | None:
+        if isinstance(node, ast.Name):
+            return alias.get(node.id, node.id)
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "get"
+            and node.args
+            and isinstance(node.args[0], ast.Constant)
+            and isinstance(node.args[0].value, str)
+        ):
+            return node.args[0].value
+        if isinstance(node, ast.Subscript) and isinstance(node.slice, ast.Constant):
+            return node.slice.value if isinstance(node.slice.value, str) else None
+        return None
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target, source = node.targets[0], param_of(node.value)
+            if (
+                isinstance(target, ast.Name)
+                and isinstance(node.value, (ast.Call, ast.Subscript))
+                and source
+            ):
+                alias[target.id] = source
+    branches: dict[str, set[str]] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Compare):
+            continue
+        sides = [node.left, *node.comparators]
+        for i, side in enumerate(sides):
+            param = param_of(side)
+            if not param:
+                continue
+            for other in sides[:i] + sides[i + 1 :]:
+                values = (
+                    other.elts if isinstance(other, (ast.Tuple, ast.List, ast.Set)) else [other]
+                )
+                for v in values:
+                    if isinstance(v, ast.Constant) and isinstance(v.value, str) and v.value:
+                        branches.setdefault(param, set()).add(v.value)
+    return frozenset(literals), {k: frozenset(v) for k, v in branches.items()}
+
+
+def _parameter_names(info) -> tuple[list[str], list[str]]:
+    """``(names to try as a list parameter, scalar names)`` of a tag.
+
+    A simple tag has a strict signature. A tag written as a Node takes any keyword and reads some
+    of them in a helper, possibly of its parent (``filter_select`` takes ``options`` and the
+    parent draws them), so the names it can read are the ones its module says as a string."""
     from scripts.lib.template_library_parity import variants
 
-    names = variants.passed_names(info)
-    others = [n for n in names if variants.kind_of(n) == "list" and n != name]
-    matching = [f"{k}={v}" for k, v in MATCHING.items() if k in names and k != name]
+    names = list(variants.passed_names(info))
+    scalars = []
+    if info.py_kind not in variants.SIMPLE_KINDS:
+        module = getattr(url_sweep._fn_of(info), "__module__", "")
+        literals, _ = _source_facts(module)
+        names += sorted((variants.LIST_EXACT | set(url_sweep.NESTED_KEYS)) & literals - set(names))
+        names += [n for n in info.py_keys if n not in names]
+    for n in names:
+        if variants.kind_of(n) not in ("list", "bool") and n not in ITEM_CONTAINERS:
+            scalars.append(n)
+    return names, scalars
+
+
+def _wrap(info, args: str, body: str | None) -> str:
+    from scripts.lib.template_library_parity import variants
+
+    parent = variants.PARENT.get(info.name)
+    head = "{% " + info.name + (" " + args if args else "") + " %}"
+    inner = head
+    if info.is_block:
+        text = url_sweep.BODIES.get(info.name, variants.BODY) if body is None else body
+        inner = head + text + "{% " + url_sweep.end_tag(info) + " %}"
+    if parent:
+        inner = "{% " + parent + " open=True %}" + inner + "{% end" + parent + " %}"
+    return "{% load " + info.lib + " %}" + inner
+
+
+def _modes(info, name: str, names: list[str], scalars: list[str]) -> list[ItemMode]:
+    """The branches worth asking a tag for: flags on or off x (nothing more, the scalar that
+    selects an item, every scalar at its typical value), one enum literal at a time, and a block
+    tag with an empty body (its default rows)."""
+    from scripts.lib.template_library_parity import variants
+
     typical = url_sweep.typical_args(info, name)
     bare = [a for a in typical if variants.kind_of(a.split("=")[0]) != "bool"]
-    parent = variants.PARENT.get(info.name)
+    given = {a.split("=")[0] for a in typical}
+    matching = tuple(f"{k}={v}" for k, v in MATCHING.items() if k in names and k != name)
+    matching_benign = tuple(
+        f"{k}={v}" for k, v in MATCHING_BENIGN.items() if k in names and k != name
+    )
+    typical_scalars = tuple(
+        f"{n}={variants.token(n, 'typical')}" for n in scalars if n != name and n not in given
+    )
+    module = getattr(url_sweep._fn_of(info), "__module__", "")
+    branches = _source_facts(module)[1]
+    enums = tuple(
+        f'{n}="{lit}"'
+        for n in scalars
+        if n != name
+        for lit in sorted(branches.get(n, ()))
+        if lit.replace("_", "").replace("-", "").isalnum()
+    )
+    modes: list[ItemMode] = []
+    for flags in (True, False):
+        if not flags and bare == typical:
+            continue
+        side = "on" if flags else "off"
+        modes.append(ItemMode(f"{side}", flags, (), None))
+        if matching:
+            modes.append(ItemMode(f"{side}/match", flags, matching, None))
+            modes.append(ItemMode(f"{side}/match-benign", flags, matching_benign, None))
+        if typical_scalars:
+            modes.append(ItemMode(f"{side}/typical", flags, typical_scalars, None))
+    modes += [ItemMode(f"enum/{e}", True, (e,), None) for e in enums]
+    if info.is_block:
+        modes.append(ItemMode("empty-body", True, (), ""))
+        if bare != typical:
+            modes.append(ItemMode("empty-body/off", False, (), ""))
+    return modes
+
+
+def _item_cells(info, name: str, *, shapes: tuple[str, ...] = ITEM_SHAPES) -> list[ItemCell]:
+    """Every cell for parameter ``name`` of the tag: shape x companions x mode."""
+    from scripts.lib.template_library_parity import variants
+
+    names, scalars = _parameter_names(info)
+    others = [n for n in names if variants.kind_of(n) == "list" and n != name]
+    typical = url_sweep.typical_args(info, name)
+    bare = [a for a in typical if variants.kind_of(a.split("=")[0]) != "bool"]
     out = []
-    for shape in ITEM_SHAPES:
-        for companion in COMPANIONS:
-            if companion and not others:
-                continue
-            for flags in (True, False):
-                if not flags and bare == typical:
+    for mode in _modes(info, name, names, scalars):
+        taken = {a.split("=")[0] for a in mode.extra}
+        base = [a for a in (typical if mode.flags else bare) if a.split("=")[0] not in taken]
+        for shape in shapes:
+            for companion in COMPANIONS:
+                if companion and not others:
                     continue
-                for match in (False, True):
-                    if match and not matching:
-                        continue
-                    args = [*(typical if flags else bare), f"{name}=p_{shape}"]
-                    if companion:
-                        args += [f"{q}={companion}" for q in others]
-                    if match:
-                        args += matching
-                    src = url_sweep.wrap(
-                        info, " ".join(args), parent, "open=True" if parent else ""
-                    )
-                    out.append(ItemCell(shape, companion, flags, match, src))
+                args = [*base, f"{name}=p_{shape}", *mode.extra]
+                if companion:
+                    args += [f"{q}={companion}" for q in others if q not in taken]
+                out.append(ItemCell(shape, companion, mode, _wrap(info, " ".join(args), mode.body)))
     return out
 
 
-def _item_context(value: object, keys: set[str], scalar: str) -> dict:
-    """The context of an item cell: ``value`` is the claim, ``scalar`` the plain text of it."""
+def _item_context(
+    claim: object,
+    keys: set[str],
+    scalar: str,
+    *,
+    key: str | None = None,
+    reads: _Reads | None = None,
+) -> dict:
+    """The context of an item cell.
+
+    ``claim`` is written to the item ``key`` and to nothing else; every other key is benign. For
+    a text shape (``key`` is ``None``) ``claim`` is the item itself. ``scalar`` is the plain text
+    of the claim, for the scalar that makes an item selected."""
+    containers = keys & ITEM_CONTAINERS
+
+    def record(data: dict) -> dict:
+        return _RecDict(data, reads) if reads is not None else data
+
+    every = key == EVERY_KEY
+
+    def value_of(k: str) -> object:
+        if every:
+            return 1 if k in NUMERIC_KEYS else claim
+        if k == key:
+            return claim
+        return 1 if k in NUMERIC_KEYS else BENIGN
+
+    flat = {k: value_of(k) for k in (keys | ({key} if key and not every else set())) - containers}
+    nested = {**flat, **{c: [record(dict(flat))] for c in containers}}
+    text = claim if key in (None, EVERY_KEY) else BENIGN
     return {
         **harness.make_context(False),
         "p_scalar": scalar,
         "p_scalar_list": [scalar, scalar],
-        "p_list_str": [value, value],
-        "p_list_pair": [(value, value)] * 2,
-        "p_dict": url_sweep.dict_of(value, keys),  # type: ignore[arg-type]
-        "p_list_dict": [url_sweep.dict_of(value, keys)] * 2,  # type: ignore[arg-type]
-        "p_list_nested": [_nested_item(value, keys)] * 2,
+        "p_scalar_benign": "1",
+        "p_scalar_list_benign": ["1", "1"],
+        "p_list_str": [text, text],
+        "p_list_pair": [(text, text)] * 2,
+        "p_dict": record(flat),
+        "p_list_dict": [record(dict(flat)), record(dict(flat))],
+        "p_list_nested": [record(dict(nested)), record(dict(nested))],
     }
 
 
-def wide_tag_leaks() -> set[str]:
-    """``library/tag/parameter`` for every (tag, parameter) where a marked-safe ITEM value (a
-    list of items, a list of text, a list of pairs, an item) creates the payload's ``onmouseover``
-    attribute, in Django's engine, in any of the cells of :func:`_item_sources`. The scalar
-    arguments of a tag are the developer's own and are not counted."""
+def _django_render(src: str, ctx: dict) -> str | None:
     from django.template import engines
 
-    from scripts.lib.template_library_parity import variants
+    return url_sweep._render(engines["django"], src, ctx)
 
-    python_engine = engines["django"]
+
+def _keys_of(info) -> set[str]:
+    return url_sweep.keys_read(info, url_sweep._fn_of(info)) | set(TAG_KEYS) | set(ATTR_KEYS)
+
+
+def _cell_keys(info, cell: ItemCell) -> frozenset[str | None]:
+    """The item keys the tag READS in this cell, recorded at run time; ``{None}`` for a text shape.
+
+    An empty set means the cell did not render, or the tag read nothing from its items."""
+    if cell.shape in TEXT_SHAPES:
+        return frozenset({None})
+    reads = _Reads()
+    ctx = _item_context(BENIGN, _keys_of(info), BENIGN, reads=reads)
+    if _django_render(cell.src, ctx) is None:
+        return frozenset()
+    return frozenset(k for k in reads if isinstance(k, str) and k not in ITEM_CONTAINERS)
+
+
+def _takes_items(info, name: str) -> bool:
+    """Whether ``name`` is a list parameter of the tag: a list handed to it is walked or indexed
+    in some branch (any mode), recorded at run time."""
+    probe = _IterProbe([{k: BENIGN for k in _keys_of(info)}])
+    for cell in _item_cells(info, name, shapes=("list_probe",)):
+        probe.touched = False
+        ctx = {**harness.make_context(False), "p_list_probe": probe}
+        _django_render(cell.src, ctx)
+        if probe.touched:
+            return True
+    return False
+
+
+def item_probe_cases(info, name: str) -> list[tuple[ItemCell, str | None]]:
+    """``(cell, key)``: every cell of the parameter with every key the tag reads from its items."""
+    return [
+        (cell, key)
+        for cell in _item_cells(info, name)
+        for key in sorted(_cell_keys(info, cell), key=str)
+    ]
+
+
+def wide_tag_leaks(libraries: frozenset[str] | None = None) -> set[str]:
+    """``library/tag/parameter`` for every (tag, list parameter) where a marked-safe ITEM value
+    creates an attribute of the markup the plain string does not, in Django's engine, in any
+    branch of the tag (:func:`_modes`), with any key the tag reads from its items (:func:`_cell_keys`)
+    holding the value while the others are benign. The scalar arguments of a tag are the
+    developer's own and are not counted. ``libraries`` narrows it to the named libraries."""
     payload = 'x" onmouseover="alert(zq7)" y="'
     leaks: set[str] = set()
     for _key, info in sorted(url_sweep.inventory().items()):
-        if info.name.startswith("end"):
+        if info.name.startswith("end") or (libraries and info.lib not in libraries):
             continue
-        names = variants.passed_names(info)
-        if not names:
-            continue
-        keys = url_sweep.keys_read(info, url_sweep._fn_of(info)) | set(TAG_KEYS) | set(ATTR_KEYS)
-        ctx = _item_context(mark_safe(payload), keys, payload)
+        names, _scalars = _parameter_names(info)
+        keys = _keys_of(info)
         for name in names:
-            for cell in _item_sources(info, name):
-                html = url_sweep._render(python_engine, cell.src, ctx)
+            if not _takes_items(info, name):
+                continue
+            found = False
+            for cell, key in item_probe_cases(info, name):
+                ctx = _item_context(mark_safe(payload), keys, payload, key=key)
+                html = _django_render(cell.src, ctx)
                 if html and any(len(h) == 2 for h in holes_in(html)):
                     leaks.add(f"{info.lib}/{info.name}/{name}")
+                    found = True
                     break
+            if found:
+                continue
     return leaks
 
 
@@ -1507,15 +1790,6 @@ class TestHybridCellsAreReached:
         assert Avatar(src=_lazy_safe("/a.png"))._rust_instance is None
 
 
-class TestEveryTag:
-    def test_the_item_leaks_of_the_tags_are_exactly_the_listed_ones(self) -> None:
-        leaks = wide_tag_leaks()
-        assert leaks == set(KNOWN_TAG_ITEM_LEAKS), (
-            f"new leaks (escape the item value with attr_text): {sorted(leaks - KNOWN_TAG_ITEM_LEAKS)}\n"
-            f"fixed (delete from KNOWN_TAG_ITEM_LEAKS): {sorted(set(KNOWN_TAG_ITEM_LEAKS) - leaks)}"
-        )
-
-
 # --- the tag parameters that take ITEMS and print them in an attribute (#3904) -----------------
 
 #: ``library/tag/parameter`` -> ``(the attributes an item value lands in, whether an item of it
@@ -1529,19 +1803,23 @@ ITEM_PARAMETERS: dict[str, tuple[tuple[str, ...], bool]] = {
     "djust_components/audit_log/entries": (("class",), True),
     "djust_components/autocomplete/suggestions": (("data-value",), True),
     "djust_components/collab_selection/users": (("data-user",), True),
-    "djust_components/combobox/options": (("data-value",), True),
+    "djust_components/combobox/options": (("data-value", "value"), True),
     "djust_components/combobox/selected": (("data-value", "value"), True),
+    "djust_components/comparison_table/plans": (("data-value",), True),
     "djust_components/cursors/users": (("data-user",), True),
     "djust_components/dashboard_grid/panels": (("data-panel-id",), True),
     "djust_components/data_grid/columns": (("data-col-key", "data-type"), True),
-    "djust_components/data_grid/rows": (("data-row-key",), False),
+    "djust_components/data_grid/rows": (("data-row-key", "data-value"), False),
     "djust_components/dependent_select/options": (("value",), True),
     "djust_components/dj_select/options": (("value",), True),
     "djust_components/export_dialog/columns": (("value",), True),
     "djust_components/export_dialog/formats": (("value",), False),
     "djust_components/fab/actions": (("aria-label", "dj-click"), True),
+    "djust_components/filter_select/options": (("value",), True),
+    "djust_components/form_array/rows": (("value",), False),
     "djust_components/file_tree/nodes": (("class", "data-name", "data-type"), True),
     "djust_components/gantt_chart/tasks": (("fill",), True),
+    "djust_components/import_wizard/model_fields": (("name",), True),
     "djust_components/kanban_board/columns": (
         ("class", "data-card-id", "data-col-id", "data-value", "dj-key"),
         True,
@@ -1552,10 +1830,12 @@ ITEM_PARAMETERS: dict[str, tuple[tuple[str, ...], bool]] = {
     "djust_components/model_selector/options": (("data-value",), True),
     "djust_components/multi_select/options": (("data-value", "dj-value-option", "value"), True),
     "djust_components/notification_center/notifications": (("data-value",), True),
+    "djust_components/pie_chart/segments": (("fill",), True),
     "djust_components/reactions/options": (("aria-label", "dj-value-emoji"), True),
     "djust_components/scroll_spy/sections": (("data-section", "data-sections", "href"), True),
     "djust_components/sortable_list/items": (("data-id",), True),
     "djust_components/split_button/options": (("dj-click",), True),
+    "djust_components/table_of_contents/items": (("data-value", "href"), True),
     "djust_components/tag_input/suggestions": (("value",), False),
     "djust_components/tag_input/tags": (("data-value", "value"), True),
     "djust_components/toast_container/toasts": (("class", "data-value"), True),
@@ -1601,16 +1881,6 @@ def _tag_infos() -> dict:
     return {f"{i.lib}/{i.name}": i for i in url_sweep.inventory().values()}
 
 
-def _django_render(src: str, ctx: dict) -> str | None:
-    from django.template import engines
-
-    return url_sweep._render(engines["django"], src, ctx)
-
-
-def _keys_of(info) -> set[str]:
-    return url_sweep.keys_read(info, url_sweep._fn_of(info)) | set(TAG_KEYS) | set(ATTR_KEYS)
-
-
 def _slots(markup: str, names: tuple[str, ...]) -> list[tuple[str, str, str]]:
     """``(element, attribute, value)`` of the attributes called ``names``, as a browser reads them."""
     return sorted(
@@ -1618,56 +1888,72 @@ def _slots(markup: str, names: tuple[str, ...]) -> list[tuple[str, str, str]]:
     )
 
 
-class ReachedCell(NamedTuple):
+class ReachedCase(NamedTuple):
+    """A cell and the item key (``None``: the item is the text itself) whose probe landed in an
+    attribute."""
+
     cell: ItemCell
+    key: str | None
     #: the attribute holds the item's own text, not the ``repr`` of a dict or a pair the tag
     #: printed for a string it expected (an object claim is formatted differently there)
     direct: bool
 
 
 @lru_cache(maxsize=None)
-def _reached_cells(key: str) -> tuple[tuple[ReachedCell, ...], frozenset[str], bool]:
-    """``(cells, attributes, text)`` of ``library/tag/parameter``.
+def _reached(key: str) -> tuple[tuple[ReachedCase, ...], frozenset[str], bool]:
+    """``(cases, attributes, text)`` of ``library/tag/parameter``.
 
-    ``cells`` are the cells in which a plain probe lands in an attribute (a shape, flags or
-    companion that takes another branch of the tag reaches other sites, so none is dropped as a
-    duplicate); ``attributes`` are the names of those attributes; ``text`` is whether a marked-safe
-    ``<i>`` item is printed with its markup as text."""
+    ``cases`` are the (cell, item key) pairs in which a plain probe lands in an attribute (a
+    shape, branch or companion that takes another path through the tag reaches other sites, so
+    none is dropped as a duplicate); ``attributes`` are the names of those attributes; ``text`` is
+    whether a marked-safe ``<i>`` item is printed with its markup as text."""
     lib, tag, name = key.split("/")
     info = _tag_infos()[f"{lib}/{tag}"]
     keys = _keys_of(info)
-    probe_ctx = _item_context(REACH_PROBE, keys, REACH_PROBE)
-    marked_ctx = _item_context(mark_safe("<i>mark</i>"), keys, "<i>mark</i>")
-    other_ctx = _item_context("ZQOTHERITEM", keys, REACH_PROBE)
-    cells: list[ReachedCell] = []
+    benign_ctx = _item_context(BENIGN, keys, REACH_PROBE)
+    cases: list[ReachedCase] = []
     attributes: set[str] = set()
     text = False
-    for cell in _item_sources(info, name):
-        out = _django_render(cell.src, probe_ctx)
+    for cell, item_key in item_probe_cases(info, name):
+        ctx = _item_context(REACH_PROBE, keys, REACH_PROBE, key=item_key)
+        out = _django_render(cell.src, ctx)
         found = Counter(
             (a.element, a.name) for a in url_sweep.attributes(out or "") if REACH_PROBE in a.value
         )
-        if cell.match:
+        if any("p_scalar" in arg for arg in cell.mode.extra):
             # the scalar that makes an item selected is the probe too: what it prints on its own
-            # (the same call with other items) is not the item's
-            ref = _django_render(cell.src, other_ctx)
+            # (the same call with benign items) is not the item's
+            ref = _django_render(cell.src, benign_ctx)
             found -= Counter(
                 (a.element, a.name)
                 for a in url_sweep.attributes(ref or "")
                 if REACH_PROBE in a.value
             )
-        if found:
-            landed = [
-                a
-                for a in url_sweep.attributes(out or "")
-                if REACH_PROBE in a.value and (a.element, a.name) in found
-            ]
-            direct = all(not set("{('") & set(a.value.replace(REACH_PROBE, "")) for a in landed)
-            attributes |= {a.name for a in landed}
-            cells.append(ReachedCell(cell, direct))
-        marked = _django_render(cell.src, marked_ctx)
+        if not found:
+            continue
+        landed = [
+            a
+            for a in url_sweep.attributes(out or "")
+            if REACH_PROBE in a.value and (a.element, a.name) in found
+        ]
+        direct = all(not set("{('") & set(a.value.replace(REACH_PROBE, "")) for a in landed)
+        attributes |= {a.name for a in landed}
+        cases.append(ReachedCase(cell, item_key, direct))
+        marked = _django_render(
+            cell.src,
+            _item_context(mark_safe("<i>mark</i>"), keys, "<i>mark</i>", key=EVERY_KEY),
+        )
         text = text or bool(marked and "<i>mark</i>" in marked)
-    return tuple(cells), frozenset(attributes), text
+    return tuple(cases), frozenset(attributes), text
+
+
+class TestEveryTag:
+    def test_the_item_leaks_of_the_tags_are_exactly_the_listed_ones(self) -> None:
+        leaks = wide_tag_leaks()
+        assert leaks == set(KNOWN_TAG_ITEM_LEAKS), (
+            f"new leaks (escape the item value with attr_text): {sorted(leaks - KNOWN_TAG_ITEM_LEAKS)}\n"
+            f"fixed (delete from KNOWN_TAG_ITEM_LEAKS): {sorted(set(KNOWN_TAG_ITEM_LEAKS) - leaks)}"
+        )
 
 
 class TestEveryItemParameter:
@@ -1681,42 +1967,512 @@ class TestEveryItemParameter:
 
     @pytest.mark.parametrize("key", sorted(ITEM_PARAMETERS))
     def test_the_parameter_is_driven_and_its_slots_are_the_pinned_ones(self, key: str) -> None:
-        cells, attributes, text = _reached_cells(key)
+        cases, attributes, text = _reached(key)
         pinned_attributes, pinned_text = ITEM_PARAMETERS[key]
-        assert cells, f"{key}: no item reaches an attribute through any cell (not driven)"
-        assert any(c.direct for c in cells), f"{key}: only a dict's repr reaches an attribute"
+        assert cases, f"{key}: no item reaches an attribute through any cell (not driven)"
+        assert any(c.direct for c in cases), f"{key}: only a dict's repr reaches an attribute"
         assert attributes == set(pinned_attributes), (key, sorted(attributes))
         assert text == pinned_text, (key, text)
 
     @pytest.mark.parametrize("key", sorted(ITEM_PARAMETERS))
     def test_a_marked_safe_item_is_neutralised_like_the_plain_string(self, key: str) -> None:
-        cells, _attributes, _text = _reached_cells(key)
-        assert cells, f"{key}: not driven"
+        cases, _attributes, _text = _reached(key)
+        assert cases, f"{key}: not driven"
         slots = ITEM_PARAMETERS[key][0]
         keys = _keys_of(_tag_infos()["/".join(key.split("/")[:2])])
         failures: list[tuple] = []
         rendered: dict[str, int] = {claim: 0 for claim in ITEM_CLAIMS}
         for label, payload in ITEM_PAYLOADS:
-            controls: dict[ItemCell, list] = {}
+            controls: dict[tuple, list] = {}
             for claim, make in ITEM_CLAIMS.items():
-                ctx = _item_context(make(payload), keys, payload)  # type: ignore[operator]
-                for reached in cells:
-                    cell = reached.cell
-                    out = _django_render(cell.src, ctx)
+                for case in cases:
+                    ctx = _item_context(make(payload), keys, payload, key=case.key)  # type: ignore[operator]
+                    out = _django_render(case.cell.src, ctx)
                     if out is None:
                         continue
                     rendered[claim] += 1
-                    where = (label, claim, cell.shape, cell.companion, cell.flags, cell.match)
+                    where = (label, claim, case.cell.shape, case.key, case.cell.mode.label)
                     if holes_in(out):
                         failures.append((*where, "hole"))
                     if claim == "plain":
-                        controls[cell] = _slots(out, slots)
+                        controls[(case.cell, case.key)] = _slots(out, slots)
                     elif (
-                        reached.direct
+                        case.direct
                         and claim not in NOT_COMPARED_WITH_PLAIN
-                        and controls[cell] != _slots(out, slots)
+                        and controls[(case.cell, case.key)] != _slots(out, slots)
                     ):
                         failures.append((*where, "differs from plain"))
         assert not failures, f"{key}: {failures[:4]}"
         never = frozenset(claim for claim, n in rendered.items() if n == 0)
         assert never == REJECTED_CLAIMS.get(key, frozenset()), (key, sorted(never))
+
+
+# --- the derivation can fail: a planted leak of each kind it has missed must be reported -------
+
+#: A tag library the test builds. Every ``canary_leaks_*`` tag writes an item into a quoted
+#: attribute through ``conditional_escape`` and must be reported; every ``canary_clean_*`` tag
+#: does the same through ``attr_text`` and must not be. The leaking ones are the shapes the
+#: first derivation could not see: an item whose other key does arithmetic, an attribute
+#: written only when a scalar is set (``event=``) or has one value (``step="map"``), a child tag
+#: drawn only by its parent, and a block tag whose default rows are drawn only for an empty body.
+CANARY_SOURCE = """
+from django import template
+from django.utils.html import conditional_escape
+from django.utils.safestring import mark_safe
+
+from djust.components.templatetags._registry import _parse_kv_args, _resolve
+from djust.components.utils import attr_text
+
+register = template.Library()
+
+
+@register.simple_tag
+def canary_leaks_text(items=None):
+    return mark_safe("".join(f'<i data-x="{conditional_escape(str(i))}">' for i in items or []))
+
+
+@register.simple_tag
+def canary_clean_text(items=None):
+    return mark_safe("".join(f'<i data-x="{attr_text(i)}">' for i in items or []))
+
+
+@register.simple_tag
+def canary_leaks_numeric(items=None):
+    out = ""
+    for i in items or []:
+        weight = float(i.get("weight", 0))
+        out += f'<i data-w="{weight}" data-id="{conditional_escape(str(i.get("ident", "")))}">'
+    return mark_safe(out)
+
+
+@register.simple_tag
+def canary_clean_numeric(items=None):
+    out = ""
+    for i in items or []:
+        weight = float(i.get("weight", 0))
+        out += f'<i data-w="{weight}" data-id="{attr_text(i.get("ident", ""))}">'
+    return mark_safe(out)
+
+
+@register.simple_tag
+def canary_leaks_event(items=None, event=""):
+    if not event:
+        return ""
+    return mark_safe("".join(f'<i data-e="{conditional_escape(str(i))}">' for i in items or []))
+
+
+@register.simple_tag
+def canary_clean_event(items=None, event=""):
+    if not event:
+        return ""
+    return mark_safe("".join(f'<i data-e="{attr_text(i)}">' for i in items or []))
+
+
+@register.simple_tag
+def canary_leaks_step(items=None, step=""):
+    if step == "map":
+        return mark_safe("".join(f'<i data-s="{conditional_escape(str(i))}">' for i in items or []))
+    return ""
+
+
+@register.simple_tag
+def canary_clean_step(items=None, step=""):
+    if step == "map":
+        return mark_safe("".join(f'<i data-s="{attr_text(i)}">' for i in items or []))
+    return ""
+
+
+class _Child(template.Node):
+    def __init__(self, kwargs):
+        self.kwargs = kwargs
+
+    def render(self, context):
+        return ""
+
+
+class _Parent(template.Node):
+    def __init__(self, nodelist, clean):
+        self.nodelist = nodelist
+        self.clean = clean
+
+    def render(self, context):
+        out = ""
+        for node in self.nodelist:
+            if isinstance(node, _Child):
+                options = _resolve(node.kwargs.get("options"), context) or []
+                for o in options:
+                    value = attr_text(o) if self.clean else conditional_escape(str(o))
+                    out += f'<option value="{value}">'
+        return mark_safe(out)
+
+
+def _parent(clean):
+    def compile_(parser, token):
+        nodelist = parser.parse(("endcanary_" + ("clean" if clean else "leaks") + "_parent",))
+        parser.delete_first_token()
+        return _Parent(nodelist, clean)
+
+    return compile_
+
+
+register.tag("canary_leaks_parent", _parent(False))
+register.tag("canary_clean_parent", _parent(True))
+
+
+@register.tag("canary_child")
+def canary_child(parser, token):
+    return _Child(_parse_kv_args(token.split_contents()[1:], parser))
+
+
+class _Block(template.Node):
+    def __init__(self, nodelist, kwargs, clean):
+        self.nodelist, self.kwargs, self.clean = nodelist, kwargs, clean
+
+    def render(self, context):
+        rows = _resolve(self.kwargs.get("rows"), context) or []
+        if any(n.render(context).strip() for n in self.nodelist):
+            return mark_safe(self.nodelist.render(context))
+        out = ""
+        for r in rows:
+            value = attr_text(r) if self.clean else conditional_escape(str(r))
+            out += f'<input value="{value}">'
+        return mark_safe(out)
+
+
+def _block(clean):
+    def compile_(parser, token):
+        kwargs = _parse_kv_args(token.split_contents()[1:], parser)
+        end = "endcanary_" + ("clean" if clean else "leaks") + "_block"
+        nodelist = parser.parse((end,))
+        parser.delete_first_token()
+        return _Block(nodelist, kwargs, clean)
+
+    return compile_
+
+
+register.tag("canary_leaks_block", _block(False))
+register.tag("canary_clean_block", _block(True))
+"""
+
+CANARY_LIBRARY = "djust_item_canary_tags"
+#: ``tag/parameter`` of the planted leaks: exactly these, and not the clean twins.
+CANARY_LEAKS = frozenset(
+    {
+        f"{CANARY_LIBRARY}/canary_leaks_text/items",
+        f"{CANARY_LIBRARY}/canary_leaks_numeric/items",
+        f"{CANARY_LIBRARY}/canary_leaks_event/items",
+        f"{CANARY_LIBRARY}/canary_leaks_step/items",
+        f"{CANARY_LIBRARY}/canary_child/options",
+        f"{CANARY_LIBRARY}/canary_leaks_block/rows",
+    }
+)
+
+
+@pytest.fixture
+def canary_library(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    """Register the canary tags with the sweep and with Django's engine, and undo it afterwards.
+    The module is a real file (the harness reads tag sources from files)."""
+    import importlib.util
+
+    from django.template import engines
+
+    from scripts.lib.template_library_parity import variants
+
+    path = tmp_path / f"{CANARY_LIBRARY}.py"
+    path.write_text(CANARY_SOURCE, encoding="utf-8")
+    spec = importlib.util.spec_from_file_location(CANARY_LIBRARY, path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, CANARY_LIBRARY, module)
+    spec.loader.exec_module(module)
+    monkeypatch.setitem(url_sweep.SWEPT_LIBRARIES, CANARY_LIBRARY, CANARY_LIBRARY)
+    monkeypatch.setitem(variants.PARENT, "canary_child", "canary_leaks_parent")
+    monkeypatch.setitem(
+        engines["django"].engine.template_libraries,  # type: ignore[attr-defined]
+        CANARY_LIBRARY,
+        module.register,
+    )
+    _tag_infos.cache_clear()
+    _source_facts.cache_clear()
+    yield
+    _tag_infos.cache_clear()
+    _source_facts.cache_clear()
+
+
+class TestTheDerivationCanFail:
+    """``TestEveryTag`` asserts that the derivation finds NOTHING in the package, which a
+    derivation that finds nothing also satisfies. These plant a leak of each kind the first
+    derivation missed (and a clean twin of each) in a library built here, and require the
+    derivation to report exactly the planted ones."""
+
+    def test_it_reports_exactly_the_planted_leaks(self, canary_library) -> None:
+        leaks = wide_tag_leaks(frozenset({CANARY_LIBRARY}))
+        assert leaks == set(CANARY_LEAKS), (
+            f"missed: {sorted(CANARY_LEAKS - leaks)}; reported as leaking though clean: "
+            f"{sorted(leaks - CANARY_LEAKS)}"
+        )
+
+    def test_it_reports_nothing_when_its_detection_is_switched_off(
+        self, canary_library, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The instrument is what the previous test measures: with the detection removed the
+        planted leaks are not reported, so the previous test cannot pass for a blind one."""
+        monkeypatch.setitem(globals(), "holes_in", lambda markup: [])
+        assert wide_tag_leaks(frozenset({CANARY_LIBRARY})) == set()
+
+
+# --- a static hunt for the same sink, found without enumeration ---------------------------------
+
+#: Names a tag reads its own scalar keywords from: an item is not read from these.
+SCALAR_BASES = frozenset({"kw", "kwargs", "nkw", "attrs", "context", "self", "request", "extra"})
+ESCAPERS = frozenset({"conditional_escape", "escape"})
+#: Functions whose result is a validated value (a colour, a length, a number), not the item.
+VALIDATORS = frozenset({"safe_css_color", "safe_css_length", "int", "float", "len"})
+
+
+def _call_name(node: ast.AST) -> str:
+    if isinstance(node, ast.Call):
+        func = node.func
+        return func.id if isinstance(func, ast.Name) else getattr(func, "attr", "")
+    return ""
+
+
+def _quoted_attribute_values(node: ast.JoinedStr) -> list[ast.expr]:
+    """The expressions of an f-string that land inside a quoted attribute value (``="{x}"``)."""
+    quote: str | None = None
+    last = ""
+    found: list[ast.expr] = []
+    for part in node.values:
+        if isinstance(part, ast.Constant) and isinstance(part.value, str):
+            for ch in part.value:
+                if quote is None:
+                    if last == "=" and ch in "\"'":
+                        quote = ch
+                elif ch == quote:
+                    quote = None
+                last = ch
+        elif isinstance(part, ast.FormattedValue):
+            if quote is not None:
+                found.append(part.value)
+            last = "}"
+    return found
+
+
+def static_sink_hunt(source: str, *, lines: bool = False) -> list[str]:
+    """``function: expression`` of every ``conditional_escape(...)`` / ``escape(...)`` of an ITEM
+    that lands in a quoted attribute of an f-string, in one module's source.
+
+    An item is a value read with ``.get("k")`` or ``["k"]`` from anything but the tag's own
+    keyword dict, or a name bound by a ``for`` over something that is not a literal (a helper
+    that is handed an item and escapes it is found the same way: the loop variable). Escaped
+    through ``attr_text`` is not a finding. It follows an attribute value written through a local
+    name one step (``v = conditional_escape(item.get("k"))`` ... ``f'value="{v}"'``)."""
+    findings: list[str] = []
+    tree = ast.parse(source)
+    for func in [
+        n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+    ]:
+        loop_names: set[str] = set()
+        for node in ast.walk(func):
+            targets = []
+            if isinstance(node, ast.For):
+                targets, iterable = [node.target], node.iter
+            elif isinstance(node, ast.comprehension):
+                targets, iterable = [node.target], node.iter
+            else:
+                continue
+            if isinstance(iterable, (ast.Constant, ast.Tuple, ast.List, ast.Dict, ast.Set)):
+                continue
+            if _call_name(iterable) == "range":
+                continue
+            skip_first = _call_name(iterable) == "enumerate"
+            for target in targets:
+                names = [n for n in ast.walk(target) if isinstance(n, ast.Name)]
+                loop_names |= {
+                    n.id for n in (names[1:] if skip_first else names) if n.id not in SCALAR_BASES
+                }
+        assigns: dict[str, list[ast.Assign]] = {}
+        for node in ast.walk(func):
+            if isinstance(node, ast.Assign) and len(node.targets) == 1:
+                if isinstance(node.targets[0], ast.Name):
+                    assigns.setdefault(node.targets[0].id, []).append(node)
+
+        def bound_before(name: str, line: int) -> list[ast.expr]:
+            """The value ``name`` holds at ``line``: its nearest assignment above it."""
+            before = [a for a in assigns.get(name, []) if a.lineno <= line]
+            nearest = max(before, key=lambda a: a.lineno, default=None)
+            return [nearest.value] if nearest is not None else []
+
+        def reads_item(expr: ast.AST) -> bool:
+            if isinstance(expr, ast.JoinedStr) or _call_name(expr) in VALIDATORS:
+                return False  # an f-string is an exact str; a validator returns its own value
+            for n in ast.walk(expr):
+                base = None
+                if (
+                    isinstance(n, ast.Call)
+                    and isinstance(n.func, ast.Attribute)
+                    and n.func.attr == "get"
+                ):
+                    base = n.func.value
+                elif isinstance(n, ast.Subscript):
+                    base = n.value
+                if isinstance(base, ast.Name) and base.id not in SCALAR_BASES:
+                    return True
+                if isinstance(n, ast.Name) and n.id in loop_names:
+                    return True
+            return False
+
+        for joined in [n for n in ast.walk(func) if isinstance(n, ast.JoinedStr)]:
+            for expr in _quoted_attribute_values(joined):
+                candidates = (
+                    bound_before(expr.id, expr.lineno) if isinstance(expr, ast.Name) else [expr]
+                )
+                for candidate in candidates:
+                    if _call_name(candidate) in ESCAPERS and candidate.args:
+                        if reads_item(candidate.args[0]):
+                            at = f" (line {candidate.lineno})" if lines else ""
+                            findings.append(f"{func.name}: {ast.unparse(candidate)[:90]}{at}")
+    return sorted(set(findings))
+
+
+#: Module paths (under ``python/djust``) the hunt reads: every tag module of both tag packages.
+HUNTED_SOURCES = (
+    "components/templatetags",
+    "theming/templatetags",
+)
+
+CONST = "iterates a constant table written in this module, not an item handed to the tag"
+PLAIN = "a plain str built in the function (a split of the value, a regex over the template text)"
+SCHEMA = "columns and filter options inferred from the model's fields, not a list handed to the tag"
+CHILD_SCALAR = "the id= keyword of a child tag: a scalar argument, the developer's own"
+#: ``module:function: expression`` the hunt reports and a person has judged not to be an item
+#: written to an attribute, with the reason. Exactly these: a new finding fails, and so does an
+#: entry the hunt no longer reports.
+STATIC_SINK_ALLOWED: dict[str, str] = {
+    "components/templatetags/_advanced.py:render: conditional_escape(label)": CONST,
+    "components/templatetags/_advanced.py:render: conditional_escape(v)": PLAIN,
+    "components/templatetags/_advanced.py:render: conditional_escape(val)": PLAIN,
+    "components/templatetags/_charts.py:render: conditional_escape(str(self.COLORS[idx % len(self.COLORS)]))": CONST,
+    "components/templatetags/_dev_tools.py:render: conditional_escape(prefix)": CONST,
+    "components/templatetags/_dev_tools.py:render: conditional_escape(suffix)": CONST,
+    "components/templatetags/_forms.py:model_table: conditional_escape(col['key'])": SCHEMA,
+    "components/templatetags/_forms.py:model_table: conditional_escape(str(fo.get('value', '')))": SCHEMA,
+    "components/templatetags/djust_components.py:_render_emoji: conditional_escape(val)": CONST,
+    "components/templatetags/djust_components.py:render: conditional_escape(tid)": CHILD_SCALAR,
+    "components/templatetags/djust_components.py:rich_text_editor: conditional_escape(arg)": CONST,
+    "components/templatetags/djust_components.py:rich_text_editor: conditional_escape(cmd)": CONST,
+}
+
+
+def _hunted() -> dict[str, list[str]]:
+    root = ROOT / "python" / "djust"
+    found: dict[str, list[str]] = {}
+    for sub in HUNTED_SOURCES:
+        for path in sorted((root / sub).glob("*.py")):
+            for finding in static_sink_hunt(path.read_text(encoding="utf-8")):
+                found.setdefault(f"{sub}/{path.name}", []).append(finding)
+    return found
+
+
+PLANTED_SINK = """
+def leaks_through_a_helper(items):
+    out = ""
+    for item in items:
+        value = conditional_escape(str(item.get("value", "")))
+        out += f'<option value="{value}">'
+    return out
+
+
+def leaks_a_loop_variable(choices):
+    return "".join(f'<input value="{conditional_escape(v)}">' for v, label in choices)
+"""
+CLEAN_SINK = """
+def clean(items, kw):
+    out = ""
+    for item in items:
+        value = attr_text(item.get("value", ""))
+        label = conditional_escape(str(item.get("label", "")))
+        out += f'<option value="{value}">{label}</option>'
+    title = conditional_escape(kw.get("title", ""))
+    return out + f'<p title="{title}">'
+"""
+
+
+class TestTheStaticHunt:
+    def test_it_finds_a_planted_sink_and_not_its_clean_twin(self) -> None:
+        planted = static_sink_hunt(PLANTED_SINK)
+        assert len(planted) == 2, planted
+        assert static_sink_hunt(CLEAN_SINK) == []
+
+    def test_the_tag_modules_have_exactly_the_judged_findings(self) -> None:
+        found = {f"{mod}:{f}": None for mod, fs in _hunted().items() for f in fs}
+        assert set(found) == set(STATIC_SINK_ALLOWED), (
+            f"new: {sorted(set(found) - set(STATIC_SINK_ALLOWED))}\n"
+            f"stale: {sorted(set(STATIC_SINK_ALLOWED) - set(found))}"
+        )
+
+
+# --- a form field's choice value (a schema, not a tag list), through ``dj_form`` ----------------
+
+CHOICE_WIDGETS = ("select", "radio", "checkbox")
+
+
+def _choice_form(widget: str, value: object):
+    """A form with one choice field whose only choice has ``value``."""
+    from django import forms
+
+    field = forms.MultipleChoiceField if widget == "checkbox" else forms.ChoiceField
+    widget_class = {
+        "select": forms.Select,
+        "radio": forms.RadioSelect,
+        "checkbox": forms.CheckboxSelectMultiple,
+    }[widget]
+
+    class ChoiceForm(forms.Form):
+        c = field(choices=[(value, "label")], widget=widget_class)
+
+    return ChoiceForm()
+
+
+class TestFormFieldChoices:
+    """``dj_form`` draws a field's choices into ``value=``: the choice value is the form's schema,
+    not a list handed to a tag, and is treated the same way (#3904 review)."""
+
+    @pytest.mark.parametrize("widget", CHOICE_WIDGETS)
+    @pytest.mark.parametrize("claim", sorted(set(ITEM_CLAIMS) - {"plain"}))
+    def test_a_marked_safe_choice_value_is_neutralised_like_the_plain_string(
+        self, widget: str, claim: str
+    ) -> None:
+        src = "{% load djust_components %}{% dj_form form=f %}"
+        for _label, payload in ITEM_PAYLOADS:
+            plain = _django_render(src, {"f": _choice_form(widget, payload)})
+            marked = _django_render(src, {"f": _choice_form(widget, ITEM_CLAIMS[claim](payload))})  # type: ignore[operator]
+            assert plain is not None, "the plain choice did not render"
+            if marked is None:
+                continue  # a value no field accepts fails closed
+            assert holes_in(marked) == [], (widget, claim)
+            if claim not in NOT_COMPARED_WITH_PLAIN:
+                slots = ("value", "id", "for")
+                assert _slots(marked, slots) == _slots(plain, slots), (widget, claim)
+
+    @pytest.mark.parametrize("widget", CHOICE_WIDGETS)
+    def test_the_choice_is_drawn_into_the_pinned_attribute(self, widget: str) -> None:
+        out = _django_render(
+            "{% load djust_components %}{% dj_form form=f %}",
+            {"f": _choice_form(widget, REACH_PROBE)},
+        )
+        assert out is not None
+        names = {a.name for a in url_sweep.attributes(out) if REACH_PROBE in a.value}
+        assert "value" in names, (widget, sorted(names))
+
+    def test_the_native_engine_draws_no_field_from_a_form_object(self) -> None:
+        """Pinned, not assumed: the native engine is handed the form as data it cannot draw, so a
+        choice value cannot reach it. If it starts drawing the fields, this fails and the choice
+        needs the same cells under the native engine."""
+        from djust.tests.test_components_csp_aria import _rust
+
+        out = _rust(
+            "{% load djust_components %}{% dj_form form=f %}",
+            {"f": _choice_form("select", REACH_PROBE)},
+        )
+        assert REACH_PROBE not in out and "<select" not in out, out

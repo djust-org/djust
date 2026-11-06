@@ -1103,7 +1103,7 @@ def _render_field(bound_field: Any, event_prefix: Any = "") -> Any:
         for ov, ol in choices:
             selected_attr = " selected" if str(ov) == str(value) else ""
             options_html += (
-                f'<option value="{conditional_escape(ov)}"{selected_attr}>'
+                f'<option value="{attr_text(ov)}"{selected_attr}>'
                 f"{conditional_escape(ol)}</option>"
             )
         return (
@@ -1126,7 +1126,7 @@ def _render_field(bound_field: Any, event_prefix: Any = "") -> Any:
             radios += (
                 f'<div class="form-radio-wrapper">'
                 f'<input class="form-radio" type="radio" '
-                f'name="{e_name}" id="{radio_id}" value="{conditional_escape(ov)}" '
+                f'name="{e_name}" id="{radio_id}" value="{attr_text(ov)}" '
                 f'dj-change="{dj_event}"{checked_attr}{disabled_attr}>'
                 f'<label class="form-radio-label" for="{radio_id}">{conditional_escape(ol)}</label>'
                 f"</div>"
@@ -1150,7 +1150,7 @@ def _render_field(bound_field: Any, event_prefix: Any = "") -> Any:
             checks += (
                 f'<div class="form-checkbox-wrapper">'
                 f'<input class="form-checkbox" type="checkbox" '
-                f'name="{e_name}" id="{cb_id}" value="{conditional_escape(ov)}" '
+                f'name="{e_name}" id="{cb_id}" value="{attr_text(ov)}" '
                 f'dj-change="{dj_event}"{checked_attr}{disabled_attr}>'
                 f'<label class="form-checkbox-label" for="{cb_id}">{conditional_escape(ol)}</label>'
                 f"</div>"

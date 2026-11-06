@@ -3478,7 +3478,7 @@ def table_of_contents(
     def render_item(item: Any) -> Any:
         if not isinstance(item, dict):
             return ""
-        iid = conditional_escape(str(item.get("id", "")))
+        iid = attr_text(item.get("id", ""))  # only in href="#..." / data-value= (#3904)
         lbl = conditional_escape(str(item.get("label", "")))
         level = int(item.get("level", 1))
         indent = (level - 1) * 1.0
@@ -6698,16 +6698,18 @@ def render_filter_bar(
                     if isinstance(opt, dict):
                         ov = conditional_escape(str(opt.get("value", "")))
                         ol = conditional_escape(str(opt.get("label", ov)))
+                        av = attr_text(opt.get("value", ""))  # the value= attribute (#3904)
                     else:
                         ov = conditional_escape(str(opt))
                         ol = ov
+                        av = attr_text(opt)
                     selected = (
                         " selected"
                         if str(opt.get("value", opt) if isinstance(opt, dict) else opt)
                         == str(value)
                         else ""
                     )
-                    opt_html += f'<option value="{ov}"{selected}>{ol}</option>'
+                    opt_html += f'<option value="{av}"{selected}>{ol}</option>'
             parts.append(
                 f'<div class="dj-filter-bar__control dj-filter-bar__select-wrap">'
                 f'<select class="dj-filter-bar__select" name="{name}" '
@@ -8906,9 +8908,8 @@ class FormArrayNode(template.Node):
                     f"{inner_html}{remove_html}</div>"
                 )
             else:
-                val = conditional_escape(
-                    str(row.get("value", "") if isinstance(row, dict) else row)
-                )
+                # only in value= (#3904)
+                val = attr_text(row.get("value", "") if isinstance(row, dict) else row)
                 rows_html.append(
                     f'<div class="dj-form-array__row" data-index="{i}">'
                     f'<input type="text" name="{e_name}[{i}]" value="{val}" '
@@ -9502,7 +9503,7 @@ class ImportWizardNode(template.Node):
             for field in model_fields:
                 if not isinstance(field, dict):
                     continue
-                e_id = conditional_escape(str(field.get("id", "")))
+                e_id = attr_text(field.get("id", ""))  # only in name= (#3904)
                 e_label = conditional_escape(str(field.get("label", "")))
                 field_rows.append(
                     f'<div class="dj-import-wizard__field-row">'
