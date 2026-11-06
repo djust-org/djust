@@ -50,7 +50,7 @@ djust_components:cursors,DIFFERENT-escape-policy-only,2,escaping:2,,18,6/6,18
 djust_components:dashboard_grid,DIFFERENT-escape-policy-only,4,escaping:4,,23,10/10,23
 djust_components:data_card_grid,DIFFERENT-escape-policy-only,2,escaping:2,,20,8/8,20
 djust_components:data_grid,DIFFERENT-escape-policy-only,3,escaping:3,,23,18/18,23
-djust_components:data_table,DIFFERENT,176,a11y:176+classes:176+data/dj-attrs:176+escaping:2+other-attrs:20+tags:20+text:16,rust_only_keys:python,176,118/118,177
+djust_components:data_table,DIFFERENT,176,a11y:176+classes:176+data/dj-attrs:176+escaping:2+other-attrs:16+tags:16+text:16,rust_only_keys:python,176,120/120,177
 djust_components:date_picker,DIFFERENT,31,classes:31+data/dj-attrs:1+escaping:11+other-attrs:1+tags:31+text:31,,34,15/15,34
 djust_components:dependent_select,DIFFERENT,10,a11y:1+classes:2+data/dj-attrs:1+escaping:9+ids:2+other-attrs:1+tags:6+text:6,,25,12/12,25
 djust_components:diff_viewer,DIFFERENT-escape-policy-only,4,escaping:4+tags:3+text:3,,19,7/7,19
