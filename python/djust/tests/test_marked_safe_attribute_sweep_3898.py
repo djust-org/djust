@@ -159,7 +159,11 @@ def _shapes(value: object) -> dict[str, object]:
         "scalar": value,
         "list_str": [value] * N_ITEMS,
         "dict": url_sweep.dict_of(value, KEYS),  # type: ignore[arg-type]
-        "list_dict": [_item(value) for _ in range(N_ITEMS)],
+        # alternate items WITH a dropdown and plain ones: a navbar draws the two differently
+        "list_dict": [
+            _item(value) if i % 2 == 0 else url_sweep.dict_of(value, KEYS)  # type: ignore[arg-type]
+            for i in range(N_ITEMS)
+        ],
         "list_obj": [_obj(value) for _ in range(N_ITEMS)],
     }
 
