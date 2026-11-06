@@ -25,7 +25,7 @@ import uuid
 import pytest
 from asgiref.sync import sync_to_async
 from django import forms
-from django.contrib.auth.models import AnonymousUser
+from django.contrib.auth.models import AnonymousUser, User
 from django.contrib.sessions.backends.db import SessionStore
 from django.core.exceptions import ImproperlyConfigured
 from django.test import Client, RequestFactory, override_settings
@@ -245,6 +245,90 @@ class NoteParams(forms.Form):
     note = forms.CharField(required=False)
 
 
+class CopiesParams(forms.Form):
+    """#3891: ``clean()`` copies the raw ``q`` into ``a``, a field the URL did not supply."""
+
+    a = forms.CharField(required=False, initial="da")
+    q = forms.CharField(max_length=5, required=False, initial="")
+
+    def clean(self):
+        cleaned = super().clean()
+        if "q" in self.data:
+            cleaned["a"] = self.data["q"]  # raw request data, valid or not
+        return cleaned
+
+
+class CopiesNoInitialParams(CopiesParams):
+    """The same, but ``a`` has NO initial value: nothing is filled over ``clean()``'s write."""
+
+    a = forms.CharField(required=False)
+
+
+class CopiesCallableParams(CopiesParams):
+    """The same, but ``a``'s initial is a callable."""
+
+    a = forms.CharField(required=False, initial=lambda: "dyn")
+
+
+class CopiesManyParams(forms.Form):
+    """Several kept fields: two unsupplied (``a``, ``b``, both overwritten) and one the URL supplies."""
+
+    a = forms.CharField(required=False, initial="da")
+    b = forms.CharField(required=False, initial="db")
+    c = forms.CharField(required=False, initial="dc")
+    q = forms.CharField(max_length=5, required=False, initial="")
+
+    def clean(self):
+        cleaned = super().clean()
+        if "q" in self.data:
+            cleaned["a"] = cleaned["b"] = cleaned["c"] = self.data["q"]
+        return cleaned
+
+
+class CopiesRequiredParams(forms.Form):
+    """A REQUIRED field next to the copy: unsupplied it fails and is replaced, supplied it is kept."""
+
+    token = forms.CharField(required=True)
+    a = forms.CharField(required=False, initial="da")
+    q = forms.CharField(max_length=5, required=False, initial="")
+
+    def clean(self):
+        cleaned = super().clean()
+        if "q" in self.data:
+            cleaned["a"] = self.data["q"]
+        return cleaned
+
+
+class CopiesRaisesParams(CopiesParams):
+    """``clean()`` raises on the copied value: a form-level error, so nothing is kept."""
+
+    def clean(self):
+        cleaned = super().clean()
+        if str(cleaned.get("a", "")).startswith("boom"):
+            raise forms.ValidationError("refused")
+        return cleaned
+
+
+class CopiesModelParams(forms.ModelForm):
+    """A ModelForm: ``last_name`` takes the instance's value as its initial, ``clean()`` overwrites it."""
+
+    first_name = forms.CharField(max_length=5, required=False)
+
+    class Meta:
+        model = User
+        fields = ["first_name", "last_name"]
+
+    def __init__(self, *args, **kwargs):
+        kwargs.setdefault("instance", User(last_name="Default"))
+        super().__init__(*args, **kwargs)
+
+    def clean(self):
+        cleaned = super().clean()
+        if "first_name" in self.data:
+            cleaned["last_name"] = self.data["first_name"]
+        return cleaned
+
+
 # --------------------------------------------------------------------------- #
 # Views
 # --------------------------------------------------------------------------- #
@@ -360,6 +444,46 @@ class NoteFields(_Base):
     params_form_fallback = "fields"
 
 
+class CopiesFields(_Base):
+    params_form = CopiesParams
+    params_form_fallback = "fields"
+
+
+class CopiesInitial(_Base):
+    params_form = CopiesParams
+    params_form_fallback = "initial"
+
+
+class CopiesNoInitialFields(_Base):
+    params_form = CopiesNoInitialParams
+    params_form_fallback = "fields"
+
+
+class CopiesCallableFields(_Base):
+    params_form = CopiesCallableParams
+    params_form_fallback = "fields"
+
+
+class CopiesManyFields(_Base):
+    params_form = CopiesManyParams
+    params_form_fallback = "fields"
+
+
+class CopiesRequiredFields(_Base):
+    params_form = CopiesRequiredParams
+    params_form_fallback = "fields"
+
+
+class CopiesRaisesFields(_Base):
+    params_form = CopiesRaisesParams
+    params_form_fallback = "fields"
+
+
+class CopiesModelFields(_Base):
+    params_form = CopiesModelParams
+    params_form_fallback = "fields"
+
+
 class AsyncFields(FieldsView):
     """An ``async def handle_params``: the default must still await it."""
 
@@ -400,6 +524,14 @@ _VIEWS = (
     AttributedFields,
     BoolFields,
     NoteFields,
+    CopiesFields,
+    CopiesInitial,
+    CopiesNoInitialFields,
+    CopiesCallableFields,
+    CopiesManyFields,
+    CopiesRequiredFields,
+    CopiesRaisesFields,
+    CopiesModelFields,
     SpanFields,
     SpanRaisesFields,
     CrashFields,
@@ -445,6 +577,9 @@ def _url(view_name: str, query: dict | None = None) -> str:
 # --------------------------------------------------------------------------- #
 # The cases: (view, query, what handle_params receives, the fields in params_errors)
 # --------------------------------------------------------------------------- #
+
+#: A request value no field accepts and no response should carry (#3891).
+RAW = "<script>alert(1)</script>"
 
 KEPT = {"page": 1, "sort": "name", "q": "hello"}
 INITIAL = {"page": 1, "sort": "date", "q": ""}
@@ -543,6 +678,56 @@ CASES = [
     # An async handle_params and a super() override see the same kept values.
     ("AsyncFields", {"page": "abc", "sort": "name", "q": "hello"}, KEPT, {"page"}),
     ("SuperFields", {"page": "abc", "sort": "name", "q": "hello"}, KEPT, {"page"}),
+    # #3891: a KEPT field the URL did not supply takes its initial value AFTER clean() ran, as on
+    # the valid path, so a clean() that copies the failed raw q into it cannot hand the raw value over.
+    ("CopiesFields", {"q": RAW}, {"a": "da", "q": ""}, {"q"}),
+    ("CopiesFields", {"q": "ok"}, {"a": "da", "q": "ok"}, set()),  # the valid path, for comparison
+    # A field the URL supplied keeps clean()'s write, on both paths (the documented trust boundary).
+    ("CopiesFields", {"a": "x", "q": "ok"}, {"a": "ok", "q": "ok"}, set()),
+    ("CopiesFields", {"a": "x", "q": RAW}, {"a": RAW, "q": ""}, {"q"}),
+    # A field the URL supplied EMPTY counts as left out, as on the valid path.
+    ("CopiesFields", {"a": "", "q": "ok"}, {"a": "da", "q": "ok"}, set()),
+    ("CopiesFields", {"a": "", "q": RAW}, {"a": "da", "q": ""}, {"q"}),
+    # "initial" never handed a raw value over: unchanged, supplied or not.
+    ("CopiesInitial", {"q": RAW}, {"a": "da", "q": ""}, {"q"}),
+    ("CopiesInitial", {"a": "x", "q": RAW}, {"a": "da", "q": ""}, {"q"}),
+    ("CopiesInitial", {"q": "ok"}, {"a": "da", "q": "ok"}, set()),
+    # No initial value: nothing to fill over clean()'s write, on the valid path and the fallback alike.
+    ("CopiesNoInitialFields", {"q": "ok"}, {"a": "ok", "q": "ok"}, set()),
+    ("CopiesNoInitialFields", {"q": RAW}, {"a": RAW, "q": ""}, {"q"}),
+    # A callable initial is what the field takes.
+    ("CopiesCallableFields", {"q": "ok"}, {"a": "dyn", "q": "ok"}, set()),
+    ("CopiesCallableFields", {"q": RAW}, {"a": "dyn", "q": ""}, {"q"}),
+    # Several kept fields: every unsupplied one is filled, the supplied one keeps clean()'s write.
+    ("CopiesManyFields", {"q": "ok"}, {"a": "da", "b": "db", "c": "dc", "q": "ok"}, set()),
+    ("CopiesManyFields", {"q": RAW}, {"a": "da", "b": "db", "c": "dc", "q": ""}, {"q"}),
+    ("CopiesManyFields", {"c": "x", "q": RAW}, {"a": "da", "b": "db", "c": RAW, "q": ""}, {"q"}),
+    # A required field: unsupplied it is replaced (None) and the copy still cannot get out; supplied
+    # it is kept.
+    ("CopiesRequiredFields", {"q": RAW}, {"token": None, "a": "da", "q": ""}, {"token", "q"}),
+    ("CopiesRequiredFields", {"token": "t", "q": RAW}, {"token": "t", "a": "da", "q": ""}, {"q"}),
+    (
+        "CopiesRequiredFields",
+        {"token": "t", "q": "ok"},
+        {"token": "t", "a": "da", "q": "ok"},
+        set(),
+    ),
+    # clean() raising on the copied value is a form-level error: nothing is kept.
+    ("CopiesRaisesFields", {"q": "boomboom"}, {"a": "da", "q": ""}, {"__all__", "q"}),
+    ("CopiesRaisesFields", {"q": "boom"}, {"a": "da", "q": ""}, {"__all__"}),
+    # A ModelForm: last_name's initial comes from the instance.
+    (
+        "CopiesModelFields",
+        {"first_name": "toolong!"},
+        {"first_name": "", "last_name": "Default"},
+        {"first_name"},
+    ),
+    (
+        "CopiesModelFields",
+        {"first_name": "ok"},
+        {"first_name": "ok", "last_name": "Default"},
+        set(),
+    ),
 ]
 
 
@@ -591,6 +776,15 @@ class _Cases:
         assert not seen.failed
         assert CALLS[-1][0] == {"page": 1, "sort": "date", "q": "ok"}
         assert "alert(1)" not in seen.html and "drop" not in seen.html
+
+    async def test_a_failed_value_does_not_reach_handle_params_through_an_unsupplied_kept_field(
+        self,
+    ):
+        """#3891: the raw value a clean() copies into a field the URL left out is that field's initial."""
+        seen = await self.visit("CopiesFields", {"q": RAW})
+        assert not seen.failed
+        assert CALLS[-1][0] == {"a": "da", "q": ""}
+        assert "alert(1)" not in seen.html
 
     async def test_the_url_a_view_with_no_form_gets_is_untouched(self):
         seen = await self.visit("NoFormBadMode", {"page": "abc", "x": "y"})
@@ -1229,8 +1423,10 @@ class TestFallbackValues:
 
     def test_a_clean_that_copies_raw_data_into_a_kept_field_hands_it_over_as_documented(self):
         """The documented trust boundary: a failed field's OWN entry is its initial value, but a
-        clean() that copies raw request data into a KEPT field hands it over through that field,
-        exactly as on the valid path. ``"initial"`` is the mode that never hands over a raw value."""
+        clean() that copies raw request data into a KEPT field the URL SUPPLIED hands it over
+        through that field, exactly as on the valid path (an unsupplied one takes its initial value
+        after clean() on both paths, #3891). ``"initial"`` is the mode that never hands over a raw
+        value."""
         from djust._params_form import fallback_values
 
         class Copies(forms.Form):
@@ -1250,6 +1446,204 @@ class TestFallbackValues:
         assert values is None
         assert fallback_values(form, "fields") == {"a": raw, "q": ""}  # via the kept field
         assert fallback_values(form, "initial") == {"a": "da", "q": ""}  # never a raw value
+
+    def test_the_issues_reproducer_the_fallback_hands_over_the_valid_paths_value_for_an_unsupplied_field(
+        self,
+    ):
+        """#3891: ``a`` is not in the URL; the valid path gives its initial and so must the fallback."""
+        from djust._params_form import fallback_values
+
+        _, valid, _ = self._bound(CopiesParams, {"q": "ok"})
+        assert valid == {"a": "da", "q": "ok"}
+        form, values, _ = self._bound(CopiesParams, {"q": RAW})
+        assert values is None
+        assert fallback_values(form, "fields") == {"a": "da", "q": ""}
+        assert fallback_values(form, "initial") == {"a": "da", "q": ""}
+
+    def test_the_recheck_sees_the_raw_cleaned_values_as_the_valid_paths_clean_does(self):
+        """The choice (#3891): clean() runs BEFORE the initial fill on both paths, so the re-check is
+        given the raw cleaned value of an unsupplied kept field (``""``), never its initial (``"da"``)."""
+        from djust._params_form import fallback_values
+
+        seen: list = []
+
+        class Records(forms.Form):
+            a = forms.CharField(required=False, initial="da")
+            q = forms.CharField(max_length=5, required=False)
+
+            def clean(self):
+                cleaned = super().clean()
+                seen.append(dict(self.cleaned_data))
+                return cleaned
+
+        _, valid, _ = self._bound(Records, {"q": "ok"})
+        assert valid == {"a": "da", "q": "ok"}
+        assert seen == [{"a": "", "q": "ok"}]  # the valid path's clean() saw the raw ""
+        seen.clear()
+        form, values, _ = self._bound(Records, {"q": "toolong!"})
+        assert values is None
+        assert seen == [{"a": ""}]  # the first pass: q failed and left cleaned_data
+        seen.clear()
+        assert fallback_values(form, "fields") == {"a": "da", "q": None}
+        assert seen == [{"a": "", "q": None}]  # the re-check: a raw "", q paired with its initial
+
+    def test_the_fill_judges_what_clean_left_not_what_the_first_pass_cleaned(self):
+        """A supplied field whose clean() blanks it takes its initial, on both paths."""
+        from djust._params_form import fallback_values
+
+        class Blanks(forms.Form):
+            a = forms.CharField(required=False, initial="da")
+            q = forms.CharField(max_length=5, required=False, initial="")
+
+            def clean(self):
+                cleaned = super().clean()
+                cleaned["a"] = ""
+                return cleaned
+
+        _, valid, _ = self._bound(Blanks, {"a": "x", "q": "ok"})
+        assert valid == {"a": "da", "q": "ok"}
+        form, values, _ = self._bound(Blanks, {"a": "x", "q": RAW})
+        assert values is None
+        assert fallback_values(form, "fields") == {"a": "da", "q": ""}
+
+    def test_the_fill_judges_the_re_checks_output_not_the_first_passs(self):
+        """The value handed over is the re-check's, so emptiness is judged on it (#3891).
+
+        ``clean()`` derives ``a`` from a sibling: with ``q`` failed the first pass leaves ``a`` at
+        the URL's ``"x"``, but the re-check pairs ``q`` with its initial ``""`` and blanks ``a``, so
+        it takes its initial value (the fill reads the output it fills, not ``cleaned_data``).
+        """
+        from djust._params_form import fallback_values
+
+        class Derives(forms.Form):
+            a = forms.CharField(required=False, initial="da")
+            q = forms.CharField(max_length=5, required=False, initial="")
+
+            def clean(self):
+                cleaned = super().clean()
+                cleaned["a"] = "" if cleaned.get("q") == "" else self.data.get("a", "")
+                return cleaned
+
+        _, valid, _ = self._bound(Derives, {"a": "x", "q": "ok"})
+        assert valid == {"a": "x", "q": "ok"}
+        form, values, _ = self._bound(Derives, {"a": "x", "q": RAW})
+        assert values is None
+        assert form.cleaned_data["a"] == "x"  # the first pass left it non-empty
+        assert fallback_values(form, "fields") == {"a": "da", "q": ""}
+
+    @pytest.mark.parametrize(
+        "form_class",
+        [
+            CopiesParams,
+            CopiesNoInitialParams,
+            CopiesCallableParams,
+            CopiesManyParams,
+            CopiesRequiredParams,
+            CopiesModelParams,
+        ],
+    )
+    def test_every_kept_field_is_what_the_valid_path_hands_over_property(self, form_class):
+        """The differential (#3891): the valid path's own function is the oracle.
+
+        For random binds that fail, every field the fallback KEPT must equal ``_cleaned_values`` on
+        the same first-pass form (that is, what the valid path would hand ``handle_params``), and
+        every field that failed must be its initial value, in both modes. Randomised over which
+        fields the URL supplies, leaves out, empties or sends as a value that fails.
+        """
+        import random
+
+        from djust._params_form import _cleaned_values, fallback_values, initial_values
+
+        rng = random.Random(3891)
+        invalid_binds = kept_unsupplied = 0
+        for _ in range(250):
+            params = {}
+            for name in form_class.base_fields:
+                kind = rng.choice(("absent", "empty", "ok", "raw"))
+                if kind == "empty":
+                    params[name] = ""
+                elif kind == "ok":
+                    params[name] = rng.choice(("ok", "x"))
+                elif kind == "raw":
+                    params[name] = RAW + str(rng.randint(0, 9))
+            form, values, _ = self._bound(form_class, params)
+            if values is not None:
+                continue
+            invalid_binds += 1
+            fields_result = fallback_values(form, "fields")
+            initial = initial_values(form)
+            assert fallback_values(form, "initial") == initial
+            if form.non_field_errors():
+                assert fields_result == initial
+                continue
+            valid_path = _cleaned_values(form)
+            for name in form.fields:
+                if name in form.errors:
+                    assert fields_result[name] == initial[name], (params, name)
+                elif name in form.cleaned_data:
+                    assert fields_result[name] == valid_path[name], (params, name)
+                    kept_unsupplied += name not in params or params[name] == ""
+        assert invalid_binds > 50 and kept_unsupplied > 20  # exercised, not vacuous
+
+    def test_the_initial_mode_is_unaffected_and_never_runs_clean_again(self):
+        from djust._params_form import fallback_values, initial_values
+
+        calls = []
+
+        class Counts(CopiesParams):
+            def clean(self):
+                calls.append(1)
+                return super().clean()
+
+        for params in ({"q": RAW}, {"a": "x", "q": RAW}, {"a": "", "q": RAW}):
+            calls.clear()
+            form, values, _ = self._bound(Counts, params)
+            assert values is None
+            assert len(calls) == 1
+            assert fallback_values(form, "initial") == initial_values(form) == {"a": "da", "q": ""}
+            assert len(calls) == 1  # "initial" never re-checks
+
+    def test_a_callable_initial_over_clean_is_evaluated_once_and_only_when_needed(self):
+        from djust._params_form import fallback_values
+
+        count = {"a": 0}
+
+        def a_initial():
+            count["a"] += 1
+            return "dyn"
+
+        class Counted(CopiesParams):
+            a = forms.CharField(required=False, initial=a_initial)
+
+        form, values, _ = self._bound(Counted, {"q": RAW})
+        assert values is None
+        assert fallback_values(form, "fields") == {"a": "dyn", "q": ""}
+        assert count["a"] == 1
+        count["a"] = 0
+        form, values, _ = self._bound(Counted, {"a": "x", "q": RAW})  # supplied: never evaluated
+        assert fallback_values(form, "fields") == {"a": RAW, "q": ""}
+        assert count["a"] == 0
+
+    def test_a_clean_that_raises_on_the_recheck_gives_the_plain_initials(self):
+        """A clean() that accepts the first pass and refuses the second keeps nothing."""
+        from djust._params_form import fallback_values
+
+        calls = []
+
+        class RefusesTheSecondCall(CopiesParams):
+            def clean(self):
+                calls.append(1)
+                cleaned = super().clean()
+                if len(calls) > 1:
+                    raise forms.ValidationError("refused")
+                return cleaned
+
+        form, values, _ = self._bound(RefusesTheSecondCall, {"q": RAW})
+        assert values is None
+        result = fallback_values(form, "fields")
+        assert result == {"a": "da", "q": ""}
+        assert RAW not in repr(result)
+        assert len(calls) == 2
 
     def test_a_repair_of_a_replaced_field_is_not_adopted(self):
         """clean() adopted for kept fields only: a write to the failed ``hi`` is its initial still."""

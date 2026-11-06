@@ -304,17 +304,22 @@ def fallback_values(form: forms.BaseForm, mode: str, view: Any = None) -> Dict[s
     ``"initial"``: the initial value of every declared field.
 
     ``"fields"`` (#3874): the declared fields only, each field that validated
-    with the value the valid path would hand over (a field the URL left out or
-    empty takes its ``initial``, exactly as there) and each field that did not
+    with the value the valid path would hand over and each field that did not
     with its ``initial``. A field is "valid" when it has no entry in
     ``form.errors`` *and* is in ``form.cleaned_data``: Django removes a field
     from ``cleaned_data`` when its own ``clean_<field>()`` fails, but a field
     that merely did not fail is not proof it was checked, so a field a ``clean()``
     deleted counts as not valid. A failed field's own entry is always its initial
-    value; ``"initial"`` is the mode that never hands over a raw request value, and
-    in ``"fields"`` a ``clean()`` that copies raw request data into a KEPT field
-    hands it over through that field, as on the valid path for a field the URL
-    supplied (an unsupplied one is a known difference, #3891).
+    value; ``"initial"`` is the mode that never hands over a raw request value.
+
+    **The order is the valid path's** (#3891): ``clean()`` runs on the RAW cleaned
+    values and the ``initial`` fill comes AFTER it (:func:`_cleaned_values`), so a
+    kept field the URL left out or empty takes its ``initial`` over whatever
+    ``clean()`` wrote into it, and both paths hand ``handle_params`` the same value
+    for it. A ``clean()`` that copies raw request data into a KEPT field the URL
+    SUPPLIED hands it over through that field, on both paths (``clean()``'s own
+    trust boundary); one that copies it into an unsupplied field does not, on
+    either. A field with no ``initial`` (``None``) is not filled, on either path.
 
     The result is always a combination the form's ``clean()`` accepts, or the
     plain initial values. A kept field is now paired with the initial value of a
@@ -356,9 +361,14 @@ def fallback_values(form: forms.BaseForm, mode: str, view: Any = None) -> Dict[s
     kept = [name for name in form.fields if name not in form.errors and name in cleaned]
     if not kept:
         return all_initial()
-    values: Dict[str, Any] = {name: cleaned[name] for name in kept}
-    _fill_unsupplied(form, values, kept, initial_of)
-    merged = {name: values[name] if name in values else initial_of(name) for name in form.fields}
+    # The re-check sees the RAW cleaned values of the kept fields (what the first pass left, a field
+    # the URL left out included: ``""`` / ``None`` / ``False``), exactly what ``clean()`` sees on
+    # the valid path, where the initial fill (``_cleaned_values``) comes AFTER ``clean()``. Only a
+    # replaced field has no cleaned value, so it is paired with its initial value.
+    kept_names = set(kept)
+    merged = {
+        name: cleaned[name] if name in kept_names else initial_of(name) for name in form.fields
+    }
     repaired = _rechecked(view, form, merged)
     if repaired is None:
         return all_initial()
@@ -366,11 +376,13 @@ def fallback_values(form: forms.BaseForm, mode: str, view: Any = None) -> Dict[s
     # out counts: it is in `kept`). A replaced field is its initial value whatever clean() wrote:
     # a clean() that re-reads self.data would otherwise write the failed raw value into its own entry.
     # A kept field clean() removed is not valid, as one it was never given: its initial value.
-    adopted = set(kept)
-    return {
-        name: repaired[name] if name in adopted and name in repaired else initial_of(name)
-        for name in form.fields
-    }
+    adopted: Dict[str, Any] = {name: repaired[name] for name in kept if name in repaired}
+    # Then the initial fill, on that OUTPUT and not before it, as ``_cleaned_values`` does on the
+    # valid path: a field the URL left out or empty takes its initial value over whatever clean()
+    # wrote into it, so a clean() that copies a failed field's raw value into an unsupplied field
+    # cannot hand it over through that field (#3891).
+    _fill_unsupplied(form, adopted, list(adopted), initial_of)
+    return {name: adopted[name] if name in adopted else initial_of(name) for name in form.fields}
 
 
 def _error_messages(form: forms.BaseForm) -> Dict[str, List[str]]:
