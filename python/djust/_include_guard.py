@@ -140,7 +140,7 @@ guarded_include_render._djust_original = _ORIGINAL  # type: ignore[attr-defined]
 
 #: True once :func:`install` has patched the class. A later wrapper (instrumentation, a test's
 #: ``mock.patch.object``) sits ON TOP of the guard; entering a scope must not knock it off.
-_installed = False
+_STATE = {"installed": False}  # a dict, so install() and uninstall() need no ``global``
 
 
 def _wraps_the_guard(render: Callable[..., Any]) -> bool:
@@ -162,18 +162,16 @@ def install() -> None:
     A wrapper that is installed on top afterwards must call the render it wraps; one that does
     not takes the guard with it.
     """
-    global _installed
-    if _installed or _wraps_the_guard(IncludeNode.render):
-        _installed = True
+    if _STATE["installed"] or _wraps_the_guard(IncludeNode.render):
+        _STATE["installed"] = True
         return
     IncludeNode.render = guarded_include_render  # type: ignore[method-assign]
-    _installed = True
+    _STATE["installed"] = True
 
 
 def uninstall() -> None:
     """Put Django's ``IncludeNode.render`` back (for tests that prove the patch is what holds)."""
-    global _installed
-    _installed = False
+    _STATE["installed"] = False
     IncludeNode.render = _ORIGINAL  # type: ignore[method-assign]
 
 
