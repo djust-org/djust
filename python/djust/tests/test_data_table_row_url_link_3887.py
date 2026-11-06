@@ -534,16 +534,17 @@ def test_a_callable_inside_a_column_dict_is_not_reachable_natively() -> None:
 # --- the declined parts, pinned so they cannot silently widen ------------------------------------------
 
 
-def test_a_marked_safe_url_is_kept_by_the_python_tag_and_neutralised_natively() -> None:
-    """The escaping policy of every native handler: the Python tag honours ``mark_safe`` (the
-    developer said the string is safe), the native handler is handed text. The native side is the
-    one that is safe; the Python side letting a marked-safe row value through is #3894."""
+def test_a_marked_safe_url_is_neutralised_by_both_engines() -> None:
+    """``mark_safe`` on a row value is data, not a URL (#3894): the Python tag checks and escapes
+    it like the native handler does (which is handed text), so both write ``#`` for a script
+    scheme. This pinned the divergence until the Python tag was fixed."""
     rows = [{"id": 1, "name": "N", "age": 3, "u": mark_safe("javascript:alert(1)")}]
     src = '{% data_table rows=rows columns=cols row_url="u" %}'
     py, rs = render_both(src, ctx(rows=rows, cols=LINKED))
-    assert view(py).rows[0]["attrs"]["data-href"] == "javascript:alert(1)"
-    assert view(rs).rows[0]["attrs"]["data-href"] == "#"
-    assert url_sweep.findings(rs) == []
+    for page in (view(py), view(rs)):
+        assert page.rows[0]["attrs"]["data-href"] == "#"
+        assert [a["href"] for a in page.rows[0]["anchors"]] == ["#"]
+    assert url_sweep.findings(py) == [] and url_sweep.findings(rs) == []
 
 
 class _SafeSub(SafeString):

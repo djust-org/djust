@@ -248,17 +248,6 @@ def test_an_unmarked_text_cell_is_escaped() -> None:
 # --- the native engine: a marked-safe value is text there, so it was already safe --------------
 
 
-def _native_draws_row_urls() -> bool:
-    html = _rust(
-        '{% data_table rows=rows columns=cols row_url="u" %}',
-        {"rows": [{"id": 1, "name": "N", "u": "/x"}], "cols": COLS},
-    )
-    return "data-href" in html
-
-
-@pytest.mark.skipif(
-    not _native_draws_row_urls(), reason="the native row_url / link column land with #3887"
-)
 @pytest.mark.parametrize("claim", sorted(CLAIMS))
 @pytest.mark.parametrize("payload", SCHEMES + BREAKOUTS)
 def test_both_engines_agree_on_a_marked_safe_url(claim: str, payload: str) -> None:
@@ -281,3 +270,56 @@ def test_both_engines_agree_on_a_marked_safe_row_id_in_the_checkbox(
     py, rs = page(_django(src, ctx)), page(_rust(src, ctx))
     assert [c["data-value"] for c in py.checkboxes] == [c["data-value"] for c in rs.checkboxes]
     assert py.handlers == rs.handlers == []
+
+
+# --- the column width: a CSS length in a style attribute, whatever the columns are -------------
+
+WIDTH_BREAKOUTS = [
+    '10px" onmouseover="alert(1)" x="',
+    "10px;background:url(//e.x/a)",
+    "10px'><img src=x onerror=alert(1)>",
+]
+
+
+class _Col:
+    """A column that is an OBJECT, not a dict (``_checked_column_widths`` only reads dicts)."""
+
+    def __init__(self, key: str, label: str, width: object) -> None:
+        self.key, self.label, self.width = key, label, width
+
+
+def _column_shapes(width: object) -> dict[str, object]:
+    return {
+        "list-of-dicts": [{"key": "name", "label": "N", "width": width}],
+        "tuple-of-dicts": ({"key": "name", "label": "N", "width": width},),
+        "list-of-objects": [_Col("name", "N", width)],
+        "set-of-objects": {_Col("name", "N", width)},
+        "generator": (c for c in [{"key": "name", "label": "N", "width": width}]),
+    }
+
+
+def _widths(html: str) -> list[str]:
+    p = page(html)
+    return [t.get("style", "") for t in p.sortable]
+
+
+@pytest.mark.parametrize("shape", sorted(_column_shapes("1px")))
+@pytest.mark.parametrize("claim", ["plain", *sorted(CLAIMS)])
+@pytest.mark.parametrize("payload", WIDTH_BREAKOUTS)
+def test_a_hostile_column_width_never_leaves_the_style_attribute(
+    shape: str, claim: str, payload: str
+) -> None:
+    value = payload if claim == "plain" else CLAIMS[claim](payload)
+    html = render({"id": 1}, _column_shapes(value)[shape], args="")  # type: ignore[arg-type]
+    p = page(html)
+    assert p.handlers == [], html
+    assert "<img" not in html and "url(" not in html, html
+    assert _widths(html) == [""], html
+
+
+@pytest.mark.parametrize("shape", sorted(_column_shapes("1px")))
+@pytest.mark.parametrize("claim", ["plain", *sorted(CLAIMS)])
+def test_a_real_column_width_is_kept(shape: str, claim: str) -> None:
+    value = "120px" if claim == "plain" else CLAIMS[claim]("120px")
+    html = render({"id": 1}, _column_shapes(value)[shape], args="")  # type: ignore[arg-type]
+    assert _widths(html) == ["width:120px"], html
