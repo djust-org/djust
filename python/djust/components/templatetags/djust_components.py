@@ -26,7 +26,14 @@ from django.utils.safestring import SafeString
 
 from djust._template_guards import call_method_for_template
 from djust.components.utils import safe_url  # from where it is DEFINED, not ``._registry`` (#3820)
-from djust.components.utils import rich_html, unique_ids as _unique_ids, url_attr, srcset_attr
+from djust.components.utils import (
+    rich_html,
+    unique_ids as _unique_ids,
+    url_attr,
+    data_url_attr,
+    attr_text,
+    srcset_attr,
+)
 from djust.components.utils import (
     safe_css_color,
     safe_css_length,
@@ -1182,10 +1189,9 @@ def avatar(
     return {
         # The same sanitiser the native handler uses, so both engines agree: a
         # script-capable scheme becomes "#", an inline data:image/ URI is kept
-        # (#3665). ``url_attr`` returns HTML-escaped text marked safe, so the
-        # template does not escape it a second time (pinned by
-        # ``test_a_marked_safe_src_is_not_escaped_twice_under_django``).
-        "src": url_attr(src, image=True),
+        # (#3665). The helper returns HTML-escaped text marked safe, so the template does not
+        # escape it a second time; a marked-safe ``src`` is checked like any other (#3898).
+        "src": data_url_attr(src, image=True),
         "alt": alt,
         "initials": initials or (alt[:2].upper() if alt else ""),
         "size": size,
@@ -2904,11 +2910,11 @@ def carousel(
     dots = ""
     for i, img in enumerate(images):
         if isinstance(img, dict):
-            src = url_attr(img.get("src", img.get("url", "")), image=True)
-            alt = conditional_escape(str(img.get("alt", f"Slide {i + 1}")))
+            src = data_url_attr(img.get("src", img.get("url", "")), image=True)
+            alt = attr_text(img.get("alt", f"Slide {i + 1}"))  # only in alt=
             caption = img.get("caption", "")
         else:
-            src = url_attr(img, image=True)
+            src = data_url_attr(img, image=True)
             alt = f"Slide {i + 1}"
             caption = ""
 
@@ -5168,7 +5174,7 @@ def rich_select(
         opt_html = _rich_select_option_html(opt, is_display=False)
         opt_parts.append(
             f'<div class="rich-select-option{active_cls}{variant_cls}" '
-            f'data-value="{conditional_escape(ov)}" '
+            f'data-value="{attr_text(ov)}" '
             f'dj-click="{dj_event}"{field_attr} '
             f'role="option" aria-selected="{"true" if ov == value else "false"}">'
             f"{opt_html}"
@@ -5232,7 +5238,7 @@ def _rich_select_option_html(opt: Any, is_display: Any = False) -> Any:
 
     if image:
         parts.append(
-            f'<img class="rich-select-option-image" src="{url_attr(image, image=True)}" alt="">'
+            f'<img class="rich-select-option-image" src="{data_url_attr(image, image=True)}" alt="">'
         )
     elif icon:
         parts.append(
@@ -5736,7 +5742,7 @@ def responsive_image(
     if isinstance(lazy, str):
         lazy = lazy.lower() not in ("false", "0", "")
 
-    e_src = url_attr(src, image=True)
+    e_src = data_url_attr(src, image=True)
     e_alt = conditional_escape(alt)
     e_cls = conditional_escape(custom_class)
 
@@ -5755,7 +5761,7 @@ def responsive_image(
     img_attrs = [f'src="{e_src}"', f'alt="{e_alt}"']
     if lazy:
         img_attrs.append('loading="lazy"')
-    e_srcset = srcset_attr(srcset)
+    e_srcset = srcset_attr(srcset, honor_safe=False)
     if e_srcset:
         img_attrs.append(f'srcset="{e_srcset}"')
     if sizes:
@@ -5765,7 +5771,7 @@ def responsive_image(
 
     placeholder_html = ""
     if placeholder:
-        e_ph = url_attr(placeholder, image=True)
+        e_ph = data_url_attr(placeholder, image=True)
         placeholder_html = (
             f'<img src="{e_ph}" alt="" class="dj-responsive-image__placeholder" aria-hidden="true">'
         )
@@ -6841,8 +6847,8 @@ class AvatarGroupNode(template.Node):
             else:
                 name = str(user)
                 src = ""
-            e_name = conditional_escape(str(name))
-            e_src = url_attr(src, image=True)
+            e_name = attr_text(name)  # only in title= / alt=
+            e_src = data_url_attr(src, image=True)
             initials = conditional_escape("".join(w[0].upper() for w in str(name).split()[:2] if w))
             z = len(visible) - i
             if e_src:
@@ -7725,7 +7731,7 @@ class ChatBubbleNode(template.Node):
         e_name = conditional_escape(str(name))
         e_text = conditional_escape(str(text))
         e_time = conditional_escape(str(time_str))
-        e_avatar = url_attr(avatar_src, image=True)
+        e_avatar = data_url_attr(avatar_src, image=True)
         e_class = conditional_escape(str(custom_class))
 
         side = "dj-bubble--user" if sender == "user" else "dj-bubble--other"
@@ -7740,7 +7746,7 @@ class ChatBubbleNode(template.Node):
         if e_avatar:
             avatar_html = (
                 f'<span class="dj-bubble__avatar">'
-                f'<img src="{e_avatar}" alt="{e_name}" class="dj-bubble__avatar-img">'
+                f'<img src="{e_avatar}" alt="{attr_text(name)}" class="dj-bubble__avatar-img">'
                 f"</span>"
             )
         else:
@@ -7832,8 +7838,8 @@ class PresenceAvatarsNode(template.Node):
                 src = ""
                 status = "online"
 
-            e_name = conditional_escape(str(name))
-            e_src = url_attr(src, image=True)
+            e_name = attr_text(name)  # only in title= / alt=
+            e_src = data_url_attr(src, image=True)
             safe_status = status if status in self.VALID_STATUSES else "online"
             initials = conditional_escape(
                 "".join(w[0].upper() for w in str(name).split()[:2] if w) or "?"
@@ -7916,9 +7922,10 @@ class MentionsInputNode(template.Node):
         for user in users:
             if not isinstance(user, dict):
                 continue
-            uid = conditional_escape(str(user.get("id", "")))
+            uid = attr_text(user.get("id", ""))  # only in data-user-id=
             uname = conditional_escape(str(user.get("name", "")))
-            avatar_src = url_attr(user.get("avatar", ""), image=True)
+            uname_attr = attr_text(user.get("name", ""))  # alt= / data-user-name=
+            avatar_src = data_url_attr(user.get("avatar", ""), image=True)
 
             initials = (
                 conditional_escape(
@@ -7929,14 +7936,14 @@ class MentionsInputNode(template.Node):
 
             if avatar_src:
                 avatar_html = (
-                    f'<img src="{avatar_src}" alt="{uname}" class="dj-mentions__avatar-img">'
+                    f'<img src="{avatar_src}" alt="{uname_attr}" class="dj-mentions__avatar-img">'
                 )
             else:
                 avatar_html = f'<span class="dj-mentions__avatar-initials">{initials}</span>'
 
             items_html.append(
                 f'<li class="dj-mentions__item" data-user-id="{uid}" '
-                f'data-user-name="{uname}" role="option">'
+                f'data-user-name="{uname_attr}" role="option">'
                 f'<span class="dj-mentions__avatar">{avatar_html}</span>'
                 f'<span class="dj-mentions__name">{uname}</span>'
                 f"</li>"
@@ -9133,7 +9140,7 @@ def render_menu_item(item: Any, event_attrs: Any = None) -> str:
 
     if item.get("href") and not disabled:
         return (
-            f'<a class="{item_cls}" role="{role}" href="{url_attr(item["href"])}"'
+            f'<a class="{item_cls}" role="{role}" href="{data_url_attr(item["href"])}"'
             f"{checked_attr}>{inner}</a>"
         )
 
@@ -9771,16 +9778,16 @@ class SortableGridNode(template.Node):
         for item in items:
             if not isinstance(item, dict):
                 continue
-            item_id = conditional_escape(str(item.get("id", "")))
+            item_id = attr_text(item.get("id", ""))  # only in data-id= / data-key=
             key_attr = f' data-key="{item_id}"' if keyed else ""
             label = conditional_escape(str(item.get("label", "")))
             thumbnail = item.get("thumbnail", "")
             thumb_html = ""
             if thumbnail:
-                e_thumb = url_attr(thumbnail, image=True)
+                e_thumb = data_url_attr(thumbnail, image=True)
                 thumb_html = (
                     f'<img class="dj-sortable-grid__thumb" '
-                    f'src="{e_thumb}" alt="{label}" loading="lazy">'
+                    f'src="{e_thumb}" alt="{attr_text(item.get("label", ""))}" loading="lazy">'
                 )
             drag_attr = ' draggable="true"' if not disabled else ""
             items_html.append(
@@ -9825,7 +9832,7 @@ class ImageCropperNode(template.Node):
         disabled = kw.get("disabled", False)
         custom_class = kw.get("class", "")
 
-        e_src = url_attr(src, image=True)
+        e_src = data_url_attr(src, image=True)
         e_event = conditional_escape(str(crop_event))
         e_class = conditional_escape(str(custom_class))
 
@@ -10081,8 +10088,8 @@ class LightboxNode(template.Node):
         if images and 0 <= idx < total:
             img = images[idx]
             if isinstance(img, dict):
-                e_src = url_attr(img.get("src", ""), image=True)
-                e_alt = conditional_escape(str(img.get("alt", "")))
+                e_src = data_url_attr(img.get("src", ""), image=True)
+                e_alt = attr_text(img.get("alt", ""))  # only in alt=
                 caption = img.get("caption", "")
                 img_html = f'<img class="dj-lightbox__image" src="{e_src}" alt="{e_alt}">'
                 if caption:

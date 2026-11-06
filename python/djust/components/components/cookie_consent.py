@@ -2,9 +2,8 @@
 
 import html
 
-from django.utils.html import conditional_escape
 from djust import Component
-from djust.components.utils import url_attr
+from djust.components.utils import data_url_attr, attr_text
 from typing import Any
 
 
@@ -72,7 +71,7 @@ class CookieConsent(Component):
         self.custom_class = custom_class
 
     def _render_custom(self) -> str:
-        classes = ["dj-cookie-consent", f"dj-cookie-consent--{conditional_escape(self.position)}"]
+        classes = ["dj-cookie-consent", f"dj-cookie-consent--{attr_text(self.position)}"]
         if self.custom_class:
             classes.append(html.escape(self.custom_class))
         class_str = " ".join(classes)
@@ -82,7 +81,7 @@ class CookieConsent(Component):
 
         privacy_html = ""
         if self.privacy_url:
-            e_url = url_attr(self.privacy_url)
+            e_url = data_url_attr(self.privacy_url)
             privacy_html = f' <a href="{e_url}" class="dj-cookie-consent__link">Privacy Policy</a>'
 
         buttons = [

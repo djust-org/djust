@@ -14,6 +14,7 @@ from django.utils.html import conditional_escape
 from django.utils.safestring import SafeString
 
 from djust.components.utils import safe_url  # from where it is DEFINED, not ``._registry`` (#3820)
+from djust.components.utils import attr_text
 from ._registry import (
     register,
     _resolve,
@@ -1623,7 +1624,7 @@ def model_table(
         for col in columns:
             if col.get("filterable"):
                 col_key = conditional_escape(col["key"])
-                fval = conditional_escape(str(filters.get(col["key"], "")))
+                fval = attr_text(filters.get(col["key"], ""))  # only in value= / the compare
                 ft = col.get("filter_type", "text")
                 if ft == "select" and col.get("filter_options"):
                     opts = '<option value="">All</option>'
@@ -1669,8 +1670,11 @@ def model_table(
             f"</td></tr>"
         )
     else:
-        for row in safe_rows:
+        for row, raw_row in zip(safe_rows, rows):
             row_id = row.get(row_key, "")
+            # the id as the row HELD it: ``safe_rows`` kept a marked-safe value raw, and the id is
+            # written into an attribute below (a TEXT cell keeps its markup, an attribute never)
+            row_id_attr = attr_text(raw_row.get(row_key, ""))
             row_selected = str(row_id) in [str(s) for s in selected_rows]
             selected_cls = " data-table__tr--selected" if row_selected else ""
             cells = ""
@@ -1679,7 +1683,7 @@ def model_table(
                 cells += (
                     f'<td class="data-table__td data-table__td--select">'
                     f'<input type="checkbox" dj-change="{e_select_event}" '
-                    f'dj-value-row="{conditional_escape(str(row_id))}"{chk}></td>'
+                    f'dj-value-row="{row_id_attr}"{chk}></td>'
                 )
             for col in columns:
                 cell_val = row.get(col["key"], "")

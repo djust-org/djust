@@ -1235,3 +1235,21 @@ row(
     + "def f(x):\n    frag = '<i title=\"' + safe_url(x) + '\">x</i>'\n    return mark_safe('<p>' + frag + '</p>')\n",
     False,
 )
+
+# --- #3898: data_url_attr and attr_text are context-sensitive escapers too ------------------
+# Both HTML-escape the value (a quoted attribute or text is safe) but keep spaces and the rest, so
+# an unquoted attribute, an attribute NAME and a tag name are not.
+for _helper in ("data_url_attr", "attr_text"):
+    _imp = f"from djust.components.utils import {_helper}\n"
+    for _label, _body, _bad in (
+        ("an unquoted attribute", f'f"<a href={{{_helper}(x)}}>go</a>"', True),
+        ("an attribute name", f'f"<a {{{_helper}(x)}}=1>go</a>"', True),
+        ("a tag name", f"f'<{{{_helper}(x)}}>x'", True),
+        ("a quoted attribute", f"f'<a href=\"{{{_helper}(x)}}\">go</a>'", False),
+        ("text", f'f"<p>{{{_helper}(x)}}</p>"', False),
+    ):
+        row(
+            f"{_helper} in {_label}" if _bad else f"{_helper} kept in {_label}",
+            f"{_imp}def f(x):\n    return mark_safe({_body})\n",
+            _bad,
+        )

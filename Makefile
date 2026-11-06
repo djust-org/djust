@@ -398,6 +398,7 @@ MERGE_GATES := \
 	tests/test_merge_gates_3757.py \
 	tests/test_reset_fixture_hygiene_2234.py \
 	python/djust/tests/test_communicator_timeouts_ratchet_3709.py \
+	python/djust/tests/test_marked_safe_attribute_sweep_3898.py \
 	python/djust/tests/test_no_absolute_time_bounds_3711.py \
 	python/tests/test_no_override_settings_with_fixture_3728.py \
 	python/tests/test_no_reported_crash_signals_2701.py \

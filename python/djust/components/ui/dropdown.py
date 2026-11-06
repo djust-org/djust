@@ -11,6 +11,8 @@ from ..base import LiveComponent
 from django.utils.html import conditional_escape
 from django.utils.safestring import SafeString, mark_safe
 
+from djust.components.utils import attr_text
+
 
 # ``data-*`` attribute names: letters, digits, "-" and "_" only.
 _DATA_KEY_RE = re.compile(r"^[A-Za-z0-9_-]+$")
@@ -157,9 +159,9 @@ class DropdownComponent(LiveComponent):
                 html += '<li><hr class="dropdown-divider"></li>'
             else:
                 text = conditional_escape(item.get("text", ""))
-                action = conditional_escape(item.get("action", ""))
+                action = attr_text(item.get("action", ""))
                 icon = conditional_escape(item.get("icon", ""))
-                item_variant = conditional_escape(item.get("variant", ""))
+                item_variant = attr_text(item.get("variant", ""))
                 data = item.get("data", {})
 
                 click_attr = f' dj-click="{action}"' if action else ""
@@ -175,9 +177,11 @@ class DropdownComponent(LiveComponent):
                             continue
                         # Convert value to JSON string for complex types
                         if isinstance(value, (dict, list)):
-                            value_str = conditional_escape(json.dumps(value))
+                            value_str = conditional_escape(
+                                json.dumps(value)
+                            )  # a plain str: always escaped
                         else:
-                            value_str = conditional_escape(value)
+                            value_str = attr_text(value)
                         data_attrs += f' data-{key}="{value_str}"'
 
                 content = f"{icon} {text}" if icon else text
@@ -221,7 +225,7 @@ class DropdownComponent(LiveComponent):
                 html += '<div class="border-t border-gray-100"></div>'
             else:
                 text = conditional_escape(item.get("text", ""))
-                action = conditional_escape(item.get("action", ""))
+                action = attr_text(item.get("action", ""))
                 icon = conditional_escape(item.get("icon", ""))
                 item_variant = conditional_escape(item.get("variant", ""))
                 data = item.get("data", {})
@@ -240,9 +244,11 @@ class DropdownComponent(LiveComponent):
                         if not _DATA_KEY_RE.match(str(key)):
                             continue
                         if isinstance(value, (dict, list)):
-                            value_str = conditional_escape(json.dumps(value))
+                            value_str = conditional_escape(
+                                json.dumps(value)
+                            )  # a plain str: always escaped
                         else:
-                            value_str = conditional_escape(value)
+                            value_str = attr_text(value)
                         data_attrs += f' data-{key}="{value_str}"'
 
                 content = f"{icon} {text}" if icon else text
@@ -262,7 +268,7 @@ class DropdownComponent(LiveComponent):
                 html += '<hr class="dropdown-divider">'
             else:
                 text = conditional_escape(item.get("text", ""))
-                action = conditional_escape(item.get("action", ""))
+                action = attr_text(item.get("action", ""))
                 icon = conditional_escape(item.get("icon", ""))
                 data = item.get("data", {})
 
@@ -277,9 +283,11 @@ class DropdownComponent(LiveComponent):
                         if not _DATA_KEY_RE.match(str(key)):
                             continue
                         if isinstance(value, (dict, list)):
-                            value_str = conditional_escape(json.dumps(value))
+                            value_str = conditional_escape(
+                                json.dumps(value)
+                            )  # a plain str: always escaped
                         else:
-                            value_str = conditional_escape(value)
+                            value_str = attr_text(value)
                         data_attrs += f' data-{key}="{value_str}"'
 
                 content = f"{icon} {text}" if icon else text

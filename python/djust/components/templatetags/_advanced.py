@@ -14,7 +14,7 @@ from django import template
 from django.utils.html import conditional_escape
 from django.utils.safestring import SafeString
 
-from djust.components.utils import url_attr
+from djust.components.utils import attr_text, data_url_attr
 from djust.components.utils import safe_css_color, safe_css_length
 
 # ``safe_url`` comes from where it is DEFINED, not through ``._registry``: the safe-markup guard
@@ -744,18 +744,19 @@ class OrgChartNode(template.Node):
 
         click_attr = ""
         if e_event:
-            click_attr = f' dj-click="{e_event}" data-value="{conditional_escape(nid)}"'
+            click_attr = f' dj-click="{e_event}" data-value="{attr_text(nid)}"'
 
         if avatar:
             avatar_html = (
-                f'<img class="dj-org__avatar" src="{url_attr(avatar, image=True)}" alt="{name}" />'
+                f'<img class="dj-org__avatar" src="{data_url_attr(avatar, image=True)}" '
+                f'alt="{attr_text(node.get("name", ""))}" />'
             )
         else:
             initials = "".join(w[0] for w in str(node.get("name", "")).split()[:2]).upper() or "?"
             avatar_html = f'<span class="dj-org__initials">{conditional_escape(initials)}</span>'
 
         node_html = (
-            f'<div class="dj-org__card" data-id="{conditional_escape(nid)}"{click_attr}>'
+            f'<div class="dj-org__card" data-id="{attr_text(nid)}"{click_attr}>'
             f"{avatar_html}"
             f'<div class="dj-org__info">'
             f'<span class="dj-org__name">{name}</span>'
@@ -1136,7 +1137,7 @@ class LiveIndicatorNode(template.Node):
             avatar = ""
 
         e_name = conditional_escape(str(name))
-        e_avatar = url_attr(avatar, image=True)
+        e_avatar = data_url_attr(avatar, image=True)
         e_field = conditional_escape(str(field))
         e_action = conditional_escape(str(action))
 
@@ -1146,7 +1147,9 @@ class LiveIndicatorNode(template.Node):
 
         avatar_html = ""
         if e_avatar:
-            avatar_html = f'<img src="{e_avatar}" alt="{e_name}" class="dj-live-indicator__avatar">'
+            avatar_html = (
+                f'<img src="{e_avatar}" alt="{attr_text(name)}" class="dj-live-indicator__avatar">'
+            )
 
         dots = (
             '<span class="dj-live-indicator__dots">'
@@ -1312,7 +1315,7 @@ class ActivityFeedNode(template.Node):
             action = conditional_escape(str(event.get("action", "")))
             target = conditional_escape(str(event.get("target", "")))
             time = conditional_escape(str(event.get("time", "")))
-            avatar_src = url_attr(event.get("avatar", ""), image=True)
+            avatar_src = data_url_attr(event.get("avatar", ""), image=True)
             icon = conditional_escape(str(event.get("icon", "")))
 
             initials = (
@@ -1324,7 +1327,8 @@ class ActivityFeedNode(template.Node):
 
             if avatar_src:
                 avatar_html = (
-                    f'<img src="{avatar_src}" alt="{user}" class="dj-activity-feed__avatar-img">'
+                    f'<img src="{avatar_src}" alt="{attr_text(event.get("user", ""))}" '
+                    f'class="dj-activity-feed__avatar-img">'
                 )
             else:
                 avatar_html = f'<span class="dj-activity-feed__avatar-initials">{initials}</span>'
@@ -1818,7 +1822,7 @@ class ImageUploadPreviewNode(template.Node):
 
         thumbs = []
         for url in previews:
-            e_url = url_attr(url, image=True)
+            e_url = data_url_attr(url, image=True)
             thumbs.append(
                 f'<div class="dj-img-upload__thumb">'
                 f'<img src="{e_url}" alt="Preview" '
@@ -2148,7 +2152,7 @@ class DataCardGridNode(template.Node):
                 e_cat = conditional_escape(cat)
                 btns.append(
                     f'<button type="button" class="dj-data-card-grid__filter" '
-                    f'data-filter="{e_cat}">{e_cat}</button>'
+                    f'data-filter="{attr_text(cat)}">{e_cat}</button>'
                 )
             filter_html = f'<div class="dj-data-card-grid__filters">{"".join(btns)}</div>'
 
@@ -2158,17 +2162,22 @@ class DataCardGridNode(template.Node):
                 continue
             title = conditional_escape(str(it.get("title", "")))
             desc = conditional_escape(str(it.get("description", "")))
-            cat = conditional_escape(str(it.get(fk, "")))
+            cat = attr_text(it.get(fk, ""))  # only in data-category=
             image = it.get("image", "")
 
             img_html = ""
             if image:
-                e_img = url_attr(image, image=True)
-                img_html = f'<img src="{e_img}" alt="{title}" class="dj-data-card-grid__img">'
+                e_img = data_url_attr(image, image=True)
+                img_html = (
+                    f'<img src="{e_img}" alt="{attr_text(it.get("title", ""))}" '
+                    f'class="dj-data-card-grid__img">'
+                )
 
             click_attr = ""
             if e_event:
-                click_attr = f' dj-click="{e_event}" dj-value-title="{title}"'
+                click_attr = (
+                    f' dj-click="{e_event}" dj-value-title="{attr_text(it.get("title", ""))}"'
+                )
 
             cards.append(
                 f'<div class="dj-data-card-grid__card" data-category="{cat}" '

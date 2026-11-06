@@ -11,7 +11,7 @@ from ..base import Component
 
 from django.utils.html import conditional_escape
 
-from djust.components.utils import url_attr
+from djust.components.utils import data_url_attr, attr_text
 
 # Characters rewritten when a value is placed inside a single-quoted JS string
 # in an inline handler attribute. Letters, digits, "-" and "_" are unchanged.
@@ -223,14 +223,10 @@ class NavBar(Component):
         bg_variant = "dark" if self.variant == "dark" else "light"
         data_bs_theme = ' data-bs-theme="dark"' if self.variant == "dark" else ""
 
-        container_class = (
-            f"container-{conditional_escape(self.container)}"
-            if self.container == "fluid"
-            else "container"
-        )
+        container_class = "container-fluid" if self.container == "fluid" else "container"
 
         parts = [
-            f'<nav class="navbar navbar-expand-{conditional_escape(self.expand)} bg-{bg_variant}{sticky_class}"{data_bs_theme}>'
+            f'<nav class="navbar navbar-expand-{attr_text(self.expand)} bg-{bg_variant}{sticky_class}"{data_bs_theme}>'
         ]
         parts.append(f'    <div class="{container_class}">')
 
@@ -240,24 +236,24 @@ class NavBar(Component):
             brand_url = self.brand.get("url", "#")
             brand_logo = self.brand.get("logo", "")
 
-            parts.append(f'        <a class="navbar-brand" href="{url_attr(brand_url)}">')
+            parts.append(f'        <a class="navbar-brand" href="{data_url_attr(brand_url)}">')
             if brand_logo:
                 parts.append(
-                    f'            <img src="{url_attr(brand_logo, image=True)}" alt="{brand_text}" height="30" class="d-inline-block align-text-top">'
+                    f'            <img src="{data_url_attr(brand_logo, image=True)}" alt="{attr_text(self.brand.get("text", ""))}" height="30" class="d-inline-block align-text-top">'
                 )
             parts.append(f"            {brand_text}")
             parts.append("        </a>")
 
         # Toggler button
         parts.append(
-            f'        <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#{conditional_escape(self.id)}-content" aria-controls="{conditional_escape(self.id)}-content" aria-expanded="false" aria-label="Toggle navigation">'
+            f'        <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#{attr_text(self.id)}-content" aria-controls="{attr_text(self.id)}-content" aria-expanded="false" aria-label="Toggle navigation">'
         )
         parts.append('            <span class="navbar-toggler-icon"></span>')
         parts.append("        </button>")
 
         # Navbar content
         parts.append(
-            f'        <div class="collapse navbar-collapse" id="{conditional_escape(self.id)}-content">'
+            f'        <div class="collapse navbar-collapse" id="{attr_text(self.id)}-content">'
         )
         parts.append('            <ul class="navbar-nav ms-auto mb-2 mb-lg-0">')
 
@@ -289,7 +285,7 @@ class NavBar(Component):
                         disabled_attr = ' aria-disabled="true"' if disabled else ""
 
                         parts.append(
-                            f'                        <li><a class="dropdown-item{disabled_class}" href="{url_attr(dropdown_url)}"{disabled_attr}>{dropdown_label}</a></li>'
+                            f'                        <li><a class="dropdown-item{disabled_class}" href="{data_url_attr(dropdown_url)}"{disabled_attr}>{dropdown_label}</a></li>'
                         )
 
                 parts.append("                    </ul>")
@@ -308,7 +304,7 @@ class NavBar(Component):
 
                 parts.append('                <li class="nav-item">')
                 parts.append(
-                    f'                    <a class="nav-link{active_class}{disabled_class}" href="{url_attr(url)}"{aria_current}{disabled_attr}>{label}</a>'
+                    f'                    <a class="nav-link{active_class}{disabled_class}" href="{data_url_attr(url)}"{aria_current}{disabled_attr}>{label}</a>'
                 )
                 parts.append("                </li>")
 
@@ -354,11 +350,11 @@ class NavBar(Component):
             brand_logo = self.brand.get("logo", "")
 
             parts.append(
-                f'            <a href="{url_attr(brand_url)}" class="flex items-center space-x-3">'
+                f'            <a href="{data_url_attr(brand_url)}" class="flex items-center space-x-3">'
             )
             if brand_logo:
                 parts.append(
-                    f'                <img src="{url_attr(brand_logo, image=True)}" alt="{brand_text}" class="h-8 w-auto">'
+                    f'                <img src="{data_url_attr(brand_logo, image=True)}" alt="{attr_text(self.brand.get("text", ""))}" class="h-8 w-auto">'
                 )
             parts.append(f'                <span class="text-xl font-bold">{brand_text}</span>')
             parts.append("            </a>")
@@ -402,7 +398,7 @@ class NavBar(Component):
                         disabled_class = " opacity-50 cursor-not-allowed" if disabled else ""
 
                         parts.append(
-                            f'                            <a href="{url_attr(dropdown_url)}" class="{link_class} block px-4 py-2 text-sm{disabled_class}">{dropdown_label}</a>'
+                            f'                            <a href="{data_url_attr(dropdown_url)}" class="{link_class} block px-4 py-2 text-sm{disabled_class}">{dropdown_label}</a>'
                         )
 
                 parts.append("                        </div>")
@@ -424,7 +420,7 @@ class NavBar(Component):
                     item_class += " opacity-50 cursor-not-allowed"
 
                 parts.append(
-                    f'                <a href="{url_attr(url)}" class="{item_class} px-3 py-2 rounded-md text-sm font-medium">{label}</a>'
+                    f'                <a href="{data_url_attr(url)}" class="{item_class} px-3 py-2 rounded-md text-sm font-medium">{label}</a>'
                 )
 
         parts.append("            </div>")
@@ -447,9 +443,7 @@ class NavBar(Component):
         parts.append("        </div>")
 
         # Mobile menu
-        parts.append(
-            f'        <div class="hidden md:hidden" id="{conditional_escape(self.id)}-mobile">'
-        )
+        parts.append(f'        <div class="hidden md:hidden" id="{attr_text(self.id)}-mobile">')
         parts.append('            <div class="px-2 pt-2 pb-3 space-y-1">')
 
         for item in self.items:
@@ -470,7 +464,7 @@ class NavBar(Component):
                         disabled_class = " opacity-50 cursor-not-allowed" if disabled else ""
 
                         parts.append(
-                            f'                <a href="{url_attr(dropdown_url)}" class="{link_class} block px-6 py-2 rounded-md text-sm{disabled_class}">{dropdown_label}</a>'
+                            f'                <a href="{data_url_attr(dropdown_url)}" class="{link_class} block px-6 py-2 rounded-md text-sm{disabled_class}">{dropdown_label}</a>'
                         )
             else:
                 # Regular nav item
@@ -488,7 +482,7 @@ class NavBar(Component):
                     item_class += " opacity-50 cursor-not-allowed"
 
                 parts.append(
-                    f'                <a href="{url_attr(url)}" class="{item_class} block px-3 py-2 rounded-md text-base font-medium">{label}</a>'
+                    f'                <a href="{data_url_attr(url)}" class="{item_class} block px-3 py-2 rounded-md text-base font-medium">{label}</a>'
                 )
 
         parts.append("            </div>")
@@ -501,10 +495,10 @@ class NavBar(Component):
 
     def _render_plain(self) -> str:
         """Render plain HTML navbar"""
-        sticky_class = f" navbar-sticky-{conditional_escape(self.sticky)}" if self.sticky else ""
+        sticky_class = f" navbar-sticky-{attr_text(self.sticky)}" if self.sticky else ""
 
-        parts = [f'<nav class="navbar navbar-{conditional_escape(self.variant)}{sticky_class}">']
-        parts.append(f'    <div class="navbar-container-{conditional_escape(self.container)}">')
+        parts = [f'<nav class="navbar navbar-{attr_text(self.variant)}{sticky_class}">']
+        parts.append(f'    <div class="navbar-container-{attr_text(self.container)}">')
 
         # Brand
         if self.brand:
@@ -512,10 +506,10 @@ class NavBar(Component):
             brand_url = self.brand.get("url", "#")
             brand_logo = self.brand.get("logo", "")
 
-            parts.append(f'        <a href="{url_attr(brand_url)}" class="navbar-brand">')
+            parts.append(f'        <a href="{data_url_attr(brand_url)}" class="navbar-brand">')
             if brand_logo:
                 parts.append(
-                    f'            <img src="{url_attr(brand_logo, image=True)}" alt="{brand_text}" class="navbar-logo">'
+                    f'            <img src="{data_url_attr(brand_logo, image=True)}" alt="{attr_text(self.brand.get("text", ""))}" class="navbar-logo">'
                 )
             parts.append(f"            {brand_text}")
             parts.append("        </a>")
@@ -526,7 +520,7 @@ class NavBar(Component):
         )
 
         # Nav items
-        parts.append(f'        <div class="navbar-menu" id="{conditional_escape(self.id)}-menu">')
+        parts.append(f'        <div class="navbar-menu" id="{attr_text(self.id)}-menu">')
         parts.append('            <ul class="navbar-nav">')
 
         for item in self.items:
@@ -549,7 +543,7 @@ class NavBar(Component):
                         disabled_class = " disabled" if disabled else ""
 
                         parts.append(
-                            f'                        <li><a href="{url_attr(dropdown_url)}" class="dropdown-item{disabled_class}">{dropdown_label}</a></li>'
+                            f'                        <li><a href="{data_url_attr(dropdown_url)}" class="dropdown-item{disabled_class}">{dropdown_label}</a></li>'
                         )
 
                 parts.append("                    </ul>")
@@ -566,7 +560,7 @@ class NavBar(Component):
 
                 parts.append('                <li class="nav-item">')
                 parts.append(
-                    f'                    <a href="{url_attr(url)}" class="nav-link{active_class}{disabled_class}">{label}</a>'
+                    f'                    <a href="{data_url_attr(url)}" class="nav-link{active_class}{disabled_class}">{label}</a>'
                 )
                 parts.append("                </li>")
 
