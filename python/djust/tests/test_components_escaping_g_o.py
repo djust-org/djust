@@ -122,6 +122,15 @@ def test_nav_menu_href_quote_is_escaped() -> None:
     assert "&quot;" in out
 
 
-def test_nav_menu_marked_safe_href_passes_through() -> None:
+def test_nav_menu_marked_safe_href_is_checked_and_escaped_like_any_other() -> None:
     out = str(NavMenu(items=[{"label": "a", "href": mark_safe("/x?a=1&b=2")}]).render())
-    assert 'href="/x?a=1&b=2"' in out
+    assert 'href="/x?a=1&amp;b=2"' in out
+    out = str(NavMenu(items=[{"label": "a", "href": mark_safe("javascript:alert(1)")}]).render())
+    assert "javascript:" not in out
+
+
+def test_nav_menu_keeps_the_no_op_toggle_href() -> None:
+    for given in ("javascript:void(0)", "javascript:;"):
+        for value in (given, mark_safe(given)):
+            out = str(NavMenu(items=[{"label": "a", "href": value}]).render())
+            assert f'href="{given}"' in out, given

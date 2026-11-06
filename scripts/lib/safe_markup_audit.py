@@ -282,7 +282,7 @@ AUDITED: dict[tuple[str, str], Audit] = {
             "def _render_node(self, nid: Any, node_map: Any, children: Any, e_event: Any) -> Any:",
             "OrgChartNode._render_node",
         ),
-        (ADV, 'src="{url_attr(avatar, image=True)}"', "OrgChartNode._render_node"),
+        (ADV, 'src="{data_url_attr(avatar, image=True)}"', "OrgChartNode._render_node"),
     ),
     (ADV, "PromptEditorNode.render"): S(
         1,
@@ -423,7 +423,7 @@ AUDITED: dict[tuple[str, str], Audit] = {
             "def render_menu_item(item: Any, event_attrs: Any = None) -> str:",
             "render_menu_item",
         ),
-        (DC, 'href="{url_attr(item["href"])}"', "render_menu_item"),
+        (DC, 'href="{data_url_attr(item["href"])}"', "render_menu_item"),
     ),
     # --- the Rust-native handlers (#3820): `_safe(...)` is a sink since the wrapper sinks, so
     # these are the handlers whose markup the guard still cannot prove. Every other handler
@@ -521,7 +521,7 @@ AUDITED: dict[tuple[str, str], Audit] = {
         "the tree comes from _render_node, which conditional_escape's id, name and title, sends the avatar through url_attr and takes the already-escaped event (e_event here) from this method; same as OrgChartNode",
         (RH, 'e_event = conditional_escape(str(event)) if event else ""'),
         (RH, "tree_html = self._render_node(root_id, node_map, children, e_event)"),
-        (RH, 'src="{url_attr(avatar, image=True)}"', "OrgChartHandler._render_node"),
+        (RH, 'src="{data_url_attr(avatar, image=True)}"', "OrgChartHandler._render_node"),
         (
             RH,
             'name = conditional_escape(str(node.get("name", "")))',

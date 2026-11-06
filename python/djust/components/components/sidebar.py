@@ -2,7 +2,7 @@
 
 import html
 from django.utils.html import conditional_escape
-from djust.components.utils import url_attr
+from djust.components.utils import data_url_attr
 
 from djust import Component
 from typing import Any, Optional
@@ -64,7 +64,7 @@ class Sidebar(Component):
                 if not isinstance(item, dict):
                     continue
                 label = html.escape(str(item.get("label", "")))
-                href = url_attr(item.get("href", "#"))
+                href = data_url_attr(item.get("href", "#"))
                 icon = item.get("icon", "")
                 active = item.get("active", False)
                 active_cls = " dj-sidebar__item--active" if active else ""

@@ -6,7 +6,7 @@ Provides card/panel layout with optional title, body, footer, and image.
 
 from typing import Dict, Any
 from ..base import LiveComponent
-from ..utils import url_attr
+from ..utils import attr_text, data_url_attr
 from django.utils.html import conditional_escape
 from django.utils.safestring import SafeString, mark_safe
 
@@ -68,10 +68,10 @@ class CardComponent(LiveComponent):
 
     def _render_bootstrap(self) -> str:
         """Render Bootstrap 5 card"""
-        html = f'<div class="card" id="{conditional_escape(self.component_id)}">'
+        html = f'<div class="card" id="{attr_text(self.component_id)}">'
 
         if self.image:
-            html += f'<img src="{url_attr(self.image, image=True)}" class="card-img-top" alt="{conditional_escape(self.title)}">'
+            html += f'<img src="{data_url_attr(self.image, image=True)}" class="card-img-top" alt="{attr_text(self.title)}">'
 
         html += '<div class="card-body">'
 
@@ -91,10 +91,10 @@ class CardComponent(LiveComponent):
 
     def _render_tailwind(self) -> str:
         """Render Tailwind CSS card"""
-        html = f'<div class="overflow-hidden rounded-lg bg-white shadow" id="{conditional_escape(self.component_id)}">'
+        html = f'<div class="overflow-hidden rounded-lg bg-white shadow" id="{attr_text(self.component_id)}">'
 
         if self.image:
-            html += f'<img src="{url_attr(self.image, image=True)}" class="w-full" alt="{conditional_escape(self.title)}">'
+            html += f'<img src="{data_url_attr(self.image, image=True)}" class="w-full" alt="{attr_text(self.title)}">'
 
         html += '<div class="px-4 py-5 sm:p-6">'
 
@@ -114,10 +114,12 @@ class CardComponent(LiveComponent):
 
     def _render_plain(self) -> str:
         """Render plain HTML card"""
-        html = f'<div class="card" id="{conditional_escape(self.component_id)}">'
+        html = f'<div class="card" id="{attr_text(self.component_id)}">'
 
         if self.image:
-            html += f'<img src="{url_attr(self.image, image=True)}" alt="{conditional_escape(self.title)}">'
+            html += (
+                f'<img src="{data_url_attr(self.image, image=True)}" alt="{attr_text(self.title)}">'
+            )
 
         if self.title:
             html += f"<h3>{conditional_escape(self.title)}</h3>"

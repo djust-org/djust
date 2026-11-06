@@ -8,6 +8,7 @@ from typing import Optional, List, Dict, Any
 from ..base import Component
 
 from django.utils.html import conditional_escape
+from djust.components.utils import attr_text
 
 
 class Radio(Component):
@@ -146,7 +147,7 @@ class Radio(Component):
                 'type="radio"',
                 f'id="{radio_id}"',
                 f'name="{conditional_escape(self.name)}"',
-                f'value="{conditional_escape(opt_value)}"',
+                f'value="{attr_text(opt_value)}"',
             ]
 
             # Check if this option is selected

@@ -7,7 +7,7 @@ Similar to shadcn/ui components - framework-agnostic with customizable styles.
 
 from typing import Dict, Any, Optional
 from ..base import LiveComponent
-from ..utils import url_attr
+from ..utils import data_url_attr, attr_text
 from django.utils.html import conditional_escape
 from django.utils.safestring import SafeString, mark_safe
 from ...config import config
@@ -134,19 +134,19 @@ class NavbarComponent(LiveComponent):
         if self.brand_logo:
             alt_text = self.brand_name or "Logo"
             margin_style = " margin-right: 0.5rem;" if self.brand_name else ""
-            logo_html = f'<img src="{url_attr(self.brand_logo, image=True)}" alt="{conditional_escape(alt_text)}" height="{conditional_escape(self.logo_height)}" style="width: auto;{margin_style}">'
+            logo_html = f'<img src="{data_url_attr(self.brand_logo, image=True)}" alt="{attr_text(alt_text)}" height="{attr_text(self.logo_height)}" style="width: auto;{margin_style}">'
 
         # Navigation items
         nav_items_html = ""
         for item in self.items:
             active_class = "active" if item.active else ""
-            target_attr = f' target="{conditional_escape(item.target)}"' if item.target else ""
+            target_attr = f' target="{attr_text(item.target)}"' if item.target else ""
             icon_html = f"{conditional_escape(item.icon)} " if item.icon else ""
 
             # Badge HTML
             badge_html = ""
             if item.badge is not None and item.badge > 0:
-                badge_html = f' <span class="badge bg-{conditional_escape(item.badge_variant)} rounded-pill">{conditional_escape(item.badge)}</span>'
+                badge_html = f' <span class="badge bg-{attr_text(item.badge_variant)} rounded-pill">{conditional_escape(item.badge)}</span>'
 
             # External link styling
             link_style = ""
@@ -155,7 +155,7 @@ class NavbarComponent(LiveComponent):
 
             nav_items_html += f"""
                 <li class="nav-item">
-                    <a class="nav-link {active_class}" href="{url_attr(item.href)}"{target_attr}{link_style}>{icon_html}{conditional_escape(item.label)}{badge_html}</a>
+                    <a class="nav-link {active_class}" href="{data_url_attr(item.href)}"{target_attr}{link_style}>{icon_html}{conditional_escape(item.label)}{badge_html}</a>
                 </li>
             """
 
@@ -165,9 +165,9 @@ class NavbarComponent(LiveComponent):
         )
 
         return f"""
-        <nav class="navbar navbar-expand-lg navbar-custom {position_class} {conditional_escape(self.custom_classes)}" id="{conditional_escape(self.component_id)}">
+        <nav class="navbar navbar-expand-lg navbar-custom {position_class} {attr_text(self.custom_classes)}" id="{attr_text(self.component_id)}">
             <div class="{container_class}">
-                <a class="navbar-brand d-flex align-items-center" href="{url_attr(self.brand_href)}">
+                <a class="navbar-brand d-flex align-items-center" href="{data_url_attr(self.brand_href)}">
                     {logo_html}
                     {brand_name_html}
                 </a>
@@ -189,7 +189,7 @@ class NavbarComponent(LiveComponent):
         logo_html = ""
         if self.brand_logo:
             alt_text = self.brand_name or "Logo"
-            logo_html = f'<img src="{url_attr(self.brand_logo, image=True)}" alt="{conditional_escape(alt_text)}" class="h-4 w-auto mr-2">'
+            logo_html = f'<img src="{data_url_attr(self.brand_logo, image=True)}" alt="{attr_text(alt_text)}" class="h-4 w-auto mr-2">'
 
         # Brand name HTML (only if not None)
         brand_name_html = (
@@ -206,7 +206,7 @@ class NavbarComponent(LiveComponent):
                 if item.active
                 else "text-gray-700 hover:text-blue-600"
             )
-            target_attr = f' target="{conditional_escape(item.target)}"' if item.target else ""
+            target_attr = f' target="{attr_text(item.target)}"' if item.target else ""
             icon_html = f"{conditional_escape(item.icon)} " if item.icon else ""
 
             # External link styling
@@ -214,17 +214,17 @@ class NavbarComponent(LiveComponent):
                 active_class = "text-purple-600 font-semibold hover:text-purple-700"
 
             nav_items_html += f"""
-                <a href="{url_attr(item.href)}"{target_attr}
+                <a href="{data_url_attr(item.href)}"{target_attr}
                    class="px-3 py-2 rounded-md text-sm font-medium transition-colors {active_class}">
                     {icon_html}{conditional_escape(item.label)}
                 </a>
             """
 
         return f"""
-        <nav class="bg-white border-b border-gray-200 shadow-sm {position_classes} {conditional_escape(self.custom_classes)}" id="{conditional_escape(self.component_id)}">
+        <nav class="bg-white border-b border-gray-200 shadow-sm {position_classes} {attr_text(self.custom_classes)}" id="{attr_text(self.component_id)}">
             <div class="{container_class} px-4">
                 <div class="flex items-center justify-between h-16">
-                    <a href="{url_attr(self.brand_href)}" class="flex items-center">
+                    <a href="{data_url_attr(self.brand_href)}" class="flex items-center">
                         {logo_html}
                         {brand_name_html}
                     </a>
@@ -244,7 +244,7 @@ class NavbarComponent(LiveComponent):
         logo_html = ""
         if self.brand_logo:
             alt_text = self.brand_name or "Logo"
-            logo_html = f'<img src="{url_attr(self.brand_logo, image=True)}" alt="{conditional_escape(alt_text)}" class="navbar-logo">'
+            logo_html = f'<img src="{data_url_attr(self.brand_logo, image=True)}" alt="{attr_text(alt_text)}" class="navbar-logo">'
 
         # Brand name HTML (only if not None)
         brand_name_html = (
@@ -257,7 +257,7 @@ class NavbarComponent(LiveComponent):
         nav_items_html = ""
         for item in self.items:
             active_class = "active" if item.active else ""
-            target_attr = f' target="{conditional_escape(item.target)}"' if item.target else ""
+            target_attr = f' target="{attr_text(item.target)}"' if item.target else ""
             external_class = "external" if item.external else ""
             icon_html = (
                 f'<span class="nav-icon">{conditional_escape(item.icon)}</span>'
@@ -267,14 +267,14 @@ class NavbarComponent(LiveComponent):
 
             nav_items_html += f"""
                 <li class="nav-item {active_class} {external_class}">
-                    <a href="{url_attr(item.href)}"{target_attr}>{icon_html}{conditional_escape(item.label)}</a>
+                    <a href="{data_url_attr(item.href)}"{target_attr}>{icon_html}{conditional_escape(item.label)}</a>
                 </li>
             """
 
         return f"""
-        <nav class="navbar {position_class} {conditional_escape(self.custom_classes)}" id="{conditional_escape(self.component_id)}">
+        <nav class="navbar {position_class} {attr_text(self.custom_classes)}" id="{attr_text(self.component_id)}">
             <div class="navbar-container">
-                <a href="{url_attr(self.brand_href)}" class="navbar-brand">
+                <a href="{data_url_attr(self.brand_href)}" class="navbar-brand">
                     {logo_html}
                     {brand_name_html}
                 </a>

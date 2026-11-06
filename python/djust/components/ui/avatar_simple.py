@@ -33,7 +33,7 @@ from ..base import Component
 
 from django.utils.html import conditional_escape
 
-from djust.components.utils import url_attr
+from djust.components.utils import data_url_attr, attr_text
 
 # Try to import Rust implementation
 try:
@@ -139,7 +139,7 @@ class Avatar(Component):
 
         if self.src:
             parts.append(
-                f'    <img src="{url_attr(self.src, image=True)}" alt="{conditional_escape(self.alt)}" class="w-100 h-100 object-fit-cover {shape_class}">'
+                f'    <img src="{data_url_attr(self.src, image=True)}" alt="{attr_text(self.alt)}" class="w-100 h-100 object-fit-cover {shape_class}">'
             )
         elif self.initials:
             # Initials fallback
@@ -186,7 +186,7 @@ class Avatar(Component):
 
         if self.src:
             parts.append(
-                f'    <img src="{url_attr(self.src, image=True)}" alt="{conditional_escape(self.alt)}" class="w-full h-full object-cover {shape_class}">'
+                f'    <img src="{data_url_attr(self.src, image=True)}" alt="{attr_text(self.alt)}" class="w-full h-full object-cover {shape_class}">'
             )
         elif self.initials:
             parts.append(
@@ -215,11 +215,11 @@ class Avatar(Component):
 
     def _render_plain(self) -> str:
         """Render plain HTML avatar"""
-        parts = [f'<div class="avatar avatar-{conditional_escape(self.size)}">']
+        parts = [f'<div class="avatar avatar-{attr_text(self.size)}">']
 
         if self.src:
             parts.append(
-                f'    <img src="{url_attr(self.src, image=True)}" alt="{conditional_escape(self.alt)}">'
+                f'    <img src="{data_url_attr(self.src, image=True)}" alt="{attr_text(self.alt)}">'
             )
         elif self.initials:
             parts.append(
@@ -228,7 +228,7 @@ class Avatar(Component):
 
         if self.status:
             parts.append(
-                f'    <span class="avatar-status avatar-status-{conditional_escape(self.status)}"></span>'
+                f'    <span class="avatar-status avatar-status-{attr_text(self.status)}"></span>'
             )
 
         parts.append("</div>")

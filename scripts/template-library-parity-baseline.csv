@@ -144,7 +144,7 @@ djust_components:rating,DIFFERENT-escape-policy-only,3,classes:1+escaping:3,,15,
 djust_components:reactions,DIFFERENT-escape-policy-only,2,escaping:2,,15,5/5,15
 djust_components:relative_time,IDENTICAL,0,,,13,4/4,13
 djust_components:resizable_panel,DIFFERENT-escape-policy-only,3,escaping:3,,17,7/7,17
-djust_components:responsive_image,DIFFERENT,8,classes:1+escaping:7+other-attrs:2,,24,8/8,24
+djust_components:responsive_image,DIFFERENT,6,classes:1+escaping:5+other-attrs:2,,24,8/8,24
 djust_components:ribbon,DIFFERENT-escape-policy-only,3,escaping:3+tags:2+text:2,,15,4/4,15
 djust_components:rich_select,IDENTICAL,0,,,29,15/15,29
 djust_components:rich_text_editor,DIFFERENT,14,classes:14+data/dj-attrs:8+escaping:6+other-attrs:1+tags:14+text:14,,17,7/7,17

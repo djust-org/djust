@@ -381,9 +381,13 @@ def test_a_marked_safe_image_url_is_escaped_exactly_as_before(make):
 
 
 def test_url_attr_can_be_told_to_ignore_the_safe_marker():
-    safe = mark_safe("javascript:void(0)")
-    assert url_attr(safe) == "javascript:void(0)"
+    safe = mark_safe("javascript:alert(1)")
+    assert url_attr(safe) == "javascript:alert(1)"  # the flag's old default, kept for a caller
     assert url_attr(safe, honor_safe=False) == "#"
+    # the one exception, an ``href`` that runs nothing, with or without the flag and the marker
+    assert url_attr(mark_safe("javascript:void(0)"), honor_safe=False) == "javascript:void(0)"
+    assert url_attr("javascript:;", honor_safe=False) == "javascript:;"
+    assert url_attr(mark_safe("javascript:void(0)"), image=True, honor_safe=False) == "#"
     assert (
         url_attr(mark_safe(QUOTE_BREAK), honor_safe=False) == "/x.png&quot; onerror=&quot;alert(1)"
     )
@@ -406,11 +410,11 @@ def test_the_responsive_image_class_escapes_a_marked_safe_srcset():
     ]
 
 
-def test_the_responsive_image_class_src_is_unchanged_by_this_pr():
-    """``ResponsiveImage.src`` already went through ``url_attr`` before #3665 (honouring the
-    marker, like the tag). Pinned so a later change to it is a decision, not a drift."""
+def test_the_responsive_image_class_src_is_checked_like_any_other():
+    """A marked-safe ``ResponsiveImage.src`` is checked like plain text, as the tag's is (#3898);
+    the no-op ``javascript:void(0)`` exception is for an ``href``, never an image source."""
     html = str(ResponsiveImage(src=mark_safe("javascript:void(0)")).render())
-    assert _img_srcs(html)[0] == "javascript:void(0)"
+    assert _img_srcs(html)[0] == "#"
 
 
 @pytest.mark.django_db

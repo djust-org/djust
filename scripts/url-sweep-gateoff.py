@@ -63,7 +63,7 @@ MUTATIONS: list[tuple[str, pathlib.Path, str, str, str, str]] = [
     (
         "avatar tag: src printed as given (the issue)",
         TAGS,
-        '        "src": url_attr(src, image=True),',
+        '        "src": data_url_attr(src, image=True),',
         '        "src": src,',
         AVATAR,
         "",
@@ -71,7 +71,7 @@ MUTATIONS: list[tuple[str, pathlib.Path, str, str, str, str]] = [
     (
         "responsive_image tag: srcset only escaped",
         TAGS,
-        "    e_srcset = srcset_attr(srcset)\n",
+        "    e_srcset = srcset_attr(srcset, honor_safe=False)\n",
         "    e_srcset = str(conditional_escape(srcset))\n",
         SINKS,
         "",
@@ -79,7 +79,7 @@ MUTATIONS: list[tuple[str, pathlib.Path, str, str, str, str]] = [
     (
         "responsive_image handler: srcset only escaped",
         HANDLERS,
-        '        srcset = srcset_attr(kw.get("srcset", ""))',
+        '        srcset = srcset_attr(kw.get("srcset", ""), honor_safe=False)',
         '        srcset = conditional_escape(str(kw.get("srcset", "")))',
         SINKS,
         "",
@@ -184,8 +184,8 @@ MUTATIONS: list[tuple[str, pathlib.Path, str, str, str, str]] = [
     (
         "the Python responsive_image tag prints an empty srcset attribute",
         TAGS,
-        "    e_srcset = srcset_attr(srcset)\n    if e_srcset:",
-        "    e_srcset = srcset_attr(srcset)\n    if srcset:",
+        "    e_srcset = srcset_attr(srcset, honor_safe=False)\n    if e_srcset:",
+        "    e_srcset = srcset_attr(srcset, honor_safe=False)\n    if srcset:",
         SINKS,
         "",
     ),
@@ -240,8 +240,8 @@ MUTATIONS: list[tuple[str, pathlib.Path, str, str, str, str]] = [
     (
         "avatar tag hands the template plain text (double escaping)",
         TAGS,
-        '        "src": url_attr(src, image=True),',
-        '        "src": "".join([url_attr(src, image=True)]),',
+        '        "src": data_url_attr(src, image=True),',
+        '        "src": "".join([data_url_attr(src, image=True)]),',
         AVATAR,
         "",
     ),
@@ -524,7 +524,7 @@ MUTATIONS: list[tuple[str, pathlib.Path, str, str, str, str]] = [
     (
         "sweep (tags): the avatar fix reverted, the SWEEP must go red",
         TAGS,
-        '        "src": url_attr(src, image=True),',
+        '        "src": data_url_attr(src, image=True),',
         '        "src": src,',
         SWEEPTEST,
         SWEEP_K,
@@ -532,7 +532,7 @@ MUTATIONS: list[tuple[str, pathlib.Path, str, str, str, str]] = [
     (
         "sweep (tags): the srcset fix reverted in the Python tag, the SWEEP must go red",
         TAGS,
-        "    e_srcset = srcset_attr(srcset)\n",
+        "    e_srcset = srcset_attr(srcset, honor_safe=False)\n",
         "    e_srcset = str(conditional_escape(srcset))\n",
         SWEEPTEST,
         SWEEP_K,

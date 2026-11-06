@@ -107,15 +107,13 @@ def test_the_two_engines_emit_the_same_src_for_every_payload(engine):
         assert _final_src(engine, u=payload) == _final_src(other, u=payload), label
 
 
-def test_a_marked_safe_src_is_the_authors_opt_out_under_django():
-    """``mark_safe`` is the documented way to say "I vouch for this" (``url_attr``).
-
-    The Rust engine never sees the marker (a context value crosses as plain text),
-    so it neutralises the same value: the stricter side, and an existing,
-    separately tracked escape-policy difference (``ESCAPE_VARIANTS`` in the parity
-    ratchet). This test pins that the fix did not change the Django side."""
-    assert _final_src("django", u=mark_safe("javascript:void(0)")) == ["javascript:void(0)"]
-    assert _final_src("djust", u=mark_safe("javascript:void(0)")) == ["#"]
+def test_a_marked_safe_src_is_checked_like_any_other_on_both_engines():
+    """``mark_safe`` means "no HTML escaping needed", not "navigable" (#3898): a marked-safe
+    ``src`` goes through the same allowlist as plain text, so the engines agree. (The no-op
+    ``javascript:void(0)`` href exception is for an ``href`` only, never an image source.)"""
+    for engine in ENGINES:
+        assert _final_src(engine, u=mark_safe("javascript:void(0)")) == ["#"], engine
+        assert _final_src(engine, u=mark_safe("javascript:alert(1)")) == ["#"], engine
 
 
 @pytest.mark.parametrize("engine", ENGINES)
@@ -136,13 +134,15 @@ def test_no_src_still_shows_the_initials(engine):
     assert not [a for a in url_sweep.attributes(html) if a.name == "src"]
 
 
-def test_a_marked_safe_src_is_not_escaped_twice_under_django():
-    """``url_attr`` returns escaped text marked safe, and the tag hands exactly that to the
+def test_the_src_is_not_escaped_twice_under_django():
+    """The helper returns escaped text marked safe, and the tag hands exactly that to the
     template; if it ever handed plain text instead, autoescape would escape it a second time
     (``&amp;amp;``). Pinned because the fix depends on it and no other case passes a value
-    with an ampersand through."""
+    with an ampersand through. A marked-safe value is text like any other (#3898): its ``&amp;``
+    is escaped once, as the ``&`` it is."""
     assert _final_src("django", u="/a.png?x=1&y=2") == ["/a.png?x=1&y=2"]
-    assert _final_src("django", u=mark_safe("/a.png?x=1&amp;y=2")) == ["/a.png?x=1&y=2"]
+    assert _final_src("django", u=mark_safe("/a.png?x=1&y=2")) == ["/a.png?x=1&y=2"]
+    assert _final_src("django", u=mark_safe("/a.png?x=1&amp;y=2")) == ["/a.png?x=1&amp;y=2"]
     html = (
         _engine("django").from_string(LOAD + "{% avatar src=u %}").render({"u": "/a.png?x=1&y=2"})
     )
