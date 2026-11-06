@@ -172,11 +172,28 @@ OBJ_KEYS = KEYS | {"target", "badge", "badge_variant", "active", "external", "ic
 N_ITEMS = 5
 
 
-def _item(value: object, keys: set[str] = KEYS) -> dict:
-    """An item dict whose every key is ``value``, with a nested ``dropdown`` list of the same
-    (a navbar's dropdown entries are items under the ``dropdown`` key)."""
-    item = url_sweep.dict_of(value, keys)  # type: ignore[arg-type]
-    item["dropdown"] = [url_sweep.dict_of(value, keys) for _ in range(2)]  # type: ignore[arg-type]
+#: Item keys whose value is not text but a CONTAINER: a list-group item's ``badge`` is a mapping
+#: (``badge.get("text")``), a navbar item's ``dropdown`` is a list of items. Filling them with the
+#: claim string crashes the component (``'str' has no attribute 'get'``), and a crash is a cell
+#: that proved nothing: the first version of this sweep skipped every cell of ``ui.ListGroup`` and
+#: ``ui.NavBar`` that way and two leaks sat behind it. So the builder is typed, and
+#: ``TestEveryClassIsReached`` fails any (class, parameter) pair that no cell got through.
+CONTAINER_KEYS = ("badge", "dropdown")
+
+
+def _flat(value: object, keys: set[str]) -> dict:
+    """An item whose every text key is ``value`` and that has no container key."""
+    return url_sweep.dict_of(value, set(keys) - set(CONTAINER_KEYS))  # type: ignore[arg-type]
+
+
+def _item(value: object, keys: set[str] = KEYS, dropdown: bool = True) -> dict:
+    """An item dict: every text key is ``value``, ``badge`` is a mapping of the same, and (when
+    ``dropdown``) the navbar's ``dropdown`` holds two entries of the same kind. An item WITHOUT a
+    ``dropdown`` key is what a navbar draws as a plain link."""
+    item = _flat(value, keys)
+    item["badge"] = _flat(value, keys)
+    if dropdown:
+        item["dropdown"] = [_flat(value, keys) for _ in range(2)]
     return item
 
 
@@ -186,18 +203,65 @@ def _obj(value: object, keys: set[str] = KEYS) -> SimpleNamespace:
     return SimpleNamespace(**{**dict.fromkeys(OBJ_KEYS | keys, value), "badge": 1})
 
 
-def _shapes(value: object, keys: set[str] = KEYS) -> dict[str, object]:
-    return {
-        "scalar": value,
-        "list_str": [value] * N_ITEMS,
-        "dict": url_sweep.dict_of(value, keys),  # type: ignore[arg-type]
-        # alternate items WITH a dropdown and plain ones: a navbar draws the two differently
-        "list_dict": [
-            _item(value, keys) if i % 2 == 0 else url_sweep.dict_of(value, keys)  # type: ignore[arg-type]
-            for i in range(N_ITEMS)
+#: Item keys a component cannot take the claim for: it does ``int(item["level"])`` or
+#: ``item["badge"].get(...)``. ``DROP`` leaves the key out, ``NUMBER`` gives it a number. The
+#: search for them is :func:`_overrides_for`; what it finds is pinned by
+#: ``TestEveryClassIsReached`` (a key the sweep cannot carry is stated, never skipped).
+DROP = "<drop>"
+NUMBER = 1
+
+
+def _override(node: object, overrides: dict[str, object]) -> object:
+    """Apply ``overrides`` to every item under ``node`` (items, objects, nested containers)."""
+    if isinstance(node, dict):
+        for k in list(node):
+            if k in overrides:
+                if overrides[k] is DROP:
+                    del node[k]
+                else:
+                    node[k] = overrides[k]
+            else:
+                _override(node[k], overrides)
+    elif isinstance(node, list):
+        for entry in node:
+            _override(entry, overrides)
+    elif isinstance(node, SimpleNamespace):
+        for k in list(vars(node)):
+            if k in overrides:
+                if overrides[k] is DROP:
+                    delattr(node, k)
+                else:
+                    setattr(node, k, overrides[k])
+    return node
+
+
+SHAPES = ("scalar", "list_str", "dict", "list_dict", "list_dict_flat", "list_obj", "form_like")
+
+
+def _build(
+    shape: str, value: object, keys: set[str] = KEYS, overrides: dict[str, object] | None = None
+) -> object:
+    """One shape of ``value``: a scalar, a list of text, one item, a list of items (alternating
+    with and without a ``dropdown``: a navbar draws the two differently), a list of items whose
+    every key holds the claim itself (a component that prints ``badge`` as text), a list of
+    object items. ``overrides`` are the keys the component cannot take the claim for."""
+    if shape == "scalar":
+        return value
+    built: object = {
+        "list_str": lambda: [value] * N_ITEMS,
+        # one item: ``badge`` a mapping, no ``dropdown`` (a navbar draws a plain link)
+        "dict": lambda: _item(value, keys, dropdown=False),
+        "list_dict": lambda: [_item(value, keys, dropdown=i % 2 == 0) for i in range(N_ITEMS)],
+        "list_dict_flat": lambda: [
+            url_sweep.dict_of(value, set(keys) - {"dropdown"})  # type: ignore[arg-type]
+            for _ in range(N_ITEMS)
         ],
-        "list_obj": [_obj(value, keys) for _ in range(N_ITEMS)],
-    }
+        "list_obj": lambda: [_obj(value, keys) for _ in range(N_ITEMS)],
+        # what ``FieldError`` / ``FormErrors`` read off a Django form: ``errors`` and
+        # ``non_field_errors()``
+        "form_like": lambda: SimpleNamespace(errors=[value], non_field_errors=lambda: [value]),
+    }[shape]()
+    return _override(built, overrides) if overrides else built
 
 
 #: Parameters that make a conditional section draw (a split button, a brand, an image with its
@@ -206,6 +270,8 @@ URL_COMPANIONS = {
     "src", "image", "logo", "brand_logo", "thumbnail", "avatar", "brand_href", "url", "href",
 }  # fmt: skip
 TEXT_COMPANIONS = {"brand", "brand_name", "alt", "label", "title", "name", "text"}
+#: A ``LiveComponent`` has no signature to read a bool default from: these draw nothing until set.
+BOOL_COMPANIONS = {"show", "open", "visible", "is_open"}
 
 
 def _bool_default(cls: type, name: str) -> bool:
@@ -225,13 +291,61 @@ def _companions(cls: type, names: list[str], skip: str) -> dict[str, object]:
     for n in names:
         if n == skip:
             continue
-        if variants.kind_of(n) == "bool" or _bool_default(cls, n):
+        if variants.kind_of(n) == "bool" or n in BOOL_COMPANIONS or _bool_default(cls, n):
             out[n] = True
         elif n in URL_COMPANIONS:
             out[n] = "/ok.png"
         elif n in TEXT_COMPANIONS:
             out[n] = "x"
     return out
+
+
+#: What a required parameter may need besides the URL sweep's filler (``value: str`` wants text,
+#: ``buttons: List[Dict]`` wants entries): tried in order until the class draws with its defaults.
+REQUIRED_ALTERNATIVES = (
+    "x",
+    ["x"],
+    [{"label": "x", "text": "x", "title": "x", "url": "/ok"}],
+    {"label": "x"},
+    1,
+)
+_REQUIRED: dict[type, dict[str, object]] = {}
+
+
+def _draws(cls: type, kwargs: dict) -> bool:
+    try:
+        with _framework("bootstrap5"):
+            obj = cls(**kwargs)  # type: ignore[call-arg]
+            for attr in ("_rust_instance", "template"):
+                if hasattr(obj, attr):
+                    setattr(obj, attr, None)
+            obj.render()
+        return True
+    except Exception:  # noqa: BLE001 - the answer is "no"
+        return False
+
+
+def class_params(cls: type) -> tuple[list[str], dict[str, object]]:
+    """``(parameters, required)`` of ``cls``: the URL sweep's, with the filler of each required
+    parameter repaired when the class does not draw with it. ``StatCard(value=1)`` crashed on
+    ``.replace`` in every cell, so no parameter of ``StatCard`` was ever swept."""
+    names, required = url_sweep.component_params(cls)
+    if cls not in _REQUIRED:
+        fixed = dict(required)
+        if fixed and not _draws(cls, fixed):
+            for name in list(fixed):
+                for alternative in (fixed[name], *REQUIRED_ALTERNATIVES):
+                    if _draws(cls, {**fixed, name: alternative}):
+                        fixed[name] = alternative
+                        break
+                else:
+                    continue
+                break
+        _REQUIRED[cls] = fixed
+    # ``component_id`` is a LiveComponent's own constructor argument (it lands in ``id=``)
+    if issubclass(cls, LiveComponent) and "component_id" not in names:
+        names = [*names, "component_id"]
+    return names, _REQUIRED[cls]
 
 
 @contextlib.contextmanager
@@ -259,6 +373,104 @@ def _hybrid_template_path(obj: object) -> bool:
     )
 
 
+#: Set aside, not a crash: the cell drew through the hybrid template path (see the sweep).
+HYBRID = object()
+#: A benign marked-safe value: what a cell is decided with, and what the reach test looks for.
+REACH_MARK = "ZQREACH"
+PROBE = mark_safe(REACH_MARK)
+
+#: ``cell -> overrides`` (``None``: the component rejects the shape whatever the keys). A cell is
+#: ``(class, parameter, shape, framework, companions, force_python)``.
+_OVERRIDES: dict[tuple, dict[str, object] | None] = {}
+
+
+def _search_overrides(attempt, keys: set[str]) -> dict[str, object] | None:
+    """The item keys a component cannot take the claim for, found PER KEY, never per class: with
+    only the common URL keys the shape must draw (else the component rejects the shape, and the
+    cell is not one); then each further key is put back as the claim, else as a number, else left
+    out. Whatever is left out is recorded in ``_OVERRIDES`` and pinned by the reach test."""
+
+    def ok(overrides: dict[str, object]) -> bool:
+        try:
+            attempt(overrides)
+        except Exception:  # noqa: BLE001 - the answer is "no"
+            return False
+        return True
+
+    extras = sorted(set(keys) - set(KEYS))
+    found: dict[str, object] = {k: DROP for k in extras}
+    if not ok(found):
+        return None
+    for k in extras:
+        for form in (None, NUMBER):
+            trial = {name: value for name, value in found.items() if name != k}
+            if form is not None:
+                trial[k] = form
+            if ok(trial):
+                found = trial
+                break
+    return found
+
+
+def drive(
+    cls: type,
+    key: str,
+    names: list[str],
+    required: dict[str, object],
+    keys: set[str],
+    name: str,
+    shape: str,
+    framework: str,
+    companions: bool,
+    value: object,
+    force_python: bool,
+) -> object:
+    """Render ``cls`` with ``name`` set to ``shape`` of ``value``: the output, :data:`HYBRID`, or
+    ``None`` (the component rejects this shape of this parameter, with every key it could take
+    left out). A crash is not the end of a cell: the keys the component cannot take the claim
+    for are searched for one by one (:func:`_search_overrides`)."""
+
+    def attempt(claimed: object, overrides: dict[str, object]) -> object:
+        kwargs = {
+            **required,
+            **(_companions(cls, names, name) if companions else {}),
+            name: _build(shape, claimed, keys, overrides),
+        }
+        if "css_framework" in names and name != "css_framework":
+            kwargs["css_framework"] = framework
+        harness.reset_ids()
+        with _framework(framework):
+            obj = cls(**kwargs)  # type: ignore[call-arg]
+            if force_python:
+                for attr in ("_rust_instance", "template"):
+                    if hasattr(obj, attr):
+                        setattr(obj, attr, None)
+            elif _hybrid_template_path(obj):
+                return HYBRID
+            return str(obj.render())
+
+    cell = (key, name, shape, framework, companions, force_python)
+    if cell not in _OVERRIDES:
+        # decided ONCE per cell, with the benign probe, whatever claim and payload come first: a
+        # payload a validator rejects must not be what leaves a key out of every later cell
+        def with_probe(overrides: dict[str, object]) -> object:
+            return attempt(PROBE, overrides)
+
+        try:
+            with_probe({})
+        except Exception:  # noqa: BLE001 - searched for below, recorded, never silent
+            _OVERRIDES[cell] = _search_overrides(with_probe, keys) if shape != "scalar" else None
+        else:
+            _OVERRIDES[cell] = {}
+    overrides = _OVERRIDES[cell]
+    if overrides is None:
+        return None
+    try:
+        return attempt(value, overrides)
+    except Exception:  # noqa: BLE001 - a value this payload makes the component reject says nothing
+        return None
+
+
 def sweep(
     only_claims: tuple[str, ...] = tuple(CLAIMS),
     force_python: bool = False,
@@ -277,42 +489,28 @@ def sweep(
     rendered = 0
     hybrid: set[tuple[str, str]] = set()
     for key, cls in (CLASSES if classes is None else classes).items():
-        names, required = url_sweep.component_params(cls)
+        names, required = class_params(cls)
         keys = class_keys(cls)
-        # ``component_id`` is a LiveComponent's own constructor argument (it lands in ``id=``)
-        if issubclass(cls, LiveComponent) and "component_id" not in names:
-            names = [*names, "component_id"]
         # EVERY framework, for every class: the renderer is chosen by the constructor argument or
         # by ``djust.config``, so each is driven under both (a class that ignores them renders the
         # same three times)
         frameworks = url_sweep.FRAMEWORKS
         for claim in only_claims:
             for label, payload in payloads:
-                for shape, value in _shapes(CLAIMS[claim](payload), keys).items():
+                claimed = CLAIMS[claim](payload)
+                for shape in SHAPES:
                     for name in names:
                         for framework in frameworks:
-                            kwargs = {
-                                **required,
-                                **(_companions(cls, names, name) if companions else {}),
-                                name: value,
-                            }
-                            if "css_framework" in names and name != "css_framework":
-                                kwargs["css_framework"] = framework
-                            harness.reset_ids()
-                            try:
-                                with _framework(framework):
-                                    obj = cls(**kwargs)  # type: ignore[call-arg]
-                                    if force_python:
-                                        if hasattr(obj, "_rust_instance"):
-                                            obj._rust_instance = None
-                                        if hasattr(obj, "template"):
-                                            obj.template = None
-                                    elif _hybrid_template_path(obj):
-                                        hybrid.add((key, claim))
-                                        continue
-                                    out = str(obj.render())
-                            except Exception:  # noqa: BLE001 - a call the component rejects says nothing
+                            result = drive(
+                                cls, key, names, required, keys, name, shape, framework,
+                                companions, claimed, force_python,
+                            )  # fmt: skip
+                            if result is None:
                                 continue
+                            if result is HYBRID:
+                                hybrid.add((key, claim))
+                                continue
+                            out = str(result)
                             rendered += 1
                             holes = holes_in(out)
                             if wide:
@@ -892,6 +1090,152 @@ class TestEveryClass:
         subset of it."""
         assert set(CLASSES) <= set(ALL_CLASSES)
         assert ONLY or len(ALL_CLASSES) > len(CLASSES) * 4
+
+
+#: ``Class.parameter`` of the pairs NO cell can get through, and why. Each one takes numbers, a
+#: dotted module path or a queryset and raises on any text, so no markup can arrive in them; the
+#: list is exact (a pair that starts to draw fails until it is removed here).
+UNREACHED = {
+    "components.bar_chart.BarChart.data": "numbers",
+    "components.calendar_heatmap.CalendarHeatmap.year": "a year",
+    "components.markdown.Markdown.extensions": "module names (ModuleNotFoundError)",
+    "components.markdown_editor.MarkdownEditor.mode": "two allowed words (ValueError)",
+    "components.meter.Meter.segments": "numbers",
+    "data.pagination.PaginationComponent.max_visible_pages": "a number",
+    "data.pagination.PaginationComponent.total_items": "a number",
+    "data.pagination.PaginationComponent.total_pages": "a number",
+    "forms.foreign_key.ForeignKeySelect.queryset": "a queryset",
+    "forms.foreign_key.ManyToManySelect.queryset": "a queryset",
+    "ui.pagination_simple.Pagination.current_page": "a number",
+    "ui.pagination_simple.Pagination.total_pages": "a number",
+    "ui.progress.ProgressComponent.max_value": "a number",
+    "ui.progress.ProgressComponent.min_value": "a number",
+    "ui.progress.ProgressComponent.value": "a number",
+    "ui.progress_simple.Progress.value": "a number",
+    "ui.offcanvas_simple.Offcanvas.placement": "four allowed words (ValueError)",
+}
+
+#: ``Class.parameter`` -> the item keys a cell could not take the claim for, found per key by
+#: :func:`_search_overrides`. A key left out is a key the sweep does NOT test: it is stated here,
+#: exactly (a number is a number key: ``int(item["level"])``; ``badge`` is left out of the shape
+#: that gives it the claim itself, because the list group reads it as a mapping, which the typed
+#: shape ``list_dict`` gives it and sweeps).
+CARRIED_DIFFERENTLY = {
+    "components.dashboard_grid.DashboardGrid.panels": {
+        "col=number", "height=number", "row=number", "width=number",
+    },
+    "components.org_chart.OrgChart.nodes": {"parent=number"},
+    "components.table_of_contents.TableOfContents.items": {"level=number"},
+    "ui.list_group_simple.ListGroup.items": {"badge=left out"},
+}  # fmt: skip
+
+
+def _numeric_parameter(cls: type, name: str) -> bool:
+    """A constructor parameter whose default is a bool / int / float (derived from the signature):
+    it selects, it does not print."""
+    try:
+        param = inspect.signature(cls.__init__).parameters.get(name)  # type: ignore[misc]
+    except (TypeError, ValueError):
+        return False
+    return param is not None and isinstance(param.default, (bool, int, float))
+
+
+def reach() -> dict[tuple[str, str], dict[str, int]]:
+    """``{(class, parameter): {"rendered": n, "echoed": n}}`` over EVERY derived pair: the
+    parameter is given a marked-safe probe (in every shape, under every framework, with and
+    without the companions) and the output is searched for the probe. ``rendered`` counts the
+    cells that drew; ``echoed`` those whose output carries the probe."""
+    out: dict[tuple[str, str], dict[str, int]] = {}
+    probe = PROBE
+    for key, cls in ALL_CLASSES.items():
+        names, required = class_params(cls)
+        keys = class_keys(cls)
+        for name in names:
+            out[(key, name)] = {"rendered": 0, "echoed": 0}
+        for companions in (False, True):
+            for framework in url_sweep.FRAMEWORKS:
+                for shape in SHAPES:
+                    for name in names:
+                        result = drive(
+                            cls, key, names, required, keys, name, shape, framework,
+                            companions, probe, True,
+                        )  # fmt: skip
+                        if result is None:
+                            continue
+                        out[(key, name)]["rendered"] += 1
+                        if REACH_MARK in str(result):
+                            out[(key, name)]["echoed"] += 1
+    return out
+
+
+def carried_differently() -> dict[str, set[str]]:
+    """``"Class.parameter" -> {"key=left out" / "key=number"}`` for every item key some cell of
+    the probe could not take the claim for (what :func:`_search_overrides` found), so a key the
+    sweep does not reach is stated, not silently skipped."""
+    found: dict[str, set[str]] = {}
+    for (key, name, _shape, _fw, _companions, force_python), overrides in _OVERRIDES.items():
+        if not force_python or not overrides:
+            continue
+        for k, form in overrides.items():
+            how = "left out" if form is DROP else "number"
+            found.setdefault(f"{key.replace('djust.components.', '')}.{name}", set()).add(
+                f"{k}={how}"
+            )
+    return found
+
+
+class TestEveryClassIsReached:
+    """The class sweep skips a cell its component rejects. That is only honest if the skip is
+    accounted for: this test fails a (class, parameter) pair that NO cell drew (so nothing was
+    swept there), and a class none of whose parameters ever printed a probe. The first version
+    of the sweep skipped every item cell of ``ui.ListGroup`` and ``ui.NavBar`` (a ``badge`` that
+    must be a mapping, a ``dropdown`` that must be a list) and every parameter of ``StatCard`` (a
+    required ``value`` that must be text) without a word, and a leak sat behind each."""
+
+    @pytest.fixture(scope="class")
+    def outcome(self) -> dict[tuple[str, str], dict[str, int]]:
+        return reach()
+
+    def test_every_pair_is_drawn_by_some_cell_or_listed_with_its_reason(self, outcome) -> None:
+        short = lambda key: key.replace("djust.components.", "")  # noqa: E731
+        unreached = {pair for pair, n in outcome.items() if not n["rendered"]}
+        unexplained = {
+            pair for pair in unreached if not _numeric_parameter(ALL_CLASSES[pair[0]], pair[1])
+        }
+        listed = {f"{short(k)}.{n}" for k, n in unexplained if not ONLY}
+        if ONLY:
+            assert not [p for p in listed if p not in UNREACHED], sorted(listed)
+            return
+        assert listed == set(UNREACHED), (
+            f"pairs no cell drew (fix the probe's input, or list them with a reason): "
+            f"{sorted(listed - set(UNREACHED))}\n"
+            f"listed but now drawn (delete from UNREACHED): {sorted(set(UNREACHED) - listed)}"
+        )
+
+    def test_the_pairs_are_partitioned_and_most_of_them_print_the_probe(self, outcome) -> None:
+        echoed = {p for p, n in outcome.items() if n["echoed"]}
+        silent = {p for p, n in outcome.items() if n["rendered"] and not n["echoed"]}
+        unreached = {p for p, n in outcome.items() if not n["rendered"]}
+        derived = {(key, name) for key, cls in ALL_CLASSES.items() for name in class_params(cls)[0]}
+        assert echoed | silent | unreached == derived
+        assert not (echoed & silent or echoed & unreached or silent & unreached)
+        assert len(echoed) + len(silent) + len(unreached) == len(derived)
+        assert ONLY or len(echoed) > 700, len(echoed)
+
+    def test_the_keys_a_cell_could_not_carry_are_exactly_the_listed_ones(self, outcome) -> None:
+        """A crash is searched per KEY, and what the search leaves out or turns into a number
+        is stated here, so the sweep cannot lose a key without a test saying so."""
+        assert carried_differently() == CARRIED_DIFFERENTLY
+
+    def test_every_class_prints_a_probe_through_some_parameter(self, outcome) -> None:
+        silent_classes = sorted(
+            {
+                key
+                for key in ALL_CLASSES
+                if not any(n["echoed"] for (k, _name), n in outcome.items() if k == key)
+            }
+        )
+        assert not silent_classes, silent_classes
 
 
 class TestEveryTag:

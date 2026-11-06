@@ -251,7 +251,11 @@ ALWAYS_ESCAPED = {"divider", "tooltip"}
 #: (``role=``, ``aria-label=``, a ``for=`` id) is the developer's own and still passes through:
 #: these cases hand the same value to every slot, so they assert only that SOME attribute
 #: escaped it and that the text slots kept the markup.
-ATTRIBUTE_SLOTS_ESCAPE = {"avatar", "dropdown", "navbar", "button_group", "radio", "select"}
+ATTRIBUTE_SLOTS_ESCAPE = {
+    "avatar", "dropdown", "navbar", "button_group", "radio", "select", "list_group",
+}  # fmt: skip
+#: the tailwind renderers of these map a variant to fixed classes, so no attribute carries the value
+MAPS_VARIANT_TO_CLASSES = {("button_group", "tailwind"), ("list_group", "tailwind")}
 
 
 @pytest.mark.parametrize(
@@ -273,7 +277,7 @@ def test_marked_safe_value_passes_through_a_text_slot_and_is_escaped_in_an_attri
 ) -> None:
     factory, _ = CASES[name]
     html = _python_render(factory(mark_safe(SAFE)), framework)
-    if (name, framework) != ("button_group", "tailwind"):  # that one maps a variant to classes
+    if (name, framework) not in MAPS_VARIANT_TO_CLASSES:
         assert "&lt;b&gt;ok&lt;/b&gt;" in html  # an attribute escaped it
     if name != "avatar":  # the avatar's only slots are attributes
         assert SAFE in html  # a text slot (a label) kept the markup
