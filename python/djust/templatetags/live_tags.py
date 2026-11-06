@@ -39,6 +39,7 @@ from django.utils.html import conditional_escape, escape, format_html, format_ht
 from django.utils.safestring import SafeString, mark_safe
 
 from .._attr_policy import passthrough_attrs
+from .._include_guard import include_guard_scope
 from .._html import build_tag
 from ..auth._login_required_middleware import mark_embedded
 from ..config import config
@@ -1843,7 +1844,7 @@ def _render_sticky_child_html(
 
     inline = getattr(child, "template", None)
     if inline:
-        with active_parent_view(child):
+        with active_parent_view(child), include_guard_scope():
             rendered_inner = Template(inline).render(Context(child_context))
     else:
         template_name = getattr(child, "template_name", None)
@@ -1852,7 +1853,7 @@ def _render_sticky_child_html(
                 "{%% live_render %%} child %r has neither ``template`` nor "
                 "``template_name`` set" % view_path
             )
-        with active_parent_view(child):
+        with active_parent_view(child), include_guard_scope():
             rendered_inner = get_template(template_name).render(child_context, request)
 
     # Record the child's dj-model auto-allowlist from its own TEMPLATE SOURCE
@@ -2379,7 +2380,8 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
                 child_context.setdefault("view", child)
                 inline_template = getattr(child, "template", None)
                 if inline_template:
-                    rendered_inner = Template(inline_template).render(Context(child_context))
+                    with include_guard_scope():
+                        rendered_inner = Template(inline_template).render(Context(child_context))
                 else:
                     template_name = getattr(child, "template_name", None)
                     if not template_name:
@@ -2387,7 +2389,8 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
                             "child %r has neither ``template`` nor "
                             "``template_name`` set" % view_path
                         )
-                    rendered_inner = get_template(template_name).render(child_context, request)
+                    with include_guard_scope():
+                        rendered_inner = get_template(template_name).render(child_context, request)
                 # Record the child's dj-model auto-allowlist from its own
                 # TEMPLATE SOURCE so child update_model events (gated on the
                 # child's _dj_model_fields) accept its dj-model inputs — this
@@ -2846,7 +2849,8 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
 
     inline = getattr(child, "template", None)
     if inline:
-        rendered_inner = Template(inline).render(Context(child_context))
+        with include_guard_scope():
+            rendered_inner = Template(inline).render(Context(child_context))
     else:
         template_name = getattr(child, "template_name", None)
         if not template_name:
@@ -2854,7 +2858,8 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
                 "{%% live_render %%} child %r has neither ``template`` nor "
                 "``template_name`` set" % view_path
             )
-        rendered_inner = get_template(template_name).render(child_context, request)
+        with include_guard_scope():
+            rendered_inner = get_template(template_name).render(child_context, request)
 
     # Record the child's dj-model auto-allowlist from its own TEMPLATE SOURCE
     # so child update_model events (gated on the child's _dj_model_fields)

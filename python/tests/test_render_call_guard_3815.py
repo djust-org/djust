@@ -15,12 +15,17 @@ empty string (the engine's ``string_if_invalid`` for an ``alters_data`` variable
 empty too), with a WARNING; it does not raise. ``{{ user.get_full_name }}`` in the
 component tags falls back to ``str(user)``, the branch they already take for a
 falsy name.
+
+#3880 applies the same rule where a view's or component's context reaches Django's stock
+engine (child views, streamed fragments, pending layouts, component fallbacks): see the
+"Child templates" section at the end.
 """
 
 from __future__ import annotations
 
 import logging
 import re
+from pathlib import Path
 from typing import Any, Callable
 
 import pytest
@@ -29,6 +34,8 @@ from django.template import Engine
 
 from djust import _rust
 from djust.template import DjustTemplateBackend
+
+from django import template as django_template
 
 
 @pytest.fixture(autouse=True)
@@ -500,42 +507,808 @@ def test_get_full_name_refusal_logs_once_per_type_and_names_no_object(caplog):
 
 
 # ---------------------------------------------------------------------------
-# NOT covered, pinned as it is: child templates render through Django's stock engine
+# Child templates (#3880): Django's stock engine, guarded where it renders
 # ---------------------------------------------------------------------------
-def _child_view(obj: Any) -> Any:
+# An embedded child, a sticky child, a ``{% live_render %}`` child, a streamed fragment, a
+# pending layout, a component's Django-engine fallback and the test client's Django engine are
+# rendered by Django's own engine, not the five entries above. The engine is unchanged (same
+# filters, tags, escaping); the guard is applied where those renders happen
+# (``djust._include_guard.include_guard_scope``), so a flagged ``render`` named by
+# ``{% include obj %}`` is refused there too -- and ONLY there: a render that no djust view or
+# component is making is Django's, untouched (``test_stock_django_..._divergence`` above and
+# ``test_a_render_outside_the_scope_is_stock_django`` below).
+_TEMPLATES: dict[str, str] = {}
+
+register = django_template.Library()
+
+
+@register.inclusion_tag("inclusion_3880.html", takes_context=True)
+def inclusion_3880(context):
+    """A third-party-shaped inclusion tag: Django renders ITS template with the page's operands."""
+    return {"obj": context["obj"], "objs": context.get("objs", [])}
+
+
+@pytest.fixture(autouse=True)
+def _locmem_templates():
+    """Named templates the child sites load: ``_TEMPLATES`` is the loader's dict, so a test adds one."""
+    from django.test import override_settings
+
+    from djust._include_guard import uninstall
+
+    # Start every test with Django's own IncludeNode.render, so a site is guarded because IT
+    # entered the scope (the scope installs the patch), not because an earlier test installed it.
+    uninstall()
+    _TEMPLATES.clear()
+    config = [
+        {
+            "BACKEND": "django.template.backends.django.DjangoTemplates",
+            "DIRS": [],
+            "APP_DIRS": False,
+            "OPTIONS": {"loaders": [("django.template.loaders.locmem.Loader", _TEMPLATES)]},
+        }
+    ]
+    with override_settings(TEMPLATES=config):
+        yield
+    _TEMPLATES.clear()
+
+
+def _child(source: str, ctx: dict, name: str | None = None) -> Any:
+    """A mounted child view that renders ``source`` (inline, or from the named template)."""
     from djust.live_view import LiveView
 
-    class _Child(LiveView):
-        template = "[{% include obj %}]"
+    def get_context_data(self: Any, **kwargs: Any) -> dict:
+        return dict(ctx)
 
-        def mount(self, request, **kwargs):
-            self.obj = obj
-
-        def get_context_data(self, **kwargs):
-            return {"obj": self.obj}
-
-    child = _Child()
+    attrs: dict[str, Any] = {"get_context_data": get_context_data}
+    if name is None:
+        attrs["template"] = source
+    else:
+        _TEMPLATES[name] = source
+        attrs["template_name"] = name
+    child = type("Child3880", (LiveView,), attrs)()
     child.mount(None)
     return child
 
 
-def test_PIN_embedded_child_template_still_calls_a_flagged_render():
-    """Embedded children render through Django's stock engine, which is NOT guarded.
+def _unwrap(html: Any) -> str:
+    """The inner HTML of the ``<div dj-view ...>`` wrapper a sticky / explicit child renders into."""
+    match = re.match(r"<div dj-view[^>]*>(.*)</div>$", str(html), re.S)
+    assert match is not None, html
+    return match.group(1)
 
-    This pins today's behaviour so that moving child rendering onto the guarded path flips
-    this test on purpose (the follow-up issue is linked from the PR).
+
+def embedded_site(source: str, ctx: dict) -> str:
+    from djust.websocket import render_embedded_child_html
+
+    return render_embedded_child_html(_child(source, ctx))
+
+
+def sticky_inline_site(source: str, ctx: dict) -> str:
+    from djust.templatetags.live_tags import _render_sticky_child_html
+
+    child = _child(source, ctx)
+    return _unwrap(_render_sticky_child_html(child, "v1", "sid", None, "x.Child"))
+
+
+def sticky_named_site(source: str, ctx: dict) -> str:
+    from djust.templatetags.live_tags import _render_sticky_child_html
+
+    child = _child(source, ctx, name="sticky_child_3880.html")
+    return _unwrap(_render_sticky_child_html(child, "v1", "sid", None, "x.Child"))
+
+
+def transient_inline_site(source: str, ctx: dict) -> str:
+    """``sticky_id_value=None``: the transient explicit child's plain wrapper."""
+    from djust.templatetags.live_tags import _render_sticky_child_html
+
+    child = _child(source, ctx)
+    return _unwrap(_render_sticky_child_html(child, "v1", None, None, "x.Child"))
+
+
+def transient_named_site(source: str, ctx: dict) -> str:
+    from djust.templatetags.live_tags import _render_sticky_child_html
+
+    child = _child(source, ctx, name="transient_child_3880.html")
+    return _unwrap(_render_sticky_child_html(child, "v1", None, None, "x.Child"))
+
+
+def _live_render_site(tag_args: str, named: bool = False) -> Callable[[str, dict], str]:
+    """A page whose ``{% live_render %}`` mounts a child that renders ``source``.
+
+    Drives the tag end to end (the page GET), so the two branches that render inside the tag
+    itself -- the legacy non-sticky render and the lazy fill -- are reached the way a user
+    reaches them. (``sticky=True`` and explicit children call ``_render_sticky_child_html``,
+    which the ``sticky-*`` / ``transient-*`` sites call directly: a page GET renders a sticky
+    child twice and the second pass reuses the live instance under the request's auth.)
     """
+
+    def site(source: str, ctx: dict) -> str:
+        import sys
+
+        from django.contrib.auth.models import AnonymousUser
+        from django.contrib.sessions.middleware import SessionMiddleware
+        from django.test import RequestFactory, override_settings
+
+        from djust.live_view import LiveView
+
+        def get_context_data(self: Any, **kwargs: Any) -> dict:
+            return dict(ctx)
+
+        attrs: dict[str, Any] = {
+            "get_context_data": get_context_data,
+            "mount": lambda self, request, **kw: None,
+        }
+        if named:
+            _TEMPLATES["live_render_child_3880.html"] = source
+            attrs["template_name"] = "live_render_child_3880.html"
+        else:
+            attrs["template"] = source
+        child_cls = type("LiveRenderChild3880", (LiveView,), attrs)
+        setattr(sys.modules[__name__], "LiveRenderChild3880", child_cls)
+        page_cls = type(
+            "LiveRenderPage3880",
+            (LiveView,),
+            {
+                "template": (
+                    "{% load live_tags %}<html><body><div dj-root>"
+                    '{% live_render "' + __name__ + '.LiveRenderChild3880" ' + tag_args + " %}"
+                    "</div></body></html>"
+                ),
+                "mount": lambda self, request, **kw: None,
+            },
+        )
+        request = RequestFactory().get("/")
+        request.user = AnonymousUser()
+        SessionMiddleware(lambda r: None).process_request(request)
+        request.session.save()
+        view = page_cls()
+        view.streaming_render = False  # the page-POST fallback shape: lazy slots are filled
+        with override_settings(DJUST_LIVE_RENDER_ALLOWED_MODULES=[__name__]):
+            html = view.get(request).content.decode("utf-8")
+        match = re.search(r'data-djust-embedded="[^"]*">(.*?)</div>', html, re.S)
+        assert match is not None, html
+        return match.group(1)
+
+    return site
+
+
+live_render_plain_site = _live_render_site("")
+live_render_lazy_site = _live_render_site("lazy=True")
+live_render_plain_named_site = _live_render_site("", named=True)
+live_render_lazy_named_site = _live_render_site("lazy=True", named=True)
+
+
+CHILD_SITES = [
+    pytest.param(embedded_site, id="embedded-child"),
+    pytest.param(sticky_inline_site, id="sticky-inline"),
+    pytest.param(sticky_named_site, id="sticky-named"),
+    pytest.param(transient_inline_site, id="transient-inline"),
+    pytest.param(transient_named_site, id="transient-named"),
+    pytest.param(live_render_plain_site, id="live_render-plain", marks=pytest.mark.django_db),
+    pytest.param(live_render_lazy_site, id="live_render-lazy", marks=pytest.mark.django_db),
+    pytest.param(
+        live_render_plain_named_site, id="live_render-plain-named", marks=pytest.mark.django_db
+    ),
+    pytest.param(
+        live_render_lazy_named_site, id="live_render-lazy-named", marks=pytest.mark.django_db
+    ),
+]
+
+
+@pytest.mark.parametrize("site", CHILD_SITES)
+@pytest.mark.parametrize("kind", KINDS_REFUSED)
+def test_child_include_of_a_flagged_render_is_not_called(site, kind):
+    """The issue's reproducer, on every site, for every way a render can be flagged."""
+    obj = _payload(kind)()
+    out = site("[{% include obj %}]", {"obj": obj})
+    assert type(obj).calls == 0, f"render() ran {type(obj).calls} time(s) on {site.__name__}"
+    assert out == "[]"
+
+
+@pytest.mark.parametrize("site", CHILD_SITES)
+@pytest.mark.parametrize("kind", KINDS_ALLOWED)
+def test_child_include_of_an_unflagged_render_still_renders(site, kind):
+    obj = _payload(kind)()
+    out = site("[{% include obj %}]", {"obj": obj})
+    assert out == "[RENDERED]"
+    assert type(obj).calls >= 1  # a page GET renders its child more than once
+
+
+@pytest.mark.parametrize("site", CHILD_SITES)
+def test_child_include_nested_in_a_block_tag_is_refused(site):
+    obj = _payload("alters_data")()
+    out = site(
+        "{% if obj %}{% with x=1 %}[{% include obj %}]{% endwith %}{% endif %}", {"obj": obj}
+    )
+    assert type(obj).calls == 0
+    assert out == "[]"
+
+
+@pytest.mark.parametrize("site", CHILD_SITES)
+def test_child_include_inside_a_loop_is_refused_for_every_item(site):
+    flagged, other = _payload("alters_data")(), _payload("do_not_call_in_templates")()
+    out = site(
+        "{% for o in objs %}[{% include o %}]{% endfor %}",
+        {"objs": [flagged, other, flagged]},
+    )
+    assert type(flagged).calls == 0 and type(other).calls == 0
+    assert out == "[][][]"
+
+
+@pytest.mark.parametrize("site", CHILD_SITES)
+def test_child_loop_refuses_the_flagged_item_and_renders_the_plain_one(site):
+    """A refusal is per object: it neither skips the next item nor poisons the loop."""
+    flagged, plain = _payload("alters_data")(), _payload("plain")()
+    out = site(
+        "{% for o in objs %}[{% include o %}]{% endfor %}",
+        {"objs": [flagged, plain, flagged, plain]},
+    )
+    assert out == "[][RENDERED][][RENDERED]"
+    assert type(flagged).calls == 0
+    assert type(plain).calls >= 2
+
+
+@pytest.mark.parametrize("site", CHILD_SITES)
+def test_child_include_inside_an_included_template_is_refused(site):
+    """The operand is reached through ``{% include "inner.html" %}``: a NAMED include is not a bypass."""
+    _TEMPLATES["inner_3880.html"] = "<{% include obj %}>"
+    obj = _payload("alters_data")()
+    out = site('[{% include "inner_3880.html" %}]', {"obj": obj})
+    assert type(obj).calls == 0
+    assert out == "[<>]"
+
+
+@pytest.mark.parametrize("site", CHILD_SITES)
+def test_child_include_inside_an_extended_template_is_refused(site):
+    """A block of a child template that ``{% extends %}`` a loader-found parent is guarded too."""
+    _TEMPLATES["base_3880.html"] = "<main>{% block b %}{% endblock %}</main>"
+    obj = _payload("alters_data")()
+    out = site(
+        '{% extends "base_3880.html" %}{% block b %}[{% include obj %}]{% endblock %}', {"obj": obj}
+    )
+    assert type(obj).calls == 0
+    assert out == "<main>[]</main>"
+
+
+@pytest.mark.parametrize("site", CHILD_SITES)
+def test_child_include_with_only_and_with_still_refuses(site):
+    obj = _payload("alters_data")()
+    out = site("[{% include obj with a=1 only %}]", {"obj": obj})
+    assert type(obj).calls == 0
+    assert out == "[]"
+
+
+@pytest.mark.parametrize("site", CHILD_SITES)
+def test_child_include_of_a_template_name_and_of_a_template_object_still_work(site):
+    """The guard only touches an operand that quacks like a template and is flagged."""
+    _TEMPLATES["greet_3880.html"] = "hi {{ who }}"
+    tpl = Engine().from_string("T {{ who }}")
+    out = site(
+        '[{% include "greet_3880.html" with who="a" %}][{% include t with who="b" %}]'
+        '[{% include names with who="c" %}]',
+        {"t": tpl, "names": ["missing_3880.html", "greet_3880.html"]},
+    )
+    assert out == "[hi a][T b][hi c]"
+
+
+@pytest.mark.parametrize("site", CHILD_SITES)
+def test_child_include_cache_serves_a_loop_of_template_names(site):
+    """Django caches a name's template per render in the node's slot: still one per name."""
+    _TEMPLATES["row_3880.html"] = "<{{ n }}>"
+    out = site('{% for n in ns %}{% include "row_3880.html" %}{% endfor %}', {"ns": [1, 2, 3]})
+    assert out == "<1><2><3>"
+
+
+SINGLE_RENDER_SITES = [
+    pytest.param(embedded_site, id="embedded-child"),
+    pytest.param(sticky_inline_site, id="sticky-inline"),
+    pytest.param(sticky_named_site, id="sticky-named"),
+]
+
+
+@pytest.mark.parametrize("site", SINGLE_RENDER_SITES)
+def test_child_include_operand_is_resolved_once(site):
+    """A computed operand is evaluated once, as in Django: the guard must not read it twice."""
+
+    class Picker:
+        calls = 0
+
+        def __call__(self) -> Any:
+            type(self).calls += 1
+            return Engine().from_string("PICKED")
+
+    out = site("[{% include pick %}]", {"pick": Picker()})
+    assert out == "[PICKED]"
+    assert Picker.calls == 1
+
+
+@pytest.mark.parametrize("site", SINGLE_RENDER_SITES)
+def test_child_include_loads_a_named_template_once_per_render(site):
+    """Django keeps a name's template in a per-render cache keyed on the ``{% include %}`` node.
+
+    The guard hands Django a stand-in for the node; that stand-in must be the same cache key, or
+    every iteration of a loop would load the template again.
+    """
+    from unittest.mock import patch
+
+    from django.template.loaders.locmem import Loader
+
+    _TEMPLATES["row_3880.html"] = "<{{ n }}>"
+    real = Loader.get_contents
+    loads: list[str] = []
+
+    def counting(self: Any, origin: Any) -> str:
+        loads.append(origin.name)
+        return real(self, origin)
+
+    with patch.object(Loader, "get_contents", counting):
+        out = site('{% for n in ns %}{% include "row_3880.html" %}{% endfor %}', {"ns": [1, 2, 3]})
+    assert out == "<1><2><3>"
+    assert loads.count("row_3880.html") == 1, loads
+
+
+# --- the other guard cases #3815 covers, on the child sites --------------------------------
+class _CallablePayload:
+    """A callable object a template may name as ``{{ obj }}``: ``__call__`` counts."""
+
+    calls = 0
+
+    def __call__(self) -> str:
+        type(self).calls += 1
+        return "CALLED"
+
+    def __str__(self) -> str:
+        return "OBJ"
+
+
+def _callable(kind: str) -> Any:
+    cls = type(f"Callable_{kind}", (_CallablePayload,), {"calls": 0})
+    if kind != "plain":
+        setattr(cls, kind, True)
+    return cls()
+
+
+@pytest.mark.parametrize("site", CHILD_SITES)
+@pytest.mark.parametrize(
+    "kind,expected",
+    [("alters_data", "[]"), ("do_not_call_in_templates", "[OBJ]")],
+)
+def test_child_callable_operand_in_a_variable_is_not_called_when_flagged(site, kind, expected):
+    """``{{ obj }}`` of a flagged callable: Django's own variable rule holds on the child sites."""
+    obj = _callable(kind)
+    out = site("[{{ obj }}]", {"obj": obj})
+    assert type(obj).calls == 0
+    assert out == expected
+
+
+@pytest.mark.parametrize("site", CHILD_SITES)
+def test_child_callable_operand_in_a_variable_is_called_when_unflagged(site):
+    obj = _callable("plain")
+    out = site("[{{ obj }}]", {"obj": obj})
+    assert out == "[CALLED]"
+    assert type(obj).calls >= 1
+
+
+@pytest.mark.parametrize("site", CHILD_SITES)
+def test_child_a_flagged_render_logs_one_warning_and_does_not_raise(site, caplog):
+    obj = _payload("alters_data")()
+    with caplog.at_level(logging.WARNING, logger="djust._template_guards"):
+        site("[{% include obj %}]", {"obj": obj})
+        site("[{% include obj %}]", {"obj": obj})
+    assert len([r for r in caplog.records if "alters_data" in r.getMessage()]) == 1
+
+
+# --- the two tests that PINNED the old behaviour, flipped on purpose (#3880) ----------------
+def test_embedded_child_template_does_not_call_a_flagged_render():
+    """Was ``test_PIN_embedded_child_template_still_calls_a_flagged_render`` (``"[RENDERED]"``, 1 call)."""
     from djust.websocket import render_embedded_child_html
 
     obj = _payload("alters_data")()
-    assert render_embedded_child_html(_child_view(obj)) == "[RENDERED]"
-    assert type(obj).calls == 1
+    assert render_embedded_child_html(_child_view(obj)) == "[]"
+    assert type(obj).calls == 0
 
 
-def test_PIN_sticky_child_template_still_calls_a_flagged_render():
+def test_sticky_child_template_does_not_call_a_flagged_render():
+    """Was ``test_PIN_sticky_child_template_still_calls_a_flagged_render`` (``"[RENDERED]"``, 1 call)."""
     from djust.templatetags.live_tags import _render_sticky_child_html
 
     obj = _payload("alters_data")()
     html = str(_render_sticky_child_html(_child_view(obj), "v1", None, None, "x.Child"))
-    assert "[RENDERED]" in html
+    assert "RENDERED" not in html
+    assert "[]" in html
+    assert type(obj).calls == 0
+
+
+def _child_view(obj: Any) -> Any:
+    return _child("[{% include obj %}]", {"obj": obj})
+
+
+# --- the guard's own mechanics -------------------------------------------------------------
+def test_the_embedded_child_reproducer_from_the_issue():
+    from djust.live_view import LiveView
+    from djust.websocket import render_embedded_child_html
+
+    class P:
+        calls = 0
+
+        def render(self, ctx=None):
+            type(self).calls += 1
+            return "RENDERED"
+
+        render.alters_data = True
+
+    class C(LiveView):
+        template = "[{% include obj %}]"
+
+        def mount(self, request, **kw):
+            self.obj = P()
+
+        def get_context_data(self, **kw):
+            return {"obj": self.obj}
+
+    c = C()
+    c.mount(None)
+    assert render_embedded_child_html(c) == "[]"
+    assert P.calls == 0
+
+
+def test_a_render_outside_the_scope_is_stock_django():
+    """Installing the patch (a child was rendered) changes nothing for a render no view makes."""
+    from djust._include_guard import install
+
+    install()
+    obj = _payload("alters_data")()
+    out = django_render("[{% include obj %}]", {"obj": obj})
+    assert type(obj).calls == 1, out
+
+
+def test_the_scope_ends_with_the_render_even_when_it_raises():
+    from djust._include_guard import include_guard_scope, install
+
+    install()
+    with pytest.raises(RuntimeError):
+        with include_guard_scope():
+            raise RuntimeError("boom")
+    obj = _payload("alters_data")()
+    django_render("[{% include obj %}]", {"obj": obj})
+    assert type(obj).calls == 1  # no longer guarded: the scope was reset
+
+
+def test_scopes_nest():
+    from djust._include_guard import include_guard_scope
+
+    obj = _payload("alters_data")()
+    with include_guard_scope():
+        with include_guard_scope():
+            pass
+        assert django_render("[{% include obj %}]", {"obj": obj}) == "[]"  # outer still active
+    assert type(obj).calls == 0
+
+
+def test_the_scope_is_per_thread():
+    """A render on another thread is not made stricter because this thread is in a scope."""
+    import threading
+
+    from djust._include_guard import include_guard_scope
+
+    obj = _payload("alters_data")()
+    seen: list[str] = []
+    with include_guard_scope():
+        t = threading.Thread(
+            target=lambda: seen.append(django_render("[{% include obj %}]", {"obj": obj}))
+        )
+        t.start()
+        t.join()
+    assert seen == ["[RENDERED]"]
     assert type(obj).calls == 1
+
+
+def test_a_backend_template_wrapper_is_checked_on_its_inner_render():
+    """Django calls ``obj.template.render``; that is the callable whose markers count."""
+    from django.template import Template
+    from django.template.backends.django import Template as BackendTemplate
+
+    from djust._include_guard import include_guard_scope
+
+    calls: list[int] = []
+
+    class Flagged(Template):
+        def render(self, context):
+            calls.append(1)
+            return super().render(context)
+
+        render.alters_data = True  # type: ignore[attr-defined]
+
+    engine = Engine()
+    inner = Flagged("INNER", engine=engine)
+    wrapper = BackendTemplate(inner, backend=None)  # type: ignore[arg-type]
+    with include_guard_scope():
+        assert (
+            Engine().from_string("[{% include t %}]").render(DjangoContext({"t": wrapper})) == "[]"
+        )
+    assert calls == []
+    # an unflagged inner template behind the same wrapper type still renders
+    plain = BackendTemplate(engine.from_string("OK"), backend=None)  # type: ignore[arg-type]
+    with include_guard_scope():
+        assert (
+            Engine().from_string("[{% include t %}]").render(DjangoContext({"t": plain})) == "[OK]"
+        )
+
+
+class _ShiftyAfterTwoReads:
+    """``render`` is a property: reads 1 and 2 are harmless, every later read is flagged.
+
+    Django's own "does it quack" test is read 1, so the read a guard checks is read 2. A guard
+    that checks read 2 and then reads again to CALL would run a flagged callable; one that binds
+    once runs read 2's.
+    """
+
+    def __init__(self) -> None:
+        self.reads = 0
+        self.ran: list[tuple[str, bool]] = []
+
+    @property
+    def render(self) -> Callable[..., str]:
+        self.reads += 1
+        label = f"read{self.reads}"
+        flagged = self.reads >= 3
+
+        def render(context: Any = None) -> str:
+            self.ran.append((label, flagged))
+            return label
+
+        if flagged:
+            render.alters_data = True  # type: ignore[attr-defined]
+        return render
+
+
+def test_the_checked_render_is_the_one_that_runs():
+    from djust._include_guard import include_guard_scope
+
+    obj = _ShiftyAfterTwoReads()
+    with include_guard_scope():
+        out = Engine().from_string("[{% include obj %}]").render(DjangoContext({"obj": obj}))
+    assert not any(flagged for _label, flagged in obj.ran), obj.ran
+    assert out == "[read2]"
+    assert obj.ran == [("read2", False)]
+
+
+def test_the_check_does_not_call_the_method():
+    from djust._include_guard import include_guard_scope
+
+    obj = _payload("raising_marker")()
+    with include_guard_scope():
+        assert (
+            Engine().from_string("[{% include obj %}]").render(DjangoContext({"obj": obj})) == "[]"
+        )
+    assert type(obj).calls == 0
+
+
+# --- the other places a view's or a component's context reaches Django's engine --------------
+def _view_with(source: str, ctx: dict, name: str | None = None) -> Any:
+    return _child(source, ctx, name=name)
+
+
+def streaming_inline_site(source: str, ctx: dict) -> str:
+    from asgiref.sync import async_to_sync
+
+    view = _view_with(f"<div dj-stream='s'>{source}</div>", ctx)
+    return str(async_to_sync(view._render_stream_fragment)("s"))
+
+
+def streaming_named_site(source: str, ctx: dict) -> str:
+    from asgiref.sync import async_to_sync
+
+    view = _view_with(f"<div dj-stream='s'>{source}</div>", ctx, name="stream_3880.html")
+    return str(async_to_sync(view._render_stream_fragment)("s"))
+
+
+def layout_site(source: str, ctx: dict) -> str:
+    from djust.mixins.layout import render_pending_layout
+
+    view = _view_with("unused", ctx)
+    _TEMPLATES["layout_3880.html"] = source
+    return render_pending_layout(view, "layout_3880.html")
+
+
+def testing_client_site(source: str, ctx: dict) -> str:
+    from djust.live_view import LiveView
+    from djust.testing import LiveViewTestClient
+
+    _TEMPLATES["client_3880.html"] = source
+
+    class _V(LiveView):
+        template_name = "client_3880.html"
+
+        def mount(self, request, **kwargs):
+            for k, v in ctx.items():
+                setattr(self, k, v)
+
+        def get_context_data(self, **kwargs):
+            return dict(ctx)
+
+    client = LiveViewTestClient(_V)
+    client.mount()
+    return client.render(engine="django")
+
+
+def native_site(source: str, ctx: dict) -> str:
+    from unittest.mock import MagicMock, patch
+
+    from djust.renderers import ComposeRenderer
+
+    _TEMPLATES["native_3880.html"] = f"<Stack><Text>{source}</Text></Stack>"
+    view = MagicMock()
+    view.template_name = "native_3880.html"
+    renderer = ComposeRenderer(view)
+    with patch.object(renderer, "resolve_template", return_value="native_3880.html"):
+        _html, patches_json, _version = renderer.render_with_diff(preloaded_context=dict(ctx))
+    import json
+
+    patch_list = json.loads(patches_json)
+    return str(patch_list[0]["node"]["children"][0]["text"])
+
+
+def suspense_site(source: str, ctx: dict) -> str:
+    from djust.components.suspense import _render_fallback
+
+    _TEMPLATES["suspense_3880.html"] = source
+    return _render_fallback("suspense_3880.html", dict(ctx))
+
+
+def component_fallback_site(source: str, ctx: dict) -> str:
+    """``_render_template_with_fallback`` when the Rust entry is unavailable."""
+    from unittest.mock import patch
+
+    from djust import _rust
+    from djust.components.base import _render_template_with_fallback
+
+    with patch.object(_rust, "render_template", side_effect=RuntimeError("no rust")):
+        return str(_render_template_with_fallback(source, dict(ctx)))
+
+
+def live_component_extends_site(source: str, ctx: dict) -> str:
+    """A ``LiveComponent`` whose ``template_name`` uses ``{% extends %}`` renders via ``render_to_string``."""
+    from djust.components.base import LiveComponent
+
+    _TEMPLATES["comp_base_3880.html"] = "<c>{% block body %}{% endblock %}</c>"
+    _TEMPLATES["comp_3880.html"] = (
+        '{% extends "comp_base_3880.html" %}{% block body %}' + source + "{% endblock %}"
+    )
+
+    class Comp(LiveComponent):
+        template_name = "comp_3880.html"
+
+        def get_context_data(self) -> dict:
+            return dict(ctx)
+
+    comp = Comp()
+    comp.mount()
+    html = str(comp.render())
+    match = re.search(r"<c>(.*)</c>", html, re.S)
+    assert match is not None, html
+    return match.group(1)
+
+
+def bound_component_extends_site(source: str, ctx: dict) -> str:
+    """A descriptor (ADR-031) component whose ``template_name`` uses ``{% extends %}``.
+
+    It renders through ``render_to_string`` too (the marker entry cannot follow an
+    ``{% extends %}``), in the bound component's own render rather than ``LiveComponent``'s.
+    """
+    from djust.components.descriptors.base import LiveComponent, TypedState
+    from djust.live_view import LiveView
+
+    _TEMPLATES["bound_base_3880.html"] = "<c>{% block body %}{% endblock %}</c>"
+    _TEMPLATES["bound_3880.html"] = (
+        '{% extends "bound_base_3880.html" %}{% block body %}' + source + "{% endblock %}"
+    )
+    state = type("State", (TypedState,), {"__annotations__": {"obj": Any}, "obj": None})
+    comp = type("Nav3880", (LiveComponent,), {"State": state, "template_name": "bound_3880.html"})
+    page = type("Page3880", (LiveView,), {"nav": comp(obj=ctx["obj"])})
+    html = str(page().nav)
+    match = re.search(r"<c>(.*)</c>", html, re.S)
+    assert match is not None, html
+    return match.group(1)
+
+
+def bridged_inclusion_tag_site(source: str, ctx: dict) -> str:
+    """An inclusion tag bridged into a LiveView's Rust render: Django renders the tag's template.
+
+    With no djust backend among the project's engines the tag's template comes from Django's
+    own loader and engine (``template_libraries._LoaderBackend``), not from a guarded entry.
+    """
+    from unittest.mock import patch
+
+    from djust import template_libraries
+
+    _TEMPLATES["inclusion_3880.html"] = source
+    with patch.dict(template_libraries._extra_libraries, {"probe3880": __name__}):
+        return liveview_render("{% load probe3880 %}{% inclusion_3880 %}", ctx)
+
+
+EXTRA_SITES = [
+    pytest.param(streaming_inline_site, id="stream-fragment-inline"),
+    pytest.param(streaming_named_site, id="stream-fragment-named"),
+    pytest.param(layout_site, id="pending-layout"),
+    pytest.param(testing_client_site, id="test-client-django-engine"),
+    pytest.param(native_site, id="native-renderer"),
+    pytest.param(suspense_site, id="suspense-fallback"),
+    pytest.param(component_fallback_site, id="component-django-fallback"),
+    pytest.param(live_component_extends_site, id="live-component-extends"),
+    pytest.param(bound_component_extends_site, id="bound-component-extends"),
+    pytest.param(bridged_inclusion_tag_site, id="bridged-inclusion-tag"),
+]
+
+
+@pytest.mark.parametrize("site", EXTRA_SITES)
+@pytest.mark.parametrize("kind", KINDS_REFUSED)
+def test_other_view_and_component_renders_refuse_a_flagged_render(site, kind):
+    obj = _payload(kind)()
+    out = site("[{% include obj %}]", {"obj": obj})
+    assert type(obj).calls == 0, f"render() ran on {site.__name__}"
+    assert out == "[]"
+
+
+@pytest.mark.parametrize("site", EXTRA_SITES)
+@pytest.mark.parametrize("kind", KINDS_ALLOWED)
+def test_other_view_and_component_renders_still_render_an_unflagged_render(site, kind):
+    obj = _payload(kind)()
+    out = site("[{% include obj %}]", {"obj": obj})
+    assert out == "[RENDERED]"
+    assert type(obj).calls >= 1
+
+
+# --- the net: a new Django-engine render site must be guarded or say why it is not ----------
+#: Files (or directory prefixes) under ``python/djust`` that render through Django's engine and are
+#: deliberately NOT inside ``include_guard_scope``, each with the reason. A template in one of
+#: these is shipped by the framework or rendered for a non-view caller; no view or component
+#: state reaches a ``{% include %}`` in it.
+_UNGUARDED_ENGINE_RENDERS = {
+    "admin_ext/plugins.py": "an admin dashboard widget: Django-admin Python builds the context, no LiveView",
+    "bug_capture_views.py": "a framework-owned replay page rendered with framework data",
+    "management/commands/generate_sw.py": "a build-time management command writing a file",
+    "template_tags/pwa.py": "the PWA tags render fixed framework source with string operands only",
+    "theming/": "framework-owned theme templates, rendered from theme tokens and tag arguments",
+}
+
+
+def test_every_django_engine_render_site_is_guarded_or_says_why_not():
+    """A net for the commonest shapes of a Django-engine render, not a proof of coverage.
+
+    A file under ``python/djust`` that renders through ``render_to_string(...)``,
+    ``Template(...).render(...)``, ``get_template(...).render(...)`` or ``tmpl.render(...)`` must
+    enter ``include_guard_scope`` or be listed above with its reason. A new site then fails here
+    until someone decides, instead of shipping unguarded (the shape #3880 closed).
+    """
+    pattern = re.compile(
+        r"render_to_string\(|\bTemplate\([^()]*\)\.render\(|\.from_string\([^()]*\)\.render\(|"
+        r"get_template\([^()]*\)\.render\(|\btmpl\.render\(|\btemplate\.render\("
+    )
+    root = Path(__file__).resolve().parents[1] / "djust"
+    undecided = []
+    seen_guarded = 0
+    for path in sorted(root.rglob("*.py")):
+        rel = path.relative_to(root).as_posix()
+        if "/tests/" in "/" + rel or path.name.startswith("test_") or rel == "_include_guard.py":
+            continue
+        text = path.read_text()
+        if not pattern.search(text):
+            continue
+        if "include_guard_scope" in text:
+            seen_guarded += 1
+            continue
+        if any(
+            rel == key or (key.endswith("/") and rel.startswith(key))
+            for key in _UNGUARDED_ENGINE_RENDERS
+        ):
+            continue
+        undecided.append(rel)
+    assert not undecided, (
+        "renders through Django's engine without include_guard_scope (#3880): "
+        f"{undecided} -- wrap the render, or list the file in _UNGUARDED_ENGINE_RENDERS with a reason"
+    )
+    assert seen_guarded, "the scan matched nothing: the pattern or the root is wrong"
+    # An exemption that no longer names a file is stale.
+    stale = [k for k in _UNGUARDED_ENGINE_RENDERS if not (root / k).exists()]
+    assert not stale, stale
