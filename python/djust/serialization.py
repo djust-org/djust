@@ -12,7 +12,8 @@ import json
 import logging
 import re
 import threading
-from datetime import datetime, date, time, timedelta, timezone as _dt_timezone, tzinfo as _dt_tzinfo
+from datetime import datetime, date, time, timedelta
+from datetime import timezone as _dt_timezone, tzinfo as _dt_tzinfo
 from decimal import Decimal, InvalidOperation
 from typing import Any, Callable, Dict, FrozenSet, List, Optional, Union, cast
 from types import ModuleType as _ModuleType
