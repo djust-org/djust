@@ -177,7 +177,9 @@ class DropdownComponent(LiveComponent):
                             continue
                         # Convert value to JSON string for complex types
                         if isinstance(value, (dict, list)):
-                            value_str = attr_text(json.dumps(value))
+                            value_str = conditional_escape(
+                                json.dumps(value)
+                            )  # a plain str: always escaped
                         else:
                             value_str = attr_text(value)
                         data_attrs += f' data-{key}="{value_str}"'
@@ -225,7 +227,7 @@ class DropdownComponent(LiveComponent):
                 text = conditional_escape(item.get("text", ""))
                 action = attr_text(item.get("action", ""))
                 icon = conditional_escape(item.get("icon", ""))
-                item_variant = attr_text(item.get("variant", ""))
+                item_variant = conditional_escape(item.get("variant", ""))
                 data = item.get("data", {})
 
                 click_attr = (
@@ -242,7 +244,9 @@ class DropdownComponent(LiveComponent):
                         if not _DATA_KEY_RE.match(str(key)):
                             continue
                         if isinstance(value, (dict, list)):
-                            value_str = attr_text(json.dumps(value))
+                            value_str = conditional_escape(
+                                json.dumps(value)
+                            )  # a plain str: always escaped
                         else:
                             value_str = attr_text(value)
                         data_attrs += f' data-{key}="{value_str}"'
@@ -279,7 +283,9 @@ class DropdownComponent(LiveComponent):
                         if not _DATA_KEY_RE.match(str(key)):
                             continue
                         if isinstance(value, (dict, list)):
-                            value_str = attr_text(json.dumps(value))
+                            value_str = conditional_escape(
+                                json.dumps(value)
+                            )  # a plain str: always escaped
                         else:
                             value_str = attr_text(value)
                         data_attrs += f' data-{key}="{value_str}"'
