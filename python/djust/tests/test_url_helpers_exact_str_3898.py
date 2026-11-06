@@ -33,7 +33,7 @@ class Hostile(str):
     """A ``str`` whose every method lies: the content is the dangerous text, the answers are not."""
 
     def __str__(self) -> str:  # type: ignore[override]
-        return mark_safe(str.__str__(self))  # a marked-safe object, as ``str()`` of it
+        return self  # ``str()`` of it is itself: every later method call is the lying one
 
     def __html__(self) -> str:
         return str.__str__(self)
@@ -75,7 +75,8 @@ def test_the_hostile_class_really_lies() -> None:
     """Not a tautology: the class defeats the naive reading it is here to catch."""
     h = Hostile("javascript:alert(1)")
     assert h.strip() is BENIGN and h.lower() is BENIGN and not h.startswith("javascript:")
-    assert str(h) == "javascript:alert(1)" and type(str(h)) is not str
+    assert str.__str__(h) == "javascript:alert(1)" and type(str(h)) is Hostile
+    assert str(h).strip() is BENIGN  # what ``str(value).strip()`` would hand a check
 
 
 @pytest.mark.parametrize("text", [*SCRIPT, BREAKOUT, "/ok?a=1&b=2", ""])

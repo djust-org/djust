@@ -1596,7 +1596,7 @@ def model_table(
             '<th class="data-table__th data-table__th--select"><input type="checkbox"></th>'
         )
     for col in columns:
-        col_key = attr_text(col["key"])  # only in dj-value-column=
+        col_key = conditional_escape(col["key"])
         col_label = conditional_escape(col["label"])
         sort_cls = ""
         sort_attr = ""
@@ -1623,13 +1623,13 @@ def model_table(
             filter_cells += '<td class="data-table__filter-cell"></td>'
         for col in columns:
             if col.get("filterable"):
-                col_key = attr_text(col["key"])
+                col_key = conditional_escape(col["key"])
                 fval = attr_text(filters.get(col["key"], ""))  # only in value= / the compare
                 ft = col.get("filter_type", "text")
                 if ft == "select" and col.get("filter_options"):
                     opts = '<option value="">All</option>'
                     for fo in col["filter_options"]:
-                        fov = attr_text(fo.get("value", ""))  # value= and the compare
+                        fov = conditional_escape(str(fo.get("value", "")))
                         fol = conditional_escape(str(fo.get("label", "")))
                         sel = " selected" if fov == fval else ""
                         opts += f'<option value="{fov}"{sel}>{fol}</option>'
