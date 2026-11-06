@@ -15,8 +15,10 @@ was pinned as strict xfails by the diagnosis PR; every marker the change fixes i
 differential (container x operand x read, four models) and the security matrix are in
 ``python/tests/test_model_live_handle_3888.py``.
 
-What is still red, and why it is not this issue: a QuerySet or a LiveView row with ``dictsort`` over a
-field the template reads nowhere else (#3892): the row is path-JIT serialized and has no such field.
+A QuerySet or a LiveView row with ``dictsort`` over a field the template reads nowhere else was a
+different invariant (#3892: the extractor did not attribute the key a filter names in its argument, so
+the path-JIT row had no such field); it is fixed, and ``TestDictsortOverJitRows`` is its reproducer. The
+full set of cases is in ``python/tests/test_item_key_filters_3892.py``.
 
 Engine path: the Django-backend engine; LiveView and the QuerySet are the controls.
 
@@ -130,15 +132,16 @@ class TestWhatAgreesSoTheBoundaryIsTheFilter:
         source = _source(UNFILTERED[op], read)
         assert _got(_backend_render, source, shape) == _expected(source, shape)
 
-    @pytest.mark.parametrize("op", [op for op in FILTERED if op != "dictsort"])
+    @pytest.mark.parametrize("op", list(FILTERED))
     @pytest.mark.parametrize("read", list(READS))
     def test_a_queryset_agrees_because_its_rows_carry_the_data(self, world, op, read) -> None:
-        """``dictsort`` is excluded: it reads a field named in its ARGUMENT, which the JIT rows do not
-        carry (a different invariant, #3892; pinned in ``TestDictsortOverJitRows``)."""
+        """``dictsort`` included: the key it names in its ARGUMENT is attributed to the rows (#3892)."""
         source = _source(FILTERED[op], read)
         assert _got(_backend_render, source, "QuerySet") == _expected(source, "QuerySet")
 
-    @pytest.mark.parametrize("op", ["slice-head", "slice-reversed", "with-slice", "first"])
+    @pytest.mark.parametrize(
+        "op", ["slice-head", "slice-reversed", "dictsort", "with-slice", "first"]
+    )
     @pytest.mark.parametrize("read", list(READS))
     def test_a_liveview_over_the_same_list_agrees(self, world, op, read) -> None:
         source = _source(FILTERED[op], read)
@@ -206,8 +209,9 @@ DICTSORT = "{% for u in users|dictsort:'username' %}{{ u.pk }},{% endfor %}"
 
 @pytest.mark.django_db
 class TestDictsortOverJitRows:
-    """#3892: the sort key is a field named only in the filter ARGUMENT, so a path-JIT row (which holds
-    only the fields the template reads) has none, and the loop renders EMPTY instead of sorted."""
+    """#3892: the sort key is a field named only in the filter ARGUMENT. A path-JIT row holds only the
+    fields the template reads, so it had none, and the loop rendered EMPTY instead of sorted. The
+    extractor now attributes the key to the rows."""
 
     @pytest.mark.parametrize(
         "render,shape",
@@ -217,7 +221,6 @@ class TestDictsortOverJitRows:
             pytest.param(_liveview_render, "list[Model]", id="liveview-list"),
         ],
     )
-    @pytest.mark.xfail(strict=True, reason="#3892: dictsort's key field is not in the JIT row")
     def test_agrees_with_django(self, world, render, shape) -> None:
         assert _got(render, DICTSORT, shape) == _expected(DICTSORT, shape)
 
