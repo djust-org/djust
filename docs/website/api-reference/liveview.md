@@ -19,6 +19,7 @@ from djust import LiveView
 | `query_budget`      | `int` or `dict` | `None` | Query budget: an int caps mount + first render together; a dict caps each phase (`"mount"`, `"render"`, `"event"`, `"events": {handler: n}`). Read by `LiveViewSmokeTest` and measured at run time in `DEBUG` (see [Per-view query budgets](../testing/index.md#per-view-query-budgets)) |
 | `use_actors`        | `bool` | `False` | Enable actor-based state management                                           |
 | `params_form`       | `Form` class | `None` | Django form that declares the URL's query parameters; `handle_params()` receives its `cleaned_data` (see [`handle_params`](#handle_paramsparams-uri)) |
+| `params_form_fallback` | `str` | `"initial"` | What the default `handle_invalid_params()` hands `handle_params()` when `params_form` rejects the URL: `"initial"` (every field's initial value) or `"fields"` (keep the fields that validated; see [Navigation](../guides/navigation.md#declared-parameters-params_form)). Anything else raises `ImproperlyConfigured` and is a V023 error |
 | `http_status_of_state` | `Mapping[str, int]` | `{}` | HTTP status for a state the page renders itself, e.g. `{"not_found": 404}`; read by the default `get_http_status()`. A view that declares none reads `LIVEVIEW_CONFIG["http_status_of_state"]` |
 | `state_attribute`   | `str`  | `"state"` | Name of the attribute `http_status_of_state` is looked up by                 |
 | `on_mount`          | `list` | `[]`    | List of hook functions to run before `mount()` (see [on_mount Hooks](../guides/on-mount-hooks.md)) |
@@ -197,7 +198,7 @@ class ListView(LiveView):
 
 #### `handle_invalid_params(form, uri)`
 
-Called instead of `handle_params()` when `params_form` rejects the URL. `form` is the bound form; `form.errors` holds the messages, and the template reads them as `params_errors` (`{field: [messages]}`, errors that belong to no field under `"__all__"`). The default hands `handle_params()` the form's initial values. Override it to raise `Http404` or to answer 400 (set a flag and return 400 from `get_http_status()`). May be `async def`.
+Called instead of `handle_params()` when `params_form` rejects the URL. `form` is the bound form; `form.errors` holds the messages, and the template reads them as `params_errors` (`{field: [messages]}`, errors that belong to no field under `"__all__"`). The default hands `handle_params()` the form's initial values, or, with `params_form_fallback = "fields"`, keeps the fields that validated and replaces only the ones in `form.errors` with their initial value (a form-level error from `clean()`, or a combination `clean()` rejects, still replaces all of them). See [Navigation: keeping what validated](../guides/navigation.md#declared-parameters-params_form). Override it to raise `Http404` or to answer 400 (set a flag and return 400 from `get_http_status()`). May be `async def`.
 
 ---
 

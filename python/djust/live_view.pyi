@@ -59,6 +59,7 @@ class LiveView(
     http_status_of_state: Mapping[str, int] = {}
     state_attribute: str = "state"
     params_form: Optional[type] = None
+    params_form_fallback: str = "initial"
     _component_bindings: dict[str, object]
     _components: dict[str, LiveComponent]
     _component_subscriptions: tuple[SubscriptionBinding, ...]
