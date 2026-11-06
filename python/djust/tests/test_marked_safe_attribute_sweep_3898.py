@@ -46,6 +46,17 @@ from scripts.lib.template_library_parity import harness, url_sweep
 
 pytestmark = pytest.mark.components
 
+
+@pytest.fixture(autouse=True, scope="module")
+def _auto_call_on():
+    """Auto-call is the project's setting. The claims that are callables are only a claim while
+    the engine calls what it is given (it prints a function's repr otherwise), so another test
+    that leaves the global config switched off must not decide what this module exercises."""
+    with pytest.MonkeyPatch.context() as patch_:
+        patch_.setattr("djust.config.template_auto_call_enabled", lambda: True)
+        yield
+
+
 ROOT = Path(__file__).resolve().parents[3]
 
 
@@ -65,12 +76,36 @@ def _lazy_safe(text: str) -> object:
     return lazy(lambda: mark_safe(text), str)()
 
 
+class _TextFormMarkedSafe:
+    """Not text, and not marked safe itself, but the text it gives (``str(x)``) is: a template
+    engine formats a value of a type it does not know by calling ``str`` on it."""
+
+    def __init__(self, text: str) -> None:
+        self.text = text
+
+    def __str__(self) -> str:
+        return mark_safe(self.text)
+
+
+def _callable_marked_safe(text: str) -> object:
+    """A callable whose result is marked safe: a template engine calls a callable it is given."""
+    return lambda: mark_safe(text)
+
+
 CLAIMS = {
     "mark_safe": mark_safe,
     "safestring-subclass": _SafeSub,
     "lazy-mark_safe": _lazy_safe,
     "html-object": _HtmlStr,
+    "text-form-marked-safe": _TextFormMarkedSafe,
+    "callable-marked-safe": _callable_marked_safe,
 }
+#: Claims only a template ENGINE unwraps (it calls a callable it is given). A URL helper or a
+#: ``_render_custom`` f-string takes a value as it is and prints a function's repr, so the tests
+#: that hand a value straight to one of those use ``VALUE_CLAIMS``; the sweeps, which draw
+#: through ``Component.render``, use them all.
+ENGINE_CLAIMS = frozenset({"callable-marked-safe"})
+VALUE_CLAIMS = sorted(set(CLAIMS) - ENGINE_CLAIMS)
 
 #: ``(label, payload)``: three spellings of a script scheme, a data document, and two ways out of
 #: an attribute. A scheme hole is found by the URL sweep's scanner; a breakout creates ``on...``.
@@ -604,7 +639,12 @@ class TestTheSweep:
         drawn through it, with every claim, payload, shape and parameter. The scalar shapes
         are in (a constructor argument like ``size`` or ``status`` is escaped on the crate and
         ``_render_custom`` paths, so it is here), and the claims include a lazy string, the value
-        that sends a class with a crate counterpart down this path."""
+        that sends a class with a crate counterpart down this path.
+
+        Not reached here: a ``srcset`` slot (no shipped template has one; the explicit test in
+        ``test_component_hybrid_template_attrs_3900.py`` covers it and
+        ``test_no_shipped_template_has_a_srcset_slot_for_the_sweep_to_reach`` fails when one
+        appears)."""
         # one script scheme, the data document and one breakout: the scheme spellings are the
         # URL helper's own sweep (``TestTheSweep`` above); this one proves the template path
         # calls the helper and escapes the attribute
@@ -616,6 +656,15 @@ class TestTheSweep:
         assert ONLY or len(TEMPLATE_CLASSES) >= 15, sorted(TEMPLATE_CLASSES)
         assert not found, _report(found)
 
+    def test_the_default_render_of_a_template_class_lets_nothing_out_of_an_attribute(self) -> None:
+        """The same classes drawn by ``Component.render`` itself: the crate instance where it
+        takes the value, the template where it does not. The cells that reach the template are
+        the ones the crate refuses, which is every claim that is not plain text."""
+        payloads = tuple(p for p in PAYLOADS if p[0] in {"js", "breakout-dq"})
+        found, rendered = sweep(classes=TEMPLATE_CLASSES, payloads=payloads)
+        assert rendered > (50 if ONLY else 2_000), f"the sweep barely ran ({rendered} renders)"
+        assert not found, _report(found)
+
     @pytest.mark.parametrize("companions", [False, True], ids=["bare", "companions"])
     def test_no_template_class_lets_an_item_value_out_of_an_attribute(
         self, companions: bool
@@ -624,7 +673,7 @@ class TestTheSweep:
         ``class=``), the wide rule of ``TestEveryClass``."""
         payloads = tuple(p for p in PAYLOADS if p[0] in {"js", "breakout-dq"})
         found, rendered = sweep(
-            only_claims=("mark_safe", "html-object", "lazy-mark_safe"),
+            only_claims=tuple(CLAIMS),
             classes=TEMPLATE_CLASSES,
             hybrid=True,
             companions=companions,
@@ -885,7 +934,7 @@ class TestTheNoOpHrefException:
     """The ONE exception, on purpose: the literal no-op hrefs of a dropdown toggle. Exact text
     (after ``strip`` / case-folding, nothing appended), in an ``href`` only."""
 
-    @pytest.mark.parametrize("claim", ["plain", *sorted(CLAIMS)])
+    @pytest.mark.parametrize("claim", ["plain", *VALUE_CLAIMS])
     @pytest.mark.parametrize(
         ("given", "kept"),
         [
@@ -904,7 +953,7 @@ class TestTheNoOpHrefException:
         value = given if claim == "plain" else CLAIMS[claim](given)
         assert data_url_attr(value) == kept
 
-    @pytest.mark.parametrize("claim", ["plain", *sorted(CLAIMS)])
+    @pytest.mark.parametrize("claim", ["plain", *VALUE_CLAIMS])
     @pytest.mark.parametrize(
         "given",
         [
@@ -941,7 +990,7 @@ class TestTheNoOpHrefException:
         value = given if claim == "plain" else CLAIMS[claim](given)
         assert data_url_attr(value) == "#"
 
-    @pytest.mark.parametrize("claim", ["plain", *sorted(CLAIMS)])
+    @pytest.mark.parametrize("claim", ["plain", *VALUE_CLAIMS])
     @pytest.mark.parametrize("given", ["javascript:void(0)", "javascript:;"])
     def test_an_image_source_never_gets_the_exception(self, claim: str, given: str) -> None:
         from djust.components.utils import data_url_attr
@@ -964,7 +1013,7 @@ class TestTextSlotsKeepTheirMarkup:
     ``__html__``): both as before. The class-based components have always escaped what they were
     given, a marked-safe value included, which is why they pass ``honor_safe=False``."""
 
-    @pytest.mark.parametrize("claim", sorted(CLAIMS))
+    @pytest.mark.parametrize("claim", VALUE_CLAIMS)
     def test_a_class_component_escapes_a_text_slot_as_it_always_did(self, claim: str) -> None:
         from djust.components.components.breadcrumb import Breadcrumb
 
@@ -1204,7 +1253,7 @@ def _numeric_parameter(cls: type, name: str) -> bool:
     return param is not None and isinstance(param.default, (bool, int, float))
 
 
-def reach(hybrid: bool = False) -> dict[tuple[str, str], dict[str, int]]:
+def reach(hybrid: bool = False, claim: str | None = None) -> dict[tuple[str, str], dict[str, int]]:
     """``{(class, parameter): {"rendered": n, "echoed": n}}`` over EVERY derived pair: the
     parameter is given a marked-safe probe (in every shape, under every framework, with and
     without the companions) and the output is searched for the probe. ``rendered`` counts the
@@ -1212,9 +1261,13 @@ def reach(hybrid: bool = False) -> dict[tuple[str, str], dict[str, int]]:
 
     ``hybrid`` is the same question for the second path of ``Component.render``: the classes that
     have a ``template``, drawn through it with the crate instance taken away (#3900); the
-    default is ``_render_custom``, the path the rest of this file governs."""
+    default is ``_render_custom``, the path the rest of this file governs.
+
+    ``claim`` wraps the probe the way that claim kind wraps a payload (``CLAIMS[claim]``), so the
+    question "does a value of THIS kind reach the output" is asked per kind, not only for a
+    marked-safe string."""
     out: dict[tuple[str, str], dict[str, int]] = {}
-    probe = PROBE
+    probe = CLAIMS[claim](REACH_MARK) if claim else PROBE
     for key, cls in (TEMPLATE_CLASSES if hybrid else ALL_CLASSES).items():
         names, required = class_params(cls)
         keys = class_keys(cls)
@@ -1353,6 +1406,30 @@ class TestHybridCellsAreReached:
             f"pairs no hybrid cell drew: {sorted(unreached - listed)}\n"
             f"listed but now drawn: {sorted(listed - unreached)}"
         )
+
+    @pytest.mark.parametrize("claim", sorted(CLAIMS))
+    def test_every_claim_kind_is_driven_and_reaches_the_output(self, claim: str) -> None:
+        """The reach tests above count PARAMETERS. A kind of value that no cell draws, or that
+        no parameter prints, would leave the sweep clean for it by default: this asks the
+        question per claim kind, so a claim in ``CLAIMS`` that is not driven fails."""
+        by_claim = reach(hybrid=True, claim=claim)
+        assert any(n["rendered"] for n in by_claim.values()), claim
+        echoed = {pair for pair, n in by_claim.items() if n["echoed"]}
+        assert len(echoed) >= (1 if ONLY else 40), (claim, len(echoed))
+        # ... and a URL slot in particular: the parameter a judged URL group reads is drawn with
+        # a value of this kind and printed (a kind the judge cannot handle makes the render
+        # raise, which the sweep reads as "the component rejects this value": it must not hide
+        # behind the many text slots that do print)
+        from djust.components import _hybrid_attrs
+
+        url_pairs = {
+            (key, name)
+            for key, cls in TEMPLATE_CLASSES.items()
+            for group in _hybrid_attrs.plan(cls.template).groups
+            for _slot_key, name in group.slots
+        }
+        assert url_pairs or ONLY, "no shipped template has a judged URL slot any more"
+        assert url_pairs <= echoed, sorted(url_pairs - echoed)
 
     def test_every_template_class_prints_a_probe_through_some_parameter(self, outcome) -> None:
         silent = sorted(
