@@ -267,6 +267,23 @@ extract_template_variables("{{ name|upper }}")  # {"name": []}
 # Result: {"items": ["name"], "item": ["name"]}
 ```
 
+**A field named in a filter argument** (#3892): `dictsort` and `dictsortreversed`
+read the field their QUOTED argument names off each item, and so does
+`{% regroup <list> by <field> %}`. The field is filed on the list beside the
+fields the body reads, so a JIT row carries it.
+```python
+# Template: {% for u in users|dictsort:'username' %}{{ u.pk }}{% endfor %}
+# Result: {"users": ["pk", "username"], "u": ["pk"]}
+```
+Three limits, each deliberate. The field is filed only when the list's items
+are also read by field: with nothing else singled out the row is serialized
+whole, which already carries the field (`{% for u in users|dictsort:'name' %}{{ u }}`
+gives `{"users": []}`). A bare argument (`dictsort:key`) is a context variable
+whose value is the field, which a static pass cannot know, so it is filed as
+the variable read it is and names no field (#3910). A key that is not a plain
+dotted path (an empty segment, a segment starting with `_`) is ignored, as Django
+refuses it.
+
 ---
 
 ## Template Inheritance
