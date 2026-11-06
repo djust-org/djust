@@ -39,7 +39,8 @@ from __future__ import annotations
 from html.parser import HTMLParser
 
 import pytest
-from django.utils.safestring import mark_safe
+from django.utils.functional import lazy
+from django.utils.safestring import SafeString, mark_safe
 
 from djust.tests.test_component_dj_attr_parity_3669 import _django
 from djust.tests.test_components_csp_aria import _rust, assert_strict_csp_safe
@@ -543,6 +544,83 @@ def test_a_marked_safe_url_is_kept_by_the_python_tag_and_neutralised_natively() 
     assert view(py).rows[0]["attrs"]["data-href"] == "javascript:alert(1)"
     assert view(rs).rows[0]["attrs"]["data-href"] == "#"
     assert url_sweep.findings(rs) == []
+
+
+class _SafeSub(SafeString):
+    """``isinstance(x, SafeData)`` is true for a subclass too."""
+
+
+class _HtmlStr(str):
+    """Any ``str`` with ``__html__`` (what ``markupsafe.Markup`` is; no third-party package)."""
+
+    def __html__(self) -> str:
+        return str(self)
+
+
+def _lazy_safe(text: str) -> object:
+    return lazy(lambda: mark_safe(text), str)()
+
+
+#: How a value claims to be safe.
+CLAIMS = {
+    "mark_safe": mark_safe,
+    "safestring-subclass": _SafeSub,
+    "lazy-mark_safe": _lazy_safe,
+    "html-object": _HtmlStr,
+}
+MARKED_PAYLOADS = [
+    "javascript:alert(1)",
+    "JaVaScRiPt:alert(1)",
+    "java\tscript:alert(1)",
+    "data:text/html,<b>",
+    '/x" onmouseover="alert(1)" y="',
+    "/x' onmouseover='alert(1)",
+]
+
+
+def _direct(rows: list, cols: list, args: tuple[str, ...] = ()) -> str:
+    """The handler called DIRECTLY, with the Python objects (a ``SafeString`` stays one): the
+    engine hands a handler text, so a marked-safe value only reaches it this way."""
+    from djust.components.rust_handlers import DataTableHandler
+
+    return str(
+        DataTableHandler().render(
+            ["rows=rows", "columns=cols", 'row_url="u"', *args], {"rows": rows, "cols": cols}
+        )
+    )
+
+
+@pytest.mark.parametrize("claim", sorted(CLAIMS))
+@pytest.mark.parametrize("payload", MARKED_PAYLOADS)
+def test_a_handler_called_directly_checks_a_marked_safe_row_url(claim: str, payload: str) -> None:
+    """Native neutralisation must not depend on the engine turning values into text (#3894)."""
+    rows = [{"id": 1, "name": "N", "age": 3, "u": CLAIMS[claim](payload)}]
+    html = _direct(rows, LINKED)
+    page = view(html)
+    plain = view(_direct([{**rows[0], "u": payload}], LINKED))
+    assert page.rows[0]["attrs"]["data-href"] == plain.rows[0]["attrs"]["data-href"], html
+    assert page.rows[0]["anchors"][0]["href"] == plain.rows[0]["anchors"][0]["href"], html
+    assert page.handlers == [], html
+    assert url_sweep.findings(html) == [], html
+
+
+@pytest.mark.parametrize("claim", sorted(CLAIMS))
+@pytest.mark.parametrize("payload", MARKED_PAYLOADS[4:] + ["<b>x</b> a&b"])
+def test_a_marked_safe_link_class_stays_inside_the_class_attribute_natively(
+    claim: str, payload: str
+) -> None:
+    cols = [{"key": "name", "label": "N", "link": "u", "link_class": CLAIMS[claim](payload)}]
+    rows = [{"id": 1, "name": "N", "age": 3, "u": "/x"}]
+    for html in (
+        _direct(rows, cols),  # called with the objects
+        _rust(
+            '{% data_table rows=rows columns=cols row_url="u" %}', {"rows": rows, "cols": cols}
+        ),  # through the engine
+    ):
+        page = view(html)
+        assert page.handlers == [], html
+        assert page.rows[0]["anchors"][0]["class"] == payload, html
+        assert "<b>" not in html, html
 
 
 def test_a_row_that_is_not_a_dict_is_dropped_natively() -> None:

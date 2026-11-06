@@ -16,7 +16,7 @@ import uuid as _uuid
 from html.parser import HTMLParser
 from typing import Any, cast
 
-from django.utils.html import conditional_escape
+from django.utils.html import conditional_escape, escape
 from django.utils.safestring import mark_safe
 
 
@@ -1145,7 +1145,10 @@ def _row_href(row: dict[str, object], key: object) -> str:
     The Python tag's ``table_href`` (``url_attr`` over ``table_cell``): the one URL rule every
     component uses, so a row's URL reaches the attribute through the same allowlist (#3887).
     """
-    return str(url_attr(_row_text(row, key)))
+    # ``honor_safe=False``: a marked-safe value (or one with ``__html__``) is checked and escaped
+    # like any other. The engine hands a handler text, so this never differed in the engine; a
+    # handler called directly with a ``SafeString`` row value must not depend on that (#3894).
+    return str(url_attr(_row_text(row, key), honor_safe=False))
 
 
 class DataTableHandler:
@@ -1991,9 +1994,7 @@ class DataTableHandler:
                 link_key = col.get("link") if isinstance(col, dict) else None
                 if link_key:
                     link_class = col.get("link_class") if isinstance(col, dict) else None
-                    link_cls_attr = (
-                        f' class="{conditional_escape(link_class)}"' if link_class else ""
-                    )
+                    link_cls_attr = f' class="{escape(str(link_class))}"' if link_class else ""
                     cell_val = f'<a href="{_row_href(row, link_key)}"{link_cls_attr}>{cell_val}</a>'
 
                 # Apply conditional formatting to cell content
