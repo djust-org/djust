@@ -572,22 +572,32 @@ data-dump tag such as `json_viewer` spell each model as its `str()` (Django rais
 
 **What a read through a handle can return (closed set, #3888).** The handle does not list the names it
 refuses; it decides by the KIND of what a read returns, in one place (`_floored_result`,
-`python/djust/serialization.py`). Plain data (strings, numbers, dates, decimals, UUIDs, bytes, `None`)
-comes back as is, and so does a list / tuple / dict / set of it, rebuilt member by member. A model, a
-manager and a queryset come back as floor proxies. Any callable (a bound method, a manager's `.all`)
-comes back as a call wrapper whose result goes through the same function. A class, a module or a
-descriptor is refused. Any other instance (a file field, an enum member) comes back as a read-only
-view that answers reads, calls and items through the same function. Every underscore-prefixed name is
-refused by every one of these, except `__class__` (answered as the proxy's own type, so `isinstance`
-and `issubclass` against `collections.abc` classes work) and the serialisation hook the engine asks
-for. A model's own exception classes (`{{ u.DoesNotExist }}`) are classes, so they are refused too.
+`python/djust/serialization.py`). Plain data comes back as is, matched by EXACT type (`str`, `int`,
+`float`, `bool`, `None`, `Decimal`, `bytes`, `datetime`, `date`, `time`, `timedelta`), and so does a list /
+tuple / dict / set of it, rebuilt member by member (a dict's keys too). A UUID is its text. Safe markup
+stays safe markup (`SafeData` is what the engine asks), as a `str` whose class and methods a reader
+cannot reach; a `TextChoices` / `IntegerChoices` member is its value. A model, a manager and a queryset
+come back as floor proxies. Any callable (a bound method, a manager's `.all`) comes back as a call
+wrapper whose result goes through the same function. A class, a module or a descriptor is refused. Any
+other instance (a file field, a subclass of plain data, an enum member) comes back as a read-only view
+that answers reads, calls and items through the same function. Every underscore-prefixed name is
+refused by every one of these, except the serialisation hook the engine asks for and `__class__`,
+which reports a class with no Python-level methods (so a reader that walks attributes from a wrapper
+finds no function, and no module namespace behind one) while `isinstance` / `issubclass` against
+`collections.abc` classes still work because they also consult the wrapper's real type. A call wrapper
+hands out no `inspect.Signature`; the engine asks it "were arguments required?" through a marker
+(`djust_requires_arguments`), the same way it reads `djust_orm_call`. A model's own exception classes
+(`{{ u.DoesNotExist }}`) are classes, so they are refused too.
 `python/tests/test_model_handle_closed_set_3888.py` enumerates `dir()` of `User`, `Group`,
 `Permission`, `ContentType` and a custom model with a relation, a property, a file field and a
 method, and asserts that no result, at the first or the second level, is a model instance, a model
-class, a manager, a queryset, a bound method, a module or a type; the second level is every
-underscore name that would reach one (`__self__`, `__func__`, `__wrapped__`, `__globals__`,
-`__code__`, `__closure__`, `__dict__`, `__module__`). The test guarantees the KIND of what is
-returned for the members of those five models; it does not guarantee the content of a field.
+class, a manager, a queryset, a bound method, a module or a type, and that no class reached has a
+Python function among its members; the second level is every underscore name that would reach one
+(`__self__`, `__func__`, `__wrapped__`, `__globals__`, `__code__`, `__closure__`, `__dict__`,
+`__module__`). `python/tests/test_model_handle_namespaces_3888.py` pins the kinds one at a time. The
+tests guarantee the KIND of what is returned for the members of those models; they do not guarantee
+the content of a field, and a `datetime` is handed over as it is (its `tzinfo` is the application's
+own object).
 
 ## Non-goals
 
