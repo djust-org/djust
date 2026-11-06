@@ -178,7 +178,10 @@ N_ITEMS = 5
 #: that proved nothing: the first version of this sweep skipped every cell of ``ui.ListGroup`` and
 #: ``ui.NavBar`` that way and two leaks sat behind it. So the builder is typed, and
 #: ``TestEveryClassIsReached`` fails any (class, parameter) pair that no cell got through.
-CONTAINER_KEYS = ("badge", "dropdown")
+CONTAINER_KEYS = ("badge", "data", "dropdown")
+#: ... of which these hold a mapping of the same kind of text (``badge.get("text")``,
+#: ``data.items()``); ``dropdown`` holds a list of items.
+MAPPING_KEYS = ("badge", "data")
 
 
 def _flat(value: object, keys: set[str]) -> dict:
@@ -186,15 +189,44 @@ def _flat(value: object, keys: set[str]) -> dict:
     return url_sweep.dict_of(value, set(keys) - set(CONTAINER_KEYS))  # type: ignore[arg-type]
 
 
-def _item(value: object, keys: set[str] = KEYS, dropdown: bool = True) -> dict:
+#: Item keys that are FLAGS (``active``, ``disabled``, ``divider`` ...): a truthy claim in one makes
+#: the component draw the inactive branch (a breadcrumb item that is ``active`` is a ``<span>``,
+#: never a link), so the link's ``href`` is never reached. Derived from the URL sweep's own
+#: bool-name rule, plus the item flags it does not name.
+FLAG_NAMES = {"divider", "current", "selected", "hidden", "external", "separator", "dismissed"}
+
+
+def _is_flag(key: str) -> bool:
+    from scripts.lib.template_library_parity import variants
+
+    return variants.kind_of(key) == "bool" or key in FLAG_NAMES
+
+
+def _flags_off(node: object) -> object:
+    """Every flag key of an item (and of the containers under it) set to ``False``."""
+    if isinstance(node, dict):
+        for k in list(node):
+            if _is_flag(k):
+                node[k] = False
+            else:
+                _flags_off(node[k])
+    elif isinstance(node, list):
+        for entry in node:
+            _flags_off(entry)
+    return node
+
+
+def _item(value: object, keys: set[str] = KEYS, dropdown: bool = True, flags: bool = True) -> dict:
     """An item dict: every text key is ``value``, ``badge`` is a mapping of the same, and (when
     ``dropdown``) the navbar's ``dropdown`` holds two entries of the same kind. An item WITHOUT a
-    ``dropdown`` key is what a navbar draws as a plain link."""
+    ``dropdown`` key is what a navbar draws as a plain link. With ``flags`` False its flag keys
+    (``active``, ``disabled``) are ``False``: the active / disabled branch is the other half."""
     item = _flat(value, keys)
-    item["badge"] = _flat(value, keys)
+    for k in MAPPING_KEYS:
+        item[k] = _flat(value, keys)
     if dropdown:
         item["dropdown"] = [_flat(value, keys) for _ in range(2)]
-    return item
+    return item if flags else _flags_off(item)  # type: ignore[return-value]
 
 
 def _obj(value: object, keys: set[str] = KEYS) -> SimpleNamespace:
@@ -251,7 +283,10 @@ def _build(
         "list_str": lambda: [value] * N_ITEMS,
         # one item: ``badge`` a mapping, no ``dropdown`` (a navbar draws a plain link)
         "dict": lambda: _item(value, keys, dropdown=False),
-        "list_dict": lambda: [_item(value, keys, dropdown=i % 2 == 0) for i in range(N_ITEMS)],
+        # items 0..4: (dropdown, flags on) (plain, on) (dropdown, off) (plain, off) (dropdown, on)
+        "list_dict": lambda: [
+            _item(value, keys, dropdown=i % 2 == 0, flags=i not in (2, 3)) for i in range(N_ITEMS)
+        ],
         "list_dict_flat": lambda: [
             url_sweep.dict_of(value, set(keys) - {"dropdown"})  # type: ignore[arg-type]
             for _ in range(N_ITEMS)
