@@ -53,7 +53,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | V020 | LiveView | Error | A `use_actors = True` view declares an interactive component (`djust.components.interactive`); actor views do not support them |
 | V021 | LiveView | Info / Warning | A subclass overrides a `@push_handler` method without the marker (Info; still push-only), or gives the override `@event_handler` (Warning; browsers are still refused) |
 | V022 | LiveView | Warning | View code assigns an attribute djust's `LiveView` keeps its own state under (`self._streams = ...`) |
-| V023 | LiveView | Error | A `params_form` the request path cannot use: not a form class, or a form whose `__init__` needs arguments beyond `data=` |
+| V023 | LiveView | Error | A `params_form` the request path cannot use: not a form class, or a form whose `__init__` needs arguments beyond `data=`; or a `params_form_fallback` that is not `"initial"` or `"fields"` |
 | V024 | LiveView | Error | A `query_budget` nothing can enforce: an unknown key, a bool or negative number, a handler named in `events` that the view lacks or that is `async def` / `@background` |
 | V025 | LiveView | Warning | A class defines `get_http_status()` while `LIVEVIEW_CONFIG['http_status_of_state']` is configured: the override replaces the project-wide map |
 | S001 | Security | Error | mark_safe() with f-string (XSS risk) |
@@ -469,7 +469,8 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 - **Severity**: Error
 - **Method**: Runtime (class inspection; no view is constructed and no form is instantiated)
 - **What it detects**: a LiveView whose `params_form` (read from the class, so an inherited declaration counts) will fail on the first request. djust binds the URL's query parameters with `form_class(data=...)` and nothing else, so two declarations fail there: a `params_form` that is not a Django form class (a dotted-path string, a form instance, another class) raises `ImproperlyConfigured`, and a form whose `__init__` requires another argument (a user, a queryset, a tenant) or cannot take `data=` raises `TypeError`. The verdicts are the request path's own (`djust._params_form.form_class_problem` and `construction_problem`), so every failure visible in the signature is judged as the request path judges it. It reads signatures only: it does not instantiate the form, so an `__init__` that raises, a positional-only `data` (`__init__(self, data=None, /, **kw)`) that the form's own `super().__init__` then rejects, or a lazy object wrapping a form class passes the check and still fails on the first request. A signature that cannot be read is not reported.
-- **Fix**: set `params_form` to a form class; give every other `__init__` argument a default, or read it from the view in `handle_params()` instead.
+- **Also detects**: a view that declares a `params_form` and a `params_form_fallback` (also read from the class) that is not `"initial"` or `"fields"` (`djust._params_form.fallback_problem`). The request path reads it on every request of such a view and raises `ImproperlyConfigured`, so a typo such as `"field"` never silently keeps the default. A view with no `params_form` never reads the attribute and is not reported. Reported as a second message when both declarations are wrong.
+- **Fix**: set `params_form` to a form class, and `params_form_fallback` to `"initial"` or `"fields"`; give every other `__init__` argument a default, or read it from the view in `handle_params()` instead.
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["V023"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.V023"]`
 
 ### V024 — Invalid `query_budget`

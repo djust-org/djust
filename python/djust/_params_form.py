@@ -10,7 +10,8 @@ instead:
 * valid input calls ``handle_params(cleaned_data, uri)``, with the form's
   ``initial`` values filling the fields the URL left empty;
 * invalid input calls ``handle_invalid_params(form, uri)``, whose default hands
-  ``handle_params`` the initial values;
+  ``handle_params`` the initial values (``params_form_fallback = "fields"`` keeps
+  the fields that validated and replaces only the ones that did not, #3874);
 * either way ``view.params_errors`` holds the messages, for the template.
 
 Every path that calls ``handle_params`` goes through :func:`run_handle_params`
@@ -23,18 +24,22 @@ exactly as before.
 
 from __future__ import annotations
 
+import copy
 import inspect
+import logging
 from collections.abc import Mapping
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from asgiref.sync import sync_to_async
 from django import forms
-from django.core.exceptions import ImproperlyConfigured
+from django.core.exceptions import ImproperlyConfigured, SynchronousOnlyOperation, ValidationError
 from django.http import QueryDict
 
 from . import _form_data_bounds
 from ._view_hooks import call_hook, call_hook_sync
 from .sync_turn import guarded_step, run_guarded_step
+
+logger = logging.getLogger(__name__)
 
 #: The key Django uses for errors that belong to no field (``NON_FIELD_ERRORS``).
 NON_FIELD_ERRORS_KEY = "__all__"
@@ -55,6 +60,41 @@ def form_class_problem(declared: Any) -> Optional[str]:
     if isinstance(declared, type) and issubclass(declared, forms.BaseForm):
         return None
     return "must be a Django form class, not %r" % type(declared).__name__
+
+
+#: ``params_form_fallback``: what the default ``handle_invalid_params`` hands ``handle_params``.
+#: ``"initial"`` (the default) is the initial value of every field; ``"fields"`` keeps the
+#: fields that validated and uses the initial value only for the ones that did not (#3874).
+FALLBACK_INITIAL = "initial"
+FALLBACK_FIELDS = "fields"
+FALLBACKS = (FALLBACK_INITIAL, FALLBACK_FIELDS)
+
+
+def fallback_problem(declared: Any) -> Optional[str]:
+    """Why ``declared`` cannot be a ``params_form_fallback``, or ``None`` when it can.
+
+    The one definition, as :func:`form_class_problem` is for ``params_form``: the
+    request path raises on it (:func:`declared_fallback`) and the V023 system
+    check reports it, so the two cannot disagree.
+    """
+    if isinstance(declared, str) and declared in FALLBACKS:
+        return None
+    return "must be one of %s, not %r" % (", ".join(repr(name) for name in FALLBACKS), declared)
+
+
+def declared_fallback(view: Any) -> str:
+    """The view's ``params_form_fallback``, read from its class (like ``params_form``).
+
+    Read from the class so an instance attribute that happens to share the name
+    cannot replace the declaration. Anything but a known mode raises
+    ``ImproperlyConfigured``: a typo (``"field"``) must not silently keep the
+    conservative default the author meant to leave.
+    """
+    declared = getattr(type(view), "params_form_fallback", FALLBACK_INITIAL)
+    problem = fallback_problem(declared)
+    if problem is not None:
+        raise ImproperlyConfigured("%s.params_form_fallback %s." % (type(view).__name__, problem))
+    return declared
 
 
 def construction_problem(form_class: type) -> Optional[str]:
@@ -163,22 +203,174 @@ def _url_supplied(form: forms.BaseForm, name: str, field: forms.Field) -> bool:
     return key not in form.data or any(text != "" for text in form.data.getlist(key))
 
 
-def _cleaned_values(form: forms.BaseForm) -> Dict[str, Any]:
-    """The cleaned data, with each field the URL left out or empty set to its ``initial``.
+def _fill_unsupplied(
+    form: forms.BaseForm,
+    values: Dict[str, Any],
+    names: List[str],
+    initial_of: Callable[[str], Any],
+) -> None:
+    """Set each of ``names`` the URL left out or empty to its ``initial``, in ``values``.
 
     "Left out" is read from what the URL supplied, not from what the field cleaned
     to: a ``BooleanField`` cleans an absent key to ``False``, which Django does not
     count as empty, so judging by the cleaned value alone would leave
     ``initial=True`` unapplied exactly where a URL has no way to say "unchecked".
+    ``initial_of(name)`` is asked only for a field that needs it, so a callable
+    ``initial`` is not evaluated for a field the URL supplied.
     """
-    values: Dict[str, Any] = dict(form.cleaned_data)
-    for name, field in form.fields.items():
+    for name in names:
+        field = form.fields[name]
         if _url_supplied(form, name, field) and values.get(name) not in field.empty_values:
             continue
-        initial = form.get_initial_for_field(field, name)
+        initial = initial_of(name)
         if initial is not None:
             values[name] = initial
+
+
+def _cleaned_values(form: forms.BaseForm) -> Dict[str, Any]:
+    """The cleaned data, with each field the URL left out or empty set to its ``initial``."""
+    values: Dict[str, Any] = dict(form.cleaned_data)
+    _fill_unsupplied(
+        form,
+        values,
+        list(form.fields),
+        lambda name: form.get_initial_for_field(form.fields[name], name),
+    )
     return values
+
+
+def _rechecked(view: Any, form: forms.BaseForm, values: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The declared fields ``form.clean()`` leaves of ``values``, or ``None`` when it does not accept them.
+
+    Runs the form's own ``clean()`` on a copy whose ``cleaned_data`` is a deep copy
+    of ``values`` and whose errors start empty, so the form the caller holds (its
+    ``errors``, its ``cleaned_data``) is not touched. What it leaves is read the way
+    ``BaseForm._clean_form`` reads it on the valid path (the returned dict, else
+    ``self.cleaned_data``; an empty returned dict is what it leaves, so no field
+    survives), so a ``clean()`` that repairs a value hands back the same repair
+    here as there. The caller adopts that output for the fields it KEPT only. Accepted
+    means ``clean()`` neither raised ``ValidationError`` nor reported an error
+    with ``add_error()``; a plain ``ValidationError`` is an ordinary rejection and
+    logs nothing.
+
+    **``clean()`` must be idempotent.** It runs on values it already cleaned once
+    (a kept value is its own first-pass output, a replaced field's initial value
+    passes through it too), so a ``clean()`` that multiplies a price by 100 hands
+    ``handle_params`` 50000 where the valid path hands 500.
+
+    ``None`` (nothing is kept) also for anything else that goes wrong: a
+    ``clean()`` that compares with the ``None`` an initial value can be, that uses
+    the ORM on the event loop (an ``async def handle_invalid_params`` that calls
+    ``super()``), that raises ``PermissionDenied`` or ``Http404`` only on this
+    second call, or values that cannot be deep-copied. The answer is the plain
+    initial values and a logged warning, not a 500. (A kept ``ModelChoiceField``
+    value comes back as a deep copy: equal by primary key, not the same object.)
+    """
+    try:
+        probe = copy.copy(form)
+        probe.cleaned_data = copy.deepcopy(values)
+        probe._errors = type(form.errors)()
+        returned = probe.clean()
+        if returned is not None:
+            probe.cleaned_data = returned
+        if probe._errors:
+            return None
+        return {
+            name: probe.cleaned_data[name] for name in form.fields if name in probe.cleaned_data
+        }
+    except ValidationError:
+        return None
+    except Exception as exc:  # noqa: BLE001 — application code runs inside clean()
+        from ._exposure_diagnostics import log_failure_for
+
+        if isinstance(exc, SynchronousOnlyOperation):
+            message = (
+                "params_form clean() used the ORM on the event loop, so the fields it did not "
+                "see are not kept: call super().handle_invalid_params() from a sync "
+                "handle_invalid_params, or keep ORM work out of clean(); using the initial "
+                "values: %s"
+            )
+        else:
+            message = (
+                "params_form clean() failed on the merged fields; using the initial values: %s"
+            )
+        log_failure_for(logger, (view,), exc, message, exc, level="warning")
+        return None
+
+
+def fallback_values(form: forms.BaseForm, mode: str, view: Any = None) -> Dict[str, Any]:
+    """What the default ``handle_invalid_params`` hands ``handle_params`` for an invalid ``form``.
+
+    ``"initial"``: the initial value of every declared field.
+
+    ``"fields"`` (#3874): the declared fields only, each field that validated
+    with the value the valid path would hand over (a field the URL left out or
+    empty takes its ``initial``, exactly as there) and each field that did not
+    with its ``initial``. A field is "valid" when it has no entry in
+    ``form.errors`` *and* is in ``form.cleaned_data``: Django removes a field
+    from ``cleaned_data`` when its own ``clean_<field>()`` fails, but a field
+    that merely did not fail is not proof it was checked, so a field a ``clean()``
+    deleted counts as not valid. A failed field's own entry is always its initial
+    value; ``"initial"`` is the mode that never hands over a raw request value, and
+    in ``"fields"`` a ``clean()`` that copies raw request data into a KEPT field
+    hands it over through that field, as on the valid path for a field the URL
+    supplied (an unsupplied one is a known difference, #3891).
+
+    The result is always a combination the form's ``clean()`` accepts, or the
+    plain initial values. A kept field is now paired with the initial value of a
+    replaced one, a pair ``clean()`` never saw (``lo=9`` kept, ``hi=2`` replaced
+    by ``3``), so the form's ``clean()`` runs once more on exactly that
+    combination (:func:`_rechecked`); if it objects, nothing is kept, and what
+    it repairs it repairs here as on the valid path. **Only ``clean()`` runs
+    again, not the fields' own ``clean_<field>()``:** a ``clean_end()`` that
+    checks ``end >= start`` was skipped when ``start`` failed and is not run on
+    the merged values, so ``?start=zz&end=1`` hands over ``start`` at its initial
+    value 10 next to ``end=1``. A replaced field's own validity is not asked
+    either (a required field with no initial value is replaced by ``None``).
+
+    Three cases keep nothing. A form-level error (``NON_FIELD_ERRORS``) says the
+    *combination* is wrong, so the siblings that validated one by one would hand
+    ``handle_params`` the very combination the form refused; a form that was
+    never validated (the data exceeded its bounds, :func:`bind_params`) has no
+    ``cleaned_data`` at all; and a combination ``clean()`` rejects (above). All
+    fall back to the initial values.
+
+    A callable ``initial`` is evaluated at most once, and only for the fields
+    that need it: never for a field the URL supplied and that was kept.
+    """
+    if mode != FALLBACK_FIELDS:
+        return initial_values(form)
+    evaluated: Dict[str, Any] = {}
+
+    def initial_of(name: str) -> Any:
+        if name not in evaluated:
+            evaluated[name] = form.get_initial_for_field(form.fields[name], name)
+        return evaluated[name]
+
+    def all_initial() -> Dict[str, Any]:
+        return {name: initial_of(name) for name in form.fields}
+
+    cleaned = getattr(form, "cleaned_data", None)
+    if cleaned is None or form.non_field_errors():
+        return all_initial()
+    kept = [name for name in form.fields if name not in form.errors and name in cleaned]
+    if not kept:
+        return all_initial()
+    values: Dict[str, Any] = {name: cleaned[name] for name in kept}
+    _fill_unsupplied(form, values, kept, initial_of)
+    merged = {name: values[name] if name in values else initial_of(name) for name in form.fields}
+    repaired = _rechecked(view, form, merged)
+    if repaired is None:
+        return all_initial()
+    # clean()'s output is adopted for the fields the fallback KEPT only (a kept field the URL left
+    # out counts: it is in `kept`). A replaced field is its initial value whatever clean() wrote:
+    # a clean() that re-reads self.data would otherwise write the failed raw value into its own entry.
+    # A kept field clean() removed is not valid, as one it was never given: its initial value.
+    adopted = set(kept)
+    return {
+        name: repaired[name] if name in adopted and name in repaired else initial_of(name)
+        for name in form.fields
+    }
 
 
 def _error_messages(form: forms.BaseForm) -> Dict[str, List[str]]:
@@ -224,6 +416,7 @@ async def run_handle_params(view: Any, params: Any, uri: str) -> None:
         if hasattr(view, "handle_params"):
             await call_hook(view.handle_params, params, uri)
         return
+    declared_fallback(view)  # a mode nothing implements fails the request, not only an invalid one
     # A guarded step: a wrapper that swallowed a failure here would otherwise
     # leave nothing bound, and the view would act on a URL no form accepted.
     stepped = guarded_step(view, "handle_params", bind_params)
@@ -241,6 +434,7 @@ def run_handle_params_sync(view: Any, params: Any, uri: str) -> None:
         if hasattr(view, "handle_params"):
             call_hook_sync(view.handle_params, params, uri)
         return
+    declared_fallback(view)  # a mode nothing implements fails the request, not only an invalid one
     form, values = run_guarded_step(view, "handle_params", bind_params, view, form_class, params)
     if values is None:
         call_hook_sync(view.handle_invalid_params, form, uri)

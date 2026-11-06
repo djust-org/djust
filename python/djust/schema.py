@@ -874,6 +874,15 @@ CLASS_ATTRIBUTES: List[Dict[str, Any]] = [
         "example": "params_form = ListParams",
     },
     {
+        "name": "params_form_fallback",
+        "type": "str",
+        "default": "'initial'",
+        "description": "What the default handle_invalid_params() hands handle_params() when "
+        "params_form rejects the URL: 'initial' (the initial value of every field) or 'fields' "
+        "(keep the fields that validated, replace only the invalid ones with their initial value)",
+        "example": "params_form_fallback = 'fields'",
+    },
+    {
         "name": "http_status_of_state",
         "type": "Mapping[str, int]",
         "default": "{}",
