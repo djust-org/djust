@@ -2890,6 +2890,9 @@ pub fn extract_template_variables(
             }
         }
         paths.retain(|path| !path.is_empty());
+        // After the index segments are gone, so that `rows.0.items` and
+        // `rows.items` are the same iterable when a key is matched to it.
+        resolve_item_key_paths(paths);
         paths.sort();
         paths.dedup();
     }
@@ -3205,10 +3208,14 @@ fn extract_from_nodes(
                 // must be tracked as a dependency too, otherwise a nested
                 // {% if %}{{ x|default:dynamic }}{% endif %} silently drops
                 // when only `dynamic` changes (issue #787).
-                for (_name, arg) in filters {
+                for (name, arg) in filters {
                     if let Some(arg) = arg {
                         extract_from_filter_arg(arg, variables);
                     }
+                    // `{{ users|dictsort:'name' }}` reads `name` off each user
+                    // (#3892); a tag operand reaches the same helper through
+                    // `extract_from_operand`.
+                    record_item_key_filter(var_expr, name, arg.as_deref(), variables);
                 }
             }
             Node::If {
@@ -3383,17 +3390,25 @@ fn extract_from_nodes(
                 }
                 variables.entry("*".to_string()).or_default();
             }
-            Node::CustomTag { args, name: _ }
+            Node::CustomTag { args, name }
             | Node::BlockCustomTag {
                 args,
-                name: _,
+                name,
                 children: _,
             }
             | Node::RawBlockCustomTag {
                 args,
-                name: _,
+                name,
                 body: _,
             } => {
+                // `{% regroup users by name as g %}` reads `name` off each
+                // user, as `dictsort:'name'` does (#3892). `regroup` is an
+                // inline tag handler (the `as` form is still `CustomTag`),
+                // and `handler_exists` is asked before `assign_handler_exists`
+                // at parse, so it arrives here and never as `AssignTag`.
+                if name == "regroup" {
+                    record_regroup_item_key(args, variables);
+                }
                 // Extract variables from custom/block tag arguments
                 for arg in args {
                     if (arg.starts_with('"') && arg.ends_with('"'))
@@ -3689,7 +3704,159 @@ fn extract_from_operand(
         if let Some((_, arg)) = spec.split_once(':') {
             extract_from_filter_arg(arg, variables);
         }
+        // A quoted argument is a LITERAL, so the line above rightly files
+        // nothing for it. For `dictsort:'username'` that literal is itself a
+        // read: of `username`, off each item of `head` (#3892).
+        let (name, arg, _) = crate::filter_lexer::scan_filter_spec(spec.trim());
+        record_item_key_filter(head, name, arg, variables);
     }
+}
+
+/// Marks a path as an ITEM-KEY read: the field a filter or tag names in its
+/// ARGUMENT, off each item of an iterable, rather than a read the template
+/// body makes (#3892). A path is `<iterable path>.<MARK><key>`, or `<MARK><key>`
+/// when the iterable is the root. It rides the ordinary path channel so every
+/// transfer in [`extract_from_nodes`] (a loop variable onto its iterable, a
+/// `{% with %}` alias onto its source) prefixes it like any other path, and
+/// [`resolve_item_key_paths`] settles it at the one chokepoint every
+/// producer flows through. `U+0001` cannot appear in a template identifier.
+const ITEM_KEY_MARK: char = '\u{1}';
+
+/// The built-in filters whose ARGUMENT names an attribute read off each ITEM
+/// of the value they filter (a Django `Variable` path, resolved per item).
+///
+/// A decision per built-in filter, derived rather than recalled: the probe in
+/// `python/tests/test_item_key_filters_3892.py` hands every Django built-in an
+/// iterable of tripwire items and records which of them read the named
+/// attribute, and exactly these two do. The others read nothing by name:
+/// `unordered_list`, `join`, `first`, `last`, `random`, `slice`, `length`,
+/// `make_list`, `safeseq` and `escapeseq` stringify or index whole items.
+/// A new entry here is a filter that reads a field of each item; the test
+/// fails when Django grows one.
+const ITEM_KEY_FILTERS: &[&str] = &["dictsort", "dictsortreversed"];
+
+/// A key a filter or tag may name, as a path the JIT may serialize.
+///
+/// Django resolves it with `Variable`, so a dotted path (`profile.name`) and an
+/// index segment are legal and an underscore-led segment is refused
+/// ("Variables and attributes may not begin with underscores"). The refusal
+/// matters here: the key comes from a string literal, which the parser never
+/// sees as a variable, so without this check `dictsort:'_secret'` would name a
+/// private attribute for the serializer to read. A key that is not a plain path
+/// contributes nothing, as does one that starts with an index (`itemgetter`).
+fn is_item_key_path(key: &str) -> bool {
+    !key.is_empty()
+        && !is_index_segment(key.split('.').next().unwrap_or(""))
+        && key.split('.').all(|segment| {
+            !segment.is_empty()
+                && !segment.starts_with('_')
+                && segment.chars().all(|c| c.is_alphanumeric() || c == '_')
+        })
+}
+
+/// File `key` as a field read off each item of the iterable `head`.
+///
+/// `head` is the iterable's own variable path (`users`, `page.users`), without
+/// its filter chain. The read is filed under `head`'s root with the path to
+/// the iterable in front, exactly where `{% for u in head %}{{ u.<key> }}`
+/// puts it after the loop transfer, because a list's item paths are filed on
+/// the list (see the `Node::For` arm of [`extract_from_nodes`]).
+fn record_item_key_read(
+    head: &str,
+    key: &str,
+    variables: &mut std::collections::HashMap<String, Vec<String>>,
+) {
+    let head = head.trim();
+    // A variable starts like a name; a quoted string and a number do not, and
+    // have no list to put a key on.
+    let named = head
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_alphabetic() || c == '_');
+    if !named || !is_item_key_path(key) {
+        return;
+    }
+    let (root, list_path) = match head.split_once('.') {
+        Some((root, path)) => (root, format!("{path}.")),
+        None => (head, String::new()),
+    };
+    variables
+        .entry(root.to_string())
+        .or_default()
+        .push(format!("{list_path}{ITEM_KEY_MARK}{key}"));
+}
+
+/// The item-key read of one filter applied to `head`, if it is one: a filter in
+/// [`ITEM_KEY_FILTERS`] whose argument is a QUOTED literal. A bare argument
+/// (`dictsort:key`) is a context variable whose value is the field name, which
+/// no static pass can know; it is filed as the variable read it also is, and
+/// the field it will name at render time is not attributed (#3892).
+fn record_item_key_filter(
+    head: &str,
+    name: &str,
+    arg: Option<&str>,
+    variables: &mut std::collections::HashMap<String, Vec<String>>,
+) {
+    if !ITEM_KEY_FILTERS.contains(&name) {
+        return;
+    }
+    let Some(arg) = arg.map(str::trim) else {
+        return;
+    };
+    let key = strip_filter_arg_quotes(arg);
+    if key.len() != arg.len() {
+        record_item_key_read(head, key, variables);
+    }
+}
+
+/// `{% regroup <source> by <attr> as <var> %}` reads `<attr>` off each item of
+/// `<source>`, the same read `dictsort:'<attr>'` makes (#3892). The source may
+/// carry a filter chain, and so may the attribute (`by country|lower`); only
+/// the heads name anything.
+fn record_regroup_item_key(
+    args: &[String],
+    variables: &mut std::collections::HashMap<String, Vec<String>>,
+) {
+    // The second argument is `by`: the handler's `validate_at_parse` refuses
+    // `{% regroup x y z %}` ("second argument to 'regroup' tag must be 'by'")
+    // before extraction runs, so a tag that reaches here has it.
+    let [source, _by, attr, ..] = args else {
+        return;
+    };
+    let head = |operand: &str| {
+        crate::filter_lexer::split_pipes(operand)
+            .first()
+            .map(|part| part.trim().to_string())
+            .unwrap_or_default()
+    };
+    record_item_key_read(&head(source), &head(attr), variables);
+}
+
+/// Settle the item-key reads in one root's paths (see [`ITEM_KEY_MARK`]).
+///
+/// A key is kept only when the same iterable's items are read by field
+/// elsewhere (`<iterable path>.<other field>`, or any other path when the
+/// iterable is the root). A path list that names fields makes the JIT build
+/// rows from exactly those fields, so the key has to be among them; an empty
+/// list means "no field is singled out" and the row is serialized whole, which
+/// already carries the key AND the `__str__` a bare `{{ u }}` prints. Adding
+/// the key to an empty list would turn that whole row into a one-field row and
+/// break `{% for u in users|dictsort:'name' %}{{ u }}`, which works today.
+fn resolve_item_key_paths(paths: &mut Vec<String>) {
+    if !paths.iter().any(|path| path.contains(ITEM_KEY_MARK)) {
+        return;
+    }
+    let (marked, mut plain): (Vec<String>, Vec<String>) = std::mem::take(paths)
+        .into_iter()
+        .partition(|path| path.contains(ITEM_KEY_MARK));
+    let kept: Vec<String> = marked
+        .iter()
+        .filter_map(|path| path.split_once(ITEM_KEY_MARK))
+        .filter(|(list_path, _)| plain.iter().any(|other| other.starts_with(list_path)))
+        .map(|(list_path, key)| format!("{list_path}{key}"))
+        .collect();
+    plain.extend(kept);
+    *paths = plain;
 }
 
 /// Extract variable paths from an expression (like in if tags)
