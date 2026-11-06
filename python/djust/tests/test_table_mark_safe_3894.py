@@ -9,8 +9,9 @@ attribute. The rule of the table is now: a row value that reaches an ATTRIBUTE i
 escaped whatever it is marked as; a row value that reaches TEXT stays as marked.
 
 Every case is rendered with each way a value can claim to be safe: ``mark_safe`` (``SafeString``),
-a ``SafeString`` subclass, a lazy string whose result is marked safe, and ``markupsafe.Markup``
-(an ``__html__`` object, which Django's ``conditional_escape`` also honours).
+a ``SafeString`` subclass, a lazy string whose result is marked safe, and a ``str`` with an
+``__html__`` method (what ``markupsafe.Markup`` is, which Django's ``conditional_escape`` also
+honours; a local class, so the file needs no third-party package).
 """
 
 from __future__ import annotations
@@ -21,7 +22,6 @@ import pytest
 from django.template import Context, Engine
 from django.utils.functional import lazy
 from django.utils.safestring import SafeString, mark_safe
-from markupsafe import Markup
 
 import djust.components
 from djust.tests.test_components_csp_aria import _rust
@@ -42,6 +42,14 @@ class _SafeSub(SafeString):
     """A subclass of the safe string type: ``isinstance(x, SafeData)`` is still true."""
 
 
+class _HtmlStr(str):
+    """Any ``str`` with an ``__html__`` method (what ``markupsafe.Markup`` is, without the
+    dependency): Django's ``conditional_escape`` writes it as it is, though it is not ``SafeData``."""
+
+    def __html__(self) -> str:
+        return str(self)
+
+
 def _lazy_safe(text: str) -> object:
     return lazy(lambda: mark_safe(text), str)()
 
@@ -51,11 +59,16 @@ CLAIMS = {
     "mark_safe": mark_safe,
     "safestring-subclass": _SafeSub,
     "lazy-mark_safe": _lazy_safe,
-    "markupsafe-Markup": Markup,
+    "html-object": _HtmlStr,
 }
 
 #: The payloads: a script scheme (three spellings) and an attribute breakout.
-SCHEMES = ["javascript:alert(1)", "JaVaScRiPt:alert(1)", "java\tscript:alert(1)", "data:text/html,<b>"]
+SCHEMES = [
+    "javascript:alert(1)",
+    "JaVaScRiPt:alert(1)",
+    "java\tscript:alert(1)",
+    "data:text/html,<b>",
+]
 BREAKOUTS = [
     '/x" onmouseover="alert(1)" x="',
     "/x' onmouseover='alert(1)",
@@ -159,7 +172,9 @@ def test_an_unmarked_value_is_the_reference_for_the_marked_one(claim: str, paylo
 
 @pytest.mark.parametrize("claim", sorted(CLAIMS))
 @pytest.mark.parametrize("payload", BREAKOUTS + ["<b>x</b> a&b"])
-def test_a_marked_safe_link_class_stays_inside_the_class_attribute(claim: str, payload: str) -> None:
+def test_a_marked_safe_link_class_stays_inside_the_class_attribute(
+    claim: str, payload: str
+) -> None:
     cols = [{"key": "name", "label": "N", "link": "u", "link_class": CLAIMS[claim](payload)}]
     html = render({"id": 1, "name": "N", "u": "/x"}, cols)
     p = page(html)

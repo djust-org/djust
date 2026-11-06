@@ -10,7 +10,7 @@ from ..base import Component
 
 from django.utils.html import conditional_escape
 
-from djust.components.utils import url_attr
+from djust.components.utils import data_url_attr
 
 
 # Try to import Rust implementation (will be added later)
@@ -210,7 +210,7 @@ class ListGroup(Component):
                 disabled_attr = ' aria-disabled="true"' if disabled else ""
                 aria_current = ' aria-current="true"' if active else ""
                 list_items.append(
-                    f'  <a href="{url_attr(url)}" class="{class_str}"{disabled_attr}{aria_current}>{content}</a>'
+                    f'  <a href="{data_url_attr(url)}" class="{class_str}"{disabled_attr}{aria_current}>{content}</a>'
                 )
             else:
                 # Regular item
@@ -310,7 +310,9 @@ class ListGroup(Component):
             # Build item
             if url and not disabled:
                 # Link item
-                list_items.append(f'  <a href="{url_attr(url)}" class="{class_str}">{content}</a>')
+                list_items.append(
+                    f'  <a href="{data_url_attr(url)}" class="{class_str}">{content}</a>'
+                )
             else:
                 # Regular item
                 list_items.append(f'  <li class="{class_str}">{content}</li>')
@@ -372,7 +374,9 @@ class ListGroup(Component):
             # Build item
             if url and not disabled:
                 # Link item
-                list_items.append(f'  <a href="{url_attr(url)}" class="{class_str}">{content}</a>')
+                list_items.append(
+                    f'  <a href="{data_url_attr(url)}" class="{class_str}">{content}</a>'
+                )
             else:
                 # Regular item
                 list_items.append(f'  <li class="{class_str}">{content}</li>')

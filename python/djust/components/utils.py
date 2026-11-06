@@ -9,7 +9,7 @@ import re
 from typing import Any
 from urllib.parse import urlsplit
 
-from django.utils.html import conditional_escape
+from django.utils.html import conditional_escape, escape
 from django.utils.safestring import SafeData
 
 __all__ = [
@@ -477,6 +477,29 @@ def url_attr(value: Any, *, image: bool = False, honor_safe: bool = True) -> str
         escaped: str = conditional_escape(str(value).strip())
         return escaped
     return safe_url(value)
+
+
+def data_url_attr(value: Any, *, image: bool = False) -> str:
+    """:func:`url_attr` for a URL that is DATA: read out of an item dict, a list of images, a row,
+    or the constructor of a class-based component (#3898, #3894).
+
+    A marked-safe value (``mark_safe``, a lazy one, ``Markup``) is checked and escaped like any
+    other. ``mark_safe`` keeps markup in a TEXT slot; it does not mean "use this as a URL". Only a
+    template tag's own keyword argument (the developer wrote it in the template) may use
+    :func:`url_attr`'s default; ``python/djust/tests/test_marked_safe_attribute_sweep_3898.py``
+    pins the call sites that still do.
+    """
+    return url_attr(value, image=image, honor_safe=False)
+
+
+def attr_text(value: Any) -> str:
+    """``value`` escaped for a quoted attribute, whatever it is marked as (#3898).
+
+    ``conditional_escape`` leaves a marked-safe value (and anything with ``__html__``) as it is,
+    which is right in a text slot and lets the value out of an attribute. This always escapes
+    (``django.utils.html.escape``), so it is for ``class=``, ``id=``, ``data-*`` and the like.
+    """
+    return str(escape(str(value)))
 
 
 #: The HTML spec's "ASCII whitespace": TAB, LF, FF, CR and SPACE. Not VT, and not

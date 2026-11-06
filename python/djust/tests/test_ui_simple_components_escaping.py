@@ -7,9 +7,10 @@ where the component has per-framework output). These tests pin the Python
 f-string path: the Rust instance and the template are switched off on the
 instance so ``render()`` reaches ``_render_custom()`` under each CSS framework.
 
-Values are escaped with ``conditional_escape``, so a value the developer marked
-safe (``mark_safe`` / ``SafeString``) passes through unchanged. URL-bearing
-attributes go through ``url_attr``: non-navigation schemes become ``#``.
+Values in a TEXT slot are escaped with ``conditional_escape``, so a value the
+developer marked safe (``mark_safe`` / ``SafeString``) passes through unchanged
+there. A value in an ATTRIBUTE, and every URL (``data_url_attr``: non-navigation
+schemes become ``#``), is checked and escaped whatever it is marked as (#3898).
 """
 
 from __future__ import annotations
@@ -243,12 +244,34 @@ def test_quoted_value_cannot_leave_its_attribute(name: str, framework: str) -> N
 ALWAYS_ESCAPED = {"divider", "tooltip"}
 
 
-@pytest.mark.parametrize("name,framework", [(n, fw) for n, fw in PARAMS if n not in ALWAYS_ESCAPED])
+#: These components put the value in an ATTRIBUTE as well as (``avatar``: only) in text. A
+#: marked-safe value is checked and escaped in an attribute (#3898): ``mark_safe`` keeps markup
+#: in a TEXT slot, it never meant "write this into a quoted attribute".
+ATTRIBUTE_SLOTS_ESCAPE = {"avatar", "dropdown", "navbar"}
+
+
+@pytest.mark.parametrize(
+    "name,framework",
+    [(n, fw) for n, fw in PARAMS if n not in ALWAYS_ESCAPED | ATTRIBUTE_SLOTS_ESCAPE],
+)
 def test_marked_safe_value_passes_through(name: str, framework: str) -> None:
     factory, _ = CASES[name]
     html = _python_render(factory(mark_safe(SAFE)), framework)
     assert SAFE in html
     assert "&lt;b&gt;" not in html
+
+
+@pytest.mark.parametrize(
+    "name,framework", [(n, fw) for n, fw in PARAMS if n in ATTRIBUTE_SLOTS_ESCAPE]
+)
+def test_marked_safe_value_passes_through_a_text_slot_and_is_escaped_in_an_attribute(
+    name: str, framework: str
+) -> None:
+    factory, _ = CASES[name]
+    html = _python_render(factory(mark_safe(SAFE)), framework)
+    assert "&lt;b&gt;ok&lt;/b&gt;" in html  # an attribute escaped it
+    if name != "avatar":  # the avatar's only slots are attributes
+        assert SAFE in html  # a text slot (a label) kept the markup
 
 
 @pytest.mark.parametrize("framework", ALL_FRAMEWORKS)
@@ -334,12 +357,19 @@ def test_url_with_quote_is_escaped(name: str, framework: str) -> None:
     assert "&quot;" in html
 
 
-def test_marked_safe_url_passes_through() -> None:
+def test_marked_safe_url_is_checked_and_escaped_like_any_other() -> None:
+    """A URL read out of an item is data: ``mark_safe`` does not exempt it from the scheme
+    allowlist or the escaping (#3898). Pass the plain URL (``/a?x=1&y=2``), not a pre-escaped one."""
     html = _python_render(
         Breadcrumb(items=[{"label": "a", "url": mark_safe("/a?x=1&amp;y=2")}, {"label": "b"}]),
         "bootstrap5",
     )
-    assert 'href="/a?x=1&amp;y=2"' in html
+    assert 'href="/a?x=1&amp;amp;y=2"' in html
+    html = _python_render(
+        Breadcrumb(items=[{"label": "a", "url": mark_safe("javascript:alert(1)")}, {"label": "b"}]),
+        "bootstrap5",
+    )
+    assert "javascript:" not in html
 
 
 # --- NavBar id inside the inline onclick handlers --------------------------------
