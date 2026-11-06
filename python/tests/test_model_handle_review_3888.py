@@ -29,6 +29,7 @@ import re
 import pytest
 from django.contrib.auth.models import Group, User
 
+from python.tests._scratch_models_3888 import scratch_models  # noqa: F401
 from python.tests.test_queryset_all_traversal_3777 import _django_render  # noqa: F401
 
 LIBS = {"libraries": {"rv3888": "python.tests._reviewlib_3888"}}
@@ -296,7 +297,7 @@ class TestAModelWhoseStrRaisesIsNamedByItsClass:
         with pytest.raises(Exception, match=r"'User' object is not iterable"):
             _backend("{% for x in rows|first %}{{ x }}{% endfor %}", {"rows": list(users)})
 
-    def test_the_container_spelling_names_the_model_not_the_proxy(self) -> None:
+    def test_the_container_spelling_names_the_model_not_the_proxy(self, scratch_models) -> None:
         from django.db import models as dj_models
 
         class Raises3888(dj_models.Model):

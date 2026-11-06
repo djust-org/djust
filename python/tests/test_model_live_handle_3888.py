@@ -39,6 +39,7 @@ from django.contrib.auth.models import Group, Permission, User
 from django.contrib.contenttypes.models import ContentType
 from django.template import TemplateSyntaxError
 
+from python.tests._scratch_models_3888 import scratch_models  # noqa: F401
 from python.tests.test_queryset_all_traversal_3777 import (  # noqa: F401
     _backend_render,
     _django_render,
@@ -427,7 +428,7 @@ class TestTheFloorHoldsOnTheHandle:
             getattr(_SidecarModelProxy(user), "password")
 
     def test_a_floor_field_set_by_per_model_exclusion_is_refused_on_the_handle(
-        self, secure_world
+        self, scratch_models, secure_world
     ) -> None:
         """``djust_exclude_fields`` and ``djust_serializable_fields`` are honoured per attribute."""
         from django.db import models as dj_models
@@ -468,7 +469,7 @@ class TestTheConversionContract:
         assert _rust.crosses_as_encoded(user) is True
         assert _rust.crosses_as_encoded_by_conversion(user) is True
 
-    def test_a_model_whose_str_raises_still_has_its_floor(self) -> None:
+    def test_a_model_whose_str_raises_still_has_its_floor(self, scratch_models) -> None:
         """``opaque_value`` declines an object whose ``__str__`` raises, so the handle arm steps
         aside and the conversion falls through to the ``Encoded`` carrier it always reached for such
         an object. The floor holds there too, because ``Context::walk_live`` re-applies it to the
@@ -563,7 +564,7 @@ class TestTheFloorOfTheHandleItself:
         users = list(User.objects.filter(username__in=["u0", "u1"]).order_by("pk"))
         assert _got(source, {"rows": users}) == "SAME"
 
-    def test_a_binary_field_is_not_readable_on_the_handle(self) -> None:
+    def test_a_binary_field_is_not_readable_on_the_handle(self, scratch_models) -> None:
         """The type-based floor (#1987) applies to the handle, whatever the field is named."""
         from django.db import models as dj_models
 
@@ -581,14 +582,14 @@ class TestTheFloorOfTheHandleItself:
         assert got == "[n|]", got
 
     def test_dictsort_cannot_rank_rows_by_a_floor_field_of_a_related_row(
-        self, secure_world
+        self, scratch_models, secure_world
     ) -> None:
         """``dictsort`` reads ``owner.password`` off the handle with no walk in between, so a related
         object that was not wrapped would be sorted by it. The proxy wraps what it returns."""
         from django.db import models as dj_models
 
         class Owned3888(dj_models.Model):
-            owner = dj_models.ForeignKey(User, on_delete=dj_models.CASCADE)
+            owner = dj_models.ForeignKey(User, on_delete=dj_models.CASCADE, related_name="+")
             nick = dj_models.CharField(max_length=5)
 
             class Meta:
