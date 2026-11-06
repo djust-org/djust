@@ -509,6 +509,49 @@ separate change with its own before/after (CLAUDE.md #1079), not a side effect o
 - **Behaviour changes to declare (CHANGELOG "Behavior change" sub-bullets at the flip).** `{{ o }}` on the plain path renders `str(o)`, not the attribute dict; a class in a context is instantiated (Django parity, including model classes); a generator is consumed by `{% for %}`; a callable at any segment is called (rows J/J2 — was a repr / `None`).
 - **Negative / risks.** Presenter objects on downstream sites that relied on the dict repr; `Encoded` reader-sweep completeness (the count-canary is the defence); the unmeasured cost on the `@property` fixture and `presenter_control`'s one-off list extraction (`page.rows` still converts a list of raw models per render; memoising it is a follow-up); #2532 must land first — it is the row above this one.
 
+## Addendum (#3888): a raw model that reaches the engine is a floored handle
+
+This ADR kept "models stay eager floored dicts" for the LiveView path, for four reasons: the client
+needs a JSON shape, a rolling deploy needs msgpack compatibility, the floor needs a materialised
+form, and `_normalize_db_values` turns a model into a dict so a container `!=` sees a field mutation
+behind a stable `id()`. **All four are properties of the state path, and the LiveView path still
+normalises a model in Python before it reaches Rust** (`mixins/context.py`, `rust_bridge.py`), so
+they are unchanged.
+
+What changed is the model that reaches `impl FromPyObject for Value` RAW: a `list` / `tuple` / nested
+`QuerySet` of models in a `DjustTemplateBackend` context, `render_template`, a tag's return value.
+That model used to be the denylist dict, and the dict has no manager and no `*_id` attname, so a read
+of either went to the render sidecar through the loop alias `u == rows.<N>`. A filtered operand
+(`|slice`, `|first`, `|dictsort`, a `{% with %}` of one, a nested name) registers no alias (it would
+key the safe-string marks by a shifted index, an XSS boundary, #2325/#2334), so the read was empty.
+
+It is now carried as a `Value::Encoded` whose live handle is `_SidecarModelProxy`
+(`floored_model_handle`, `crates/djust_core/src/lib.rs`): the object ADR-027 already gives every other
+Python object, over the floor proxy this ADR already uses for a walked model. So the row carries its
+own handle through any filter, and the floor is enforced per attribute READ (and again after every
+segment of `Context::walk_live`), not once at conversion. It adds no reach: it moves the existing
+reach from "by alias" to "by row".
+
+Invariants it keeps (each has a test in `python/tests/test_model_live_handle_3888.py`):
+
+- the handle is never the raw model; if the floor cannot be built the conversion falls back to the
+  denylist dict, never to the model (fail closed);
+- a floor field, a sensitive method, a `_` name and a per-model exclusion are unreadable on the handle,
+  through any filter and through any relation (the relation yields floored rows again);
+- `alters_data` / `do_not_call_in_templates` are decided by the engine's call guard on the object the
+  proxy returns, so `{{ u.delete }}` and `{{ u.save }}` are never called;
+- `{{ u }}` is `str(u)`, two handles of one row are `==`, and a handle is never serialised (the msgpack
+  snapshot carries the facts and drops the live object, as it does for a datetime).
+
+The rows a relation read returns (`u.groups.all`, `.first`) are carried the same way: the
+`__djust_serialize__` arm of the conversion recognises the floor MODEL proxy
+(`is_model_floor_proxy`) and carries it as the handle instead of calling the hook, and a queryset
+proxy's hook answers its rows' proxies rather than their dicts. So a row has ONE representation
+however it arrived (raw, or walked), a second relation hop (`g.user_set.count` inside `u.groups.all`)
+has a row to read from, and a container of such rows spells the same on both sides of
+`OPAQUE_ITEM_CAP`. A carried model's `repr` slot is its `str()` (the spelling a model inside a
+container has always had here, `[u0, u1]`), not Python's `<User: u0>`, so no existing spelling moves.
+
 ## Non-goals
 
 `string_if_invalid` as an engine option (enabled, not delivered); parse-time `TemplateSyntaxError`s
