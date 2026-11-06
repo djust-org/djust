@@ -133,6 +133,12 @@ ALL_CLASSES = {
     for key, cls in url_sweep.component_classes().items()
     if not ONLY or any(word in key for word in ONLY)
 }
+#: The classes with a ``template``: what ``Component.render`` draws when the crate instance is
+#: absent (derived, not listed). A value the crate constructor refuses (a lazy string) leaves them
+#: to it, and the ones with no crate counterpart are drawn by it always (#3900).
+TEMPLATE_CLASSES = {
+    key: cls for key, cls in ALL_CLASSES.items() if getattr(cls, "template", None) is not None
+}
 KEYS = set(url_sweep.COMMON_KEYS)
 #: Attribute-ish item keys no URL sweep names (a lightbox image's ``alt``, a card's ``caption``).
 ATTR_KEYS = frozenset(
@@ -398,18 +404,6 @@ def _framework(framework: str):
         yield
 
 
-def _hybrid_template_path(obj: object) -> bool:
-    """Whether ``Component.render`` will draw ``obj`` through its ``template`` (``{{ x }}``):
-    no Rust instance took the value (the crate constructor refuses a lazy string) and the class
-    has a template. That path does no URL check at all, for ANY value; it is not the
-    ``url_attr`` / ``conditional_escape`` rule and is tracked separately (#3900)."""
-    return (
-        getattr(obj, "_rust_instance", None) is None and getattr(obj, "template", None) is not None
-    )
-
-
-#: Set aside, not a crash: the cell drew through the hybrid template path (see the sweep).
-HYBRID = object()
 #: A benign marked-safe value: what a cell is decided with, and what the reach test looks for.
 REACH_MARK = "ZQREACH"
 PROBE = mark_safe(REACH_MARK)
@@ -459,11 +453,17 @@ def drive(
     companions: bool,
     value: object,
     force_python: bool,
+    hybrid: bool = False,
 ) -> object:
-    """Render ``cls`` with ``name`` set to ``shape`` of ``value``: the output, :data:`HYBRID`, or
+    """Render ``cls`` with ``name`` set to ``shape`` of ``value``: the output, or
     ``None`` (the component rejects this shape of this parameter, with every key it could take
     left out). A crash is not the end of a cell: the keys the component cannot take the claim
-    for are searched for one by one (:func:`_search_overrides`)."""
+    for are searched for one by one (:func:`_search_overrides`).
+
+    ``hybrid`` draws the class through its ``template`` (``Component.render``'s second path) with
+    the crate instance taken away, the way a value the crate constructor refuses (a lazy string)
+    or a class with no crate counterpart is drawn (#3900). It is for classes that have a
+    ``template``; ``force_python`` (``_render_custom``) wins if both are set."""
 
     def attempt(claimed: object, overrides: dict[str, object]) -> object:
         kwargs = {
@@ -480,11 +480,12 @@ def drive(
                 for attr in ("_rust_instance", "template"):
                     if hasattr(obj, attr):
                         setattr(obj, attr, None)
-            elif _hybrid_template_path(obj):
-                return HYBRID
+            elif hybrid:
+                obj._rust_instance = None  # type: ignore[attr-defined]
+                assert getattr(obj, "template", None) is not None, cls
             return str(obj.render())
 
-    cell = (key, name, shape, framework, companions, force_python)
+    cell = (key, name, shape, framework, companions, force_python, hybrid)
     if cell not in _OVERRIDES:
         # decided ONCE per cell, with the benign probe, whatever claim and payload come first: a
         # payload a validator rejects must not be what leaves a key out of every later cell
@@ -513,23 +514,31 @@ def sweep(
     classes: dict[str, type] | None = None,
     payloads: tuple[tuple[str, str], ...] = PAYLOADS,
     wide: bool = False,
-) -> tuple[list[tuple], int, set[tuple[str, str]]]:
-    """``([(class, param, shape, claim, payload label, holes)], renders, hybrid-template cells)``.
+    hybrid: bool = False,
+) -> tuple[list[tuple], int]:
+    """``([(class, param, shape, claim, payload label, holes)], renders)``.
 
     ``force_python`` renders through ``_render_custom`` (the f-string path) for every component,
     the way ``test_ui_simple_components_escaping`` does: the path this rule governs, whichever
-    path the crate would have taken. Without it, the render is whatever ``Component.render`` picks,
-    and a cell that picks the hybrid template path is set aside, not counted."""
+    path the crate would have taken. Without it, the render is whatever ``Component.render`` picks
+    (a value the crate constructor refuses, a lazy string, leaves a class with a ``template`` to
+    draw it: that cell is counted like any other, #3900). ``hybrid`` draws every class that has a
+    ``template`` through it, whatever the value (a class with no template is not driven)."""
     found: list[tuple] = []
     rendered = 0
-    hybrid: set[tuple[str, str]] = set()
     for key, cls in (CLASSES if classes is None else classes).items():
+        if hybrid and getattr(cls, "template", None) is None:
+            continue
         names, required = class_params(cls)
         keys = class_keys(cls)
         # EVERY framework, for every class: the renderer is chosen by the constructor argument or
         # by ``djust.config``, so each is driven under both (a class that ignores them renders the
         # same three times)
         frameworks = url_sweep.FRAMEWORKS
+        if hybrid:
+            # a ``template`` is one string whatever ``css_framework`` says; the constructor
+            # argument of that name is still a parameter, driven below with each framework
+            frameworks = frameworks[:1]
         for claim in only_claims:
             for label, payload in payloads:
                 claimed = CLAIMS[claim](payload)
@@ -538,12 +547,9 @@ def sweep(
                         for framework in frameworks:
                             result = drive(
                                 cls, key, names, required, keys, name, shape, framework,
-                                companions, claimed, force_python,
+                                companions, claimed, force_python, hybrid,
                             )  # fmt: skip
                             if result is None:
-                                continue
-                            if result is HYBRID:
-                                hybrid.add((key, claim))
                                 continue
                             out = str(result)
                             rendered += 1
@@ -561,7 +567,7 @@ def sweep(
                                 ]
                             if holes:
                                 found.append((key, name, shape, claim, label, tuple(holes)))
-    return found, rendered, hybrid
+    return found, rendered
 
 
 def _report(found: list[tuple]) -> str:
@@ -585,25 +591,48 @@ class TestTheSweep:
     def test_no_class_component_lets_a_marked_safe_value_out_of_its_attribute(
         self, force_python: bool, companions: bool
     ) -> None:
-        found, rendered, _hybrid = sweep(force_python=force_python, companions=companions)
+        found, rendered = sweep(force_python=force_python, companions=companions)
         assert rendered > (50 if ONLY else 10_000), f"the sweep barely ran ({rendered} renders)"
         assert ONLY or len(CLASSES) >= 20, sorted(CLASSES)
         assert not found, _report(found)
 
-    def test_the_hybrid_template_path_is_set_aside_and_only_for_classes_with_a_template(
-        self,
+    @pytest.mark.parametrize("companions", [False, True], ids=["bare", "companions"])
+    def test_no_template_class_lets_a_marked_safe_value_out_of_its_attribute(
+        self, companions: bool
     ) -> None:
-        """A value the crate's constructor refuses (a lazy string is one) leaves a ``Component``
-        with a ``template`` to draw it with ``{{ x }}``: no URL check, for any value (#3900).
-        Pinned so the cells set aside stay exactly that, and the day it is fixed this test says to
-        delete the exception."""
-        _found, _rendered, hybrid = sweep()
-        if ONLY:
-            pytest.skip("a narrowed sweep (the gate-off harness)")
-        assert hybrid, "no cell reached the hybrid template path any more: delete this exception"
-        for key, _claim in hybrid:
-            assert getattr(CLASSES[key], "template", None) is not None, key
-        assert "lazy-mark_safe" in {claim for _key, claim in hybrid}
+        """The second path of ``Component.render`` (#3900): every class that has a ``template``,
+        drawn through it, with every claim, payload, shape and parameter. The scalar shapes
+        are in (a constructor argument like ``size`` or ``status`` is escaped on the crate and
+        ``_render_custom`` paths, so it is here), and the claims include a lazy string, the value
+        that sends a class with a crate counterpart down this path."""
+        # one script scheme, the data document and one breakout: the scheme spellings are the
+        # URL helper's own sweep (``TestTheSweep`` above); this one proves the template path
+        # calls the helper and escapes the attribute
+        payloads = tuple(p for p in PAYLOADS if p[0] in {"js", "data-html", "breakout-dq"})
+        found, rendered = sweep(
+            classes=TEMPLATE_CLASSES, hybrid=True, companions=companions, payloads=payloads
+        )
+        assert rendered > (50 if ONLY else 2_000), f"the sweep barely ran ({rendered} renders)"
+        assert ONLY or len(TEMPLATE_CLASSES) >= 15, sorted(TEMPLATE_CLASSES)
+        assert not found, _report(found)
+
+    @pytest.mark.parametrize("companions", [False, True], ids=["bare", "companions"])
+    def test_no_template_class_lets_an_item_value_out_of_an_attribute(
+        self, companions: bool
+    ) -> None:
+        """... and the item shapes (``ButtonGroup.buttons``: a ``{% for %}`` variable in a
+        ``class=``), the wide rule of ``TestEveryClass``."""
+        payloads = tuple(p for p in PAYLOADS if p[0] in {"js", "breakout-dq"})
+        found, rendered = sweep(
+            only_claims=("mark_safe", "html-object", "lazy-mark_safe"),
+            classes=TEMPLATE_CLASSES,
+            hybrid=True,
+            companions=companions,
+            payloads=payloads,
+            wide=True,
+        )
+        assert rendered > (50 if ONLY else 3_000), f"the sweep barely ran ({rendered})"
+        assert not found, _report(found)
 
     def test_the_sweep_can_fail(self) -> None:
         """A component that prints a marked-safe value raw IS found (not a tautology)."""
@@ -1108,7 +1137,7 @@ class TestEveryClass:
         self, companions: bool
     ) -> None:
         payloads = tuple(p for p in PAYLOADS if p[0] in {"js", "breakout-dq"})
-        found, rendered, _ = sweep(
+        found, rendered = sweep(
             only_claims=("mark_safe", "html-object"),
             force_python=True,
             companions=companions,
@@ -1175,25 +1204,29 @@ def _numeric_parameter(cls: type, name: str) -> bool:
     return param is not None and isinstance(param.default, (bool, int, float))
 
 
-def reach() -> dict[tuple[str, str], dict[str, int]]:
+def reach(hybrid: bool = False) -> dict[tuple[str, str], dict[str, int]]:
     """``{(class, parameter): {"rendered": n, "echoed": n}}`` over EVERY derived pair: the
     parameter is given a marked-safe probe (in every shape, under every framework, with and
     without the companions) and the output is searched for the probe. ``rendered`` counts the
-    cells that drew; ``echoed`` those whose output carries the probe."""
+    cells that drew; ``echoed`` those whose output carries the probe.
+
+    ``hybrid`` is the same question for the second path of ``Component.render``: the classes that
+    have a ``template``, drawn through it with the crate instance taken away (#3900); the
+    default is ``_render_custom``, the path the rest of this file governs."""
     out: dict[tuple[str, str], dict[str, int]] = {}
     probe = PROBE
-    for key, cls in ALL_CLASSES.items():
+    for key, cls in (TEMPLATE_CLASSES if hybrid else ALL_CLASSES).items():
         names, required = class_params(cls)
         keys = class_keys(cls)
         for name in names:
             out[(key, name)] = {"rendered": 0, "echoed": 0}
         for companions in (False, True):
-            for framework in url_sweep.FRAMEWORKS:
+            for framework in url_sweep.FRAMEWORKS[: 1 if hybrid else None]:
                 for shape in SHAPES:
                     for name in names:
                         result = drive(
                             cls, key, names, required, keys, name, shape, framework,
-                            companions, probe, True,
+                            companions, probe, not hybrid, hybrid,
                         )  # fmt: skip
                         if result is None:
                             continue
@@ -1208,8 +1241,16 @@ def carried_differently() -> dict[str, set[str]]:
     the probe could not take the claim for (what :func:`_search_overrides` found), so a key the
     sweep does not reach is stated, not silently skipped."""
     found: dict[str, set[str]] = {}
-    for (key, name, _shape, _fw, _companions, force_python), overrides in _OVERRIDES.items():
-        if not force_python or not overrides:
+    for (
+        key,
+        name,
+        _shape,
+        _fw,
+        _companions,
+        force_python,
+        hybrid,
+    ), overrides in _OVERRIDES.items():
+        if not force_python or hybrid or not overrides:
             continue
         for k, form in overrides.items():
             how = "left out" if form is DROP else "number"
@@ -1271,6 +1312,66 @@ class TestEveryClassIsReached:
             }
         )
         assert not silent_classes, silent_classes
+
+
+class TestHybridCellsAreReached:
+    """The hybrid cells are accounted for the way ``TestEveryClassIsReached`` accounts for the
+    ``_render_custom`` ones (#3900). Until that issue was fixed they were SET ASIDE: the sweep
+    saw the cell reach the template path and did not judge it, so the three paths of
+    ``Component.render`` were governed by two rules. A cell that is skipped must be stated."""
+
+    @pytest.fixture(scope="class")
+    def outcome(self) -> dict[tuple[str, str], dict[str, int]]:
+        return reach(hybrid=True)
+
+    def test_the_template_classes_are_derived_and_all_driven(self, outcome) -> None:
+        from djust.components.base import Component
+
+        derived = {
+            key
+            for key, cls in ALL_CLASSES.items()
+            if issubclass(cls, Component) and cls.template is not None
+        }
+        assert set(TEMPLATE_CLASSES) == derived
+        assert ONLY or len(derived) >= 15, sorted(derived)
+        assert {key for key, _name in outcome} == derived
+
+    def test_every_pair_is_drawn_by_some_cell_or_listed_with_its_reason(self, outcome) -> None:
+        short = lambda key: key.replace("djust.components.", "")  # noqa: E731
+        unreached = {
+            f"{short(key)}.{name}"
+            for (key, name), n in outcome.items()
+            if not n["rendered"] and not _numeric_parameter(TEMPLATE_CLASSES[key], name)
+        }
+        listed = {
+            p for p in UNREACHED if any(p.startswith(short(k) + ".") for k in TEMPLATE_CLASSES)
+        }
+        if ONLY:
+            assert not [p for p in unreached if p not in UNREACHED], sorted(unreached)
+            return
+        assert unreached == listed, (
+            f"pairs no hybrid cell drew: {sorted(unreached - listed)}\n"
+            f"listed but now drawn: {sorted(listed - unreached)}"
+        )
+
+    def test_every_template_class_prints_a_probe_through_some_parameter(self, outcome) -> None:
+        silent = sorted(
+            key
+            for key in TEMPLATE_CLASSES
+            if not any(n["echoed"] for (k, _name), n in outcome.items() if k == key)
+        )
+        assert not silent, silent
+
+    def test_a_lazy_string_takes_the_hybrid_path_on_a_class_with_a_crate_counterpart(self) -> None:
+        """The premise of the issue, measured: the crate constructor refuses a lazy string, so
+        ``Avatar`` is drawn by its template. If the crate ever takes it (or the class stops being
+        refused), this says the cells above no longer cover that route and must be re-derived."""
+        from djust.components.ui.avatar_simple import Avatar
+
+        if Avatar._rust_impl_class is None:
+            pytest.skip("the Rust extension is not built")
+        assert Avatar(src="/a.png")._rust_instance is not None
+        assert Avatar(src=_lazy_safe("/a.png"))._rust_instance is None
 
 
 class TestEveryTag:
