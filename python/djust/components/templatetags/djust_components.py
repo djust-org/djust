@@ -752,6 +752,19 @@ def _checked_column_widths(columns: Any) -> Any:
 
 
 @register.filter
+def table_width(value: Any) -> Any:
+    """``col.width`` as a CSS length for ``style="width:..."``, or ``""``.
+
+    Checked HERE, in the template, so it holds whatever the columns are (a list of dicts, of
+    objects, any other iterable) and whatever the width is marked as: the value is judged as the
+    plain text it prints (``safe_css_length``) and escaped, so a marked-safe width cannot leave
+    the attribute (#3894). ``_checked_column_widths`` only reaches dicts in a list or tuple."""
+    if not value:
+        return ""
+    return mark_safe(conditional_escape(safe_css_length(str(value), "")))
+
+
+@register.filter
 def table_cell(row: Any, key: Any) -> Any:
     """``row[key]`` of a dict row, as ``table.html`` writes a cell and a row's ``data-value`` (#3870).
 
