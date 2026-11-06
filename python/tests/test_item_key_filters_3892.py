@@ -49,6 +49,26 @@ from python.tests.test_sliced_list_of_models_3888 import _ctx, _expected, _got
 DICTSORT = "{% for u in users|dictsort:'username' %}{{ u.pk }},{% endfor %}"
 
 
+def _pk_list(reverse: bool = False, suffix: bool = False, group: bool = False) -> str:
+    """What Django prints for the three rows, from the pks the database actually gave them.
+
+    The rows are created u0, u1, u2 in that order, which is also their username order. Their pks
+    are NOT 1, 2, 3 in a full run (the sequence moves on with every earlier test that creates a
+    user), so a literal pk in an expectation is an order dependence, not a claim.
+    """
+    from django.contrib.auth import get_user_model
+
+    pks = list(get_user_model().objects.order_by("pk").values_list("pk", flat=True))
+    names = [f"u{i}" for i in range(len(pks))]
+    if reverse:
+        pks, names = pks[::-1], names[::-1]
+    if group:
+        return "".join(f"{n}:{k}," for n, k in zip(names, pks))
+    if suffix:
+        return "".join(f"{k}{n}," for n, k in zip(names, pks))
+    return "".join(f"{k}," for k in pks)
+
+
 def _paths(source: str) -> dict[str, list[str]]:
     return {name: list(paths) for name, paths in _rust.extract_template_variables(source).items()}
 
@@ -330,12 +350,12 @@ RENDERS = [
 class TestRendersLikeDjango:
     @pytest.mark.parametrize("render,shape", RENDERS)
     def test_dictsort_over_a_key_nothing_else_reads(self, world, render, shape) -> None:
-        assert _got(render, DICTSORT, shape) == _expected(DICTSORT, shape) == "1,2,3,"
+        assert _got(render, DICTSORT, shape) == _expected(DICTSORT, shape) == _pk_list()
 
     @pytest.mark.parametrize("render,shape", RENDERS)
     def test_dictsortreversed(self, world, render, shape) -> None:
         source = "{% for u in users|dictsortreversed:'username' %}{{ u.pk }},{% endfor %}"
-        assert _got(render, source, shape) == _expected(source, shape) == "3,2,1,"
+        assert _got(render, source, shape) == _expected(source, shape) == _pk_list(reverse=True)
 
     @pytest.mark.parametrize("render,shape", RENDERS)
     def test_through_a_with_alias(self, world, render, shape) -> None:
@@ -343,18 +363,18 @@ class TestRendersLikeDjango:
             "{% with s=users|dictsort:'username' %}"
             "{% for u in s %}{{ u.pk }},{% endfor %}{% endwith %}"
         )
-        assert _got(render, source, shape) == _expected(source, shape) == "1,2,3,"
+        assert _got(render, source, shape) == _expected(source, shape) == _pk_list()
 
     @pytest.mark.parametrize("render,shape", RENDERS)
     def test_after_a_slice(self, world, render, shape) -> None:
         source = "{% for u in users|slice:'::-1'|dictsort:'username' %}{{ u.pk }},{% endfor %}"
-        assert _got(render, source, shape) == _expected(source, shape) == "1,2,3,"
+        assert _got(render, source, shape) == _expected(source, shape) == _pk_list()
 
     @pytest.mark.parametrize("render,shape", RENDERS)
     def test_with_the_key_read_elsewhere_too(self, world, render, shape) -> None:
         """The control, and why it was easy to miss: any other read of the key made it agree."""
         source = "{% for u in users|dictsort:'username' %}{{ u.pk }}{{ u.username }},{% endfor %}"
-        assert _got(render, source, shape) == _expected(source, shape) == "1u0,2u1,3u2,"
+        assert _got(render, source, shape) == _expected(source, shape) == _pk_list(suffix=True)
 
     @pytest.mark.xfail(
         strict=True,
@@ -383,7 +403,7 @@ class TestRendersLikeDjango:
             "{% for u in users %}{{ u.pk }},{% endfor %}"
         )
         assert _got(render, source, "QuerySet") == _expected(source, "QuerySet")
-        assert _expected(source, "QuerySet") == "u0,u1,u2,|1,2,3,"
+        assert _expected(source, "QuerySet") == "u0,u1,u2,|" + _pk_list()
 
     @pytest.mark.parametrize("render", [_backend_render, _liveview_render])
     def test_regroup_on_a_sorted_source(self, world, render) -> None:
@@ -440,7 +460,7 @@ class TestWholeRowsStayWhole:
             "{% regroup users by username as g %}{% for grp in g %}{{ grp.grouper }}:"
             "{% for u in grp.list %}{{ u.pk }}{% endfor %},{% endfor %}"
         )
-        assert _got(render, source, shape) == _expected(source, shape) == "u0:1,u1:2,u2:3,"
+        assert _got(render, source, shape) == _expected(source, shape) == _pk_list(group=True)
 
 
 @pytest.mark.django_db
