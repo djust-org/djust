@@ -197,7 +197,7 @@ class ListView(LiveView):
 
 #### `handle_invalid_params(form, uri)`
 
-Called instead of `handle_params()` when `params_form` rejects the URL. `form` is the bound form; `form.errors` holds the messages, and the template reads them as `params_errors` (`{field: [messages]}`, errors that belong to no field under `"__all__"`). The default hands `handle_params()` the form's initial values. Override it to raise `Http404` or to answer 400 (set a flag and return 400 from `get_http_status()`). May be `async def`.
+Called instead of `handle_params()` when `params_form` rejects the URL. `form` is the bound form; `form.errors` holds the messages, and the template reads them as `params_errors` (`{field: [messages]}`, errors that belong to no field under `"__all__"`). The default hands `handle_params()` the form's initial values, or, with `params_form_fallback = "fields"`, keeps the fields that validated and replaces only the ones in `form.errors` with their initial value (a form-level error from `clean()` still replaces all of them). See [Navigation: keeping what validated](../guides/navigation.md#declared-parameters-params_form). Override it to raise `Http404` or to answer 400 (set a flag and return 400 from `get_http_status()`). May be `async def`.
 
 ---
 

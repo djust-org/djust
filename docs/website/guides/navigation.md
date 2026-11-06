@@ -173,6 +173,42 @@ fails the mount like any exception from `handle_params()`. To answer 400 and kee
 the page, set a flag in the override (calling `super().handle_invalid_params(form,
 uri)` keeps the default) and return 400 from `get_http_status()`.
 
+**Keeping what validated.** The default is the conservative one: `?page=abc&sort=name`
+hands `handle_params()` the initial value of `page` *and* of `sort`, so the valid
+`sort=name` is lost with the bad `page`. Set `params_form_fallback = "fields"` to keep
+it:
+
+```python
+class ListView(LiveView):
+    params_form = ListParams
+    params_form_fallback = "fields"  # the default is "initial"
+```
+
+Now `?page=abc&sort=name` hands `handle_params()` `page=1` (its initial value) and
+`sort="name"` (what the URL said). The rules:
+
+- A field is kept when it has no entry in `form.errors` and is in `form.cleaned_data`.
+  Every other field takes its initial value, so a value that failed validation never
+  reaches `handle_params()`; the fallback only ever hands over a cleaned value or a
+  value the form declared.
+- A kept field is the value the valid path would hand over: a field the URL left out
+  or empty takes its `initial`, exactly as on a valid URL. An optional field the URL
+  omitted is valid by the form's own say-so; a required one is an error and is replaced.
+- Only the declared fields are handed over, in the form's order. A key `clean()` derived
+  and added to `cleaned_data` is not carried into the fallback (the valid path keeps it).
+- A form-level error keeps nothing. If `clean()` raises a plain `ValidationError` (the
+  `"__all__"` entry of `params_errors`), the fields that passed one by one are the
+  combination the form refused, so all of them take their initial values. A `clean()` that
+  names the field (`self.add_error("hi", ...)`) is a field error, and the siblings are kept.
+- A URL past the form-data bounds (`max_form_fields` and the others) is bound to nothing
+  and reports its reason under `"__all__"`; nothing of it was validated, so nothing is kept.
+- `params_errors` is the same in either mode: one entry per failed field, so the template
+  shows the same messages. Only what `handle_params()` receives differs.
+- It is read from the class, on every request of a view that declares `params_form`. A value
+  other than `"initial"` or `"fields"` raises `ImproperlyConfigured` (V023 reports it first),
+  so a typo cannot silently mean the default.
+- A view that overrides `handle_invalid_params()` without calling `super()` never reads it.
+
 **Every transport.** The same form decides on the HTTP GET, the WebSocket and SSE
 mount, `live_patch` and back/forward (`url_change`), and the HTTP fallback POST.
 The page is rendered by the same template engine as any other render; the form
@@ -189,8 +225,8 @@ Things to know:
   `params_errors = state(default_factory=dict)` and pass it to `get_context_data()`.
 - A `params_form` that is not a form class raises `ImproperlyConfigured` on the first
   request; `manage.py check` reports it first (V023).
-- `params_form`, `http_status_of_state` and `state_attribute` are framework class
-  attributes: an `exposure_policy = "explicit"` view cannot declare a `state()` field
+- `params_form`, `params_form_fallback`, `http_status_of_state` and `state_attribute` are
+  framework class attributes: an `exposure_policy = "explicit"` view cannot declare a `state()` field
   under those names, and a legacy view that assigns one on the instance does not publish
   it as state.
 

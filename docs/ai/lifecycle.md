@@ -48,6 +48,7 @@ class ListParams(forms.Form):
 
 class ListView(LiveView):
     params_form = ListParams  # handle_params gets cleaned_data; a bad value -> params_errors
+    params_form_fallback = "fields"  # optional: keep the fields that validated (default "initial": every field's initial value)
 
     def handle_params(self, params, uri):
         self.page = params["page"]
