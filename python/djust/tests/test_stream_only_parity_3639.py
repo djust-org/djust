@@ -12,6 +12,8 @@ WebSocket                                   (real ``WebsocketCommunicator``)
 ``ViewRuntime.dispatch_event`` over SSE     ``TestSseRuntime`` (real
                                             ``SSESessionTransport``)
 ``_tick_once`` (WebSocket tick)             ``TestTick``
+``ViewRuntime._tick_once`` (SSE tick,       ``TestSseTick`` (real
+#3809)                                      ``SSESessionTransport``)
 HTTP POST fallback                          ``TestHttpFallback`` (renders every
                                             event; there is no skip decision to
                                             teach, so this pins that it finds the
@@ -31,6 +33,7 @@ from __future__ import annotations
 import ast
 import asyncio
 import json
+import queue
 from pathlib import Path
 
 import pytest
@@ -119,6 +122,8 @@ class _SseSession:
         self.session_id = "sse-test"
         self.frames = []
         self._render_lock = asyncio.Lock()
+        # ``client_backlogged`` (the tick's "is the client draining" check) reads its depth.
+        self.queue = queue.Queue()
 
     def push(self, data):
         self.frames.append(data)
@@ -204,6 +209,50 @@ class TestTick:
         consumer.sent.clear()
         assert await consumer._tick_once() is False
         assert not [f for f in consumer.sent if f.get("source") == "tick"]
+
+
+@pytest.mark.asyncio
+class TestSseTick:
+    """``ViewRuntime._tick_body``, the SSE twin of the WebSocket tick (#3809, slice 1).
+
+    It makes the same "did ``handle_tick`` change anything" decision as ``TestTick`` with its own
+    ``_snapshot_assigns`` pair, so a stream insert has to count there too: with a plain
+    ``dict`` compare of the assigns a stream-only tick would be dropped as idle and the row would
+    never reach an SSE client.
+    """
+
+    @staticmethod
+    def _tick_runtime():
+        runtime, session = _sse_runtime(TickFeed())
+        runtime._mount_sent_for = runtime.view_instance  # the mount frame has gone out
+        return runtime, session
+
+    @staticmethod
+    def _tick_frames(session):
+        return [f for f in session.frames if f.get("source") == "tick"]
+
+    async def test_a_tick_whose_only_effect_is_a_stream_insert_is_sent_over_sse(self):
+        runtime, session = self._tick_runtime()
+        assert await runtime._tick_once(runtime.view_instance) is True
+        (frame,) = self._tick_frames(session)
+        assert "InsertChild" in _kinds(frame), frame
+
+    async def test_a_tick_after_the_stream_tick_is_idle_and_sends_nothing_over_sse(self):
+        runtime, session = self._tick_runtime()
+        await runtime._tick_once(runtime.view_instance)
+        session.frames.clear()
+        assert await runtime._tick_once(runtime.view_instance) is False
+        assert not self._tick_frames(session)
+
+    async def test_sse_and_websocket_agree_on_the_tick_frame(self):
+        """The same tick answers with the same patch kinds on both transports."""
+        runtime, session = self._tick_runtime()
+        await runtime._tick_once(runtime.view_instance)
+        (sse,) = self._tick_frames(session)
+        consumer = _tick_consumer()
+        await consumer._tick_once()
+        (ws,) = [f for f in consumer.sent if f.get("source") == "tick"]
+        assert _kinds(sse) == _kinds(ws)
 
 
 def _session_request(factory):
@@ -361,6 +410,8 @@ class TestCallSiteInventory:
         ("python/djust/runtime.py", "_dispatch_single_event_body"): 2,
         ("python/djust/runtime.py", "_legacy_noop_snapshot"): 1,
         ("python/djust/runtime.py", "handler"): 1,
+        # the SSE tick (``TestSseTick``): the pre/post pair of ``handle_tick``
+        ("python/djust/runtime.py", "_tick_body"): 2,
         # the consumer: its deferred twin and the tick
         ("python/djust/websocket.py", "_dispatch_single_event_body"): 2,
         ("python/djust/websocket.py", "_tick_locked"): 2,

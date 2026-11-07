@@ -1279,11 +1279,60 @@ class TestProtectingAMultiValueDictKeepsItsType:
         with pytest.raises(AttributeError):
             out["page"] = "9"
 
-    @_QS
-    def test_querystring_still_renders_from_a_protected_query_dict(self):
-        """The tag runs on the object the floor handed over, on both entries."""
+    @staticmethod
+    def _liveview_html(src: str, make_qd: Any) -> str:
+        """The LiveView entry over a ``QueryDict`` the view holds as ``self.qd``."""
         from djust import LiveView
         from djust.testing import LiveViewTestClient
+
+        class _V(LiveView):
+            def mount(self, request, **kwargs):
+                self.qd = make_qd()
+
+        _V.template = "<div dj-root>%s</div>" % src
+        client = LiveViewTestClient(_V)
+        client.mount()
+        html, _, _ = client.render_with_patches()
+        return html
+
+    @_QS
+    def test_querystring_still_renders_from_a_protected_query_dict(self):
+        """The tag runs on the object the floor handed over, on both entries.
+
+        The value is a ``list``: the floor rebuilds EVERY container it walks, so this
+        ``QueryDict`` really is the protected copy (asserted below), and unlike a model it
+        survives the ``.copy()`` -> ``copy.deepcopy`` that ``{% querystring %}`` performs.
+        A model value cannot: see the next test.
+        """
+        from djust.serialization import build_render_sidecar
+
+        def _qd():
+            qd = QueryDict("a=1&a=2&page=3", mutable=True)
+            qd.setlist("u", [["x", "y"]])
+            return qd
+
+        probe = _qd()
+        assert build_render_sidecar({"qd": probe})["qd"] is not probe, "not a protected copy"
+
+        src = "{% querystring qd page=4 %}"
+        expected = django_render(src, {"qd": _qd()})
+        assert "page=4" in expected and "a=1&amp;a=2" in expected, expected
+        assert backend_render(src, {"qd": _qd()}) == expected
+        assert expected in self._liveview_html(src, _qd)
+
+    @_QS
+    def test_querystring_over_a_query_dict_holding_a_model_gets_the_proxys_refusal(self):
+        """A model in a ``QueryDict`` is a floor proxy, and a proxy refuses to be copied.
+
+        Django's own ``{% querystring %}`` does ``query_dict.copy()``, which deep-copies every
+        value, so the tag now fails with ``copy.Error`` instead of rendering ``u=alice``. That is
+        the documented consequence for any tag that copies a model (ADR-027, "A custom FILTER
+        that receives the model gets the floor proxy"; #3888 / #3901 made the proxy refuse
+        ``copy`` and ``pickle`` so a handle can never be duplicated out of the floor). Before
+        #3901 this row rendered, and was asserted to; the premise changed, the proxy did not.
+        Real request data never holds a model, so the refusal costs no real page.
+        """
+        import copy
 
         def _qd():
             qd = QueryDict("a=1&a=2&page=3", mutable=True)
@@ -1291,19 +1340,12 @@ class TestProtectingAMultiValueDictKeepsItsType:
             return qd
 
         src = "{% querystring qd page=4 %}"
-        expected = django_render(src, {"qd": _qd()})
-        assert "page=4" in expected and "a=1&amp;a=2" in expected, expected
-        assert backend_render(src, {"qd": _qd()}) == expected
-
-        class _V(LiveView):
-            def mount(self, request, **kwargs):
-                self.qd = _qd()
-
-        _V.template = "<div dj-root>%s</div>" % src
-        client = LiveViewTestClient(_V)
-        client.mount()
-        html, _, _ = client.render_with_patches()
-        assert expected in html, html
+        # Django's own engine still renders it: this is a divergence we pin, not parity.
+        assert "u=alice" in django_render(src, {"qd": _qd()})
+        with pytest.raises(copy.Error):
+            backend_render(src, {"qd": _qd()})
+        with pytest.raises(copy.Error):
+            self._liveview_html(src, _qd)
 
     def test_a_multi_value_dict_whose_lists_cannot_be_read_is_not_downgraded(self):
         """A subclass with a hostile ``lists()`` keeps its type rather than
