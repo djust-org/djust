@@ -965,6 +965,7 @@ HOOKS: Dict[str, str] = {
     # ---- forms ----
     "FormMixin.get_form_class": "inside:event|mount@forms.py::FormMixin._init_form_state",
     "FormMixin.get_form_kwargs": "inside:event|mount@forms.py::FormMixin.get_form",
+    "FormMixin._form_class_for_restore": "unwrapped:not-threaded:called by FormMixin._djust_scrub_restored while restore_public_state restores saved state, in the thread and step of that restore (a snapshot restore, a mount, the HTTP event fallback)",
     "FormMixin._create_form": "inside:mount|event@forms.py::FormMixin.mount",
     "FormMixin._ensure_form_state": "inside:event|none@forms.py::FormMixin.submit_form",
     "FormMixin.as_live": "unwrapped:template-time:called by the {% live_form %} tag, at template time: no step is open, so a queryset the form's fields evaluate (a ModelChoiceField) is read without the wrapper scope",

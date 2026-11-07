@@ -67,8 +67,9 @@
   }
 
   // A URL the page may fetch an asset from: http(s) or a root-relative path.
+  // A root-relative path is tested the way a browser reads the URL: one leading slash.
   function isFetchUrl(value) {
-    return isHttpUrl(value) || (typeof value === "string" && /^\/(?!\/)[^\s]*$/.test(value));
+    return isHttpUrl(value) || (typeof value === "string" && /^\/(?![\/\\])[^\s]*$/.test(value));
   }
 
   function isTileTemplate(value) {

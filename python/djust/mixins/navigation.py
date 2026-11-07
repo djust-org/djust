@@ -43,7 +43,13 @@ def same_origin_target(url: str) -> str:
     """
     from urllib.parse import urlsplit
 
-    parts = urlsplit(url.replace("\\", "/"))
+    try:
+        parts = urlsplit(url.replace("\\", "/"))
+    except ValueError:
+        # ``urlsplit`` refuses a netloc that is not valid after NFKC normalisation (for
+        # example a fullwidth slash after ``//``): the URL names no usable target, so the
+        # safe answer is the site root.
+        return "/"
     path = "/" + parts.path.lstrip("/")
     return path + ("?" + parts.query if parts.query else "")
 

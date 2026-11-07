@@ -72,6 +72,12 @@ def restore_public_state(view: Any, saved_state: Mapping[str, Any]) -> Dict[str,
                     cls.__qualname__,
                 )
             continue
+        # A view may clean part of what was saved (``FormMixin`` cleans withheld fields out of a
+        # restored ``form_data``). This is the one place every restore of saved public state passes
+        # through.
+        scrub = getattr(view, "_djust_scrub_restored", None)
+        if callable(scrub):
+            value = scrub(key, value)
         if safe_setattr(view, key, value, allow_private=False):
             applied[key] = value
     return applied
