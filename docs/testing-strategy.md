@@ -256,6 +256,96 @@ open to closed median 6.3h, p75 17.4h, p90 28.4h). The finding from that baselin
 is short (CI plus the merge queue); the time is in the wait before a PR exists and in serial review
 rounds. Run it at every retro; it is not a merge gate (a metric on history would block unrelated work).
 
+## Gate-off over many sites: `scripts/gate_off_batch.py`
+
+A gate-off reverts the change under test and re-runs the tests that guard it; every one of
+them must go red. For one or a few mutations use `scripts/gate_off.py` (#3714), which runs the
+test command once per mutation. A sweep over many call sites does not scale that way: #3903
+had about 190 sites and a full run took about four minutes, so a run per site is over twelve
+hours. Narrowing each run to the tests of the site's component is fast but is no longer the CI
+configuration, and a narrowed run can hide a gap in what the full run covers.
+
+`scripts/gate_off_batch.py` (#3905) applies all the mutations of a *batch* at once, runs the
+**whole** test command once, and attributes each failing test to a mutation by the text of its
+failure. On a synthetic fixture, three mutations that each break a distinct test cost one full
+run instead of three. It reuses `gate_off.py` for the bounded run (deadline and RSS ceiling:
+`HUNG` and `RUNAWAY-MEMORY` are reported as `CAUGHT` with the measurement), the per-directory
+lock and out-of-tree journal, the SHA-256-verified restore (also on SIGINT, SIGTERM and SIGHUP)
+and the classification of pytest's summary (errors counted with failures; a module that did not
+import is `INVALID`, never a number).
+
+Describe the mutations as data, in the `gate_off.py` spec plus the fields that attribute a
+failure to a mutation:
+
+```json
+{
+  "root": ".",
+  "test_files": ["tests/test_calc.py"],
+  "deadline": 600,
+  "mutations": [
+    {
+      "label": "alpha() returns the wrong value",
+      "file": "pkg/calc.py",
+      "old": "def alpha():\n    return 1",
+      "new": "def alpha():\n    return 99",
+      "component": "alpha",
+      "names": ["calc.alpha("]
+    },
+    {
+      "label": "gamma() returns the wrong value",
+      "file": "pkg/calc.py",
+      "old": "def gamma():\n    return 3",
+      "new": "def gamma():\n    return 99",
+      "component": "gamma",
+      "test_ids": ["::test_gamma"]
+    }
+  ]
+}
+```
+
+```bash
+make gate-off-batch SPEC=mutations.json                 # one full run per batch
+make gate-off-batch SPEC=mutations.json ARGS="--jobs 2" # two workers (the second on a copy of the tree)
+make gate-off-batch SPEC=mutations.json ARGS="--survivors-only"  # confirm last run's survivors, one at a time
+```
+
+How a result is reached (it is never guessed):
+
+* A failing test belongs to the mutation whose `names` appear in its failure text, or whose
+  `test_ids` regexes match its `classname::name`. A mutation with a test only it claims is
+  `CAUGHT`, and that test is the evidence in the report.
+* A test claimed by two mutations, or by none, is ambiguous. A mutation with no test of its own
+  that is touched by either is re-run **alone**, and the single run decides. A batch that does
+  not collect, hangs or runs out of memory cannot be attributed to a member, so every member is
+  re-run alone and the culprit is then reported as `INVALID` or as a bounded catch.
+* A mutation no failure names, when every failure of the batch was claimed by someone else, is
+  `SURVIVED`. `--verify-survivors` re-runs those alone too; `--survivors-only` re-runs the
+  survivors of the previous report alone and merges the rows.
+* At most one mutation per `component` shares a batch, and mutations whose texts overlap in one
+  file, or that differ in `command`, `deadline`, `rss_mb` or `smoke`, never do. A mutation with
+  no `component`, `names` or `test_ids` cannot be attributed and always runs alone.
+* Every text must match exactly once and change the source, or the row is `INVALID`. Files are
+  restored from the bytes saved before the first write, in a `finally`, and the run refuses to
+  start when a mutated file has uncommitted changes (`--allow-dirty` to opt out); `git status`
+  is checked again afterwards.
+
+The report is written to `<spec>.gateoff-report.json` (`--json` to choose) next to a human table
+that ends with the number of full runs made against the number a run per mutation would take.
+
+Limits. Attribution is by **name**: the failure text has to name the site, so use specific
+names (`calc.alpha(`, not `alpha`). A site inside a module-level helper shared by several
+components is attributed to the module. A failure that names mutation A but was caused by B
+alone is attributed to A. Several mutations applied at once can mask an interaction. A survivor
+is a question, not a pass: an equivalent mutation, two mechanisms shadowing each other, or
+coverage that is genuinely missing look identical from here (#3903 had four survivors, all
+equivalent). The runner is pytest; `-x` and `--maxfail` are refused because they stop at the
+first failure. `--jobs` is limited to 2 because the machine is shared.
+
+The tool is itself gate-off'd with `gate_off.py`: `scripts/gate-off-batch-selfcheck.json` lists
+the attribution, planning, restore and validation rules whose removal must turn
+`tests/unit/test_gate_off_batch_3905.py` red (run it from a copy of the files it names, as its
+`_comment` says).
+
 ## Measurements and next improvements
 
 Main `0aa117d6` [CI run 37083226366](https://github.com/djust-org/djust/actions/runs/37083226366)

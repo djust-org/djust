@@ -90,6 +90,9 @@ EXCLUDED: dict[str, str] = {
         "reads the fixed tests/js/fixtures/*.json corpus and the templates, not test modules"
     ),
     "tests/unit/test_gate_off_3714.py": ("iterates temporary directories the test itself created"),
+    "tests/unit/test_gate_off_batch_3905.py": (
+        "iterates the temporary fixture tree the test itself created"
+    ),
 }
 
 

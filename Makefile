@@ -332,6 +332,11 @@ test-sequential: test-python test-js test-rust ## Run all tests sequentially (fa
 flow-metrics: ## Time per PR / issue against budgets (DAYS=3; CHECK=1 exits non-zero on a breach)
 	@$(PYTHON) scripts/flow-metrics.py --days $(or $(DAYS),3) $(if $(CHECK),--check,)
 
+.PHONY: gate-off-batch
+gate-off-batch: ## Batch gate-off: SPEC=mutations.json [ARGS="--jobs 2 --survivors-only"]; one full run per batch, attributed by failure text (#3905)
+	@test -n "$(SPEC)" || { echo "usage: make gate-off-batch SPEC=mutations.json [ARGS='--jobs 2']"; exit 2; }
+	@$(PYTHON) scripts/gate_off_batch.py $(SPEC) $(ARGS)
+
 .PHONY: test-selected
 test-selected: ## Run affected Python tests (FROM/TO optional; unknown/shared changes run full)
 	@PRE_COMMIT_FROM_REF='$(FROM)' PRE_COMMIT_TO_REF='$(TO)' bash scripts/pre-push-pytest.sh
