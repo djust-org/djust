@@ -1635,16 +1635,21 @@ class TestTheAliasFallbackStays2628:
         handle there, so the filtered rebinding keeps the model and the handle answers the read
         (`render_template`, `render_template_with_dirs`). The alias guards are untouched.
 
-        It stays a recorded gap on the two entries that serialize a top-level model in PYTHON
-        first (`DjustTemplateBackend` -> `_jit_serialize_model`, `LiveView` ->
-        `normalize_django_value`): the Rust conversion receives a dict there, so there is still no
-        handle. Filed as #3902; delete the `''` branch when it closes."""
+        #3902 closed `DjustTemplateBackend` the same way: `DjustTemplate.render` no longer replaces a
+        top-level single model with `_jit_serialize_model(...)`, it carries it raw like a list row
+        (a plain render is not state).
+
+        It stays a recorded gap on `LiveView` ONLY: the view holds the model as STATE (ADR-027
+        "models stay eager": client payload, msgpack, change detection), so `normalize_django_value`
+        still makes a dict of it and the Rust conversion has no handle to keep. Making it a handle
+        there is a design decision, not a fix (#3936, the LiveView half of #3902); delete the `''`
+        branch when it closes."""
         source = "{% with q=user|default:user %}{{ q.groups.count }}{% endwith %}"
         u = self._alice()
         assert django_render(source, {"user": u}) == "1"
         got = render(source, {"user": u})
-        if request.node.callspec.id in ("DjustTemplateBackend", "LiveView"):
-            assert got == "", "#3902: a Python-serialized top-level model has no handle"
+        if request.node.callspec.id == "LiveView":
+            assert got == "", "LiveView: a state-held top-level model is a dict, with no handle"
         else:
             assert got == "1"
 

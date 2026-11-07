@@ -389,6 +389,10 @@ class DjustTemplate:
         """
         Serialize a single Django model instance.
 
+        ``render`` no longer calls this for a top-level model (#3902): a plain render is not state,
+        so the model reaches the engine whole as a floored live handle. Kept as the helper that
+        builds the dict form for a caller that wants one.
+
         Returns both 'id' and 'pk' as native types for consistent template comparisons.
         This ensures {% if item.id == state_var %} works with integer comparisons.
 
@@ -479,8 +483,16 @@ class DjustTemplate:
         # protection as its direct render entry points.
         raw_context = dict(context_dict)
 
-        # JIT auto-serialization for QuerySets and Models
+        # JIT auto-serialization for QuerySets
         # This prevents N+1 queries and makes context compatible with Rust
+        #
+        # A top-level single ``Model`` is deliberately NOT replaced here (#3902). This is a plain
+        # render, not state: nothing is sent to a client, put in msgpack or change-tracked, so the
+        # model reaches the Rust conversion raw, as a list row has since #3888 — a floored live
+        # handle. The dict ``_jit_serialize_model`` built has no manager and no relation, so
+        # ``{% with q=user|default:user %}{{ q.groups.count }}{% endwith %}`` (a FILTERED rebinding
+        # registers no loop alias, context.rs #2504) read an empty relation where Django prints it.
+        # ``serialize_value(for_render=True)`` passes a Model through whole (see there).
         jit_serialized_keys = set()
         for key, value in list(context_dict.items()):
             if isinstance(value, QuerySet):
@@ -494,11 +506,6 @@ class DjustTemplate:
                     count_key = f"{key}_count"
                     if count_key not in context_dict:
                         context_dict[count_key] = len(serialized)
-
-            elif isinstance(value, models.Model):
-                # Auto-serialize Model instance
-                context_dict[key] = self._jit_serialize_model(value, key)
-                jit_serialized_keys.add(key)
 
         # Auto-add count for plain lists (Phase 4+ optimization)
         for key, value in list(context_dict.items()):
