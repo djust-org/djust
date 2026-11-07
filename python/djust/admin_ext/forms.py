@@ -73,9 +73,15 @@ class AdminFormMixin(FormMixin):
 
         # Initialize form data from object
         if self.object:
+            from djust.serialization import form_withheld_field_names
+
             form = self._create_form()
+            # A secret-like floor field (the ``password`` column of a ``User``) is not seeded with its
+            # stored value: ``form_data`` reaches ``get_field_value()``, the live renderers and the
+            # state the framework reports.
+            withheld = form_withheld_field_names(form)
             for field in form:
-                self.form_data[field.name] = field.value()
+                self.form_data[field.name] = "" if field.name in withheld else field.value()
 
         # Create initial form instance
         self.form_instance = self._create_form()
@@ -93,11 +99,19 @@ class AdminFormMixin(FormMixin):
         Returns:
             Django Form instance
         """
+        from djust.serialization import protect_blanked_floor_columns
+
         form_class = self._model_admin.get_form(self.request, self.object)
 
-        if data:
-            return form_class(data=data, instance=self.object)
-        return form_class(instance=self.object)
+        form = (
+            form_class(data=data, instance=self.object)
+            if data
+            else form_class(instance=self.object)
+        )
+        # What is seeded WITHOUT its stored value would be saved as empty by an untouched re-post:
+        # a disabled form field keeps its initial value (the same call ``FormMixin.get_form()`` makes).
+        protect_blanked_floor_columns(form)
+        return form
 
     def get_field_options(self, field_name: str) -> List[Dict[str, str]]:
         """
@@ -184,10 +198,18 @@ class AdminFormMixin(FormMixin):
         """
         # Check form_data first
         if field_name in self.form_data:
-            return self.form_data.get(field_name, default)
+            return self._without_stored_secret(
+                field_name, self.form_data.get(field_name, default), default
+            )
 
         # Get from object if available
         if not self.object:
+            return default
+
+        # The fallback reads the column straight off the instance: not a secret-like floor one.
+        from djust.serialization import model_field_value_withheld
+
+        if model_field_value_withheld(self._model, field_name):
             return default
 
         try:
@@ -233,6 +255,25 @@ class AdminFormMixin(FormMixin):
         except Exception:
             logger.debug("Failed to get field value for %s", field_name, exc_info=True)
             return default
+
+    def _without_stored_secret(self, field_name: str, value: Any, default: Any = "") -> Any:
+        """``FormMixin``'s read-time guard, with a lost form rebuilt the admin way (``form_class`` is
+        unset here, so the base class has no form to rebuild)."""
+        if (
+            value
+            and self._form_instance is None
+            and getattr(self, "_model_admin", None) is not None
+        ):
+            self._form_instance = self._create_form()
+        return super()._without_stored_secret(field_name, value, default)
+
+    def _stored_row_expected(self) -> bool:
+        """An admin change page names its row by ``object_id`` (the add page has none)."""
+        return bool(getattr(self, "object_id", None))
+
+    def _form_class_for_restore(self) -> Any:
+        """The ModelAdmin's form class for the object being edited (``form_class`` is unset here)."""
+        return self._model_admin.get_form(self.request, self.object)
 
     def _declared_field_names(self) -> FrozenSet[str]:
         """The fields of the ModelAdmin form (``form_class`` is unset here), which are not the
@@ -298,7 +339,9 @@ class AdminFormMixin(FormMixin):
                     clean_method()
 
             except forms.ValidationError as e:
-                self.field_errors[field_name] = e.messages
+                from djust.serialization import scrub_error_messages
+
+                self.field_errors[field_name] = scrub_error_messages(form, field_name, e.messages)
 
         # Update form instance
         self.form_instance = form
@@ -316,6 +359,9 @@ class AdminFormMixin(FormMixin):
 
         # Create form with all data
         form = self._create_form(self.form_data)
+        from djust.serialization import keep_withheld_columns_when_blank
+
+        keep_withheld_columns_when_blank(form)
 
         # Validate entire form
         if form.is_valid():
@@ -329,11 +375,17 @@ class AdminFormMixin(FormMixin):
                 self.form_valid(form)
         else:
             self.is_valid = False
-            self.field_errors = {field: errors for field, errors in form.errors.items()}
+            from djust.serialization import form_errors_without_secret_values
 
-            if form.non_field_errors():
-                self.form_errors = form.non_field_errors()
+            safe_errors = form_errors_without_secret_values(form)
+            self.field_errors = {field: errors for field, errors in safe_errors.items()}
 
+            non_field = safe_errors.get("__all__")
+            if non_field:
+                self.form_errors = non_field
+
+            if safe_errors is not form.errors:
+                form._errors = safe_errors
             self.form_instance = form
 
             # Call form_invalid hook
