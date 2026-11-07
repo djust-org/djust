@@ -260,13 +260,60 @@ def _static_url(path):
         return "/static/" + path
 
 
+def _static_state():
+    """Where ``static()`` gets its URL from, read WITHOUT the ``django.conf.settings`` patch.
+
+    The tests below patch ``django.conf.settings`` with a mock, so the real settings are
+    reached through the static storage module, which holds the object it first imported.
+    A failure that says only "the tag is missing" cannot tell a product bug from a leak in
+    an earlier test of the same worker (#3751); this names the script prefix, the settings
+    in force, the two caches that freeze a prefixed URL and what ``static()`` answers.
+    """
+    try:
+        import django.contrib.staticfiles.storage as storage_module
+        from django.core.files.storage import storages
+        from django.urls import get_script_prefix
+
+        real = storage_module.settings
+        held = storages._storages.get("staticfiles")
+        state = {
+            "script prefix": get_script_prefix(),
+            "storage module settings": type(real).__name__,
+            "STATIC_URL": real.STATIC_URL,
+            "settings cache": real.__dict__.get("STATIC_URL"),
+            "STORAGES[staticfiles]": real.STORAGES.get("staticfiles", {}).get("BACKEND"),
+            "storage instance base url": getattr(held, "_base_url", None),
+            "static(panel)": _static_url("djust/debug-panel.js"),
+        }
+    except Exception as exc:  # noqa: BLE001 - the report must never hide the failure it describes
+        return "static state unreadable: %r" % (exc,)
+    return ", ".join("%s=%r" % item for item in state.items())
+
+
 def _missing_tag_message(expected, html):
     import re
 
-    return "expected %r in the injected HTML; its <script src> tags were %r" % (
+    return "expected %r in the injected HTML; its <script src> tags were %r; %s" % (
         expected,
         re.findall(r"<script[^>]*\bsrc=[^>]*>", html),
+        _static_state(),
     )
+
+
+def test_the_missing_tag_message_names_where_static_urls_come_from():
+    """The failure report is only worth having if it names the cause (#3751)."""
+    message = _missing_tag_message('<script src="/static/x.js"', "<html><script src='/app/x.js'>")
+
+    for needle in (
+        "script prefix",
+        "STATIC_URL",
+        "settings cache",
+        "STORAGES[staticfiles]",
+        "storage instance base url",
+        "static(panel)",
+        "/app/x.js",
+    ):
+        assert needle in message, message
 
 
 class TestDebugInfoInjection:

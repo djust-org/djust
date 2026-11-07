@@ -81,6 +81,14 @@ Globals reset (and why):
   making ``get_format`` fall back to ``global_settings``, where
   ``NUMBER_GROUPING`` is ``0``. ``deactivate()`` restores the settings default,
   which is what resetting should mean.
+- **The static-URL state** (script prefix, ``settings.STATIC_URL`` / ``MEDIA_URL``
+  caches, ``storages._storages["staticfiles"]``, ``staticfiles_storage._wrapped``)
+  — the #3751 class. A relative ``STATIC_URL`` is frozen with whatever script prefix is
+  in force at its first read, in four places; clearing three of them (which
+  ``test_ws_path_script_name_3186`` did) refills from the fourth, so ``static()`` kept
+  answering ``/app/static/...`` for the rest of the worker. ``reset_static_state()``
+  clears all four, and a dirty reading is reported as a ``StaticStateLeakWarning``
+  naming the previous test, which is the polluter.
 - **Rust per-thread render environment** (``djust_core::locale`` number
   formats + the active timezone cell) — the #2728 class, the Rust half of the
   one above. ``apply_render_env()`` resolves the active locale into a number
@@ -430,6 +438,105 @@ def _reset_rust_render_env() -> None:
         pass
 
 
+class StaticStateLeakWarning(UserWarning):
+    """The static-URL state was dirty when the next test started (#3751)."""
+
+
+#: The id of the test whose reset ran last, so a dirty reading can name the test that left it.
+#: Mutated in place, never rebound.
+_STATIC_STATE_OWNER: dict[str, Optional[str]] = {"test": None}
+
+
+def reset_static_state() -> list[str]:
+    """Put the static-URL state back to what ``django.setup()`` leaves; return what was dirty (#3751).
+
+    ``static()`` is a chain of four caches, and a URL computed under a script prefix
+    (``set_script_prefix("/app/")``: what Django's WSGI/ASGI handlers do for
+    ``SCRIPT_NAME``) is frozen into each of them at the FIRST read:
+
+    1. the script prefix itself (``django.urls.get_script_prefix``);
+    2. ``settings.__dict__["STATIC_URL"]`` / ``["MEDIA_URL"]`` (``LazySettings`` caches the
+       prefixed value of a relative URL such as the demo project's ``static/``);
+    3. the storage instance in ``storages._storages["staticfiles"]``, whose ``_base_url`` is
+       the URL it was constructed with;
+    4. ``staticfiles_storage._wrapped``, the lazy proxy over (3).
+
+    Clearing (1), (2) and (4), which is what ``test_ws_path_script_name_3186`` did, is not
+    enough: (4) refills from (3), so the next test's ``static()`` still answered
+    ``/app/static/...``. Django's own ``storages_changed`` receiver drops (3) for exactly
+    that reason; this does the same, and only for the ``staticfiles`` alias (the other
+    aliases may hold files a module-scoped fixture put in an in-memory storage).
+
+    Returns one string per cache that held a value other than what a clean read gives,
+    so the caller can name it. Every step is guarded: the settings may be unconfigured, or
+    ``django.contrib.staticfiles`` absent, and a reset must never break the autouse fixture.
+    """
+    findings: list[str] = []
+    try:
+        from django.conf import settings
+        from django.urls import get_script_prefix, set_script_prefix
+        from django.utils.functional import empty
+
+        # What ``django.setup()`` sets (django/__init__.py), so a project with a
+        # FORCE_SCRIPT_NAME keeps it and every other project gets "/".
+        force = settings.FORCE_SCRIPT_NAME
+        clean_prefix = "/" if force is None else force
+        if not clean_prefix.endswith("/"):
+            clean_prefix += "/"
+        if get_script_prefix() != clean_prefix:
+            findings.append("script prefix %r (clean: %r)" % (get_script_prefix(), clean_prefix))
+            set_script_prefix(clean_prefix)
+
+        cached = {name: settings.__dict__.pop(name, empty) for name in ("STATIC_URL", "MEDIA_URL")}
+        fresh = {name: getattr(settings, name) for name in ("STATIC_URL", "MEDIA_URL")}
+        for name, value in cached.items():
+            if value is not empty and value != fresh[name]:
+                findings.append("settings.%s cached %r (clean: %r)" % (name, value, fresh[name]))
+
+        from django.contrib.staticfiles.storage import staticfiles_storage
+        from django.core.files.storage import storages
+
+        held = storages._storages.pop("staticfiles", None)
+        base = getattr(held, "_base_url", None)
+        if base is not None and base != fresh["STATIC_URL"]:
+            findings.append(
+                "the staticfiles storage built with %r (clean: %r)" % (base, fresh["STATIC_URL"])
+            )
+        staticfiles_storage._wrapped = empty
+    except Exception:  # noqa: BLE001 - never error the autouse fixture
+        pass  # settings unconfigured, or staticfiles not installed: nothing to reset
+    return findings
+
+
+def _reset_django_static_state() -> None:
+    """Reset the static-URL state before each test and name the test that left it dirty (#3751).
+
+    The warning is the diagnostic the victim of a leak cannot give: by the time a test
+    fails on ``/app/static/...`` the polluter is some earlier test in the same xdist
+    worker, and the failing log names only the victim. Reset runs BEFORE every test, so
+    the dirty reading belongs to the test that ran just before this one.
+    """
+    import os
+    import warnings
+
+    findings = reset_static_state()
+    if findings:
+        warnings.warn(
+            "static-URL state was dirty before %s; the previous test in this process was %s: %s. "
+            "It was reset, so this test was not affected (#3751)."
+            % (
+                os.environ.get("PYTEST_CURRENT_TEST", "?"),
+                _STATIC_STATE_OWNER["test"] or "unknown",
+                "; ".join(findings),
+            ),
+            StaticStateLeakWarning,
+            stacklevel=2,
+        )
+    # PYTEST_CURRENT_TEST is "<nodeid> (setup)" while a fixture runs: the id is the test.
+    current = os.environ.get("PYTEST_CURRENT_TEST")
+    _STATIC_STATE_OWNER["test"] = current.rsplit(" (", 1)[0] if current else None
+
+
 def _reset_render_caches() -> None:
     """Drop the per-template render caches (``djust._render_caches``).
 
@@ -491,9 +598,10 @@ def reset_djust_globals() -> None:
     _reset_template_libraries()
     _reset_builtin_template_tags()
     _reset_django_thread_locals()
+    _reset_django_static_state()
     _reset_rust_render_env()
     _reset_render_caches()
     _reset_worker_pool_config()
 
 
-__all__ = ["reset_djust_globals"]
+__all__ = ["reset_djust_globals", "reset_static_state", "StaticStateLeakWarning"]
