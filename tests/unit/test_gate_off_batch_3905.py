@@ -46,7 +46,28 @@ go = gb.go
 CALC = '''\
 """Fixture module for the batch gate-off tests."""
 
+import os
+import subprocess
+import sys
 import time
+
+# EVERY busy loop in this fixture ends by itself after 45 s, so a bug in the tool under test
+# (a kill that does not reach the process) can cost a developer 45 s of CPU, never a runaway.
+_BOUND = 45
+_SPIN_SRC = "import time\\nt = time.monotonic() + 45\\nwhile time.monotonic() < t:\\n    pass\\n"
+
+
+def _hold():
+    stop = time.monotonic() + _BOUND
+    while time.monotonic() < stop:
+        pass
+
+
+def _spawn_pair(pidfile):
+    """Record this process and a busy GRANDCHILD (own pids) in ``pidfile``, one line per call."""
+    child = subprocess.Popen([sys.executable, "-c", _SPIN_SRC])
+    with open(pidfile, "a") as handle:
+        handle.write("%d %d\\n" % (os.getpid(), child.pid))
 
 
 def alpha():
@@ -87,7 +108,8 @@ def make():
 
 def spin():
     i = 0
-    while i < 3:
+    stop = time.monotonic() + _BOUND
+    while i < 3 and time.monotonic() < stop:
         i += 1
     return i
 
@@ -270,7 +292,7 @@ SPIN_HANG = lambda: _m(  # noqa: E731
 GROW_RUNAWAY = lambda: _m(  # noqa: E731
     "grow never stops allocating",
     "for _ in range(3):",
-    "for _ in iter(int, 1):",
+    "for _ in range(400):",  # 400 MB: over the 300 MB ceiling, bounded if never killed
     component="grow",
     names=["calc.grow("],
 )
@@ -289,6 +311,45 @@ def _run(root, mutations, **kw):
     kw.setdefault("control", False)
     kw.setdefault("git_guard", False)
     return gb.run_batches(mutations, root=root, **kw)
+
+
+def _read_pids(pidfile: Path) -> list[int]:
+    if not pidfile.exists():
+        return []
+    return [int(word) for word in pidfile.read_text().split()]
+
+
+def _alive(pid: int) -> bool:
+    """Running, and not merely a zombie nobody has reaped (a container's PID 1 may not)."""
+    state = subprocess.run(
+        ["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True, check=False
+    ).stdout.strip()
+    return bool(state) and not state.startswith("Z")
+
+
+def _wait_for_pids(pidfile: Path, seconds: float = 60) -> list[int]:
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        pids = _read_pids(pidfile)
+        if len(pids) >= 2:
+            return pids
+        time.sleep(0.05)
+    raise AssertionError(f"the fixture never recorded its pids in {pidfile}")
+
+
+def _assert_all_dead(pids: list[int], why: str, seconds: float = 15) -> None:
+    assert pids, "no pid was recorded, so nothing was proven"
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline and any(_alive(pid) for pid in pids):
+        time.sleep(0.1)
+    alive = [pid for pid in pids if _alive(pid)]
+    for pid in alive:  # never leave a runaway behind, whatever the assertion says
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            # Already gone between the check and the kill: exactly what was wanted.
+            pass
+    assert not alive, f"{why}: still alive after {seconds:.0f}s: {alive}"
 
 
 def _by_label(report):
@@ -436,8 +497,8 @@ def test_an_import_time_hang_is_invalid_like_an_import_time_raise(tmp_path):
     root = _fixture(tmp_path)
     hang = _m(
         "import spins forever",
-        "import time\n",
-        "import time\n\nwhile True:\n    pass\n",
+        "def make():",
+        "_hold()\n\n\ndef make():",
         names=["calc.make("],
         deadline=3,
     )
@@ -510,6 +571,91 @@ def test_unbounded_allocation_is_runaway_memory_and_counts_as_caught_with_the_me
     assert (root / "calc.py").read_text() == CALC
 
 
+# --------------------------------------------------------------------------- no orphaned descendants
+
+
+def test_no_descendant_of_a_hung_run_is_alive_afterwards(tmp_path):
+    """The deadline kills the whole process GROUP: the command, and the grandchild it spawned."""
+    root = _fixture(tmp_path)
+    pidfile = tmp_path / "pids.txt"
+    hang = _m(
+        "spin hangs with a grandchild",
+        "    i = 0\n",
+        f"    i = 0\n    _spawn_pair({str(pidfile)!r})\n    _hold()\n",
+        component="spin",
+        names=["calc.spin("],
+    )
+    report, _ = _run(root, [hang], deadline=4)
+    assert report.rows[0].kind == "hung"
+    pids = _read_pids(pidfile)
+    assert len(pids) == 2, "the command and its grandchild were both started"
+    _assert_all_dead(pids, "a HUNG outcome left a descendant running")
+
+
+def test_no_descendant_of_an_import_time_hang_is_alive_afterwards(tmp_path):
+    root = _fixture(tmp_path)
+    pidfile = tmp_path / "pids.txt"
+    hang = _m(
+        "import hangs with a grandchild",
+        "def make():",
+        f"_spawn_pair({str(pidfile)!r})\n_hold()\n\n\ndef make():",
+        names=["calc.make("],
+    )
+    report, _ = _run(root, [hang], deadline=4)
+    assert report.rows[0].kind == "hung-at-import"
+    pids = _read_pids(pidfile)
+    assert len(pids) >= 2, "the run and the --collect-only probe both started a pair"
+    _assert_all_dead(pids, "an import-time hang left a descendant running")
+
+
+def test_a_runaway_allocation_leaves_no_descendant_either(tmp_path):
+    root = _fixture(tmp_path)
+    pidfile = tmp_path / "pids.txt"
+    grow = GROW_RUNAWAY()
+    grow.old = "    chunks = []\n"
+    grow.new = f"    chunks = []\n    _spawn_pair({str(pidfile)!r})\n    chunks.extend(b'x' * 1_000_000 for _ in range(400))\n    _hold()\n"
+    report, _ = _run(root, [grow], rss_mb=300)
+    assert report.rows[0].kind == "runaway-memory"
+    _assert_all_dead(_read_pids(pidfile), "a RUNAWAY-MEMORY outcome left a descendant running")
+
+
+def test_a_tool_that_is_sigkilled_does_not_leave_its_test_command_spinning(
+    tmp_path, _gate_off_state_dir
+):
+    """Nothing can run in a SIGKILLed tool; the command's watchdog notices the missing parent."""
+    root = _fixture(tmp_path)
+    pidfile = tmp_path / "pids.txt"
+    spec = _hang_spec(root, tmp_path, pidfile)
+    proc = subprocess.Popen(
+        [sys.executable, str(SCRIPT), str(spec), "--no-control", "--allow-dirty"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        pids = _wait_for_pids(pidfile)
+        proc.kill()  # SIGKILL: no handler, no finally
+        proc.wait(timeout=30)
+        _assert_all_dead(pids, "SIGKILLing the tool orphaned its test command")
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+        # a SIGKILLed tool leaves its mutants and journals: that is what its next run recovers
+        (root / "calc.py").write_text(CALC)
+        (root / "other.py").write_text(OTHER)
+        for journal in _gate_off_state_dir.glob("*.journal"):
+            journal.unlink()
+
+
+def test_the_watchdog_passes_the_exit_status_through_and_reports_a_missing_binary():
+    ok = subprocess.run(
+        gb._guarded([sys.executable, "-c", "raise SystemExit(3)"]), capture_output=True
+    )
+    assert ok.returncode == 3
+    with pytest.raises(go.CommandNotRunnable):
+        gb._guarded(["/nonexistent/interpreter"])
+
+
 # --------------------------------------------------------------------------- (h) survivors
 
 
@@ -550,7 +696,7 @@ def test_a_batch_that_stays_green_survives_every_member_in_one_run(tmp_path):
 # --------------------------------------------------------------------------- (g) signals / restore
 
 
-def _hang_spec(root: Path, tmp_path: Path) -> Path:
+def _hang_spec(root: Path, tmp_path: Path, pidfile: Path) -> Path:
     spec = tmp_path / "spec.json"
     spec.write_text(
         json.dumps(
@@ -562,8 +708,8 @@ def _hang_spec(root: Path, tmp_path: Path) -> Path:
                     {
                         "label": "hang",
                         "file": "calc.py",
-                        "old": "        i += 1\n",
-                        "new": "        i += 0\n",
+                        "old": "    i = 0\n",
+                        "new": f"    i = 0\n    _spawn_pair({str(pidfile)!r})\n    _hold()\n",
                         "names": ["calc.spin("],
                     },
                     {
@@ -586,7 +732,8 @@ def test_every_file_is_restored_byte_for_byte_when_the_tool_is_signalled_mid_run
 ):
     """A real tool process, a batch that hangs the tests, a real signal."""
     root = _fixture(tmp_path)
-    spec = _hang_spec(root, tmp_path)
+    pidfile = tmp_path / "pids.txt"
+    spec = _hang_spec(root, tmp_path, pidfile)
     proc = subprocess.Popen(
         [sys.executable, str(SCRIPT), str(spec), "--no-control", "--allow-dirty"],
         stdout=subprocess.PIPE,
@@ -596,13 +743,14 @@ def test_every_file_is_restored_byte_for_byte_when_the_tool_is_signalled_mid_run
         # wait on observable state (BOTH mutants are on disk), not on a fixed delay
         for _ in range(1200):
             both = (
-                b"i += 0" in (root / "calc.py").read_bytes()
+                b"_hold()" in (root / "calc.py").read_bytes()
                 and b"return 8" in (root / "other.py").read_bytes()
             )
             if both or proc.poll() is not None:
                 break
             time.sleep(0.05)
         assert both, "the mutations never reached the disk"
+        _wait_for_pids(pidfile)  # the test command is really running (and has a grandchild)
         proc.send_signal(sig)
         proc.communicate(timeout=60)
     finally:
@@ -614,6 +762,7 @@ def test_every_file_is_restored_byte_for_byte_when_the_tool_is_signalled_mid_run
     assert (root / "other.py").read_text() == OTHER, "the signal left a mutant behind"
     assert sorted(p.name for p in root.iterdir() if p.is_file()) == ["calc.py", "other.py"]
     assert list(_gate_off_state_dir.glob("*.journal")) == [], "a journal outlived the restore"
+    _assert_all_dead(_read_pids(pidfile), f"{sig.name} left the test command running")
 
 
 def test_a_keyboard_interrupt_mid_run_restores_every_file_and_clears_the_bookkeeping(
@@ -1308,14 +1457,17 @@ def test_the_example_mutation_file_in_the_docs_loads_and_is_attributable():
 def test_every_selfcheck_mutation_text_still_applies():
     """The tool is gate-off'd with gate_off.py; this keeps that list from rotting."""
     spec = json.loads(SELFCHECK.read_text())
-    source = SCRIPT.read_text()
+    sources = {
+        "scripts/gate_off_batch.py": SCRIPT.read_text(),
+        "scripts/gate_off.py": (ROOT / "scripts" / "gate_off.py").read_text(),
+    }
     assert spec["mutations"], "the self-check list is empty"
     labels = [e["label"] for e in spec["mutations"]]
     assert len(set(labels)) == len(labels)
     for entry in spec["mutations"]:
-        found = source.count(entry["old"])
+        assert entry["file"] in sources, f"{entry['label']!r} names a file this test cannot read"
+        found = sources[entry["file"]].count(entry["old"])
         assert found == entry.get("expect", 1), f"{entry['label']!r}: found {found} time(s)"
-        assert entry["file"] == "scripts/gate_off_batch.py"
         assert entry["old"] != entry["new"]
 
 

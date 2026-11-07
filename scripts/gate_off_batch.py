@@ -399,6 +399,37 @@ def _combine(root: Path, group: Sequence[BatchMutation]) -> dict[Path, bytes] | 
     return combined
 
 
+#: Runs the test command as its child and kills their whole process group the moment the tool that
+#: started it is gone. ``gate_off._run_bounded`` kills the group on a deadline, the RSS ceiling,
+#: SIGINT and SIGTERM, but nothing can run in a tool that is SIGKILLed (or whose pytest worker an
+#: outer harness SIGKILLs): the command sits in its own session, so it outlives its parent as an
+#: orphan, spinning. macOS has no PR_SET_PDEATHSIG, so the child watches its parent instead.
+_WATCHDOG = """\
+import os, signal, subprocess, sys
+parent, command = int(sys.argv[1]), sys.argv[2:]
+try:
+    proc = subprocess.Popen(command)
+except OSError as exc:
+    sys.stderr.write("watchdog: cannot run %r: %s\\n" % (command[:1], exc))
+    sys.exit(127)
+while True:
+    try:
+        code = proc.wait(timeout=0.2)
+        break
+    except subprocess.TimeoutExpired:
+        if os.getppid() != parent:
+            os.killpg(os.getpgrp(), signal.SIGKILL)
+sys.exit(code if code >= 0 else 128 - code)
+"""
+
+
+def _guarded(command: Sequence[str]) -> list[str]:
+    """``command`` wrapped so it cannot outlive this process (see ``_WATCHDOG``)."""
+    if shutil.which(command[0]) is None:
+        raise go.CommandNotRunnable(f"cannot run {list(command)[:1]}: not found")
+    return [sys.executable, "-c", _WATCHDOG, str(os.getpid()), *command]
+
+
 def _tail(text: str, lines: int = 6) -> str:
     return "\n".join(text.rstrip().splitlines()[-lines:])
 
@@ -439,7 +470,7 @@ def run_group(ctx: Context, group: Sequence[BatchMutation], *, probe: bool = Fal
             landed.append(path)
             go._clear_pycache(path)
         if smoke:
-            check = go._run_bounded(smoke, ctx.root, deadline, ceiling)
+            check = go._run_bounded(_guarded(smoke), ctx.root, deadline, ceiling)
             if check.verdict or check.returncode != 0:
                 return GroupRun(
                     error="the smoke command failed on the mutated tree: "
@@ -449,12 +480,15 @@ def run_group(ctx: Context, group: Sequence[BatchMutation], *, probe: bool = Fal
         junit = ctx.scratch / f"junit-{ctx.suite_runs}.xml"
         ctx.suite_runs += 1
         result.outcome = go._run_bounded(
-            list(command) + [f"--junitxml={junit}"], ctx.root, deadline, ceiling
+            _guarded(list(command) + [f"--junitxml={junit}"]), ctx.root, deadline, ceiling
         )
         if result.outcome.verdict:
             if probe:
                 result.probe = go._run_bounded(
-                    list(command) + ["--collect-only", "-q"], ctx.root, deadline, ceiling
+                    _guarded(list(command) + ["--collect-only", "-q"]),
+                    ctx.root,
+                    deadline,
+                    ceiling,
                 )
         else:
             result.failures = parse_junit(junit)

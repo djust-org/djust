@@ -237,6 +237,24 @@
       "new": "        kept = []"
     },
     {
+      "label": "watchdog: the test command's group is not killed when the tool that started it is gone",
+      "file": "scripts/gate_off_batch.py",
+      "old": "            os.killpg(os.getpgrp(), signal.SIGKILL)",
+      "new": "            pass"
+    },
+    {
+      "label": "watchdog: the test command is not wrapped by it at all",
+      "file": "scripts/gate_off_batch.py",
+      "old": "            _guarded(list(command) + [f\"--junitxml={junit}\"]), ctx.root, deadline, ceiling",
+      "new": "            list(command) + [f\"--junitxml={junit}\"], ctx.root, deadline, ceiling"
+    },
+    {
+      "label": "gate_off.py: a deadline / RSS kill reaches only the group leader, not its descendants",
+      "file": "scripts/gate_off.py",
+      "old": "        os.killpg(pgid, signal.SIGKILL)",
+      "new": "        os.kill(pgid, signal.SIGKILL)"
+    },
+    {
       "label": "report: HUNG is not counted in the summary",
       "file": "scripts/gate_off_batch.py",
       "old": "    if s[\"hung\"]:",
