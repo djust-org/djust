@@ -1471,7 +1471,10 @@ over-deletion and every one a regression against `main`.
   did not import. **Do not write this harness again: state the mutations as data
   and run `scripts/gate_off.py` (#3714), which implements (a)-(d) here and the
   bounded-run and restore rules in the paragraph further down; it cannot judge an
-  equivalent mutation or a shadowed mechanism; see its docstring.** Reference
+  equivalent mutation or a shadowed mechanism; see its docstring. For a sweep over
+  many sites use `scripts/gate_off_batch.py` (`make gate-off-batch`, #3905): one full
+  run per batch, failures attributed to a mutation by name, never guessed; see
+  `docs/testing-strategy.md`.** Reference
   implementation shape:
 
   ```python
