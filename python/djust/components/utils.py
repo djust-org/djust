@@ -12,6 +12,8 @@ from urllib.parse import urlsplit
 from django.utils.html import conditional_escape, escape
 from django.utils.safestring import SafeData
 
+from djust.security.urls import url_as_parsed, url_is_protocol_relative
+
 __all__ = [
     "CURRENCY_SYMBOLS",
     "format_cell",
@@ -24,7 +26,9 @@ __all__ = [
     "safe_url",
     "unique_ids",
     "url_allowed",
+    "url_as_parsed",
     "url_attr",
+    "url_is_protocol_relative",
 ]
 
 
@@ -420,6 +424,10 @@ def url_allowed(value: Any, *, image: bool = False) -> bool:
     fails to parse. With ``image=True`` an inline ``data:image/...`` URI is also
     allowed, for ``<img src>``. A marked-safe (``SafeData``) value is judged like any
     other string.
+
+    This is a SCHEME allowlist, not an origin check: a URL to another host is allowed, as it is
+    in an ``<a href>``. A slot that must stay on this site (a root-relative asset path, a
+    same-origin redirect) says so with :func:`url_is_protocol_relative`.
 
     This only JUDGES the scheme. A caller that prints the value must also escape it:
     ``safe_url`` does, and ``djust_theming`` hands its templates plain text (a

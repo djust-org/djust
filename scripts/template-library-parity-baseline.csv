@@ -19,7 +19,7 @@ djust_components:await,DIFFERENT-escape-policy-only,4,escaping:4+tags:2+text:2,,
 djust_components:badge,DIFFERENT,13,a11y:13+classes:13+escaping:4+tags:13+text:8,,13,3/3,13
 djust_components:bar_chart,DIFFERENT-escape-policy-only,2,escaping:2+tags:1+text:1,,14,8/8,14
 djust_components:bottom_sheet,DIFFERENT-escape-policy-only,4,escaping:4+tags:2+text:2,,13,4/4,12
-djust_components:breadcrumb,DIFFERENT,7,classes:7+tags:5+text:5,rust_only_keys:python,10,5/5,11
+djust_components:breadcrumb,DIFFERENT,7,classes:7+tags:5+text:5,rust_only_keys:python,10,4/4,11
 djust_components:breadcrumb_dropdown,DIFFERENT-escape-policy-only,2,escaping:2,,18,6/6,18
 djust_components:calendar,DIFFERENT-escape-policy-only,3,escaping:3,,24,9/9,24
 djust_components:calendar_heatmap,DIFFERENT-escape-policy-only,3,escaping:3+tags:2+text:2,,19,8/8,19
@@ -59,7 +59,7 @@ djust_components:dj_checkbox,DIFFERENT,15,data/dj-attrs:1+escaping:5+ids:15+othe
 djust_components:dj_divider,DIFFERENT,8,classes:5+escaping:3+tags:8+text:6,,13,2/2,13
 djust_components:dj_input,DIFFERENT,23,classes:7+data/dj-attrs:1+escaping:9+ids:2+other-attrs:8+tags:10+text:6,rust_only_keys:python,23,11/11,24
 djust_components:dj_label,DIFFERENT-escape-policy-only,3,escaping:3,,11,3/3,11
-djust_components:dj_radio,DIFFERENT,17,data/dj-attrs:1+escaping:5+ids:17+other-attrs:2+tags:17+text:3,rust_only_keys:python,17,7/7,18
+djust_components:dj_radio,DIFFERENT,17,data/dj-attrs:1+escaping:5+ids:17+other-attrs:1+tags:17+text:3,rust_only_keys:python,17,7/7,18
 djust_components:dj_select,DIFFERENT,21,classes:11+data/dj-attrs:1+escaping:7+ids:2+other-attrs:1+tags:12+text:11,rust_only_keys:python,21,10/10,22
 djust_components:dj_tag,DIFFERENT-escape-policy-only,6,classes:1+data/dj-attrs:1+escaping:6+tags:3+text:3,,17,5/5,17
 djust_components:dj_textarea,DIFFERENT,23,classes:23+data/dj-attrs:1+escaping:8+ids:2+other-attrs:1+tags:12+text:6,,23,10/10,23

@@ -136,6 +136,26 @@ def _parse_args(args: list[str], context: dict[str, object]) -> dict[str, object
     return result
 
 
+def _passed_or_context(
+    kw: dict[str, object],
+    name: str,
+    context: dict[str, object],
+    key: str | None = None,
+    default: object = None,
+) -> object:
+    """``kw[name]`` when the argument was PASSED (even empty, ``None`` or ``False``); only when it
+    is ABSENT, the render context's ``key`` (default: ``name``).
+
+    This is the one place a handler reads the context as a stand-in for an argument. It decides on
+    PRESENCE, never on truthiness: ``kw.get(name) or context.get(key)`` used the context's
+    ``rows`` / ``options`` / ``steps`` for ``rows=[]``, where the Python tag uses the empty value
+    it was given.
+    """
+    if name in kw:
+        return kw[name]
+    return context.get(key if key is not None else name, default)
+
+
 class TupleValue(list):  # type: ignore[type-arg]
     """A tuple a native handler was given (#3768).
 
@@ -738,7 +758,7 @@ class SkeletonHandler:
 class BreadcrumbHandler:
     def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
-        items = kw.get("items") or context.get("breadcrumb_items", [])
+        items = _passed_or_context(kw, "items", context, "breadcrumb_items", [])
         if not isinstance(items, (list, tuple)):
             items = []
         parts = []
@@ -871,7 +891,7 @@ class TagChipHandler:
 class StepperHandler:
     def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
-        steps = kw.get("steps") or context.get("steps", [])
+        steps = _passed_or_context(kw, "steps", context, default=[])
         if not isinstance(steps, (list, tuple)):
             steps = []
         try:
@@ -991,7 +1011,7 @@ class DjSelectHandler:
         name = conditional_escape(kw.get("name", ""))
         label = conditional_escape(kw.get("label", ""))
         current = str(kw.get("value", ""))
-        options = kw.get("options") or context.get(cast("str", kw.get("options_var", "")), [])
+        options = _passed_or_context(kw, "options", context, str(kw.get("options_var", "")), [])
         error = conditional_escape(kw.get("error", ""))
         required = kw.get("required", False)
         disabled = kw.get("disabled", False)
@@ -1103,7 +1123,9 @@ class DjRadioHandler:
         raw_value = kw.get("value", "")
         value = conditional_escape(str(raw_value))
         current = str(
-            kw.get("current_value", "") or context.get(str(kw.get("current_value_var", "")), "")
+            _passed_or_context(
+                kw, "current_value", context, str(kw.get("current_value_var", "")), ""
+            )
         )
         event = conditional_escape(kw.get("event", name))
         disabled = kw.get("disabled", False)
@@ -1162,8 +1184,8 @@ def _row_href(row: dict[str, object], key: object) -> str:
 class DataTableHandler:
     def render(self, args: list[str], context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
-        rows = kw.get("rows") or context.get("rows", [])
-        columns = kw.get("columns") or context.get("columns", [])
+        rows = _passed_or_context(kw, "rows", context, default=[])
+        columns = _passed_or_context(kw, "columns", context, default=[])
         sort_by = conditional_escape(str(kw.get("sort_by", "")))
         sort_desc = kw.get("sort_desc", False)
         sort_event = conditional_escape(kw.get("sort_event", "on_table_sort"))
@@ -4376,7 +4398,7 @@ class AutocompleteHandler:
         event = conditional_escape(kw.get("event", name))
         debounce = int(cast("str | int | float", kw.get("debounce", 300)))
         min_chars = int(cast("str | int | float", kw.get("min_chars", 1)))
-        suggestions = kw.get("suggestions") or context.get("suggestions", [])
+        suggestions = _passed_or_context(kw, "suggestions", context, default=[])
         loading = kw.get("loading", False)
         disabled = kw.get("disabled", False)
         error = conditional_escape(kw.get("error", ""))
@@ -4529,9 +4551,7 @@ class DependentSelectHandler:
         error = conditional_escape(kw.get("error", ""))
         custom_class = conditional_escape(kw.get("custom_class", ""))
 
-        options = kw.get("options", None)
-        if options is None:
-            options = context.get("options", [])
+        options = _passed_or_context(kw, "options", context, default=[])
         if not isinstance(options, list):
             options = []
 
