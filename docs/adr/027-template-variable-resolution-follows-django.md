@@ -560,13 +560,18 @@ has a row to read from, and a container of such rows spells the same on both sid
 `OPAQUE_ITEM_CAP`. A carried model's `repr` slot is its `str()` (the spelling a model inside a
 container has always had here, `[u0, u1]`), not Python's `<User: u0>`, so no existing spelling moves.
 
-**What is still the dict form.** A top-level SINGLE model on `DjustTemplateBackend` and on a LiveView
-is serialised in Python before it reaches Rust (#3902), so `{{ u|pprint }}` of a top-level model dumps
-its fields while `{{ rows|first|pprint }}` prints its name, and a filtered rebinding of a top-level
-model reads its reverse relations empty. **What changed for Python readers.** A custom filter or
-simple tag that receives a model INSIDE a list / tuple / nested container now receives the floor
-proxy (attribute reads work, `row["field"]` does not) where it received the dict; a top-level model
-or a top-level queryset loop still receives the dict. `{{ rows|json_script:"x" }}`, `|pprint` and a
+**What is still the dict form.** A top-level SINGLE model on a LiveView is serialised in Python before
+it reaches Rust (#3936: the view holds it as STATE, and this ADR keeps models eager on the state path),
+so `{{ u|pprint }}` of a top-level model dumps its fields while `{{ rows|first|pprint }}` prints its
+name, and a filtered rebinding of a top-level model reads its reverse relations empty. A top-level
+single model on `DjustTemplateBackend` is NOT in this set since #3902: a plain render is not state, so
+`DjustTemplate.render` leaves it whole (`serialize_value(for_render=True)` passes a `Model` through
+before its duck-typed file check) and it is a handle exactly like a row; a model reached through a
+context processor (`request.user` as `user`, a lazy object) is the same. **What changed for Python
+readers.** A custom filter or simple tag that receives a model INSIDE a list / tuple / nested
+container, or a top-level model on `DjustTemplateBackend`, now receives the floor proxy (attribute
+reads work, `row["field"]` does not) where it received the dict; a top-level model on a LiveView or a
+top-level queryset loop still receives the dict. `{{ rows|json_script:"x" }}`, `|pprint` and a
 data-dump tag such as `json_viewer` spell each model as its `str()` (Django raises for the
 `json_script` case), so code that reads such data in JavaScript must build the data explicitly.
 
