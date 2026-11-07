@@ -1,1 +1,0 @@
-- **Dependencies updated to patched versions.** The locked Python packages (`certifi`, `msgpack`, `pyasn1`, `setuptools`, `twisted`, `autobahn`), the Rust crates (`pulldown-cmark`, `tokio`) and the JavaScript dev tooling (`vitest`, `happy-dom` and their dependencies) now resolve to releases that carry the fixes for their published security advisories. No djust code changed.

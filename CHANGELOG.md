@@ -28,6 +28,7 @@ A 1.2 patch release that includes security fixes; upgrading from 1.2.6 is recomm
   had no case for it and dropped it as an unknown frame. It now swaps the
   layout as the WebSocket transport does. Covered by
   `tests/js/sse_layout_frame.test.js`, which runs on both transports.
+- **Dependencies updated to patched versions.** The locked Python packages (`certifi`, `msgpack`, `pyasn1`, `setuptools`, `twisted`, `autobahn`), the Rust crates (`pulldown-cmark`, `tokio`) and the JavaScript dev tooling (`vitest`, `happy-dom` and their dependencies) now resolve to releases that carry the fixes for their published security advisories. No djust code changed.
 
 ### Security
 
