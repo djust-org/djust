@@ -213,9 +213,6 @@ class TestScriptStylesAndCatalogue:
     def test_script_parses_no_markup_loads_nothing_and_stores_nothing(self, banned):
         assert not re.search(banned, self.SOURCE), banned
 
-    def test_script_registers_without_replacing_an_app_hook(self):
-        assert "!appHooks.SignaturePad && !window.DjustHooks.SignaturePad" in self.SOURCE
-
     def test_the_canvas_does_not_scroll_the_page_while_drawing(self):
         rule = re.search(r"\.dj-signature-pad__canvas \{([^}]*)\}", self.CSS).group(1)
         assert "touch-action: none" in rule

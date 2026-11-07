@@ -418,7 +418,3 @@ class TestScriptAndCatalogue:
     def test_script_has_no_hard_coded_tile_host_or_key(self):
         assert "openstreetmap" not in self.SOURCE.lower()
         assert not re.search(r"api[_-]?key|access[_-]?token", self.SOURCE, re.I)
-
-    def test_script_registers_without_replacing_an_app_hook(self):
-        assert "window.DjustHooks.MapPicker" in self.SOURCE
-        assert "!appHooks.MapPicker && !window.DjustHooks.MapPicker" in self.SOURCE

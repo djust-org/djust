@@ -107,6 +107,7 @@ describe('the shipped hooks never replace an app hook (#2985 batch 4)', () => {
         describe(c.hook, () => {
             it('registers a hook, so mounting logs no "No hook registered"', () => {
                 const env = boot(c.markup, c.file);
+                expect(typeof env.window.DjustHooks?.[c.hook]?.mounted).toBe('function');
                 expect(env.warnings.filter((w) => w.includes('No hook registered'))).toEqual([]);
                 expect(c.probe(env.$(`[dj-hook="${c.hook}"]`))).toBe(true);
             });
@@ -120,13 +121,16 @@ describe('the shipped hooks never replace an app hook (#2985 batch 4)', () => {
             it('an app hook in window.djust.hooks registered first is the one that runs', () => {
                 const mounted = vi.fn();
                 const env = boot(c.markup, c.file, { preRegister: (w) => { w.djust.hooks = { [c.hook]: { mounted } }; } });
+                expect(env.window.DjustHooks?.[c.hook]).toBeUndefined();
                 expect(mounted).toHaveBeenCalledTimes(1);
                 expect(c.probe(env.$(`[dj-hook="${c.hook}"]`))).toBe(false);
             });
 
             it('an app hook in window.DjustHooks registered first is the one that runs', () => {
                 const mounted = vi.fn();
-                const env = boot(c.markup, c.file, { preRegister: (w) => { w.DjustHooks = { [c.hook]: { mounted } }; } });
+                const mine = { mounted };
+                const env = boot(c.markup, c.file, { preRegister: (w) => { w.DjustHooks = { [c.hook]: mine }; } });
+                expect(env.window.DjustHooks[c.hook]).toBe(mine);
                 expect(mounted).toHaveBeenCalledTimes(1);
                 expect(c.probe(env.$(`[dj-hook="${c.hook}"]`))).toBe(false);
             });

@@ -197,11 +197,6 @@ class TestScriptsAreShippedAndFound:
             "hook_shipped": True,
         }
 
-    def test_the_script_registers_without_replacing_an_app_hook(self, component, hook, script):
-        source = (STATIC / script).read_text()
-        assert f"window.DjustHooks.{hook} = " in source
-        assert f"!appHooks.{hook} && !window.DjustHooks.{hook}" in source
-
     def test_the_script_never_writes_html_from_data(self, component, hook, script):
         """Names, captions and alt text reach the page as text or attributes only."""
         source = (STATIC / script).read_text()
