@@ -51,6 +51,9 @@ from python.tests._scratch_models_3888 import scratch_models  # noqa: F401
 from python.tests.test_model_handle_namespaces_3888 import PyTz
 from python.tests.test_model_handle_review_3888 import LIBS, PRIVATE_PATHS
 
+#: the #3888 review library plus the two filters that copy / pickle their argument
+LIBS_3902 = {"libraries": {**LIBS["libraries"], "rv3902": "python.tests._reviewlib_3902"}}
+
 SECRET = "pbkdf2-sentinel-hash-3902"
 ENV_SECRET = "environ-sentinel-3902"
 
@@ -60,7 +63,7 @@ def _backend(src: str, ctx: dict) -> str:
     from djust.template import DjustTemplateBackend
 
     backend = DjustTemplateBackend(
-        params={"NAME": "djust", "DIRS": [], "APP_DIRS": False, "OPTIONS": LIBS}
+        params={"NAME": "djust", "DIRS": [], "APP_DIRS": False, "OPTIONS": LIBS_3902}
     )
     return str(backend.from_string(src).render(context=dict(ctx), request=None))
 
@@ -137,7 +140,16 @@ def world(db, scratch_models):
         def url(self):
             raise ValueError("url boom")
 
-    alice = User.objects.create_user("alice", "a@example.com", SECRET, is_staff=True)
+    class Doc3902(models.Model):
+        attach = models.FileField(upload_to="a")
+        raw = models.BinaryField(default=b"xyz")
+
+        class Meta:
+            app_label = "auth"
+
+    alice = User.objects.create_user(
+        "alice", "a@example.com", SECRET, is_staff=True, is_superuser=True, first_name="Alice"
+    )
     alice.groups.add(Group.objects.create(name="g1"), Group.objects.create(name="g2"))
     return {
         "user": alice,
@@ -150,6 +162,7 @@ def world(db, scratch_models):
         "obj": Probe3902(pk=7),
         "link": Link3902(pk=1),
         "pu": PropUrl3902(pk=2),
+        "doc": Doc3902(pk=3, attach="a/b.txt"),
     }
 
 
@@ -187,6 +200,7 @@ MATRIX = {
     "regroup": "{% regroup user.groups.all by name as r %}{% for x in r %}{{ x.grouper }}{% endfor %}",
     "with-all": "{% with a=user.groups.all %}{{ a|length }}{% endwith %}",
     "not-a-mapping": "{% for k, v in user.items %}{{ k }}{% endfor %}|{% if 'username' in user %}Y{% else %}N{% endif %}",
+    "join-and-pluralize": "{{ user|join:',' }}|[{{ user|pluralize }}]",
     "equality": "{% if user == same %}eq{% else %}ne{% endif %}|{% if user == other %}eq{% else %}ne{% endif %}",
     "membership": "{% if user in users %}in{% else %}out{% endif %}",
     "missing": "[{{ user.nonexistent }}][{{ user.groups.nonexistent }}]",
@@ -281,6 +295,10 @@ class TestARequestUserTakesTheSameRoute:
         "relation": "{{ user.groups.count }}|{% for g in user.groups.all %}{{ g.name }}{% endfor %}",
         "filtered rebinding": "{% with q=user|default:user %}{{ q.groups.count }}|{{ q.username }}{% endwith %}",
         "if": "{% if user.is_authenticated %}auth{% else %}anon{% endif %}|{% if user %}t{% endif %}",
+        "filtered exists": "{% with q=user|default:user %}{{ q.groups.exists }}{% endwith %}",
+        "filtered loop": "{% with q=user|default:user %}{% for g in q.groups.all %}{{ g.name }},{% endfor %}{% endwith %}",
+        "filtered first": "{% with q=user|default:user %}{{ q.groups.first.name }}{% endwith %}",
+        "filtered attname": "{% with q=user|default:user %}{{ q.id }}|{{ q.pk }}{% endwith %}",
     }
 
     @staticmethod
@@ -312,6 +330,55 @@ class TestARequestUserTakesTheSameRoute:
         want = self._render(DjangoTemplates, src, user)
         assert want and want != "|", "premise: Django renders something"
         assert self._render(DjustTemplateBackend, src, user) == want
+
+
+@pytest.mark.django_db
+class TestTheGlobalFloorHoldsOnTheRequestUserRoute:
+    """The floor's global fields and a configured ``DJUST_SENSITIVE_FIELDS`` name are withheld for
+    ``request.user`` as the context processor delivers it: lazy, real and anonymous."""
+
+    READS = {
+        "password": "[{{ user.password }}]",
+        "is_superuser": "[{{ user.is_superuser }}]",
+        "is_staff": "[{{ user.is_staff }}]",
+        "configured": "[{{ user.first_name }}]",
+        "through a rebinding": "{% with q=user|default:user %}[{{ q.password }}|{{ q.is_staff }}|{{ q.first_name }}]{% endwith %}",
+    }
+
+    @staticmethod
+    def _user(world, kind):
+        from django.contrib.auth.models import AnonymousUser
+        from django.utils.functional import SimpleLazyObject
+
+        if kind == "anonymous":
+            return AnonymousUser()
+        pk = world["user"].pk
+        if kind == "lazy":
+            return SimpleLazyObject(lambda: User.objects.get(pk=pk))
+        return world["user"]
+
+    @pytest.mark.parametrize("kind", ["lazy", "real", "anonymous"])
+    @pytest.mark.parametrize("name", list(READS))
+    def test_a_floor_field_is_withheld(self, world, kind, name) -> None:
+        from django.test.utils import override_settings
+
+        from djust.template import DjustTemplateBackend
+
+        from django.template.backends.django import DjangoTemplates
+
+        src = self.READS[name]
+        user = self._user(world, kind)
+        with override_settings(DJUST_SENSITIVE_FIELDS=["first_name"]):
+            got = TestARequestUserTakesTheSameRoute._render(DjustTemplateBackend, src, user)
+            want = TestARequestUserTakesTheSameRoute._render(DjangoTemplates, src, user)
+        skeleton = re.sub(r"[^\[\]|]", "", want)
+        if kind == "anonymous":
+            # not a model: nothing to withhold, and the engine agrees with Django
+            assert got == want, (got, want)
+            return
+        assert re.search(r"pbkdf2|True|Alice", want), ("not vacuous: Django prints it", want)
+        assert got == skeleton, (got, want)
+        assert SECRET not in got and "pbkdf2" not in got
 
 
 # -- 2. nothing is serialized in Python any more ---------------------------------------------------
@@ -389,6 +456,78 @@ class TestAModelIsNeverMistakenForAFile:
                 return True
 
         assert _backend("{{ f }}", {"f": FileLike()}) == "http://f/"
+
+
+@pytest.mark.django_db
+class TestWhatTheOldDictDid:
+    """Each documented behaviour change (changelog fragment, ADR-027 addendum), run as code."""
+
+    def test_a_bare_filefield_prints_its_stored_name_not_its_url(self, world) -> None:
+        ctx = {"doc": world["doc"]}
+        for src, want in (
+            ("{{ doc.attach }}", "a/b.txt"),
+            ('<img src="{{ doc.attach }}">', '<img src="a/b.txt">'),
+            ("{{ doc.attach.url }}", "/a/b.txt"),
+        ):
+            assert _django(src, ctx) == want, "premise: Django"
+            assert _backend(src, ctx) == want
+
+    @pytest.mark.parametrize(
+        "src",
+        ["{% for f in user %}{{ f }},{% endfor %}", "{{ user|unordered_list }}"],
+        ids=["for", "unordered_list"],
+    )
+    def test_iterating_the_model_fails_the_render(self, world, src) -> None:
+        with pytest.raises(TypeError):
+            _django(src, {"user": world["user"]})
+        # the engine's own error: not an empty render and not the field names
+        assert _observe(_backend, src, {"user": world["user"]}).startswith("RAISES:")
+
+    def test_join_and_pluralize_see_the_model_not_its_field_names(self, world) -> None:
+        ctx = {"user": world["user"]}
+        assert (
+            _backend("{{ user|join:',' }}", ctx) == _django("{{ user|join:',' }}", ctx) == "alice"
+        )
+        assert _backend("[{{ user|pluralize }}]", ctx) == _django("[{{ user|pluralize }}]", ctx)
+
+    def test_a_simple_tag_and_a_filter_both_get_the_floor_proxy(self, world) -> None:
+        ctx = {"user": world["user"]}
+        tag = _backend("{% load rv3888 %}{% attr_of user 'username' %}", ctx)
+        flt = _backend("{% load rv3888 %}{{ user|dotted:'username' }}", ctx)
+        assert tag == flt == "alice"
+        # the argument is the proxy (a class of no methods), never the dict
+        assert "_Opaque" in _backend("{% load rv3888 %}{% attr_of user '__class__' %}", ctx)
+
+    def test_a_filter_that_copies_or_pickles_the_model_gets_the_proxys_refusal(self, world) -> None:
+        read = "{% load rv3902 %}{{ user|deepcopied }}|{{ user|pickled }}"
+        got = _backend(read, {"user": world["user"]})
+        assert got == "ERR:copy.Error|ERR:_pickle.PicklingError", got
+        # a model inside a list already refused both
+        row = _backend("{% for user in rows %}" + read + "{% endfor %}", {"rows": [world["user"]]})
+        assert row == got
+
+
+@pytest.mark.django_db
+class TestABinaryFieldIsWithheldOnATopLevelModel:
+    """The type floor (#1987) refuses a ``BinaryField`` on the handle exactly as on a list row."""
+
+    def test_the_bytes_are_withheld_like_on_a_row(self, world) -> None:
+        top = _backend("[{{ doc.raw }}]", {"doc": world["doc"]})
+        row = _backend("{% for doc in rows %}[{{ doc.raw }}]{% endfor %}", {"rows": [world["doc"]]})
+        assert "xyz" in _django("[{{ doc.raw }}]", {"doc": world["doc"]}), (
+            "premise: Django prints it"
+        )
+        assert top == row == "[]", (top, row)
+
+    def test_a_dotted_read_and_a_filtered_rebinding_are_refused_too(self, world) -> None:
+        src = (
+            "{% load rv3888 %}[{{ doc|dotted:'raw' }}]"
+            "{% with d=doc|default:doc %}[{{ d.raw }}]{% endwith %}"
+        )
+        top = _backend(src, {"doc": world["doc"]})
+        row = _backend("{% for doc in rows %}" + src + "{% endfor %}", {"rows": [world["doc"]]})
+        assert top == row == "[ERR:AttributeError][]", (top, row)
+        assert "xyz" not in top
 
 
 # -- 4. a tag argument is still the denylist dict --------------------------------------------------
