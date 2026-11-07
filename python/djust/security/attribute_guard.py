@@ -245,6 +245,14 @@ def safe_setattr(
             raise AttributeSecurityError(f"Blocked dangerous attribute: {name}")
         return False
 
+    # A view may refuse part of what it is handed from outside (``FormMixin`` cleans a restored
+    # ``form_data`` of its withheld fields). Every restore
+    # of saved public state (session, signed snapshot, sticky child, HTTP fallback, reconnect) sets
+    # attributes through this function, so this is the one place all of them pass through.
+    # Looked up on the CLASS: an object with a catch-all ``__getattr__`` (a mock) must not be asked.
+    if callable(getattr(type(obj), "_djust_scrub_restored", None)):
+        value = obj._djust_scrub_restored(name, value)
+
     try:
         setattr(obj, name, value)
         return True

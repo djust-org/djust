@@ -4,9 +4,12 @@ JSON serialization utilities for Django models and Python types.
 Extracted from live_view.py for modularity.
 """
 
+import copy
 import importlib.util
 import json
 import logging
+import re
+import threading
 from datetime import datetime, date, time, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any, Callable, Dict, FrozenSet, List, Optional, Union, cast
@@ -2357,3 +2360,501 @@ def _rehydrate_private_model_ref(label: Any, pk: Any) -> Any:
             pk,
         )
         return None
+
+
+# ---------------------------------------------------------------------------------------------
+# Credential form fields are not pre-filled from the stored value.
+#
+# ``FormMixin`` seeds ``form_data`` from a ``ModelForm``'s stored columns. A credential-like field on
+# the serialization floor is seeded with ``""`` instead. Everything here is the question "must this
+# field's stored value NOT be carried?", asked of a form, a form class or a model class, plus the
+# pieces that keep the column safe once it is no longer in ``form_data`` (an untouched re-save, a
+# restore of older saved state, a validation message that includes the value).
+# ---------------------------------------------------------------------------------------------
+
+_PASSWORD_WIDGET_CLASSES: Optional[tuple] = None
+
+
+def _widget_draws_password(widget: Any) -> bool:
+    """A password input, or a ``MultiWidget`` that has one among its parts (recursively)."""
+    global _PASSWORD_WIDGET_CLASSES
+    if _PASSWORD_WIDGET_CLASSES is None:
+        from django.forms import MultiWidget, PasswordInput
+
+        _PASSWORD_WIDGET_CLASSES = (PasswordInput, MultiWidget)
+    password_input, multi_widget = _PASSWORD_WIDGET_CLASSES
+    if isinstance(widget, password_input) or getattr(widget, "input_type", None) == "password":
+        return True
+    if isinstance(widget, multi_widget):
+        return any(_widget_draws_password(part) for part in getattr(widget, "widgets", ()))
+    return False
+
+
+def field_has_password_widget(field: Any) -> bool:
+    """Is *field*'s widget a password input (a subclass, an ``input_type == "password"`` widget, or a
+    ``MultiWidget`` with such a part)? What such a field holds is what a person TYPED: it is no column
+    of any model, so the model floor cannot name it, and it is a secret whatever the field is called."""
+    return _widget_draws_password(getattr(field, "widget", None))
+
+
+def _password_field_names(fields: Any) -> frozenset:
+    """The keys of *fields* (a form's ``fields`` or a form class's ``base_fields``) whose widget is a
+    password input."""
+    if not hasattr(fields, "items"):
+        return frozenset()
+    return frozenset(name for name, field in fields.items() if field_has_password_widget(field))
+
+
+def _floor_for_model(model_class: Any, password_names: Any = frozenset()) -> tuple:
+    """``(model class, denied, allowed, optout, password names)`` for a model CLASS: the same three
+    sets the serializer is built from, and the names of the form's password-widget fields.
+    ``model_class`` is ``None`` for a form with no model behind it (a plain ``Form``): its floor is the
+    password fields alone. The model's readers look only at ``type(obj)``, so an instance that was never
+    initialised stands in for the class."""
+    if model_class is None:
+        return (None, frozenset(), None, frozenset(), password_names)
+    stand_in = object.__new__(model_class)
+    return (
+        model_class,
+        DjangoJSONEncoder._get_denied_fields(stand_in),
+        DjangoJSONEncoder._get_allowlist_fields(stand_in),
+        DjangoJSONEncoder._get_sensitive_optout_fields(stand_in),
+        password_names,
+    )
+
+
+def _model_form_floor(form: Any) -> Optional[tuple]:
+    """The floor tuple for a form, else ``None``.
+
+    Two floors meet here: the MODEL floor of a ``ModelForm`` (read off its ``instance``: a form over a
+    ``User`` holds that user's values under the user's field names, so the user's floor is the form's
+    floor: ``password``, ``is_superuser``, ``is_staff``, ``DJUST_SENSITIVE_FIELDS``,
+    ``djust_exclude_fields``, the ``djust_serializable_fields`` allowlist and the field-type floor), and
+    the WIDGET-TYPE floor: a field whose widget is a password input holds what was typed, whatever the
+    form is, so it is a floor field of a plain ``Form`` and of a ``ModelForm`` alike.
+    """
+    from django.forms import ModelForm
+
+    passwords = _password_field_names(getattr(form, "fields", None))
+    if isinstance(form, ModelForm):
+        instance = getattr(form, "instance", None)
+        if isinstance(instance, models.Model):
+            return _floor_for_model(type(instance), passwords)
+    if not passwords:
+        return None
+    return _floor_for_model(None, passwords)
+
+
+def _floor_field_readable(floor: tuple, name: Any) -> bool:
+    """May the value held under form-field key *name* be carried? One authority:
+    ``_attr_is_serializable`` and the TYPE floor, as the template sidecar asks, and the form's
+    password-widget fields."""
+    if not isinstance(name, str):
+        return True
+    model_class, denied, allowed, optout, passwords = floor
+    if name in passwords:
+        return False
+    if model_class is None:
+        return True  # a plain Form: only its password fields are on the floor
+    if not DjangoJSONEncoder._attr_is_serializable(name, denied, allowed, optout):
+        return False
+    return not _field_type_excluded_for(model_class, name)
+
+
+#: Name tokens that make a floor field a SECRET. A name is split into lower-case words (``api_token``,
+#: ``apiToken``, ``AuthKey`` -> api/token, api/token, auth/key) and any word here counts;
+#: ``password`` / ``passwd`` / ``secret`` / ``token`` / ``apikey`` are also matched inside a longer word
+#: (``newpassword``). ``is_staff`` and ``is_superuser`` (privilege flags), selects and ordinary
+#: declared-sensitive text (``email``, ``first_name``) are NOT secrets: drawing them empty would corrupt
+#: data on the next save.
+_SECRET_NAME_WORDS = frozenset(
+    {
+        "password",
+        "passwd",
+        "passphrase",
+        "pwd",
+        "secret",
+        "token",
+        "key",
+        "apikey",
+        "hash",
+        "salt",
+        "credential",
+        "credentials",
+        "otp",
+        "signature",
+        "pin",
+    }
+)
+_SECRET_NAME_SUBSTRINGS = ("password", "passwd", "secret", "token", "apikey")
+_NAME_WORD_RE = re.compile(r"[A-Z]?[a-z]+|[A-Z]+(?![a-z])")
+
+
+def _name_is_secret_like(name: Any) -> bool:
+    if not isinstance(name, str):
+        return False
+    lowered = name.lower()
+    if any(part in lowered for part in _SECRET_NAME_SUBSTRINGS):
+        return True
+    return any(word.lower() in _SECRET_NAME_WORDS for word in _NAME_WORD_RE.findall(name))
+
+
+def _floor_field_is_secret(floor: tuple, name: Any, field: Any = None) -> bool:
+    """Is the floor field *name* a SECRET? Three things make one, and nothing else does: its widget is
+    a password input, its name is secret-like (:func:`_name_is_secret_like`), or the model's column is
+    of a type ``LIVEVIEW_CONFIG['sensitive_field_types']`` excludes."""
+    if field is not None and field_has_password_widget(field):
+        return True
+    if _name_is_secret_like(name):
+        return True
+    return (
+        floor[0] is not None and isinstance(name, str) and _field_type_excluded_for(floor[0], name)
+    )
+
+
+def _value_withheld(floor: tuple, name: Any, field: Any) -> bool:
+    """:func:`form_field_value_withheld`, asked of a floor already built. No widget is exempt: the live
+    renderers print ``form_data`` through an adapter and never ask the widget, so a widget's own
+    contract about what it draws (``PasswordInput(render_value=True)`` echoes, Django's hash widget
+    shows a masked summary) says nothing about what ``form_data``, the state, the session and the
+    WebSocket frames may carry."""
+    return (
+        isinstance(name, str)
+        and field is not None
+        and not _floor_field_readable(floor, name)
+        and _floor_field_is_secret(floor, name, field)
+    )
+
+
+def form_field_value_withheld(form: Any, name: Any, field: Any = None) -> bool:
+    """Must the live form renderers NOT carry the stored value of field *name* of *form*?
+
+    A SECRET-LIKE floor field is seeded with ``""`` and never with its stored value; every other field
+    is seeded as it was. A CREATE form is withheld the same way: a secret-like field with an
+    ``initial`` (a generated ``api_key``) is seeded ``""`` and is not pre-filled in the live renderers.
+    """
+    if field is None and isinstance(name, str):
+        field = getattr(form, "fields", {}).get(name)
+    floor = _model_form_floor(form)
+    return floor is not None and _value_withheld(floor, name, field)
+
+
+def model_field_value_withheld(model_class: Any, name: Any) -> bool:
+    """:func:`form_field_value_withheld` for a read of column *name* straight off a model instance
+    (``AdminFormMixin.get_field_value``'s fallback for a name that is not in ``form_data``)."""
+    if not (isinstance(model_class, type) and issubclass(model_class, models.Model)):
+        return False
+    floor = _floor_for_model(model_class)
+    return isinstance(name, str) and (
+        not _floor_field_readable(floor, name) and _floor_field_is_secret(floor, name)
+    )
+
+
+def form_withheld_field_names(form: Any) -> FrozenSet[str]:
+    """The names of the fields of *form* :func:`form_field_value_withheld` holds back, asked of the
+    floor ONCE (a seeding loop over a wide form must not rebuild it per field)."""
+    floor = _model_form_floor(form)
+    if floor is None:
+        return frozenset()
+    return frozenset(
+        name for name, field in form.fields.items() if _value_withheld(floor, name, field)
+    )
+
+
+def form_class_withheld_field_names(form_class: Any) -> FrozenSet[str]:
+    """:func:`form_withheld_field_names` for a form CLASS: no form is built and no row is read.
+
+    The names come from ``base_fields`` and the floor of ``Meta.model`` (a restore of saved state runs
+    before any form exists). A field a form's ``__init__`` adds is not in ``base_fields``.
+    """
+    base = getattr(form_class, "base_fields", None) or {}
+    if not base:
+        return frozenset()
+    model = getattr(getattr(form_class, "_meta", None), "model", None)
+    if not (isinstance(model, type) and issubclass(model, models.Model)):
+        model = None
+    floor = _floor_for_model(model, _password_field_names(base))
+    return frozenset(name for name, field in base.items() if _value_withheld(floor, name, field))
+
+
+def keep_withheld_columns_when_blank(form: Any) -> None:
+    """Make a withheld field of a BOUND ``ModelForm`` over an existing row ``disabled`` when the
+    submission leaves it absent or blank.
+
+    ``form_data`` is seeded ``""`` for a withheld field, so every submit posts ``""`` for it unless the
+    person typed a value. A ``ModelForm`` saves what it is posted: an untouched field would overwrite
+    the column with ``""``. A ``disabled`` form field keeps the initial value (the stored one), and a
+    ``required`` one validates against it, so an untouched required secret does not make the form
+    invalid for good. A non-blank submitted value is left alone and writes. Blank is absent, ``None``,
+    text that is empty once stripped, a list or tuple whose parts are all blank (a ``MultiWidget``), or
+    any other falsy value.
+
+    CONTRACT for a field made ``disabled`` here: the column is untouched (the instance keeps the stored
+    value) AND the form reads the field as the blank it was posted. A ``disabled`` field cleans to its
+    INITIAL value, which is the stored value, so without more ``form.clean()`` and a ``save()`` that
+    tests ``cleaned_data[name]`` (``if pw: user.set_password(pw)``) would see the stored value and treat
+    it as a newly typed one. ``cleaned_data[name]`` is therefore ``""`` in ``form.clean()`` and after
+    ``is_valid()``; only the construction of the instance (which must keep the column) sees the stored
+    value. A ``clean_<name>()`` method, the model's own ``clean()`` and the body of a ``_post_clean``
+    override still see the stored value (a ``clean_password`` that transforms ``pw`` when it is truthy
+    transforms the stored value on a blank submission). The reading
+    applies to single-valued columns only (a many-to-many keeps its value: ``_save_m2m`` reads it)
+    and only to a form whose ``full_clean`` runs ``_clean_form`` and ``_post_clean``.
+    """
+    instance = getattr(form, "instance", None)
+    if (
+        not getattr(form, "is_bound", False)
+        or not isinstance(instance, models.Model)
+        or instance._state.adding
+    ):
+        return
+    data, files = getattr(form, "data", None), getattr(form, "files", None)
+    kept: List[str] = []
+    for name in form_withheld_field_names(form):
+        field = form.fields[name]
+        if field.disabled:
+            continue
+        value = field.widget.value_from_datadict(data, files, form.add_prefix(name))
+        if _value_is_blank(value):
+            field.disabled = True
+            if _is_single_column(instance, name):
+                kept.append(name)
+    if kept:
+        _read_kept_fields_as_blank(form, kept)
+
+
+def _value_is_blank(value: Any) -> bool:
+    """Blank: absent, ``None``, text empty once stripped, a list or tuple whose parts are all blank (a
+    ``MultiWidget`` returns one part per sub-widget), and any other falsy value (``[]``, ``{}``, ``0``,
+    ``False``: only a client that crafts its frame sends them, and ``str()`` of one would be written
+    over the column)."""
+    if isinstance(value, str):
+        return not value.strip()
+    if isinstance(value, (list, tuple)):
+        return all(_value_is_blank(part) for part in value)
+    return not value
+
+
+class _KeptBlankMixin:
+    """Mixed into the CLASS of a form (see :func:`_read_kept_fields_as_blank`) so that a copy of the
+    form (``copy.copy`` / ``copy.deepcopy``) carries the behaviour with it and validates on its own."""
+
+    def _clean_form(self) -> None:
+        stored: Dict[str, Any] = {}
+        for name in self.__dict__.get("_djust_kept_blank", ()):
+            if name in self.cleaned_data:  # type: ignore[attr-defined]
+                stored[name] = self.cleaned_data[name]  # type: ignore[attr-defined]
+                self.cleaned_data[name] = ""  # type: ignore[attr-defined]
+        self.__dict__["_djust_kept_stored"] = stored
+        super()._clean_form()  # type: ignore[misc]
+
+    def _post_clean(self) -> None:
+        stored: Dict[str, Any] = self.__dict__.get("_djust_kept_stored", {})
+        cleaned = self.cleaned_data  # type: ignore[attr-defined]
+        for name, value in stored.items():
+            # Only what is still the blank we set: a ``clean()`` that assigned something owns it.
+            if cleaned.get(name) == "":
+                cleaned[name] = value
+        try:
+            super()._post_clean()  # type: ignore[misc]
+        finally:
+            for name, value in stored.items():
+                if cleaned.get(name) == value:
+                    cleaned[name] = ""
+
+
+#: The attribute a form class carries its derived class under. On the CLASS (not in a module-level
+#: container): the original and the derived class refer to each other, a cycle the garbage collector
+#: frees, so a class built per call (``modelform_factory``, ``ModelAdmin.get_form``) is collectable. A
+#: module-level cache keyed on the class would keep it alive through the derived class's bases.
+_KEPT_BLANK_ATTR = "_djust_kept_blank_class"
+_KEPT_BLANK_LOCK = threading.RLock()
+
+
+def _read_kept_fields_as_blank(form: Any, names: List[str]) -> None:
+    """Make ``cleaned_data[name]`` read ``""`` for each kept (now ``disabled``) field, except while the
+    instance is constructed.
+
+    ``_clean_form`` (``form.clean()``) and what follows ``_post_clean`` see ``""``; ``_post_clean`` puts
+    the stored value back for the moment ``construct_instance`` runs, so the column is unchanged.
+
+    Done by giving the form a subclass of its own class (cached ON the class, see ``_KEPT_BLANK_ATTR``)
+    rather than by wrapping its methods with closures: a closure is bound to THIS form object, so
+    ``copy.copy(form)`` would validate through the original. The class of any other form is not
+    changed.
+
+    Consequences of a derived class: ``type(form) is MyForm`` is False (``isinstance`` holds), the MRO
+    lists ``MyForm`` once more through the derived class, ``MyForm.__init_subclass__`` and the form
+    metaclass run again for it, and its ``base_fields`` are those of ``MyForm`` at the moment of the
+    first derivation (the form instance keeps its own ``fields``). A class that registers its
+    subclasses somewhere global keeps the derived class there, one per form class.
+    """
+    form.__dict__["_djust_kept_blank"] = tuple(names)
+    cls = type(form)
+    if not issubclass(cls, _KeptBlankMixin):
+        # ``vars(cls)``, not ``getattr``: a subclass must not inherit its parent's derived class.
+        derived = vars(cls).get(_KEPT_BLANK_ATTR)
+        if derived is None:
+            with _KEPT_BLANK_LOCK:
+                derived = vars(cls).get(_KEPT_BLANK_ATTR)
+                if derived is None:
+                    derived = type(
+                        cls.__name__, (_KeptBlankMixin, cls), {"__module__": cls.__module__}
+                    )
+                    try:
+                        setattr(cls, _KEPT_BLANK_ATTR, derived)
+                    except (AttributeError, TypeError):  # a class that refuses attributes: uncached
+                        logger.debug("[djust] a form class refused the kept-blank cache attribute")
+        form.__class__ = derived
+
+
+def _is_single_column(instance: Any, name: str) -> bool:
+    """Is *name* a concrete, single-valued column of *instance*'s model? A many-to-many (or a
+    form-only field) is kept ``disabled`` like any other, but its ``cleaned_data`` is NOT read as
+    blank: ``_save_m2m`` saves what ``cleaned_data`` holds, so ``""`` would empty the relation."""
+    try:
+        model_field = instance._meta.get_field(name)
+    except Exception:  # noqa: BLE001 - not a model field
+        return False
+    return bool(getattr(model_field, "concrete", False)) and not model_field.many_to_many
+
+
+def form_over_stored_row(form: Any) -> bool:
+    """Does *form* stand over an existing row? A plain form has no row (its initial is all there is);
+    a ``ModelForm`` does when its instance is a saved model."""
+    from django.forms import ModelForm
+
+    if not isinstance(form, ModelForm):
+        return True
+    instance = getattr(form, "instance", None)
+    return isinstance(instance, models.Model) and not instance._state.adding
+
+
+def scrub_form_errors(form: Any) -> Any:
+    """Replace ``form.errors`` of *form* (in place) with :func:`form_errors_without_secret_values` and
+    return it, so the form handed to a developer's ``form_invalid(form)`` carries no value-bearing
+    error of a withheld field either."""
+    errors = form_errors_without_secret_values(form)
+    if errors is not form.errors:
+        form._errors = errors
+    return errors
+
+
+def scrub_restored_form_data(value: Any, withheld: Any) -> Any:
+    """*value* (a saved ``form_data``) with every key in *withheld* set to ``""``.
+
+    State saved by an earlier version may hold the stored value, and a restore writes the saved
+    ``form_data`` over the freshly seeded one. The same object when there is
+    nothing to scrub.
+    """
+    if not isinstance(value, dict) or not withheld:
+        return value
+    held = set(withheld) & set(value)
+    if not held:
+        return value
+    return {key: ("" if key in held else item) for key, item in value.items()}
+
+
+def stored_value_withheld(form: Any, name: Any, value: Any) -> bool:
+    """Is *value*, held under *name* in ``form_data``, the STORED value of a withheld field?
+
+    The read-time guard of ``get_field_value`` / ``as_live_field``: state that was restored or set by
+    code that does not go through the seeding still must not be printed. It compares with the form's
+    own initial value, so what a person TYPED into a password box is not mistaken for it.
+    """
+    if not value or form is None:
+        return False
+    field = getattr(form, "fields", {}).get(name) if isinstance(name, str) else None
+    if field is None or not form_field_value_withheld(form, name, field):
+        return False
+    stored = field.prepare_value(form[name].initial)
+    return stored not in ("", None) and bool(value == stored)
+
+
+def _stored_tokens(form: Any, name: Any, field: Any) -> tuple:
+    """The texts under which the STORED value of field *name* could appear in a message: its ``str`` and
+    the ``repr`` of it and of its text. Empty when nothing is stored."""
+    try:
+        stored = field.prepare_value(form[name].initial)
+    except Exception:  # noqa: BLE001 - no initial can be read: only parameterised errors are scrubbed
+        return ()
+    if stored in ("", None):
+        return ()
+    text = str(stored)
+    return tuple({text, repr(stored), repr(text)})
+
+
+def _error_carries_value(error: Any, tokens: tuple) -> bool:
+    """Does this error say something about the value? Any parameterised one (Django interpolates the
+    value it rejects), and any whose message contains the stored value or its repr (a ``clean_<name>``
+    that writes ``f"... {value!r} ..."``).
+
+    Scrubbing of developer-authored messages is token-based best effort: a message that contains a
+    TRANSFORMED form of the stored value (``json.dumps``, HTML-escaped, a bytes repr, upper-cased, a
+    prefix, hard-wrapped) is not caught; the plain string, its ``repr`` and ``%`` / ``str()``
+    formatting of it are.
+    """
+    if getattr(error, "params", None):
+        return True
+    if not tokens:
+        return False
+    try:
+        text = " ".join(str(m) for m in error.messages)
+    except Exception:  # noqa: BLE001 - a message that cannot be formatted is not shown either
+        return True
+    return any(token in text for token in tokens)
+
+
+def scrub_error_messages(form: Any, name: Any, messages: List[Any]) -> List[Any]:
+    """*messages* (the ``.messages`` of a ``ValidationError`` raised for field *name*) made generic when
+    the field is withheld and a message contains its stored value. The same list otherwise."""
+    floor = _model_form_floor(form)
+    field = form.fields.get(name) if isinstance(name, str) else None
+    if floor is None or not _value_withheld(floor, name, field):
+        return messages
+    tokens = _stored_tokens(form, name, field)
+    if tokens and any(token in str(m) for m in messages for token in tokens):
+        return ["Enter a valid value."]
+    return messages
+
+
+def _scrub_floor_errors(errors: Any, floor: tuple, form: Any) -> Any:
+    """*errors* (a form's ``ErrorDict``) with every error of a withheld field that carries the value
+    replaced by a generic one. Django's own messages interpolate the value (``invalid_choice``:
+    "Select a valid choice. <value> is not one of the available choices."), a ``disabled`` field is
+    validated against its STORED value, and a developer's ``clean_<name>`` may include it. A copy; the
+    form's own errors are kept. The same object when nothing needs scrubbing."""
+    if not isinstance(errors, dict) or not errors:
+        return errors
+    scrubbed: Any = None
+    for name, error_list in list(errors.items()):
+        data = getattr(error_list, "data", None)
+        if not data:
+            continue
+        field = form.fields.get(name) if isinstance(name, str) else None
+        if not _value_withheld(floor, name, field):
+            continue
+        tokens = _stored_tokens(form, name, field)
+        if not any(_error_carries_value(error, tokens) for error in data):
+            continue
+        from django.core.exceptions import ValidationError
+
+        if scrubbed is None:
+            scrubbed = copy.copy(errors)
+        replacement = copy.copy(error_list)
+        replacement.data = [
+            ValidationError("Enter a valid value.", code=getattr(error, "code", None))
+            if _error_carries_value(error, tokens)
+            else error
+            for error in data
+        ]
+        scrubbed[name] = replacement
+    return errors if scrubbed is None else scrubbed
+
+
+def form_errors_without_secret_values(form: Any) -> Any:
+    """``form.errors`` with the value-bearing errors of a withheld field made generic. A copy; the
+    form's own errors are kept. The same object when nothing needs scrubbing."""
+    errors = form.errors
+    floor = _model_form_floor(form)
+    return errors if floor is None else _scrub_floor_errors(errors, floor, form)

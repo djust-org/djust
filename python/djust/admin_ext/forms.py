@@ -73,9 +73,14 @@ class AdminFormMixin(FormMixin):
 
         # Initialize form data from object
         if self.object:
+            from djust.serialization import form_withheld_field_names
+
             form = self._create_form()
+            # A credential-like floor field (the ``password`` column of a ``User``) is not seeded
+            # with its stored value.
+            withheld = form_withheld_field_names(form)
             for field in form:
-                self.form_data[field.name] = field.value()
+                self.form_data[field.name] = "" if field.name in withheld else field.value()
 
         # Create initial form instance
         self.form_instance = self._create_form()
@@ -184,10 +189,18 @@ class AdminFormMixin(FormMixin):
         """
         # Check form_data first
         if field_name in self.form_data:
-            return self.form_data.get(field_name, default)
+            return self._without_stored_secret(
+                field_name, self.form_data.get(field_name, default), default
+            )
 
         # Get from object if available
         if not self.object:
+            return default
+
+        # The fallback reads the column straight off the instance: not a secret-like floor one.
+        from djust.serialization import model_field_value_withheld
+
+        if model_field_value_withheld(self._model, field_name):
             return default
 
         try:
@@ -233,6 +246,26 @@ class AdminFormMixin(FormMixin):
         except Exception:
             logger.debug("Failed to get field value for %s", field_name, exc_info=True)
             return default
+
+    def _expects_stored_row(self) -> bool:
+        """The admin view records the object id it was mounted with."""
+        return bool(getattr(self, "object_id", None))
+
+    def _guard_form(self) -> Any:
+        """The admin form for the read-time guard. ``form_class`` is unset here, so the base property
+        cannot rebuild a lost ``_form_instance``: build it from the ModelAdmin."""
+        form = self._form_instance
+        if form is None:
+            try:
+                form = self._create_form()
+            except Exception:  # noqa: BLE001 - request / object not available: guard by class instead
+                logger.debug("[djust] the admin form could not be built for the read-time guard")
+                return None
+        return form
+
+    def _form_class_for_restore(self) -> Any:
+        """The ModelAdmin's form class for the object being edited (``form_class`` is unset here)."""
+        return self._model_admin.get_form(self.request, self.object)
 
     def validate_field(
         self, field: str = "", field_name: str = "", value: Any = None, **kwargs: Any
@@ -290,7 +323,9 @@ class AdminFormMixin(FormMixin):
                     clean_method()
 
             except forms.ValidationError as e:
-                self.field_errors[field_name] = e.messages
+                from djust.serialization import scrub_error_messages
+
+                self.field_errors[field_name] = scrub_error_messages(form, field_name, e.messages)
 
         # Update form instance
         self.form_instance = form
@@ -306,6 +341,9 @@ class AdminFormMixin(FormMixin):
 
         # Create form with all data
         form = self._create_form(self.form_data)
+        from djust.serialization import keep_withheld_columns_when_blank
+
+        keep_withheld_columns_when_blank(form)
 
         # Validate entire form
         if form.is_valid():
@@ -319,7 +357,9 @@ class AdminFormMixin(FormMixin):
                 self.form_valid(form)
         else:
             self.is_valid = False
-            self.field_errors = {field: errors for field, errors in form.errors.items()}
+            from djust.serialization import scrub_form_errors
+
+            self.field_errors = {field: errors for field, errors in scrub_form_errors(form).items()}
 
             if form.non_field_errors():
                 self.form_errors = form.non_field_errors()

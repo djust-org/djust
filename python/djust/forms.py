@@ -24,7 +24,21 @@ def initial_field_value(form: Any, name: str, field: Any) -> Any:
     (``UUIDField(initial=uuid.uuid4)``, ``initial=timezone.now``) instead of
     returning the function, and lets the form's own ``initial`` win. Only
     ``None`` becomes ``""``: ``0`` and ``False`` are real initial values.
+
+    A SECRET-LIKE floor field is the exception: its stored value is never seeded
+    (``""``), because what is seeded lands in ``form_data`` and so in the live
+    renderers, ``get_state()``, ``get_debug_info()`` and the session snapshot
+    (:func:`djust.serialization.form_field_value_withheld`).
     """
+    from .serialization import form_field_value_withheld
+
+    if form_field_value_withheld(form, name, field):
+        return ""
+    return _initial_value(form, name, field)
+
+
+def _initial_value(form: Any, name: str, field: Any) -> Any:
+    """The raw initial value of a field (see :func:`initial_field_value`), withholding nothing."""
     initial = form.get_initial_for_field(field, name)
     return "" if initial is None else initial
 
@@ -136,7 +150,13 @@ class FormMixin:
 
             # If _model_instance is set and this is a ModelForm, populate from instance
             if self._model_instance and issubclass(self.form_class, forms.ModelForm):
+                # A secret-like floor field keeps its ``""`` seed: the stored column is not carried.
+                from .serialization import form_withheld_field_names
+
+                withheld = form_withheld_field_names(form)
                 for field_name in form.fields:
+                    if field_name in withheld:
+                        continue
                     if hasattr(self._model_instance, field_name):
                         val = getattr(self._model_instance, field_name)
                         if val is not None:
@@ -372,7 +392,9 @@ class FormMixin:
 
         except ValidationError as e:
             # Store field error
-            self.field_errors[field_name] = e.messages
+            from .serialization import scrub_error_messages
+
+            self.field_errors[field_name] = scrub_error_messages(form, field_name, e.messages)
 
         # Update form instance
         self._form_instance = form
@@ -395,6 +417,11 @@ class FormMixin:
 
         # Create form with all data
         form = self._create_form(self.form_data)
+        # ``form_data`` holds ``""`` for a withheld secret, so a submission that never typed one must
+        # not save that emptiness over the stored column (an edit form only).
+        from .serialization import keep_withheld_columns_when_blank
+
+        keep_withheld_columns_when_blank(form)
 
         # Validate entire form
         if form.is_valid():
@@ -422,8 +449,10 @@ class FormMixin:
         else:
             self.is_valid = False
 
-            # Store all errors
-            self.field_errors = {field: errors for field, errors in form.errors.items()}
+            # Store all errors (a secret-like field's value-bearing errors made generic)
+            from .serialization import scrub_form_errors
+
+            self.field_errors = {field: errors for field, errors in scrub_form_errors(form).items()}
 
             # Store non-field errors
             if form.non_field_errors():
@@ -442,10 +471,18 @@ class FormMixin:
         reflecting the saved state. For ModelForms, reads from the saved
         instance; for plain forms, reads from cleaned_data.
         """
+        from .serialization import form_withheld_field_names
+
         source = None
         if isinstance(form, forms.ModelForm) and hasattr(form, "instance"):
             source = form.instance
+        # A secret-like field is not synced back: the saved column (or what was typed) must not land
+        # in ``form_data`` and so in the state the framework reports.
+        withheld = form_withheld_field_names(form)
         for field_name in form.fields:
+            if field_name in withheld:
+                self.form_data[field_name] = ""
+                continue
             if source is not None and hasattr(source, field_name):
                 val = getattr(source, field_name)
                 # FK fields: store PK, not the related object
@@ -459,8 +496,17 @@ class FormMixin:
 
     @staticmethod
     def _initial_form_data(form: Any) -> Dict[str, Any]:
-        """Each field's initial value, or ``""`` when it has none."""
-        return {name: initial_field_value(form, name, field) for name, field in form.fields.items()}
+        """Each field's initial value, or ``""`` when it has none or must not be carried.
+
+        The floor is asked once for the whole form, not once per field.
+        """
+        from .serialization import form_withheld_field_names
+
+        withheld = form_withheld_field_names(form)
+        return {
+            name: "" if name in withheld else _initial_value(form, name, field)
+            for name, field in form.fields.items()
+        }
 
     @event_handler
     def reset_form(self, **kwargs: Any) -> None:
@@ -495,9 +541,89 @@ class FormMixin:
         self._should_reset_form = True
 
     def get_field_value(self, field_name: str, default: Any = "") -> Any:
-        """Get current value for a field"""
+        """Get current value for a field.
+
+        The STORED value of a withheld secret is never returned, even if ``form_data`` holds it (state
+        restored from an earlier version, or set by the view's own code): the read-time twin of
+        the seeding (:func:`djust.serialization.form_field_value_withheld`). ``as_live_field`` and
+        ``{% live_field %}`` read through here, so the live renderers never draw it either. What a
+        person typed into the field is returned as typed.
+        """
         self._ensure_form_state()
-        return self.form_data.get(field_name, default)
+        return self._without_stored_secret(
+            field_name, self.form_data.get(field_name, default), default
+        )
+
+    def _without_stored_secret(self, field_name: str, value: Any, default: Any = "") -> Any:
+        from .serialization import form_over_stored_row, stored_value_withheld
+
+        if not value:
+            return value
+        form = self._guard_form()
+        # A form rebuilt over a blank instance (the row is gone) has ``""`` as its initial, so comparing
+        # with it would print the stored value: when the view says a row should exist, guard by class.
+        if form is not None and not (self._expects_stored_row() and not form_over_stored_row(form)):
+            withheld = stored_value_withheld(form, field_name, value)
+        else:
+            withheld = self._withheld_without_form(field_name)
+        return ("" if default is None else default) if withheld else value
+
+    def _expects_stored_row(self) -> bool:
+        """Does this view say a stored row exists (it recorded the model's pk at mount)?"""
+        return bool(getattr(self, "model_pk", None))
+
+    def _guard_form(self) -> Any:
+        """The form the read-time guard compares with, or ``None`` when none can be had.
+
+        The ``form_instance`` property rebuilds a form that was lost (it is private and is not
+        restored).
+        """
+        try:
+            return self.form_instance
+        except Exception:  # noqa: BLE001 - a form that cannot be built here guards by class instead
+            logger.debug("[djust] the form could not be built for the read-time guard")
+            return None
+
+    def _withheld_without_form(self, field_name: str) -> bool:
+        """No form to compare with: a field the form CLASS withholds (else a secret-like name) is
+        treated as holding the stored value. Fail closed: this may only lose a draft, never print."""
+        from .serialization import _name_is_secret_like, form_class_withheld_field_names
+
+        try:
+            form_class = self._form_class_for_restore()
+        except Exception:  # noqa: BLE001 - a dynamic form class that needs state this read lacks
+            form_class = None
+        if form_class is None:
+            return _name_is_secret_like(field_name)
+        return field_name in form_class_withheld_field_names(form_class)
+
+    def _form_class_for_restore(self) -> Any:
+        """The form class whose fields name what a restore must withhold (admin overrides it)."""
+        return self.form_class
+
+    def _djust_scrub_restored(self, key: str, value: Any) -> Any:
+        """Framework hook (``safe_setattr``): a saved ``form_data`` loses its withheld fields.
+
+        State saved by an earlier version may hold the stored value, and a restore writes the saved
+        ``form_data`` over the freshly seeded one. Class-level (no form is built, no row is read).
+        """
+        if key != "form_data" or not isinstance(value, dict):
+            return value
+        from .serialization import (
+            _name_is_secret_like,
+            form_class_withheld_field_names,
+            scrub_restored_form_data,
+        )
+
+        try:
+            form_class = self._form_class_for_restore()
+        except Exception:  # noqa: BLE001 - a dynamic form class that needs state this restore lacks
+            logger.debug("[djust] the form class could not be resolved to scrub a restore")
+            form_class = None
+        if form_class is None:
+            # Nothing to ask: refuse every key that looks like a secret, a restore may only lose data.
+            return scrub_restored_form_data(value, {k for k in value if _name_is_secret_like(k)})
+        return scrub_restored_form_data(value, form_class_withheld_field_names(form_class))
 
     def get_field_errors(self, field_name: str) -> List[str]:
         """Get errors for a specific field"""
