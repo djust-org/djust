@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.7] - 2026-11-07
+
+A 1.2 patch release that includes security fixes; upgrading from 1.2.6 is recommended.
+
+### Fixed
+
+- **The HTTP POST fallback no longer drops `push_event`, `set_layout` and
+  `defer()` (#3541).** An event answered over HTTP carried only flash and
+  page metadata. Its JSON answer now also carries `_push_events`
+  (`{event, payload}` per `push_event` / `push_commands`) and `_layout`
+  (`{path, html}` for `set_layout`), and `defer()` callbacks run after the
+  answer is built, as on the WebSocket. The client dispatches each push event
+  (`djust:push_event` and the `dj-hook` handlers) and applies the layout, as
+  the WebSocket `push_event` / `layout` cases do. 10 regression cases in
+  `python/tests/test_http_side_channels_push_layout_defer.py`, plus
+  `tests/js/http-side-channels-push-layout-3541.test.js` for the client.
+- **SSE pages ignored `set_layout()`.** The server sends the `layout` frame
+  from the shared turn end, so it reaches SSE pages too, but the SSE transport
+  had no case for it and dropped it as an unknown frame. It now swaps the
+  layout as the WebSocket transport does. Covered by
+  `tests/js/sse_layout_frame.test.js`, which runs on both transports.
+
+### Security
+
+- **Credential form fields are no longer pre-filled from the stored value in `FormMixin` state.** A form field is seeded empty when it is on the serialization floor and it is credential-like. On the floor means: a password-input field; the built-in `password`; a name listed in `DJUST_SENSITIVE_FIELDS` or `djust_exclude_fields`; a field outside a `djust_serializable_fields` allowlist; or a column of an excluded field type. Credential-like means: a password widget, a name such as `password`, `token`, `secret` or `key`, or an excluded field type. A custom column that is not on the floor is unchanged: list it in `DJUST_SENSITIVE_FIELDS` to have it covered, the same as for `{{ obj.field }}`. On an edit form, a blank submission (absent, empty, whitespace-only, `None` or another falsy value) keeps the stored column, so clearing such a column now needs explicit code; a typed value still writes. Saved state from earlier versions is cleaned on restore, validation messages for these fields are generic, and after a valid `UserCreationForm` submit the password fields in form state are empty. A `FormMixin` view with no `form_class` now reads credential-like keys (`token`, `key`, `pin`, `hash`, ...) from `get_field_value()` as empty. Sessions and snapshots written by earlier versions are not rewritten until their next save. Regression cases in `python/tests/test_form_data_sensitive_fields.py`.
+- **A native component handler uses an explicitly passed argument as given.** The nine native handlers `data_table` (`rows`, `columns`), `breadcrumb`, `stepper`, `dj_select`, `dj_radio`, `autocomplete`, `dependent_select`, `toast_container` and `form_errors` now consult the render context for an argument only when it was not passed, so an explicit argument (including an empty one) wins over a context variable of the same name, as it does in the Python tag. `toast_container` now also honours its `toasts=` and `dismiss_event=` arguments.
+- **Per-model serialization settings are honoured for lazily wrapped model instances.** `djust_exclude_fields`, `djust_serializable_fields`, `djust_serialize_sensitive_fields`, a model-level `to_dict()` and the field-type exclusion (`BinaryField`) now apply to a model held in a `SimpleLazyObject` or another transparent object proxy the same way as to the bare instance. The wrapper is resolved once.
+- **Custom tag handlers that resolve dotted names no longer see underscore-prefixed attributes of a model or queryset handle.** The template handles for models and querysets now refuse single-underscore names (as template resolution already does) and keep the protocol names reachable. A handle can be copied with `copy` / `deepcopy` but is no longer picklable: pickling a render context that holds one raises `TypeError`.
+- **Row-click navigation targets and mount URLs are normalised before they are checked.** The data table's row navigation script and `validate_mount_url` now apply the browser's URL normalisation (tabs and newlines removed, backslash read as a slash) before the same-site test, through one definition in `djust.security.urls`. Absolute `http(s)` row URLs are still followed.
+
 ## [1.2.6] - 2026-10-16
 
 A 1.2 patch release with a security fix; upgrading from 1.2.5 is recommended.

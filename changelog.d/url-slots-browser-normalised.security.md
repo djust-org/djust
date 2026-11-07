@@ -1,1 +1,0 @@
-- **Row-click navigation targets and mount URLs are normalised before they are checked.** The data table's row navigation script and `validate_mount_url` now apply the browser's URL normalisation (tabs and newlines removed, backslash read as a slash) before the same-site test, through one definition in `djust.security.urls`. Absolute `http(s)` row URLs are still followed.
