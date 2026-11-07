@@ -242,9 +242,11 @@ flag, a PII column — because serialization defaulted to *allow everything*.
 > (`optimization/codegen.py::emittable_names`, which the compiled serializers
 > and the Rust serializers call) applies it through
 > `DjangoJSONEncoder._attr_is_readable`, the name rules followed by this floor,
-> so a template naming such a column reads it as empty on every route. Its cache
-> key carries the model class and the configured types, because the verdict
-> depends on a column's type.
+> so a template naming such a column reads it as empty on every route. The floor
+> governs columns: a `@property`, method, annotation or `values_list` row that
+> carries the same value is outside it, as on the eager path. Its cache key
+> carries the model class and the configured types, because the verdict depends
+> on a column's type.
 
 **Canonical site.**
 `python/djust/serialization.py`:
@@ -303,8 +305,9 @@ flag, a PII column — because serialization defaulted to *allow everything*.
   queryset serializer** — every attribute the generated serializer reads, and
   every attribute `crates/djust_live/src/lib.rs::serialize_object_with_paths`
   reads, is gated by
-  `python/djust/optimization/codegen.py::emittable_names`, which calls this
-  and nothing else (#2685 / #2688; a denied name is omitted from the dict, so
+  `python/djust/optimization/codegen.py::emittable_names`, which asks
+  `_attr_is_readable` (this, then the column-TYPE floor below) and nothing
+  else (#2685 / #2688; a denied name is omitted from the dict, so
   the template renders `string_if_invalid`). Rust holds no policy of its own:
   `resolve_attr_gate` imports that one Python function and `gated_names` calls
   it once per object LEVEL, threading the result through both recursions — so

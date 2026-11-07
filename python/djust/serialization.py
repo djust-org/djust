@@ -51,8 +51,8 @@ HAS_ORJSON = importlib.util.find_spec("orjson") is not None
 # Since #2685 it ALSO covers a template that *explicitly* references a field:
 # ``{{ user.password }}`` flows through the compiled JIT serializer (and, for a
 # QuerySet, through Rust's ``serialize_object_with_paths``), and both now
-# consult this floor via ``optimization/codegen.py::emittable_names`` before
-# emitting a name. Naming a field in a template is not consent to ship a
+# consult this floor via ``optimization/codegen.py::emittable_names`` (the name
+# rules, then the column-TYPE floor below it) before emitting a name. Naming a field in a template is not consent to ship a
 # password hash — the value renders as ``string_if_invalid`` (empty) instead.
 # The match is name-EXACT: it covers ``password`` but not a ``get_password()``
 # accessor or a differently-named ``@property`` — use ``DJUST_SENSITIVE_FIELDS``
@@ -826,7 +826,9 @@ class DjangoJSONEncoder(json.JSONEncoder, metaclass=_EncoderDepthMeta):
         Every channel that decides whether a model attribute ships — the eager
         field loop, the eager ``get_*`` method loop, the eager ``@property``
         loop and the template sidecar proxy (``_SidecarModelProxy``) — calls
-        this and nothing else, so the channels cannot drift (#1646). Before
+        this and nothing else for the NAME decision, so the channels cannot
+        drift (#1646); the JIT gate reaches it through :meth:`_attr_is_readable`,
+        which adds the column-TYPE floor. Before
         #2614 the property loop consulted only ``_field_is_serializable`` while
         the sidecar also refused ``_SENSITIVE_MODEL_METHODS``; a ``@property``
         that *shadowed* ``get_session_auth_hash`` was serialized eagerly and
@@ -856,21 +858,15 @@ class DjangoJSONEncoder(json.JSONEncoder, metaclass=_EncoderDepthMeta):
 
     @staticmethod
     def _model_class_behind(obj: Any) -> Optional[type]:
-        """The Django model class *obj* is an instance of, else ``None``.
+        """The Django model class governing *obj*, else ``None`` for an object that is not a model.
 
-        Sees through a lazy wrapper (``SimpleLazyObject``): ``type(obj)`` is the
-        wrapper, ``obj.__class__`` is the model. The per-model sets
-        (``djust_exclude_fields`` and the like) and the column TYPES both belong
-        to that class, so a decision keyed on the wrapper's own class decides on
-        neither.
+        :func:`_model_class_of` (the one reader of "which class's settings apply", which
+        sees through a lazy wrapper) narrowed to a model: the JIT gate keys its memo on this
+        class and asks it for column types, and a non-model has no columns. A wrapper that
+        cannot be evaluated raises here, as it does in :func:`_model_class_of`.
         """
-        try:
-            cls = obj.__class__
-        except Exception:  # noqa: BLE001 - a proxy that refuses __class__ is no model
-            return None
-        if isinstance(cls, type) and issubclass(cls, models.Model):
-            return cls
-        return None
+        cls = _model_class_of(obj)
+        return cls if issubclass(cls, models.Model) else None
 
     @staticmethod
     def _configured_sensitive_types() -> FrozenSet[str]:
@@ -896,7 +892,10 @@ class DjangoJSONEncoder(json.JSONEncoder, metaclass=_EncoderDepthMeta):
         opt-out names a COLUMN, and neither lifts a column's type.
 
         *model_class* is ``None`` for an object that is not a model, which has no
-        columns to type.
+        columns to type. The type floor governs COLUMNS: a name that is not a column
+        (a property, a method, an annotation, a reverse relation) or whose field
+        cannot be resolved is not type-excluded, as in :func:`_field_type_excluded_for`
+        on the eager path, so a value carried by one of those is outside this floor.
         """
         if not DjangoJSONEncoder._attr_is_serializable(name, denied, allowed, optout):
             return False

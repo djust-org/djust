@@ -55,8 +55,9 @@ _GATE_CACHE: Dict[
 
 #: Bound on :data:`_GATE_CACHE`. Real templates name a small, fixed set of paths
 #: per model, so the live key count is tiny; the cap only stops an unbounded
-#: walk if some caller synthesises path tuples at runtime. Past the cap the gate
-#: keeps working, uncached.
+#: walk if some caller synthesises path tuples at runtime. A full cache is
+#: cleared and refilled, so the gate keeps memoising the keys in use now rather
+#: than recomputing every call for the rest of the process.
 _GATE_CACHE_MAX = 512
 
 #: The chokepoint class, resolved on first use. Held here rather than imported
@@ -104,21 +105,23 @@ def emittable_names(obj: Any, names: Iterable[str]) -> FrozenSet[str]:
 
     A denied name is simply omitted from the result dict, which the template
     renders as ``string_if_invalid`` (empty) — the same outcome as the eager
-    channel. Fail-closed: any error resolving the sets denies every name.
+    channel. Fail-closed: any error resolving the sets denies every name. That includes an
+    object whose ``__class__`` cannot be read: the class is resolved by
+    ``serialization._model_class_of`` inside the guard, so a lazy wrapper that
+    raises when evaluated denies every name rather than being gated by name rules
+    alone. A name that is not a column of the model (a property, a method, an
+    annotation, a reverse relation) is not type-excluded: the type floor governs
+    columns and the name rules govern the rest, exactly as on the eager path.
     """
     try:
         encoder = _chokepoint()
-        # The model class, seen through a lazy wrapper: the per-model sets and the
-        # column types both belong to it, and ``type(obj)`` of a ``SimpleLazyObject``
-        # is the wrapper. The readers below look only at the class, so a bare
-        # instance of it stands in for the wrapped one (as ``_floor_for_model`` does).
+        # The per-model sets and the column types belong to the model class, which for a
+        # lazy wrapper is what ``__class__`` reports, not ``type(obj)``. The set readers
+        # resolve it themselves (``_model_class_of``); the type floor needs it here.
         model_class = encoder._model_class_behind(obj)
-        subject = obj
-        if model_class is not None and type(obj) is not model_class:
-            subject = object.__new__(model_class)
-        denied = encoder._get_denied_fields(subject)
-        allowed = encoder._get_allowlist_fields(subject)
-        optout = encoder._get_sensitive_optout_fields(subject)
+        denied = encoder._get_denied_fields(obj)
+        allowed = encoder._get_allowlist_fields(obj)
+        optout = encoder._get_sensitive_optout_fields(obj)
         wanted = frozenset(names)
         key = (wanted, denied, allowed, optout, model_class, encoder._configured_sensitive_types())
         hit = _GATE_CACHE.get(key)
@@ -127,8 +130,12 @@ def emittable_names(obj: Any, names: Iterable[str]) -> FrozenSet[str]:
         permitted = frozenset(
             n for n in wanted if encoder._attr_is_readable(n, model_class, denied, allowed, optout)
         )
-        if len(_GATE_CACHE) < _GATE_CACHE_MAX:
-            _GATE_CACHE[key] = permitted
+        if len(_GATE_CACHE) >= _GATE_CACHE_MAX:
+            # Clear-on-full: dict ``clear`` and ``__setitem__`` are each atomic (also under
+            # free threading), and a thread that loses an entry to a racing clear simply
+            # recomputes it, so a memo of a pure function needs no lock.
+            _GATE_CACHE.clear()
+        _GATE_CACHE[key] = permitted
         return permitted
     except Exception:
         logger.debug("attribute gate failed for %s; refusing every name", type(obj).__name__)

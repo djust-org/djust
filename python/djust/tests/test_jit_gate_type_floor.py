@@ -421,6 +421,50 @@ class TestTheGateCache:
             assert verdicts[Bare] == frozenset({"blob"}), (order, verdicts)
             assert verdicts[Plain] == frozenset(), (order, verdicts)
 
+    def test_two_lazy_wrapped_models_with_the_same_name_sets_do_not_share_a_verdict(self):
+        """The same isolation through a lazy wrapper, in BOTH orders.
+
+        ``type(lazy)`` is ``SimpleLazyObject`` for every wrapped model, so a key built from
+        ``type(obj)`` instead of the model class collapses the two twins to one entry and the
+        second asked gets the first's verdict. The non-lazy test above cannot see that:
+        there ``type(obj)`` IS the model class.
+        """
+        Bare = type(
+            "TypeFloorLazyBare",
+            (models.Model,),
+            {
+                "__module__": __name__,
+                "blob": models.CharField(max_length=10, default=""),
+                "Meta": type("Meta", (), {"app_label": "tests"}),
+            },
+        )
+        Binary = type(
+            "TypeFloorLazyBinary",
+            (models.Model,),
+            {
+                "__module__": __name__,
+                "blob": models.BinaryField(default=b""),
+                "Meta": type("Meta", (), {"app_label": "tests"}),
+            },
+        )
+        names = ("blob",)
+        for order in ((Bare, Binary), (Binary, Bare)):
+            _codegen._GATE_CACHE.clear()
+            verdicts = {m: _codegen.emittable_names(SimpleLazyObject(m), names) for m in order}
+            assert verdicts[Bare] == frozenset({"blob"}), (order, verdicts)
+            assert verdicts[Binary] == frozenset(), (order, verdicts)
+
+    def test_a_full_cache_keeps_memoising_the_keys_in_use(self, monkeypatch):
+        """Past the cap the cache is cleared and refilled, not frozen at its first 512 keys."""
+        monkeypatch.setattr(_codegen, "_GATE_CACHE_MAX", 3)
+        obj = _row()
+        _codegen._GATE_CACHE.clear()
+        for i in range(10):
+            _codegen.emittable_names(obj, (CONTROL, f"unknown_{i}"))
+            assert len(_codegen._GATE_CACHE) <= 3, _codegen._GATE_CACHE
+        latest = (CONTROL, "unknown_9")
+        assert any(k[0] == frozenset(latest) for k in _codegen._GATE_CACHE), _codegen._GATE_CACHE
+
     def test_a_change_to_the_configured_types_changes_the_verdict(self):
         cfg = get_config()
         obj = _row()
