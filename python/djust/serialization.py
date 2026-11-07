@@ -1595,6 +1595,18 @@ def _protect_sidecar_value(value: Any) -> Any:
     return value
 
 
+def _refuse_private_name(name: str) -> None:
+    """Raise ``AttributeError`` for a single-underscore name; a dunder (protocol) name is allowed.
+
+    The sidecar proxies keep what they wrap in ``__slots__`` (a real slot is a data descriptor, found
+    before ``__getattr__`` is consulted), so a name starting with ``_`` read from outside the proxy would
+    return the wrapped object itself. Template resolution never touches such names (Django-parity), and
+    nothing outside the proxy needs them: the proxy reads its own slots through ``object.__getattribute__``.
+    """
+    if name[:1] == "_" and not (name[:2] == "__" and name[-2:] == "__"):
+        raise AttributeError(name)
+
+
 class _SidecarModelProxy:
     """Denylist-consulting wrapper for a Django ``Model`` placed in the
     template getattr sidecar (ADR-024 / #1986 review).
@@ -1650,6 +1662,25 @@ class _SidecarModelProxy:
         object.__setattr__(self, "_denied", DjangoJSONEncoder._get_denied_fields(obj))
         object.__setattr__(self, "_allowed", DjangoJSONEncoder._get_allowlist_fields(obj))
         object.__setattr__(self, "_optout", DjangoJSONEncoder._get_sensitive_optout_fields(obj))
+
+    def __getattribute__(self, name: str) -> Any:
+        _refuse_private_name(name)
+        return object.__getattribute__(self, name)
+
+    def __copy__(self) -> Any:
+        # ``copy`` would otherwise read the slots through ``getattr`` (refused above) and drop them;
+        # rebuilding from the wrapped model recomputes every per-model set.
+        return type(self)(object.__getattribute__(self, "_obj"))
+
+    def __deepcopy__(self, memo: Any) -> Any:
+        # A handle is a read-only view: a deep copy is a new handle over the same model, so the caller's
+        # memo never receives a copy of the model (and no queryset is cloned per context copy).
+        return self.__copy__()
+
+    def __reduce__(self) -> Any:
+        # A reduce tuple carries what the handle wraps, and an explicit call would hand it out: a handle is
+        # copied through ``__copy__`` / ``__deepcopy__`` and is not picklable.
+        raise TypeError("a template handle cannot be pickled")
 
     def __getattr__(self, name: str) -> Any:
         # ``__getattr__`` fires only for names not in ``__slots__`` — i.e.
@@ -1735,6 +1766,19 @@ class _SidecarQuerySetProxy:
         # This is the ONLY queryset op that sets ``_fields``, so it cleanly
         # detects the projection class we must refuse.
         object.__setattr__(self, "_is_projection", getattr(qs, "_fields", None) is not None)
+
+    def __getattribute__(self, name: str) -> Any:
+        _refuse_private_name(name)
+        return object.__getattribute__(self, name)
+
+    def __copy__(self) -> Any:
+        return type(self)(object.__getattribute__(self, "_qs"))
+
+    def __deepcopy__(self, memo: Any) -> Any:
+        return self.__copy__()
+
+    def __reduce__(self) -> Any:
+        raise TypeError("a template handle cannot be pickled")
 
     def __getattr__(self, name: str) -> Any:
         if name.startswith("_"):
