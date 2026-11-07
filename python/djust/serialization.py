@@ -199,6 +199,26 @@ def _field_type_is_excluded(field: Any) -> bool:
     return result
 
 
+def _model_class_of(obj: Any) -> type:
+    """The model class whose per-model settings govern *obj*: ``type(obj)`` for a model instance, else
+    the model class *obj* reports through ``__class__`` (a lazy wrapper does).
+
+    ONE function for every reader of a per-model setting (``djust_exclude_fields``,
+    ``djust_serializable_fields``, ``djust_serialize_sensitive_fields``, ``to_dict``, the column types of
+    ``_meta``), so the eager serializer, the sidecar proxy, the JIT gate and the form floor cannot
+    disagree (#1646). Asking ``__class__`` evaluates a lazy wrapper once and follows a wrapper of a
+    wrapper; a wrapper that cannot be evaluated raises, and no setting is guessed. The common case costs
+    one ``issubclass``. A floor handle reports an opaque ``__class__`` and is never taken for a model.
+    """
+    cls = type(obj)
+    if issubclass(cls, models.Model):
+        return cls
+    claimed = getattr(obj, "__class__", None)
+    if isinstance(claimed, type) and issubclass(claimed, models.Model):
+        return claimed
+    return cls
+
+
 def _field_type_excluded_for(model_class: Any, field_name: str) -> bool:
     """Sidecar-path helper for the #1987 TYPE floor: resolve *field_name* on
     *model_class* and apply :func:`_field_type_is_excluded`. Non-fields
@@ -607,7 +627,7 @@ class DjangoJSONEncoder(json.JSONEncoder, metaclass=_EncoderDepthMeta):
         """
         # Model-level to_dict() override — developer takes full ownership of the
         # client-bound payload (intentional opt-out from the denylist).
-        to_dict = getattr(type(obj), "to_dict", None)
+        to_dict = getattr(_model_class_of(obj), "to_dict", None)
         if callable(to_dict):
             try:
                 return obj.to_dict()
@@ -706,14 +726,14 @@ class DjangoJSONEncoder(json.JSONEncoder, metaclass=_EncoderDepthMeta):
         and the per-model ``djust_exclude_fields`` iterable, if defined.
         """
         denied = _resolve_sensitive_fields()
-        per_model = getattr(type(obj), "djust_exclude_fields", None)
+        per_model = getattr(_model_class_of(obj), "djust_exclude_fields", None)
         if per_model:
             try:
                 denied = denied | frozenset(per_model)
             except TypeError:
                 logger.warning(
                     "%s.djust_exclude_fields is not iterable; ignoring it.",
-                    type(obj).__name__,
+                    _model_class_of(obj).__name__,
                 )
         return denied
 
@@ -725,7 +745,7 @@ class DjangoJSONEncoder(json.JSONEncoder, metaclass=_EncoderDepthMeta):
         serialized. Returns ``None`` when no allowlist is defined (the common
         case — denylist semantics apply instead).
         """
-        allowlist = getattr(type(obj), "djust_serializable_fields", None)
+        allowlist = getattr(_model_class_of(obj), "djust_serializable_fields", None)
         if not allowlist:
             return None
         try:
@@ -733,7 +753,7 @@ class DjangoJSONEncoder(json.JSONEncoder, metaclass=_EncoderDepthMeta):
         except TypeError:
             logger.warning(
                 "%s.djust_serializable_fields is not iterable; ignoring it.",
-                type(obj).__name__,
+                _model_class_of(obj).__name__,
             )
             return None
 
@@ -748,7 +768,7 @@ class DjangoJSONEncoder(json.JSONEncoder, metaclass=_EncoderDepthMeta):
         per-model ``djust_serializable_fields`` allowlist alone can NOT re-expose
         a floor field. Returns an empty ``frozenset`` when unset (default deny).
         """
-        optout = getattr(type(obj), "djust_serialize_sensitive_fields", None)
+        optout = getattr(_model_class_of(obj), "djust_serialize_sensitive_fields", None)
         if not optout:
             return frozenset()
         try:
@@ -756,7 +776,7 @@ class DjangoJSONEncoder(json.JSONEncoder, metaclass=_EncoderDepthMeta):
         except TypeError:
             logger.warning(
                 "%s.djust_serialize_sensitive_fields is not iterable; ignoring it.",
-                type(obj).__name__,
+                _model_class_of(obj).__name__,
             )
             return frozenset()
 
@@ -1827,7 +1847,7 @@ class _SidecarModelProxy:
             raise AttributeError(name)
         # TYPE-based floor (#1987): refuse BinaryField / configured / encrypted field types even
         # when the NAME passes the denylist — same authority the eager path calls.
-        if _field_type_excluded_for(type(obj), name):
+        if _field_type_excluded_for(_model_class_of(obj), name):
             raise AttributeError(name)
         value = getattr(obj, name)
         if type(value) in _PLAIN_TYPES:
@@ -2429,7 +2449,7 @@ def _model_form_floor(form: Any) -> Optional[tuple]:
     if isinstance(form, _form_classes()[3]):
         instance = getattr(form, "instance", None)
         if isinstance(instance, models.Model):
-            model_class = type(instance)
+            model_class = _model_class_of(instance)
     if model_class is not None:
         # On the floor whatever the password fields are, so nothing needs to know whether there are
         # any: the names ride as a view of the live fields and no step scans the form (#3816).
