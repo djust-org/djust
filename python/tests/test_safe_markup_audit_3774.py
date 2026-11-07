@@ -444,7 +444,10 @@ class TestTheCheckerCanFail:
         assert injections(f'<a href="{href}">x</a>') != []
 
 
+# Mark each reader explicitly: once they share a shard, only the first
+# reader's recorded duration includes the expensive fixture setup.
 class TestPayloadSweep:
+    @pytest.mark.slow
     def test_no_audited_sink_turns_the_payload_into_markup_or_a_script_url(self, traced_sweep):
         result, _ = traced_sweep
         assert result["found"] == [], f"a payload became markup or a script URL: {result['found']}"
@@ -501,6 +504,7 @@ class TestEverySinkIsReached:
             out[key] = [bool(group & ran) for group in audit.sink_groups(key)]
         return out
 
+    @pytest.mark.slow
     def test_every_audited_sink_runs_unless_the_entry_says_why_not(self, traced_sweep):
         reached = self._reached(traced_sweep)
         unexplained = [
@@ -511,6 +515,7 @@ class TestEverySinkIsReached:
             f"python/tests/payload_drivers_3774.py, or give the entry an `unreached` reason: {unexplained}"
         )
 
+    @pytest.mark.slow
     def test_an_entry_marked_unreached_really_is(self, traced_sweep):
         reached = self._reached(traced_sweep)
         stale = [k for k, entry in audit.AUDITED.items() if entry.unreached and all(reached[k])]
