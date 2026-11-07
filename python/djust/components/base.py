@@ -16,6 +16,7 @@ from abc import ABC
 from django.utils.safestring import SafeString, mark_safe
 
 from djust._html import attr_name
+from djust._include_guard import include_guard_scope
 from djust._template_guards import TemplateMutatorGuard, alters_data
 from djust.decorators import is_event_handler
 
@@ -88,7 +89,8 @@ def _render_template_with_fallback(template_str: str, context: Dict[str, Any]) -
 
         template = Template(template_str)
         django_context = Context(context)
-        return cast(str, template.render(django_context))
+        with include_guard_scope():  # Django's engine renders this fallback (#3880)
+            return cast(str, template.render(django_context))
 
 
 def _render_inline_template(template_str: str, context: Dict[str, Any], owner: str = "") -> str:
@@ -901,7 +903,8 @@ class BoundComponent:
             if html is None:
                 from django.template.loader import render_to_string
 
-                html = render_to_string(template_name, context)
+                with include_guard_scope():
+                    html = render_to_string(template_name, context)
         wrapped = cast(
             str,
             format_html('<div data-component-id="{}">{}</div>', self.component_id, mark_safe(html)),
@@ -1379,7 +1382,8 @@ class LiveComponent(TemplateMutatorGuard, ContextProviderMixin):
                 return cast(str, mark_safe(engine_html))
             from django.template.loader import render_to_string
 
-            return cast(str, mark_safe(render_to_string(self.template_name, context)))
+            with include_guard_scope():
+                return cast(str, mark_safe(render_to_string(self.template_name, context)))
 
         raise ValueError(
             f"{self.__class__.__name__} must define 'template' attribute or set 'template_name'"

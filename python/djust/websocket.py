@@ -644,12 +644,14 @@ def render_embedded_child_html(child_view: Any) -> str:
         if not legacy_child and "view" in context:
             raise ExposureError("Explicit child context contains a reserved name")
         from django.template import engines
+        from ._include_guard import include_guard_scope
         from .templatetags.live_tags import active_parent_view
 
         template_str = child_view.get_template()
         engine = engines["django"] if "django" in engines else list(engines.all())[0]
         tmpl = engine.from_string(template_str)
-        with active_parent_view(child_view):
+        # Django's engine renders this; the template-call guard (#3880) is applied here.
+        with active_parent_view(child_view), include_guard_scope():
             html = tmpl.render(context)
         # Record the child's dj-model auto-allowlist from ITS own TEMPLATE
         # SOURCE — child update_model events gate against the child's

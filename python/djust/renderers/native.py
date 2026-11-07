@@ -28,6 +28,8 @@ from typing import Any, Optional, Tuple
 
 from django.template.loader import render_to_string
 
+from .._include_guard import include_guard_scope
+
 __all__ = ["NativeRenderer", "SwiftUIRenderer", "ComposeRenderer"]
 
 
@@ -172,7 +174,8 @@ class NativeRenderer:
 
         # Hoisted-import call site so tests can patch
         # djust.renderers.native.render_to_string.
-        html_text = render_to_string(template_name, context)
+        with include_guard_scope():
+            html_text = render_to_string(template_name, context)
 
         builder = _VNodeBuilder()
         builder.feed(html_text)

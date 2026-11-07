@@ -77,6 +77,7 @@ def render_pending_layout(view: Any, layout_path: str) -> str:
     """
     from django.template.loader import render_to_string
 
+    from .._include_guard import include_guard_scope
     from ..sync_turn import run_sync_step
 
     context = (
@@ -84,5 +85,6 @@ def render_pending_layout(view: Any, layout_path: str) -> str:
         if hasattr(view, "get_context_data")
         else {}
     )
-    html: str = render_to_string(layout_path, context)
+    with include_guard_scope():
+        html: str = render_to_string(layout_path, context)
     return html
