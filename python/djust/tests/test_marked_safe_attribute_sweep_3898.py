@@ -9,9 +9,10 @@ quoted attribute". So, in ``djust.components``:
   ``javascript:void(0)`` / ``javascript:;``;
 * an ITEM value (an entry of a list of items, an item dict) that lands in an attribute is escaped
   whatever it is marked as;
-* a text slot keeps its markup, except the text of a RAW-TEXT element (``<textarea>``,
-  ``<title>``, ``<script>`` ...) of a hybrid template, where markup can end the element (#3914);
-  a scalar argument in a non-URL attribute is the developer's own.
+* a text slot keeps its markup, except the text of ``<textarea>`` / ``<title>`` (RCDATA) and of an
+  HTML comment in a hybrid template, where markup can end the element (#3914); ``<script>``,
+  ``<style>`` ... keep the author's markup (HTML escaping is the wrong encoding there); a scalar
+  argument in a non-URL attribute is the developer's own.
 
 What each class here proves, and what it does NOT:
 
@@ -121,11 +122,11 @@ PAYLOADS = (
     ("breakout-sq", "/x' onmouseover='alert(%s)' y='" % url_sweep.MARK),
 )
 
-#: Raw-text elements (HTML): their content is text, and ends at the first matching end tag.
-RAW_TEXT_TAGS = (
-    "textarea", "title", "script", "style", "xmp", "noscript", "iframe", "noembed", "noframes",
-)  # fmt: skip
-#: Text that ends EVERY raw-text element and starts a live element carrying the marker (#3914). It is not in
+#: The elements whose text a hybrid template escapes (RCDATA: entities are decoded, the first
+#: matching end tag ends it). ``<script>``, ``<style>`` ... keep the author's markup: HTML
+#: escaping is the wrong encoding there (#3914), so a value that ends one is not a finding.
+RAW_TEXT_TAGS = ("textarea", "title")
+#: Text that ends EVERY such element and starts a live element carrying the marker (#3914). It is not in
 #: ``PAYLOADS``: the sweeps that cover the attribute rule over 200+ classes do not need it, and
 #: the cells that do (the hybrid templates) add it explicitly.
 RAW_TEXT_PAYLOAD = (
