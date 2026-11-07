@@ -189,8 +189,8 @@ fast tier, like an unlabelled PR; the push to main after the merge still runs th
 matrix and the slow tier. `external-pr-gate.yml` also listens to `merge_group` and
 reports success there, because the PR passed it to be queued.
 
-**Hang dumps.** The Python shard step passes `-o faulthandler_timeout=1200`. If one test
-(setup, call and teardown together) runs longer than 20 minutes, pytest writes every
+**Hang dumps.** The Python shard step passes `-o faulthandler_timeout=1800`. If one test
+(setup, call and teardown together) runs longer than 30 minutes, pytest writes every
 thread's stack to the job log, naming the test, and carries on; nothing fails. The value
 is above three times the slowest test recorded in `.test_durations`, and
 `tests/test_ci_hang_dump_3800.py` fails when a recorded test outgrows it. The

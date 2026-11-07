@@ -339,7 +339,7 @@ jobs:
     # python-tests cell over the last five green main runs (85 cells): 15.4
     # min, a push run, i.e. with the slow tier and every interpreter. 45 min is
     # about 3x that, so growth and a slow runner do not trip it. It must stay
-    # above faulthandler_timeout (20 min) so the stack dump can fire first;
+    # above faulthandler_timeout (30 min) so the stack dump can fire first;
     # tests/test_ci_hang_dump_3800.py pins both. This does NOT make #3800
     # diagnosable on its own: it bounds the hang, the dump names the test.
     timeout-minutes: 45
@@ -506,17 +506,18 @@ jobs:
       # .test_collected_floor says exits TESTS_FAILED — and this step has no
       # continue-on-error, so that fails the job and the test-summary gate.
       #
-      # `-o faulthandler_timeout=1200` (#3800): pytest's built-in faulthandler
+      # `-o faulthandler_timeout=1800` (#3800): pytest's built-in faulthandler
       # plugin dumps every thread's stack to stderr when ONE test (setup, call
-      # and teardown together) runs longer than 1200 s, then lets it carry on --
+      # and teardown together) runs longer than 1800 s, then lets it carry on --
       # it never kills or fails anything, so test semantics are unchanged. It
       # exists because shard 3/4 once went silent on two interpreters with no
       # pytest summary, and nothing could say which test it was stuck in. Under
       # xdist each worker arms its own timer and writes to the inherited
       # stderr, so the dump lands in this step's log with the file, line and
       # test function (checked with `-n 2 --dist loadfile`). The value is above
-      # 3x the slowest recorded test in .test_durations (380 s, the URL-sweep
-      # module fixture charged to its first test, #3781), so a normal run prints
+      # 3x the slowest recorded test in .test_durations (441 s, the first cell
+      # of the #3898 marked-safe attribute sweep; before it, 380 s for the
+      # URL-sweep module fixture charged to its first test, #3781), so a normal run prints
       # nothing; the timer fires from a C thread, so it still works when the
       # hang holds the GIL. Pinned by tests/test_ci_hang_dump_3800.py.
       - name: Run Python tests (parallel with pytest-xdist, shard ${{ matrix.group }}/4)
@@ -538,7 +539,7 @@ jobs:
           # Flip to the full tier for the queue by dropping the `merge_group` arm.
           PYTEST_MARK: ${{ ((github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'full-tests')) || github.event_name == 'merge_group') && 'not nightly and not slow' || 'not nightly' }}
         run: |
-          PYTHONPATH=. .venv/bin/python -m pytest tests/ python/tests/ python/djust/tests/ -v -n auto --dist loadfile -m "$PYTEST_MARK" -o faulthandler_timeout=1200 --splits 4 --group ${{ matrix.group }} --splitting-algorithm least_duration --durations-path .test_durations --store-durations --clean-durations
+          PYTHONPATH=. .venv/bin/python -m pytest tests/ python/tests/ python/djust/tests/ -v -n auto --dist loadfile -m "$PYTEST_MARK" -o faulthandler_timeout=1800 --splits 4 --group ${{ matrix.group }} --splitting-algorithm least_duration --durations-path .test_durations --store-durations --clean-durations
 
       # Ancillary to the gate, so it may never fail the job: the merge gate is
       # the pytest step above, and a flaky artifact upload must not block a
