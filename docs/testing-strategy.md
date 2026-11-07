@@ -341,7 +341,10 @@ coverage that is genuinely missing look identical from here (#3903 had four surv
 equivalent). The runner is pytest; `-x` and `--maxfail` are refused because they stop at the
 first failure. `--jobs` is limited to 2 because the machine is shared.
 
-The tool is itself gate-off'd with `gate_off.py`: `scripts/gate-off-batch-selfcheck.json` lists
+The tool runs the test command under a small watchdog that kills the command's whole process group
+the moment the tool is gone, so even a SIGKILLed tool (or an outer harness that SIGKILLs its pytest
+worker) cannot leave a spinning orphan behind; every busy loop in the tool's own fixtures is also
+bounded to 45 s. The tool is itself gate-off'd with `gate_off.py`: `scripts/gate-off-batch-selfcheck.json` lists
 the attribution, planning, restore and validation rules whose removal must turn
 `tests/unit/test_gate_off_batch_3905.py` red (run it from a copy of the files it names, as its
 `_comment` says).
