@@ -834,6 +834,54 @@ class DjangoJSONEncoder(json.JSONEncoder, metaclass=_EncoderDepthMeta):
             return False
         return DjangoJSONEncoder._field_is_serializable(name, denied, allowed, optout)
 
+    @staticmethod
+    def _model_class_behind(obj: Any) -> Optional[type]:
+        """The Django model class *obj* is an instance of, else ``None``.
+
+        Sees through a lazy wrapper (``SimpleLazyObject``): ``type(obj)`` is the
+        wrapper, ``obj.__class__`` is the model. The per-model sets
+        (``djust_exclude_fields`` and the like) and the column TYPES both belong
+        to that class, so a decision keyed on the wrapper's own class decides on
+        neither.
+        """
+        try:
+            cls = obj.__class__
+        except Exception:  # noqa: BLE001 - a proxy that refuses __class__ is no model
+            return None
+        if isinstance(cls, type) and issubclass(cls, models.Model):
+            return cls
+        return None
+
+    @staticmethod
+    def _configured_sensitive_types() -> FrozenSet[str]:
+        """The configured field-class names the TYPE floor drops (an input to its verdict)."""
+        return _sensitive_field_types()
+
+    @staticmethod
+    def _attr_is_readable(
+        name: str,
+        model_class: Optional[type],
+        denied: FrozenSet[str],
+        allowed: Optional[FrozenSet[str]],
+        optout: FrozenSet[str] = frozenset(),
+    ) -> bool:
+        """May a template read *name* off an instance of *model_class*? (the JIT gate's verdict)
+
+        The name rules (:meth:`_attr_is_serializable`) AND the column-TYPE floor
+        (:func:`_field_type_excluded_for`, #1987): the two checks the eager field loop
+        makes one after the other and the sidecar proxy makes in the same order. Until
+        this existed the JIT attribute gate made only the first, so a column the type
+        floor drops (a ``BinaryField``, a configured or encrypted-named type) was read by
+        a template that named it. The type floor is unconditional: an allowlist or an
+        opt-out names a COLUMN, and neither lifts a column's type.
+
+        *model_class* is ``None`` for an object that is not a model, which has no
+        columns to type.
+        """
+        if not DjangoJSONEncoder._attr_is_serializable(name, denied, allowed, optout):
+            return False
+        return model_class is None or not _field_type_excluded_for(model_class, name)
+
     def _is_relation_prefetched(self, obj: models.Model, field_name: str) -> bool:
         """Check if a relation was loaded via select_related/prefetch_related.
 
