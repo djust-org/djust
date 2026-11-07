@@ -18,7 +18,7 @@ from uuid import UUID
 from django.core.serializers.json import DjangoJSONEncoder as _DjangoJSONEncoder
 from django.db import models
 from django.utils.datastructures import MultiValueDict
-from django.utils.functional import Promise
+from django.utils.functional import LazyObject, Promise, empty as _lazy_empty
 
 logger = logging.getLogger(__name__)
 
@@ -203,6 +203,30 @@ def _field_type_excluded_for(model_class: Any, field_name: str) -> bool:
     except Exception:
         return False
     return _field_type_is_excluded(field)
+
+
+def _model_class(obj: Any) -> Any:
+    """The model CLASS the per-model rules are read from.
+
+    ``type(obj)`` is the wrapper's class for a lazily wrapped model (``request.user`` is a
+    ``SimpleLazyObject``), so a rule read from it silently never applied. ``obj.__class__`` is the
+    wrapped model's class for a wrapper and ``type(obj)`` for a bare instance; reading it resolves a
+    wrapper once. A transparent object proxy that is not a Django ``LazyObject`` (one that spoofs
+    ``__class__``) reads the same way. Every reader of a per-model rule (``djust_exclude_fields``,
+    ``djust_serializable_fields``, ``djust_serialize_sensitive_fields``, ``to_dict`` and the field-type
+    floor) goes through this one function; the sidecar proxy also resolves a Django wrapper first
+    (:func:`_unwrap_lazy`) and so holds the model.
+    """
+    return obj.__class__
+
+
+def _unwrap_lazy(obj: Any) -> Any:
+    """The object a ``LazyObject`` (``SimpleLazyObject``) wraps, resolved once; anything else as is."""
+    while isinstance(obj, LazyObject):
+        if obj._wrapped is _lazy_empty:
+            obj._setup()
+        obj = obj._wrapped
+    return obj
 
 
 # Identity keys that are ALWAYS allowed even under a per-model allowlist —
@@ -559,7 +583,7 @@ class DjangoJSONEncoder(json.JSONEncoder):
         """
         # Model-level to_dict() override — developer takes full ownership of the
         # client-bound payload (intentional opt-out from the denylist).
-        to_dict = getattr(type(obj), "to_dict", None)
+        to_dict = getattr(_model_class(obj), "to_dict", None)
         if callable(to_dict):
             try:
                 return obj.to_dict()
@@ -658,7 +682,7 @@ class DjangoJSONEncoder(json.JSONEncoder):
         and the per-model ``djust_exclude_fields`` iterable, if defined.
         """
         denied = _resolve_sensitive_fields()
-        per_model = getattr(type(obj), "djust_exclude_fields", None)
+        per_model = getattr(_model_class(obj), "djust_exclude_fields", None)
         if per_model:
             try:
                 denied = denied | frozenset(per_model)
@@ -677,7 +701,7 @@ class DjangoJSONEncoder(json.JSONEncoder):
         serialized. Returns ``None`` when no allowlist is defined (the common
         case — denylist semantics apply instead).
         """
-        allowlist = getattr(type(obj), "djust_serializable_fields", None)
+        allowlist = getattr(_model_class(obj), "djust_serializable_fields", None)
         if not allowlist:
             return None
         try:
@@ -700,7 +724,7 @@ class DjangoJSONEncoder(json.JSONEncoder):
         per-model ``djust_serializable_fields`` allowlist alone can NOT re-expose
         a floor field. Returns an empty ``frozenset`` when unset (default deny).
         """
-        optout = getattr(type(obj), "djust_serialize_sensitive_fields", None)
+        optout = getattr(_model_class(obj), "djust_serialize_sensitive_fields", None)
         if not optout:
             return frozenset()
         try:
@@ -1619,6 +1643,9 @@ class _SidecarModelProxy:
     __slots__ = ("_obj", "_denied", "_allowed", "_optout")
 
     def __init__(self, obj: "models.Model") -> None:
+        # A lazily wrapped model (``request.user``) is resolved here, once: the proxy holds the model,
+        # never the wrapper, and every per-model rule below is read from the model's class.
+        obj = _unwrap_lazy(obj)
         object.__setattr__(self, "_obj", obj)
         object.__setattr__(self, "_denied", DjangoJSONEncoder._get_denied_fields(obj))
         object.__setattr__(self, "_allowed", DjangoJSONEncoder._get_allowlist_fields(obj))
@@ -1644,7 +1671,7 @@ class _SidecarModelProxy:
         # TYPE-based floor (#1987): refuse BinaryField / configured / encrypted
         # field types even when the NAME passes the denylist — same authority
         # the eager path calls.
-        if _field_type_excluded_for(type(obj), name):
+        if _field_type_excluded_for(_model_class(obj), name):
             raise AttributeError(name)
         return _protect_sidecar_value(getattr(obj, name))
 
@@ -2409,7 +2436,7 @@ def _floor_for_model(model_class: Any, password_names: Any = frozenset()) -> tup
     """``(model class, denied, allowed, optout, password names)`` for a model CLASS: the same three
     sets the serializer is built from, and the names of the form's password-widget fields.
     ``model_class`` is ``None`` for a form with no model behind it (a plain ``Form``): its floor is the
-    password fields alone. The model's readers look only at ``type(obj)``, so an instance that was never
+    password fields alone. The model's readers look only at the instance's class, so an instance that was never
     initialised stands in for the class."""
     if model_class is None:
         return (None, frozenset(), None, frozenset(), password_names)
