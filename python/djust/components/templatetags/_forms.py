@@ -414,13 +414,15 @@ def autocomplete(
     suggestion_items = []
     for sug in suggestions:
         if isinstance(sug, dict):
-            sv = conditional_escape(str(sug.get("value", "")))
-            sl = conditional_escape(str(sug.get("label", sv)))
+            raw_value = sug.get("value", "")
+            sv = attr_text(raw_value)  # only in data-value= (#3904)
+            sl = conditional_escape(str(sug.get("label", raw_value)))
         elif isinstance(sug, (list, tuple)) and len(sug) >= 2:
-            sv = conditional_escape(str(sug[0]))
+            sv = attr_text(sug[0])  # only in data-value= (#3904)
             sl = conditional_escape(str(sug[1]))
         else:
-            sv = sl = conditional_escape(str(sug))
+            sv = attr_text(sug)  # only in data-value= (#3904)
+            sl = conditional_escape(str(sug))
         suggestion_items.append(
             f'<li class="dj-autocomplete__item" role="option" data-value="{sv}">{sl}</li>'
         )
@@ -704,11 +706,13 @@ def dependent_select(
         if isinstance(opt, dict):
             ov = conditional_escape(str(opt.get("value", "")))
             ol = conditional_escape(str(opt.get("label", ov)))
+            av = attr_text(opt.get("value", ""))  # the value= attribute (#3904)
         else:
             ov = conditional_escape(str(opt))
             ol = ov
+            av = attr_text(opt)
         selected = " selected" if ov == e_value else ""
-        opt_parts.append(f'<option value="{ov}"{selected}>{ol}</option>')
+        opt_parts.append(f'<option value="{av}"{selected}>{ol}</option>')
 
     spinner_html = (
         '<span class="dj-dependent-select__spinner" aria-hidden="true"></span>' if loading else ""
@@ -1099,8 +1103,7 @@ def _render_field(bound_field: Any, event_prefix: Any = "") -> Any:
         for ov, ol in choices:
             selected_attr = " selected" if str(ov) == str(value) else ""
             options_html += (
-                f'<option value="{conditional_escape(ov)}"{selected_attr}>'
-                f"{conditional_escape(ol)}</option>"
+                f'<option value="{attr_text(ov)}"{selected_attr}>{conditional_escape(ol)}</option>'
             )
         return (
             f'<div class="form-group">'
@@ -1122,7 +1125,7 @@ def _render_field(bound_field: Any, event_prefix: Any = "") -> Any:
             radios += (
                 f'<div class="form-radio-wrapper">'
                 f'<input class="form-radio" type="radio" '
-                f'name="{e_name}" id="{radio_id}" value="{conditional_escape(ov)}" '
+                f'name="{e_name}" id="{radio_id}" value="{attr_text(ov)}" '
                 f'dj-change="{dj_event}"{checked_attr}{disabled_attr}>'
                 f'<label class="form-radio-label" for="{radio_id}">{conditional_escape(ol)}</label>'
                 f"</div>"
@@ -1146,7 +1149,7 @@ def _render_field(bound_field: Any, event_prefix: Any = "") -> Any:
             checks += (
                 f'<div class="form-checkbox-wrapper">'
                 f'<input class="form-checkbox" type="checkbox" '
-                f'name="{e_name}" id="{cb_id}" value="{conditional_escape(ov)}" '
+                f'name="{e_name}" id="{cb_id}" value="{attr_text(ov)}" '
                 f'dj-change="{dj_event}"{checked_attr}{disabled_attr}>'
                 f'<label class="form-checkbox-label" for="{cb_id}">{conditional_escape(ol)}</label>'
                 f"</div>"
@@ -1596,7 +1599,7 @@ def model_table(
             '<th class="data-table__th data-table__th--select"><input type="checkbox"></th>'
         )
     for col in columns:
-        col_key = conditional_escape(col["key"])
+        col_key = attr_text(col["key"])  # only in dj-value-column= (#3904)
         col_label = conditional_escape(col["label"])
         sort_cls = ""
         sort_attr = ""
@@ -1623,13 +1626,13 @@ def model_table(
             filter_cells += '<td class="data-table__filter-cell"></td>'
         for col in columns:
             if col.get("filterable"):
-                col_key = conditional_escape(col["key"])
+                col_key = attr_text(col["key"])  # only in dj-value-column= (#3904)
                 fval = attr_text(filters.get(col["key"], ""))  # only in value= / the compare
                 ft = col.get("filter_type", "text")
                 if ft == "select" and col.get("filter_options"):
                     opts = '<option value="">All</option>'
                     for fo in col["filter_options"]:
-                        fov = conditional_escape(str(fo.get("value", "")))
+                        fov = attr_text(fo.get("value", ""))  # value= and the compare (#3904)
                         fol = conditional_escape(str(fo.get("label", "")))
                         sel = " selected" if fov == fval else ""
                         opts += f'<option value="{fov}"{sel}>{fol}</option>'
