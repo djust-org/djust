@@ -217,18 +217,13 @@ MATRIX = {
     "queryset-reader": "[{{ obj.recent.count }}][{{ obj.recent|length }}]",
     "queryset-reader-through-a-rebinding": "{% with q=obj|default:obj %}[{{ q.recent.count }}]{% endwith %}",
     "alters-data-refused": "[{{ obj.delete_me }}]",
-    "name-and-url-model": "[{{ link.name }}][{{ link.url }}][{{ link }}]",
-    "raising-url-property": "[{{ pu.name }}]",
 }
 
-#: Rows where the backend is NOT Django's bytes today, on the raw entries as well. All four are
-#: deliberate or pre-existing and independent of how the model crosses (see the PR body).
+#: Rows where the backend and raw entries deliberately differ from Django.
 DIFFERS = {
-    "floor-denied-fields": "{{ user.is_staff }}|{{ user.is_superuser }}|[{{ user.password }}]",
     "floor-if": "{% if user.is_staff %}s{% endif %}",
     "iterating-a-model": "{% for x in user %}{{ x }}{% endfor %}",
     "queryset-spelling": "{{ user.groups.filter }}",
-    "data-dumps": "{{ user|pprint }}|{{ user|json_script:'x' }}",
 }
 
 
@@ -237,48 +232,42 @@ def _ctx(world: dict, src: str) -> dict:
 
 
 @pytest.mark.django_db
-class TestTheIssueReproducer:
-    def test_the_filtered_rebinding_reaches_the_reverse_relation(self, world) -> None:
-        src = "{% with q=user|default:user %}{{ q.groups.count }}{% endwith %}"
-        ctx = {"user": world["user"]}
-        assert _django(src, ctx) == "2", "premise: Django prints the relation"
-        assert _backend(src, ctx) == "2"
-        # the raw entry agreed since #3901; the backend is its twin now
-        assert _raw(src, ctx) == "2"
-
-
-@pytest.mark.django_db
 class TestADifferentialAgainstDjango:
-    @pytest.mark.parametrize("name", list(MATRIX))
-    def test_the_backend_renders_djangos_bytes(self, world, name) -> None:
-        src = MATRIX[name]
-        ctx = _ctx(world, src)
-        # a CONSTANT-free comparison: every expected value is read from Django's engine, never typed
-        want = _observe(_django, src, ctx)
-        assert _observe(_backend, src, ctx) == want
-
     @pytest.mark.parametrize("name", list(MATRIX) + list(DIFFERS))
     def test_the_backend_and_the_raw_entry_agree(self, world, name) -> None:
-        """The #1646 twin check: two entries of one engine must not spell a model differently."""
+        """Compare both djust entry points and use Django as the oracle for MATRIX rows."""
         src = {**MATRIX, **DIFFERS}[name]
         ctx = _ctx(world, src)
-        assert _observe(_backend, src, ctx) == _observe(_raw, src, ctx)
+        django = _observe(_django, src, ctx) if name in MATRIX else None
+        backend = _observe(_backend, src, ctx)
+        raw = _observe(_raw, src, ctx)
+        if name == "issue":
+            assert django == "2", "premise: Django prints the relation"
+        if name in MATRIX:
+            assert backend == django, "backend vs Django"
+        assert backend == raw, "backend vs raw entry (#1646)"
 
     def test_the_floor_still_holds_on_the_backend(self, world) -> None:
-        out = _backend(DIFFERS["floor-denied-fields"], {"user": world["user"]})
+        src = "{{ user.is_staff }}|{{ user.is_superuser }}|[{{ user.password }}]"
+        ctx = {"user": world["user"]}
+        out = _backend(src, ctx)
         assert out == "||[]", out
-        assert SECRET not in _backend("{{ user.password }}|{{ user }}", {"user": world["user"]})
+        assert out == _raw(src, ctx)
+        assert SECRET not in _backend("{{ user.password }}|{{ user }}", ctx)
 
     def test_a_data_dump_spells_the_model_as_its_str_like_a_list_row(self, world) -> None:
         """The changelog's behaviour change: ``pprint`` / ``json_script`` of a top-level model no
         longer dump its fields (Django: ``<User: alice>`` and a ``TypeError``)."""
         user = world["user"]
-        top = _backend("{{ user|pprint }}|{{ user|json_script:'x' }}", {"user": user})
+        src = "{{ user|pprint }}|{{ user|json_script:'x' }}"
+        ctx = {"user": user}
+        top = _backend(src, ctx)
         row = _backend(
             "{% for user in rows %}{{ user|pprint }}|{{ user|json_script:'x' }}{% endfor %}",
             {"rows": [user]},
         )
         assert top == row == 'alice|<script id="x" type="application/json">"alice"</script>'
+        assert top == _raw(src, ctx)
 
     def test_the_matrix_and_the_exclusions_are_disjoint(self) -> None:
         assert not set(MATRIX) & set(DIFFERS)
@@ -421,8 +410,9 @@ class TestAModelIsNeverMistakenForAFile:
     SRC_ROW = "{% for link in rows %}" + SRC_TOP + "{% endfor %}"
 
     def test_a_top_level_model_with_name_and_url_renders_its_str(self, world) -> None:
-        got = _backend(self.SRC_TOP, {"link": world["link"]})
-        assert got == _django(self.SRC_TOP, {"link": world["link"]})
+        ctx = {"link": world["link"]}
+        got = _backend(self.SRC_TOP, ctx)
+        assert got == _django(self.SRC_TOP, ctx) == _raw(self.SRC_TOP, ctx)
         assert got.endswith("[Link3902 object (1)]"), got
 
     def test_a_list_row_renders_its_str(self, world) -> None:
@@ -440,7 +430,8 @@ class TestAModelIsNeverMistakenForAFile:
         """``hasattr(value, "url")`` RAN the property, and only ``AttributeError`` is swallowed."""
         top = "[{{ pu.name }}]"
         if shape == "top":
-            assert _backend(top, {"pu": world["pu"]}) == "[P]"
+            ctx = {"pu": world["pu"]}
+            assert _backend(top, ctx) == _django(top, ctx) == _raw(top, ctx) == "[P]"
         else:
             src = "{% for pu in rows %}" + top + "{% endfor %}"
             assert _backend(src, {"rows": [world["pu"]]}) == "[P]"
