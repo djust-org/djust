@@ -12,14 +12,14 @@
         <input
             type="radio"
             name="{{ name }}"
-            id="{{ name }}_{{ opt.value }}"
-            value="{{ opt.value }}"
+            id="{{ name }}_{{ opt.value|force_escape }}"
+            value="{{ opt.value|force_escape }}"
             class="{{ css_prefix }}radio"
             {% if opt.value == selected %}checked{% endif %}
             {% if attrs.required %}required{% endif %}
             {% if attrs.disabled %}disabled{% endif %}
         />
-        <label for="{{ name }}_{{ opt.value }}" class="{{ css_prefix }}radio-label">{{ opt.label }}</label>
+        <label for="{{ name }}_{{ opt.value|force_escape }}" class="{{ css_prefix }}radio-label">{{ opt.label }}</label>
     </div>
     {% endfor %}
     {% endif %}

@@ -16,6 +16,8 @@ from django import template
 # guard trusts an escaper by its origin, and a re-export is a different origin (#3774, #3820).
 from django.utils.html import conditional_escape
 
+from djust.components.utils import attr_text
+
 from ._registry import register, _resolve, _parse_kv_args, mark_safe
 
 
@@ -537,7 +539,8 @@ class FileTreeNode(template.Node):
         children = node.get("children", [])
         expanded = node.get("expanded", True)
         e_name = conditional_escape(name)
-        e_type = conditional_escape(node_type)
+        a_name = attr_text(name)  # the data-name= attribute; e_name stays the text (#3904)
+        e_type = attr_text(node_type)  # only in class= / data-type= (#3904)
 
         is_selected = name == selected
         selected_cls = " dj-file-tree__node--selected" if is_selected else ""
@@ -569,7 +572,7 @@ class FileTreeNode(template.Node):
             child_display = ' style="display:none"' if not expanded else ""
             return (
                 f'<div class="dj-file-tree__node{type_cls}{selected_cls}{expand_cls}"'
-                f'{indent_style} data-name="{e_name}" data-type="{e_type}">'
+                f'{indent_style} data-name="{a_name}" data-type="{e_type}">'
                 f"{toggle}{icon_html}"
                 f'<span class="dj-file-tree__name">{e_name}</span></div>'
                 f'<div class="dj-file-tree__children"{child_display}>'
@@ -578,7 +581,7 @@ class FileTreeNode(template.Node):
 
         return (
             f'<div class="dj-file-tree__node{type_cls}{selected_cls}"'
-            f'{indent_style} data-name="{e_name}" data-type="{e_type}" '
+            f'{indent_style} data-name="{a_name}" data-type="{e_type}" '
             f'dj-click="{e_event}" role="treeitem" tabindex="0">'
             f'{icon_html}<span class="dj-file-tree__name">{e_name}</span></div>'
         )

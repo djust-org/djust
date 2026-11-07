@@ -62,7 +62,7 @@ class TourNode(template.Node):
             return ""
 
         e_event = conditional_escape(str(event))
-        e_target = conditional_escape(str(step.get("target", "")))
+        e_target = attr_text(step.get("target", ""))  # only in data-target= (#3904)
         e_title = conditional_escape(str(step.get("title", "")))
         e_content = conditional_escape(str(step.get("content", "")))
 
@@ -388,7 +388,7 @@ class GanttChartNode(template.Node):
             bar_h = rh - 12
 
             e_name = conditional_escape(name)
-            e_color = conditional_escape(color)
+            e_color = attr_text(color)  # only in fill= (#3904)
             e_unit = conditional_escape(str(unit_label))
 
             parts.append(
@@ -883,13 +883,14 @@ class ComparisonTableNode(template.Node):
             if not isinstance(plan, dict):
                 continue
             name = conditional_escape(str(plan.get("name", "")))
+            a_name = attr_text(plan.get("name", ""))  # the data-value= attribute (#3904)
             price = conditional_escape(str(plan.get("price", "")))
             highlighted = plan.get("highlighted", False)
             hl_class = " dj-compare__plan--highlighted" if highlighted else ""
 
             click_attr = ""
             if e_event:
-                click_attr = f' dj-click="{e_event}" data-value="{name}"'
+                click_attr = f' dj-click="{e_event}" data-value="{a_name}"'
 
             price_html = f'<div class="dj-compare__price">{price}</div>' if price else ""
             header_cells.append(
@@ -989,7 +990,7 @@ class MasonryGridNode(template.Node):
             item_cards = []
             for item in items_in_col:
                 content = conditional_escape(item.get("content", ""))
-                item_class = conditional_escape(str(item.get("class", "")))
+                item_class = attr_text(item.get("class", ""))  # only in class= (#3904)
                 extra = f" {item_class}" if item_class else ""
                 item_cards.append(f'<div class="dj-masonry__item{extra}">{content}</div>')
             col_html.append(f'<div class="dj-masonry__col">{"".join(item_cards)}</div>')
@@ -1052,6 +1053,7 @@ class CursorsOverlayNode(template.Node):
                 y = 0
 
             e_name = conditional_escape(str(name))
+            a_name = attr_text(name)  # the data-user= attribute; e_name stays the text (#3904)
             e_color = conditional_escape(
                 safe_css_color(color, self.DEFAULT_COLORS[i % len(self.DEFAULT_COLORS)])
             )
@@ -1075,7 +1077,7 @@ class CursorsOverlayNode(template.Node):
             parts.append(
                 f'<div class="dj-cursors__cursor" '
                 f'style="left:{px}px;top:{py}px" '
-                f'data-user="{e_name}">'
+                f'data-user="{a_name}">'
                 f"{cursor_svg}"
                 f'<span class="dj-cursors__label" '
                 f'style="background:{e_color}">{e_name}</span>'
@@ -1224,6 +1226,7 @@ class CollabSelectionNode(template.Node):
                 end = 0
 
             e_name = conditional_escape(str(name))
+            a_name = attr_text(name)  # the data-user= attribute; e_name stays the text (#3904)
             e_color = conditional_escape(
                 safe_css_color(color, self.DEFAULT_COLORS[i % len(self.DEFAULT_COLORS)])
             )
@@ -1241,7 +1244,7 @@ class CollabSelectionNode(template.Node):
             parts.append(
                 f'<span class="dj-collab-sel__range" '
                 f'style="--dj-collab-sel-color:{e_color}" '
-                f'data-user="{e_name}" data-start="{s}" data-end="{e}">'
+                f'data-user="{a_name}" data-start="{s}" data-end="{e}">'
                 f'<span class="dj-collab-sel__highlight">{e_text}</span>'
                 f'<span class="dj-collab-sel__label" '
                 f'style="background:{e_color}">{e_name}</span>'
@@ -1402,6 +1405,8 @@ class ReactionsNode(template.Node):
         buttons = []
         for emoji in options:
             e_emoji = conditional_escape(str(emoji))
+            # the dj-value-emoji= / aria-label= attributes; e_emoji stays the text (#3904)
+            a_emoji = attr_text(emoji)
 
             count = 0
             try:
@@ -1422,9 +1427,9 @@ class ReactionsNode(template.Node):
 
             buttons.append(
                 f'<button type="button" class="{btn_cls}" '
-                f'dj-click="{e_event}" dj-value-emoji="{e_emoji}" '
+                f'dj-click="{e_event}" dj-value-emoji="{a_emoji}" '
                 f'aria-pressed="{aria_pressed}" '
-                f'aria-label="{e_emoji} {count}">'
+                f'aria-label="{a_emoji} {count}">'
                 f'<span class="dj-reactions__emoji">{e_emoji}</span>'
                 f"{count_html}"
                 f"</button>"
