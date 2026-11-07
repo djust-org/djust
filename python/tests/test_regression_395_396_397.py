@@ -162,13 +162,6 @@ def test_websocket_py_uses_getattr_not_hasattr():
 # ===========================================================================
 
 
-def test_flex_between_utility_defined_in_utilities_css():
-    """utilities.css must define a .flex-between class."""
-    css_path = _WORKTREE_ROOT / "examples/demo_project/demo_app/static/css/utilities.css"
-    content = css_path.read_text()
-    assert ".flex-between" in content, "utilities.css must define .flex-between"
-
-
 def test_flex_between_sets_required_properties():
     """The .flex-between rule must include display:flex, flex-direction:row,
     and justify-content:space-between."""

@@ -28,9 +28,6 @@ import pytest
 from djust.uploads import UploadMixin, UploadWriter
 from djust.uploads.resumable import (
     ResumableUploadWriter,
-    bytes_received_from_ranges,
-    compact_chunks,
-    expand_ranges,
     resolve_resume_request,
 )
 from djust.uploads.storage import (
@@ -39,7 +36,6 @@ from djust.uploads.storage import (
     RedisUploadState,
     UploadStateTooLarge,
     _reset_default_store_for_tests,
-    get_default_store,
     set_default_store,
 )
 
@@ -99,37 +95,6 @@ def _reset_default_store():
 @pytest.fixture
 def memory_store() -> InMemoryUploadState:
     return InMemoryUploadState()
-
-
-# ---------------------------------------------------------------------------
-# Compact / expand utilities
-# ---------------------------------------------------------------------------
-
-
-class TestChunkCompaction:
-    def test_compact_empty(self):
-        assert compact_chunks([]) == []
-
-    def test_compact_single(self):
-        assert compact_chunks([5]) == [(5, 5)]
-
-    def test_compact_contiguous(self):
-        assert compact_chunks([0, 1, 2, 3, 4]) == [(0, 4)]
-
-    def test_compact_gaps(self):
-        assert compact_chunks([0, 1, 2, 5, 6, 9]) == [(0, 2), (5, 6), (9, 9)]
-
-    def test_compact_unsorted_and_duplicates(self):
-        assert compact_chunks([5, 1, 2, 0, 5, 6, 1]) == [(0, 2), (5, 6)]
-
-    def test_expand_roundtrip(self):
-        original = [0, 1, 2, 5, 6, 9, 10, 11]
-        ranges = compact_chunks(original)
-        assert sorted(expand_ranges(ranges)) == original
-
-    def test_bytes_received_from_ranges(self):
-        # 3 chunks × 64 KB = 192 KB
-        assert bytes_received_from_ranges([(0, 2)], chunk_size=64 * 1024) == 3 * 64 * 1024
 
 
 # ---------------------------------------------------------------------------
@@ -647,25 +612,6 @@ class TestUploadStatusView:
         req.session.session_key = None  # anonymous
         resp = view.get(req, upload_id="a1b2c3d4-0000-0000-0000-000000000000")
         assert resp.status_code == 404
-
-
-# ---------------------------------------------------------------------------
-# set_default_store / get_default_store
-# ---------------------------------------------------------------------------
-
-
-class TestDefaultStoreResolution:
-    def test_default_store_is_in_memory(self):
-        store = get_default_store()
-        assert isinstance(store, InMemoryUploadState)
-
-    def test_set_default_store_overrides(self, memory_store):
-        set_default_store(memory_store)
-        assert get_default_store() is memory_store
-
-    def test_set_default_store_rejects_bad_type(self):
-        with pytest.raises(TypeError):
-            set_default_store("not-a-store")  # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------------------

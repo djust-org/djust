@@ -9,9 +9,10 @@ only practical path (task private IPs rotate on every redeploy / autoscale).
 
 These tests make sure:
 
-* Existing behavior is preserved — A010 / A011 fire without the escape hatch.
 * The escape hatch needs BOTH settings — partial opt-in still fires.
 * The escape hatch suppresses both A010 and A011.
+
+The default wildcard behavior is covered by ``test_static_security_checks.py``.
 """
 
 from django.test import override_settings
@@ -25,15 +26,6 @@ def _ids(errors):
 
 class TestA010ProxyTrustedEscapeHatch:
     """Verify the DJUST_TRUSTED_PROXIES + SECURE_PROXY_SSL_HEADER escape hatch."""
-
-    @override_settings(DEBUG=False, ALLOWED_HOSTS=["*"])
-    def test_a010_fires_without_trusted_proxies(self):
-        """Baseline: A010 still fires when neither escape-hatch setting is set."""
-        errors = check_configuration(None)
-        assert "djust.A010" in _ids(errors), (
-            "A010 must keep firing when ALLOWED_HOSTS=['*'] and the deployer "
-            "has NOT opted into proxy-trusted mode."
-        )
 
     @override_settings(
         DEBUG=False,
@@ -93,11 +85,6 @@ class TestA010ProxyTrustedEscapeHatch:
 
 class TestA011ProxyTrustedEscapeHatch:
     """A011 (wildcard mixed with explicit hosts) gets the same escape hatch."""
-
-    @override_settings(DEBUG=False, ALLOWED_HOSTS=["myapp.example.com", "*"])
-    def test_a011_fires_without_trusted_proxies(self):
-        errors = check_configuration(None)
-        assert "djust.A011" in _ids(errors)
 
     @override_settings(
         DEBUG=False,
