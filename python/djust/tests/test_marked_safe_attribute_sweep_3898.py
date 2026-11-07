@@ -601,16 +601,23 @@ def drive(
         return None
 
 
+class Sweep(NamedTuple):
+    classes: dict[str, type]
+    claims: tuple[str, ...] = tuple(CLAIMS)
+    payloads: tuple[tuple[str, str], ...] = PAYLOADS
+    wide: bool = False
+
+
+ITEM_ATTRIBUTE_PAYLOADS = tuple(p for p in PAYLOADS if p[0] in {"js", "breakout-dq"})
+
+
 def sweep(
-    only_claims: tuple[str, ...] = tuple(CLAIMS),
+    *checks: Sweep,
     force_python: bool = False,
     companions: bool = False,
-    classes: dict[str, type] | None = None,
-    payloads: tuple[tuple[str, str], ...] = PAYLOADS,
-    wide: bool = False,
     hybrid: bool = False,
-) -> tuple[list[tuple], int]:
-    """``([(class, param, shape, claim, payload label, holes)], renders)``.
+) -> list[tuple[list[tuple], int]]:
+    """Return each check's findings and render count, sharing observations of identical cells.
 
     ``force_python`` renders through ``_render_custom`` (the f-string path) for every component,
     the way ``test_ui_simple_components_escaping`` does: the path this rule governs, whichever
@@ -618,11 +625,18 @@ def sweep(
     (a value the crate constructor refuses, a lazy string, leaves a class with a ``template`` to
     draw it: that cell is counted like any other, #3900). ``hybrid`` draws every class that has a
     ``template`` through it, whatever the value (a class with no template is not driven)."""
-    found: list[tuple] = []
-    rendered = 0
-    for key, cls in (CLASSES if classes is None else classes).items():
+    found: list[list[tuple]] = [[] for _ in checks]
+    rendered = [0] * len(checks)
+    classes = {key: cls for check in checks for key, cls in check.classes.items()}
+    for key, cls in classes.items():
         if hybrid and getattr(cls, "template", None) is None:
             continue
+        cases: dict[tuple[str, str, str], list[int]] = {}
+        for i, check in enumerate(checks):
+            if key in check.classes:
+                for claim in check.claims:
+                    for label, payload in check.payloads:
+                        cases.setdefault((claim, label, payload), []).append(i)
         names, required = class_params(cls)
         keys = class_keys(cls)
         # EVERY framework, for every class: the renderer is chosen by the constructor argument or
@@ -633,35 +647,34 @@ def sweep(
             # a ``template`` is one string whatever ``css_framework`` says; the constructor
             # argument of that name is still a parameter, driven below with each framework
             frameworks = frameworks[:1]
-        for claim in only_claims:
-            for label, payload in payloads:
-                claimed = CLAIMS[claim](payload)
-                for shape in SHAPES:
-                    for name in names:
-                        for framework in frameworks:
-                            result = drive(
-                                cls, key, names, required, keys, name, shape, framework,
-                                companions, claimed, force_python, hybrid,
-                            )  # fmt: skip
-                            if result is None:
-                                continue
-                            out = str(result)
-                            rendered += 1
-                            holes = holes_in(out)
-                            if wide:
-                                # the classes outside the URL family: a payload's handler in an
-                                # attribute an ITEM value reached, or a script URL a browser FOLLOWS
-                                # (``exec``). A scalar constructor argument is the developer's own,
-                                # and an author-named ``data-url`` attribute is inert.
-                                holes = [
+        for (claim, label, payload), readers in cases.items():
+            claimed = CLAIMS[claim](payload)
+            for shape in SHAPES:
+                for name in names:
+                    for framework in frameworks:
+                        result = drive(
+                            cls, key, names, required, keys, name, shape, framework,
+                            companions, claimed, force_python, hybrid,
+                        )  # fmt: skip
+                        if result is None:
+                            continue
+                        holes = holes_in(str(result))
+                        for i in readers:
+                            rendered[i] += 1
+                            judged = holes
+                            if holes and checks[i].wide:
+                                # Judge script URLs a browser follows and event handlers
+                                # reached by an item value. Scalar constructor arguments
+                                # and author-defined data attributes have a separate policy.
+                                judged = [
                                     h
                                     for h in holes
                                     if (len(h) == 4 and h[2] == "exec")
                                     or (len(h) == 2 and shape != "scalar")
                                 ]
-                            if holes:
-                                found.append((key, name, shape, claim, label, tuple(holes)))
-    return found, rendered
+                            if judged:
+                                found[i].append((key, name, shape, claim, label, tuple(judged)))
+    return list(zip(found, rendered))
 
 
 def _report(found: list[tuple]) -> str:
@@ -677,19 +690,21 @@ def _report(found: list[tuple]) -> str:
 
 
 class TestTheSweep:
-    @pytest.mark.parametrize(
-        ("force_python", "companions"),
-        [(False, False), (True, False), (True, True)],
-        ids=["as-rendered", "python-path", "python-path+companions"],
-    )
-    def test_no_class_component_lets_a_marked_safe_value_out_of_its_attribute(
-        self, force_python: bool, companions: bool
-    ) -> None:
-        found, rendered = sweep(force_python=force_python, companions=companions)
+    @pytest.mark.slow
+    def test_the_default_render_of_a_template_class_lets_nothing_out_of_an_attribute(self) -> None:
+        # Leave the render path selection to Component.render, including for classes
+        # that fall back to a template when the crate rejects the value.
+        (found, rendered), (template_found, template_rendered) = sweep(
+            Sweep(CLASSES),
+            Sweep(TEMPLATE_CLASSES, payloads=ITEM_ATTRIBUTE_PAYLOADS + (RAW_TEXT_PAYLOAD,)),
+        )
         assert rendered > (50 if ONLY else 10_000), f"the sweep barely ran ({rendered} renders)"
         assert ONLY or len(CLASSES) >= 20, sorted(CLASSES)
         assert not found, _report(found)
+        assert template_rendered > (50 if ONLY else 2_000), template_rendered
+        assert not template_found, _report(template_found)
 
+    @pytest.mark.slow
     @pytest.mark.parametrize("companions", [False, True], ids=["bare", "companions"])
     def test_no_template_class_lets_a_marked_safe_value_out_of_its_attribute(
         self, companions: bool
@@ -711,39 +726,21 @@ class TestTheSweep:
         # ... and the text that ends a raw-text element (#3914): the text of a ``<textarea>`` is
         # not an attribute, and a marked-safe value used to end it
         payloads += (RAW_TEXT_PAYLOAD,)
-        found, rendered = sweep(
-            classes=TEMPLATE_CLASSES, hybrid=True, companions=companions, payloads=payloads
+        (found, rendered), (item_found, item_rendered) = sweep(
+            Sweep(TEMPLATE_CLASSES, payloads=payloads),
+            # Cover item attributes such as class= inside ButtonGroup's template.
+            Sweep(
+                TEMPLATE_CLASSES, payloads=ITEM_ATTRIBUTE_PAYLOADS + (RAW_TEXT_PAYLOAD,), wide=True
+            ),
+            hybrid=True,
+            companions=companions,
         )
         assert rendered > (50 if ONLY else 2_000), f"the sweep barely ran ({rendered} renders)"
         assert ONLY or len(TEMPLATE_CLASSES) >= 15, sorted(TEMPLATE_CLASSES)
         assert not found, _report(found)
 
-    def test_the_default_render_of_a_template_class_lets_nothing_out_of_an_attribute(self) -> None:
-        """The same classes drawn by ``Component.render`` itself: the crate instance where it
-        takes the value, the template where it does not. The cells that reach the template are
-        the ones the crate refuses, which is every claim that is not plain text."""
-        payloads = tuple(p for p in PAYLOADS if p[0] in {"js", "breakout-dq"}) + (RAW_TEXT_PAYLOAD,)
-        found, rendered = sweep(classes=TEMPLATE_CLASSES, payloads=payloads)
-        assert rendered > (50 if ONLY else 2_000), f"the sweep barely ran ({rendered} renders)"
-        assert not found, _report(found)
-
-    @pytest.mark.parametrize("companions", [False, True], ids=["bare", "companions"])
-    def test_no_template_class_lets_an_item_value_out_of_an_attribute(
-        self, companions: bool
-    ) -> None:
-        """... and the item shapes (``ButtonGroup.buttons``: a ``{% for %}`` variable in a
-        ``class=``), the wide rule of ``TestEveryClass``."""
-        payloads = tuple(p for p in PAYLOADS if p[0] in {"js", "breakout-dq"}) + (RAW_TEXT_PAYLOAD,)
-        found, rendered = sweep(
-            only_claims=tuple(CLAIMS),
-            classes=TEMPLATE_CLASSES,
-            hybrid=True,
-            companions=companions,
-            payloads=payloads,
-            wide=True,
-        )
-        assert rendered > (50 if ONLY else 3_000), f"the sweep barely ran ({rendered})"
-        assert not found, _report(found)
+        assert item_rendered > (50 if ONLY else 3_000), item_rendered
+        assert not item_found, _report(item_found)
 
     def test_the_sweep_can_fail(self) -> None:
         """A component that prints a marked-safe value raw IS found (not a tautology)."""
@@ -1600,19 +1597,20 @@ class TestEveryClass:
     handler in an attribute, and no script URL a browser follows is printed. A scalar constructor
     argument is the developer's own (see ``wide`` in :func:`sweep`)."""
 
+    @pytest.mark.slow
     @pytest.mark.parametrize("companions", [False, True], ids=["bare", "companions"])
     def test_no_class_lets_a_marked_safe_item_value_out_of_an_attribute(
         self, companions: bool
     ) -> None:
-        payloads = tuple(p for p in PAYLOADS if p[0] in {"js", "breakout-dq"})
-        found, rendered = sweep(
-            only_claims=("mark_safe", "html-object"),
+        (url_found, url_rendered), (found, rendered) = sweep(
+            Sweep(CLASSES),
+            Sweep(ALL_CLASSES, ("mark_safe", "html-object"), ITEM_ATTRIBUTE_PAYLOADS, wide=True),
             force_python=True,
             companions=companions,
-            classes=ALL_CLASSES,
-            payloads=payloads,
-            wide=True,
         )
+        assert url_rendered > (50 if ONLY else 10_000), url_rendered
+        assert ONLY or len(CLASSES) >= 20, sorted(CLASSES)
+        assert not url_found, _report(url_found)
         assert rendered > (50 if ONLY else 40_000), f"the sweep barely ran ({rendered})"
         assert ONLY or len(ALL_CLASSES) > 150, len(ALL_CLASSES)
         assert not found, _report(found)
@@ -2046,39 +2044,42 @@ def _reached(key: str) -> tuple[tuple[ReachedCase, ...], frozenset[str], bool]:
     info = _tag_infos()[f"{lib}/{tag}"]
     keys = _keys_of(info)
     benign_ctx = _item_context(BENIGN, keys, REACH_PROBE)
+    benign_slots: dict[str, Counter] = {}
+    marked_text: dict[str, bool] = {}
     cases: list[ReachedCase] = []
     attributes: set[str] = set()
     text = False
     for cell, item_key in item_probe_cases(info, name):
         ctx = _item_context(REACH_PROBE, keys, REACH_PROBE, key=item_key)
         out = _django_render(cell.src, ctx)
-        found = Counter(
-            (a.element, a.name) for a in url_sweep.attributes(out or "") if REACH_PROBE in a.value
-        )
+        slots = [a for a in url_sweep.attributes(out or "") if REACH_PROBE in a.value]
+        found = Counter((a.element, a.name) for a in slots)
         if any("p_scalar" in arg for arg in cell.mode.extra):
             # the scalar that makes an item selected is the probe too: what it prints on its own
             # (the same call with benign items) is not the item's
-            ref = _django_render(cell.src, benign_ctx)
-            found -= Counter(
-                (a.element, a.name)
-                for a in url_sweep.attributes(ref or "")
-                if REACH_PROBE in a.value
-            )
+            if cell.src not in benign_slots:
+                ref = _django_render(cell.src, benign_ctx)
+                benign_slots[cell.src] = Counter(
+                    (a.element, a.name)
+                    for a in url_sweep.attributes(ref or "")
+                    if REACH_PROBE in a.value
+                )
+            found -= benign_slots[cell.src]
         if not found:
             continue
-        landed = [
-            a
-            for a in url_sweep.attributes(out or "")
-            if REACH_PROBE in a.value and (a.element, a.name) in found
-        ]
+        landed = [a for a in slots if (a.element, a.name) in found]
         direct = all(not set("{('") & set(a.value.replace(REACH_PROBE, "")) for a in landed)
         attributes |= {a.name for a in landed}
         cases.append(ReachedCase(cell, item_key, direct))
-        marked = _django_render(
-            cell.src,
-            _item_context(mark_safe("<i>mark</i>"), keys, "<i>mark</i>", key=EVERY_KEY),
-        )
-        text = text or bool(marked and "<i>mark</i>" in marked)
+        # The controls replace all item keys together, so the same source has
+        # the same control input for every reached key.
+        if cell.src not in marked_text:
+            marked = _django_render(
+                cell.src,
+                _item_context(mark_safe("<i>mark</i>"), keys, "<i>mark</i>", key=EVERY_KEY),
+            )
+            marked_text[cell.src] = bool(marked and "<i>mark</i>" in marked)
+        text = text or marked_text[cell.src]
     return tuple(cases), frozenset(attributes), text
 
 
