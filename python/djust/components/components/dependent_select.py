@@ -4,6 +4,7 @@ import html as html_mod
 from typing import Any, Optional
 
 from djust import Component
+from djust.components.utils import _exact_str
 
 
 class DependentSelect(Component):
@@ -121,12 +122,15 @@ class DependentSelect(Component):
         opt_parts = [f'<option value="">{html_mod.escape(self.placeholder)}</option>']
         for opt in self.options:
             if isinstance(opt, dict):
-                ov = html_mod.escape(str(opt.get("value", "")))
+                raw_ov = opt.get("value", "")
+                ov = html_mod.escape(str(raw_ov))
                 ol = html_mod.escape(str(opt.get("label", ov)))
             else:
+                raw_ov = opt
                 ov = html_mod.escape(str(opt))
                 ol = ov
-            selected = " selected" if ov == self.value else ""
+            # The RAW text decides "selected"; ``ov`` is the escaped output only (#3927).
+            selected = " selected" if _exact_str(raw_ov) == self.value else ""
             opt_parts.append(f'<option value="{ov}"{selected}>{ol}</option>')
 
         spinner_html = (

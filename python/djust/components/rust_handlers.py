@@ -47,6 +47,7 @@ from djust.components.utils import (
     data_url_attr,
     srcset_attr,
 )
+from djust.components.utils import _exact_str
 from djust.template_tags import TYPED_ARGS_KEY
 
 
@@ -1000,13 +1001,17 @@ class DjSelectHandler:
         option_html = []
         for opt in options:
             if isinstance(opt, dict):
-                ov = conditional_escape(str(opt.get("value", "")))
+                raw_ov = opt.get("value", "")
+                ov = conditional_escape(str(raw_ov))
                 ol = conditional_escape(str(opt.get("label", ov)))
             elif isinstance(opt, (list, tuple)) and len(opt) >= 2:
+                raw_ov = opt[0]
                 ov, ol = conditional_escape(str(opt[0])), conditional_escape(str(opt[1]))
             else:
+                raw_ov = opt
                 ov = ol = conditional_escape(str(opt))
-            sel = " selected" if str(ov) == str(current) else ""
+            # The RAW text decides "selected"; ``ov`` is the escaped output only (#3927).
+            sel = " selected" if _exact_str(raw_ov) == _exact_str(current) else ""
             option_html.append(f'<option value="{ov}"{sel}>{ol}</option>')
         select_cls = "form-select" + (" form-select-error" if error else "")
         required_attr = " required" if required else ""
@@ -1095,13 +1100,15 @@ class DjRadioHandler:
         kw = _parse_args(args, context)
         name = conditional_escape(kw.get("name", ""))
         label = conditional_escape(kw.get("label", ""))
-        value = conditional_escape(str(kw.get("value", "")))
+        raw_value = kw.get("value", "")
+        value = conditional_escape(str(raw_value))
         current = str(
             kw.get("current_value", "") or context.get(str(kw.get("current_value_var", "")), "")
         )
         event = conditional_escape(kw.get("event", name))
         disabled = kw.get("disabled", False)
-        checked_attr = " checked" if str(value) == str(current) else ""
+        # The RAW text decides "checked"; ``value`` is the escaped output only (#3927).
+        checked_attr = " checked" if _exact_str(raw_value) == _exact_str(current) else ""
         disabled_attr = " disabled" if disabled else ""
         return _safe(
             f'<div class="form-radio-wrapper">'

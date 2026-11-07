@@ -41,6 +41,7 @@ from djust.components.utils import (
     safe_css_ratio,
 )
 from djust.components.components.dashboard_grid import clamp_cells, clamp_columns
+from djust.components.utils import _exact_str
 from django.utils.safestring import mark_safe
 
 
@@ -2347,7 +2348,8 @@ def combobox(
         else:
             opt_label_map[str(opt)] = str(opt)
 
-    selected_set = set(str(s) for s in selected) if multiple else set()
+    # Selected state is decided on the RAW text of both sides (#3927); escaping is for output only.
+    selected_set = set(_exact_str(s) for s in selected) if multiple else set()
 
     # Ids: from ``id`` / the bound field's auto_id, else the legacy
     # name-derived ones.
@@ -2382,13 +2384,13 @@ def combobox(
         options_html = ""
         for n, opt in enumerate(options):
             if isinstance(opt, dict):
-                ov = conditional_escape(str(opt.get("value", "")))
+                raw_ov = opt.get("value", "")
                 ol = conditional_escape(str(opt.get("label", "")))
-                av = attr_text(opt.get("value", ""))
             else:
-                ov = ol = conditional_escape(str(opt))
-                av = attr_text(opt)
-            sel_cls = " combobox-option-selected" if str(ov) in selected_set else ""
+                raw_ov = opt
+                ol = conditional_escape(str(opt))
+            av = attr_text(raw_ov)
+            sel_cls = " combobox-option-selected" if _exact_str(raw_ov) in selected_set else ""
             aria_sel = "true" if sel_cls else "false"
             options_html += (
                 f'<div class="combobox-option{sel_cls}" id="{id_prefix}-option-{n}" role="option" '
@@ -2405,13 +2407,13 @@ def combobox(
         # (the client moves it with the arrow keys).
         for n, opt in enumerate(options):
             if isinstance(opt, dict):
-                ov = conditional_escape(str(opt.get("value", "")))
+                raw_ov = opt.get("value", "")
                 ol = conditional_escape(str(opt.get("label", "")))
-                av = attr_text(opt.get("value", ""))
             else:
-                ov = ol = conditional_escape(str(opt))
-                av = attr_text(opt)
-            is_sel = str(ov) == str(value)
+                raw_ov = opt
+                ol = conditional_escape(str(opt))
+            av = attr_text(raw_ov)
+            is_sel = _exact_str(raw_ov) == _exact_str(value)
             sel = " combobox-option-selected" if is_sel else ""
             options_html += (
                 f'<div class="combobox-option{sel}" id="{id_prefix}-option-{n}" role="option" '
@@ -2444,7 +2446,7 @@ def combobox(
     if not multiple:
         current_label = e_value
         for opt in options:
-            if isinstance(opt, dict) and str(opt.get("value", "")) == str(value):
+            if isinstance(opt, dict) and _exact_str(opt.get("value", "")) == _exact_str(value):
                 current_label = attr_text(opt.get("label", value))  # only in value= (#3904)
                 break
         input_value = current_label
