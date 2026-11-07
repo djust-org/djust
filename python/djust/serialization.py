@@ -51,8 +51,8 @@ HAS_ORJSON = importlib.util.find_spec("orjson") is not None
 # Since #2685 it ALSO covers a template that *explicitly* references a field:
 # ``{{ user.password }}`` flows through the compiled JIT serializer (and, for a
 # QuerySet, through Rust's ``serialize_object_with_paths``), and both now
-# consult this floor via ``optimization/codegen.py::emittable_names`` before
-# emitting a name. Naming a field in a template is not consent to ship a
+# consult this floor via ``optimization/codegen.py::emittable_names`` (the name
+# rules, then the column-TYPE floor below it) before emitting a name. Naming a field in a template is not consent to ship a
 # password hash — the value renders as ``string_if_invalid`` (empty) instead.
 # The match is name-EXACT: it covers ``password`` but not a ``get_password()``
 # accessor or a differently-named ``@property`` — use ``DJUST_SENSITIVE_FIELDS``
@@ -826,7 +826,9 @@ class DjangoJSONEncoder(json.JSONEncoder, metaclass=_EncoderDepthMeta):
         Every channel that decides whether a model attribute ships — the eager
         field loop, the eager ``get_*`` method loop, the eager ``@property``
         loop and the template sidecar proxy (``_SidecarModelProxy``) — calls
-        this and nothing else, so the channels cannot drift (#1646). Before
+        this and nothing else for the NAME decision, so the channels cannot
+        drift (#1646); the JIT gate reaches it through :meth:`_attr_is_readable`,
+        which adds the column-TYPE floor. Before
         #2614 the property loop consulted only ``_field_is_serializable`` while
         the sidecar also refused ``_SENSITIVE_MODEL_METHODS``; a ``@property``
         that *shadowed* ``get_session_auth_hash`` was serialized eagerly and
@@ -853,6 +855,51 @@ class DjangoJSONEncoder(json.JSONEncoder, metaclass=_EncoderDepthMeta):
         if name in _SENSITIVE_MODEL_METHODS or name.startswith(_SENSITIVE_MODEL_METHOD_PREFIXES):
             return False
         return DjangoJSONEncoder._field_is_serializable(name, denied, allowed, optout)
+
+    @staticmethod
+    def _model_class_behind(obj: Any) -> Optional[type]:
+        """The Django model class governing *obj*, else ``None`` for an object that is not a model.
+
+        :func:`_model_class_of` (the one reader of "which class's settings apply", which
+        sees through a lazy wrapper) narrowed to a model: the JIT gate keys its memo on this
+        class and asks it for column types, and a non-model has no columns. A wrapper that
+        cannot be evaluated raises here, as it does in :func:`_model_class_of`.
+        """
+        cls = _model_class_of(obj)
+        return cls if issubclass(cls, models.Model) else None
+
+    @staticmethod
+    def _configured_sensitive_types() -> FrozenSet[str]:
+        """The configured field-class names the TYPE floor drops (an input to its verdict)."""
+        return _sensitive_field_types()
+
+    @staticmethod
+    def _attr_is_readable(
+        name: str,
+        model_class: Optional[type],
+        denied: FrozenSet[str],
+        allowed: Optional[FrozenSet[str]],
+        optout: FrozenSet[str] = frozenset(),
+    ) -> bool:
+        """May a template read *name* off an instance of *model_class*? (the JIT gate's verdict)
+
+        The name rules (:meth:`_attr_is_serializable`) AND the column-TYPE floor
+        (:func:`_field_type_excluded_for`, #1987): the two checks the eager field loop
+        makes one after the other and the sidecar proxy makes in the same order. Until
+        this existed the JIT attribute gate made only the first, so a column the type
+        floor drops (a ``BinaryField``, a configured or encrypted-named type) was read by
+        a template that named it. The type floor is unconditional: an allowlist or an
+        opt-out names a COLUMN, and neither lifts a column's type.
+
+        *model_class* is ``None`` for an object that is not a model, which has no
+        columns to type. The type floor governs COLUMNS: a name that is not a column
+        (a property, a method, an annotation, a reverse relation) or whose field
+        cannot be resolved is not type-excluded, as in :func:`_field_type_excluded_for`
+        on the eager path, so a value carried by one of those is outside this floor.
+        """
+        if not DjangoJSONEncoder._attr_is_serializable(name, denied, allowed, optout):
+            return False
+        return model_class is None or not _field_type_excluded_for(model_class, name)
 
     def _is_relation_prefetched(self, obj: models.Model, field_name: str) -> bool:
         """Check if a relation was loaded via select_related/prefetch_related.

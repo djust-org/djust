@@ -645,7 +645,10 @@ class TestStructuralChokepointCodegen:
 
     def test_helper_calls_the_chokepoint(self):
         src = inspect.getsource(_codegen.emittable_names)
-        assert "_attr_is_serializable(" in src
+        # The gate asks ``_attr_is_readable``: the name rules of the chokepoint plus the
+        # column-TYPE floor. The chokepoint is still the only per-name authority.
+        assert "_attr_is_readable(" in src
+        assert "_attr_is_serializable(" in inspect.getsource(DjangoJSONEncoder._attr_is_readable)
         assert "_field_is_serializable(" not in src
         assert "_SENSITIVE_MODEL_METHODS" not in src
 
