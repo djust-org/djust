@@ -1701,32 +1701,49 @@ class TestThePinLockIsReentrant:
         assert serialization._PINNED_CLASS_ATTR in vars(other)
 
 
-class Slotted:
-    __slots__ = ()
+class Unswappable:
+    """A mixin whose instances refuse ``__class__`` assignment, on every Python.
+
+    The product swaps a form's class to pin its behaviour and falls back to pinning on the instance when
+    the swap is refused. Which layouts the interpreter refuses differs between versions (a ``__slots__``
+    mixin refuses on 3.12 to 3.14 and not on 3.15), so the refusal is made explicit here."""
+
+    def __setattr__(self, name, value):
+        if name == "__class__":
+            raise TypeError("__class__ assignment is refused for this class")
+        super().__setattr__(name, value)
 
 
-def slotted(form_class):
-    class SlottedForm(Slotted, form_class):
+def unswappable(form_class):
+    class UnswappableForm(Unswappable, form_class):
         class Meta(form_class.Meta):
             pass
 
-    return SlottedForm
+    return UnswappableForm
 
 
 class TestAFormClassThatCannotBeSwapped:
     def test_the_class_really_cannot_be_swapped(self):
         """If this stops raising, the tests below no longer reach the fallback."""
         user = User.objects.create(username="slot", password=real_stored())
-        form = slotted(set_password_form(None))({"username": "slot"}, instance=user)
+        form = unswappable(set_password_form(None))({"username": "slot"}, instance=user)
         with pytest.raises(TypeError):
             form.__class__ = serialization._pinned_form_class(type(form))
+        assert type(form).__name__ == "UnswappableForm"  # the refused swap changed nothing
+
+    def test_an_ordinary_form_class_can_be_swapped(self):
+        """The control: it is the mixin that refuses, not the form."""
+        user = User.objects.create(username="slot", password=real_stored())
+        form = set_password_form(None)({"username": "slot"}, instance=user)
+        form.__class__ = serialization._pinned_form_class(type(form))
+        assert getattr(type(form), "_djust_pinned", False) is True
 
     @pytest.mark.parametrize("widget", [None, forms.PasswordInput], ids=["text", "passwordinput"])
     def test_a_blank_submission_keeps_the_column_and_cleans_to_blank(self, widget, caplog):
         """The text field is made read-only at MOUNT (``get_form``); the password-widget field is kept
         at SUBMIT. Both reach the fallback."""
         seen = []
-        form_class = slotted(set_password_form(widget, seen=seen))
+        form_class = unswappable(set_password_form(widget, seen=seen))
         user = User.objects.create(username="slot", password=real_stored())
         client = LiveViewTestClient(view_for(form_class))
         with caplog.at_level("WARNING"):
@@ -1745,10 +1762,10 @@ class TestAFormClassThatCannotBeSwapped:
         assert user.check_password("oldpw") is True
         # logged, value-free
         said = [r.getMessage() for r in caplog.records if "cannot be derived" in r.getMessage()]
-        assert said and all("SlottedForm" in m and real_stored() not in m for m in said)
+        assert said and all("UnswappableForm" in m and real_stored() not in m for m in said)
 
     def test_a_typed_value_still_writes(self):
-        form_class = slotted(set_password_form(forms.PasswordInput))
+        form_class = unswappable(set_password_form(forms.PasswordInput))
         user = User.objects.create(username="slot", password=real_stored())
         client = LiveViewTestClient(view_for(form_class))
         client.mount(pk=user.pk)
@@ -1759,7 +1776,7 @@ class TestAFormClassThatCannotBeSwapped:
 
     def test_pinning_twice_wraps_once(self):
         user = User.objects.create(username="slot", password=real_stored())
-        form = slotted(set_password_form(None))({"username": "slot"}, instance=user)
+        form = unswappable(set_password_form(None))({"username": "slot"}, instance=user)
         serialization.protect_blanked_floor_columns(form)
         wrapped = form.__dict__["_clean_fields"]
         serialization.protect_blanked_floor_columns(form)
