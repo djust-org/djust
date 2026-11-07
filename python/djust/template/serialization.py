@@ -14,6 +14,7 @@ from django.utils.functional import Promise
 from typing import Any, Dict, List, Union, cast
 from uuid import UUID
 
+from django.db.models import Model
 from django.db.models.fields.files import FieldFile
 
 from djust.serialization import django_json_datetime
@@ -113,6 +114,14 @@ def serialize_value(
         if isinstance(value, Promise):
             return str(value)
         if isinstance(value, (datetime, date, time, timedelta, Decimal, UUID)):
+            return value
+        # A model crosses whole (#3902): the engine carries it as a floored live handle (#3888), so
+        # it keeps its managers and its relations. It has to be decided HERE, before the duck-typed
+        # file check below: that check asks ``hasattr(value, "url") and hasattr(value, "name")``,
+        # which a ``Link(name, url)`` row satisfies (``{{ link }}`` rendered its URL instead of its
+        # ``str()``) and which RUNS a ``url`` property — one that raises anything but
+        # ``AttributeError`` failed the whole render. A model is never a file.
+        if isinstance(value, Model):
             return value
 
     if value is None:

@@ -624,9 +624,19 @@ and for values bound by `{% for %}` and `{% with %}`.
    discloses *more*. Check what the `__str__` of anything you place bare
    in a template, or pass to `json_script`, actually says.
 
-Django **models** are unaffected by all of this: they stay on djust's
-eager, floored path, and the serialization floor keeps
-`{{ user.password }}` empty.
+Django **models** are held to the serialization floor on every path
+(`{{ user.password }}` is empty everywhere), but how one reaches the
+engine depends on the entry. A model in a list, tuple or nested
+container, and a top-level model rendered through
+`DjustTemplateBackend` or `render_template`, is a floored live handle:
+managers, relations and `*_id` attributes read as they do on Django,
+including behind a filter (`{% with q=user|default:user %}{{ q.groups.count }}{% endwith %}`).
+A top-level model held by a `LiveView` is still the floored dict,
+because a view holds it as state (it is sent to the client and
+change-tracked), so that filtered rebinding reads a relation empty
+there (#3936). A handle is not a mapping: iterate a model's fields
+explicitly, and read a `FileField` with `.url` (a bare
+`{{ doc.attach }}` prints the stored name, as on Django).
 
 **There is no kill-switch.** The release candidates carried
 `LIVEVIEW_CONFIG["template_resolve_lazy"] = False` as a rollback to the

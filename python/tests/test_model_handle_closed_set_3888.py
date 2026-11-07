@@ -318,9 +318,10 @@ class TestAnAbcCheckOnAProxy:
             {"rows": list(users)},
         )
         assert got == "[Hashable]", got
-        # a top-level model is still the dict form (#3902): the filter can ask it too, and no crash
+        # #3902: a top-level model on the backend is the floor proxy too (it was the dict form,
+        # Mapping/Iterable/Sized, while it was serialized in Python first): the same answer as a row
         top = _backend("{% load rv3888 %}[{{ u|abc_kinds }}]", {"u": users[0]})
-        assert top == "[Mapping,Iterable,Sized]", top
+        assert top == "[Hashable]", top
 
     def test_normalize_django_value_accepts_a_proxy(self, users) -> None:
         from djust.serialization import _SidecarModelProxy, normalize_django_value
