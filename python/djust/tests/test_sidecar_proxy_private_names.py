@@ -194,9 +194,9 @@ class TestCopiesOfAHandle:
 # ---------------------------------------------------------------------------
 
 SEEN: dict = {}
+PROBE_NAME = "djust_proxy_probe_d"
 
 
-@register("djust_proxy_probe_d")
 class _ProbeTag(TagHandler):
     """Resolves each token the way a custom handler does and records what came back."""
 
@@ -209,8 +209,34 @@ class _ProbeTag(TagHandler):
         return ""
 
 
+@pytest.fixture
+def probe_tag():
+    """Register the probe handler for one test and take it out again afterwards.
+
+    The handler registry is process-global with no teardown of its own, so a handler left behind is
+    seen by every later test in the process (the registry enumeration in
+    ``test_custom_tag_return_escape_2379`` counts handlers defined under ``djust.``). The entry that
+    was there before, if any, is put back.
+    """
+    from djust import _rust
+    from djust import template_tags
+
+    registry = template_tags._registered_handlers
+    previous = registry.get(PROBE_NAME)
+    register(PROBE_NAME)(_ProbeTag)
+    try:
+        yield
+    finally:
+        registry.pop(PROBE_NAME, None)
+        _rust.unregister_tag_handler(PROBE_NAME)
+        if previous is not None:
+            registry[PROBE_NAME] = previous
+            _rust.register_tag_handler(PROBE_NAME, previous)
+        SEEN.clear()
+
+
 TOKENS = ("u._obj.password", "u._obj", "u._denied", "qs._qs", "u.username")
-SOURCE = "{% djust_proxy_probe_d " + " ".join(TOKENS) + " %}"
+SOURCE = "{% " + PROBE_NAME + " " + " ".join(TOKENS) + " %}"
 
 
 def _assert_walk(seen):
@@ -226,7 +252,7 @@ def _context():
     return {"u": _user(), "qs": Group.objects.all()}
 
 
-def test_the_backend_entry_does_not_resolve_a_private_name():
+def test_the_backend_entry_does_not_resolve_a_private_name(probe_tag):
     backend = DjustTemplateBackend(
         params={"NAME": "djust", "DIRS": [], "APP_DIRS": False, "OPTIONS": {}}
     )
@@ -235,7 +261,7 @@ def test_the_backend_entry_does_not_resolve_a_private_name():
     _assert_walk(dict(SEEN))
 
 
-def test_the_http_get_entry_does_not_resolve_a_private_name():
+def test_the_http_get_entry_does_not_resolve_a_private_name(probe_tag):
     values = _context()
 
     class _V(LiveView):
@@ -264,7 +290,7 @@ def test_the_http_get_entry_does_not_resolve_a_private_name():
     _assert_walk(dict(SEEN))
 
 
-def test_the_websocket_render_entry_does_not_resolve_a_private_name():
+def test_the_websocket_render_entry_does_not_resolve_a_private_name(probe_tag):
     values = _context()
 
     class _V(LiveView):
