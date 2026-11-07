@@ -418,34 +418,39 @@ def _pick(table: dict[str, str], *labels: str) -> dict[str, str]:
     return {label: table[label] for label in labels}
 
 
-#: The tags share ONE implementation (``_passthrough_attrs``); what differs per tag is that its
-#: template prints ``{{ extra_attrs }}`` at all (pinned below). So every TAG is driven with a
-#: representative payload per family, and one tag (``theme_input``) with EVERY payload.
+#: The tags share ``_passthrough_attrs``. The full corpus covers every payload for
+#: ``theme_input``, so the other tags only need a representative payload per family.
+FULL_CORPUS_TAG = "theme_input"
+PASSTHROUGH_CASES = [(attr, tag) for attr in PASSTHROUGH_ATTRS for tag in PASSTHROUGH_TAGS]
+QUICK_PASSTHROUGH_CASES = [(attr, tag) for attr, tag in PASSTHROUGH_CASES if tag != FULL_CORPUS_TAG]
 QUICK_REJECTED = _pick(REJECTED, "javascript", "blob-lead-control", "data-html", "custom")
 QUICK_INERT = _pick(INERT, "entity-letter")
 QUICK_MARKED_SAFE = _pick(MARKED_SAFE, "entity-letter")
 QUICK_PRESERVED = _pick(PRESERVED, "relative", "https")
 
 
-@pytest.mark.parametrize("tag", list(PASSTHROUGH_TAGS))
-@pytest.mark.parametrize("attr", PASSTHROUGH_ATTRS)
 class TestEveryPassthroughTagAndAttribute:
+    @pytest.mark.parametrize("attr,tag", QUICK_PASSTHROUGH_CASES)
     @pytest.mark.parametrize("url", list(QUICK_REJECTED.values()), ids=list(QUICK_REJECTED))
     def test_a_rejected_scheme_becomes_a_hash(self, engine, tag, attr, url):
         _check_rejected(engine, tag, attr, url)
 
+    @pytest.mark.parametrize("attr,tag", QUICK_PASSTHROUGH_CASES)
     @pytest.mark.parametrize("url", list(QUICK_INERT.values()), ids=list(QUICK_INERT))
     def test_an_encoded_scheme_is_never_a_scheme(self, engine, tag, attr, url):
         _check_inert(engine, tag, attr, url)
 
+    @pytest.mark.parametrize("attr,tag", QUICK_PASSTHROUGH_CASES)
     @pytest.mark.parametrize("url", list(QUICK_MARKED_SAFE.values()), ids=list(QUICK_MARKED_SAFE))
     def test_a_marked_safe_value_is_judged_and_escaped(self, engine, tag, attr, url):
         _check_marked_safe(engine, tag, attr, url)
 
+    @pytest.mark.parametrize("attr,tag", QUICK_PASSTHROUGH_CASES)
     @pytest.mark.parametrize("url", list(QUICK_PRESERVED.values()), ids=list(QUICK_PRESERVED))
     def test_an_allowed_url_is_printed_escaped_once(self, engine, tag, attr, url):
         _check_preserved(engine, tag, attr, url)
 
+    @pytest.mark.parametrize("attr,tag", PASSTHROUGH_CASES)
     def test_a_script_scheme_never_raises_here(self, engine, tag, attr):
         """Only ``href`` / ``src`` / ``action`` / ``formaction`` have always raised; these
         rendered anything before, so a page must not start to 500 on one."""
@@ -457,7 +462,7 @@ class TestEveryPassthroughTagAndAttribute:
 class TestEveryPayloadThroughOneTag:
     """The whole corpus (every spelling of every rejected scheme) for each attribute."""
 
-    TAG = "theme_input"
+    TAG = FULL_CORPUS_TAG
 
     @pytest.mark.parametrize("url", list(REJECTED.values()), ids=list(REJECTED))
     def test_a_rejected_scheme_becomes_a_hash(self, engine, attr, url):
