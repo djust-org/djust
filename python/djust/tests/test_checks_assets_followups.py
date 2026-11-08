@@ -6,10 +6,15 @@ from __future__ import annotations
 
 import pytest
 from django.contrib.staticfiles.finders import BaseFinder
+from django.core.checks.registry import CheckRegistry, registry
 from django.core.management import call_command
 from django.test import override_settings
 
-from djust.checks.assets import check_undeclared_origins
+from djust.checks.assets import (
+    check_sbom_not_served_before_collect,
+    check_sbom_not_served_every_run,
+    check_undeclared_origins,
+)
 
 _BACKEND = "django.template.backends.django.DjangoTemplates"
 
@@ -175,25 +180,30 @@ def _b008(messages):
     return [m.id for m in messages if "vendor.cdx.json" in m.msg]
 
 
+def _run_b008_checks(*, include_deployment_checks=False):
+    """Run only B008, preserving its ordinary and deploy registrations."""
+    checks = {check_sbom_not_served_before_collect, check_sbom_not_served_every_run}
+    scoped = CheckRegistry()
+    scoped.registered_checks = registry.registered_checks & checks
+    scoped.deployment_checks = registry.deployment_checks & checks
+    return scoped.run_checks(include_deployment_checks=include_deployment_checks)
+
+
 def test_b008_does_not_walk_static_files_on_ordinary_check_runs(monkeypatch):
     """djust listed above staticfiles: runserver, migrate and a plain `check`
     run the non-deploy checks, and none of them may list every static file."""
-    from django.core.checks import run_checks
-
     _collectstatic_owner(monkeypatch, "djust")
     _RecordingFinder.calls = []
     with override_settings(STATICFILES_FINDERS=[_FINDER]):
-        messages = run_checks()
+        messages = _run_b008_checks()
     assert _RecordingFinder.calls == []
     assert _b008(messages) == []
 
 
 def test_b008_runs_under_deploy_checks_when_djust_owns_collectstatic(monkeypatch):
-    from django.core.checks import run_checks
-
     _collectstatic_owner(monkeypatch, "djust")
     with override_settings(STATICFILES_FINDERS=[_FINDER]):
-        messages = run_checks(include_deployment_checks=True)
+        messages = _run_b008_checks(include_deployment_checks=True)
     assert _b008(messages) == ["djust.B008"]
 
 
@@ -204,11 +214,9 @@ def test_b008_keeps_running_on_every_check_when_djust_does_not_own_collectstatic
     """djust listed after staticfiles: Django's collectstatic wins and never
     runs B008, so the ordinary check pass keeps it, as before #3144, and a
     deploy run reports it once, not twice."""
-    from django.core.checks import run_checks
-
     _collectstatic_owner(monkeypatch, "django.contrib.staticfiles")
     with override_settings(STATICFILES_FINDERS=[_FINDER]):
-        messages = run_checks(include_deployment_checks=deploy)
+        messages = _run_b008_checks(include_deployment_checks=deploy)
     assert _b008(messages) == ["djust.B008"]
 
 

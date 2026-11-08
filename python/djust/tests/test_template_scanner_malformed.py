@@ -5,7 +5,7 @@ from django.template import Engine
 
 from djust import LiveView
 from djust._template_bindings import recovery_scan, scan_source
-from djust.checks.bindings import binding_reports, check_event_bindings, coverage
+from djust.checks import bindings
 
 
 def _marked_sections_raise(monkeypatch):
@@ -36,14 +36,16 @@ def test_malformed_inline_template_does_not_abort_checks(monkeypatch, malformed)
         template = '<button dj-click="missing">before</button>' + malformed
 
     try:
-        report = next(r for r in binding_reports() if r.owner is MalformedView)
+        owners = [owner for owner in bindings._owners() if owner[0] is MalformedView]
+        monkeypatch.setattr(bindings, "_owners", lambda: owners)
+        report = next(r for r in bindings.binding_reports() if r.owner is MalformedView)
         assert report.results[0].binding.name == "missing"
         if malformed.startswith("<!["):
             assert report.gaps
             assert "could not scan" in report.gaps[0].reason
-            assert not coverage([report])["templates"][0]["complete"]
+            assert not bindings.coverage([report])["templates"][0]["complete"]
             assert recovery_scan(MalformedView)[1] is False
-        check_event_bindings(None)
+        bindings.check_event_bindings(None)
     finally:
         MalformedView.abstract = True
 
