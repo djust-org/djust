@@ -116,7 +116,7 @@ def _shapes(w):
     return {
         "list": lambda: [w["a1"], w["a2"]],
         "tuple": lambda: (w["a1"], w["a2"]),
-        "queryset": lambda: Account.objects.order_by("username"),
+        "queryset": lambda: Account.objects.filter(username__in=("a1", "a2")).order_by("username"),
         "dict-of-list": lambda: {"items": [w["a1"], w["a2"]]},
         "dict-of-model": lambda: {"owner": w["a1"]},
     }
@@ -173,13 +173,12 @@ class TestAWholeContainerPrintPrintsTheText:
         for shape in ("list", "queryset"):
             rows = _shapes(world)[shape]()
             ctx = {"rows": rows}
-            assert ENTRIES[entry]("{{ rows|pprint }}", ctx) == "[Account:a1, Account:a2]", (
-                entry,
-                shape,
-            )
-            assert ENTRIES[entry]('{{ rows|json_script:"x" }}', ctx) == (
+            got = ENTRIES[entry]("{{ rows|pprint }}", ctx)
+            assert got == "[Account:a1, Account:a2]", (entry, shape, got)
+            got = ENTRIES[entry]('{{ rows|json_script:"x" }}', ctx)
+            assert got == (
                 '<script id="x" type="application/json">["Account:a1", "Account:a2"]</script>'
-            ), (entry, shape)
+            ), (entry, shape, got)
 
     @pytest.mark.parametrize("entry", sorted(ENTRIES))
     def test_the_exact_spelling_of_a_model_nested_in_a_dict(self, world, entry) -> None:
