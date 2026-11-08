@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.8] - 2026-11-08
+
+### Fixed
+
+- **A model held in a container prints as its text when a filter prints the whole container.** `{{ rows|pprint }}` and `{{ rows|json_script:"x" }}` over a list, tuple, QuerySet or dict holding models now write each model's `str()`, as `{{ rows }}` does, on every entry (LiveView state, `DjustTemplateBackend` lists, tuples and QuerySets), instead of the model's serialized mapping. `pprint` writes `[Account:a1, Account:a2]` (Django writes the `repr()`); `json_script` writes `["Account:a1", "Account:a2"]` through the usual escaping (Django raises `TypeError`). A named read (`{{ r.name }}`), `{{ rows }}`, `|length`, an ordinary dict and the data itself (`get_state()`, the snapshot) are unchanged. To hand a model's fields to JavaScript, pass a plain dict of the fields you want (not the output of `normalize_django_value`, which carries a `__str__` text). Needs the rebuilt `_rust` module.
+- **A model is not a mapping to a template.** On a model held in LiveView state or in a container, `{{ r.items }}`, `{{ r.values }}` and `{{ r.keys }}` resolve to nothing (a bare `{{ r.items }}` prints nothing on most entries, and the text `dict_items([])` (`dict_keys([])`, `dict_values([])`) on LiveView for a list, QuerySet or top-level model and for QuerySet rows on `DjustTemplateBackend`, where Django prints nothing; no entry is ever printed), `{% for k in r %}`, `|unordered_list`, `|safeseq` and `|escapeseq` refuse the model as Django does (`|join` returns the model's text), and `|stringformat:"(name)s"`, `{% if 'name' in r %}` / `not in` (both take the `else` branch) and `|pluralize` treat it as the non-mapping Django does, instead of reading the map the model was serialized to. A named read (`{{ r.name }}`) is unchanged. The sinks go by the full identity shape a serializer stamps (`__str__`, `__model__` and `pk`), and a model whose `__str__` is a `SafeString` is recognised like any other; a dict from user data that only carries a `__str__` key stays a dict (views, iteration, `pprint`, `json_script`), while `{{ d }}` and `|length` of it keep going by the `__str__` text as before. Needs the rebuilt `_rust` module.
+
 ## [1.2.7] - 2026-11-07
 
 A 1.2 patch release that includes security fixes; upgrading from 1.2.6 is recommended.
