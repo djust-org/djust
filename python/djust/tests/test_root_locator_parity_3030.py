@@ -18,31 +18,22 @@ later for every locator at once: see ``test_root_selection_3031.py``.)
 
 from __future__ import annotations
 
-import time
-
 import pytest
 
 from djust.mixins.template import (
     _DJ_ROOT_RE,
     _DJ_VIEW_RE,
     _mask_for_root_search,
+    _mask_for_root_search_uncached,
     _search_dj_root_open,
 )
+from djust.tests._growth import FACTOR, assert_scales_linearly
 
 
 def _python_root(html: str) -> str:
     m = _search_dj_root_open(html, _DJ_ROOT_RE, _DJ_VIEW_RE)
     assert m is not None
     return html[m.start() : m.end()]
-
-
-def _best_of(fn, arg, runs=3):
-    best = float("inf")
-    for _ in range(runs):
-        start = time.perf_counter()
-        fn(arg)
-        best = min(best, time.perf_counter() - start)
-    return best
 
 
 class TestQuotedValues3030:
@@ -94,13 +85,9 @@ class TestQuotedValues3030:
         ],
     )
     def test_the_walk_is_linear_on_tag_soup(self, html):
-        # Growth, not an absolute bound (#3710): a 1 s ceiling failed main's CI
-        # on a runner that stalled for ~100 s, while the corpus costs 0.01-0.03 s
-        # here. Four times the input must cost under ten times as much; linear
-        # is ~4x and quadratic ~16x. Best of three per size drops a stall that
-        # lands on one run.
-        small = _best_of(_mask_for_root_search, html)
-        large = _best_of(_mask_for_root_search, html * 4)
-        assert large < small * 10, (
-            f"4x input cost {large / small:.1f}x ({small:.4f}s -> {large:.4f}s)"
+        # Time the walk itself, excluding input construction and identity-cache hits.
+        inputs = {1: html, FACTOR: html * FACTOR}
+        assert_scales_linearly(
+            lambda scale: _mask_for_root_search_uncached(inputs[scale]),
+            what="root mask on tag soup",
         )
