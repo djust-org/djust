@@ -3128,10 +3128,37 @@ impl Value {
             // A non-`String` `"__str__"` (an upstream bug producing
             // `"__str__": null`) is NOT a marker: `Display` falls back to dict
             // repr for it, so this must too or the two disagree.
+            // A model whose `__str__` returns a `SafeString` (`format_html`, `mark_safe`)
+            // stamps a `Value::SafeString`; it is the same marker, so it is spelled by it too.
+            // The text is never marked safe by being printed from here: it is escaped like any
+            // other text unless the renderer is told otherwise.
             Value::Object(o) => match o.get("__str__") {
-                Some(Value::String(s)) => Some(s.as_str()),
+                Some(Value::String(s) | Value::SafeString(s)) => Some(s.as_str()),
                 _ => None,
             },
+            _ => None,
+        }
+    }
+
+    /// The text of a map that is a SERIALIZED MODEL: [`Value::object_str`]'s marker AND the rest
+    /// of the identity shape every model-serialization site stamps (`pk` and a text
+    /// `__model__`, see `serialization.model_identity`).
+    ///
+    /// `object_str` is what DISPLAY goes by (`{{ obj }}`, `|length`): it must accept the looser
+    /// shapes the path-mode serializers stamp (`__str__` beside only the keys the template
+    /// named). The sinks that treat a map as a model rather than as a dict (`pprint`,
+    /// `json_script`, `.items` / `.keys` / `.values`, iteration, `stringformat` mapping specs,
+    /// `in`, `pluralize`) go by this stricter shape, so a dict from user data that happens to
+    /// carry a text `__str__` key (a stored JSON column) keeps being a dict there. Any dict can
+    /// still carry all three keys: this narrows the accident, it does not make the marker
+    /// unforgeable.
+    pub fn model_str(&self) -> Option<&str> {
+        let text = self.object_str()?;
+        let Value::Object(o) = self else {
+            return None;
+        };
+        match (o.get("__model__"), o.get("pk")) {
+            (Some(Value::String(_) | Value::SafeString(_)), Some(_)) => Some(text),
             _ => None,
         }
     }
@@ -6002,6 +6029,72 @@ mod tests {
         ] {
             assert_eq!(v.object_str(), None, "{v:?}");
         }
+    }
+
+    /// A model whose `__str__` returns a `SafeString` (`format_html`, `mark_safe`) stamps a text
+    /// that crosses as `Value::SafeString`; it is the same marker, not an ordinary dict.
+    #[test]
+    fn test_object_str_accepts_a_safe_text() {
+        let mut model: IndexMap<ObjectKey, Value> = IndexMap::new();
+        model.insert(
+            "__str__".into(),
+            Value::SafeString("<b>bob</b>".to_string()),
+        );
+        assert_eq!(Value::Object(model).object_str(), Some("<b>bob</b>"));
+    }
+
+    /// `model_str()` is the marker the sinks that treat a map as a MODEL (not as a dict) read: the
+    /// full identity shape a serializer stamps. A dict that only carries a `__str__` text is
+    /// still spelled by it for display (`object_str`), but is not refused its keys, views or
+    /// iteration.
+    #[test]
+    fn test_model_str_needs_the_whole_identity_shape() {
+        let build = |keys: &[(&str, Value)]| {
+            let mut m: IndexMap<ObjectKey, Value> = IndexMap::new();
+            for (k, v) in keys {
+                m.insert((*k).into(), v.clone());
+            }
+            Value::Object(m)
+        };
+        let text = Value::String("bob".to_string());
+        let safe = Value::SafeString("<b>bob</b>".to_string());
+        let class = Value::String("Account".to_string());
+        let pk = Value::Integer(1);
+        let full = build(&[
+            ("pk", pk.clone()),
+            ("__str__", text.clone()),
+            ("__model__", class.clone()),
+        ]);
+        assert_eq!(full.model_str(), Some("bob"));
+        // a SafeString text and a null pk are still a model
+        let safe_full = build(&[
+            ("pk", Value::None),
+            ("__str__", safe.clone()),
+            ("__model__", class.clone()),
+        ]);
+        assert_eq!(safe_full.model_str(), Some("<b>bob</b>"));
+        // each part missing, or of the wrong type, is not
+        for partial in [
+            build(&[("__str__", text.clone())]),
+            build(&[("__str__", text.clone()), ("__model__", class.clone())]),
+            build(&[("__str__", text.clone()), ("pk", pk.clone())]),
+            build(&[("pk", pk.clone()), ("__model__", class.clone())]),
+            build(&[
+                ("__str__", text.clone()),
+                ("__model__", Value::Integer(5)),
+                ("pk", pk.clone()),
+            ]),
+            build(&[
+                ("__str__", Value::Integer(5)),
+                ("__model__", class.clone()),
+                ("pk", pk.clone()),
+            ]),
+        ] {
+            assert_eq!(partial.model_str(), None, "{partial:?}");
+        }
+        assert_eq!(Value::List(vec![]).model_str(), None);
+        // display still goes by the looser marker
+        assert_eq!(build(&[("__str__", text)]).object_str(), Some("bob"));
     }
 
     /// `object_str()` is the ONLY place the marker is spelled (#1646/#1859).

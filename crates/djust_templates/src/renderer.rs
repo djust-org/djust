@@ -2909,6 +2909,12 @@ pub fn render_node_with_loader_mut<L: TemplateLoader>(
                     true,
                     Vec::new(),
                 ),
+                // A serialized Django model is not iterable (`list(model)` raises): it falls
+                // through to the refusal arm below, as a live model handle does, rather than
+                // iterating the keys of the map it was serialized to.
+                model @ Value::Object(_) if model.model_str().is_some() => {
+                    (model, false, Vec::new())
+                }
                 Value::Object(map) => (
                     // Each key as the VALUE it is, not its text: an int key
                     // binds `Value::Integer` so `{{ k }}` renders `0` and
@@ -5038,7 +5044,9 @@ fn evaluate_condition(condition: &str, context: &Context) -> Result<bool> {
                         .or_else(|| e.consume_live_match(|item| values_equal(&needle, item)))
                     {
                         Some(Ok(found)) => Ok(found),
-                        Some(Err(_)) | None => Ok(false),
+                        // The handle's own `in` raised (a model handle has no `__contains__`):
+                        // false for `not in` as well, as in Django's smart-if.
+                        Some(Err(_)) | None => return Ok(false),
                     }
                 }
                 Value::Encoded(ref e) if e.items.is_some() => Ok(e
@@ -5052,6 +5060,10 @@ fn evaluate_condition(condition: &str, context: &Context) -> Result<bool> {
                         return Ok(false);
                     }
                 }
+                // A serialized model is not a container: `x in model` raises in Python, and
+                // smart-if reads the raise as false for `in` AND for `not in`, so this returns
+                // rather than flowing into the negation below.
+                ref model @ Value::Object(_) if model.model_str().is_some() => return Ok(false),
                 Value::Object(map) => {
                     // Django: "x in dict" checks dict keys — BY VALUE, as
                     // Python does, not by `Display` (#2339).
@@ -7333,6 +7345,38 @@ mod tests {
         assert_eq!(render_nodes(&nodes, &context).unwrap(), "<!--dj-if-->");
     }
 
+    /// `x in model` and `x not in model` both raise in Python, and smart-if reads a raise as false
+    /// for BOTH, so neither takes the true branch (the `not in` negation must not flip it).
+    #[test]
+    fn test_membership_in_a_serialized_model_is_false_for_in_and_not_in() {
+        let model: IndexMap<_, _> = [
+            ("pk", "1"),
+            ("__str__", "Account:a1"),
+            ("__model__", "Account"),
+            ("name", "a1"),
+        ]
+        .into_iter()
+        .map(|(k, v)| {
+            (
+                djust_core::ObjectKey::Str(k.chars().collect()),
+                Value::String(v.chars().collect()),
+            )
+        })
+        .collect();
+        let mut context = Context::new();
+        context.set("m".chars().collect(), Value::Object(model));
+        for (src, want) in [
+            ("{% if 'name' in m %}YES{% else %}NO{% endif %}", "NO"),
+            ("{% if 'zzz' in m %}YES{% else %}NO{% endif %}", "NO"),
+            ("{% if 'name' not in m %}YES{% else %}NO{% endif %}", "NO"),
+            ("{% if 'zzz' not in m %}YES{% else %}NO{% endif %}", "NO"),
+        ] {
+            let tokens = tokenize(src).unwrap();
+            let nodes = parse(&tokens).unwrap();
+            assert_eq!(render_nodes(&nodes, &context).unwrap(), want, "{src}");
+        }
+    }
+
     // Asserts `<!--dj-if-->` from a default Context: LiveView pin (#2519).
     #[cfg(feature = "liveview")]
     #[test]
@@ -8045,6 +8089,34 @@ mod tests {
             Value::List(Vec::new()),
             Value::Tuple(vec![Value::Integer(1)]),
             Value::Object(IndexMap::new()),
+            // A serialized model: `list(model)` raises, so BOTH probes say "not iterable".
+            Value::Object(
+                [
+                    ("__str__", "Account:a1"),
+                    ("__model__", "Account"),
+                    ("pk", "1"),
+                ]
+                .into_iter()
+                .map(|(k, v)| {
+                    (
+                        djust_core::ObjectKey::Str(k.chars().collect()),
+                        Value::String(v.chars().collect()),
+                    )
+                })
+                .collect(),
+            ),
+            // A dict that merely carries a text `__str__` is user data and iterates its keys.
+            Value::Object(
+                [("__str__", "lbl"), ("k1", "v1")]
+                    .into_iter()
+                    .map(|(k, v)| {
+                        (
+                            djust_core::ObjectKey::Str(k.chars().collect()),
+                            Value::String(v.chars().collect()),
+                        )
+                    })
+                    .collect(),
+            ),
             Value::DictView {
                 kind: djust_core::DictViewKind::Keys,
                 items: vec![Value::Integer(1)],
@@ -8185,12 +8257,12 @@ mod tests {
                 refusing += 1;
             }
         }
-        // The canary: the sweep is not vacuous in either direction. Six of the
+        // The canary: the sweep is not vacuous in either direction. Seven of the
         // samples refuse and eleven do not, so a change that made EVERYTHING
         // refuse — or nothing — cannot pass by making the equality trivially
         // true.
-        assert_eq!(refusing, 6, "expected exactly six refusing samples");
-        assert_eq!(samples.len(), 19);
+        assert_eq!(refusing, 7, "expected exactly seven refusing samples");
+        assert_eq!(samples.len(), 21);
         // Non-vacuity for the extra term: the zero-`len`-and-not-iterable
         // sample must be one the two probes DISAGREE about, or the relation
         // above is indistinguishable from a plain equality.

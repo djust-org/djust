@@ -172,6 +172,12 @@ class TestTheContainerSinksSpellFromTheLiveHandle:
         # short one back, BYTE for byte — a prefix check would not catch a
         # changed suffix, and `json_script`'s is `]</script>`.
         padding_free = re.sub(r"(,\s*(None|null))+", "", past)
+        if "pprint" in src:
+            # `pprint` puts a short list on ONE line and a long one on a line per item, so the
+            # separators legitimately differ with the length. A model is spelled by its `str()`
+            # (short), so the separator is the only thing the length changes. Collapse it.
+            padding_free = re.sub(r",\s+", ", ", padding_free)
+            under = re.sub(r",\s+", ", ", under)
         assert padding_free == under, (
             f"{shape} {src}: past the cap the container is spelled\n"
             f"  {padding_free[:300]!r}\nwhere under it, it is\n  {under[:300]!r}"
@@ -631,12 +637,14 @@ class TestASmallQuerySetIsUnmovedByTheDeclineChange2717:
         assert self._render_rows(src) == expected
 
     @pytest.mark.parametrize("src", ["{{ rows|pprint }}", '{{ rows|json_script:"x" }}'])
-    def test_the_dump_filters_still_dump_three_identity_maps(self, src: str) -> None:
-        """Asserted structurally rather than byte-for-byte: both dump every
-        field, including a `date_joined` the fixture cannot pin. Three maps is
-        the `Value::List` answer; a carrier would spell one string."""
+    def test_pprint_and_json_script_spell_each_model_as_its_text(self, src: str) -> None:
+        """A model in a container is spelled by its `str()`, which is also what `{{ rows }}`
+        prints, so the three cells agree: three rows, each by name; a carrier of the WHOLE
+        queryset would spell one string."""
         out = self._render_rows(src)
-        assert out.count("__model__") == 3, out[:200]
+        assert out.count("__model__") == 0, out[:200]
+        for name in ("u0", "u1", "u2"):
+            assert name in out, out[:200]
         assert "SECRET" not in out
 
     def test_the_small_queryset_is_not_a_carrier_at_all(self) -> None:
