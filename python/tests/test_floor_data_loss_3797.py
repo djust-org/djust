@@ -425,8 +425,9 @@ class TestMadeReadOnlyIsNotSilent:
 
 
 class TestProtectKeepsTheKeptWidgets:
-    def test_a_password_hash_widget_field_is_not_made_read_only(self):
-        """``UserChangeForm.password`` shaped: a non-password-widget the floor draws as its own summary."""
+    def test_a_password_hash_widget_field_is_made_read_only(self):
+        """A hash widget on a field that is not ``disabled`` is made so (the live renderers print
+        ``form_data``, which withholds the value, so an untouched re-save must keep the column)."""
         from django.contrib.auth.forms import ReadOnlyPasswordHashWidget
 
         class Hash(forms.ModelForm):
@@ -438,7 +439,7 @@ class TestProtectKeepsTheKeptWidgets:
 
         form = Hash(instance=make_user())
         serialization.protect_blanked_floor_columns(form)
-        assert form.fields["password"].disabled is False
+        assert form.fields["password"].disabled is True
 
 
 class TestSecretPredicate:

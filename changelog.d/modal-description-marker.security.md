@@ -1,1 +1,0 @@
-- **`{% modal %}` finds its `{% modal_description %}` block by a marker escaped variables cannot spell.** The marker is now `<!--dj-modal-description-->`, no marker is left in the rendered output, and both engines share the one `render_modal` path.

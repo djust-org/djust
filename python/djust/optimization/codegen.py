@@ -20,14 +20,18 @@ logger = logging.getLogger(__name__)
 
 #: Memoized :func:`emittable_names` decisions (#2685 perf).
 #:
-#: Keyed on ``(names, denied, allowed, optout)`` — the COMPLETE argument set of
-#: ``DjangoJSONEncoder._attr_is_serializable``, which is a pure function of
-#: exactly those. The model class is deliberately NOT part of the key: two
-#: models resolving to the same three sets provably reach the same decision, and
-#: any config change (``DJUST_SENSITIVE_FIELDS``, ``djust_exclude_fields``,
-#: ``djust_serializable_fields``, ``djust_serialize_sensitive_fields``) changes
-#: one of the sets and therefore the key. There is no staleness mode to
-#: invalidate — a changed policy simply misses.
+#: Keyed on ``(names, denied, allowed, optout, model class, configured types)``:
+#: every input to the verdict. The name sets are the per-model denylist /
+#: allowlist / opt-out resolution of ``DjangoJSONEncoder._attr_is_serializable``;
+#: the model class and the configured sensitive type names are the inputs to the
+#: column-TYPE floor (``DjangoJSONEncoder._attr_is_readable``), which depends on
+#: what a column IS, not what it is called. Two models whose name sets are equal
+#: can still differ in a column's type, and ``LIVEVIEW_CONFIG['sensitive_field_types']``
+#: can change under a running process, so neither may be left out of the key. Any
+#: config change (``DJUST_SENSITIVE_FIELDS``, ``djust_exclude_fields``,
+#: ``djust_serializable_fields``, ``djust_serialize_sensitive_fields``, the
+#: configured types) changes one of the parts and therefore the key. There is no
+#: staleness mode to invalidate — a changed policy simply misses.
 #:
 #: *names* is keyed as a ``frozenset``, not a tuple, because the answer depends
 #: on the SET of names and nothing else — and because the Rust caller iterates a
@@ -38,14 +42,22 @@ logger = logging.getLogger(__name__)
 #: half, which no test could then tell apart from this one (#2233). This key is
 #: the single mechanism, and it is correct for any caller's ordering.
 _GATE_CACHE: Dict[
-    Tuple[FrozenSet[str], FrozenSet[str], Optional[FrozenSet[str]], FrozenSet[str]],
+    Tuple[
+        FrozenSet[str],
+        FrozenSet[str],
+        Optional[FrozenSet[str]],
+        FrozenSet[str],
+        Optional[type],
+        FrozenSet[str],
+    ],
     FrozenSet[str],
 ] = {}
 
 #: Bound on :data:`_GATE_CACHE`. Real templates name a small, fixed set of paths
 #: per model, so the live key count is tiny; the cap only stops an unbounded
-#: walk if some caller synthesises path tuples at runtime. Past the cap the gate
-#: keeps working, uncached.
+#: walk if some caller synthesises path tuples at runtime. A full cache is
+#: cleared and refilled, so the gate keeps memoising the keys in use now rather
+#: than recomputing every call for the rest of the process.
 _GATE_CACHE_MAX = 512
 
 #: The chokepoint class, resolved on first use. Held here rather than imported
@@ -75,39 +87,55 @@ def emittable_names(obj: Any, names: Iterable[str]) -> FrozenSet[str]:
     generated code reads, and every attribute the **Rust** queryset serializer
     reads (``crates/djust_live/src/lib.rs::serialize_object_with_paths`` calls
     this function), now goes through the same ONE chokepoint,
-    ``DjangoJSONEncoder._attr_is_serializable``, with the same per-model
-    denylist / allowlist / opt-out resolution the eager loops use — so no
-    channel can drift (#1646).
+    ``DjangoJSONEncoder._attr_is_readable`` (the name rules of
+    ``_attr_is_serializable`` plus the column-TYPE floor, #1987), with the same
+    per-model denylist / allowlist / opt-out resolution the eager loops use — so
+    no channel can drift (#1646).
 
     Set-at-a-time, once per OBJECT, for two reasons. It is the shape the Rust
     caller needs — one GIL crossing per object level instead of one per
     attribute, over every row of a QuerySet. And it makes the whole decision
     memoizable in one lookup (:data:`_GATE_CACHE`): the answer depends only on
-    ``(names, denied, allowed, optout)``, so the per-name ``_attr_is_serializable``
-    loop runs once per distinct policy+path-set and never again. The three
+    the names, the three name sets, the model class and the configured sensitive
+    types, so the per-name loop runs once per distinct policy+path-set and never
+    again. The three
     per-model sets still resolve per object — they are three ``getattr`` calls
     over a memoized global — because a nested path (``lease.tenant.password``)
     crosses model classes and the decision cannot be inherited.
 
     A denied name is simply omitted from the result dict, which the template
     renders as ``string_if_invalid`` (empty) — the same outcome as the eager
-    channel. Fail-closed: any error resolving the sets denies every name.
+    channel. Fail-closed: any error resolving the sets denies every name. That includes an
+    object whose ``__class__`` cannot be read: the class is resolved by
+    ``serialization._model_class_of`` inside the guard, so a lazy wrapper that
+    raises when evaluated denies every name rather than being gated by name rules
+    alone. A name that is not a column of the model (a property, a method, an
+    annotation, a reverse relation) is not type-excluded: the type floor governs
+    columns and the name rules govern the rest, exactly as on the eager path.
     """
     try:
         encoder = _chokepoint()
+        # The per-model sets and the column types belong to the model class, which for a
+        # lazy wrapper is what ``__class__`` reports, not ``type(obj)``. The set readers
+        # resolve it themselves (``_model_class_of``); the type floor needs it here.
+        model_class = encoder._model_class_behind(obj)
         denied = encoder._get_denied_fields(obj)
         allowed = encoder._get_allowlist_fields(obj)
         optout = encoder._get_sensitive_optout_fields(obj)
         wanted = frozenset(names)
-        key = (wanted, denied, allowed, optout)
+        key = (wanted, denied, allowed, optout, model_class, encoder._configured_sensitive_types())
         hit = _GATE_CACHE.get(key)
         if hit is not None:
             return hit
         permitted = frozenset(
-            n for n in wanted if encoder._attr_is_serializable(n, denied, allowed, optout)
+            n for n in wanted if encoder._attr_is_readable(n, model_class, denied, allowed, optout)
         )
-        if len(_GATE_CACHE) < _GATE_CACHE_MAX:
-            _GATE_CACHE[key] = permitted
+        if len(_GATE_CACHE) >= _GATE_CACHE_MAX:
+            # Clear-on-full: dict ``clear`` and ``__setitem__`` are each atomic (also under
+            # free threading), and a thread that loses an entry to a racing clear simply
+            # recomputes it, so a memo of a pure function needs no lock.
+            _GATE_CACHE.clear()
+        _GATE_CACHE[key] = permitted
         return permitted
     except Exception:
         logger.debug("attribute gate failed for %s; refusing every name", type(obj).__name__)

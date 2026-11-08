@@ -173,6 +173,10 @@ class TestTileUrlPolicy:
         "https://tiles.example.com/{z}/{x}/{y} .png",
         "https://tiles.example.com/{z}/{x}/{y}\n.png",
         "tiles/{z}/{x}/{y}.png",
+        # the same URL with other separators or a TAB (a browser normalises them first)
+        "/\\tiles.example/{z}/{x}/{y}.png",
+        "/\t/tiles.example/{z}/{x}/{y}.png",
+        "\\\\tiles.example/{z}/{x}/{y}.png",
         "",
         None,
         42,

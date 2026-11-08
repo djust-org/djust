@@ -235,6 +235,18 @@ flag, a PII column — because serialization defaulted to *allow everything*.
 > by default; case-exact). `FileField`/`ImageField` are
 > explicitly **NOT** excluded — they serialize a URL, the intended payload
 > ([#1987](https://github.com/djust-org/djust/issues/1987)).
+>
+> The type floor is unconditional: a per-model `djust_serializable_fields`
+> allowlist or a `djust_serialize_sensitive_fields` opt-out names a column and
+> does not lift the column's type. The JIT attribute gate
+> (`optimization/codegen.py::emittable_names`, which the compiled serializers
+> and the Rust serializers call) applies it through
+> `DjangoJSONEncoder._attr_is_readable`, the name rules followed by this floor,
+> so a template naming such a column reads it as empty on every route. The floor
+> governs columns: a `@property`, method, annotation or `values_list` row that
+> carries the same value is outside it, as on the eager path. Its cache key
+> carries the model class and the configured types, because the verdict depends
+> on a column's type.
 
 **Canonical site.**
 `python/djust/serialization.py`:
@@ -293,8 +305,9 @@ flag, a PII column — because serialization defaulted to *allow everything*.
   queryset serializer** — every attribute the generated serializer reads, and
   every attribute `crates/djust_live/src/lib.rs::serialize_object_with_paths`
   reads, is gated by
-  `python/djust/optimization/codegen.py::emittable_names`, which calls this
-  and nothing else (#2685 / #2688; a denied name is omitted from the dict, so
+  `python/djust/optimization/codegen.py::emittable_names`, which asks
+  `_attr_is_readable` (this, then the column-TYPE floor below) and nothing
+  else (#2685 / #2688; a denied name is omitted from the dict, so
   the template renders `string_if_invalid`). Rust holds no policy of its own:
   `resolve_attr_gate` imports that one Python function and `gated_names` calls
   it once per object LEVEL, threading the result through both recursions — so
@@ -341,8 +354,9 @@ flag, a PII column — because serialization defaulted to *allow everything*.
 - `_field_type_is_excluded(field)` + `_field_type_excluded_for(model_class, name)`
   (the #1987 **TYPE floor**) — the single authority the eager loop
   (`_serialize_model_safely`, checked right after `_field_is_serializable`) and
-  the sidecar proxy (`_SidecarModelProxy.__getattr__`) both call, so the two
-  paths can't drift (#1646). Drops `BinaryField` unconditionally, any type in
+  the sidecar proxy (`_SidecarModelProxy.__getattr__`) both call, and the JIT
+  attribute gate via `DjangoJSONEncoder._attr_is_readable`, so the paths can't
+  drift (#1646). Drops `BinaryField` unconditionally, any type in
   `LIVEVIEW_CONFIG['sensitive_field_types']`, and best-effort encrypted-field
   types (MRO class name contains `Encrypted`/`Fernet`); never
   `FileField`/`ImageField` (they serialize a URL).

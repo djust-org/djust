@@ -121,8 +121,9 @@ def validate_mount_url(url: Optional[str]) -> str:
     Rejected (all fall back to ``"/"``):
       * empty / non-string / not starting with ``"/"`` (relative path,
         traversal such as ``"../../admin/"``)
-      * protocol-relative (``"//evil.com/page"``) -- ``urlparse`` reports a netloc
-      * absolute (``"https://evil.com/page"``) -- ``urlparse`` reports a scheme
+      * protocol-relative (``"//other.example/page"``) -- ``urlparse`` reports a netloc --
+        or any URL a browser reads that way (:func:`~djust.security.urls.url_is_protocol_relative`)
+      * absolute (``"https://other.example/page"``) -- ``urlparse`` reports a scheme
       * contains a ``\\r`` or ``\\n`` (CRLF / header / log injection)
       * contains a ``".."`` path segment (path traversal)
 
@@ -140,8 +141,14 @@ def validate_mount_url(url: Optional[str]) -> str:
         return "/"
     # Must be a site-relative absolute path. Rejects relative paths
     # ("../../admin/", "foo") and is the first half of the protocol-relative
-    # ("//evil.com") rejection (completed by the netloc check below).
+    # ("//other.example") rejection (completed by the netloc check below).
     if not url.startswith("/"):
+        return "/"
+    # A URL a browser reads as protocol-relative is not a site-relative path, whatever urlparse says.
+    # (Imported here: ``django.setup()`` loads this module, and the import footprint is pinned.)
+    from .urls import url_is_protocol_relative
+
+    if url_is_protocol_relative(url):
         return "/"
     from urllib.parse import unquote, urlparse
 
@@ -149,7 +156,7 @@ def validate_mount_url(url: Optional[str]) -> str:
         parsed = urlparse(url)
     except ValueError:
         return "/"
-    # Absolute ("https://evil.com/page") or protocol-relative ("//evil.com").
+    # Absolute ("https://other.example/page") or protocol-relative ("//other.example").
     if parsed.scheme or parsed.netloc:
         return "/"
     # Path traversal: reject any ".." path segment. ``RequestFactory.get()``
