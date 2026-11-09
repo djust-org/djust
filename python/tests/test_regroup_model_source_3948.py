@@ -3,7 +3,8 @@
 Django's ``RegroupNode.render`` runs ``groupby()`` over the resolved source. A model instance is not
 iterable, so ``{% regroup r by username as g %}`` over a single model raises ``TypeError``. The bridged
 tag handler was handed that model as the mapping it crosses the engine as, iterated it, and so grouped
-the model's KEY NAMES: ``username``, ``email``, ``first_name``, ``__str__`` came out as groupers.
+the model's KEY NAMES: through the LiveView entry the one group's grouper was ``None`` and the list
+members were the identity keys (``id``, ``pk``, ``__str__``, ``__model__``).
 
 The rule now in force: the tag refuses a source that is a serialized model map (the identity shape
 every serializer stamps: a text ``__str__``, a text ``__model__`` and a ``pk``), the way the other
@@ -267,3 +268,32 @@ class TestTheIdentityShapeReader:
         from djust.serialization import is_serialized_model_map
 
         assert not is_serialized_model_map(value)
+
+
+class _PickleableSource:
+    """A stand-in for a ``FilterExpression``: a module-level class, so pickle can find it."""
+
+    var = "rows"
+
+
+class TestTheCompiledTemplateStillCopies:
+    """The wrapped source must survive ``copy.deepcopy`` and ``pickle``, as the bare node did."""
+
+    SRC = "{% regroup rows by username as g %}{% for grp in g %}[{{ grp.grouper }}]{% endfor %}"
+
+    def test_the_node_deep_copies_and_still_refuses_a_model(self, world) -> None:
+        import copy
+
+        from django.template import engines
+
+        template = engines["django"].from_string(self.SRC)
+        again = copy.deepcopy(template)
+        assert again.render({"rows": [world["a1"], world["a2"]]}) == "[a1][a2]"
+
+    def test_the_wrapper_round_trips_through_pickle(self) -> None:
+        import pickle
+
+        from djust.template_tags.regroup import _ModelRefusingSource
+
+        again = pickle.loads(pickle.dumps(_ModelRefusingSource(_PickleableSource())))
+        assert again.var == "rows"

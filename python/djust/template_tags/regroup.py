@@ -35,6 +35,10 @@ class _ModelRefusingSource:
         return value
 
     def __getattr__(self, name: str) -> Any:
+        # ``copy.deepcopy`` and ``pickle`` build the instance without ``__init__`` and probe it with
+        # the slot still unset: answering ``_source`` through ``self._source`` would recurse.
+        if name == "_source":
+            raise AttributeError(name)
         return getattr(self._source, name)
 
 
