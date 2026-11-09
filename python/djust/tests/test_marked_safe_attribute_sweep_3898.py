@@ -233,6 +233,21 @@ ALL_CLASSES = {
 TEMPLATE_CLASSES = {
     key: cls for key, cls in ALL_CLASSES.items() if getattr(cls, "template", None) is not None
 }
+
+
+def _floor(classes: dict, full: int) -> int:
+    """The least a sweep over ``classes`` must render before its "barely ran" assertion passes.
+
+    Unset (always, in CI) it is ``full``. Narrowed by ``MARKED_SAFE_SWEEP_ONLY`` to a class that is
+    in only one family (URL-only, or template-only), the other family's sweep legitimately renders
+    nothing, so it is held to no floor: otherwise a gate-off cannot tell "detected" from "the
+    baseline is red for the class I chose". A family that does have a class keeps a real floor.
+    """
+    if not ONLY:
+        return full
+    return 50 if classes else -1
+
+
 KEYS = set(url_sweep.COMMON_KEYS)
 #: Attribute-ish item keys no URL sweep names (a lightbox image's ``alt``, a card's ``caption``).
 ATTR_KEYS = frozenset(
@@ -698,10 +713,10 @@ class TestTheSweep:
             Sweep(CLASSES),
             Sweep(TEMPLATE_CLASSES, payloads=ITEM_ATTRIBUTE_PAYLOADS + (RAW_TEXT_PAYLOAD,)),
         )
-        assert rendered > (50 if ONLY else 10_000), f"the sweep barely ran ({rendered} renders)"
+        assert rendered > _floor(CLASSES, 10_000), f"the sweep barely ran ({rendered} renders)"
         assert ONLY or len(CLASSES) >= 20, sorted(CLASSES)
         assert not found, _report(found)
-        assert template_rendered > (50 if ONLY else 2_000), template_rendered
+        assert template_rendered > _floor(TEMPLATE_CLASSES, 2_000), template_rendered
         assert not template_found, _report(template_found)
 
     @pytest.mark.slow
@@ -735,11 +750,13 @@ class TestTheSweep:
             hybrid=True,
             companions=companions,
         )
-        assert rendered > (50 if ONLY else 2_000), f"the sweep barely ran ({rendered} renders)"
+        assert rendered > _floor(TEMPLATE_CLASSES, 2_000), (
+            f"the sweep barely ran ({rendered} renders)"
+        )
         assert ONLY or len(TEMPLATE_CLASSES) >= 15, sorted(TEMPLATE_CLASSES)
         assert not found, _report(found)
 
-        assert item_rendered > (50 if ONLY else 3_000), item_rendered
+        assert item_rendered > _floor(TEMPLATE_CLASSES, 3_000), item_rendered
         assert not item_found, _report(item_found)
 
     def test_the_sweep_can_fail(self) -> None:
@@ -1608,10 +1625,10 @@ class TestEveryClass:
             force_python=True,
             companions=companions,
         )
-        assert url_rendered > (50 if ONLY else 10_000), url_rendered
+        assert url_rendered > _floor(CLASSES, 10_000), url_rendered
         assert ONLY or len(CLASSES) >= 20, sorted(CLASSES)
         assert not url_found, _report(url_found)
-        assert rendered > (50 if ONLY else 40_000), f"the sweep barely ran ({rendered})"
+        assert rendered > _floor(ALL_CLASSES, 40_000), f"the sweep barely ran ({rendered})"
         assert ONLY or len(ALL_CLASSES) > 150, len(ALL_CLASSES)
         assert not found, _report(found)
 

@@ -403,6 +403,15 @@ def test_names_resolve_only_to_browser_callable_handlers_on_the_owner(fixture):
     assert found == {}
 
 
+def test_discovery_labels_a_live_component_as_a_component_and_a_view_as_a_view(fixture):
+    """``_scan`` is handed the kind by the test; discovery must assign it on its own."""
+    from djust.checks import bindings
+
+    kinds = {c.__qualname__: k for c, k in bindings._owners() if c.__module__ == MODULE}
+    assert kinds["Counter"] == "component"
+    assert kinds["Names"] == "view"
+
+
 def test_a_component_template_is_checked_against_the_component(fixture):
     module, _ = fixture
     assert _found(module.Counter) == [
