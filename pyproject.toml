@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "djust"
-version = "1.3.0rc16"
+version = "1.3.0rc17"
 description = "Phoenix LiveView-style reactive components for Django with Rust-powered performance. Real-time UI updates over WebSocket, no JavaScript build step required."
 authors = [{name = "djust contributors"}]
 readme = "README.md"
@@ -130,7 +130,7 @@ dev = [
     # "daphne" in INSTALLED_APPS, so the dev env needs the `daphne` extra.
     "channels[daphne]>=4.0.0,<5",
     "redis>=5.0.0,<9",
-    "watchdog>=3.0.0,<7",  # File system monitoring for hot reload
+    "watchdog>=3.0.0,<8",  # File system monitoring for hot reload
     "zstandard>=0.22.0,<1",  # Compression support
     "orjson>=3.11.6,<4",
     "click>=8.0,<9",  # Deploy CLI

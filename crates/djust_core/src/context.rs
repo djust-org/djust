@@ -2246,9 +2246,19 @@ impl Context {
         if !matches!(last, "items" | "keys" | "values") {
             return None;
         }
-        let Value::Object(map) = self.get(prefix)? else {
+        let value = self.get(prefix)?;
+        let Value::Object(map) = value else {
             return None;
         };
+        // A serialized Django model is not a mapping to a template. `{{ model.items }}` is
+        // empty in Django (a model has no such attribute), so this answers nothing and the
+        // read is missing, as it is for a live model handle. The entries of this map are the
+        // serializer's, not the model's, and a view of them would print them whole. The marker
+        // is `Value::model_str`, the one `pprint`, `json_script`, iteration and the other
+        // model-not-mapping sinks read, so they all agree on what `p` IS.
+        if value.model_str().is_some() {
+            return None;
+        }
         let kind = match last {
             "keys" => crate::DictViewKind::Keys,
             "values" => crate::DictViewKind::Values,

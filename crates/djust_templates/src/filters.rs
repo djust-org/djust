@@ -303,6 +303,10 @@ pub fn iter_values(value: &Value) -> Result<Option<Vec<Value>>> {
         Value::List(items) | Value::Tuple(items) | Value::NamedTuple { items, .. } => {
             Some(items.clone())
         }
+        // A serialized Django model is not iterable: `list(model)` raises, so it is "not
+        // iterable" here exactly as a live model handle is, and the keys of the map it was
+        // serialized to are not a sequence to walk.
+        Value::Object(_) if value.model_str().is_some() => None,
         // A dict iterates its KEYS, each as the value it actually is — an
         // `Integer` key must render `0`, not `"0"` (#2339).
         Value::Object(map) => Some(djust_core::object_key::dict_iteration_values(map)),
@@ -5375,6 +5379,13 @@ fn value_to_json(value: &Value) -> String {
             let parts: Vec<String> = items.iter().map(value_to_json).collect();
             format!("[{}]", parts.join(", "))
         }
+        // A serialized Django model (a map carrying a `"__str__"` string, the
+        // marker `{{ obj }}` already spells it by) is written as that text, not
+        // as the map the serializer built. Routed through the `String` arm rather than
+        // escaping here, so the one escape helper still has the same sites.
+        Value::Object(_) if value.model_str().is_some() => value_to_json(&Value::String(
+            value.model_str().unwrap_or_default().to_string(),
+        )),
         Value::Object(map) => {
             let parts: Vec<String> = map
                 .iter()
@@ -6533,6 +6544,9 @@ fn pluralize(value: &Value, arg: &str) -> String {
         | Value::Tuple(l)
         | Value::NamedTuple { items: l, .. }
         | Value::DictView { items: l, .. } => return pick(l.len() == 1),
+        // A serialized model has no `len()`, so Django's `TypeError` arm falls through to its
+        // final `return ""`.
+        Value::Object(_) if value.model_str().is_some() => {}
         Value::Object(map) => return pick(map.len() == 1),
         // `None` and an absent variable have neither a `float()` nor a
         // `len()`. Django's final `return ""`.
@@ -9618,6 +9632,251 @@ mod tests {
         assert!(s.starts_with("<script id=\"my-data\" type=\"application/json\">"));
         assert!(s.ends_with("</script>"));
         assert!(s.contains("\"hello\""));
+    }
+
+    /// A serialized Django model: a map carrying a `"__str__"` string (the one
+    /// marker `Value::object_str` reads) next to other entries. It holds more than its text on purpose, so a spelling that
+    /// fell through to the map would show them.
+    fn model_map(text: &str) -> Value {
+        let mut m = IndexMap::new();
+        for (k, v) in [
+            ("id", Value::Integer(1)),
+            ("pk", Value::Integer(1)),
+            ("__str__", Value::String(text.to_string())),
+            ("__model__", Value::String("Account".to_string())),
+            ("owner_code", Value::String("SENTINEL-A".to_string())),
+            ("get_note_text", Value::String("SENTINEL-B".to_string())),
+        ] {
+            m.insert(djust_core::ObjectKey::Str(k.to_string()), v);
+        }
+        Value::Object(m)
+    }
+
+    /// A serialized model is not iterable: `list(model)` raises in Python, so the filters that
+    /// iterate must not walk the keys of the map it was serialized to.
+    #[test]
+    fn a_serialized_model_is_not_iterable_to_the_sequence_filters() {
+        let model = model_map("Account:a1");
+        assert!(iter_values(&model).unwrap().is_none());
+        // an ordinary dict still iterates its keys
+        let mut d = IndexMap::new();
+        d.insert(
+            djust_core::ObjectKey::Str("a".to_string()),
+            Value::Integer(1),
+        );
+        assert_eq!(iter_values(&Value::Object(d)).unwrap().unwrap().len(), 1);
+
+        // `join` fails soft on a non-iterable (Django's `except TypeError: return value`),
+        // and spells the model by its text; the filters that raise still raise.
+        let joined = apply_filter("join", &model, Some(", ")).unwrap();
+        assert_eq!(joined.to_string(), "Account:a1");
+        for name in ["unordered_list", "safeseq", "escapeseq"] {
+            let out = apply_filter(name, &model, None);
+            let text = match &out {
+                Ok(v) => v.to_string(),
+                Err(e) => e.to_string(),
+            };
+            assert!(
+                !text.contains("owner_code") && !text.contains("get_note_text"),
+                "{name} printed key names: {text}"
+            );
+        }
+    }
+
+    /// A model whose text is a `SafeString`, and a dict that only carries a `__str__` text.
+    fn safe_model_map(text: &str) -> Value {
+        let mut m = IndexMap::new();
+        for (k, v) in [
+            ("pk", Value::Integer(1)),
+            ("__str__", Value::SafeString(text.to_string())),
+            ("__model__", Value::String("Account".to_string())),
+            ("owner_code", Value::String("SENTINEL-A".to_string())),
+        ] {
+            m.insert(djust_core::ObjectKey::Str(k.to_string()), v);
+        }
+        Value::Object(m)
+    }
+
+    fn text_key_dict() -> Value {
+        let mut m = IndexMap::new();
+        m.insert(
+            djust_core::ObjectKey::Str("__str__".to_string()),
+            Value::String("lbl".to_string()),
+        );
+        m.insert(
+            djust_core::ObjectKey::Str("k1".to_string()),
+            Value::String("v1".to_string()),
+        );
+        Value::Object(m)
+    }
+
+    #[test]
+    fn test_a_safe_text_model_is_spelled_as_its_text_by_json_script_and_the_sequence_filters() {
+        let model = safe_model_map("<b>a1</b>");
+        let out = json_script_of(&Value::List(vec![model.clone()]));
+        assert!(!out.contains("SENTINEL") && out.contains("a1"), "{out}");
+        assert!(iter_values(&model).unwrap().is_none());
+    }
+
+    /// A dict that merely carries a `__str__` text is user data: it keeps its keys, its
+    /// iteration and its mapping spelling in `json_script`.
+    #[test]
+    fn test_a_dict_with_only_a_text_key_is_not_a_model_to_the_sinks() {
+        let d = text_key_dict();
+        assert_eq!(iter_values(&d).unwrap().unwrap().len(), 2);
+        assert_eq!(
+            json_script_of(&d),
+            "<script id=\"x\" type=\"application/json\">{\"__str__\": \"lbl\", \"k1\": \"v1\"}</script>"
+        );
+    }
+
+    /// Django reads a model through none of these: `"%(name)s" % model` raises (the filter
+    /// answers empty) and a model has no `len()`, so `pluralize` takes the singular.
+    #[test]
+    fn test_a_serialized_model_is_not_a_mapping_to_stringformat_or_pluralize() {
+        let model = model_map("Account:a1");
+        let mut with_name = match &model {
+            Value::Object(m) => m.clone(),
+            _ => unreachable!(),
+        };
+        with_name.insert(
+            djust_core::ObjectKey::Str("name".to_string()),
+            Value::String("a1".to_string()),
+        );
+        let model = Value::Object(with_name);
+        let out = apply_filter("stringformat", &model, Some("(name)s")).unwrap();
+        assert_eq!(out.to_string(), "");
+        let out = apply_filter("pluralize", &model, None).unwrap();
+        assert_eq!(out.to_string(), "");
+        let out = apply_filter("pluralize", &model, Some("y,ies")).unwrap();
+        assert_eq!(out.to_string(), "");
+        // an ordinary one-entry dict still answers its length (Django: `len(d) == 1`)
+        let one = {
+            let mut m = IndexMap::new();
+            m.insert(
+                djust_core::ObjectKey::Str("a".to_string()),
+                Value::Integer(1),
+            );
+            Value::Object(m)
+        };
+        assert_eq!(
+            apply_filter("pluralize", &one, None).unwrap().to_string(),
+            ""
+        );
+        assert_eq!(
+            apply_filter("stringformat", &text_key_dict(), Some("(k1)s"))
+                .unwrap()
+                .to_string(),
+            "v1"
+        );
+    }
+
+    fn json_script_of(value: &Value) -> String {
+        apply_filter("json_script", value, Some("x"))
+            .unwrap()
+            .to_string()
+    }
+
+    /// `json_script` over a model map writes the model's text as a JSON string,
+    /// not the map that holds it, at the top level and inside every container.
+    #[test]
+    fn test_json_script_spells_a_model_map_as_its_text() {
+        assert_eq!(
+            json_script_of(&model_map("Account:a1")),
+            "<script id=\"x\" type=\"application/json\">\"Account:a1\"</script>"
+        );
+        let list = Value::List(vec![model_map("Account:a1"), model_map("Account:a2")]);
+        assert_eq!(
+            json_script_of(&list),
+            "<script id=\"x\" type=\"application/json\">[\"Account:a1\", \"Account:a2\"]</script>"
+        );
+        let tuple = Value::Tuple(vec![model_map("Account:a1")]);
+        assert_eq!(
+            json_script_of(&tuple),
+            "<script id=\"x\" type=\"application/json\">[\"Account:a1\"]</script>"
+        );
+        let mut d = IndexMap::new();
+        d.insert(
+            djust_core::ObjectKey::Str("items".to_string()),
+            Value::List(vec![model_map("Account:a1")]),
+        );
+        d.insert(
+            djust_core::ObjectKey::Str("owner".to_string()),
+            model_map("Account:a2"),
+        );
+        assert_eq!(
+            json_script_of(&Value::Object(d)),
+            "<script id=\"x\" type=\"application/json\">{\"items\": [\"Account:a1\"], \"owner\": \"Account:a2\"}</script>"
+        );
+        let deep = Value::List(vec![Value::List(vec![Value::Tuple(vec![model_map(
+            "Account:a1",
+        )])])]);
+        assert!(!json_script_of(&deep).contains("SENTINEL"));
+    }
+
+    /// An ordinary dict is still written as the object it is.
+    #[test]
+    fn test_json_script_still_writes_an_ordinary_dict_as_an_object() {
+        let mut d = IndexMap::new();
+        d.insert(
+            djust_core::ObjectKey::Str("a".to_string()),
+            Value::Integer(1),
+        );
+        d.insert(
+            djust_core::ObjectKey::Str("b".to_string()),
+            Value::String("x".to_string()),
+        );
+        assert_eq!(
+            json_script_of(&Value::Object(d)),
+            "<script id=\"x\" type=\"application/json\">{\"a\": 1, \"b\": \"x\"}</script>"
+        );
+    }
+
+    /// The model's text goes through the same escaping as every other string:
+    /// quotes and backslashes, controls, `<`, `>`, `&`, non-ASCII, and a text
+    /// that closes the script element.
+    #[test]
+    fn test_json_script_escapes_a_model_text_like_any_string() {
+        let cases = [
+            ("say \"hi\" \\ ok", "say \\\"hi\\\" \\\\ ok"),
+            ("a\nb\0c", "a\\nb\\u0000c"),
+            ("<b>&</b>", "\\u003Cb\\u003E\\u0026\\u003C/b\\u003E"),
+            ("caf\u{e9} \u{1F600}", "caf\\u00e9 \\ud83d\\ude00"),
+        ];
+        for (text, escaped) in cases {
+            let got = json_script_of(&model_map(text));
+            assert_eq!(
+                got,
+                format!("<script id=\"x\" type=\"application/json\">\"{escaped}\"</script>"),
+                "{text:?}"
+            );
+        }
+        let unusual = json_script_of(&model_map("</script><script>alert(1)</script>"));
+        let body = &unusual[..unusual.len() - "</script>".len()];
+        assert!(!body.contains("</script>"), "{unusual}");
+        assert!(!body.contains("<script>"), "{unusual}");
+        assert!(unusual.contains("\\u003C/script\\u003E"), "{unusual}");
+        assert!(!unusual.contains("SENTINEL"));
+    }
+
+    /// A very deep and a very large container of model maps neither overflow the
+    /// stack nor go quadratic, and never emit a field.
+    #[test]
+    fn test_json_script_over_deep_and_large_model_containers() {
+        let mut deep = model_map("Account:a1");
+        for _ in 0..200 {
+            deep = Value::List(vec![deep]);
+        }
+        let got = json_script_of(&deep);
+        assert!(got.contains("Account:a1") && !got.contains("SENTINEL"));
+
+        let rows: Vec<Value> = (0..20_000)
+            .map(|i| model_map(&format!("Account:{i}")))
+            .collect();
+        let started = std::time::Instant::now();
+        let got = json_script_of(&Value::List(rows));
+        assert!(!got.contains("SENTINEL"));
+        assert!(started.elapsed() < std::time::Duration::from_secs(20));
     }
 
     /// No argument, and every FALSY argument, omits the `id` attribute
