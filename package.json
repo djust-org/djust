@@ -26,7 +26,8 @@
     "vitest": "^5.0.5"
   },
   "overrides": {
-    "flatted": ">=3.4.2"
+    "flatted": ">=3.4.2",
+    "minimatch": "^11.0.1"
   },
   "keywords": [
     "django",
