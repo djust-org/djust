@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-11-09
+
+### Security
+
+- **[GHSA-gg2v-v5mp-jx42](https://github.com/djust-org/djust/security/advisories/GHSA-gg2v-v5mp-jx42) (Low): a model held in a container was written in full by `pprint` and `json_script`, and its mapping was iterable from a template.** Published for the fix shipped in 1.3.0rc17 (the "A model held in a container prints as its text…" and "A model is not a mapping to a template" entries in that section). Affected: >= 1.3.0rc1, < 1.3.0rc17. Upgrade to 1.3.0rc17 or later; the fix is in the compiled extension.
+
 ## [1.3.0rc17] - 2026-11-08
 
 ### Fixed
