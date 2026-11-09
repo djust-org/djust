@@ -12,7 +12,7 @@ requires-python = ">=3.11"
 license = {text = "MIT"}
 keywords = ["django", "rust", "reactive", "server-side-rendering", "websocket"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 5 - Production/Stable",
     "Framework :: Django",
     "Framework :: Django :: 4.2",
     "Framework :: Django :: 5.0",
