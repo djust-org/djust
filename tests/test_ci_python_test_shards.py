@@ -437,4 +437,8 @@ def test_shards_cover_current_collection_with_balanced_durations(tmp_path: Path)
         "the URL-sweep fixture was not recognized during collection; the readers would run "
         "the sweep once per shard (#3781). Update SHARED_FIXTURES in tests/corpus_shards.py."
     )
+    assert len(snapshot.get("shared_units", {}).get("@@djust-shared-traced-sweep", ())) >= 3, (
+        "the traced safe-markup sweep must group its payload and reachability checks. "
+        "Check SHARED_FIXTURES in tests/corpus_shards.py."
+    )
     _validate_snapshot(snapshot, json.loads(DURATIONS_TEXT), n)

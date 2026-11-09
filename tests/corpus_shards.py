@@ -5,10 +5,8 @@ indivisible unit, charged at the recorded worker time of its readers. Waiting re
 workers too, so their durations must be budgeted. Only real pytest Items reach pytest's
 selection/deselection hooks.
 
-Two fixtures are shared this way (``SHARED_FIXTURES``): the differential-reachability sweep
-(``corpus_payload``, session scope, read from several modules) and the URL-scheme sweep
-(``runs`` in ``python/tests/test_url_scheme_sweep_3665.py``, module scope). Without this each
-shard that holds one reader runs the whole fixture, so four shards run it four times (#3781).
+``SHARED_FIXTURES`` groups the differential-reachability, URL-scheme, and traced safe-markup
+sweeps. Without grouping, each shard with a reader runs the whole fixture again (#3781).
 """
 
 from __future__ import annotations
@@ -40,6 +38,11 @@ SHARED_FIXTURES = (
         "@@djust-shared-url-sweep",
         "runs",
         module="python/tests/test_url_scheme_sweep_3665.py",
+    ),
+    SharedFixture(
+        "@@djust-shared-traced-sweep",
+        "traced_sweep",
+        module="python/tests/test_safe_markup_audit_3774.py",
     ),
 )
 

@@ -174,9 +174,6 @@ class TestScriptStylesAndCatalogue:
     def test_script_sends_only_a_box_and_touches_no_pixels(self, banned):
         assert not re.search(banned, self.SOURCE), banned
 
-    def test_script_registers_without_replacing_an_app_hook(self):
-        assert "!appHooks.ImageCropper && !window.DjustHooks.ImageCropper" in self.SOURCE
-
     def test_drags_do_not_scroll_the_page(self):
         rule = re.search(r"\.dj-image-cropper__canvas \{([^}]*)\}", self.CSS).group(1)
         assert "touch-action: none" in rule

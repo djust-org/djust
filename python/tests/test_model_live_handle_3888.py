@@ -35,6 +35,7 @@ import html as html_lib
 
 import pytest
 from django.contrib.admin.models import LogEntry
+from django.contrib.auth.hashers import make_password
 from django.contrib.auth.models import Group, Permission, User
 from django.contrib.contenttypes.models import ContentType
 from django.template import TemplateSyntaxError
@@ -248,12 +249,23 @@ class TestAgreesWithDjango:
 
 
 # -- the security matrix ---------------------------------------------------------------------------
+@pytest.fixture(scope="module")
+def secure_password_hashes() -> tuple[str, str]:
+    """Encode the fixture passwords once while each case gets its own rows."""
+    return make_password("hunter2"), make_password("hunter3")
+
+
 @pytest.fixture
-def secure_world(db):
-    admin = User.objects.create_user("root", "root@example.com", "hunter2", is_staff=True)
-    admin.is_superuser = True
-    admin.save()
-    other = User.objects.create_user("other", "o@example.com", "hunter3")
+def secure_world(db, secure_password_hashes):
+    admin_hash, other_hash = secure_password_hashes
+    admin = User.objects.create(
+        username="root",
+        email="root@example.com",
+        password=admin_hash,
+        is_staff=True,
+        is_superuser=True,
+    )
+    other = User.objects.create(username="other", email="o@example.com", password=other_hash)
     g = Group.objects.create(name="ops")
     g.user_set.add(admin, other)
     admin.user_permissions.add(Permission.objects.order_by("pk").first())

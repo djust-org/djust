@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import json
 import re
-from pathlib import Path
 
 import pytest
 from django.template import Context, Template
@@ -22,8 +21,6 @@ from djust.components.components.json_viewer import JsonViewer
 from djust.components.components.log_viewer import LogViewer
 from djust.components.components.sortable_grid import SortableGrid
 from djust.components.components.sortable_list import SortableList
-
-STATIC = Path(rh.__file__).resolve().parent / "static" / "djust_components"
 
 ITEMS = [
     {"id": "a", "label": "Alpha"},
@@ -201,10 +198,3 @@ class TestScriptsAreShippedAndFound:
             "script": f"djust_components/{script}",
             "hook_shipped": True,
         }
-
-    def test_the_script_registers_without_replacing_an_app_hook(self, component, hook, script):
-        """It registers in window.DjustHooks, which window.djust.hooks overrides,
-        and only when neither registry already holds the hook."""
-        source = (STATIC / script).read_text()
-        assert f"window.DjustHooks.{hook} = " in source
-        assert f"!appHooks.{hook} && !window.DjustHooks.{hook}" in source

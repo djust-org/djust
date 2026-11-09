@@ -83,8 +83,14 @@ def test_i001_silenced_by_suppress_checks(reset_i001, monkeypatch):
 
 def test_i001_silenced_by_silenced_system_checks(reset_i001, monkeypatch):
     from django.core.checks import run_checks
+    from django.core.checks.registry import registry
 
     monkeypatch.setenv("CLAUDECODE", "1")
+    monkeypatch.setattr(
+        registry,
+        "registered_checks",
+        registry.registered_checks & {reset_i001.check_ai_discovery_hint},
+    )
     with override_settings(SILENCED_SYSTEM_CHECKS=["djust.I001"]):
         assert not any(
             c.id == "djust.I001" and not c.is_silenced() for c in run_checks(tags=["djust"])

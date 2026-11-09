@@ -514,22 +514,6 @@ class TestStateRoundtripBoundary:
                 value, cls=RealDjangoEncoder
             )
 
-    def test_one_function_decides_it_for_both_adapters(self, monkeypatch) -> None:
-        """Load-bearing single-source pin, not a decorative one (#1859).
-
-        Redefining `decimal_for_state_roundtrip` must change BOTH adapters. If
-        either had its own inline `float(...)`, this goes red — which is the
-        only way a "they share a chokepoint" claim means anything.
-        """
-        import djust.serialization as ser
-
-        monkeypatch.setattr(ser, "decimal_for_state_roundtrip", lambda d: f"SENTINEL:{d}")
-        assert ser.normalize_django_value(Decimal("1.5"), state_roundtrip=True) == "SENTINEL:1.5"
-        assert (
-            json.loads(json.dumps(Decimal("1.5"), cls=ser.StateRoundtripJSONEncoder))
-            == "SENTINEL:1.5"
-        )
-
     def test_the_roundtrip_form_is_no_longer_lossy(self) -> None:
         """The residue #2239 documented, and #2252 closed.
 

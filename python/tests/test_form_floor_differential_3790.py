@@ -417,28 +417,11 @@ class TestTheGrammar:
 
 
 @pytest.mark.parametrize("group_id,ctx_key,templates", GROUPS, ids=GROUP_IDS)
-class TestNoRouteReachesTheSecret:
-    def test_the_native_engine_prints_no_part_of_it(
-        self, engine, world, group_id, ctx_key, templates
-    ):
-        contexts, secrets = world
-        leaks = []
-        for src in templates:
-            out = _render(engine, "rust", src, contexts[ctx_key])
-            found = _leaks(out, secrets)
-            if found:
-                leaks.append((src, [s[-12:] for s in found]))
-        assert not leaks, leaks[:5]
-
-
-@pytest.mark.parametrize("group_id,ctx_key,templates", GROUPS, ids=GROUP_IDS)
 class TestAFormHeldAsLiveViewStateIsHeldToTheSameFloor:
-    """The root is the view's own attribute (#3767), not an argument to a standalone render.
+    """Render each template through the native backend and as LiveView state (#3767).
 
-    Two assertions per template, both against the already-floored native engine rather than a
-    hand-written expectation: no part of the secret appears, AND the render is the one the plain
-    backend gives (so the floor is not "held" by rendering nothing). Only the whitespace and the
-    ``dj-id`` / ``<!--dj-if-->`` bookkeeping of a LiveView render are normalised away."""
+    Check both raw outputs for leaks before normalizing them for the parity check.
+    """
 
     @staticmethod
     def _canon(text):
@@ -455,36 +438,32 @@ class TestAFormHeldAsLiveViewStateIsHeldToTheSameFloor:
         )
         return re.sub(r"\s+", " ", text).strip()
 
-    @staticmethod
-    def _attempt(engine, which, src, context):
-        try:
-            return ("ok", _render(engine, which, src, context))
-        except Exception as exc:  # noqa: BLE001 - the exception IS the observation
-            return ("err", type(exc).__name__)
-
-    def test_no_part_of_the_secret_is_printed(self, engine, world, group_id, ctx_key, templates):
-        contexts, secrets = world
-        leaks = []
-        for src in templates:
-            kind, out = self._attempt(engine, "liveview", src, contexts[ctx_key])
-            found = _leaks(out, secrets) if kind == "ok" else []
-            if found:
-                leaks.append((src, [s[-12:] for s in found]))
-        assert not leaks, leaks[:5]
-
     def test_it_renders_what_the_plain_backend_renders(
         self, engine, world, group_id, ctx_key, templates
     ):
-        contexts, _ = world
+        contexts, secrets = world
+        context = contexts[ctx_key]
+        leaks = []
         mismatches = []
         for src in templates:
-            native = self._attempt(engine, "rust", src, contexts[ctx_key])
-            held = self._attempt(engine, "liveview", src, contexts[ctx_key])
-            if native[0] != held[0] or (
-                native[0] == "ok" and self._canon(native[1]) != self._canon(held[1])
-            ):
-                mismatches.append((src, native, held))
-        assert not mismatches, mismatches[:3]
+            native = _render(engine, "rust", src, context)
+            found = _leaks(native, secrets)
+            if found:
+                leaks.append(("native", src, [s[-12:] for s in found]))
+
+            try:
+                held = _render(engine, "liveview", src, context)
+            except Exception as exc:  # noqa: BLE001 - a LiveView render error is a mismatch
+                mismatches.append((src, ("ok", native), ("err", type(exc).__name__)))
+                continue
+
+            found = _leaks(held, secrets)
+            if found:
+                leaks.append(("liveview", src, [s[-12:] for s in found]))
+            if self._canon(native) != self._canon(held):
+                mismatches.append((src, ("ok", native), ("ok", held)))
+
+        assert not leaks and not mismatches, {"leaks": leaks[:5], "mismatches": mismatches[:3]}
 
 
 def _control_is_empty_by_construction(group_id: str) -> bool:

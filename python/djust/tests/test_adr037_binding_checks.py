@@ -17,16 +17,21 @@ import types
 from io import StringIO
 
 import pytest
+from django.core.checks.registry import registry
 from django.core.management import call_command
 from django.test import override_settings
 
+from djust import LiveView
+from djust._template_bindings import django_engine
 from djust.checks.bindings import (
+    OwnerReport,
     _messages,
-    binding_reports,
     check_event_bindings,
     coverage,
+    scan_owner,
     summary_line,
 )
+from djust.components.base import LiveComponent
 
 MODULE = "binding_check_fixture"
 
@@ -308,31 +313,8 @@ def _unload(module: types.ModuleType) -> None:
     gc.collect()
 
 
-def _is_other_test_module(name: str) -> bool:
-    parts = name.split(".")
-    return name != MODULE and any(
-        p.startswith("test_") or p in ("tests", "conftest") for p in parts
-    )
-
-
 @pytest.fixture
-def fixture(tmp_path, monkeypatch):
-    # The binding scan walks every LiveView/LiveComponent subclass in the
-    # PROCESS. Under the full suite a worker has imported thousands of views
-    # from other test modules, so each scan here cost ~20x the standalone run
-    # (84.8s vs 4.3s for the slowest test; 409s vs 14.5s for the file). A real
-    # project's check never sees test classes, and every assertion below is
-    # about this module's owners, so skip other test modules' classes.
-    from djust.checks import bindings
-
-    all_owners = bindings._owners
-    monkeypatch.setattr(
-        bindings,
-        "_owners",
-        lambda: [
-            (cls, kind) for cls, kind in all_owners() if not _is_other_test_module(cls.__module__)
-        ],
-    )
+def fixture(tmp_path):
     templates = tmp_path / "templates"
     for name, text in TEMPLATES.items():
         target = templates / name
@@ -353,18 +335,35 @@ def fixture(tmp_path, monkeypatch):
         _unload(module)
 
 
-def _reports():
-    return [r for r in binding_reports() if r.owner.__module__ == MODULE]
+@pytest.fixture
+def discovery(fixture, monkeypatch):
+    """Use real discovery and scan only the owners belonging to the fixture."""
+    from djust.checks import bindings
+
+    owners = bindings._owners
+    monkeypatch.setattr(
+        bindings,
+        "_owners",
+        lambda: [(cls, kind) for cls, kind in owners() if cls.__module__ == MODULE],
+    )
+    return fixture
 
 
-def _found(owner: str) -> list[tuple[str, str, int]]:
+def _scan(*owners: type) -> list[OwnerReport]:
+    engine = django_engine()
+    assert engine is not None
+    cache = {}
+    return [
+        scan_owner(
+            owner, "component" if issubclass(owner, LiveComponent) else "view", engine, cache
+        )
+        for owner in owners
+    ]
+
+
+def _found(owner: type) -> list[tuple[str, str, int]]:
     """(check id, message tail, line) for one fixture owner."""
-    reports = [r for r in _reports() if r.owner.__qualname__ == owner]
-    return [(m.id, m.msg.split(": ", 1)[1], m.line_number) for m in _messages(reports)]
-
-
-def _ids(owner: str) -> list[str]:
-    return [check_id for check_id, _msg, _line in _found(owner)]
+    return [(m.id, m.msg.split(": ", 1)[1], m.line_number) for m in _messages(_scan(owner))]
 
 
 def _source_line(module: types.ModuleType, text: str) -> int:
@@ -372,7 +371,7 @@ def _source_line(module: types.ModuleType, text: str) -> int:
     return next(i for i, line in enumerate(lines, 1) if text in line)
 
 
-def _by_line(module, owner):
+def _by_line(owner):
     return {line: (check_id, msg) for check_id, msg, line in _found(owner)}
 
 
@@ -381,7 +380,7 @@ def _by_line(module, owner):
 
 def test_names_resolve_only_to_browser_callable_handlers_on_the_owner(fixture):
     module, _ = fixture
-    found = _by_line(module, "Names")
+    found = _by_line(module.Names)
 
     def at(text):
         return found.pop(_source_line(module, text))
@@ -404,16 +403,25 @@ def test_names_resolve_only_to_browser_callable_handlers_on_the_owner(fixture):
     assert found == {}
 
 
+def test_discovery_labels_a_live_component_as_a_component_and_a_view_as_a_view(fixture):
+    """``_scan`` is handed the kind by the test; discovery must assign it on its own."""
+    from djust.checks import bindings
+
+    kinds = {c.__qualname__: k for c, k in bindings._owners() if c.__module__ == MODULE}
+    assert kinds["Counter"] == "component"
+    assert kinds["Names"] == "view"
+
+
 def test_a_component_template_is_checked_against_the_component(fixture):
     module, _ = fixture
-    assert _found("Counter") == [
+    assert _found(module.Counter) == [
         (
             "djust.T019",
             "'missing_here' is not a handler on %s.Counter." % MODULE,
             _source_line(module, 'dj-click="missing_here"'),
         )
     ]
-    (report,) = [r for r in _reports() if r.owner.__qualname__ == "Counter"]
+    (report,) = _scan(module.Counter)
     statuses = {r.binding.name: (r.status, r.reason) for r in report.results}
     assert statuses["host_only"] == ("dynamic", "dj-poll always reaches the host view")
 
@@ -423,7 +431,7 @@ def test_a_component_template_is_checked_against_the_component(fixture):
 
 def test_legacy_arguments(fixture):
     module, _ = fixture
-    found = _by_line(module, "Legacy")
+    found = _by_line(module.Legacy)
 
     def at(text):
         return found.pop(_source_line(module, text))
@@ -461,7 +469,7 @@ def test_legacy_arguments(fixture):
 
 def test_a_catch_all_is_named_as_unchecked_not_excused(fixture):
     module, _ = fixture
-    (report,) = [r for r in _reports() if r.owner.__qualname__ == "Legacy"]
+    (report,) = _scan(module.Legacy)
     open_binding = next(r for r in report.results if r.binding.name == "search_open")
     assert open_binding.status == "checked" and open_binding.findings == []
 
@@ -471,7 +479,7 @@ def test_a_catch_all_is_named_as_unchecked_not_excused(fixture):
 
 def test_strict_arguments(fixture):
     module, _ = fixture
-    found = _by_line(module, "Strict")
+    found = _by_line(module.Strict)
 
     def at(text):
         return found.pop(_source_line(module, text))
@@ -506,7 +514,7 @@ def test_strict_missing_argument_hint_points_at_data_attributes(fixture):
     module, _ = fixture
     (message,) = [
         m
-        for m in _messages([r for r in _reports() if r.owner.__qualname__ == "Strict"])
+        for m in _messages(_scan(module.Strict))
         if m.line_number == _source_line(module, "data only")
     ]
     assert "rename data-item-id to dj-value-item-id" in message.hint
@@ -517,14 +525,14 @@ def test_strict_missing_argument_hint_points_at_data_attributes(fixture):
 
 def test_dynamic_bindings_are_reported_as_coverage_not_findings(fixture):
     module, _ = fixture
-    assert _found("Dynamic") == [
+    assert _found(module.Dynamic) == [
         (
             "djust.T019",
             "'nope_js' is not a handler on %s.Dynamic." % MODULE,
             _source_line(module, "nope_js"),
         )
     ]
-    (report,) = [r for r in _reports() if r.owner.__qualname__ == "Dynamic"]
+    (report,) = _scan(module.Dynamic)
     statuses = sorted((r.binding.label.split("=")[0], r.status, r.reason) for r in report.results)
     assert statuses == [
         ("dj-click", "checked", ""),
@@ -537,14 +545,14 @@ def test_dynamic_bindings_are_reported_as_coverage_not_findings(fixture):
 
 def test_includes_and_parents_are_followed_with_their_own_locations(fixture):
     module, templates = fixture
-    assert _found("Files") == []
+    assert _found(module.Files) == []
     part = str(templates / "fixture" / "part.html")
-    assert _found("OtherFiles") == [
+    assert _found(module.OtherFiles) == [
         ("djust.T019", "'shared' is not a handler on %s.OtherFiles." % MODULE, 2)
     ]
-    (message,) = _messages([r for r in _reports() if r.owner.__qualname__ == "OtherFiles"])
+    (message,) = _messages(_scan(module.OtherFiles))
     assert message.file_path == part
-    (report,) = [r for r in _reports() if r.owner.__qualname__ == "Files"]
+    (report,) = _scan(module.Files)
     nav = next(r for r in report.results if r.binding.name == "not_live")
     assert (nav.status, nav.binding.file, nav.binding.line) == (
         "unsupported",
@@ -555,7 +563,7 @@ def test_includes_and_parents_are_followed_with_their_own_locations(fixture):
 
 def test_suppression_requires_a_reason(fixture):
     module, _ = fixture
-    assert _found("Suppressed") == [
+    assert _found(module.Suppressed) == [
         (
             "djust.T019",
             "'bare' is not a handler on %s.Suppressed. (A noqa comment without a reason "
@@ -567,7 +575,7 @@ def test_suppression_requires_a_reason(fixture):
 
 def test_form_fields_are_checked_against_a_static_form_class(fixture):
     module, _ = fixture
-    assert _found("FormView") == [
+    assert _found(module.FormView) == [
         (
             "djust.T021",
             "'emial' is not a field of ContactForm, so validate_field() never sees it as one.",
@@ -578,7 +586,7 @@ def test_form_fields_are_checked_against_a_static_form_class(fixture):
 
 def test_decorated_handlers_are_checked_by_their_effective_signature(fixture):
     module, _ = fixture
-    assert _found("Decorated") == [
+    assert _found(module.Decorated) == [
         (
             "djust.T020",
             "archive() requires 'item_id', which this binding never sends.",
@@ -587,7 +595,7 @@ def test_decorated_handlers_are_checked_by_their_effective_signature(fixture):
     ]
 
 
-def test_managed_objects_and_authorized_querysets_are_not_flagged(fixture):
+def test_managed_objects_and_authorized_querysets_are_not_flagged(discovery):
     """ADR-037 D5: rendering authorized ORM values is not a persistence risk."""
     from django.core.checks import run_checks
 
@@ -603,11 +611,20 @@ def test_managed_objects_and_authorized_querysets_are_not_flagged(fixture):
 
 
 def test_checking_runs_no_mount_handler_property_or_queryset(fixture):
-    assert _found("Exploding") == []
+    module, _ = fixture
+    assert _found(module.Exploding) == []
 
 
 def test_every_message_is_a_warning_with_machine_readable_facts(fixture):
-    messages = _messages(_reports())
+    module, _ = fixture
+    owners = [
+        cls
+        for cls in vars(module).values()
+        if isinstance(cls, type)
+        and cls.__module__ == MODULE
+        and issubclass(cls, (LiveView, LiveComponent))
+    ]
+    messages = _messages(_scan(*owners))
     assert messages and all(m.level == 30 for m in messages)
     delete = next(m for m in messages if "delete() requires" in m.msg)
     assert delete.owner == "%s.Legacy" % MODULE
@@ -617,7 +634,8 @@ def test_every_message_is_a_warning_with_machine_readable_facts(fixture):
 
 
 def test_coverage_object_and_summary(fixture):
-    data = coverage(_reports())
+    module, _ = fixture
+    data = coverage(_scan(module.Dynamic, module.Files))
     assert set(data) == {"bindings", "owners", "complete_owners", "templates"}
     dynamic = next(t for t in data["templates"] if t["owner"].endswith(".Dynamic"))
     assert dynamic["complete"] is False
@@ -628,23 +646,40 @@ def test_coverage_object_and_summary(fixture):
     assert summary_line(data).startswith("Event bindings: ")
 
 
-def test_registered_check_reports_the_fixture(fixture):
-    ids = {m.id for m in check_event_bindings(None) if MODULE in m.msg}
-    assert ids == {"djust.T019", "djust.T020", "djust.T021", "djust.T022"}
-
-
-def test_djust_check_json_carries_the_facts_and_coverage(fixture):
+def test_djust_check_json_discovers_owners_and_reports_bindings(discovery, monkeypatch):
+    # Exercise the registered binding check through the command without running
+    # unrelated system checks.
+    monkeypatch.setattr(
+        registry, "registered_checks", registry.registered_checks & {check_event_bindings}
+    )
     out = StringIO()
     call_command("djust_check", "--format", "json", stdout=out)
     data = json.loads(out.getvalue())
-    assert "coverage" in data and data["coverage"]["bindings"]["checked"] > 0
+    assert {c["id"] for c in data["checks"]} == {
+        "djust.T019",
+        "djust.T020",
+        "djust.T021",
+        "djust.T022",
+    }
+    template = next(t for t in data["coverage"]["templates"] if t["owner"] == "%s.Legacy" % MODULE)
+    assert template["counts"]["checked"] > 0
     entry = next(c for c in data["checks"] if "delete() requires" in c["message"])
     assert entry["owner"] == "%s.Legacy" % MODULE
     assert entry["binding"] == 'dj-click="delete"'
     assert entry["expected"] == ["item_id"] and entry["supplied"] == []
 
 
-def test_legacy_json_output_is_unchanged(fixture):
+@pytest.fixture
+def command_report(fixture, monkeypatch):
+    """Supply one real scan to the command's output paths."""
+    module, _ = fixture
+    reports = _scan(module.Legacy)
+    messages = _messages(reports)
+    monkeypatch.setattr("djust.management.commands.djust_check.run_checks", lambda **_: messages)
+    monkeypatch.setattr("djust.checks.bindings.binding_reports", lambda: reports)
+
+
+def test_legacy_json_output_is_unchanged(command_report):
     out = StringIO()
     call_command("djust_check", "--json", stdout=out)
     data = json.loads(out.getvalue())
@@ -653,7 +688,7 @@ def test_legacy_json_output_is_unchanged(fixture):
     assert set(entry) == {"id", "severity", "category", "message", "hint"}
 
 
-def test_text_output_prints_the_coverage_summary(fixture):
+def test_text_output_prints_the_coverage_summary(command_report):
     out = StringIO()
     call_command("djust_check", stdout=out)
     assert "Event bindings: " in out.getvalue()
@@ -739,9 +774,9 @@ def test_the_ai_schema_event_directives_agree_with_the_directive_table():
 # -- #3299: a TEMPLATES list with only DjustTemplateBackend ---------------------
 
 
-def test_bindings_are_checked_when_templates_lists_only_the_djust_backend(fixture):
+def test_bindings_are_checked_when_templates_lists_only_the_djust_backend(discovery):
     """``djust new`` writes only ``DjustTemplateBackend``; T019-T022 must still run."""
-    module, templates = fixture
+    module, templates = discovery
     djust_only = [
         {
             "BACKEND": "djust.template.backend.DjustTemplateBackend",
@@ -754,18 +789,18 @@ def test_bindings_are_checked_when_templates_lists_only_the_djust_backend(fixtur
         from django.template import engines
 
         assert not any(hasattr(b, "engine") for b in engines.all())
-        assert _ids("Names"), "T019-T022 never ran on a Djust-only TEMPLATES"
-        assert "djust.T019" in _ids("Names")
-        assert not [m for m in check_event_bindings(None) if m.id == "djust.T023"]
+        messages = check_event_bindings(None)
+        assert any(m.id == "djust.T019" and m.owner == "%s.Names" % MODULE for m in messages)
+        assert not [m for m in messages if m.id == "djust.T023"]
         # The base template loads ``static``: the installed-app tag libraries
         # must be registered or the parent never compiles and the child is not
         # scanned through it.
-        assert _found("OtherFiles") == [
+        assert _found(module.OtherFiles) == [
             ("djust.T019", "'shared' is not a handler on %s.OtherFiles." % MODULE, 2)
         ]
 
 
-def test_a_skipped_binding_scan_says_so(fixture, settings):
+def test_a_skipped_binding_scan_says_so(discovery, settings):
     """No template engine at all: the checks cannot run, and the output names why."""
     with override_settings(TEMPLATES=[]):
         messages = check_event_bindings(None)

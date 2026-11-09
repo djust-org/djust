@@ -68,10 +68,6 @@ _SOURCE = (
 #: ``djust``'s own source, a fixed fixture directory, or a temporary tree a test built: nothing a
 #: different PR adds under the test roots moves what they read.
 EXCLUDED: dict[str, str] = {
-    "python/djust/tests/test_adr037_binding_checks.py": (
-        "globs the client's static/djust/src/*.js, a directory few PRs touch, and the test "
-        "names are only a startswith filter on its own helpers"
-    ),
     "python/djust/tests/test_free_threaded_class_caches_3151.py": _SOURCE,
     "python/djust/tests/test_log_exposure_pin.py": _SOURCE,
     "python/djust/tests/test_module_getattr_hooks.py": _SOURCE,

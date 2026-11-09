@@ -119,6 +119,7 @@ describe('the shipped hook never replaces an app hook (#2985 batch 5)', () => {
 
     it('registers a hook, so mounting logs no "No hook registered"', async () => {
         const env = await boot(CROP());
+        expect(typeof env.window.DjustHooks?.ImageCropper?.mounted).toBe('function');
         expect(env.warnings.filter((w) => w.includes('No hook registered'))).toEqual([]);
         expect(probe(env)).toBe(true);
     });
@@ -132,7 +133,11 @@ describe('the shipped hook never replaces an app hook (#2985 batch 5)', () => {
     it('an app hook in either registry, registered first, is the one that runs', async () => {
         for (const where of ['djust.hooks', 'DjustHooks']) {
             const mounted = vi.fn();
-            const env = await boot(CROP(), { preRegister: (w) => { if (where === 'DjustHooks') w.DjustHooks = { ImageCropper: { mounted } }; else w.djust.hooks = { ImageCropper: { mounted } }; } });
+            const mine = { mounted };
+            const env = await boot(CROP(), { preRegister: (w) => { if (where === 'DjustHooks') w.DjustHooks = { ImageCropper: mine }; else w.djust.hooks = { ImageCropper: mine }; } });
+            const registered = env.window.DjustHooks?.ImageCropper;
+            if (where === 'DjustHooks') expect(registered).toBe(mine);
+            else expect(registered).toBeUndefined();
             expect(mounted).toHaveBeenCalledTimes(1);
             expect(probe(env)).toBe(false);
         }

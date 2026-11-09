@@ -105,6 +105,7 @@ describe('the shipped hook never replaces an app hook (#2985 batch 5)', () => {
 
     it('registers a hook, so mounting logs no "No hook registered"', async () => {
         const env = await boot(MAP());
+        expect(typeof env.window.DjustHooks?.MapPicker?.mounted).toBe('function');
         expect(env.warnings.filter((w) => w.includes('No hook registered'))).toEqual([]);
         expect(probe(env)).toBe(true);
     });
@@ -118,6 +119,7 @@ describe('the shipped hook never replaces an app hook (#2985 batch 5)', () => {
     it('an app hook in window.djust.hooks registered first is the one that runs', async () => {
         const mounted = vi.fn();
         const env = await boot(MAP(), { preRegister: (w) => { w.djust.hooks = { MapPicker: { mounted } }; } });
+        expect(env.window.DjustHooks?.MapPicker).toBeUndefined();
         expect(mounted).toHaveBeenCalledTimes(1);
         expect(probe(env)).toBe(false);
     });
