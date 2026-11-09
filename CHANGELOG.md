@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-11-09
+
+### Fixed
+
+- **`{% regroup %}` over a single model refuses, as Django does (#3948).** A model is not
+  iterable, so `{% regroup r by name as g %}` over one raises `TypeError`; through a
+  LiveView's state the tag was handed the model's serialized map and grouped its key
+  names. The tag now refuses a source that is a serialized model map (a text `__str__`,
+  a text `__model__` and a `pk`), after any filters on the source have run. A regroup
+  over a list, tuple or QuerySet of models, and over an ordinary dict, is unchanged.
+  Pinned against Django on a real instance in
+  `python/tests/test_regroup_model_source_3948.py`.
+
 ## [1.3.0] - 2026-11-09
 
 ### Security
