@@ -270,6 +270,23 @@ def model_identity(obj: Any) -> Dict[str, Any]:
     }
 
 
+def is_serialized_model_map(value: Any) -> bool:
+    """Whether ``value`` is the map :func:`model_identity` produced for a model.
+
+    The READER of the shape :func:`model_identity` writes, kept beside it so the two cannot drift:
+    a dict with a text ``__str__``, a text ``__model__`` and a ``pk`` key. This is the same shape
+    the Rust engine reads (``Value::model_str``). A dict carrying only some of those keys is an
+    ordinary dict. Any dict can carry all three, so this narrows the accident and does not make
+    the marker unforgeable.
+    """
+    return (
+        isinstance(value, dict)
+        and isinstance(value.get("__str__"), str)
+        and isinstance(value.get("__model__"), str)
+        and "pk" in value
+    )
+
+
 #: Memoized result of :func:`_resolve_sensitive_fields` (#2685 perf). ``None``
 #: means "not resolved yet"; the empty-denylist case is impossible because the
 #: floor is never empty, so ``None`` is an unambiguous miss.
