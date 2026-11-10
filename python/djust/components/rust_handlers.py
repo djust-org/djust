@@ -2641,6 +2641,7 @@ class RatingHandler:
                 readonly=kwargs.get("readonly", False),
                 event=kwargs.get("event", "set_rating"),
                 size=kwargs.get("size", "md"),
+                name=kwargs.get("name", ""),
             )
         )
 
@@ -3269,6 +3270,16 @@ class ToggleGroupHandler:
         event = conditional_escape(kw.get("event", "toggle_select"))
         disabled = kw.get("disabled", False)
         size = kw.get("size", "md")
+        from djust.components.templatetags.djust_components import (
+            _toggle_group_hidden,
+            _truthy_flag,
+        )
+
+        hidden = (
+            _toggle_group_hidden(kw.get("name", ""), value, mode)
+            if _truthy_flag(kw.get("form_field", False))
+            else ""
+        )
 
         size_cls = ""
         if size and size != "md":
@@ -3301,7 +3312,7 @@ class ToggleGroupHandler:
                 )
 
             buttons.append(
-                f'<button class="toggle-group-btn{active_cls}" '
+                f'<button type="button" class="toggle-group-btn{active_cls}" '
                 f'aria-pressed="{aria_pressed}" '
                 f'data-name="{name}"{click_attr}{disabled_attr}>'
                 f"{icon_html}"
@@ -3312,7 +3323,7 @@ class ToggleGroupHandler:
         return _safe(
             f'<div class="toggle-group{size_cls}{disabled_cls}" '
             f'role="group" data-mode="{conditional_escape(mode)}">'
-            f"{''.join(buttons)}"
+            f"{hidden}{''.join(buttons)}"
             f"</div>"
         )
 

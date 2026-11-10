@@ -57,7 +57,7 @@ class ToggleGroup(Component):
             is_active = str(opt.get("value", "")) == str(self.value)
             active_cls = " toggle-group-btn--active" if is_active else ""
             buttons.append(
-                f'<button class="toggle-group-btn{active_cls}" '
+                f'<button type="button" class="toggle-group-btn{active_cls}" '
                 f"{self.event_attrs(self.event, value=opt.get('value', ''))}>"
                 f'<span class="toggle-group-label">{ol}</span></button>'
             )
