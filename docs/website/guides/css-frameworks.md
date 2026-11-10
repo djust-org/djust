@@ -214,6 +214,10 @@ If a radio key is not set, djust falls back to the corresponding
 checkbox key — so existing Bootstrap 5 projects don't need to define
 radio classes explicitly.
 
+To change a few classes, prefer `LIVEVIEW_CONFIG["form_classes"]`
+([Theme classes](#theme-classes-form_classes) below): it sets one slot and
+keeps every other default. The framework maps are the lower layer.
+
 Top-level keys such as `LIVEVIEW_CONFIG = {'radio_class': ...}` are ignored:
 classes are looked up as `<framework>.<key>`. `LIVEVIEW_CONFIG` is also merged
 shallowly, so setting `'bootstrap4': {...}` replaces the whole Bootstrap 4
@@ -321,23 +325,130 @@ With `css_framework='tailwind'`, fields render as:
 
 With `css_framework=None`, fields render as unstyled plain HTML.
 
-### Custom Adapter
+Every adapter links help text and errors to the control: the help element is
+`<auto_id>-help`, the error element `<auto_id>-error` (`auto_id` defaults to
+`id_<name>`), the control lists them in `aria-describedby`, and a field with
+errors is `aria-invalid="true"`. With an error, the Bootstrap 5 field above
+renders:
 
-Register a custom adapter to override framework classes:
+```html
+<div class="mb-3">
+    <label for="id_email" class="form-label">Email <span class="text-danger" aria-hidden="true">*</span></label>
+    <input name="email" id="id_email" class="form-control is-invalid" required="required"
+           aria-describedby="id_email-error" aria-invalid="true"
+           dj-change="validate_field" type="email" value="nope" maxlength="320" />
+    <div id="id_email-error" class="invalid-feedback d-block"><div>Enter a valid email address.</div></div>
+</div>
+```
+
+A `RadioSelect` renders as a named group, one radio per choice:
+
+```html
+<div class="mb-3">
+  <fieldset id="id_size" class="dj-radio-group" role="radiogroup"
+            aria-labelledby="id_size-legend" aria-required="true">
+    <legend id="id_size-legend" class="col-form-label pt-0">Size <span class="text-danger" aria-hidden="true">*</span></legend>
+    <div class="dj-radio-option form-check">
+      <input type="radio" name="size" id="id_size_0" value="s" class="form-check-input"
+             required="required" dj-change="validate_field" />
+      <label class="form-check-label" for="id_size_0">Small</label>
+    </div>
+    <!-- one .dj-radio-option per choice -->
+  </fieldset>
+</div>
+```
+
+A `CheckboxSelectMultiple` is a `<fieldset class="dj-checkbox-group">` of
+checkboxes the same way (no `role`, no `required` on each box).
+
+### Theme classes (`form_classes`)
+
+Set the classes the adapters use by slot, without copying adapter code or a
+framework's whole class map:
 
 ```python
-from djust.frameworks import BaseAdapter, register_adapter
+# settings.py
+LIVEVIEW_CONFIG = {
+    "css_framework": "tailwind",
+    "form_classes": {
+        "wrapper": "field",
+        "label": "field-label",
+        "input": "input",
+        "input_invalid": "input input--invalid",
+        "textarea": "input input--multiline",
+        "select": "select",
+        "help": "field-help",
+        "error": "field-error",
+        "legend": "field-label",
+        "radio_group": "segmented",
+        "radio_option": "segmented-option",
+        "radio_input": "segmented-input",
+        "radio_label": "segmented-label",
+    },
+}
+```
 
-class MyAdapter(BaseAdapter):
+| Slot | Element | Falls back to `<framework>.<key>` |
+|---|---|---|
+| `wrapper` | the `<div>` around a field | `field_wrapper_class` |
+| `label` | `<label>` | `label_class` |
+| `input` / `input_invalid` | `<input>` (and a select or textarea with no class of its own) | `field_class` / `field_class_invalid` |
+| `textarea` | `<textarea>` | `textarea_class` |
+| `select` | `<select>` | `select_class` |
+| `invalid` | added to a select or textarea with errors | `invalid_class` (`is-invalid` on Bootstrap) |
+| `help` | help text | `help_text_class` |
+| `error` | the error container | `error_class_block`, `error_class` |
+| `checkbox`, `checkbox_label`, `checkbox_wrapper` | a `BooleanField`, and each box of a checkbox group | `checkbox_class`, ... |
+| `legend` | a group's `<legend>` | `legend_class`, `label_class` |
+| `radio_group` / `checkbox_group` | the `<fieldset>` | `radio_group_class` |
+| `radio_option` | the `<div>` around each radio | `radio_wrapper_class`, `checkbox_wrapper_class` |
+| `radio_input` / `radio_label` | each radio and its label | `radio_class` / `radio_label_class` |
+
+A slot set to `""` renders no class. Slots you leave out keep the framework's
+classes. Styling the invalid state with `[aria-invalid="true"]` works with
+every framework.
+
+The group always carries the hook classes `dj-radio-group` (or
+`dj-checkbox-group`) and each choice `dj-radio-option`; pass
+`group_variant="segmented"` to add `dj-radio-group--segmented`:
+
+```django
+{% live_field view "size" group_variant="segmented" %}
+```
+
+```css
+/* a theme's segmented control: the input comes right before its label */
+.dj-radio-group--segmented { display: inline-flex; border: 0; padding: 0; }
+.dj-radio-group--segmented .dj-radio-option input { position: absolute; opacity: 0; }
+.dj-radio-group--segmented .dj-radio-option label { padding: .375rem .75rem; border: 1px solid; }
+.dj-radio-group--segmented input:checked + label { background: hsl(var(--primary)); }
+.dj-radio-group--segmented input:focus-visible + label { outline: 2px solid; }
+```
+
+### Custom Adapter
+
+A subclass sets `css_classes` for the slots it changes; the rest come from
+`LIVEVIEW_CONFIG["form_classes"]`, then the framework it extends:
+
+```python
+from djust.frameworks import Bootstrap5Adapter, register_adapter
+
+class BrandAdapter(Bootstrap5Adapter):
+    css_classes = {"input": "form-control brand-input", "radio_group": "btn-group"}
     # Static HTML only — never interpolate user data here
-    required_marker = ' <span class="required">*</span>'
-    help_text_class = "hint"
+    required_marker = ' <span class="required" aria-hidden="true">*</span>'
 
-register_adapter('my_theme', MyAdapter())
+register_adapter("brand", BrandAdapter())
 
 # settings.py
-LIVEVIEW_CONFIG = {'css_framework': 'my_theme'}
+LIVEVIEW_CONFIG = {"css_framework": "brand"}
 ```
+
+`css_classes` wins over `form_classes`, which wins over the framework map.
+A built-in adapter reads its own framework map (`framework="tailwind"` gets
+Tailwind's classes even when `css_framework` is `bootstrap5`); a custom
+adapter that subclasses `BaseAdapter` directly reads the map named by
+`css_framework`, or the one in its `framework_name` attribute.
 
 ---
 
@@ -501,9 +612,9 @@ and the input CSS only when they are absent, so pre-create or edit those files
 to change content globs, theme, or plugins — the build respects them and
 prints the command it ran.
 
-**Form-field classes.** The simplest route is to subclass
-`djust.frameworks.BaseAdapter` and override class attributes, as shown in
-[Custom Adapter](#custom-adapter) above. To take over rendering completely,
+**Form-field classes.** The simplest route is `LIVEVIEW_CONFIG["form_classes"]`
+([Theme classes](#theme-classes-form_classes)), or a subclass that sets
+`css_classes`, as shown in [Custom Adapter](#custom-adapter) above. To take over rendering completely,
 subclass `djust.frameworks.FrameworkAdapter` and implement its three abstract
 methods with these signatures:
 

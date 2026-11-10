@@ -425,6 +425,11 @@ class LiveViewConfig:
         "sensitive_field_types": [],
         # CSS Framework
         "css_framework": "bootstrap5",  # Options: 'bootstrap4', 'bootstrap5', 'tailwind', None
+        # Theme classes for the form adapters (as_live / as_live_field), by slot:
+        # {"input": "...", "label": "...", "radio_group": "...", ...}. A slot set
+        # here wins over the framework section below; "" means no class. The slots
+        # are djust.frameworks.FORM_CLASS_SLOTS.
+        "form_classes": {},
         # Bootstrap 4 classes (NYC Core Framework, gov sites, legacy projects)
         "bootstrap4": {
             "field_class": "form-control",
@@ -440,6 +445,8 @@ class LiveViewConfig:
             "radio_class": "custom-control-input",
             "radio_label_class": "custom-control-label",
             "radio_wrapper_class": "custom-control custom-radio",
+            "legend_class": "col-form-label pt-0",
+            "invalid_class": "is-invalid",
             "field_wrapper_class": "form-group",
             "button_primary_class": "btn btn-primary",
             "button_secondary_class": "btn btn-secondary",
@@ -459,6 +466,8 @@ class LiveViewConfig:
             "radio_class": "form-check-input",
             "radio_label_class": "form-check-label",
             "radio_wrapper_class": "form-check",
+            "legend_class": "col-form-label pt-0",
+            "invalid_class": "is-invalid",
             "field_wrapper_class": "mb-3",
             "button_primary_class": "btn btn-primary",
             "button_secondary_class": "btn btn-secondary",

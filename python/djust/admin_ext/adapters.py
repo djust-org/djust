@@ -273,6 +273,10 @@ class AdminTailwindAdapter(TailwindAdapter):
         """Render standard input/textarea/select field."""
         field_class = self.get_field_class(field, has_errors)
         field_type = self._get_field_type(field)
+        if field_type == "checkbox_multiple":
+            # The base adapter renders this as a checkbox group; the admin
+            # keeps its select (many-to-many fields take the options path).
+            field_type = "select"
 
         if field_type == "textarea":
             html = f'<textarea name="{field_name}" id="id_{field_name}" class="{field_class}" '
