@@ -621,6 +621,69 @@ Python function among its members; the second level is every underscore name tha
 tests guarantee the KIND of what is returned for the members of those models; they do not guarantee
 the content of a field.
 
+## Addendum (#3949, #3936): a render-time handle overlay for a model held as state (Accepted, to be built for 1.4.0)
+
+**Status: Accepted (maintainer decision, 2026-11-10). Nothing in this addendum is implemented yet; it is built for 1.4.0, not in a 1.3.x patch.** Maintainer decision recorded on #3949: the behaviour is pinned and documented now (`python/tests/test_custom_callable_model_argument_3949.py`, the guide section "What a custom filter or tag receives for a model"), and the real fix is taken together with #3936, under this addendum.
+
+### The problem, measured on 1.3.1
+
+The #3888 addendum made a model that reaches the engine RAW a floored handle. A model held as LiveView STATE never reaches the engine raw: `mixins/context.py` replaces it with a dict before Rust sees it (ADR-027 keeps models eager on the state path). So on a LiveView:
+
+- a custom filter or tag receives a plain `dict` where `DjustTemplateBackend` and `render_template` hand it the floor proxy (`_SidecarModelProxy`), and the dict's keys depend on what the template names elsewhere (JIT): the same filter on the same model measured 4, 1 or 19 keys;
+- a Django-library tag that prints its operand (`{% blocktranslate with u=x %}`) writes the whole mapping on a LiveView and the model's text on the other two entries;
+- a filtered rebinding of a top-level model reads its reverse relation empty (#3936).
+
+Both are one fact: the state path has no handle to hand out. Neither issue can be fixed alone (a Python shim around a registered callable has no instance to wrap, and a pruned row carries no `__model__` or `pk`).
+
+### Decision proposed
+
+Keep the dict as state. Carry, next to it, a **render-time overlay**: for each state key whose value is a model, a model list or a QuerySet, a floored handle built by the same function the raw path uses (`_protect_sidecar_tree`, `floored_model_proxy`). The Rust render entry sets those handles into the render `Context` AFTER the state is loaded, so every template read of the key (operand, filter, tag argument, `{% with %}`, loop) sees the handle. State, change detection, msgpack, the client payload and the JIT serializer keep seeing the dict.
+
+Mechanism (smallest complete design, sizes from reading the code, not a prototype):
+
+- **Python** (about 80 to 120 lines): `mixins/context.py` records the raw object per key at the places that replace a value (single model, `list[Model]`, QuerySet, the `normalize_django_value` fallback, a dict holding models) into a per-render slot, never into state. `mixins/rust_bridge.py` builds `{key: _protect_sidecar_tree(raw, ...)}` and calls a new `RustLiveView.set_render_handles(...)` on **every** sync, including empty (the discipline `set_raw_py_values` already documents, #2300).
+- **Rust** (about 100 to 150 lines, a rebuild, an ABI change): a field and setter beside `raw_py_values` in `crates/djust_live/src/lib.rs`; at each render entry, after the context is built from state, `context.set(key, handle)`; mirrored at the component and actor renders. A stale-extension guard (`hasattr`, as for `set_raw_py_values`) and `_rust.pyi`.
+- **Kill-switch:** `LIVEVIEW_CONFIG["state_models_as_handles"]`, default off for the first release candidate, as ADR-027's own steps shipped.
+- **Release:** a minor (1.4.0). It changes what custom callables and template reads of the key observe.
+
+### Invariants (each needs a test that fails without it)
+
+- The overlay is never the raw model. If the floor cannot be built the conversion falls back to the dict, not to the instance (fail closed).
+- Floor fields, `DJUST_SENSITIVE_FIELDS`, per-model `djust_exclude_fields` and `_`-prefixed names stay unreadable, through any filter and any relation. A custom callable still cannot reach the instance: this is deliberately NOT "hand over the live model". The backend entry already does not, and a filter reading `value.password` getting the hash would be a new exposure.
+- Native and bridged tag **arguments** stay the floored JSON text (`value_to_arg_string`): `data_table` and other component tags read dict rows.
+- A handle is never serialised as itself (JSON, msgpack, state): a carried model is its floored dict.
+- The overlay is set and cleared on every sync, so a key that leaves state does not leave a stale handle behind.
+- Change detection is unchanged: a field mutated behind a stable `id()` still re-renders; a partial render with `set_changed_keys` still works; a msgpack round trip drops the handle and the next sync restores it.
+- Flag on and flag off render byte-identical HTML for every template that does not depend on what changes below (an equivalence differential over the LiveView test corpus, with a non-vacuity case).
+
+### Behaviour changes to declare
+
+- Dict-style access on a state model inside a custom filter or tag (`value["name"]`, `.get`, `dict(value)`, `isinstance(value, dict)`, `.items`) stops working; attribute access starts working (`value.pk`, `value.get_full_name()`, a relation walk).
+- `{{ x|pprint }}` and `json_script` of a top-level model spell the model's text, as they already do for a model inside a container.
+- A Django-library tag that prints its operand writes the model's text on a LiveView, as on the other entries.
+- Framework callables that require a `Mapping` row (`table_cell`, `table_href` in `djust_components`) are reached through `inclusion_tag` data; the implementation must be shown, with a test, to keep handing them dict rows.
+
+### Alternatives rejected
+
+| option | why not |
+|---|---|
+| Sidecar twin for tags only (Python only) | does not reach filters, which is half the issue |
+| Resolve the filter operand by path against a twin (Rust) | bare names and dotted paths only; `rows\|first\|f`, `{% with %}` aliases and filtered rebindings have no path, and the alias guards are an XSS boundary (#2504) |
+| A hidden token key inside the dict that a shim resolves | every dict consumer (`.items`, `\|length`, `pprint`, JSON, state) must learn to skip it: the "one short" class the repo's canon warns about |
+| A Python shim that rebuilds a proxy from the dict | impossible: a JIT-pruned row has no `__model__` or `pk` and the shim has no instance |
+| Hand the raw instance (no floor) | a new exposure; not proposed |
+| A system check for filters that print their argument | undecidable statically |
+
+### Decisions (2026-11-10)
+
+1. **Accept the overlay.** It is built for 1.4.0. "Pin and document" remains the answer on the 1.3.x line.
+2. **Flag default:** `LIVEVIEW_CONFIG["state_models_as_handles"]` is off in the release candidates and on by 1.4.0, with a behaviour-change note in the changelog.
+3. **The actor entry** (`use_actors = True`) gets the overlay in the same release, so the two paths do not drift.
+
+### Acceptance (the work for 1.4.0)
+
+The #3949 matrix (every entry by every shape by every callable kind) pins the flag-on behaviour with a Django oracle on real instances; the floor gate-offs (raw instance instead of the proxy, the protect call dropped, the fail-closed fallback broken, the overlay not cleared) each turn a leak row red; the `LiveView` branch at `python/tests/test_adr027_characterization_net_2539.py` ("delete when #3936 closes") is removed; `changelog.d/3949.changed.md` carries a "Behavior change" bullet listing the items above.
+
 ## Non-goals
 
 `string_if_invalid` as an engine option (enabled, not delivered); parse-time `TemplateSyntaxError`s
