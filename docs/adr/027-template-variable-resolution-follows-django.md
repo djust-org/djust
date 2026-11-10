@@ -621,9 +621,9 @@ Python function among its members; the second level is every underscore name tha
 tests guarantee the KIND of what is returned for the members of those models; they do not guarantee
 the content of a field.
 
-## Addendum (#3949, #3936): a render-time handle overlay for a model held as state (Proposed, 1.4.0)
+## Addendum (#3949, #3936): a render-time handle overlay for a model held as state (Accepted, to be built for 1.4.0)
 
-**Status: Proposed. Nothing in this addendum is implemented. It exists so the 1.4.0 change is decided before it is built.** Maintainer decision recorded on #3949: the behaviour is pinned and documented now (`python/tests/test_custom_callable_model_argument_3949.py`, the guide section "What a custom filter or tag receives for a model"), and the real fix is taken together with #3936, behind this addendum.
+**Status: Accepted (maintainer decision, 2026-11-10). Nothing in this addendum is implemented yet; it is built for 1.4.0, not in a 1.3.x patch.** Maintainer decision recorded on #3949: the behaviour is pinned and documented now (`python/tests/test_custom_callable_model_argument_3949.py`, the guide section "What a custom filter or tag receives for a model"), and the real fix is taken together with #3936, under this addendum.
 
 ### The problem, measured on 1.3.1
 
@@ -674,13 +674,13 @@ Mechanism (smallest complete design, sizes from reading the code, not a prototyp
 | Hand the raw instance (no floor) | a new exposure; not proposed |
 | A system check for filters that print their argument | undecidable statically |
 
-### Open questions for the maintainers
+### Decisions (2026-11-10)
 
-1. Accept the overlay at all, or keep "pin and document" as the permanent answer for custom callables and fix only #3936 in the renderer?
-2. Flag default for 1.4.0 itself: off in the first rc and on by 1.4.0, or off until 2.0?
-3. Does the actor entry (`use_actors = True`) need the overlay in the same release?
+1. **Accept the overlay.** It is built for 1.4.0. "Pin and document" remains the answer on the 1.3.x line.
+2. **Flag default:** `LIVEVIEW_CONFIG["state_models_as_handles"]` is off in the release candidates and on by 1.4.0, with a behaviour-change note in the changelog.
+3. **The actor entry** (`use_actors = True`) gets the overlay in the same release, so the two paths do not drift.
 
-### Acceptance (when this addendum is accepted and the work starts)
+### Acceptance (the work for 1.4.0)
 
 The #3949 matrix (every entry by every shape by every callable kind) pins the flag-on behaviour with a Django oracle on real instances; the floor gate-offs (raw instance instead of the proxy, the protect call dropped, the fail-closed fallback broken, the overlay not cleared) each turn a leak row red; the `LiveView` branch at `python/tests/test_adr027_characterization_net_2539.py` ("delete when #3936 closes") is removed; `changelog.d/3949.changed.md` carries a "Behavior change" bullet listing the items above.
 
